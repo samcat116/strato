@@ -37,7 +37,9 @@ struct SandboxConfigDriveTests {
         let json = try drive.encoded()
         let obj = try #require(try JSONSerialization.jsonObject(with: json) as? [String: Any])
 
-        #expect(obj["schema_version"] as? Int == 2)
+        // Network-free, so stamped v1: the version is the minimum the
+        // document needs, not the newest this build can write.
+        #expect(obj["schema_version"] as? Int == 1)
         #expect(obj["sandbox_id"] as? String == "sb-1")
         #expect(obj["identity_nonce"] as? String == "nonce-1")
         #expect(obj["vsock_port"] as? Int == 1024)
@@ -113,7 +115,7 @@ struct SandboxConfigDriveTests {
         let trimmed = image[image.startIndex..<end]
         let decoded = try JSONDecoder().decode(SandboxConfigDrive.self, from: Data(trimmed))
         #expect(decoded.sandboxId == "sb-4")
-        #expect(decoded.schemaVersion == 2)
+        #expect(decoded.schemaVersion == 1)
     }
 
     /// A tiny document still fills at least one sector.
@@ -214,20 +216,23 @@ struct SandboxConfigDriveTests {
         let network = try SandboxConfigDrive.network(
             for: attachment(
                 ip6Address: "fd12:3456:789a::5", prefixLength6: 64,
-                gateway6: "fd12:3456:789a::1"),
-            hostname: SandboxConfigDrive.guestHostname(sandboxId: "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0"))
+                gateway6: "fd12:3456:789a::1"))
         let drive = SandboxConfigDrive(
-            sandboxId: "sb-9", identityNonce: "n", guestConfig: guestConfig(), spec: spec(),
-            network: network)
+            sandboxId: "0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0", identityNonce: "n",
+            guestConfig: guestConfig(), spec: spec(), network: network)
         let obj = try #require(
             try JSONSerialization.jsonObject(with: try drive.encoded()) as? [String: Any])
         let block = try #require(obj["network"] as? [String: Any])
+
+        // The hostname is a property of the sandbox, not of its NIC, so it sits
+        // beside the identity rather than inside the block.
+        #expect(obj["hostname"] as? String == "strato-0f1e2d3c4b5a")
+        #expect(block["hostname"] == nil)
 
         #expect(block["mac_address"] as? String == "06:00:ac:10:00:05")
         #expect(block["mtu"] as? Int == 1442)
         #expect(block["nameservers"] as? [String] == ["172.16.0.2"])
         #expect(block["search_domains"] as? [String] == ["proj.strato.internal"])
-        #expect(block["hostname"] as? String == "strato-0f1e2d3c4b5a")
 
         let v4 = try #require(block["ipv4"] as? [String: Any])
         #expect(v4["address"] as? String == "172.16.0.5")
@@ -240,8 +245,8 @@ struct SandboxConfigDriveTests {
         #expect(v6["gateway"] as? String == "fd12:3456:789a::1")
     }
 
-    /// A network-free sandbox's document is unchanged, so nothing about the
-    /// v1-shaped boot path moves under it.
+    /// A network-free sandbox's document is unchanged *and still stamped v1*,
+    /// so it keeps booting on a guest image that predates the network block.
     @Test("the network block is omitted for a sandbox with no NIC")
     func networkBlockOmittedWithoutANIC() throws {
         let drive = SandboxConfigDrive(
@@ -249,6 +254,27 @@ struct SandboxConfigDriveTests {
         let obj = try #require(
             try JSONSerialization.jsonObject(with: try drive.encoded()) as? [String: Any])
         #expect(obj["network"] == nil)
+        #expect(obj["schema_version"] as? Int == 1)
+        // The hostname is not gated on the NIC, so it is here either way.
+        #expect(obj["hostname"] as? String == "strato-sb10")
+    }
+
+    /// The version stamped is the minimum a document *needs*, not the newest
+    /// this build knows. Bumping unconditionally would strand every sandbox on
+    /// a node whose separately-distributed guest image lags the agent, for a
+    /// field those documents do not carry.
+    @Test("the schema version tracks what the document carries")
+    func schemaVersionTracksContent() throws {
+        #expect(SandboxConfigDrive.requiredSchemaVersion(network: nil) == 1)
+
+        let network = try SandboxConfigDrive.network(for: attachment())
+        let drive = SandboxConfigDrive(
+            sandboxId: "sb-12", identityNonce: "n", guestConfig: guestConfig(), spec: spec(),
+            network: network)
+        #expect(drive.schemaVersion == 2)
+        let obj = try #require(
+            try JSONSerialization.jsonObject(with: try drive.encoded()) as? [String: Any])
+        #expect(obj["schema_version"] as? Int == 2)
     }
 
     /// The block is written even for a DHCP-enabled NIC: OVN still answers
@@ -256,8 +282,7 @@ struct SandboxConfigDriveTests {
     /// one.
     @Test("a DHCP-enabled NIC still gets static addressing")
     func dhcpNICStillGetsStaticAddressing() throws {
-        let network = try SandboxConfigDrive.network(
-            for: attachment(dhcpEnabled: true), hostname: "strato-abc")
+        let network = try SandboxConfigDrive.network(for: attachment(dhcpEnabled: true))
         #expect(network.ipv4?.address == "172.16.0.5")
         #expect(network.ipv4?.prefixLength == 24)
     }
@@ -267,13 +292,27 @@ struct SandboxConfigDriveTests {
     @Test("an IPv4 address with no usable netmask is refused, not dropped")
     func unusableNetmaskIsRefused() throws {
         #expect(throws: SandboxRuntimeError.self) {
-            _ = try SandboxConfigDrive.network(
-                for: attachment(netmask: nil), hostname: nil)
+            _ = try SandboxConfigDrive.network(for: attachment(netmask: nil))
         }
         #expect(throws: SandboxRuntimeError.self) {
             // Non-contiguous masks have no prefix length.
+            _ = try SandboxConfigDrive.network(for: attachment(netmask: "255.0.255.0"))
+        }
+    }
+
+    /// The same outcome the netmask guard prevents, reached from the other
+    /// side: no address at all in either family. The guest runs no DHCP
+    /// client, so nothing downstream would recover it.
+    @Test("an attachment with no address in either family is refused")
+    func addresslessAttachmentIsRefused() throws {
+        #expect(throws: SandboxRuntimeError.self) {
             _ = try SandboxConfigDrive.network(
-                for: attachment(netmask: "255.0.255.0"), hostname: nil)
+                for: attachment(ipAddress: nil, netmask: nil, gateway: nil))
+        }
+        // Even with a DHCP-enabled NIC, since the guest never asks.
+        #expect(throws: SandboxRuntimeError.self) {
+            _ = try SandboxConfigDrive.network(
+                for: attachment(ipAddress: nil, netmask: nil, gateway: nil, dhcpEnabled: true))
         }
     }
 
@@ -282,13 +321,11 @@ struct SandboxConfigDriveTests {
     @Test("optional fields collapse rather than travelling blank")
     func optionalNetworkFieldsCollapse() throws {
         let network = try SandboxConfigDrive.network(
-            for: attachment(gateway: "", mtu: nil, dnsServers: ["", "  "], domainName: " "),
-            hostname: nil)
+            for: attachment(gateway: "", mtu: nil, dnsServers: ["", "  "], domainName: " "))
         #expect(network.ipv4?.gateway == nil)
         #expect(network.mtu == nil)
         #expect(network.nameservers.isEmpty)
         #expect(network.searchDomains.isEmpty)
-        #expect(network.hostname == nil)
 
         // And nothing empty survives the encode either.
         let drive = SandboxConfigDrive(
@@ -298,9 +335,21 @@ struct SandboxConfigDriveTests {
             try JSONSerialization.jsonObject(with: try drive.encoded()) as? [String: Any])
         let block = try #require(obj["network"] as? [String: Any])
         #expect(block["mtu"] == nil)
-        #expect(block["hostname"] == nil)
         let v4 = try #require(block["ipv4"] as? [String: Any])
         #expect(v4["gateway"] == nil)
+    }
+
+    /// These land as directives in a line-oriented `/etc/resolv.conf`, so the
+    /// renderer filters them rather than trusting write-time validation — the
+    /// same call `CloudInitProvisioner` makes on the VM path.
+    @Test("resolver fields that could forge a resolv.conf directive are dropped")
+    func resolverFieldsAreFilteredToWhatIsSafe() throws {
+        let network = try SandboxConfigDrive.network(
+            for: attachment(
+                dnsServers: ["172.16.0.2", "9.9.9.9\noptions ndots:0", "not-an-address"],
+                domainName: "proj.internal\nnameserver 6.6.6.6"))
+        #expect(network.nameservers == ["172.16.0.2"])
+        #expect(network.searchDomains.isEmpty)
     }
 
     /// A dual-stack network allocates /64s, and the VM path's seed already
@@ -308,7 +357,7 @@ struct SandboxConfigDriveTests {
     @Test("a missing IPv6 prefix length falls back to /64")
     func ipv6PrefixDefaultsTo64() throws {
         let network = try SandboxConfigDrive.network(
-            for: attachment(ip6Address: "fd12::5", prefixLength6: nil), hostname: nil)
+            for: attachment(ip6Address: "fd12::5", prefixLength6: nil))
         #expect(network.ipv6?.prefixLength == 64)
     }
 

@@ -261,6 +261,7 @@ fn control_response(request: Request, state: &GuestState) -> Response {
             image_config,
             overrides,
             entropy,
+            hostname,
         } => handle_launch(
             state,
             sandbox_id,
@@ -268,6 +269,7 @@ fn control_response(request: Request, state: &GuestState) -> Response {
             image_config,
             overrides,
             entropy,
+            hostname,
         ),
         Request::Reidentify {
             expected_sandbox_id,
@@ -317,6 +319,7 @@ fn control_response(request: Request, state: &GuestState) -> Response {
 /// swap to success is what keeps an interrupted launch recoverable (a host
 /// that reconnects later still sees template identity + `held` and can
 /// retry the launch or demote).
+#[allow(clippy::too_many_arguments)]
 fn handle_launch(
     state: &GuestState,
     sandbox_id: String,
@@ -324,6 +327,7 @@ fn handle_launch(
     image_config: Box<ImageConfig>,
     overrides: Box<ProcessOverrides>,
     entropy: Option<String>,
+    hostname: Option<String>,
 ) -> Response {
     {
         let mut s = state.status.lock().expect("status poisoned");
@@ -342,6 +346,16 @@ fn handle_launch(
     // because the reseed did — the proper reseed story is #427.
     if let Some(b64) = entropy.as_deref() {
         seed_entropy(b64);
+    }
+    // Adopt the restored-into sandbox's hostname before the workload starts,
+    // so it sees the same name a cold boot would have given it. Best effort
+    // for the same reason as the reseed, and applied before the identity swap
+    // below because a failure here must leave the guest recoverably `held`
+    // rather than half-renamed.
+    if let Some(hostname) = hostname.as_deref() {
+        if let Err(e) = super::net::set_hostname(hostname) {
+            eprintln!("[sandbox-init] could not set hostname '{hostname}' on launch: {e}");
+        }
     }
 
     let process = match config::resolve_process(&image_config, &overrides) {

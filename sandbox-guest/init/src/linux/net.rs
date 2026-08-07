@@ -28,6 +28,13 @@ type Result<T> = std::result::Result<T, String>;
 /// Kernel interface-name buffer size (`IFNAMSIZ`), including the NUL.
 const IF_NAMESIZE: usize = 16;
 
+/// How many times, and how far apart, to scan `/sys/class/net` for the NIC
+/// before declaring it absent. Half a second total: enough to cover a slower
+/// device probe, short enough not to matter to a cold start that is otherwise
+/// measured in tens of milliseconds.
+const INTERFACE_SCAN_ATTEMPTS: u32 = 10;
+const INTERFACE_SCAN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
 // Socket ioctls. Numbered in the architecture-independent 0x89xx range, so
 // these are the same values on x86_64 and aarch64.
 const SIOCGIFFLAGS: u32 = 0x8913;
@@ -66,6 +73,10 @@ pub fn bring_up_loopback() -> Result<()> {
 /// bring it up, assign each family's address, and install each family's
 /// default route. Returns the interface name it configured.
 ///
+/// The hostname is deliberately *not* set here — it belongs to the sandbox,
+/// not to its NIC, so the caller applies it for networked and network-free
+/// sandboxes alike.
+///
 /// Every step is an error rather than a warning. A sandbox whose NIC is half
 /// configured looks identical to a healthy one from the host's side — the VMM
 /// is running and the guest answers vsock — so failing the boot is what keeps
@@ -93,8 +104,14 @@ pub fn configure_interface(config: &NetworkConfig) -> Result<String> {
         }
         set_ipv4_address(&sock, &name, address, v4.prefix_length)?;
         if let Some(gateway) = gateway_of(v4) {
-            let gateway: Ipv4Addr = parse(gateway, "IPv4 gateway")?;
-            add_default_route(libc::AF_INET as u8, &gateway.octets(), index)?;
+            let parsed: Ipv4Addr = parse(gateway, "IPv4 gateway")?;
+            add_default_route(
+                libc::AF_INET as u8,
+                &parsed.octets(),
+                index,
+                "IPv4",
+                gateway,
+            )?;
         }
     }
 
@@ -109,39 +126,47 @@ pub fn configure_interface(config: &NetworkConfig) -> Result<String> {
         let sock6 = Socket::open(libc::AF_INET6)?;
         set_ipv6_address(&sock6, index, address, v6.prefix_length)?;
         if let Some(gateway) = gateway_of(v6) {
-            let gateway: Ipv6Addr = parse(gateway, "IPv6 gateway")?;
-            add_default_route(libc::AF_INET6 as u8, &gateway.octets(), index)?;
+            let parsed: Ipv6Addr = parse(gateway, "IPv6 gateway")?;
+            add_default_route(
+                libc::AF_INET6 as u8,
+                &parsed.octets(),
+                index,
+                "IPv6",
+                gateway,
+            )?;
         }
     }
 
-    if let Some(hostname) = config.hostname.as_deref() {
-        set_hostname(hostname)?;
-    }
     Ok(name)
 }
 
 /// Write `/etc/resolv.conf` and `/etc/hosts` into the container rootfs mounted
 /// at `root`, before the init switches onto it.
 ///
+/// Called for every sandbox, not only networked ones: `/etc/hosts` is what
+/// makes `localhost` resolve, and a scratch or distroless image may ship no
+/// `/etc` at all — which is just as true of a sandbox with no NIC, now that it
+/// gets a working `lo`. `resolv.conf` is skipped when there are no resolvers
+/// to name, so the network-free case writes only the loopback host table.
+///
 /// Best effort, unlike the interface itself: a read-only rootfs is a legitimate
 /// sandbox shape, and a workload that does its own resolution (or none) should
-/// not lose its network because its image would not take a file. Scratch and
-/// distroless images may have no `/etc` at all, so the directory is created
-/// rather than assumed, and an existing entry is unlinked first — images ship
-/// `resolv.conf` as a symlink into `/run` often enough that writing through one
-/// would land the file somewhere a tmpfs mount then hides.
-pub fn write_resolver_files(root: &Path, config: &NetworkConfig) {
+/// not lose its network because its image would not take a file. An existing
+/// entry is unlinked first — images ship `resolv.conf` as a symlink into `/run`
+/// often enough that writing through one would land the file somewhere a tmpfs
+/// mount then hides.
+pub fn write_resolver_files(root: &Path, hostname: Option<&str>, config: Option<&NetworkConfig>) {
     let etc = root.join("etc");
     if let Err(e) = fs::create_dir_all(&etc) {
         eprintln!("[sandbox-init] could not create {}: {e}", etc.display());
         return;
     }
-    if let Some(resolv) = net::resolv_conf(config) {
+    if let Some(resolv) = config.and_then(net::resolv_conf) {
         replace_file(&join_absolute(root, net::RESOLV_CONF_PATH), &resolv);
     }
     replace_file(
         &join_absolute(root, net::HOSTS_PATH),
-        &net::hosts_file(config),
+        &net::hosts_file(hostname, config),
     );
 }
 
@@ -164,7 +189,27 @@ pub fn set_hostname(hostname: &str) -> Result<()> {
 /// MAC is also what OVN's `port_security` allows on the wire, so configuring
 /// some other device would produce an interface that is up, addressed, and
 /// silently dropped upstream.
+/// Failing here is fatal, and "not found" is indistinguishable from "not
+/// yet" — so the scan is retried briefly before it gives up. With virtio-net
+/// built in (these kernel fragments enable no modules) the device is probed
+/// before PID 1 runs and the first attempt always wins; the retry costs
+/// nothing in that case and covers a slower probe rather than assuming one
+/// cannot happen.
 fn find_interface(mac_address: Option<&str>) -> Result<String> {
+    let mut last = Err(String::new());
+    for attempt in 0..INTERFACE_SCAN_ATTEMPTS {
+        last = scan_for_interface(mac_address);
+        if last.is_ok() {
+            return last;
+        }
+        if attempt + 1 < INTERFACE_SCAN_ATTEMPTS {
+            std::thread::sleep(INTERFACE_SCAN_INTERVAL);
+        }
+    }
+    last
+}
+
+fn scan_for_interface(mac_address: Option<&str>) -> Result<String> {
     let wanted = mac_address
         .map(|m| m.trim().to_ascii_lowercase())
         .filter(|m| !m.is_empty());
@@ -297,8 +342,24 @@ fn gateway_of(config: &AddressConfig) -> Option<&str> {
 /// `NLM_F_CREATE | NLM_F_REPLACE` rather than plain create so a retry — a
 /// second boot of a restored guest, say — overwrites instead of failing
 /// `EEXIST`.
-fn add_default_route(family: u8, gateway: &[u8], index: u32) -> Result<()> {
+///
+/// `label` and `gateway_text` exist only for the error message. This call is
+/// made once per family and its failure is fatal, so the serial console is the
+/// only diagnostic the operator gets — "the route was rejected" without saying
+/// *which* route sends them reading the config drive to find out. A gateway
+/// outside the on-link prefix is `ENETUNREACH` here for exactly one family.
+fn add_default_route(
+    family: u8,
+    gateway: &[u8],
+    index: u32,
+    label: &str,
+    gateway_text: &str,
+) -> Result<()> {
     let sock = netlink_socket()?;
+    // The sequence number the ACK must echo. Constant is fine: the socket is
+    // opened per call and closed on return, so there is exactly one request
+    // outstanding on it ever.
+    let sequence: u32 = 1;
 
     // nlmsghdr(16) + rtmsg(12) + RTA_GATEWAY + RTA_OIF, each attribute
     // 4-byte aligned (every piece here is already a multiple of 4).
@@ -308,7 +369,7 @@ fn add_default_route(family: u8, gateway: &[u8], index: u32) -> Result<()> {
     message.extend_from_slice(
         &(NLM_F_REQUEST | NLM_F_ACK | NLM_F_CREATE | NLM_F_REPLACE).to_ne_bytes(),
     );
-    message.extend_from_slice(&1u32.to_ne_bytes()); // nlmsg_seq
+    message.extend_from_slice(&sequence.to_ne_bytes()); // nlmsg_seq
     message.extend_from_slice(&0u32.to_ne_bytes()); // nlmsg_pid (kernel fills in)
 
     message.push(family); // rtm_family
@@ -328,7 +389,11 @@ fn add_default_route(family: u8, gateway: &[u8], index: u32) -> Result<()> {
     message[..4].copy_from_slice(&length.to_ne_bytes());
 
     sock.send_to_kernel(&message)?;
-    sock.await_ack()
+    sock.await_ack(sequence).map_err(|e| {
+        format!(
+            "install the {label} default route via {gateway_text} on interface index {index}: {e}"
+        )
+    })
 }
 
 fn push_attribute(message: &mut Vec<u8>, kind: u16, payload: &[u8]) {
@@ -481,9 +546,41 @@ impl Socket {
     /// Read the kernel's reply to an `NLM_F_ACK` request. Success is an
     /// `NLMSG_ERROR` message carrying error 0 — netlink's ACK *is* an error
     /// message with no error in it.
-    fn await_ack(&self) -> Result<()> {
+    ///
+    /// The reply is checked to actually be *ours*: from the kernel (source
+    /// port 0, not another process), echoing `sequence`, and not truncated.
+    /// Nothing can race it today — the socket is fresh per call, joins no
+    /// multicast groups, and only the init is running — so this is about being
+    /// correct on inspection rather than correct by context.
+    fn await_ack(&self, sequence: u32) -> Result<()> {
+        #[repr(C)]
+        struct SockaddrNl {
+            family: u16,
+            pad: u16,
+            pid: u32,
+            groups: u32,
+        }
         let mut buffer = [0u8; 4096];
-        let read = unsafe { libc::recv(self.fd, buffer.as_mut_ptr().cast(), buffer.len(), 0) };
+        let mut source = SockaddrNl {
+            family: 0,
+            pad: 0,
+            pid: u32::MAX,
+            groups: 0,
+        };
+        let mut source_len = std::mem::size_of::<SockaddrNl>() as libc::socklen_t;
+        // MSG_TRUNC makes netlink report the message's real size rather than
+        // the copied one, so a reply too big for the buffer is detectable
+        // instead of being silently read as a short one.
+        let read = unsafe {
+            libc::recvfrom(
+                self.fd,
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+                libc::MSG_TRUNC,
+                (&mut source as *mut SockaddrNl).cast(),
+                &mut source_len,
+            )
+        };
         if read < 0 {
             return Err(format!(
                 "read rtnetlink reply: {}",
@@ -491,6 +588,19 @@ impl Socket {
             ));
         }
         let read = read as usize;
+        if read > buffer.len() {
+            return Err(format!(
+                "rtnetlink reply is {read} bytes, larger than the {} the reply buffer holds",
+                buffer.len()
+            ));
+        }
+        if source.pid != 0 {
+            return Err(format!(
+                "rtnetlink reply came from port {} rather than the kernel",
+                source.pid
+            ));
+        }
+        // nlmsghdr(16) + nlmsgerr's leading `int error`.
         if read < 20 {
             return Err(format!("truncated rtnetlink reply ({read} bytes)"));
         }
@@ -498,12 +608,18 @@ impl Socket {
         if kind != NLMSG_ERROR {
             return Err(format!("unexpected rtnetlink reply type {kind}"));
         }
+        let echoed = u32::from_ne_bytes([buffer[8], buffer[9], buffer[10], buffer[11]]);
+        if echoed != sequence {
+            return Err(format!(
+                "rtnetlink reply echoes sequence {echoed}, not the {sequence} we sent"
+            ));
+        }
         let code = i32::from_ne_bytes([buffer[16], buffer[17], buffer[18], buffer[19]]);
         if code == 0 {
             Ok(())
         } else {
             Err(format!(
-                "rtnetlink rejected the route: {}",
+                "the kernel rejected it: {}",
                 std::io::Error::from_raw_os_error(-code)
             ))
         }

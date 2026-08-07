@@ -336,7 +336,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let configDrive = SandboxConfigDrive(
             sandboxId: sandboxId, identityNonce: nonce,
             guestConfig: materialized.guestConfig, spec: spec,
-            network: try guestNetwork(sandboxId: sandboxId, attachments: networkAttachments))
+            network: try guestNetwork(attachments: networkAttachments))
         let configData = try configDrive.blockImage(
             minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
 
@@ -424,12 +424,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// incomplete boots with a dead interface. Everything that could make it
     /// incomplete throws instead.
     private func guestNetwork(
-        sandboxId: String, attachments: [ResolvedNetworkAttachment]
+        attachments: [ResolvedNetworkAttachment]
     ) throws -> SandboxConfigDrive.NetworkConfig? {
         // A spec is capped at one NIC, so the first attachment is the whole set.
         guard let nic = attachments.first else { return nil }
-        return try SandboxConfigDrive.network(
-            for: nic, hostname: SandboxConfigDrive.guestHostname(sandboxId: sandboxId))
+        return try SandboxConfigDrive.network(for: nic)
     }
 
     /// Provision a cold microVM and register it as this sandbox. Shared by
@@ -857,7 +856,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 sandboxId: sandboxId,
                 identityNonce: nonce,
                 imageConfig: sourceConfig.imageConfig,
-                overrides: sourceConfig.overrides)
+                overrides: sourceConfig.overrides,
+                // The same name `reidentify` just gave the live guest, so the
+                // persisted drive and the running sandbox agree.
+                hostname: hostname)
             let originalConfigBytes = max(Int(fileSize(archiveConfig)), 512)
             try targetConfig.blockImage(minimumBytes: originalConfigBytes)
                 .write(to: URL(fileURLWithPath: configHost), options: .atomic)
@@ -1064,7 +1066,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let entropy = Self.freshEntropy()
         let launch = SandboxControlProtocol.LaunchRequest(
             sandboxId: sandboxId, identityNonce: drive.identityNonce,
-            imageConfig: drive.imageConfig, overrides: drive.overrides, entropy: entropy)
+            imageConfig: drive.imageConfig, overrides: drive.overrides, entropy: entropy,
+            // The template guest booted under the template's identity, so the
+            // hostname travels with the launch — otherwise a warm-provisioned
+            // sandbox would differ from a cold one by warm-cache state alone.
+            hostname: drive.hostname)
         let response = try await sendControl(
             .launch(launch), udsPath: managed.vsockUdsPath, timeout: 20)
         guard case .launched = response else {
@@ -1107,8 +1113,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let configDrive = SandboxConfigDrive(
             sandboxId: sandboxId, identityNonce: nonce,
             guestConfig: materialized.guestConfig, spec: managed.spec,
-            network: try guestNetwork(
-                sandboxId: sandboxId, attachments: managed.networkAttachments))
+            network: try guestNetwork(attachments: managed.networkAttachments))
         let configData = try configDrive.blockImage(
             minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
 

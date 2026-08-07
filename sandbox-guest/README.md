@@ -60,27 +60,34 @@ size (no filesystem). Fields: see [`init/src/config.rs`](init/src/config.rs)
                     "WorkingDir": "/", "User": "0:0" },
   "overrides": { "entrypoint": null, "cmd": null, "env": {"K":"V"},
                  "workdir": null, "user": null },
+  "hostname": "strato-0f1e2d3c4b5a",
   "network": {
     "mac_address": "06:00:ac:10:00:05",
     "ipv4": { "address": "172.16.0.5", "prefix_length": 24, "gateway": "172.16.0.1" },
     "ipv6": { "address": "fd12:3456:789a::5", "prefix_length": 64, "gateway": "fd12:3456:789a::1" },
     "mtu": 1442,
     "nameservers": ["172.16.0.2"],
-    "search_domains": ["proj.strato.internal"],
-    "hostname": "strato-0f1e2d3c4b5a"
+    "search_domains": ["proj.strato.internal"]
   }
 }
 ```
 
 `network` is absent for a sandbox with no NIC (and for warm-start templates,
 which carry no network device at all); everything inside it but the addresses
-is optional.
+is optional. `hostname` sits *beside* it rather than inside it, because a
+hostname belongs to the sandbox and not to its NIC — nesting it would leave two
+sandboxes of one image differing in name by NIC presence alone.
 
-**The schema version is a hard pairing requirement, deliberately.** Both sides
-refuse a version they do not recognize rather than guessing, so an agent that
-writes v2 documents onto a host still running a v1 guest image fails every
-sandbox boot with `unsupported config-drive schema version` on the serial
-console. Install the guest image and the agent together.
+**The version stamped is the minimum the document needs, not the newest the
+host knows.** A network-free document is stamped v1 even by an agent that can
+write v2, and the guest accepts anything in `1...SCHEMA_VERSION` — so an
+older guest image keeps booting sandboxes whose drives carry nothing it does
+not understand. A drive carrying a `network` block is stamped v2, and a guest
+that predates it refuses with `unsupported config-drive schema version` on the
+serial console rather than booting a sandbox whose NIC it would silently
+ignore. Since the guest image is distributed separately from the agent, that is
+what keeps a lagging image from being a fleet-wide outage while still failing
+loudly at the point it matters.
 
 ### Guest networking ([STR-101])
 
@@ -97,6 +104,15 @@ that reports `running` has to actually be on its network. The two files
 written into the rootfs (`/etc/resolv.conf`, `/etc/hosts`) are best effort by
 contrast — a read-only rootfs is a legitimate shape — and `/etc` is created
 rather than assumed, since scratch and distroless images may not have one.
+
+Three things are *not* gated on having a NIC, because their reasons are not
+about networking: `lo` comes up for every sandbox (workloads bind `127.0.0.1`
+with no NIC in sight), `/etc/hosts` is written for every sandbox (a scratch
+image with no host table cannot resolve `localhost` either way), and the
+hostname is set for every sandbox (it is the sandbox's name, not the NIC's).
+A warm-launched sandbox gets its hostname over the `launch` control request
+instead of the config drive, since its guest booted from the *template's*
+drive.
 
 Testable end to end with a hand-plugged TAP on a dev host: boot the guest with
 a `network` block and a `tap` device, no OVN or control plane involved.

@@ -237,9 +237,10 @@ Docker-compatible rules), so those runtime semantics live in exactly one place �
 and, at schema v2, the NIC's static L3 configuration (STR-101, see
 [Guest networking](#guest-networking-the-holding-pattern)). This keeps the
 container image pristine and lets the workload launch without waiting on the
-host to connect vsock. The schema is versioned in lockstep and **both sides
-refuse a version they do not recognize**, so a guest image and an agent from
-different releases fail loudly rather than booting a half-configured guest.
+host to connect vsock. The host stamps the **minimum schema version the
+document needs** and the guest refuses anything past what it understands, so a
+guest image older than its agent keeps booting the drives it fully understands
+and fails loudly only on one carrying something it would otherwise ignore.
 
 **vsock control surface.** The init serves newline-delimited JSON on a guest
 vsock port (default 1024). The v1 surface is health + exit only: `ping` →
@@ -755,10 +756,24 @@ the switch. Three decisions worth keeping:
   a sandbox report `running` with a dead NIC. The resolver files are the
   exception (best effort — a read-only rootfs is legitimate), and `/etc` is
   created rather than assumed for scratch/distroless images.
-- **The schema version is a pairing requirement.** Both sides refuse a
-  version they do not recognize, so a v2 agent against a v1 guest image fails
-  every sandbox boot loudly instead of booting one with no network. Install
-  the guest image and the agent together.
+- **The schema version stamps what the document needs, not what the host
+  knows.** A network-free drive is stamped v1 even by an agent that can write
+  v2, and the guest accepts `1...SCHEMA_VERSION` — so a node whose
+  separately-distributed guest image lags the agent keeps booting sandboxes
+  whose drives carry nothing new. A drive with a `network` block is stamped
+  v2 and an older guest refuses it, loudly, rather than booting a sandbox
+  whose NIC it would ignore in silence. The strictness bites exactly where it
+  buys something.
+
+**Not on the config drive: metadata routes.** A VM's static guest gets
+explicit routes to the instance-metadata addresses from its cloud-init seed,
+and a DHCP guest gets the v4 half via option 121 (STR-53). A sandbox guest is
+static *and* runs no DHCP client, so it gets neither — `metadataEnabled` is
+carried on the NIC's spec but ignored when the guest's network block is built.
+Instance metadata for sandboxes is unimplemented rather than deliberately
+excluded; delivering it means a `routes` field on the block, and it belongs
+with whichever arm picks up sandbox metadata rather than with the interface
+bring-up.
 
 **The NIC still does not go on the wire.**
 `SandboxSpecBuilder.guestNetworkingSupported` is `false` (#524), so no

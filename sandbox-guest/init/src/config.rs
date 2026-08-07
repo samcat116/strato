@@ -19,17 +19,29 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The current config-drive schema version. The host stamps this; a guest that
-/// does not recognize it refuses to launch rather than guessing.
+/// The newest config-drive schema version this init understands.
 ///
 /// * v1 — the original document (identity, rootfs, vsock, process config).
 /// * v2 — adds the optional [`NetworkConfig`] block (STR-101).
 pub const SCHEMA_VERSION: u32 = 2;
 
+/// The oldest schema version this init still understands. Every version in
+/// `MINIMUM_SCHEMA_VERSION..=SCHEMA_VERSION` is accepted.
+pub const MINIMUM_SCHEMA_VERSION: u32 = 1;
+
 /// Top-level config-drive document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuestConfig {
-    /// Schema version; must equal [`SCHEMA_VERSION`] for this init build.
+    /// The **minimum** schema version needed to act on this document, which the
+    /// host stamps from what the document actually carries — not simply the
+    /// newest version the host knows.
+    ///
+    /// So a network-free document is stamped v1 even by a host that can write
+    /// v2, and keeps booting on an older guest image; a document carrying a
+    /// [`NetworkConfig`] is stamped v2, and a guest that predates the block
+    /// refuses it rather than booting a sandbox whose NIC it would silently
+    /// ignore. A version this init understands but did not write is fine; one
+    /// newer than [`SCHEMA_VERSION`] is not.
     pub schema_version: u32,
     /// The sandbox's control-plane id, echoed back over vsock for identity.
     pub sandbox_id: String,
@@ -55,6 +67,15 @@ pub struct GuestConfig {
     /// that sandbox's identity and process via a `launch` control request.
     #[serde(default)]
     pub warm_hold: bool,
+    /// Hostname the guest boots under (STR-101).
+    ///
+    /// Deliberately *not* inside [`NetworkConfig`]: a hostname is a property of
+    /// the sandbox, not of its NIC, and the fork path's `reidentify` already
+    /// renames every restored guest regardless of whether it has one. Keeping
+    /// it here is what stops two sandboxes of the same image from differing in
+    /// hostname purely by NIC presence.
+    #[serde(default)]
+    pub hostname: Option<String>,
     /// The sandbox's single NIC, when it has one (STR-101). Absent for a
     /// network-free sandbox and for warm-start templates, which carry no
     /// network device at all.
@@ -126,9 +147,6 @@ pub struct NetworkConfig {
     /// the same as they would for a DHCP guest given `domain_name`.
     #[serde(default)]
     pub search_domains: Vec<String>,
-    /// Hostname to set (and to map to this NIC's addresses in `/etc/hosts`).
-    #[serde(default)]
-    pub hostname: Option<String>,
 }
 
 /// One address family's assignment: the address itself, its on-link prefix,
@@ -216,7 +234,9 @@ impl std::fmt::Display for ConfigError {
             ConfigError::UnsupportedSchema(v) => {
                 write!(
                     f,
-                    "unsupported config-drive schema version {v} (expected {SCHEMA_VERSION})"
+                    "unsupported config-drive schema version {v} \
+                     (this init understands {MINIMUM_SCHEMA_VERSION}...{SCHEMA_VERSION}); \
+                     the guest image is older than the agent that wrote this drive"
                 )
             }
             ConfigError::EmptyCommand => {
@@ -269,7 +289,13 @@ impl GuestConfig {
     ///   * **cwd**: `overrides.workdir` ?? image `WorkingDir` ?? `/`.
     ///   * **user**: `overrides.user` ?? image `User` ?? `0:0`, numeric only.
     pub fn resolve_process(&self) -> Result<ResolvedProcess, ConfigError> {
-        if self.schema_version != SCHEMA_VERSION {
+        // A version *older* than this build's is fully understood — the schema
+        // is additive, and the host stamps the minimum a document needs — so
+        // only a newer one is a refusal. That is what lets an agent that can
+        // write v2 keep booting network-free sandboxes on a guest image that
+        // predates the network block, while still refusing a document whose
+        // NIC this init would silently ignore.
+        if !(MINIMUM_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&self.schema_version) {
             return Err(ConfigError::UnsupportedSchema(self.schema_version));
         }
         resolve_process(&self.image_config, &self.overrides)
@@ -418,6 +444,7 @@ mod tests {
             },
             overrides: ProcessOverrides::default(),
             warm_hold: false,
+            hostname: None,
             network: None,
         }
     }
@@ -450,20 +477,21 @@ mod tests {
             "identity_nonce": "nonce-xyz",
             "rootfs": {"device": "/dev/vda"},
             "image_config": {"Cmd": ["/bin/sh"]},
+            "hostname": "strato-abc123",
             "network": {
                 "mac_address": "06:00:AC:10:00:05",
                 "ipv4": {"address": "172.16.0.5", "prefix_length": 24, "gateway": "172.16.0.1"},
                 "ipv6": {"address": "fd12:3456:789a::5", "prefix_length": 64, "gateway": "fd12:3456:789a::1"},
                 "mtu": 1442,
                 "nameservers": ["172.16.0.2"],
-                "search_domains": ["proj.strato.internal"],
-                "hostname": "strato-abc123"
+                "search_domains": ["proj.strato.internal"]
             }
         }"#;
-        let net = GuestConfig::from_slice(json)
-            .expect("parse")
-            .network
-            .expect("network block");
+        let cfg = GuestConfig::from_slice(json).expect("parse");
+        // The hostname is a property of the sandbox, not of its NIC, so it
+        // lives beside the identity rather than inside the network block.
+        assert_eq!(cfg.hostname.as_deref(), Some("strato-abc123"));
+        let net = cfg.network.expect("network block");
         assert_eq!(net.mac_address.as_deref(), Some("06:00:AC:10:00:05"));
         assert_eq!(
             net.ipv4,
@@ -477,7 +505,6 @@ mod tests {
         assert_eq!(net.mtu, Some(1442));
         assert_eq!(net.nameservers, vec!["172.16.0.2".to_string()]);
         assert_eq!(net.search_domains, vec!["proj.strato.internal".to_string()]);
-        assert_eq!(net.hostname.as_deref(), Some("strato-abc123"));
     }
 
     #[test]
@@ -582,15 +609,27 @@ mod tests {
         assert_eq!(c.resolve_process(), Err(ConfigError::UnsupportedSchema(99)));
     }
 
+    /// The host stamps the *minimum* version a document needs, so a v1 stamp
+    /// from a newer agent means "this drive carries nothing past v1" — fully
+    /// understood, and refusing it would strand every network-free sandbox on
+    /// a node whose guest image lags the agent.
     #[test]
-    fn an_older_schema_is_rejected_rather_than_guessed() {
-        // The contract runs both ways: a v1 host paired with this guest is a
-        // deployment mistake, and refusing is what surfaces it — the guest
-        // cannot know whether the missing block means "no NIC" or "a NIC this
-        // host could not describe".
+    fn an_older_schema_is_understood_rather_than_refused() {
         let mut c = base_config();
-        c.schema_version = 1;
-        assert_eq!(c.resolve_process(), Err(ConfigError::UnsupportedSchema(1)));
+        c.schema_version = MINIMUM_SCHEMA_VERSION;
+        assert!(c.resolve_process().is_ok());
+    }
+
+    /// A version past this build's is the one that must fail: it can only mean
+    /// the drive carries something this init would silently ignore.
+    #[test]
+    fn a_newer_schema_is_refused() {
+        let mut c = base_config();
+        c.schema_version = SCHEMA_VERSION + 1;
+        assert_eq!(
+            c.resolve_process(),
+            Err(ConfigError::UnsupportedSchema(SCHEMA_VERSION + 1))
+        );
     }
 
     #[test]

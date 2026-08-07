@@ -11,19 +11,40 @@ import StratoShared
 /// distilled `SandboxGuestConfig`, encodes it, and writes it NUL-padded to the
 /// config block device.
 ///
-/// The schema is versioned in lockstep with the guest: both stamp
-/// ``schemaVersion`` and a guest that does not recognize it refuses to launch
-/// rather than guessing. Field naming deliberately matches the guest's serde
-/// contract — snake_case at the top level, PascalCase inside `image_config`
-/// (so the OCI image config forwards with minimal reshaping), snake_case inside
-/// `overrides` — so this Codable and the Rust one stay byte-compatible.
+/// The schema is versioned in lockstep with the guest: the host stamps the
+/// **minimum** version a document needs and a guest that does not understand
+/// that version refuses to launch rather than guessing. Field naming
+/// deliberately matches the guest's serde contract — snake_case at the top
+/// level, PascalCase inside `image_config` (so the OCI image config forwards
+/// with minimal reshaping), snake_case inside `overrides` — so this Codable and
+/// the Rust one stay byte-compatible.
 public struct SandboxConfigDrive: Codable, Equatable, Sendable {
-    /// Config-drive schema version understood by both host and guest. Must match
+    /// Newest config-drive schema version this build writes. Must match
     /// `SCHEMA_VERSION` in the guest init.
     ///
     /// * v1 — identity, rootfs, vsock, process config.
     /// * v2 — adds the optional ``NetworkConfig`` block (STR-101).
     public static let schemaVersion: UInt32 = 2
+
+    /// The oldest version any document is stamped with — the schema every
+    /// guest image that has ever shipped understands.
+    public static let baseSchemaVersion: UInt32 = 1
+
+    /// The minimum schema version a document carrying `network` needs, which is
+    /// what the drive is actually stamped with.
+    ///
+    /// Stamping the newest version unconditionally would be a fleet-wide
+    /// outage for no gain: the guest image is a separately distributed artifact
+    /// (see `SandboxGuestImage`), so lagging an agent upgrade is the normal
+    /// rollout state, and until STR-103 flips `guestNetworkingSupported` every
+    /// document written is network-free. Stamping what the *content* requires
+    /// means a v1 guest keeps booting those, and the refusal fires precisely
+    /// when the drive carries a NIC the guest would otherwise ignore in
+    /// silence. The guest accepts any version in
+    /// `baseSchemaVersion...schemaVersion` for the same reason.
+    public static func requiredSchemaVersion(network: NetworkConfig?) -> UInt32 {
+        network == nil ? baseSchemaVersion : schemaVersion
+    }
 
     /// The guest vsock port the control agent listens on. Matches the guest's
     /// `DEFAULT_VSOCK_PORT`; the runtime connects here for health/status.
@@ -55,6 +76,13 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     /// snapshotted. Encoded only when true so ordinary config documents are
     /// byte-identical to pre-warm-start ones.
     public let warmHold: Bool?
+    /// Hostname the guest boots under (STR-101).
+    ///
+    /// Top-level rather than inside ``NetworkConfig``: a hostname belongs to
+    /// the sandbox, not to its NIC. Nesting it would leave two sandboxes of one
+    /// image differing in hostname purely by NIC presence, and the fork path's
+    /// `reidentify` already renames every restored guest either way.
+    public let hostname: String?
     /// The sandbox's single NIC, when it has one (STR-101). Encoded only when
     /// present, so a network-free sandbox's document is unchanged.
     public let network: NetworkConfig?
@@ -67,9 +95,11 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         imageConfig: ImageConfig,
         overrides: ProcessOverrides,
         warmHold: Bool? = nil,
+        hostname: String? = nil,
         network: NetworkConfig? = nil
     ) {
-        self.schemaVersion = SandboxConfigDrive.schemaVersion
+        self.schemaVersion = SandboxConfigDrive.requiredSchemaVersion(network: network)
+        self.hostname = hostname
         self.sandboxId = sandboxId
         self.identityNonce = identityNonce
         self.rootfs = rootfs
@@ -86,6 +116,9 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     /// The image config carries the OCI image's own entrypoint/cmd/env/etc.; the
     /// spec's overrides are forwarded separately so the *guest* performs the
     /// OCI-compatible merge (keeping that logic in exactly one place).
+    /// The hostname defaults to the id-derived label every sandbox boots under;
+    /// pass one explicitly only where the caller has a different name (a
+    /// warm-start template, which is not a sandbox).
     public init(
         sandboxId: String,
         identityNonce: String,
@@ -108,6 +141,7 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
                 env: spec.env,
                 workdir: spec.workingDir,
                 user: nil),
+            hostname: SandboxConfigDrive.guestHostname(sandboxId: sandboxId),
             network: network)
     }
 
@@ -155,7 +189,6 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         public let mtu: Int?
         public let nameservers: [String]
         public let searchDomains: [String]
-        public let hostname: String?
 
         public init(
             macAddress: String?,
@@ -163,8 +196,7 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
             ipv6: AddressConfig? = nil,
             mtu: Int? = nil,
             nameservers: [String] = [],
-            searchDomains: [String] = [],
-            hostname: String? = nil
+            searchDomains: [String] = []
         ) {
             self.macAddress = macAddress
             self.ipv4 = ipv4
@@ -172,7 +204,6 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
             self.mtu = mtu
             self.nameservers = nameservers
             self.searchDomains = searchDomains
-            self.hostname = hostname
         }
 
         enum CodingKeys: String, CodingKey {
@@ -182,7 +213,6 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
             case mtu
             case nameservers
             case searchDomains = "search_domains"
-            case hostname
         }
     }
 
@@ -210,15 +240,15 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     /// Build the guest's network block from the NIC the agent actually
     /// realized.
     ///
-    /// Throws when the attachment carries an address the guest could not be
-    /// told how to use — an IPv4 address whose netmask is missing or not a
-    /// contiguous mask, or an unparsable IPv6 prefix. Silently dropping the
-    /// family would boot a sandbox with a link-up, unaddressed interface and
-    /// report it `running`, which is the exact mis-convergence in-guest
-    /// networking exists to avoid.
+    /// Throws when the guest could not be told how to address the NIC: an IPv4
+    /// address whose netmask is missing or not a contiguous mask, an IPv6
+    /// prefix out of range, or — the case the other two are guarding against in
+    /// the first place — no address in either family. All three would boot a
+    /// sandbox with a link-up, unaddressed interface and report it `running`,
+    /// which is the exact mis-convergence in-guest networking exists to avoid,
+    /// and the guest runs no DHCP client to recover from any of them.
     public static func network(
-        for attachment: ResolvedNetworkAttachment,
-        hostname: String?
+        for attachment: ResolvedNetworkAttachment
     ) throws -> NetworkConfig {
         var ipv4: AddressConfig?
         if let address = attachment.ipAddress, !address.isEmpty {
@@ -246,14 +276,36 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
                 address: address, prefixLength: prefix, gateway: nonEmpty(attachment.gateway6))
         }
 
+        // An attachment with no address at all is what the two throws above
+        // exist to prevent, arrived at by a different route: IPAM allocated
+        // nothing, or the fields never reached this agent. `networkingUnsupported`
+        // is `.permanent`, which is right — a retry will not conjure an
+        // allocation.
+        guard ipv4 != nil || ipv6 != nil else {
+            throw SandboxRuntimeError.networkingUnsupported(
+                "the NIC on network '\(attachment.network)' carries no IPv4 or IPv6 address, and "
+                    + "the guest runs no DHCP client, so it would boot with an unaddressed interface")
+        }
+
         return NetworkConfig(
             macAddress: nonEmpty(attachment.macAddress),
             ipv4: ipv4,
             ipv6: ipv6,
             mtu: attachment.mtu,
-            nameservers: attachment.dnsServers.compactMap { nonEmpty($0) },
-            searchDomains: [nonEmpty(attachment.domainName)].compactMap { $0 },
-            hostname: hostname)
+            // Filtered to addresses that parse, and to a search domain with no
+            // whitespace, for the reason `CloudInitProvisioner` filters the
+            // same two fields: these land as directives in a line-oriented
+            // `/etc/resolv.conf`, so anything that is not one is a character
+            // that could end a line and start another. `NetworkController`'s
+            // `validatedDNS`/`validatedDomainName` have gated this on write
+            // since the fields' first release, so nothing reachable is dropped
+            // here — the renderer just stops depending on that, as the VM path
+            // already did. The guest re-checks too; neither side relies on the
+            // other.
+            nameservers: attachment.dnsServers.compactMap { nonEmpty($0) }
+                .filter { IPv4Address($0) != nil || IPv6Address($0) != nil },
+            searchDomains: [nonEmpty(attachment.domainName)].compactMap { $0 }
+                .filter { domain in !domain.contains(where: { $0.isWhitespace || $0 == "#" }) })
     }
 
     private static func nonEmpty(_ value: String?) -> String? {
@@ -318,6 +370,7 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         case imageConfig = "image_config"
         case overrides
         case warmHold = "warm_hold"
+        case hostname
         case network
     }
 
