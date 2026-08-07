@@ -21,25 +21,12 @@ actor ImageFetchService: ImageFetchServiceProtocol {
     private let app: Application
     private var activeFetches: [UUID: Task<Void, Error>] = [:]
     private var activeArtifactFetches: [UUID: Task<Void, Error>] = [:]
-    private let httpClient: HTTPClient
 
     /// Progress update interval in bytes (update every 1MB)
     private let progressUpdateInterval: Int64 = 1024 * 1024
 
     init(app: Application) {
         self.app = app
-        // Redirects are DISABLED at the client level so `downloadFile` can follow
-        // them by hand and SSRF-check every hop's host; auto-following would let
-        // a validated `sourceURL` 3xx to an internal address unchecked.
-        var configuration = HTTPClient.Configuration()
-        configuration.redirectConfiguration = .disallow
-        self.httpClient = HTTPClient(
-            eventLoopGroupProvider: .shared(app.eventLoopGroup),
-            configuration: configuration)
-    }
-
-    deinit {
-        try? httpClient.syncShutdown()
     }
 
     /// Starts fetching an image from its source URL
@@ -311,8 +298,6 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         try await artifact.save(on: db)
     }
 
-    /// Downloads a file from URL to local path, invoking `onProgress` with a
-    /// 0–99 percentage as bytes arrive.
     /// How many redirects a fetch may follow. Matches AsyncHTTPClient's default
     /// `RedirectConfiguration()` limit; we resolve them by hand (see
     /// `downloadFile`) so every hop can be SSRF-checked before it's connected.
@@ -325,63 +310,90 @@ actor ImageFetchService: ImageFetchServiceProtocol {
     /// volume. Kept in sync with `ImageController.maxUploadBytes` (4 GiB).
     private static let maxDownloadBytes: Int64 = 4 * 1024 * 1024 * 1024
 
+    private typealias DownloadResult = (size: Int64, checksum: String, format: ImageFormat)
+
+    /// What one hop of the redirect chain resolved to.
+    private enum HopOutcome {
+        case redirect(URL)
+        case completed(DownloadResult)
+    }
+
+    /// Downloads a file from `url` into `key`, invoking `onProgress` with a
+    /// 0–99 percentage as bytes arrive. Every request it makes — the initial one
+    /// and every redirect hop — goes through the guarded client.
     private func downloadFile(
         from url: URL,
         to key: String,
         in store: any ImageObjectStore,
         onProgress: @escaping (Int) async throws -> Void
-    ) async throws -> (size: Int64, checksum: String, format: ImageFormat) {
-        let environment = app.environment
-        let threadPool = app.threadPool
+    ) async throws -> DownloadResult {
+        let guarded = app.guardedHTTPClient
+
+        var headers = HTTPHeaders()
+        headers.add(name: "User-Agent", value: "Strato/1.0")
+        headers.add(name: "Accept", value: "*/*")
 
         // Redirects are followed BY HAND rather than by AsyncHTTPClient so the
-        // SSRF guard sees every hop's host: an attacker-controlled `sourceURL`
-        // may pass validation and then 3xx to `169.254.169.254` or an internal
+        // guard sees every hop's host: an attacker-controlled `sourceURL` may
+        // pass validation and then 3xx to `169.254.169.254` or an internal
         // service, which auto-follow would fetch unchecked. Every distro in the
         // catalog that isn't a direct CDN link (Fedora, openSUSE, Rocky) is
         // reached through a mirror redirector, so following them (up to the same
         // limit as the default config) still matters — `ImageFetchRedirectTests`
         // pins that behaviour.
+        //
+        // Each hop is its own guarded request, so each is validated *and* pinned
+        // to the address that validation approved: `dnsOverride` is fixed at
+        // client construction, so a hop cannot ride on the previous hop's pin.
         var currentURL = url
-        var response: HTTPClientResponse!
         for _ in 0...Self.maxRedirects {
-            // Re-validate every hop's host before connecting so a redirect to a
-            // non-public address is rejected, not just the initial URL. (The
-            // connection re-resolves the host; pinning the resolved address to
-            // fully close the DNS-rebind window is a follow-up.)
-            try await SSRFGuard.validate(url: currentURL, environment: environment, on: threadPool)
-
-            var request = HTTPClientRequest(url: currentURL.absoluteString)
-            request.method = .GET
-            request.headers.add(name: "User-Agent", value: "Strato/1.0")
-            request.headers.add(name: "Accept", value: "*/*")
-
-            // The shared client has redirects disabled, so this returns the 3xx
-            // itself rather than auto-following it to an unchecked host.
-            let candidate = try await httpClient.execute(request, timeout: .minutes(30))
-
-            // 3xx with a Location: resolve against the current URL and loop, so
-            // the next iteration re-validates the target before connecting.
-            if (300...399).contains(candidate.status.code),
-                let location = candidate.headers.first(name: "location"),
-                let next = URL(string: location, relativeTo: currentURL)?.absoluteURL
-            {
-                currentURL = next
-                continue
+            let outcome = try await guarded.withStreamedResponse(
+                url: currentURL, method: .GET, headers: headers, timeout: .minutes(30)
+            ) { response -> HopOutcome in
+                // 3xx with a Location: resolve against the current URL and loop,
+                // so the next hop is validated and pinned before it is connected.
+                //
+                // The redirect's own body is deliberately left unread. The
+                // streaming contract is consume-or-cancel, and this is the
+                // cancel: returning without iterating drops the body sequence,
+                // and the guarded client then shuts this hop's client down —
+                // which closes the connection rather than leaving a half-read
+                // response holding it. Reading a redirect body would mean
+                // buffering an attacker-chosen payload for nothing.
+                if (300...399).contains(response.status.code),
+                    let location = response.headers.first(name: "location"),
+                    let next = URL(string: location, relativeTo: currentURL)?.absoluteURL
+                {
+                    return .redirect(next)
+                }
+                guard response.status == .ok else {
+                    throw ImageError.downloadFailed(
+                        "HTTP \(response.status.code): \(response.status.reasonPhrase)")
+                }
+                return .completed(
+                    try await self.streamBody(
+                        of: response, to: key, in: store, onProgress: onProgress))
             }
 
-            response = candidate
-            break
+            switch outcome {
+            case .redirect(let next):
+                currentURL = next
+            case .completed(let result):
+                return result
+            }
         }
 
-        guard let response else {
-            throw ImageError.downloadFailed("Exceeded redirect limit of \(Self.maxRedirects)")
-        }
+        throw ImageError.downloadFailed("Exceeded redirect limit of \(Self.maxRedirects)")
+    }
 
-        guard response.status == .ok else {
-            throw ImageError.downloadFailed("HTTP \(response.status.code): \(response.status.reasonPhrase)")
-        }
-
+    /// Streams a 200 response's body into `key`, hashing and size-capping it as
+    /// it goes. Runs while the guarded connection is still open.
+    private func streamBody(
+        of response: HTTPClientResponse,
+        to key: String,
+        in store: any ImageObjectStore,
+        onProgress: @escaping (Int) async throws -> Void
+    ) async throws -> DownloadResult {
         // Get expected content length if available
         let expectedLength = response.headers.first(name: "content-length").flatMap(Int64.init)
 

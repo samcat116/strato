@@ -342,12 +342,40 @@ struct OIDCValidation {
         return defaultAllowedDomainSuffixes
     }
 
-    /// SSRF guard for every server-side OIDC fetch (discovery, token exchange,
-    /// UserInfo, JWKS): the URL must be HTTPS and its host must be allowed.
-    /// Endpoints can be set manually by an org admin or copied from a discovery
-    /// document, so enforcing the allow-list only on the discovery fetch is not
-    /// enough — the other endpoints could otherwise be pointed at internal
-    /// services.
+    /// Whether `host` falls under an allow-list suffix entry, matched on label
+    /// boundaries.
+    ///
+    /// A bare `hasSuffix` would be a trap for operators: the shipped defaults
+    /// all carry a leading dot (`.okta.com`), but an operator who sets
+    /// `OIDC_DISCOVERY_ALLOWED_SUFFIXES=example.com` would also be allowing
+    /// `evilexample.com`. An entry without a leading dot is therefore read as
+    /// "this domain and its subdomains" — `example.com` and `id.example.com`,
+    /// never `evilexample.com`. An entry with one keeps its existing meaning:
+    /// subdomains only (the apex, where it is trusted, is listed in
+    /// `allowedHosts`). Matching is case-insensitive because DNS is.
+    static func hostMatchesSuffix(_ host: String, suffix: String) -> Bool {
+        let host = host.lowercased()
+        let suffix = suffix.lowercased()
+        guard !suffix.isEmpty else { return false }
+        if suffix.hasPrefix(".") {
+            return host.hasSuffix(suffix)
+        }
+        return host == suffix || host.hasSuffix(".\(suffix)")
+    }
+
+    /// Name-based gate for every server-side OIDC fetch (discovery, token
+    /// exchange, UserInfo, JWKS): the URL must be HTTPS and its host must be
+    /// allowed. Endpoints can be set manually by an org admin or copied from a
+    /// discovery document, so enforcing the allow-list only on the discovery
+    /// fetch is not enough — the other endpoints could otherwise be pointed at
+    /// internal services.
+    ///
+    /// This is *one of two* gates, not the whole SSRF defense: an allow-listed
+    /// name can still resolve to a private address. The fetches themselves go
+    /// through `GuardedHTTPClient`, which classifies the resolved address and
+    /// pins the connection to it. Keep both — the allow-list is a name-based
+    /// root of trust the address classifier cannot express, and the classifier
+    /// covers what a name cannot promise.
     ///
     /// Two things make a host allowed. The global allow-list
     /// (`OIDC_DISCOVERY_ALLOWED_HOSTS`/`_SUFFIXES`) is the operator's static
@@ -369,10 +397,11 @@ struct OIDCValidation {
             throw Abort(.badRequest, reason: "\(label) must be a valid HTTPS URL")
         }
 
+        let lowercasedHost = host.lowercased()
         let isHostAllowed =
-            allowedHosts().contains(host)
-            || allowedDomainSuffixes().contains { host.hasSuffix($0) }
-            || perProviderHosts.contains(host)
+            allowedHosts().contains { $0.lowercased() == lowercasedHost }
+            || allowedDomainSuffixes().contains { hostMatchesSuffix(host, suffix: $0) }
+            || perProviderHosts.contains { $0.lowercased() == lowercasedHost }
         guard isHostAllowed else {
             throw Abort(
                 .badRequest,

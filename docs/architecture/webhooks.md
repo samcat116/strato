@@ -54,9 +54,11 @@ error strings) from any project in the organization (the same
 - **Secrets** are generated server-side (`whsec_…`), stored encrypted at rest
   by `SecretsEncryptionService`, and shown exactly once — in the create and
   rotate-secret responses.
-- **SSRF**: target URLs are validated by `SSRFGuard` at create/update *and*
-  again by the delivery sweep before every POST, so a DNS record that later
-  rebinds to an internal address is still refused.
+- **SSRF**: target URLs are validated by `SSRFGuard` at create/update, and the
+  delivery sweep POSTs through `GuardedHTTPClient`, which re-validates before
+  every attempt and pins the connection to the address it approved — so a DNS
+  record that later rebinds to an internal address is refused, and one that
+  rebinds *between* the check and the connect is never reached.
 
 ## Transactional outbox
 

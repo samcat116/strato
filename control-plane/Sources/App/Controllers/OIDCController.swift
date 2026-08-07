@@ -757,10 +757,15 @@ struct OIDCController: RouteCollection {
     }
 
     private func fetchDiscoveryDocument(url: String, on req: Request) async throws -> OIDCDiscoveryDocument {
-        // Validate URL to prevent SSRF attacks (HTTPS + host allow-list)
+        // Two gates, not either/or. The allow-list is a name-based root of trust
+        // the address classifier cannot express (only these IdPs may be talked
+        // to at all); the guarded client then classifies the address the name
+        // actually resolves to and pins the connection to it, so an allow-listed
+        // host that resolves — or rebinds — to an internal address is refused.
         try OIDCValidation.validateAllowedFetchURL(url, label: "Discovery URL")
 
-        let response = try await req.client.get(URI(string: url))
+        let response = try await req.guardedHTTPClient.send(
+            ClientRequest(method: .GET, url: URI(string: url)))
         return try response.content.decode(OIDCDiscoveryDocument.self)
     }
 
@@ -789,9 +794,11 @@ struct OIDCController: RouteCollection {
             throw Abort(.internalServerError, reason: "Token endpoint not configured")
         }
 
-        // Same SSRF guard as the discovery fetch: the stored endpoint may
-        // have been set manually or copied from a discovery document. A
-        // manually-set host still has to satisfy the global allow-list.
+        // Same two gates as the discovery fetch: the stored endpoint may have
+        // been set manually or copied from a discovery document. A manually-set
+        // host still has to satisfy the global allow-list, and the guarded
+        // client below still has to approve the address it resolves to — this
+        // request carries the provider's decrypted client secret.
         try OIDCValidation.validateAllowedFetchURL(
             tokenEndpoint, label: "Token endpoint", perProviderHosts: provider.discoveredHostSet)
 
@@ -809,9 +816,9 @@ struct OIDCController: RouteCollection {
             body["code_verifier"] = codeVerifier
         }
 
-        let response = try await req.client.post(URI(string: tokenEndpoint)) { clientReq in
-            try clientReq.content.encode(body, as: .urlEncodedForm)
-        }
+        var request = ClientRequest(method: .POST, url: URI(string: tokenEndpoint))
+        try request.content.encode(body, as: .urlEncodedForm)
+        let response = try await req.guardedHTTPClient.send(request)
 
         guard response.status == .ok else {
             throw Abort(.badGateway, reason: "Token exchange failed")
@@ -897,12 +904,13 @@ struct OIDCController: RouteCollection {
         provider: OIDCProvider,
         on req: Request
     ) async throws -> OIDCUserInfoResponse {
-        // Same SSRF guard as the discovery fetch (HTTPS + host allow-list).
+        // Same two gates as the discovery fetch: HTTPS + host allow-list here,
+        // address classification and connection pinning in the guarded client.
         try OIDCValidation.validateAllowedFetchURL(
             endpoint, label: "UserInfo endpoint", perProviderHosts: provider.discoveredHostSet)
-        let response = try await req.client.get(URI(string: endpoint)) { clientReq in
-            clientReq.headers.bearerAuthorization = BearerAuthorization(token: accessToken)
-        }
+        var request = ClientRequest(method: .GET, url: URI(string: endpoint))
+        request.headers.bearerAuthorization = BearerAuthorization(token: accessToken)
+        let response = try await req.guardedHTTPClient.send(request)
         guard response.status == .ok else {
             throw Abort(.badGateway, reason: "UserInfo request failed")
         }
@@ -959,13 +967,15 @@ struct OIDCController: RouteCollection {
     /// per-key in `OIDCTokenVerification.makeSigners` so one unsupported key
     /// can't invalidate the whole set.
     private func fetchJWKS(uri: String, provider: OIDCProvider, on req: Request) async throws -> Data {
-        // Validate JWKS URI for security (HTTPS + host allow-list)
+        // Same two gates as the discovery fetch: HTTPS + host allow-list here,
+        // address classification and connection pinning in the guarded client.
         try OIDCValidation.validateAllowedFetchURL(
             uri, label: "JWKS URI", perProviderHosts: provider.discoveredHostSet)
 
         req.logger.debug("Fetching JWKS from URI", metadata: ["uri": .string(uri)])
 
-        let response = try await req.client.get(URI(string: uri))
+        let response = try await req.guardedHTTPClient.send(
+            ClientRequest(method: .GET, url: URI(string: uri)))
         guard response.status == .ok else {
             throw Abort(.badGateway, reason: "Failed to fetch JWKS from \(uri)")
         }

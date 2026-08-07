@@ -370,6 +370,38 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
   half-finished.
 - Backing formats are **detected**, never assumed.
 
+**Outbound HTTP (SSRF)**
+- Any fetch whose destination a tenant can influence — image `sourceURL`, an
+  OCI registry host or the token realm it advertises, a webhook URL, an OIDC
+  endpoint — goes through `app.guardedHTTPClient`. `app.client` and
+  `app.http.client.shared` are for operator-configured destinations only.
+  **One live exemption**: `SSFService` hands `app.http.client.shared` to
+  `SSFReceiver`, whose transmitter URL an org admin supplies. swift-ssf's
+  `SSFReceiverConfiguration` takes an `HTTPClient`, which the guarded client
+  deliberately is not, so that path has the host allow-list
+  (`SSFValidation.validateTransmitterURL`) and no address classification or
+  pin. Closing it means either a guarded `HTTPClient` shim or an upstream
+  change — don't read the rule above as saying it's already covered.
+- Validating without pinning is not a fix. `SSRFGuard.validate` resolves the
+  host; the connection resolves it *again*, so a low-TTL record can rebind the
+  name to `169.254.169.254` in between. The guarded client validates, pins
+  `dnsOverride` to an address it approved, and refuses redirects — a new call
+  site that re-spells part of that sequence is blocking.
+- Build the request from the URL that was validated, not from the raw string.
+  If two parsers disagree about the host, the pin misses silently while
+  validation still "passes".
+- A host allow-list is an *additional* gate, never a substitute for
+  classifying the resolved address (the OIDC path had only the allow-list).
+  Match allow-list suffixes on label boundaries — a bare `hasSuffix` on
+  `example.com` also allows `evilexample.com`. The OIDC and SSF lists share
+  their defaults, so a fix to one that skips the other leaves the hole open
+  under the same environment variable.
+- `OUTBOUND_FETCH_ALLOW_PRIVATE_HOSTS` (deprecated alias:
+  `IMAGE_FETCH_ALLOW_PRIVATE_HOSTS`) disables validation *and* the pin for
+  every guarded fetch at once — images, registry, webhooks, and the OIDC
+  token exchange that carries a decrypted client secret. Treat a diff that
+  widens where it applies, or that reads it as image-scoped, accordingly.
+
 **Fluent query building**
 - A `.join` issued **inside** a `.group(.or) { … }` closure is dropped from the
   emitted SQL while its filter is kept, so the statement names a table it never
