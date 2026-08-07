@@ -9,11 +9,44 @@ public enum VsockCIDReservation: Sendable, Equatable {
     case unchanged
     /// Refused: another workload already holds this CID. Two workloads on one
     /// CID is not a bookkeeping nuisance — it is two guests sharing a control
-    /// channel — so the loser is left with no allocation and the caller is
-    /// expected to say so loudly.
+    /// channel — so the claim is dropped rather than taken over, and the caller
+    /// is expected to say so loudly.
+    ///
+    /// The refused workload is left exactly as it was: with no allocation if it
+    /// had none, and still holding its own earlier CID if it had one. Nothing
+    /// is taken away by a refusal.
     case conflict(holder: String)
-    /// Refused: the value is not an assignable CID.
+    /// Refused: the value is not an assignable CID. Same post-state as
+    /// ``conflict(holder:)`` — the workload keeps whatever it already had.
     case notAssignable
+}
+
+/// A manifest claim this allocator would not honor, for the caller to report.
+public struct VsockCIDClaimRefusal: Sendable, Equatable {
+    public let workloadId: String
+    public let cid: UInt32
+    /// Why it was refused — always ``VsockCIDReservation/conflict(holder:)`` or
+    /// ``VsockCIDReservation/notAssignable``.
+    public let reason: VsockCIDReservation
+}
+
+/// A CID taken for an in-flight create, and whether rolling the create back
+/// should give it up.
+///
+/// The distinction is the whole reason this type exists rather than a bare
+/// `UInt32?`: a create that *re-runs* for a VM that already holds a CID (an
+/// orphan whose hypervisor process is gone is rebuilt through the create path)
+/// must not release that CID when it fails, because the manifest still records
+/// it and a later create would then hand a live VM's CID to another one.
+/// Keeping the rule inside ``VsockCIDAllocator/rollBack(_:)`` means no caller
+/// can get the polarity wrong.
+public struct VsockCIDLease: Sendable, Equatable {
+    /// The CID to build the VM with, or nil when this backend takes none from
+    /// the host namespace.
+    public let cid: UInt32?
+    let workloadId: String
+    /// Whether this lease is what put the CID in the allocator.
+    let isNew: Bool
 }
 
 /// Assigns each workload a context ID in the host kernel's AF_VSOCK namespace.
@@ -48,13 +81,28 @@ public enum VsockCIDReservation: Sendable, Equatable {
 ///
 /// Allocation walks forward from a cursor rather than always taking the lowest
 /// free CID, so a freed CID is not immediately handed to the next VM. That
-/// matters because a host-side connection outlives the guest it was opened to:
-/// reusing a CID promptly would let a stale connect land on a new VM. The
-/// cursor is in-memory, so the guarantee is scoped to one agent process — which
-/// is exactly the scope of the connections it protects.
+/// matters because a host-side connection outlives the guest it was opened to,
+/// and those connections belong to *other* host processes talking to guest
+/// agents — they survive an agent restart, so the property has to as well. It
+/// does: `reserveAll` walks the cursor past every CID the manifest records, so
+/// a restarted agent resumes above its last assignment instead of handing the
+/// next VM the lowest free CID.
+///
+/// ## What it is not authoritative over
+///
+/// Only the VMs this agent created. A CID held by a process outside Strato, or
+/// by a VM started outside the agent, is invisible here and can be handed out.
+/// That fails safe rather than silently: the host kernel refuses a duplicate
+/// CID (`EADDRINUSE`), so the VM fails to start instead of two guests sharing a
+/// channel. The consumer (STR-76) should surface that as "CID already in use on
+/// this host" rather than an opaque hypervisor error.
 public struct VsockCIDAllocator: Sendable {
     /// Why a CID could not be assigned.
-    public enum AllocationError: Error, Equatable, CustomStringConvertible {
+    ///
+    /// `LocalizedError` because the reconciler records failures as
+    /// `error.localizedDescription`; without it an operator would see
+    /// Foundation's placeholder text for the one failure this type reports.
+    public enum AllocationError: Error, LocalizedError, Equatable, CustomStringConvertible {
         /// Every assignable CID on this host is held. Explicit rather than
         /// wrapping: handing out a CID that is already in use would put two
         /// guests on one control channel.
@@ -66,6 +114,8 @@ public struct VsockCIDAllocator: Sendable {
                 return "the host's vsock context ID namespace is exhausted (\(inUse) in use)"
             }
         }
+
+        public var errorDescription: String? { description }
     }
 
     /// CIDs 0–2 are reserved by the address family (0 hypervisor, 1 local,
@@ -102,8 +152,9 @@ public struct VsockCIDAllocator: Sendable {
         self.cursor = first
     }
 
-    /// How many distinct CIDs this allocator can ever have outstanding.
-    private var capacity: Int { Int(last - first) + 1 }
+    /// How many distinct CIDs this allocator can ever have outstanding. Held as
+    /// `UInt64` because the real range does not fit a 32-bit `Int`.
+    private var capacity: UInt64 { UInt64(last - first) + 1 }
 
     /// Whether `cid` is inside this allocator's range.
     private func isInRange(_ cid: UInt32) -> Bool { cid >= first && cid <= last }
@@ -124,6 +175,10 @@ public struct VsockCIDAllocator: Sendable {
     /// A workload that somehow arrives holding a *different* CID than the one
     /// recorded here takes the new one: the caller is replaying the durable
     /// record, which outranks anything this process inferred.
+    ///
+    /// A successful reservation also walks the cursor past the CID, so a
+    /// restarted agent allocates *above* what it has recorded rather than
+    /// restarting at the bottom of the range. See the type's "Reuse" note.
     @discardableResult
     public mutating func reserve(_ cid: UInt32, for workloadId: String) -> VsockCIDReservation {
         guard isInRange(cid) else { return .notAssignable }
@@ -133,7 +188,46 @@ public struct VsockCIDAllocator: Sendable {
         if let previous = byWorkload[workloadId] { byCID.removeValue(forKey: previous) }
         byWorkload[workloadId] = cid
         byCID[cid] = workloadId
+        // Only ever forward, so reserving in any order lands the cursor past
+        // the highest CID claimed rather than past the last one seen.
+        if cid >= cursor { cursor = next(after: cid) }
         return .reserved
+    }
+
+    /// Re-claim every CID a manifest read records, and report what could not be
+    /// honored.
+    ///
+    /// Both halves of the read are claimed. A quarantined entry is one this
+    /// build cannot route, but something is running under it — that is the
+    /// whole reason the entry is kept — and its CID is one of the host
+    /// resources it is still consuming, exactly like the CPU and memory the
+    /// entry keeps reserved.
+    ///
+    /// Claims are applied in workload-id order so which side of a duplicate
+    /// wins is stable across restarts rather than a dictionary-ordering coin
+    /// flip, and the refusals come back in that same order.
+    public mutating func reserveAll(
+        entries: [String: VMManifestEntry], quarantined: [String: QuarantinedManifestEntry]
+    ) -> [VsockCIDClaimRefusal] {
+        let claims =
+            entries.compactMap { id, entry in entry.vsockCID.map { (id: id, cid: $0) } }
+            + quarantined.compactMap { id, entry in entry.vsockCID.map { (id: id, cid: $0) } }
+
+        var refusals: [VsockCIDClaimRefusal] = []
+        for claim in claims.sorted(by: { $0.id < $1.id }) {
+            switch reserve(claim.cid, for: claim.id) {
+            case .reserved, .unchanged:
+                continue
+            case .conflict(let holder):
+                refusals.append(
+                    VsockCIDClaimRefusal(
+                        workloadId: claim.id, cid: claim.cid, reason: .conflict(holder: holder)))
+            case .notAssignable:
+                refusals.append(
+                    VsockCIDClaimRefusal(workloadId: claim.id, cid: claim.cid, reason: .notAssignable))
+            }
+        }
+        return refusals
     }
 
     /// Assign `workloadId` a free CID, or return the one it already holds.
@@ -146,7 +240,7 @@ public struct VsockCIDAllocator: Sendable {
     /// - Throws: ``AllocationError/exhausted(inUse:)`` when no CID is free.
     public mutating func allocate(for workloadId: String) throws -> UInt32 {
         if let existing = byWorkload[workloadId] { return existing }
-        guard byCID.count < capacity else {
+        guard UInt64(byCID.count) < capacity else {
             throw AllocationError.exhausted(inUse: byCID.count)
         }
 
@@ -160,6 +254,29 @@ public struct VsockCIDAllocator: Sendable {
         byCID[candidate] = workloadId
         cursor = next(after: candidate)
         return candidate
+    }
+
+    /// Take a CID for a create that has not happened yet.
+    ///
+    /// - Parameter needsHostCID: false for a backend that occupies none of this
+    ///   namespace, which leases a nil CID rather than spending one.
+    /// - Throws: ``AllocationError/exhausted(inUse:)`` when no CID is free.
+    public mutating func lease(for workloadId: String, needsHostCID: Bool) throws -> VsockCIDLease {
+        guard needsHostCID else {
+            return VsockCIDLease(cid: nil, workloadId: workloadId, isNew: false)
+        }
+        if let existing = byWorkload[workloadId] {
+            return VsockCIDLease(cid: existing, workloadId: workloadId, isNew: false)
+        }
+        return VsockCIDLease(cid: try allocate(for: workloadId), workloadId: workloadId, isNew: true)
+    }
+
+    /// Undo a lease whose create failed. Releases only what the lease itself
+    /// took: a CID the VM already held stays held, because the manifest still
+    /// records it.
+    public mutating func rollBack(_ lease: VsockCIDLease) {
+        guard lease.isNew else { return }
+        release(lease.workloadId)
     }
 
     /// Give up `workloadId`'s CID. A no-op for a workload that holds none, so
@@ -178,6 +295,14 @@ public struct VsockCIDAllocator: Sendable {
     private func next(after cid: UInt32) -> UInt32 {
         cid >= last ? first : cid + 1
     }
+}
+
+extension VsockCIDAllocator.AllocationError: ClassifiableError {
+    /// Permanent, in the same sense as a full disk: the namespace only frees up
+    /// when *another* VM is deleted, which cannot happen inside this item's
+    /// retry budget. Retrying would burn the whole budget re-running a create
+    /// that has no way to succeed, and hide the reason behind the last attempt.
+    public var failureClassification: FailureClassification { .permanent }
 }
 
 extension HypervisorType {

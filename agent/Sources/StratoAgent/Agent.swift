@@ -2440,36 +2440,38 @@ extension Agent {
     /// reason the entry is kept is that its workload is still consuming host
     /// resources, and this is one of them.
     ///
-    /// A conflict here means the manifest itself lists one CID twice, which
-    /// this agent cannot repair: both VMs may be running, and a running VM's
-    /// CID is programmed into the host kernel, not into anything the agent can
-    /// rewrite. It is logged at error and the loser is left with no allocation
-    /// — the CID stays reserved by the winner either way, so nothing new can
-    /// take it.
+    /// A conflict means the manifest itself lists one CID twice, which this
+    /// agent cannot repair: both VMs may be running, and a running VM's CID is
+    /// programmed into the host kernel, not into anything the agent can
+    /// rewrite. It is logged at error and the loser keeps no allocation — the
+    /// CID stays reserved by the winner either way, so nothing new can take it,
+    /// and the duplicate stays in the manifest (and re-logs on every start)
+    /// until that VM is re-created, which is what the message asks for.
+    ///
+    /// The reserving itself lives in `VsockCIDAllocator.reserveAll`, where it
+    /// is unit-testable; this is only the reporting.
     private func reserveVsockCIDs(
         entries: [String: VMManifestEntry], quarantined: [String: QuarantinedManifestEntry]
     ) {
-        let claims =
-            entries.compactMap { id, entry in entry.vsockCID.map { (id, $0) } }
-            + quarantined.compactMap { id, entry in entry.vsockCID.map { (id, $0) } }
-        // Sorted so which side of a conflict wins is stable across restarts
-        // rather than a dictionary-ordering coin flip.
-        for (id, cid) in claims.sorted(by: { $0.0 < $1.0 }) {
-            switch vsockCIDs.reserve(cid, for: id) {
-            case .reserved, .unchanged:
-                continue
+        for refusal in vsockCIDs.reserveAll(entries: entries, quarantined: quarantined) {
+            switch refusal.reason {
             case .conflict(let holder):
                 logger.error(
                     "Two workloads in the VM manifest claim one vsock context ID; the later one keeps no allocation and must be re-created to get its own",
                     metadata: [
-                        "vsockCID": .stringConvertible(cid),
+                        "vsockCID": .stringConvertible(refusal.cid),
                         "holder": .string(holder),
-                        "workloadId": .string(id),
+                        "workloadId": .string(refusal.workloadId),
                     ])
             case .notAssignable:
                 logger.error(
                     "Ignoring an unusable vsock context ID in the VM manifest; the workload keeps no allocation",
-                    metadata: ["vsockCID": .stringConvertible(cid), "workloadId": .string(id)])
+                    metadata: [
+                        "vsockCID": .stringConvertible(refusal.cid),
+                        "workloadId": .string(refusal.workloadId),
+                    ])
+            case .reserved, .unchanged:
+                continue  // not a refusal; `reserveAll` never reports these
             }
         }
     }
@@ -2484,14 +2486,6 @@ extension Agent {
         guard let cid = vsockCIDs.release(vmId) else { return }
         logger.debug(
             "Released vsock context ID", metadata: ["vmId": .string(vmId), "vsockCID": .stringConvertible(cid)])
-    }
-
-    /// Roll back an allocation a failed create made, leaving an allocation the
-    /// VM already held alone — that one is still recorded in the manifest, and
-    /// freeing it would let a later create hand a live VM's CID to another one.
-    private func releaseVsockCID(_ vmId: String, unlessHeldBefore heldBefore: UInt32?) {
-        guard heldBefore == nil else { return }
-        releaseVsockCID(vmId)
     }
 
     /// Re-read a manifest that was unreadable, so a transient cause — a
@@ -4049,14 +4043,25 @@ extension Agent: ReconcileActuator {
         }
 
         // The VM's host-global vsock context ID (STR-72), taken before the
-        // driver runs so the spawn can be built with it, and — like the NICs
-        // below — given back if the driver never created the VM. Exhaustion
-        // fails the create rather than reusing a CID, since a second guest on
-        // one CID is an isolation failure, not a degraded VM.
-        let heldCIDBefore = vsockCIDs.cid(for: item.vmId)
-        let vsockCID =
-            desired.hypervisorType.usesHostVsockNamespace
-            ? try vsockCIDs.allocate(for: item.vmId) : nil
+        // driver runs and — like the NICs below — given back if the driver
+        // never created the VM. Exhaustion fails the create rather than reusing
+        // a CID, since a second guest on one CID is an isolation failure, not a
+        // degraded VM. Nothing builds a device from it yet: STR-76 is what
+        // attaches `vhost-vsock-pci` and consumes the lease.
+        //
+        // The durable record is written *after* the driver succeeds, so a crash
+        // in that window leaves a guest whose CID no manifest entry records.
+        // That is the pre-existing shape of this path — the same crash loses
+        // the whole entry, not just the CID — and it is left as it is
+        // deliberately: claiming the workload before it exists would have the
+        // manifest reserve capacity and block re-creates for a VM that may
+        // never have been created. It fails safe rather than silently, because
+        // the CID is the one field with no deterministic derivation to fall
+        // back on: the kernel refuses a duplicate CID (`EADDRINUSE`), so a
+        // later VM handed the orphaned CID fails to start instead of joining
+        // the surviving guest's channel.
+        let lease = try vsockCIDs.lease(
+            for: item.vmId, needsHostCID: desired.hypervisorType.usesHostVsockNamespace)
 
         // Same contract as the imperative path: the orchestrator realizes the
         // VM's NICs on this host before the driver runs, and rolls them back
@@ -4066,7 +4071,7 @@ extension Agent: ReconcileActuator {
             attachments = try await networkOrchestrator.prepareAttachments(
                 vmId: item.vmId, networks: desired.spec.networks)
         } catch {
-            releaseVsockCID(item.vmId, unlessHeldBefore: heldCIDBefore)
+            vsockCIDs.rollBack(lease)
             throw error
         }
         do {
@@ -4075,12 +4080,12 @@ extension Agent: ReconcileActuator {
                 networkAttachments: attachments, metadata: desired.metadata)
         } catch {
             await networkOrchestrator.teardownAttachments(vmId: item.vmId, count: attachments.count)
-            releaseVsockCID(item.vmId, unlessHeldBefore: heldCIDBefore)
+            vsockCIDs.rollBack(lease)
             throw error
         }
 
         managedVMs[item.vmId] = VMManifestEntry(
-            hypervisorType: desired.hypervisorType, spec: desired.spec, vsockCID: vsockCID)
+            hypervisorType: desired.hypervisorType, spec: desired.spec, vsockCID: lease.cid)
         orphanedVMs.removeValue(forKey: item.vmId)
         persistManifest()
         await sendVMLog(
