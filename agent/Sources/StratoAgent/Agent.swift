@@ -149,6 +149,14 @@ actor Agent {
     // verbatim so rolling forward again restores them intact.
     private var quarantinedWorkloads: [String: QuarantinedManifestEntry] = [:]
 
+    // This host's vsock context-ID namespace (STR-72). In memory, but not a
+    // cache: the durable copy is `VMManifestEntry.vsockCID`, which is re-read
+    // into here on every manifest load — including the quarantined entries,
+    // whose workloads may still be running on the CIDs they hold. A CID is
+    // allocated when a VM that needs one is created and released when its
+    // manifest entry goes, so the two never drift.
+    private var vsockCIDs = VsockCIDAllocator()
+
     // Sandbox workload tracking (issue #417): same manifest contract as VMs,
     // kept in separate maps so the VM paths never have to filter by kind.
     // `sandboxRuntime` is the driver seam (issue #421): the Firecracker
@@ -929,11 +937,17 @@ actor Agent {
         svidManager = nil
 
         // Clear the in-memory workload records; the on-disk manifest keeps them
-        // for the next incarnation to recover as orphans.
+        // for the next incarnation to recover as orphans. The vsock
+        // allocations go with them for the same reason, and come back from the
+        // manifest on the next load — dropping them here rather than leaving
+        // them behind keeps "what the allocator holds" tied to "what the
+        // in-memory records say", which is the invariant that makes a stale
+        // allocation a bug rather than a matter of taste.
         managedVMs.removeAll()
         orphanedVMs.removeAll()
         managedSandboxes.removeAll()
         orphanedSandboxes.removeAll()
+        vsockCIDs = VsockCIDAllocator()
 
         logger.info("Agent stopped")
 
@@ -2393,6 +2407,7 @@ extension Agent {
         case .loaded(let entries, let quarantined):
             manifestReadFailure = nil
             quarantinedWorkloads = quarantined
+            reserveVsockCIDs(entries: entries, quarantined: quarantined)
             // Anything already managed by *this* incarnation stays managed: a
             // recovery re-read must not demote live workloads to orphans.
             var recovered: [String] = []
@@ -2414,6 +2429,69 @@ extension Agent {
             // The store has already logged this loudly and preserved a copy.
             manifestReadFailure = failure
         }
+    }
+
+    /// Re-claim every vsock CID the manifest records, so an agent that just
+    /// started cannot hand a running VM's CID to a new one (STR-72).
+    ///
+    /// Quarantined entries are claimed too. This build cannot route them, but
+    /// something is running under them, and a CID is exactly the kind of fact
+    /// worth honoring from an entry that is otherwise unreadable — the whole
+    /// reason the entry is kept is that its workload is still consuming host
+    /// resources, and this is one of them.
+    ///
+    /// A conflict here means the manifest itself lists one CID twice, which
+    /// this agent cannot repair: both VMs may be running, and a running VM's
+    /// CID is programmed into the host kernel, not into anything the agent can
+    /// rewrite. It is logged at error and the loser is left with no allocation
+    /// — the CID stays reserved by the winner either way, so nothing new can
+    /// take it.
+    private func reserveVsockCIDs(
+        entries: [String: VMManifestEntry], quarantined: [String: QuarantinedManifestEntry]
+    ) {
+        let claims =
+            entries.compactMap { id, entry in entry.vsockCID.map { (id, $0) } }
+            + quarantined.compactMap { id, entry in entry.vsockCID.map { (id, $0) } }
+        // Sorted so which side of a conflict wins is stable across restarts
+        // rather than a dictionary-ordering coin flip.
+        for (id, cid) in claims.sorted(by: { $0.0 < $1.0 }) {
+            switch vsockCIDs.reserve(cid, for: id) {
+            case .reserved, .unchanged:
+                continue
+            case .conflict(let holder):
+                logger.error(
+                    "Two workloads in the VM manifest claim one vsock context ID; the later one keeps no allocation and must be re-created to get its own",
+                    metadata: [
+                        "vsockCID": .stringConvertible(cid),
+                        "holder": .string(holder),
+                        "workloadId": .string(id),
+                    ])
+            case .notAssignable:
+                logger.error(
+                    "Ignoring an unusable vsock context ID in the VM manifest; the workload keeps no allocation",
+                    metadata: ["vsockCID": .stringConvertible(cid), "workloadId": .string(id)])
+            }
+        }
+    }
+
+    /// Give back a vsock CID whose VM is gone from the manifest (STR-72).
+    ///
+    /// Called from every path that removes a VM's entry, including the ones
+    /// that find it already absent: the manifest is what makes an allocation
+    /// durable, so an allocation nothing in the manifest refers to is a leak
+    /// and releasing it is always right.
+    private func releaseVsockCID(_ vmId: String) {
+        guard let cid = vsockCIDs.release(vmId) else { return }
+        logger.debug(
+            "Released vsock context ID", metadata: ["vmId": .string(vmId), "vsockCID": .stringConvertible(cid)])
+    }
+
+    /// Roll back an allocation a failed create made, leaving an allocation the
+    /// VM already held alone — that one is still recorded in the manifest, and
+    /// freeing it would let a later create hand a live VM's CID to another one.
+    private func releaseVsockCID(_ vmId: String, unlessHeldBefore heldBefore: UInt32?) {
+        guard heldBefore == nil else { return }
+        releaseVsockCID(vmId)
     }
 
     /// Re-read a manifest that was unreadable, so a transient cause — a
@@ -3228,7 +3306,7 @@ extension Agent: ReconcileActuator {
             return .created
         }
 
-        managedVMs[item.vmId] = VMManifestEntry(hypervisorType: entry.hypervisorType, spec: spec)
+        managedVMs[item.vmId] = entry.with(spec: spec)
         orphanedVMs.removeValue(forKey: item.vmId)
         persistManifest()
 
@@ -3916,8 +3994,7 @@ extension Agent: ReconcileActuator {
         }
         guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else { return }
         let remaining = entry.spec.volumes.filter { $0.volumeId?.uuidString != volumeId }
-        let updated = VMManifestEntry(
-            hypervisorType: entry.hypervisorType, spec: entry.spec.withVolumes(remaining))
+        let updated = entry.with(spec: entry.spec.withVolumes(remaining))
         if managedVMs[vmId] != nil {
             managedVMs[vmId] = updated
         } else {
@@ -3944,8 +4021,7 @@ extension Agent: ReconcileActuator {
             case (nil, nil): return lhs.deviceName < rhs.deviceName
             }
         }
-        let updated = VMManifestEntry(
-            hypervisorType: entry.hypervisorType, spec: entry.spec.withVolumes(volumes))
+        let updated = entry.with(spec: entry.spec.withVolumes(volumes))
         if managedVMs[vmId] != nil {
             managedVMs[vmId] = updated
         } else {
@@ -3972,21 +4048,39 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
         }
 
+        // The VM's host-global vsock context ID (STR-72), taken before the
+        // driver runs so the spawn can be built with it, and — like the NICs
+        // below — given back if the driver never created the VM. Exhaustion
+        // fails the create rather than reusing a CID, since a second guest on
+        // one CID is an isolation failure, not a degraded VM.
+        let heldCIDBefore = vsockCIDs.cid(for: item.vmId)
+        let vsockCID =
+            desired.hypervisorType.usesHostVsockNamespace
+            ? try vsockCIDs.allocate(for: item.vmId) : nil
+
         // Same contract as the imperative path: the orchestrator realizes the
         // VM's NICs on this host before the driver runs, and rolls them back
         // if the driver never created the VM.
-        let attachments = try await networkOrchestrator.prepareAttachments(
-            vmId: item.vmId, networks: desired.spec.networks)
+        let attachments: [ResolvedNetworkAttachment]
+        do {
+            attachments = try await networkOrchestrator.prepareAttachments(
+                vmId: item.vmId, networks: desired.spec.networks)
+        } catch {
+            releaseVsockCID(item.vmId, unlessHeldBefore: heldCIDBefore)
+            throw error
+        }
         do {
             try await service.createVM(
                 vmId: item.vmId, spec: desired.spec, imageInfo: desired.imageInfo,
                 networkAttachments: attachments, metadata: desired.metadata)
         } catch {
             await networkOrchestrator.teardownAttachments(vmId: item.vmId, count: attachments.count)
+            releaseVsockCID(item.vmId, unlessHeldBefore: heldCIDBefore)
             throw error
         }
 
-        managedVMs[item.vmId] = VMManifestEntry(hypervisorType: desired.hypervisorType, spec: desired.spec)
+        managedVMs[item.vmId] = VMManifestEntry(
+            hypervisorType: desired.hypervisorType, spec: desired.spec, vsockCID: vsockCID)
         orphanedVMs.removeValue(forKey: item.vmId)
         persistManifest()
         await sendVMLog(
@@ -4011,7 +4105,7 @@ extension Agent: ReconcileActuator {
         let service = try reconcileService(for: item.vmId)
         try await service.resizeVM(vmId: item.vmId, spec: desired.spec)
 
-        managedVMs[item.vmId] = VMManifestEntry(hypervisorType: entry.hypervisorType, spec: desired.spec)
+        managedVMs[item.vmId] = entry.with(spec: desired.spec)
         persistManifest()
         await sendVMLog(
             vmId: item.vmId, level: .info, eventType: .operation,
@@ -4076,6 +4170,7 @@ extension Agent: ReconcileActuator {
                 }
 
                 orphanedVMs.removeValue(forKey: item.vmId)
+                releaseVsockCID(item.vmId)
                 persistManifest()
                 // Host-side network resources are derived from deterministic
                 // names, so they can be torn down even with no live session.
@@ -4086,7 +4181,12 @@ extension Agent: ReconcileActuator {
         }
 
         guard let entry = managedVMs[item.vmId] else {
-            return  // already absent — deletion is idempotent
+            // Already absent — deletion is idempotent. The CID is still
+            // released: no manifest entry refers to this VM, so anything the
+            // allocator still holds for it (a create that failed after taking
+            // one, an orphan reaped by the branch above) is a leak.
+            releaseVsockCID(item.vmId)
+            return
         }
         let service = try reconcileService(for: item.vmId)
 
@@ -4106,6 +4206,7 @@ extension Agent: ReconcileActuator {
 
         managedVMs.removeValue(forKey: item.vmId)
         orphanedVMs.removeValue(forKey: item.vmId)
+        releaseVsockCID(item.vmId)
         persistManifest()
         await sendVMLog(
             vmId: item.vmId, level: .info, eventType: .operation,

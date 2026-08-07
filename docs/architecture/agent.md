@@ -737,6 +737,32 @@ and the caller has to decide:
   tombstone, since there is no backend to ask. It is re-persisted **verbatim**,
   so rolling forward again restores the routing field intact.
 
+### vsock context IDs (STR-72)
+
+A vsock CID is not a per-VM number. QEMU's `vhost-vsock-pci` programs it into
+the host kernel's `vhost_vsock` driver, which keeps **one flat 32-bit namespace
+per machine** (0–2 reserved), so a CID derived from a VM id is a collision
+waiting to happen — at best a failed VM start, at worst a host process reaching
+the wrong guest's control agent. `VsockCIDAllocator` (`StratoAgentCore`) hands
+them out instead, and every assignment is written to the VM manifest as
+`VMManifestEntry.vsockCID` so a restarted agent cannot re-issue a live VM's CID.
+The manifest read reserves every recorded CID, **including the quarantined
+entries'** — that workload may still be running on it. Allocation is idempotent
+per VM (the re-create-an-orphan path runs the same code twice), released when
+the VM's manifest entry goes, rolled back when a create fails, and walks forward
+from a cursor rather than reusing the lowest free CID, so a host-side connection
+that outlives its guest cannot land on the next VM. Exhaustion **throws** rather
+than wrapping onto a held CID: a failed create is better than two guests sharing
+a control channel.
+
+Only backends that occupy that namespace draw from it —
+`HypervisorType.usesHostVsockNamespace`, currently QEMU alone. Firecracker
+emulates virtio-vsock inside its own process and exposes a Unix-domain socket to
+the host (`VsockConfig.udsPath`), so a Firecracker guest's CID never reaches the
+host kernel. That is why every sandbox can use CID 3 and why sandboxes are
+deliberately *not* routed through this allocator: it would spend a host-global
+resource on devices that occupy none of it.
+
 ## Networking
 
 `NetworkOrchestrator` (executable target) resolves a VM's `[NetworkSpec]`

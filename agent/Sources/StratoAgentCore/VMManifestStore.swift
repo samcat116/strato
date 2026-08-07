@@ -20,12 +20,23 @@ public struct VMManifestEntry: Codable, Sendable {
     /// The sandbox's own spec (present iff `kind == .sandbox`), kept so the
     /// sandbox runtime can re-adopt the orphan after a restart.
     public let sandboxSpec: SandboxSpec?
+    /// This VM's context ID in the host's vsock namespace (STR-72), nil for a
+    /// workload that draws no CID from it — every sandbox, every Firecracker
+    /// VM, and any VM created before the allocator existed.
+    ///
+    /// It lives here because the namespace is host-global and the manifest is
+    /// the only durable record of what this host is running: a restarted agent
+    /// that forgot its assignments would hand a live VM's CID to a new one,
+    /// which is two guests on one control channel rather than a lost number.
+    /// See ``VsockCIDAllocator``.
+    public let vsockCID: UInt32?
 
-    public init(hypervisorType: HypervisorType, spec: VMSpec) {
+    public init(hypervisorType: HypervisorType, spec: VMSpec, vsockCID: UInt32? = nil) {
         self.kind = .vm
         self.hypervisorType = hypervisorType
         self.spec = spec
         self.sandboxSpec = nil
+        self.vsockCID = vsockCID
     }
 
     /// A sandbox entry. Sandboxes boot through Firecracker only, so the
@@ -36,6 +47,31 @@ public struct VMManifestEntry: Codable, Sendable {
         self.spec = VMSpec(
             cpus: sandboxSpec.cpus, memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil))
         self.sandboxSpec = sandboxSpec
+        self.vsockCID = nil
+    }
+
+    private init(
+        kind: WorkloadKind, hypervisorType: HypervisorType, spec: VMSpec, sandboxSpec: SandboxSpec?, vsockCID: UInt32?
+    ) {
+        self.kind = kind
+        self.hypervisorType = hypervisorType
+        self.spec = spec
+        self.sandboxSpec = sandboxSpec
+        self.vsockCID = vsockCID
+    }
+
+    /// The same workload with a new spec — a resize, or a volume attached or
+    /// detached.
+    ///
+    /// Copying rather than re-constructing is what keeps a spec change from
+    /// silently dropping everything else the entry carries. The vsock CID is
+    /// the field that made this necessary: it is allocated once at create and
+    /// belongs to the VM for its whole life, so a resize that rebuilt the entry
+    /// from `(hypervisorType, spec)` would free a running VM's CID for reuse.
+    public func with(spec: VMSpec) -> VMManifestEntry {
+        VMManifestEntry(
+            kind: kind, hypervisorType: hypervisorType, spec: spec, sandboxSpec: sandboxSpec,
+            vsockCID: vsockCID)
     }
 
     // Custom decode so `kind` tolerates absence: entries persisted by a
@@ -47,6 +83,7 @@ public struct VMManifestEntry: Codable, Sendable {
         hypervisorType = try c.decode(HypervisorType.self, forKey: .hypervisorType)
         spec = try c.decode(VMSpec.self, forKey: .spec)
         sandboxSpec = try c.decodeIfPresent(SandboxSpec.self, forKey: .sandboxSpec)
+        vsockCID = try c.decodeIfPresent(UInt32.self, forKey: .vsockCID)
     }
 }
 
@@ -80,6 +117,14 @@ public struct QuarantinedManifestEntry: Sendable {
     public let cpus: Int
     public let memoryBytes: Int64
     public let diskBytes: Int64
+    /// Salvaged vsock CID (STR-72). Reserved exactly like the CPU and memory
+    /// above, and for a sharper reason: the workload under this entry may still
+    /// be running on that CID, and the namespace is host-global, so handing it
+    /// to a new VM would join two guests' control channels. Nil when the entry
+    /// carried none or it could not be read — the same under-count the
+    /// reservations take, and the same reason it is only an under-count: this
+    /// build cannot create the workload again either way.
+    public let vsockCID: UInt32?
     /// Why this entry could not be used, for the log and the operator.
     public let reason: String
     /// The entry as read, for verbatim re-persistence.
@@ -91,6 +136,7 @@ public struct QuarantinedManifestEntry: Sendable {
         cpus: Int,
         memoryBytes: Int64,
         diskBytes: Int64,
+        vsockCID: UInt32?,
         reason: String,
         raw: CodableValue
     ) {
@@ -99,6 +145,7 @@ public struct QuarantinedManifestEntry: Sendable {
         self.cpus = cpus
         self.memoryBytes = memoryBytes
         self.diskBytes = diskBytes
+        self.vsockCID = vsockCID
         self.reason = reason
         self.raw = raw
     }
@@ -408,6 +455,7 @@ private struct PartiallyDecodedManifest: Decodable {
             cpus: reservation?.cpus ?? 0,
             memoryBytes: reservation?.memoryBytes ?? 0,
             diskBytes: reservation?.diskBytes ?? 0,
+            vsockCID: salvaged?.vsockCID,
             reason: reason,
             raw: raw
         )
@@ -440,9 +488,10 @@ private struct SalvagedEntry: Decodable {
     let hypervisorType: String?
     let spec: Reservation?
     let sandboxSpec: Reservation?
+    let vsockCID: UInt32?
 
     enum CodingKeys: String, CodingKey {
-        case kind, hypervisorType, spec, sandboxSpec
+        case kind, hypervisorType, spec, sandboxSpec, vsockCID
     }
 
     init(from decoder: any Decoder) throws {
@@ -451,6 +500,7 @@ private struct SalvagedEntry: Decodable {
         hypervisorType = try? c.decodeIfPresent(String.self, forKey: .hypervisorType)
         spec = try? c.decodeIfPresent(Reservation.self, forKey: .spec)
         sandboxSpec = try? c.decodeIfPresent(Reservation.self, forKey: .sandboxSpec)
+        vsockCID = try? c.decodeIfPresent(UInt32.self, forKey: .vsockCID)
     }
 }
 
