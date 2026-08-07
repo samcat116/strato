@@ -337,8 +337,20 @@ extension Volume: ConvergingResource {
         convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
         storagePath = committed.storagePath
-        attachedAgentId = committed.attachedAgentId
         finalizers = committed.finalizers
+        // The desired attachment, which is not reconciliation-owned but is
+        // read-modify-written by every mutation all the same: `accept` saves
+        // the whole model, so a resize accepted while an attach commits would
+        // write its pre-request snapshot back over the new attachment. Adopting
+        // it is also what makes `canAttach` answer against the row as it is
+        // under the lock rather than as the request found it — without which
+        // two attaches of one volume to two VMs both pass the guard and the
+        // second silently moves the attachment (STR-129).
+        $vm.id = committed.$vm.id
+        deviceName = committed.deviceName
+        bootOrder = committed.bootOrder
+        readonly = committed.readonly
+        attachedAgentId = committed.attachedAgentId
     }
 
     /// Resolves the in-flight state a failed mutation left on this volume.

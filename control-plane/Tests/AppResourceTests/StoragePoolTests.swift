@@ -103,6 +103,9 @@ struct StoragePoolTests {
         volume.storagePath = storagePath
         if let vm {
             volume.$vm.id = vm.id
+            // An attached row names its device: `NormalizeVolumeAttachments`
+            // makes that a check constraint (STR-129).
+            volume.deviceName = "disk0"
             volume.status = .attached
         }
         try await volume.save(on: db)
