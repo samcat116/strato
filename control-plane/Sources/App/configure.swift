@@ -788,6 +788,12 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddCredentialRestrictions())
     app.migrations.add(AddCredentialToIAMDecisionLog())
 
+    // Volume attachment becomes a constrained relationship: stranded and
+    // duplicate rows repaired, then a unique device name and boot order per VM,
+    // and a RESTRICT foreign key so a VM delete cannot silently orphan a volume
+    // (STR-129).
+    app.migrations.add(NormalizeVolumeAttachments())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

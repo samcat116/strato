@@ -1341,6 +1341,40 @@ actor AgentService {
                         "budgetSeconds": .string("\(Int(budget))"),
                     ])
             }
+
+            // Stranded attachments (STR-129): a row that lost its VM but kept
+            // the rest of the attachment. The VM reap detaches volumes inside
+            // the delete transaction, so this should never fire — it is the
+            // backstop for a replica still running an older build during a
+            // rolling upgrade, and for any future path that removes a VM
+            // without going through the reap. No age budget: unlike a
+            // transitional status there is nothing in flight that could still
+            // land, so waiting only extends the window in which the volume is
+            // neither deletable nor attachable.
+            let strandedVolumes = try await Volume.query(on: db)
+                .filter(\.$vm.$id == nil)
+                .group(.or) { unresolved in
+                    unresolved.filter(\.$status == .attached)
+                    unresolved.filter(\.$deviceName != nil)
+                    unresolved.filter(\.$bootOrder != nil)
+                    unresolved.filter(\.$attachedAgentId != nil)
+                }
+                .all()
+
+            for volume in strandedVolumes {
+                guard let volumeID = volume.id else { continue }
+                let previous = volume.status
+                VolumeAttachmentService.clearStrandedAttachment(volume)
+                try await volume.save(on: db)
+
+                app.logger.warning(
+                    "Volume left attachment fields set with no VM; detached",
+                    metadata: [
+                        "volumeId": .string(volumeID.uuidString),
+                        "previousStatus": .string(previous.rawValue),
+                        "resolvedStatus": .string(volume.status.rawValue),
+                    ])
+            }
         } catch {
             app.logger.error("Stuck-operation sweep failed: \(error)")
         }

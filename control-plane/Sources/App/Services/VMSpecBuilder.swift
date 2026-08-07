@@ -159,7 +159,7 @@ struct VMSpecBuilder {
         guard let diskPath = vm.diskPath else { return [] }
         return [
             VolumeSpec(
-                deviceName: "disk0",
+                deviceName: .disk(0),
                 storagePath: diskPath,
                 readonly: vm.readonlyDisk
             )
@@ -275,28 +275,41 @@ struct VMSpecBuilder {
     }
 
     /// Builds volume specs from attached volumes, sorted by boot order (explicit
-    /// orders first), then device name.
+    /// orders first), then device name, then volume id.
+    ///
+    /// The comparison is a *total* order on all three keys (STR-129). Ordering
+    /// on `bootOrder` alone left two volumes at the same priority — or two with
+    /// none — incomparable, and the input arrives from an unordered
+    /// `.with(\.$volumes)` through a `sort` that is not stable: two assemblies
+    /// of the same unchanged VM could emit its disks in different orders, which
+    /// is a spurious diff on the agent and potentially a different boot disk
+    /// after a restart. The NIC path already avoids this by sorting on
+    /// `(orderIndex, deviceName)`.
     static func volumeSpecs(from volumes: [Volume]) -> [VolumeSpec] {
-        let sortedVolumes = volumes.sorted { v1, v2 in
-            switch (v1.bootOrder, v2.bootOrder) {
-            case (let o1?, let o2?):
-                return o1 < o2
-            case (nil, _?):
-                return false
-            case (_?, nil):
-                return true
-            case (nil, nil):
-                return (v1.deviceName ?? "") < (v2.deviceName ?? "")
-            }
+        // Volumes with no explicit boot order sort after those that have one,
+        // which `Int.max` expresses without a special case.
+        func sortKey(_ volume: Volume) -> (Int, String, String) {
+            (volume.bootOrder ?? Int.max, volume.deviceName ?? "", volume.id?.uuidString ?? "")
         }
+        let sortedVolumes = volumes.sorted { sortKey($0) < sortKey($1) }
 
         var specs: [VolumeSpec] = []
         for volume in sortedVolumes where volume.status == .attached {
             guard let storagePath = volume.storagePath else { continue }
+            // An attached row without a legal device name cannot exist: the API
+            // validates one on the way in, and `NormalizeVolumeAttachments`
+            // added a `vm_id IS NULL OR device_name IS NOT NULL` check plus the
+            // `(vm_id, device_name)` unique index. Skipped rather than given a
+            // synthesized `disk<n>` if one somehow does — that fallback could
+            // collide with an explicit name on the same VM, and a duplicate id
+            // is what stops the VM booting at all.
+            guard let rawDeviceName = volume.deviceName,
+                let deviceName = VolumeDeviceName(rawDeviceName)
+            else { continue }
             specs.append(
                 VolumeSpec(
                     volumeId: volume.id,
-                    deviceName: volume.deviceName ?? "disk\(specs.count)",
+                    deviceName: deviceName,
                     storagePath: storagePath,
                     readonly: false,  // Could be enhanced to track readonly per-volume
                     bootOrder: volume.bootOrder

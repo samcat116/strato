@@ -28,6 +28,11 @@ interface AttachVolumeDialogProps {
 const selectClassName =
   "w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed";
 
+// The name reaches a hypervisor as an object id, so the API refuses anything
+// outside this charset with a 400. Mirrored here to answer before the round
+// trip; the server rule is the one that counts.
+const DEVICE_NAME_PATTERN = "[A-Za-z0-9][A-Za-z0-9._-]{0,31}";
+
 export function AttachVolumeDialog({
   volume,
   open,
@@ -128,9 +133,15 @@ export function AttachVolumeDialog({
                 placeholder="Auto-assigned (disk0, disk1, ...)"
                 value={deviceName}
                 onChange={(e) => setDeviceName(e.target.value)}
+                pattern={DEVICE_NAME_PATTERN}
+                title="Letters, digits, '.', '_' and '-', starting with a letter or digit (max 32 characters)"
                 className="bg-background border-border text-foreground"
                 disabled={isLoading}
               />
+              <p className="text-xs text-muted-foreground">
+                Must be unique on the VM. Letters, digits, &apos;.&apos;,
+                &apos;_&apos; and &apos;-&apos;, up to 32 characters.
+              </p>
             </div>
           </div>
           <DialogFooter>

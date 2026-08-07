@@ -68,6 +68,9 @@ final class VolumeStuckSweepTests {
             createdByID: user.id!
         )
         volume.$vm.id = vmID
+        // An attached row names its device: `NormalizeVolumeAttachments` makes
+        // that a check constraint (STR-129).
+        volume.deviceName = vmID == nil ? nil : "disk0"
         try await volume.save(on: app.db)
 
         let sql = try #require(app.db as? any SQLDatabase)

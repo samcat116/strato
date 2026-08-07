@@ -228,8 +228,28 @@ extension VM: FinalizableResource {
         let vmID = try vm.requireID()
 
         let reaped = try await db.transaction { tx in
+            // The attach lock first, before the row lock `reapClaim` takes:
+            // an attach holds this while its insert waits on a KEY SHARE lock
+            // of the same VM row, so taking them in the other order here would
+            // close a deadlock cycle between the two transactions.
+            try await VolumeAttachmentService.lock(vmID: vmID, on: tx)
+
             guard try await ResourceFinalizerService.reapClaim(VM.self, id: vmID, in: tx) else {
                 return false
+            }
+            // Attached volumes are detached, not deleted: the volume outlives
+            // the VM and its data is intact on the agent (STR-129). Before the
+            // delete, because `volumes.vm_id` is `ON DELETE RESTRICT` — a volume
+            // still pointing here fails the delete rather than being silently
+            // stranded the way `SET NULL` left it.
+            let detached = try await VolumeAttachmentService.releaseAll(fromVM: vmID, on: tx)
+            if !detached.isEmpty {
+                app.logger.info(
+                    "Detached volumes from deleted VM",
+                    metadata: [
+                        "vm_id": .string(vmID.uuidString),
+                        "volume_ids": .array(detached.map { .string($0.uuidString) }),
+                    ])
             }
             // Bindings first, unlike the delete-then-revoke order the other
             // controllers use: the revoke reads the VM's checkpoints, whose

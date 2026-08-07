@@ -296,7 +296,7 @@ struct VMSpecBuilderTests {
         #expect(spec.volumes.count == 1)
         #expect(spec.volumes.first?.storagePath == "/var/lib/strato/disks/vm.qcow2")
         #expect(spec.volumes.first?.readonly == false)
-        #expect(spec.volumes.first?.deviceName == "disk0")
+        #expect(spec.volumes.first?.deviceName.rawValue == "disk0")
         #expect(spec.volumes.first?.volumeId == nil)
     }
 
@@ -308,6 +308,72 @@ struct VMSpecBuilderTests {
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
         #expect(spec.volumes.first?.readonly == true)
+    }
+
+    /// An attached volume, as `volumeSpecs` sees it after `.with(\.$volumes)`.
+    private func attachedVolume(
+        id: UUID, deviceName: String?, bootOrder: Int?, storagePath: String = "/var/lib/strato/v.qcow2"
+    ) -> Volume {
+        let volume = Volume(
+            id: id, name: "v-\(id.uuidString.prefix(4))", description: "",
+            projectID: UUID(), size: 1 << 30, status: .attached, createdByID: UUID())
+        volume.deviceName = deviceName
+        volume.bootOrder = bootOrder
+        volume.storagePath = storagePath
+        return volume
+    }
+
+    @Test("Volume order is the same whatever order the rows arrive in")
+    func testVolumeOrderIsTotal() throws {
+        // Two pairs the old comparator left incomparable: equal explicit boot
+        // orders, and no boot order at all. `.with(\.$volumes)` has no ORDER BY
+        // and `sort` is not stable, so a partial order let two assemblies of the
+        // same unchanged VM emit different specs (STR-129).
+        let ids = (0..<4).map { _ in UUID() }.sorted { $0.uuidString < $1.uuidString }
+        let volumes = [
+            attachedVolume(id: ids[0], deviceName: "disk2", bootOrder: 1),
+            attachedVolume(id: ids[1], deviceName: "disk1", bootOrder: 1),
+            attachedVolume(id: ids[2], deviceName: "disk9", bootOrder: nil),
+            attachedVolume(id: ids[3], deviceName: "disk3", bootOrder: nil),
+        ]
+
+        let forward = VMSpecBuilder.volumeSpecs(from: volumes).map(\.deviceName.rawValue)
+        let reversed = VMSpecBuilder.volumeSpecs(from: volumes.reversed()).map(\.deviceName.rawValue)
+
+        // Explicit boot orders first, then device name inside each tier.
+        #expect(forward == ["disk1", "disk2", "disk3", "disk9"])
+        #expect(reversed == forward)
+    }
+
+    @Test("Volumes with identical names and orders still sort deterministically")
+    func testVolumeOrderFallsBackToID() throws {
+        // Only reachable through data that predates the unique index, but the
+        // comparator must still be a total order over it rather than depending
+        // on which row Postgres returned first.
+        let first = UUID(uuidString: "00000000-0000-0000-0000-00000000000A")!
+        let second = UUID(uuidString: "00000000-0000-0000-0000-00000000000B")!
+        let volumes = [
+            attachedVolume(id: second, deviceName: "disk0", bootOrder: 0),
+            attachedVolume(id: first, deviceName: "disk0", bootOrder: 0),
+        ]
+
+        #expect(VMSpecBuilder.volumeSpecs(from: volumes).map(\.volumeId) == [first, second])
+        #expect(VMSpecBuilder.volumeSpecs(from: volumes.reversed()).map(\.volumeId) == [first, second])
+    }
+
+    @Test("An attached volume with no legal device name is left out of the spec")
+    func testVolumeWithoutALegalNameIsSkipped() throws {
+        // Unrepresentable since `NormalizeVolumeAttachments`, but the fallback
+        // it replaced synthesized `disk<count>` — a name that could collide with
+        // an explicit one on the same VM, and a duplicate device id is what
+        // stops the VM booting at all.
+        let volumes = [
+            attachedVolume(id: UUID(), deviceName: "disk1", bootOrder: nil),
+            attachedVolume(id: UUID(), deviceName: nil, bootOrder: nil),
+            attachedVolume(id: UUID(), deviceName: "not a legal id", bootOrder: nil),
+        ]
+
+        #expect(VMSpecBuilder.volumeSpecs(from: volumes).map(\.deviceName.rawValue) == ["disk1"])
     }
 
     @Test("VMSpecBuilder omits volumes when no disk path is set")

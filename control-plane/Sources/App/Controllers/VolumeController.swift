@@ -418,56 +418,73 @@ struct VolumeController: RouteCollection {
             }
         }
 
-        // Generate device name if not provided
-        let deviceName: String
-        if let providedName = request.deviceName {
-            deviceName = providedName
-        } else {
-            deviceName = try await generateDeviceName(for: vm, on: req.db)
+        // A device name from the request body reaches the agent as a hypervisor
+        // object id, so it is validated here rather than at the point it would
+        // otherwise fail — an opaque hot-plug rejection, or a persisted spec
+        // that breaks the next boot (STR-129).
+        let requestedDeviceName: VolumeDeviceName? = try request.deviceName.map {
+            guard let name = VolumeDeviceName($0) else {
+                throw Abort(.badRequest, reason: InvalidVolumeDeviceName(rawValue: $0).description)
+            }
+            return name
         }
 
-        // Mark as attaching. The volume's replica placement is set at
-        // provisioning and must not be overwritten here — the reachability
-        // check above already guarantees the VM's agent can reach it.
-        volume.status = .attaching
-        volume.$vm.id = vm.id
-        volume.deviceName = deviceName
-        volume.bootOrder = request.bootOrder
-        volume.attachedAgentId = vm.hypervisorId
-        try await volume.save(on: req.db)
+        // Claim the device name and the VM binding in one transaction under the
+        // per-VM lock. Generating a name is a read-then-write, and the status
+        // checked above was read before it — so both are redone here, against
+        // the row as it is under the lock.
+        let volumeID = try volume.requireID()
+        let vmID = try vm.requireID()
+        let (claimed, deviceName) = try await req.db.transaction {
+            tx -> (Volume, VolumeDeviceName) in
+            try await VolumeAttachmentService.lock(vmID: vmID, on: tx)
+
+            guard let current = try await Volume.find(volumeID, on: tx) else {
+                throw Abort(.notFound, reason: "Volume not found")
+            }
+            guard current.canAttach else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Volume cannot be attached in status '\(current.status.rawValue)'. Must be 'available'")
+            }
+
+            let name = try await VolumeAttachmentService.claim(
+                current, to: vm,
+                deviceName: requestedDeviceName,
+                bootOrder: request.bootOrder,
+                on: tx)
+            return (current, name)
+        }
 
         // Send hot-plug message to agent
         do {
             try await req.application.volumeService.requestVolumeAttachment(
-                volume: volume,
+                volume: claimed,
                 vm: vm,
-                deviceName: deviceName,
+                deviceName: deviceName.rawValue,
                 readonly: request.readonly ?? false
             )
         } catch {
-            // If hot-plug fails, revert status
-            volume.status = .available
-            volume.$vm.id = nil
-            volume.deviceName = nil
-            volume.bootOrder = nil
-            volume.attachedAgentId = nil
-            try await volume.save(on: req.db)
+            // If hot-plug fails, give the claim back — every column at once, so
+            // the row cannot come to rest describing a half-attachment.
+            try await VolumeAttachmentService.release(claimed, on: req.db)
             throw error
         }
 
         // Agent confirmed the hot-plug
-        volume.status = .attached
-        try await volume.save(on: req.db)
+        claimed.status = .attached
+        try await claimed.save(on: req.db)
 
         req.logger.info(
             "Volume attached to VM",
             metadata: [
-                "volumeId": .string(volume.id!.uuidString),
-                "vmId": .string(vm.id!.uuidString),
-                "deviceName": .string(deviceName),
+                "volumeId": .string(volumeID.uuidString),
+                "vmId": .string(vmID.uuidString),
+                "deviceName": .string(deviceName.rawValue),
             ])
 
-        return VolumeResponse(from: volume)
+        return VolumeResponse(from: claimed)
     }
 
     // MARK: - Detach Volume
@@ -521,13 +538,9 @@ struct VolumeController: RouteCollection {
             throw error
         }
 
-        // Agent confirmed the hot-unplug; clear attachment info
-        volume.$vm.id = nil
-        volume.deviceName = nil
-        volume.bootOrder = nil
-        volume.attachedAgentId = nil
-        volume.status = .available
-        try await volume.save(on: req.db)
+        // Agent confirmed the hot-unplug; clear the attachment — all four
+        // columns and the status together (STR-129).
+        try await VolumeAttachmentService.release(volume, on: req.db)
 
         req.logger.info(
             "Volume detached from VM",
@@ -928,15 +941,5 @@ struct VolumeController: RouteCollection {
         }
 
         return volume
-    }
-
-    /// Generate a device name for a new volume attachment
-    private func generateDeviceName(for vm: VM, on db: Database) async throws -> String {
-        // Get existing volumes attached to this VM
-        let attachedVolumes = try await Volume.query(on: db)
-            .filter(\.$vm.$id == vm.id!)
-            .all()
-
-        return VolumeNaming.nextDeviceName(existingDeviceNames: attachedVolumes.map { $0.deviceName })
     }
 }
