@@ -194,6 +194,22 @@ re-attest with it and silently ignore the fresh join token. `e2e-agent.sh reset`
 clears it. It also clears `/var/lib/strato/vms`, whose VMs the new control plane
 has never heard of and would otherwise report as orphans.
 
+**`reset` refuses on a managed hypervisor node.** It deletes
+`/var/lib/spire/agent` and `/var/lib/strato/vms`, which are the same paths
+`deploy/agent/install.sh` manages on a real node — so it stops outright when
+systemd is running the `strato-agent` unit, or has it enabled to start at the
+next boot. Clear that deliberately if you mean it:
+
+```bash
+systemctl disable --now strato-agent
+```
+
+A unit file that is merely *present* while disabled and inactive is treated as
+a leftover from an earlier `install.sh` run: `reset` warns and continues, since
+the confirmation prompt already gates the deletion. Remove the dead unit with
+`rm /etc/systemd/system/strato-agent.service && systemctl daemon-reload` to
+silence the warning.
+
 **The site needs a network controller.** Without
 `networkControllerAgentId` on the site, nothing authors the OVN logical
 switches and VMs hang in create. `e2e-up.sh` sets it once an agent is online.

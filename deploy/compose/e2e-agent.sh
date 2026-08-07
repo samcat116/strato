@@ -28,8 +28,9 @@
 # reconciler reports each as an orphan). `reset` deletes both.
 #
 # Those are the same paths deploy/agent/install.sh manages on a real node, not
-# e2e-scoped ones, so `reset` refuses outright when a strato-agent systemd unit
-# is present and otherwise asks before deleting anything.
+# e2e-scoped ones, so `reset` refuses outright when systemd is actually running
+# the strato-agent unit (or would at the next boot) and otherwise asks before
+# deleting anything.
 #
 # Environment overrides:
 #   RUN_DIR     launch files + logs        (default $XDG_STATE_HOME/strato-e2e)
@@ -140,16 +141,55 @@ do_status() {
   say "RUN_DIR: $RUN_DIR"
 }
 
+# strato_unit_state — how systemd relates to a strato-agent unit on this host.
+#
+#   in-use   systemd is running it now, or would start it at the next boot
+#   stale    a unit file exists, but it is disabled and inactive
+#   absent   no unit file, or no systemd at all
+#
+# The mere existence of the unit file is too weak a signal to refuse on. An
+# install.sh run months ago leaves a disabled, inactive unit whose ExecStart may
+# no longer even resolve; it manages nothing, and refusing on it strands a dev
+# host mid-run with no recourse but deleting the unit by hand.
+strato_unit_state() {
+  command -v systemctl >/dev/null 2>&1 || { echo absent; return; }
+  # Matched at line start: `list-unit-files` prints the unit name in column one,
+  # and a bare grep would also match it inside a path or a status word.
+  systemctl list-unit-files strato-agent.service 2>/dev/null \
+    | grep -q '^strato-agent\.service' || { echo absent; return; }
+
+  # `activating`/`deactivating` are mid-transition, not idle, so they count as
+  # in use. `is-enabled` covers the other half: a unit that happens to be
+  # stopped right now but comes back on the next boot still belongs to systemd.
+  case "$(systemctl is-active strato-agent.service 2>/dev/null)" in
+    active|activating|reloading|deactivating) echo in-use; return ;;
+  esac
+  case "$(systemctl is-enabled strato-agent.service 2>/dev/null)" in
+    enabled|enabled-runtime|linked|linked-runtime) echo in-use; return ;;
+  esac
+  echo stale
+}
+
 do_reset() {
-  # A systemd unit means deploy/agent/install.sh provisioned this host as a real
-  # hypervisor node. Wiping /var/lib/strato/vms there destroys live VM state, so
-  # this is a refusal rather than a prompt.
-  if systemctl list-unit-files strato-agent.service >/dev/null 2>&1 \
-     && systemctl list-unit-files strato-agent.service 2>/dev/null | grep -q strato-agent; then
-    die "a strato-agent systemd unit exists — this looks like a managed hypervisor
-       node, not a dev host. Refusing to delete /var/lib/strato/vms.
-       If you really mean it, remove the unit or delete the paths by hand."
-  fi
+  # A unit systemd actually runs means deploy/agent/install.sh provisioned this
+  # host as a real hypervisor node. Wiping /var/lib/strato/vms there destroys
+  # live VM state, so that stays a refusal rather than a prompt. A leftover unit
+  # nobody runs only warrants a warning — the confirmation below is already the
+  # gate on everything destructive.
+  case "$(strato_unit_state)" in
+    in-use)
+      die "the strato-agent systemd unit is active or enabled — this looks like a
+       managed hypervisor node, not a dev host. Refusing to delete
+       /var/lib/strato/vms.
+       If you really mean it: systemctl disable --now strato-agent"
+      ;;
+    stale)
+      say "WARNING: a strato-agent systemd unit exists but is disabled and inactive."
+      say "         Treating it as a leftover from deploy/agent/install.sh rather"
+      say "         than a managed node. If it is dead weight, delete it:"
+      say "           rm /etc/systemd/system/strato-agent.service && systemctl daemon-reload"
+      ;;
+  esac
 
   if [[ "$ASSUME_YES" != 1 ]]; then
     say "reset will DELETE, as root:"
