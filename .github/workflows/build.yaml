@@ -43,6 +43,7 @@ jobs:
       compose_scripts: ${{ steps.filter.outputs.compose_scripts }}
       homebrew: ${{ steps.filter.outputs.homebrew }}
       workflow: ${{ steps.filter.outputs.workflow }}
+      release_workflow: ${{ steps.filter.outputs.release_workflow }}
       ci_scripts: ${{ steps.filter.outputs.ci_scripts }}
       docker_web: ${{ steps.filter.outputs.docker_web }}
     steps:
@@ -100,6 +101,15 @@ jobs:
               - '.github/homebrew/**'
             workflow:
               - '.github/workflows/build.yaml'
+            # The release workflow, for the Homebrew jobs below only. It was in
+            # no filter at all, so the job-level halves of the tap bump — the
+            # runner label, the tap staging, the brew invocations — reached
+            # `main` with zero CI, and the next signal was a tag. That is how
+            # `brew: command not found` shipped: the job's first-ever run was
+            # v0.1.1, after the release was public. Its own filter for the
+            # `predicate-quantifier: every` reason `ci_scripts` documents.
+            release_workflow:
+              - '.github/workflows/release.yaml'
             # A separate filter, not another pattern under `workflow`: with
             # `predicate-quantifier: every` a file would have to match BOTH
             # patterns to match the filter, so adding this there would make
@@ -167,7 +177,7 @@ jobs:
   homebrew-formula:
     name: Homebrew Formula Template
     needs: changes
-    if: needs.changes.outputs.homebrew == 'true' || needs.changes.outputs.ci_scripts == 'true' || needs.changes.outputs.workflow == 'true'
+    if: needs.changes.outputs.homebrew == 'true' || needs.changes.outputs.ci_scripts == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.release_workflow == 'true'
     # The Homebrew formula is the one release artifact nothing here compiles:
     # release.yaml renders and syntax-checks it inside the release run, which is
     # 30-90 minutes of Swift builds after the tag went public. Render it against
@@ -181,12 +191,16 @@ jobs:
       - name: Check syntax
         run: |
           bash -n .github/scripts/render-homebrew-formula.sh
+          bash -n .github/scripts/verify-homebrew-assets.sh
+          bash -n .github/scripts/smoke-test-homebrew-formula.sh
           bash -n .github/scripts/push-homebrew-formula.sh
 
       - name: Lint with shellcheck
         run: |
           shellcheck --severity=warning \
             .github/scripts/render-homebrew-formula.sh \
+            .github/scripts/verify-homebrew-assets.sh \
+            .github/scripts/smoke-test-homebrew-formula.sh \
             .github/scripts/push-homebrew-formula.sh
 
       # Same script the release runs, so this validates the real rendering
@@ -216,6 +230,84 @@ jobs:
             echo "::error::push-homebrew-formula.sh cannot parse the version out of the rendered formula (got '${parsed}')"
             exit 1
           }
+
+  # The job above renders against fixture checksums, which is all a Linux
+  # runner can do: the fixtures point at no real bytes, and GitHub removed
+  # Homebrew from the ubuntu-24.04 image anyway. So `brew install`, `brew test`
+  # and the tap staging they need had no pre-merge coverage at all — the tap
+  # bump's first-ever run (v0.1.1) was the first time any of it executed, and
+  # it failed, after the release was already public.
+  #
+  # This leg closes that: render the LAST STABLE RELEASE's real formula and run
+  # the same two scripts the release job runs, against real assets. A macOS
+  # runner is required for brew and gives the macos-arm64 leg — the asset most
+  # brew users install. Nothing is published; the push script is not called.
+  homebrew-formula-install:
+    name: Homebrew Formula Install
+    needs: changes
+    if: needs.changes.outputs.homebrew == 'true' || needs.changes.outputs.ci_scripts == 'true' || needs.changes.outputs.workflow == 'true' || needs.changes.outputs.release_workflow == 'true'
+    runs-on: macos-latest
+    env:
+      TAP_REPO: stratocloud/homebrew-strato
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # Prereleases are skipped for the same reason the release job skips them:
+      # the tap only ever carries stable versions, so an rc is not what this
+      # should be proving against.
+      - name: Resolve the last stable release
+        id: release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="$(gh release list --exclude-drafts --exclude-pre-releases \
+            --limit 1 --json tagName --jq '.[0].tagName // empty')"
+
+          # Neither case is a failure: a repo with no stable release yet, or
+          # one whose latest predates the strato-cli-* assets (STR-45), has
+          # nothing to install. Warn rather than skip quietly — a permanently
+          # green job that tests nothing is worse than a visible gap.
+          if [ -z "$tag" ]; then
+            echo "::warning::no stable release to smoke-test the formula against"
+          elif ! gh release view "$tag" --json assets --jq '.assets[].name' \
+              | grep -q '^strato-cli-.*\.tar\.gz\.sha256$'; then
+            echo "::warning::${tag} predates the strato-cli-* assets; skipping the install smoke test"
+            tag=""
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Render that release's formula
+        if: steps.release.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          mkdir -p sidecars
+          gh release download "$TAG" \
+            --pattern 'strato-cli-*.tar.gz.sha256' --dir sidecars
+          .github/scripts/render-homebrew-formula.sh \
+            "$TAG" "$GITHUB_REPOSITORY" sidecars strato.rb
+          cat strato.rb
+
+      - name: Verify every leg against that release
+        if: steps.release.outputs.tag != ''
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          .github/scripts/verify-homebrew-assets.sh \
+            strato.rb "$GITHUB_REPOSITORY" "$TAG"
+
+      - name: Install and test the formula
+        if: steps.release.outputs.tag != ''
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          .github/scripts/smoke-test-homebrew-formula.sh \
+            strato.rb "$TAP_REPO" "$TAG"
 
   lint-and-build-frontend:
     name: Frontend Lint & Build

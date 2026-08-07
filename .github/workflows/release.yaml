@@ -934,37 +934,26 @@ jobs:
             "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" sidecars strato.rb
           cat strato.rb
 
-      # Install and test the rendered formula before publishing it. This is the
-      # only check that compares the sha256 the formula CLAIMS against the bytes
-      # GitHub actually serves — a checksum/asset mismatch is precisely the
-      # failure this job can introduce — and it gives the formula's `test do`
-      # block its only caller, so a release that skipped the CompiledBuildInfo
-      # bake fails here instead of shipping a formula whose `strato --version`
-      # says "dev". Only the leg matching the runner (macos-arm64) is
-      # exercised; the other two ride the same rendering and sidecar plumbing.
+      # Every leg's url<->sha pairing, against the bytes GitHub actually serves
+      # — a checksum/asset mismatch is precisely the failure this job can
+      # introduce, and the smoke test below can only install the runner's own
+      # leg. Same script build.yaml runs on PRs. See it for why it re-reads the
+      # sha out of the rendered formula rather than the sidecar.
+      - name: Verify every leg against the release
+        run: |
+          .github/scripts/verify-homebrew-assets.sh \
+            strato.rb "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME"
+
+      # Install and test the rendered formula before publishing it. The step
+      # above proves every leg's checksum; this one proves the formula installs
+      # and the binary runs. Same script build.yaml runs on PRs.
       #
       # Runs BEFORE the push, so the job fails closed: a bad formula never
       # reaches the tap.
       - name: Smoke-test the formula
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: 1
-          HOMEBREW_NO_ANALYTICS: 1
-          HOMEBREW_NO_INSTALL_CLEANUP: 1
         run: |
-          # Homebrew refuses to install a formula that is not in a tap
-          # ("Homebrew requires formulae to be in a tap"), so stage the
-          # rendered file in a local tap under the name users actually type.
-          # Nothing is published from here — the next step does the real
-          # update. Naming the formula fully-qualified also satisfies the
-          # third-party tap trust check without a separate `brew trust`.
-          # stratocloud/homebrew-strato -> the tap name stratocloud/strato.
-          BREW_TAP="${TAP_REPO/homebrew-/}"
-          TAP_DIR="$(brew --repository)/Library/Taps/${TAP_REPO}"
-          mkdir -p "$TAP_DIR/Formula"
-          cp strato.rb "$TAP_DIR/Formula/strato.rb"
-
-          brew install --formula "${BREW_TAP}/strato"
-          brew test "${BREW_TAP}/strato"
+          .github/scripts/smoke-test-homebrew-formula.sh \
+            strato.rb "$TAP_REPO" "$GITHUB_REF_NAME"
 
       # The script owns the clone/guard/commit/push and its retries; see it for
       # the two no-op outcomes (re-run, backport) it treats as success.
