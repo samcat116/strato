@@ -24,7 +24,7 @@ convergent, so every replica runs it lock-free; the one non-idempotent effect �
 the completion webhook — is claimed by a conditional `UPDATE` on the deadline
 column rather than by a cluster singleton. The residual stuck-*operation* sweep
 keeps its `lock:sweep:stuck_operations` singleton until the last imperative
-verb (VM restart, the snapshot verbs) converts.
+verb (VM restart, VM/sandbox restore) converts.
 | Image download grants | Valkey `imggrant:agent:{agentId}:image:{imageId}` (TTL 30m) | Written by the replica that emits the download URLs; read by whichever replica serves the fetch (issue #562) |
 | Browser sessions | Valkey `vrs-{sessionID}` (idle TTL, `SESSION_TTL_SECONDS`) | **Not** coordination state — a separate store with the opposite failure contract (below) |
 
@@ -112,13 +112,15 @@ against a *stale* placement and serve stale credentials.
 Some agent exchanges are actions rather than states, so they cannot ride the
 level-triggered sync and remain correlated request/response:
 
-- **Volume operations** (create/delete/attach/detach/resize/snapshot/clone)
 - **Reboot** (a VM that is `running` before and after has no state delta)
-- **Full-VM checkpoints** — `vm_checkpoint` / `vm_restore` /
-  `vm_snapshot_delete` (wire v22, issue #564)
-- **Sandbox snapshots** — `sandbox_snapshot_create` /
-  `sandbox_snapshot_delete` / `sandbox_restore` (v9), and
-  `sandbox_snapshot_export` (v14)
+- **Restore** — `vm_restore` (wire v22, issue #564) and `sandbox_restore`
+  (v9). Loading a captured image back over a live guest is an *edge*: "this VM
+  should be at checkpoint C" cannot be re-converged on, because the guest starts
+  writing the moment it resumes.
+
+Volume operations left this list in STR-148 (wire v31) and every snapshot
+artifact's capture, delete and export in STR-150 (v33) — including
+`sandbox_snapshot_export`, which is a placement fact now rather than a verb.
 
 When the serving replica doesn't hold the agent's socket, the exchange is
 forwarded to the holding replica over `replica:{id}:rpc` and the verdict comes

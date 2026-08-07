@@ -158,7 +158,7 @@ actor FirecrackerService: HypervisorService {
             let volume = spec.volumes.first,
             let storagePath = volume.storagePath
         {
-            rootDrive = (id: volume.deviceName, path: storagePath, readOnly: volume.readonly)
+            rootDrive = (id: volume.deviceName.rawValue, path: storagePath, readOnly: volume.readonly)
         }
 
         // Firecracker cannot boot without a kernel — from the image or the spec.

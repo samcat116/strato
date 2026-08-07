@@ -99,11 +99,26 @@ public enum SecurityGroupACLBuilder {
     public static let allowPriority = 1002
     public static let dropPriority = 1001
 
+    /// The instance metadata carve-out sits one step above rule allows
+    /// (STR-54). Today that step buys nothing — a security-group rule can only
+    /// *allow*, so nothing at `allowPriority` could contradict it — but the
+    /// rule vocabulary is control-plane data, and the switch-attached stateless
+    /// NACLs on the roadmap are the deny-capable shape. Two ACLs that both
+    /// match at equal priority resolve arbitrarily in OVN, so equal priority
+    /// would make "non-overridable" a property of today's rule model rather
+    /// than of this ACL. One number makes it a property of the ACL.
+    public static let metadataAllowPriority = 1003
+
     /// Bumped when the drop-group ACL set below changes shape, so existing
     /// deployments replace it on upgrade (the generation mechanism reused).
     /// 2: MLD carve-outs (STR-34). 3: MLD split by direction so guests cannot
-    /// originate Queries.
-    public static let dropGroupRevision: Int64 = 3
+    /// originate Queries. 4: instance metadata egress (STR-54).
+    ///
+    /// "On upgrade" means the *authority's* upgrade: this group's ACLs are
+    /// authored only by the site's network-controller agent, so a mixed-version
+    /// site behind an older authority keeps the older ACL set no matter how
+    /// current its other agents are.
+    public static let dropGroupRevision: Int64 = 4
 
     /// Bumped whenever this builder's ACL *construction* changes — a fixed
     /// match syntax, a newly expressible rule shape — so upgraded agents
@@ -229,17 +244,82 @@ public enum SecurityGroupACLBuilder {
     /// members' reports (harmless, and snooping switches forward them).
     static let mldIngressMatch = "icmp6 && (\(mldQueryType) || \(mldListenerTypes))"
 
+    /// Egress to the instance metadata service, one ACL per family, allowed on
+    /// every managed port no matter which security groups it belongs to
+    /// (STR-54).
+    ///
+    /// **This is deliberate, and it is not overridable.** It exists so that
+    /// tightening a project's `default` group — or attaching a group that
+    /// simply has no permissive egress rule — cannot take IMDS away. That
+    /// failure would be silent and would not look like a policy outcome: the
+    /// guest's cloud-init datasource hangs retrying `169.254.169.254`, and the
+    /// operator sees a broken instance rather than a rule they wrote. AWS
+    /// draws the same line — IMDS reachability is not subject to
+    /// security-group rules there either. Anyone narrowing the default group
+    /// later should find this rule and understand that it, not the group's
+    /// permissiveness, is what keeps metadata reachable.
+    ///
+    /// The AWS parallel stops short of AWS's per-instance kill switch
+    /// (`HttpEndpoint: disabled`): the only lever here is the per-*network*
+    /// `metadataEnabled`, so a single workload cannot yet be denied the
+    /// service. Academic while nothing listens; a real gap once STR-56 lands
+    /// (issue #1013), and the space above `metadataAllowPriority` is where such
+    /// a deny goes.
+    ///
+    /// Egress only, and stateful (`allow-related`), so the service's replies
+    /// come back on the connection's conntrack state rather than through a
+    /// standing `to-lport` allow — which, unlike the DHCP carve-outs below,
+    /// would admit *unsolicited* inbound traffic claiming to be from the
+    /// metadata address to every managed port in the site.
+    ///
+    /// Scoped to the metadata port (`InstanceMetadataEndpoint.port`) rather
+    /// than the whole address: the localport terminates nothing else, so a
+    /// wider hole would only widen what a guest may probe on its own chassis.
+    ///
+    /// Applied on the site-singleton drop group, so it lands on every managed
+    /// port including those on networks with `metadataEnabled` off. Harmless:
+    /// such a switch publishes no localport, so a guest treating the address as
+    /// on-link gets no answer to its ARP/ND, and one without that route hands
+    /// the packet to its default gateway for the logical router to drop. Same
+    /// outcome by either path — and the alternative (per-network port groups)
+    /// would be a whole new object lifetime for the ability to deny traffic
+    /// that already goes nowhere.
+    public static func metadataEgressACLs() -> [ACLSpec] {
+        let pg = OVNNaming.dropPortGroupName
+        let ids = [managedKey: managedValue]
+        let port = InstanceMetadataEndpoint.port
+        // Clause order mirrors `acl(for:portGroup:)` — port binding, family,
+        // peer, protocol, port — so a reader can diff a carve-out against a
+        // rule-derived ACL without re-parsing either.
+        return [
+            ACLSpec(
+                direction: "from-lport", priority: metadataAllowPriority,
+                match:
+                    "inport == @\(pg) && ip4 && ip4.dst == \(InstanceMetadataEndpoint.address) "
+                    + "&& tcp && tcp.dst == \(port)",
+                action: "allow-related", externalIDs: ids),
+            ACLSpec(
+                direction: "from-lport", priority: metadataAllowPriority,
+                match:
+                    "inport == @\(pg) && ip6 && ip6.dst == \(InstanceMetadataEndpoint.addressV6) "
+                    + "&& tcp && tcp.dst == \(port)",
+                action: "allow-related", externalIDs: ids),
+        ]
+    }
+
     /// The drop group's ACL set: default-deny both directions for all IP
     /// traffic (ARP is not `ip`, so address resolution keeps working), with
     /// carve-outs for DHCP, IPv6 neighbor discovery / router advertisements,
     /// and MLD — without which a default-denied guest could never even
     /// acquire its address or default route, and IPv6 multicast (which
     /// depends on listener reports reaching the querier) would silently stop
-    /// working the moment a NIC joined a security group.
+    /// working the moment a NIC joined a security group. Instance metadata
+    /// egress rides here too, for the same reason and with the same
+    /// unconditional reach — see `metadataEgressACLs`.
     public static func dropGroupACLs() -> [ACLSpec] {
         let pg = OVNNaming.dropPortGroupName
         let ids = [managedKey: managedValue]
-        return [
+        return metadataEgressACLs() + [
             // DHCPv4/v6: the guest's requests out, the server's replies in.
             ACLSpec(
                 direction: "from-lport", priority: allowPriority,

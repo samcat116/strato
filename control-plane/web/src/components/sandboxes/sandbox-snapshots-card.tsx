@@ -21,12 +21,12 @@ import { sandboxesApi } from "@/lib/api/sandboxes";
 import { useSandboxSnapshots } from "@/lib/hooks";
 import {
   acceptedMutation,
-  acceptedOperation,
+  acceptedSnapshotMutation,
   useMutationsStore,
 } from "@/lib/stores/mutations-store";
 import { useProjectContext } from "@/providers";
 import type { Sandbox, SandboxSnapshot } from "@/types/api";
-import { formatMemory } from "./format";
+import { formatMemory } from "@/lib/format-bytes";
 
 export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const router = useRouter();
@@ -43,17 +43,25 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
     setName(`${sandbox.name}-fork`);
   };
 
-  // Export copies the snapshot's artifacts into control-plane object storage
-  // (issue #428): the checkpoint survives agent loss and becomes eligible for
-  // cross-agent restore and fork.
+  // Export records that the snapshot's artifacts should also exist in
+  // control-plane object storage (issue #428): the checkpoint survives agent
+  // loss and becomes eligible for cross-agent restore and fork. A placement
+  // fact rather than a command since STR-150 — the owning agent converges by
+  // uploading, and the snapshot stays unconverged until every artifact lands.
   const exportSnapshot = async (snapshot: SandboxSnapshot) => {
     setExportingId(snapshot.id);
     try {
-      const operation = await sandboxesApi.exportSnapshot(
+      const accepted = await sandboxesApi.exportSnapshot(
         sandbox.id,
         snapshot.id
       );
-      watch(acceptedOperation(operation, `${snapshot.name} export`));
+      watch(
+        acceptedSnapshotMutation(accepted, {
+          kind: "snapshot_export",
+          resourceKind: "sandbox_snapshot",
+          resourceName: `${snapshot.name} export`,
+        })
+      );
       toast.success(`Exporting snapshot "${snapshot.name}"`);
     } catch (exportError) {
       toast.error(

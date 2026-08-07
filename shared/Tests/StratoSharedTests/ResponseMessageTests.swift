@@ -20,16 +20,25 @@ struct ResponseMessageTests {
     }
 
     @Test func successWithTypedDataRoundTrip() throws {
-        // The real handlers ship typed structs through AnyCodableValue —
-        // e.g. VolumeStatusResponse inside a SuccessMessage.
-        let status = VolumeStatusResponse(
-            volumeId: "vol-1", status: "attached", storagePath: "/var/lib/strato/vol-1.qcow2")
-        let message = SuccessMessage(requestId: Fixtures.requestId, data: try AnyCodableValue(status))
+        // `SuccessMessage.data` carries an arbitrary `Codable` through
+        // `AnyCodableValue`, and this pins that mechanism rather than any one
+        // payload: every typed reply that used to ride it is gone —
+        // `VolumeStatusResponse` and the two snapshot reports with wire v33
+        // (STR-150), `VolumeInfoResponse` with v32 (STR-149) — because the
+        // facts they carried are desired/observed state now. The remaining
+        // senders answer with a bare success, so a live wire struct stands in.
+        let guest = GuestInfo(
+            qgaAvailable: true, hostname: "guest-1",
+            interfaces: [
+                GuestNetworkInterface(
+                    name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
+                    addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.5")])
+            ])
+        let message = SuccessMessage(requestId: Fixtures.requestId, data: try AnyCodableValue(guest))
         let decoded = try throughEnvelope(message)
-        let extracted = try #require(try decoded.data?.decode(as: VolumeStatusResponse.self))
-        #expect(extracted.volumeId == "vol-1")
-        #expect(extracted.status == "attached")
-        #expect(extracted.storagePath == "/var/lib/strato/vol-1.qcow2")
+        let extracted = try #require(try decoded.data?.decode(as: GuestInfo.self))
+        #expect(extracted.hostname == "guest-1")
+        #expect(extracted.interfaces.first?.addresses.first?.address == "10.0.0.5")
     }
 
     @Test func errorRoundTrip() throws {

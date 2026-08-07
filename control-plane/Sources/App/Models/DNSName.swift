@@ -35,24 +35,36 @@ enum DNSName {
     /// `corp.example.com` internally, and that overlap with the public name is
     /// exactly what makes split-horizon possible later (issue #769). At least
     /// two labels are required — a bare single label is a host, not a zone.
-    static func normalizedZoneName(_ raw: String) throws -> String {
+    ///
+    /// `field` and `minimumLabels` exist because this grammar is also what a
+    /// logical network's DHCP search domain must satisfy (issue #876) — the two
+    /// names in the DNS model agree on one grammar rather than each re-deriving
+    /// one. They differ in exactly one rule: a search domain may be a single
+    /// label, since `internal` and `lan` are legitimate things to append to an
+    /// unqualified lookup and both delivery paths accept them. The structural
+    /// safety both names depend on comes from `isValidLabel`, not from the
+    /// label count.
+    static func normalizedZoneName(
+        _ raw: String, field: String = "Zone name", minimumLabels: Int = 2
+    ) throws -> String {
         let normalized = normalize(raw)
         guard !normalized.isEmpty else {
-            throw Abort(.badRequest, reason: "Zone name must not be empty")
+            throw Abort(.badRequest, reason: "\(field) must not be empty")
         }
         guard normalized.count <= maxNameLength else {
-            throw Abort(.badRequest, reason: "Zone name must not exceed \(maxNameLength) characters")
+            throw Abort(.badRequest, reason: "\(field) must not exceed \(maxNameLength) characters")
         }
         let labels = normalized.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
-        guard labels.count >= 2 else {
+        guard labels.count >= minimumLabels else {
             throw Abort(
                 .badRequest,
-                reason: "Zone name '\(raw)' must be fully qualified (at least two labels, e.g. 'acme.internal')")
+                reason: "\(field) '\(raw)' must be fully qualified (at least \(minimumLabels) labels, "
+                    + "e.g. 'acme.internal')")
         }
         guard labels.allSatisfy(isValidLabel) else {
             throw Abort(
                 .badRequest,
-                reason: "Zone name '\(raw)' is not a valid domain name: each label must be 1–\(maxLabelLength) "
+                reason: "\(field) '\(raw)' is not a valid domain name: each label must be 1–\(maxLabelLength) "
                     + "characters of letters, digits, and hyphens, and must not start or end with a hyphen")
         }
         return normalized

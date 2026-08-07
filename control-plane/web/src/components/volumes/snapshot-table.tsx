@@ -21,6 +21,10 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { volumesApi } from "@/lib/api/volumes";
+import {
+  acceptedSnapshotMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
 import { toast } from "sonner";
 import type { Volume, VolumeSnapshot } from "@/types/api";
 import { SnapshotStatusBadge } from "./snapshot-status-badge";
@@ -41,6 +45,7 @@ export function SnapshotTable({
   onRefresh,
   showVolumeColumn = true,
 }: SnapshotTableProps) {
+  const watch = useMutationsStore((state) => state.watch);
   const [deleteTarget, setDeleteTarget] = useState<VolumeSnapshot | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -53,8 +58,21 @@ export function SnapshotTable({
     if (!deleteTarget?.id || !deleteTarget.volumeId) return;
     setIsDeleting(true);
     try {
-      await volumesApi.deleteSnapshot(deleteTarget.volumeId, deleteTarget.id);
-      toast.success(`Deleted snapshot ${deleteTarget.name}`);
+      const accepted = await volumesApi.deleteSnapshot(
+        deleteTarget.volumeId,
+        deleteTarget.id
+      );
+      // The row survives until the owning agent confirms the overlay is gone
+      // (STR-150), so the toast names an accepted request rather than a
+      // finished one and the watcher reports the outcome.
+      watch(
+        acceptedSnapshotMutation(accepted, {
+          kind: "delete",
+          resourceKind: "volume_snapshot",
+          resourceName: deleteTarget.name,
+        })
+      );
+      toast.success(`Deleting snapshot ${deleteTarget.name}`);
       setDeleteTarget(null);
       onRefresh?.();
     } catch (error) {
@@ -84,10 +102,11 @@ export function SnapshotTable({
     );
   }
 
-  const canDelete = (snapshot: VolumeSnapshot) =>
-    snapshot.status === "available" ||
-    snapshot.status === "error" ||
-    snapshot.status === "deleting";
+  // Every snapshot is deletable since STR-150: deletion is level-triggered and
+  // the agent's teardown is idempotent, so there is no half-finished capture a
+  // delete could interrupt. One already on its way out is the exception —
+  // asking twice does nothing.
+  const canDelete = (snapshot: VolumeSnapshot) => snapshot.status !== "deleting";
 
   return (
     <>

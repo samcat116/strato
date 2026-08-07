@@ -17,12 +17,15 @@ public enum MessageType: String, Codable, Sendable {
     // desired-state sync.
     case vmReboot = "vm_reboot"
 
-    // Full-VM checkpoint / restore (protocol version >= 22, issue #564).
-    // RAM + device state captured as a qcow2 internal snapshot; like the
-    // sandbox trio these are imperative request/response pairs, not states.
-    case vmCheckpoint = "vm_checkpoint"
+    // Full-VM restore (protocol version >= 22, issue #564): loading a captured
+    // RAM image back into a live QEMU process is an edge, not a state, and
+    // converts to a nonce on the desired entry in STR-151.
+    //
+    // `vm_checkpoint` and `vm_snapshot_delete` were removed in wire v33: a
+    // checkpoint's *result* is a durable artifact, so it rides
+    // `DesiredStateMessage.snapshots` and is confirmed through
+    // `ObservedStateReport.snapshots` (ADR 0001 stage 8, STR-150).
     case vmRestore = "vm_restore"
-    case vmSnapshotDelete = "vm_snapshot_delete"
 
     // Network topology has no imperative messages: it is level-triggered from
     // `DesiredStateMessage.networks` alone. The removed `network_*` frames
@@ -36,11 +39,11 @@ public enum MessageType: String, Codable, Sendable {
     // `volume_resize` and `volume_clone` were removed in wire v31: volumes are
     // desired state now (ADR 0001 stage 5, STR-148), realized from
     // `DesiredStateMessage.volumes` and confirmed through
-    // `ObservedStateReport.volumes`. What remains here are the artifact verbs
-    // (stage 8) and the read (stage 7), which have not converted yet.
-    case volumeSnapshot = "volume_snapshot"
-    case volumeSnapshotDelete = "volume_snapshot_delete"
-    case volumeInfo = "volume_info"
+    // `ObservedStateReport.volumes`. `volume_info` followed in v32 (stage 7,
+    // STR-149) — a read is not an action, and the control plane answers it
+    // from the observed report it already stores. `volume_snapshot` and
+    // `volume_snapshot_delete` went at v33 (stage 8, STR-150), onto
+    // `DesiredStateMessage.snapshots`. Nothing volume-shaped is left here.
 
     // Console operations
     case consoleConnect = "console_connect"
@@ -73,17 +76,15 @@ public enum MessageType: String, Codable, Sendable {
     case sandboxExecClosed = "sandbox_exec_closed"
     case sandboxLog = "sandbox_log"
 
-    // Sandbox snapshot / checkpoint operations (protocol version >= 9, issue
-    // #426). Imperative request/response pairs like the volume operations —
-    // a snapshot is an action, not a state, so it cannot ride the
-    // level-triggered desired-state sync.
-    case sandboxSnapshotCreate = "sandbox_snapshot_create"
-    case sandboxSnapshotDelete = "sandbox_snapshot_delete"
+    // Sandbox restore (protocol version >= 9, issue #426). Loading a
+    // checkpoint back over a live microVM is an edge like `vm_restore`, and
+    // converts to a nonce on the desired entry in STR-151.
+    //
+    // `sandbox_snapshot_create`, `sandbox_snapshot_delete` and
+    // `sandbox_snapshot_export` were removed in wire v33 (STR-150): the first
+    // two are the artifact's existence, and the third is *where* it exists —
+    // both states, both on `DesiredStateMessage.snapshots`.
     case sandboxRestore = "sandbox_restore"
-
-    // Snapshot mobility (protocol version >= 14, issue #428): export a
-    // checkpoint's artifacts off-node to control-plane object storage.
-    case sandboxSnapshotExport = "sandbox_snapshot_export"
 }
 
 // MARK: - Base Message Protocol
@@ -752,132 +753,19 @@ public struct ConsoleDisconnectedMessage: WebSocketMessage {
 
 // MARK: - Volume Operation Messages (QEMU only)
 
-/// Message to create a snapshot of a volume. The agent owns snapshot path
-/// layout and reports the resulting path back in the response.
-public struct VolumeSnapshotMessage: WebSocketMessage {
-    public var type: MessageType { .volumeSnapshot }
-    public let requestId: String
-    public let timestamp: Date
-    public let volumeId: String
-    public let snapshotId: String
-    public let volumePath: String
-    /// The VM this volume is currently attached to, when the control plane
-    /// knows it (`Volume.$vm`). Nil for a detached volume, or from an older
-    /// control plane.
-    ///
-    /// Originally the cue to fs-freeze that guest around overlay creation
-    /// (issue #563); since issue #747 it is a **refusal** signal instead. The
-    /// backend's snapshot is an overlay backed by the volume, and nothing
-    /// switches the running QEMU's active layer onto it, so a snapshot taken
-    /// while a guest is writing the base is not point-in-time however well the
-    /// guest was quiesced. The agent rejects the request when this is set.
-    public let attachedVMId: String?
+// The volume message section is empty by design. `volume_create`,
+// `volume_delete`, `volume_attach`, `volume_detach`, `volume_resize` and
+// `volume_clone` became desired state at wire v31 (STR-148); `volume_info` was
+// deleted at v32 as a read that was never an action (STR-149); and
+// `volume_snapshot`/`volume_snapshot_delete` became desired *artifacts* at v33
+// (STR-150). What each carried now lives on `DesiredVolumeState`,
+// `ObservedVolumeState`, `DesiredSnapshotState` or `ObservedSnapshotState` —
+// or, for the thin-provisioning triple `volume_info` reported, nowhere, having
+// had no reader.
 
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        volumeId: String,
-        snapshotId: String,
-        volumePath: String,
-        attachedVMId: String? = nil
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.volumeId = volumeId
-        self.snapshotId = snapshotId
-        self.volumePath = volumePath
-        self.attachedVMId = attachedVMId
-    }
-}
-
-/// Message to delete a snapshot of a volume from storage. Carries no file
-/// path: the agent derives the snapshot's location from the IDs (the same
-/// derivation it used when creating the snapshot), so deletion works even
-/// when the control plane never learned the path — e.g. when the snapshot
-/// was created on the agent but the success response was lost.
-public struct VolumeSnapshotDeleteMessage: WebSocketMessage {
-    public var type: MessageType { .volumeSnapshotDelete }
-    public let requestId: String
-    public let timestamp: Date
-    public let volumeId: String
-    public let snapshotId: String
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        volumeId: String,
-        snapshotId: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.volumeId = volumeId
-        self.snapshotId = snapshotId
-    }
-}
-
-/// Message to get volume information
-public struct VolumeInfoMessage: WebSocketMessage {
-    public var type: MessageType { .volumeInfo }
-    public let requestId: String
-    public let timestamp: Date
-    public let volumeId: String
-    public let volumePath: String
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        volumeId: String,
-        volumePath: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.volumeId = volumeId
-        self.volumePath = volumePath
-    }
-}
-
-/// Response with volume information from agent
-public struct VolumeInfoResponse: Codable, Sendable {
-    public let volumeId: String
-    public let actualSize: Int64  // Actual disk usage
-    public let virtualSize: Int64  // Provisioned size
-    public let format: String
-    public let dirty: Bool  // Has uncommitted changes
-    public let encrypted: Bool
-
-    public init(
-        volumeId: String,
-        actualSize: Int64,
-        virtualSize: Int64,
-        format: String,
-        dirty: Bool = false,
-        encrypted: Bool = false
-    ) {
-        self.volumeId = volumeId
-        self.actualSize = actualSize
-        self.virtualSize = virtualSize
-        self.format = format
-        self.dirty = dirty
-        self.encrypted = encrypted
-    }
-}
-
-/// Response for volume operations (create, attach, detach, etc.)
-public struct VolumeStatusResponse: Codable, Sendable {
-    public let volumeId: String
-    public let status: String
-    public let storagePath: String?
-
-    public init(
-        volumeId: String,
-        status: String,
-        storagePath: String?
-    ) {
-        self.volumeId = volumeId
-        self.status = status
-        self.storagePath = storagePath
-    }
-}
+// `VolumeStatusResponse` went with `volume_snapshot` at wire v33 (STR-150).
+// It was the last imperative volume reply, and what it carried — status and
+// storage path — is `ObservedVolumeState` / `ObservedSnapshotFacts` now.
 
 // MARK: - Message Envelope
 

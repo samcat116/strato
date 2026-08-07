@@ -86,10 +86,11 @@ recorded: a delete succeeds by its resource ceasing to exist, which the
 resource itself cannot report, so the reap appends a terminal event and
 clients poll `GET /api/operations/:id` with the `mutationId`.
 
-VM **restart** and the **snapshot** verbs are still imperative agent commands
+VM **restart** and VM/sandbox **restore** are still imperative agent commands
 with no generation to converge on: they keep `ResourceOperation` rows, the
 `409` double-submit guard, and the operation-polling contract until ADR 0001
-converts them. The operations API otherwise survives as a read-only façade
+converts them. Snapshots and checkpoints left that list in STR-150 — an
+artifact's *existence* is a state even though capturing it is an action. The operations API otherwise survives as a read-only façade
 synthesized from `resource_events` plus the resource's conditions, so older
 clients keep working.
 
@@ -153,8 +154,11 @@ qemu-img); the agent owns all paths, and the control plane stores whatever
 the agent reports. A single `materializeDisk` path converts any image to
 the format the hypervisor asked for, publishing via atomic rename. Volume
 snapshots are external qcow2 overlays; volumes are host-local and pinned
-to their VM's agent. Details: [storage](./storage.md); the replicated
-design proposal is [distributed-storage](./distributed-storage.md).
+to their VM's agent. Snapshots and checkpoints are **desired artifacts** —
+durable nouns the owning agent enumerates and converges on, with retention
+answered by an absolute expiry and a sweep. Details:
+[storage](./storage.md); the replicated design proposal is
+[distributed-storage](./distributed-storage.md).
 
 Images have an architecture and a set of typed artifacts (`diskImage` for
 QEMU; `rootfs`/`kernel`/`initramfs` for Firecracker/direct boot), each

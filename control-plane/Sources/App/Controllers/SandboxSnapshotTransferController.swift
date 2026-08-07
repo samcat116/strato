@@ -24,13 +24,19 @@ extension SandboxController {
 
     /// POST /api/sandboxes/:sandboxID/snapshots/:snapshotID/export
     ///
-    /// Copies a ready snapshot's artifacts off its agent into control-plane
-    /// object storage, making the checkpoint durable against agent loss and
-    /// eligible for cross-agent restore and fork. 202 + operation; the agent
-    /// streams each artifact to a pre-signed upload URL, the upload route
-    /// records size + SHA-256 as the bytes land, and the operation stamps
-    /// `exportedAt` once all four artifacts are recorded. Re-exporting is
-    /// idempotent: uploads replace the objects at their deterministic keys.
+    /// Asks for a copy of a ready snapshot's artifacts to exist in
+    /// control-plane object storage, making the checkpoint durable against
+    /// agent loss and eligible for cross-agent restore and fork.
+    ///
+    /// A **placement fact**, not a verb, since STR-150: the request sets
+    /// `exportDesired` on the snapshot's row, the desired entry carries the
+    /// upload slots to the agent, and the agent converges by streaming each
+    /// artifact through the upload route below. `202` + the snapshot's
+    /// `conditions`, which stay unconverged until every artifact has an
+    /// integrity record the control plane computed itself.
+    ///
+    /// Re-exporting is idempotent: uploads replace the objects at their
+    /// deterministic keys.
     func exportSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
@@ -57,13 +63,12 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot has no owning agent; its artifacts are unreachable")
         }
-        do {
-            try await SandboxSnapshotService.requireCapableAgent(agentId, app: req.application)
-        } catch let error as SandboxSnapshotServiceError {
-            throw Abort(.conflict, reason: error.localizedDescription)
-        }
-        // The export message postdates wire v13: a pre-v14 agent cannot even
-        // decode the envelope, so refuse up front instead of timing out.
+        // Two floors, and both are load-bearing. The snapshot-sync floor is
+        // what makes the desired entry mean anything at all; the mobility floor
+        // is older and narrower — a pre-v14 agent has no artifact-transfer
+        // client, so it would converge the entry by uploading nothing.
+        try await SnapshotArtifactMutation.requireCaptureCapableAgent(
+            agentId, kind: .sandboxSnapshot, app: req.application)
         guard let agent = await req.application.agentService.getAgentInfo(agentId),
             WireProtocol.supportsSandboxSnapshotMobility(agent.wireProtocolVersion ?? 0)
         else {
@@ -74,19 +79,8 @@ extension SandboxController {
             )
         }
 
-        // One upload slot per artifact: control-plane-relative paths the
-        // agent resolves against the Envoy mTLS listener it already dials
-        // and PUTs with its SVID as the credential.
-        let uploads = SandboxSnapshotArtifactKind.allCases.map { kind in
-            SandboxSnapshotArtifactUploadTarget(
-                kind: kind,
-                uploadURL: SandboxSnapshot.artifactTransferPath(
-                    sandboxId: sandboxID, snapshotId: snapshotID, kind: kind))
-        }
-
-        let operation = try await beginOperation(
-            .snapshotExport, sandbox: sandbox, user: user, on: req.db
-        ) { db in
+        let userID = try user.requireID()
+        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
             try await Self.lockSnapshotLineage([snapshotID], on: db)
             guard let current = try await SandboxSnapshot.find(snapshotID, on: db), current.isReady
             else {
@@ -94,22 +88,21 @@ extension SandboxController {
             }
             // The exported copy is a second copy of the same bytes and draws
             // its own storage from the project's pool (issue #428). Reserve it
-            // here, in the operation's transaction, so a doomed export is
+            // here, in the mutation's transaction, so a doomed export is
             // rejected before it occupies an agent — but skip it when a
             // complete copy already exists, since re-exporting overwrites the
             // same keys and adds nothing.
-            guard !current.isExported else { return }
-            guard let project = try await Project.find(current.$project.id, on: db) else {
-                throw Abort(.conflict, reason: "Snapshot's project no longer exists")
+            if !current.isExported {
+                guard let project = try await Project.find(current.$project.id, on: db) else {
+                    throw Abort(.conflict, reason: "Snapshot's project no longer exists")
+                }
+                try await QuotaEnforcementService.reserveSandboxSnapshotExport(
+                    for: project, environment: current.environment,
+                    size: current.size ?? 0, on: db)
             }
-            try await QuotaEnforcementService.reserveSandboxSnapshotExport(
-                for: project, environment: current.environment,
-                size: current.size ?? 0, on: db)
+            return try await SnapshotArtifactMutation.requestExport(
+                snapshot, actor: .user(userID), on: db, app: req.application)
         }
-
-        Self.runSnapshotExport(
-            operation, snapshotID: snapshotID, agentId: agentId, uploads: uploads,
-            app: req.application)
 
         req.logger.info(
             "Sandbox snapshot export accepted",
@@ -118,58 +111,8 @@ extension SandboxController {
                 "snapshot_id": .string(snapshotID.uuidString),
                 "agent_id": .string(agentId),
             ])
-        return try operation.acceptedResponse()
-    }
-
-    /// Background half of `exportSnapshot`: the agent RPC, then the
-    /// completeness check over what the upload route actually recorded. The
-    /// agent's success alone is deliberately not trusted to stamp
-    /// `exportedAt` — the integrity entries written as each stream landed
-    /// are the ground truth.
-    private static func runSnapshotExport(
-        _ operation: ResourceOperation,
-        snapshotID: UUID,
-        agentId: String,
-        uploads: [SandboxSnapshotArtifactUploadTarget],
-        app: Application
-    ) {
-        guard let operationId = operation.id else { return }
-        let sandboxID = operation.resourceID
-
-        app.backgroundTasks.spawn {
-            do {
-                try await SandboxSnapshotService.requestSnapshotExport(
-                    sandboxId: sandboxID, snapshotId: snapshotID, uploads: uploads,
-                    agentId: agentId, app: app)
-
-                // The agent RPC above can span shutdown's drain; bail before the
-                // completeness check if it cancelled us (see `Application.liveDB`).
-                guard let db = app.liveDB else { return }
-                guard let current = try await SandboxSnapshot.find(snapshotID, on: db) else {
-                    throw Abort(.conflict, reason: "Snapshot was deleted while its export ran")
-                }
-                let recorded = Set((current.exportedArtifacts ?? []).map(\.kind))
-                let missing = SandboxSnapshotArtifactKind.allCases.filter { !recorded.contains($0) }
-                guard missing.isEmpty else {
-                    throw Abort(
-                        .internalServerError,
-                        reason:
-                            "Agent reported the export complete but artifacts [\(missing.map(\.rawValue).joined(separator: ", "))] never arrived"
-                    )
-                }
-                current.exportedAt = Date()
-                try await current.save(on: db)
-
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
-                    settingSandboxStatus: nil, app: app)
-            } catch {
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .failed,
-                    error: error.localizedDescription,
-                    settingSandboxStatus: nil, app: app)
-            }
-        }
+        return try AcceptedMutation(SandboxSnapshotResponse(from: snapshot), accepted)
+            .acceptedResponse()
     }
 
     // MARK: - Artifact transfer (agent mTLS routes)
@@ -243,6 +186,23 @@ extension SandboxController {
         artifacts.append(
             SandboxSnapshotExportedArtifact(kind: kind, sizeBytes: size, sha256: sha256))
         current.exportedArtifacts = artifacts
+        // Completion is decided here now, not by an export operation's
+        // background half (STR-150). The rule is unchanged and deliberately
+        // strict: the copy is complete when *this route* has hashed every
+        // artifact kind, never when an agent said it finished uploading. That
+        // is what makes `exportedAt` safe to authorize a cross-agent restore
+        // against — and moving the check to the last PUT is what removes the
+        // one remaining reason for the export RPC to exist.
+        // Only the *first* complete set stamps it, which is what keeps the
+        // re-upload contract this route already had: an existing `exportedAt`
+        // is left alone, so a re-export that dies partway cannot demote a
+        // snapshot whose stored copy is still complete and valid.
+        let recorded = Set(artifacts.map(\.kind))
+        if current.exportedAt == nil,
+            SandboxSnapshotArtifactKind.allCases.allSatisfy({ recorded.contains($0) })
+        {
+            current.exportedAt = Date()
+        }
         try await current.save(on: req.db)
 
         req.logger.info(

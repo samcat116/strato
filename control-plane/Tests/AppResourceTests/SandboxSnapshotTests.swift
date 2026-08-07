@@ -61,7 +61,7 @@ final class SandboxSnapshotTests {
     private func placeOnCapableAgent(
         app: Application,
         sandbox: Sandbox,
-        capabilities: [String] = ["firecracker", MessageType.sandboxSnapshotCreate.rawValue],
+        capabilities: [String] = ["firecracker", SnapshotArtifactKind.sandboxSnapshot.agentCapability],
         status: SandboxStatus = .running
     ) async throws -> String {
         let message = AgentRegisterMessage(
@@ -144,42 +144,45 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-                #expect(res.body.string.contains("sandbox_snapshot_create"))
+                #expect(res.body.string.contains(SnapshotArtifactKind.sandboxSnapshot.agentCapability))
             }
         }
     }
 
     // MARK: - Create
 
-    @Test("POST snapshots returns 202, inserts the estimated row, and fails cleanly without a live socket")
-    func createAcceptsAndResolvesFailure() async throws {
+    @Test("POST snapshots returns 202 and inserts the snapshot as desired state")
+    func createAcceptsAsDesiredState() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, token in
             _ = try await placeOnCapableAgent(app: app, sandbox: sandbox, status: .running)
 
-            var operation: OperationResponse?
+            var accepted: AcceptedMutation<SandboxSnapshotResponse>?
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["name": "before-upgrade"])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedMutation<SandboxSnapshotResponse>.self)
             }
 
-            let accepted = try #require(operation)
-            #expect(accepted.kind == .snapshot)
-            #expect(accepted.resourceKind == .sandbox)
-            #expect(accepted.resourceId == sandbox.id)
+            let body = try #require(accepted)
+            #expect(body.resource.name == "before-upgrade")
+            #expect(body.targetGeneration == 1)
+            #expect(!body.resource.conditions.converged)
 
-            // The row was inserted in the accept transaction. (Its `size`
-            // starts as the admission estimate, but the background RPC can
-            // fail — and zero it — before this read; the estimate's effect
-            // is covered by the quota-rejection test.)
             let snapshot = try #require(
                 await SandboxSnapshot.query(on: app.db)
                     .filter(\.$sandbox.$id == sandbox.id!)
                     .first())
-            #expect(snapshot.name == "before-upgrade")
             #expect(snapshot.agentId == sandbox.hypervisorId)
+            #expect(snapshot.desiredStatus == .present)
+            // The admission estimate stands until the agent reports a real
+            // figure on its observed report; an unmeasured footprint must never
+            // silently become a free one.
+            #expect(snapshot.size == sandbox.memory)
+            // Resume is the default capture mode, and it is durable: a desired
+            // entry is re-assembled on every sync, long after this request.
+            #expect(snapshot.captureMode == .resume)
 
             // Ownership: the creator gets an admin binding on the snapshot
             // node in the create transaction.
@@ -191,52 +194,35 @@ final class SandboxSnapshotTests {
                 .filter(\.$nodeID == snapshot.id!)
                 .count()
             #expect(ownerBindings == 1)
-
-            // No live agent socket: the background RPC fails fast, the
-            // operation records the failure, and the row goes error with its
-            // charge dropped.
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .failed)
-            let failed = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
-            #expect(failed.status == .error)
-            #expect(failed.size == 0)
         }
     }
 
-    @Test("Checkpoint-and-stop flips desired state to stopped in the accept transaction")
+    /// Checkpoint-and-stop has two halves, and both have to land in the same
+    /// transaction. The *capture* leaves the microVM paused, which the agent
+    /// reads off the artifact's durable `captureMode`; the *lasting* intent is
+    /// the sandbox's own desired state, so the reconciler does not resume it on
+    /// the next level-triggered pass.
+    @Test("Checkpoint-and-stop records the capture mode and stops the sandbox")
     func createWithStopSetsDesiredStopped() async throws {
         try await withSnapshotTestApp { app, _, _, sandbox, token in
             _ = try await placeOnCapableAgent(app: app, sandbox: sandbox, status: .running)
 
-            var operation: OperationResponse?
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["stop": true])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
             }
-            let accepted = try #require(operation)
 
-            // The accept transaction flipped desired state to stopped
-            // (generation 1 → 2), but with no live agent socket the
-            // background RPC fails fast and `completeOperation` reverts
-            // desired state to observed (.running, generation 3) — reading
-            // right after the 202 races that revert. Wait out the operation
-            // and assert the settled state instead: generation 3 is only
-            // reachable through flip-then-revert, so it pins the accept
-            // -transaction flip without the race (no flip would leave the
-            // revert a no-op and the generation at 1).
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .failed)
-            var settled: Sandbox?
-            for _ in 0..<100 {
-                settled = try await Sandbox.find(sandbox.id, on: app.db)
-                if settled?.generation == 3 { break }
-                try await Task.sleep(for: .milliseconds(50))
-            }
-            #expect(settled?.generation == 3)
-            #expect(settled?.desiredStatus == .running)
+            let snapshot = try #require(
+                await SandboxSnapshot.query(on: app.db)
+                    .filter(\.$sandbox.$id == sandbox.id!)
+                    .first())
+            #expect(snapshot.captureMode == .stop)
+
+            let settled = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            #expect(settled.desiredStatus == .stopped)
+            #expect(settled.generation == 2)
         }
     }
 
@@ -259,13 +245,15 @@ final class SandboxSnapshotTests {
         }
     }
 
-    @Test("A second mutation while the snapshot operation is pending is rejected with 409")
-    func createBlocksConcurrentOperations() async throws {
+    /// The "operation already pending" mutex is gone with the operation row
+    /// (STR-147, extended to artifacts in STR-150). A snapshot is its own
+    /// resource with its own generation, so it no longer contends with the
+    /// sandbox's other mutations at all.
+    @Test("A snapshot is accepted while another sandbox mutation is pending")
+    func createAllowsConcurrentOperations() async throws {
         try await withSnapshotTestApp { app, _, _, sandbox, token in
             _ = try await placeOnCapableAgent(app: app, sandbox: sandbox, status: .running)
 
-            // Insert a pending operation directly so the double-submit guard
-            // is what rejects (the background resolver never runs for it).
             let pending = ResourceOperation(
                 sandboxID: sandbox.id!, userID: UUID(), kind: .boot)
             try await pending.save(on: app.db)
@@ -273,7 +261,7 @@ final class SandboxSnapshotTests {
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .accepted)
             }
         }
     }
@@ -364,7 +352,6 @@ final class SandboxSnapshotTests {
             snapshot.status = .ready
             try await snapshot.save(on: app.db)
 
-            var operation: OperationResponse?
             try await app.test(
                 .DELETE,
                 "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)"
@@ -372,20 +359,26 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
             }
 
-            let accepted = try #require(operation)
-            #expect(accepted.kind == .snapshotDelete)
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .succeeded)
-            let gone = try await SandboxSnapshot.find(snapshot.id, on: app.db)
-            #expect(gone == nil)
+            var removed = false
+            for _ in 0..<40 {
+                if try await SandboxSnapshot.find(snapshot.id, on: app.db) == nil {
+                    removed = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            #expect(removed)
         }
     }
 
-    @Test("A creating snapshot cannot be deleted")
-    func deleteRefusesCreating() async throws {
+    /// The `.creating` refusal is gone with the operation row that owned the
+    /// snapshot's resolution. Deletion is level-triggered and the agent's
+    /// teardown is idempotent, so there is no half-finished capture a delete
+    /// could interrupt into an inconsistent state (STR-150).
+    @Test("A snapshot still capturing can be deleted")
+    func deleteAcceptsCreating() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, token in
             let snapshot = SandboxSnapshot(
                 name: "in-flight",
@@ -402,7 +395,7 @@ final class SandboxSnapshotTests {
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .accepted)
             }
         }
     }
@@ -617,7 +610,7 @@ final class SandboxSnapshotTests {
             agentId: name,
             hostname: "\(name)-host",
             version: "1.0.0",
-            capabilities: ["firecracker", MessageType.sandboxSnapshotCreate.rawValue],
+            capabilities: ["firecracker", SnapshotArtifactKind.sandboxSnapshot.agentCapability],
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
@@ -722,13 +715,19 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-                #expect(res.body.string.contains("too old"))
+                // The snapshot-sync floor is the stricter of the two and is
+                // what refuses first; either way the caller is told to upgrade.
+                #expect(res.body.string.contains("Upgrade the agent"))
             }
         }
     }
 
-    @Test("Export returns 202 and fails cleanly without a live socket")
-    func exportAcceptsAndFailsWithoutSocket() async throws {
+    /// Export is a placement fact, not a verb (STR-150): the request records
+    /// that a copy *should* exist and the agent converges by uploading. The
+    /// snapshot stays unconverged until the upload route has hashed every
+    /// artifact itself — the agent's word is never enough.
+    @Test("Export returns 202 and records the desire without completing it")
+    func exportAcceptsAsPlacementFact() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, token in
             let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox)
             let snapshot = SandboxSnapshot(
@@ -739,9 +738,10 @@ final class SandboxSnapshotTests {
                 agentId: agentId,
                 createdByID: user.id!)
             snapshot.status = .ready
+            snapshot.observedGeneration = snapshot.generation
             try await snapshot.save(on: app.db)
 
-            var operation: OperationResponse?
+            var accepted: AcceptedMutation<SandboxSnapshotResponse>?
             try await app.test(
                 .POST,
                 "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/export"
@@ -749,14 +749,15 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedMutation<SandboxSnapshotResponse>.self)
             }
 
-            let accepted = try #require(operation)
-            #expect(accepted.kind == .snapshotExport)
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .failed)
+            let body = try #require(accepted)
+            #expect(body.resource.exportDesired)
+            #expect(!body.resource.conditions.converged)
             let current = try #require(await SandboxSnapshot.find(snapshot.id, on: app.db))
+            #expect(current.exportDesired)
+            #expect(current.generation > snapshot.observedGeneration)
             #expect(current.exportedAt == nil)
             // A failed export leaves the snapshot itself untouched.
             #expect(current.status == .ready)
@@ -954,7 +955,6 @@ final class SandboxSnapshotTests {
             let stored = try await app.imageObjectStore.exists(key: key)
             #expect(stored)
 
-            var operation: OperationResponse?
             try await app.test(
                 .DELETE,
                 "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)"
@@ -962,12 +962,16 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
             }
-            let accepted = try #require(operation)
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .succeeded)
-            let stillThere = (try? await app.imageObjectStore.exists(key: key)) ?? false
+            // The exported copy is removed by `SandboxSnapshot.reap`, which
+            // runs when the last finalizer clears — here immediately, since the
+            // snapshot has no agent to confirm anything.
+            var stillThere = true
+            for _ in 0..<40 {
+                stillThere = (try? await app.imageObjectStore.exists(key: key)) ?? false
+                if !stillThere { break }
+                try await Task.sleep(for: .milliseconds(50))
+            }
             #expect(!stillThere)
         }
     }

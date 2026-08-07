@@ -130,12 +130,20 @@ struct VMNetworkConfig: Sendable {
     /// ever reached the guest's cloud-init, so host devices kept 1500 even on a
     /// network whose MTU had been lowered for an encapsulated uplink.)
     let mtu: Int?
+    /// Whether this NIC's network publishes the instance metadata service. Its
+    /// only effect here is DHCP option 121: the network's `DHCP_Options` row
+    /// gains an on-link route to `InstanceMetadataEndpoint.address` (STR-53).
+    /// False both when the network has the service off and when the control
+    /// plane predates the field — the row simply keeps today's options, which
+    /// is what a sender with no opinion should get.
+    let metadataEnabled: Bool
 
     init(
         networkName: String, networkId: UUID, macAddress: String? = nil, ipAddress: String? = nil,
         subnet: String? = nil, gateway: String? = nil, ip6Address: String? = nil, prefixLength6: Int? = nil,
         gateway6: String? = nil, subnet6: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
-        domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil, mtu: Int? = nil
+        domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil, mtu: Int? = nil,
+        metadataEnabled: Bool = false
     ) {
         self.networkName = networkName
         self.networkId = networkId
@@ -153,6 +161,7 @@ struct VMNetworkConfig: Sendable {
         self.leaseTime = leaseTime
         self.securityGroupIds = securityGroupIds
         self.mtu = mtu
+        self.metadataEnabled = metadataEnabled
     }
 }
 

@@ -17,25 +17,14 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { vmsApi } from "@/lib/api/vms";
+import { formatMemory } from "@/lib/format-bytes";
 import { useVMSnapshots } from "@/lib/hooks";
 import {
   acceptedOperation,
+  acceptedSnapshotMutation,
   useMutationsStore,
 } from "@/lib/stores/mutations-store";
 import type { VM, VMSnapshot } from "@/types/api";
-
-/**
- * Machine-state size for one checkpoint. Separate from the dashboard's
- * `formatBytes`, which rounds to whole GiB: a checkpoint's state is often
- * hundreds of mebibytes, and rounding that to "0 GiB" would read as empty.
- * Binary units, labelled as such — the divisor is 1024.
- */
-function formatStateSize(bytes: number): string {
-  const gib = bytes / 1024 ** 3;
-  if (gib >= 1) return `${gib.toFixed(1)} GiB`;
-  const mib = bytes / 1024 ** 2;
-  return `${Math.round(mib)} MiB`;
-}
 
 /**
  * Full-VM checkpoints (issue #564): guest memory, device state, and disks
@@ -63,11 +52,17 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     setIsCreating(true);
     try {
       const trimmed = name.trim();
-      const operation = await vmsApi.createSnapshot(
+      const accepted = await vmsApi.createSnapshot(
         vm.id,
         trimmed ? { name: trimmed } : undefined
       );
-      watch(acceptedOperation(operation, trimmed || `${vm.name} checkpoint`));
+      watch(
+        acceptedSnapshotMutation(accepted, {
+          kind: "create",
+          resourceKind: "vm_checkpoint",
+          resourceName: trimmed || `${vm.name} checkpoint`,
+        })
+      );
       toast.success("Checkpointing VM");
       setShowCreate(false);
       setName("");
@@ -106,8 +101,14 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     const snapshot = deleting;
     setBusyId(snapshot.id);
     try {
-      const operation = await vmsApi.deleteSnapshot(vm.id, snapshot.id);
-      watch(acceptedOperation(operation, `${snapshot.name} delete`));
+      const accepted = await vmsApi.deleteSnapshot(vm.id, snapshot.id);
+      watch(
+        acceptedSnapshotMutation(accepted, {
+          kind: "delete",
+          resourceKind: "vm_checkpoint",
+          resourceName: snapshot.name,
+        })
+      );
       toast.success(`Deleting “${snapshot.name}”`);
       setDeleting(null);
     } catch (deleteError) {
@@ -182,7 +183,7 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
                     </div>
                     <p className="mt-1 text-xs text-muted-foreground">
                       {snapshot.size != null
-                        ? formatStateSize(snapshot.size)
+                        ? formatMemory(snapshot.size)
                         : "Size pending"}
                       {snapshot.createdAt
                         ? ` · ${new Date(snapshot.createdAt).toLocaleString()}`

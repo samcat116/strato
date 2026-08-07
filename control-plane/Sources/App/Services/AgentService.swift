@@ -965,6 +965,13 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
+                    // Delete snapshot artifacts past their retention deadline
+                    // (STR-150) — the `ttlSecondsAfterFinished` answer durable
+                    // artifact objects need and fire-and-forget RPCs did not.
+                    await SnapshotRetentionSweep.run(app: app)
+
+                    try self.checkTickPreconditions()
+
                     // Advance the agent auto-update rollout one agent at a
                     // time (issue #434).
                     await sweepAgentAutoUpdates()
@@ -1122,8 +1129,13 @@ actor AgentService {
             try await degradeOverdue(Sandbox.self, now: now, on: db)
             // Volumes joined the same backstop in STR-148, replacing the
             // status-and-timestamp sweep that used to guess which transitional
-            // status had been abandoned.
+            // status had been abandoned. Snapshot artifacts followed in
+            // STR-150, replacing the RPC timeouts that used to decide a
+            // capture's fate.
             try await degradeOverdue(Volume.self, now: now, on: db)
+            try await degradeOverdue(VolumeSnapshot.self, now: now, on: db)
+            try await degradeOverdue(VMSnapshot.self, now: now, on: db)
+            try await degradeOverdue(SandboxSnapshot.self, now: now, on: db)
         } catch {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
@@ -1281,6 +1293,45 @@ actor AgentService {
                 },
                 kind: .sandbox, timeout: timeout, on: db)
 
+            // Stranded attachments (STR-129): a row that lost its VM but kept
+            // the rest of the attachment. The VM reap releases volumes inside
+            // the delete transaction, so this should never fire — it is the
+            // backstop for a replica still running an older build during a
+            // rolling upgrade, and for any future path that removes a VM
+            // without going through the reap.
+            //
+            // No age budget, unlike the convergence sweeps above: nothing is in
+            // flight that could still land, and until the columns are cleared
+            // the volume names a device on a VM that does not exist. The
+            // generation bump is what makes the agent act on it — a desired
+            // entry no newer than the last one applied is dropped, so clearing
+            // the columns alone would leave the disk plugged into a guest the
+            // control plane no longer describes.
+            // The same predicate `NormalizeVolumeAttachments` repairs on, column
+            // for column: they describe one state, so they must agree or a row
+            // the one-off repair fixes is one this backstop never sees again.
+            let strandedVolumes = try await Volume.query(on: db)
+                .filter(\.$vm.$id == nil)
+                .group(.or) { unresolved in
+                    unresolved.filter(\.$deviceName != nil)
+                    unresolved.filter(\.$bootOrder != nil)
+                    unresolved.filter(\.$attachedAgentId != nil)
+                    unresolved.filter(\.$readonly == true)
+                }
+                .all()
+
+            for volume in strandedVolumes {
+                guard let volumeID = volume.id else { continue }
+                VolumeAttachmentService.clearAttachment(volume)
+                try await volume.save(on: db)
+
+                app.logger.warning(
+                    "Volume left attachment fields set with no VM; released",
+                    metadata: [
+                        "volumeId": .string(volumeID.uuidString),
+                        "generation": .string("\(volume.generation)"),
+                    ])
+            }
         } catch {
             app.logger.error("Stuck-operation sweep failed: \(error)")
         }
@@ -1340,9 +1391,37 @@ actor AgentService {
                 .all()
             await reapOrphanedTerminating(
                 volumes.filter { $0.finalizers.isEmpty }, kind: "volume", on: db)
+
+            // Snapshot artifacts (STR-150). Their `agent.absent` trigger is the
+            // same repeating observed-state report, but the retention sweep's
+            // deletions are unattended in exactly the way the sandbox expiry
+            // sweep's are, so they need the same backstop.
+            //
+            // No age cutoff here, unlike the three above, and it is not an
+            // oversight: `finalizers.isEmpty` on a terminating row already
+            // means nobody owes cleanup — either the token cleared, or none was
+            // stamped because the artifact never reached an agent. The cutoff
+            // exists to keep the workload scan cheap on a large table, and the
+            // terminating set here is normally empty.
+            try await reapOrphanedTerminatingSnapshots(
+                VolumeSnapshot.self, kind: "volume snapshot", on: db)
+            try await reapOrphanedTerminatingSnapshots(
+                VMSnapshot.self, kind: "checkpoint", on: db)
+            try await reapOrphanedTerminatingSnapshots(
+                SandboxSnapshot.self, kind: "sandbox snapshot", on: db)
         } catch {
             app.logger.error("Orphaned-terminating sweep failed: \(error)")
         }
+    }
+
+    /// The snapshot-artifact half of the orphan sweep. Separate from the
+    /// workload half only because `desired_status` is a different enum type per
+    /// family, which Fluent's field projection cannot be abstracted over.
+    private func reapOrphanedTerminatingSnapshots<A: SnapshotArtifactResource>(
+        _ type: A.Type, kind: String, on db: any Database
+    ) async throws {
+        let terminating = try await A.terminating(on: db).filter { $0.finalizers.isEmpty }
+        await reapOrphanedTerminating(terminating, kind: kind, on: db)
     }
 
     /// Drives one kind's orphans through the ordinary clear path — clearing an
@@ -1400,6 +1479,11 @@ actor AgentService {
             // `convergence_deadline` and `sweepStuckConvergence` replaced it
             // wholesale in STR-148.
             case .volume: ("Volume", "volumeId")
+            // Unreachable for the same reason as volumes: snapshot artifacts
+            // have only the convergence backstop (STR-150).
+            case .volumeSnapshot: ("Volume snapshot", "snapshotId")
+            case .vmCheckpoint: ("Checkpoint", "snapshotId")
+            case .sandboxSnapshot: ("Sandbox snapshot", "snapshotId")
             }
 
         for resource in resources {

@@ -12,6 +12,15 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
     case virtualMachine = "virtual_machine"
     case sandbox = "sandbox"
     case volume = "volume"
+    // Snapshot artifacts (ADR 0001 stage 8, STR-150). Three kinds rather than
+    // one, because they are three tables with three quota paths, three IAM node
+    // types and three very different completion budgets — a qcow2 overlay is
+    // seconds and a full-VM checkpoint is the guest's whole RAM at disk speed.
+    // What they share is a *shape*, and that is carried by the protocols below
+    // rather than by collapsing them into one discriminator.
+    case volumeSnapshot = "volume_snapshot"
+    case vmCheckpoint = "vm_checkpoint"
+    case sandboxSnapshot = "sandbox_snapshot"
 
     /// Short noun for client-facing messages ("An operation is already
     /// pending for this VM").
@@ -23,6 +32,22 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
             return "sandbox"
         case .volume:
             return "volume"
+        case .volumeSnapshot:
+            return "volume snapshot"
+        case .vmCheckpoint:
+            return "checkpoint"
+        case .sandboxSnapshot:
+            return "sandbox snapshot"
+        }
+    }
+
+    /// The artifact family this kind names, or nil for a live resource.
+    var snapshotArtifactKind: SnapshotArtifactKind? {
+        switch self {
+        case .volumeSnapshot: return .volumeSnapshot
+        case .vmCheckpoint: return .vmCheckpoint
+        case .sandboxSnapshot: return .sandboxSnapshot
+        case .virtualMachine, .sandbox, .volume: return nil
         }
     }
 
@@ -129,9 +154,59 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 return 120
             case .boot, .shutdown, .reboot, .pause, .resume,
                 .snapshot, .snapshotDelete, .restore, .snapshotExport:
-                // A volume has no run state, and its snapshot verbs are still
-                // imperative (ADR 0001 stage 8). Total function, unreachable
-                // arms.
+                // A volume has no run state, and its snapshot artifacts are
+                // their own resource kinds since STR-150. Total function,
+                // unreachable arms.
+                return 120
+            }
+
+        // Snapshot artifacts (STR-150). `create` is the capture and the only
+        // budget that differs meaningfully between the families; everything
+        // else is metadata work or unreachable. The figures are the ones the
+        // retired `ResourceOperation` budgets used for the same work, moved
+        // from the parent resource onto the artifact where they belong.
+        case .volumeSnapshot:
+            switch kind {
+            case .create:
+                // A qcow2 overlay is a metadata write, but it is taken against
+                // a volume that may be many gigabytes and on a busy host.
+                return 300
+            case .delete:
+                return 120
+            case .boot, .shutdown, .reboot, .pause, .resume, .resize,
+                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach:
+                return 120
+            }
+
+        case .vmCheckpoint:
+            switch kind {
+            case .create:
+                // QEMU writes the whole guest RAM through a background job, so
+                // the cost scales with the memory grant at disk speed.
+                return 1800
+            case .delete:
+                // Dropping an internal snapshot rewrites metadata, not data.
+                return 120
+            case .boot, .shutdown, .reboot, .pause, .resume, .resize,
+                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach:
+                return 120
+            }
+
+        case .sandboxSnapshot:
+            switch kind {
+            case .create:
+                // The guest memory file plus, without reflink support, a full
+                // rootfs copy.
+                return 600
+            case .snapshotExport:
+                // The whole archive streams through the control plane into
+                // object storage, so this is bounded by the network rather than
+                // by local disk.
+                return 3600
+            case .delete:
+                return 120
+            case .boot, .shutdown, .reboot, .pause, .resume, .resize,
+                .snapshot, .snapshotDelete, .restore, .attach, .detach:
                 return 120
             }
         }

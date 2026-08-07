@@ -350,7 +350,7 @@ struct ImageResponse: Content {
         self.projectId = image.$project.id
         self.filename = image.filename
         self.size = image.size
-        self.sizeFormatted = ImageResponse.formatSize(image.size)
+        self.sizeFormatted = image.size.formattedByteSize
         self.format = image.format
         self.architecture = image.architecture
         self.checksum = image.checksum
@@ -367,19 +367,6 @@ struct ImageResponse: Content {
         self.uploadedById = image.$uploadedBy.id
         self.createdAt = image.createdAt
         self.updatedAt = image.updatedAt
-    }
-
-    static func formatSize(_ bytes: Int64) -> String {
-        let gb = Double(bytes) / 1024.0 / 1024.0 / 1024.0
-        if gb >= 1.0 {
-            return String(format: "%.2f GB", gb)
-        }
-        let mb = Double(bytes) / 1024.0 / 1024.0
-        if mb >= 1.0 {
-            return String(format: "%.2f MB", mb)
-        }
-        let kb = Double(bytes) / 1024.0
-        return String(format: "%.2f KB", kb)
     }
 }
 

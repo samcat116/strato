@@ -164,12 +164,12 @@ use in code, tests, docs, and review. Architecture-level maps live in
   sync. A latency optimization only — the periodic sync is the backstop, so a
   lost nudge is always safe.
 - **Cross-replica RPC** — the correlated request/reply forwarding for the
-  exchanges that are *actions, not states* (VM reboot, VM
-  checkpoint/restore/snapshot-delete, volume *snapshot* operations, sandbox
-  snapshot operations) and so cannot ride the level-triggered sync. A volume's
-  own lifecycle left this list in STR-148. When the serving replica lacks the
-  socket, the exchange is forwarded to the holder and the verdict returns on
-  the requester's reply channel.
+  exchanges that are *actions, not states* (VM reboot, VM restore, sandbox
+  restore) and so cannot ride the level-triggered sync. A volume's own lifecycle
+  left this list in STR-148 and every snapshot artifact's in STR-150; what
+  remains is the restores, which convert to nonces in STR-151. When the serving
+  replica lacks the socket, the exchange is forwarded to the holder and the
+  verdict returns on the requester's reply channel.
 - **ReplicaMessageBridge** — the deep module (`app.replicaBridge`) that owns
   the whole cross-replica seam: route recording, the local-vs-forward routing
   decision, nudge fan-out, RPC forwarding, and the subscription lifecycle. It
@@ -180,6 +180,29 @@ use in code, tests, docs, and review. Architecture-level maps live in
   held socket, and turning a nudge into a local desired-state sync. Production
   adapter: `AgentService`. Test adapter: an in-memory fake, so the bridge is
   testable through its own interface without a real agent socket.
+
+## Volume attachment
+
+- **Attachment** — the **desired attachment** as it is stored: `vm_id`,
+  `device_name`, `boot_order`, `readonly` and `attached_agent_id` on `volumes`.
+  Not five independent columns — `VolumeAttachmentService` is the only thing
+  that moves them, and it moves them together, generation included. The
+  database enforces the shape: unique `(vm_id, device_name)` and
+  `(vm_id, boot_order)` per VM, an attached row must name its device, and
+  `vm_id` is `ON DELETE RESTRICT`.
+
+- **Claim / release** — the two transitions. A claim is one transaction under a
+  per-VM advisory lock (the `IPAMService` idiom), so generating the next free
+  `disk<N>` cannot race another attach; a release clears every column. Both
+  bump the generation, which is what makes them reach the agent at all — and
+  neither writes `status`, which is only ever what the agent last observed.
+  Deleting a VM releases its volumes inside the delete transaction: the volume
+  outlives the VM.
+
+- **Device name** — the volume's stable label within its VM (`VolumeDeviceName`
+  in `StratoShared`, validated at the API boundary). It is a *label*, not an
+  identifier: the agent names the QEMU device after the **volume id**
+  (`QEMUDiskIdentity`), so nothing resolves a disk by device name.
 
 ## Snapshots
 
@@ -196,3 +219,32 @@ use in code, tests, docs, and review. Architecture-level maps live in
 
   "Snapshot" alone is ambiguous between the two — say which, or say
   "checkpoint" when you mean memory is included.
+
+- **Snapshot artifact** — the umbrella noun for all three families (volume
+  snapshot, VM checkpoint, sandbox snapshot) as *desired state* (ADR 0001
+  stage 8, STR-150). An artifact is a durable noun with an identity, a parent,
+  and a host, which an agent enumerates, diffs and converges on: capture and
+  delete are desired state, and each family is its own `ConvergingResource` and
+  `FinalizableResource`. What is *not* a state is a **restore** — "this VM
+  should be at checkpoint C" cannot be re-converged on, because the guest
+  starts writing the moment it resumes — so restore stays an imperative
+  operation until STR-151 makes it a nonce.
+
+- **Capture strategy** — how an artifact that does not exist yet gets taken
+  (`DesiredSnapshotCapture`): a sandbox's resume/stop mode, a volume's
+  attached-VM refusal hint. A *create strategy* in the `restoreFrom` /
+  `DesiredVolumeSource` sense, read only while the artifact is absent from the
+  host — which is what makes it safe for a level-triggered sync to carry an
+  instruction that pauses a live guest.
+
+- **Export** — that an artifact should *also* exist in the control plane's
+  object store. A **placement fact**, not a verb: the desired entry carries the
+  upload slots, the agent converges by streaming to them, and the byte transfer
+  beneath stays a transport concern. Withdrawing one is the control plane's own
+  bookkeeping, never a teardown the agent performs.
+
+- **Retention** — an artifact's absolute `expires_at`, resolved at creation
+  from a per-request `ttlSeconds` or the fleet default. Swept by a
+  cluster-singleton pass that issues the same delete an operator would,
+  attributed to the `system` actor. Absolute rather than relative, because a
+  TTL re-evaluated against "now" drifts with every restart.

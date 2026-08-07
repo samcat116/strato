@@ -15,10 +15,10 @@ import {
   CHART_MEMORY,
   agentStatusColors,
   createdWithinLastDay,
-  formatBytes,
   reservedPercent,
 } from "@/components/overview";
 import { friendlyErrorMessage } from "@/lib/errors";
+import { formatCapacity } from "@/lib/format-bytes";
 import { isAgentsForbidden, useAgents, useInvalidateVMs, useVMs } from "@/lib/hooks";
 import { useOrganization, useProjectContext } from "@/providers";
 import type { AgentStatus } from "@/types/api";
@@ -181,12 +181,12 @@ export default function OverviewPage() {
               />
               <KpiCard
                 label="Memory allocated"
-                value={formatBytes(stats.allocMemory)}
+                value={formatCapacity(stats.allocMemory)}
                 sub="provisioned to instances"
               />
               <KpiCard
                 label="Storage allocated"
-                value={formatBytes(stats.allocDisk)}
+                value={formatCapacity(stats.allocDisk)}
                 sub="provisioned to instances"
               />
               <KpiCard
@@ -207,7 +207,7 @@ export default function OverviewPage() {
                 label="Memory reserved"
                 value={String(stats.memPct)}
                 unit="%"
-                sub={`${formatBytes(Math.max(0, stats.capacity.totalMemory - stats.capacity.availableMemory))} of ${formatBytes(stats.capacity.totalMemory)}`}
+                sub={`${formatCapacity(Math.max(0, stats.capacity.totalMemory - stats.capacity.availableMemory))} of ${formatCapacity(stats.capacity.totalMemory)}`}
               />
               <KpiCard
                 label="Agents"
@@ -220,7 +220,7 @@ export default function OverviewPage() {
                 label="Storage reserved"
                 value={String(stats.diskPct)}
                 unit="%"
-                sub={`${formatBytes(Math.max(0, stats.capacity.totalDisk - stats.capacity.availableDisk))} of ${formatBytes(stats.capacity.totalDisk)}`}
+                sub={`${formatCapacity(Math.max(0, stats.capacity.totalDisk - stats.capacity.availableDisk))} of ${formatCapacity(stats.capacity.totalDisk)}`}
               />
             </>
           )}

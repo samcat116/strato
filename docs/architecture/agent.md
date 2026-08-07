@@ -374,9 +374,10 @@ pre-qga behavior:
 - **fs-freeze snapshots** (withdrawn in issue #747): the volume-snapshot
   handler used to freeze the attached guest's filesystems around overlay
   creation. Nothing made that overlay the guest's active layer, so the freeze
-  only lent an inconsistent snapshot a consistency signal. The handler now
-  refuses any snapshot whose `attachedVMId` is set; `QGAClient` keeps the
-  freeze/thaw verbs for the eventual QMP-based live snapshot. See
+  only lent an inconsistent snapshot a consistency signal. The capture now
+  refuses any artifact whose entry names an attached VM
+  (`DesiredSnapshotCapture.attachedVMId`); `QGAClient` keeps the freeze/thaw
+  verbs for the eventual QMP-based live snapshot. See
   [storage](./storage.md#snapshots).
 - **Guest info**: a throttled slow poll (folded into the heartbeat cadence)
   probes running QEMU VMs for hostname and configured addresses off the report's
@@ -771,6 +772,65 @@ Nothing serves HTTP inside the namespace yet — the guest-facing IMDS
 listener is future work. See
 [ADR 0003](../adr/0003-imds-chassis-namespace.md) and
 [networking](./networking.md).
+
+### Instance metadata store (IMDS payload)
+
+`StratoAgentCore/MetadataStore.swift` holds what that service will serve:
+one `InstanceMetadata` per VM (wire v26, STR-52), written by the reconciler
+from each sync's `DesiredVMState.metadata` before it plans anything.
+Reads are answered entirely from here, with no control-plane round trip —
+the same fail-static posture as the rest of the reconciler, and deliberate,
+because a guest that cannot read its metadata may fail to boot.
+
+**That guarantee holds across a control-plane outage, for the life of the
+agent process — not across an agent restart.** The store is in memory while
+the VM manifest is durable, so a restarted agent re-adopts running VMs it can
+serve nothing for until the first sync lands, and indefinitely if the control
+plane is unreachable then. Harmless only because nothing serves reads yet:
+the listener (STR-56) has to close it, either by persisting the store beside
+the manifest or by refusing to answer until the first sync has been applied.
+Serving a guest a confidently empty document is worse than making it wait.
+
+Three rules keep it honest, and each is a place the obvious implementation
+would be wrong:
+
+- **The store's own generation guard**, not `lastApplied`. A strictly older
+  sync is refused so a replay cannot roll metadata backward; an *equal*
+  generation still applies, because editing only what metadata carries (a
+  hostname, an SSH key) changes no realization and so bumps no VM generation
+  — a strict `>` would freeze out exactly the edits the IMDS exists to
+  deliver. `lastApplied` cannot serve as that guard: it tracks convergence,
+  so a VM whose create keeps failing holds it still while generations
+  advance.
+- **Metadata is recorded outside the presence guard** that stops all
+  convergence on a host whose manifest is unreadable (STR-138). The store
+  projects what the control plane said, not what the host holds, so a blind
+  agent's guests keep getting current metadata.
+- **Withdrawal follows the VM off the host, and never further.** A desired
+  entry that wants the VM `.absent` drops the payload whatever the sender's
+  wire version, since an address outlives the VM it was allocated to and the
+  IMDS identifies its caller by source address; a tombstoned teardown drops
+  it only once the delete has actually converged, so a teardown the
+  blast-radius guard refused keeps serving. The two therefore sit on opposite
+  sides of the delete, and deliberately: the `.absent` withdrawal *leads* the
+  VM off the host because it must also cover the VM that was already gone
+  when the sync arrived — which plans no work item to hook — so a VM whose
+  delete keeps failing is still running with its metadata already withdrawn.
+  That is the safe end of the trade; the other end serves a released VM's SSH
+  keys and user data to whoever next holds its address. The teardown
+  withdrawal is also *not* generation guarded, because a teardown is
+  authorized from the observed generation the agent reported, which lags the
+  sync generations the store records whenever convergence is failing. Both
+  withdrawals seal their generation, so only a strictly newer sync can serve
+  the VM again, and withdrawn records are kept rather than deleted for
+  exactly that guard. A VM the sync merely *omits* keeps its metadata
+  (STR-98: omission is not an instruction).
+
+The payload half is gated on `supportsInstanceMetadata(senderVersion)` for
+the `networks`/`sandboxes` reason: from a v26+ control plane a nil `metadata`
+is authoritative and withdraws what we serve, while from an older one it is
+silence, and reading it as an instruction would empty every VM's metadata the
+moment a control plane is rolled back.
 
 ## Self-update
 

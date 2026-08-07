@@ -89,12 +89,6 @@ extension MessageEnvelope {
 
         let raws: [String?]
         switch type {
-        case .volumeSnapshot, .volumeSnapshotDelete, .volumeInfo:
-            // The volume verbs that have not converted to desired state yet
-            // (ADR 0001 stages 7 and 8). They take the *reconciler's* volume
-            // lane, not a bare-id one, so a snapshot can never run concurrently
-            // with the reconciler resizing or deleting the same volume.
-            raws = [volumeLane(fields?.volumeId)]
         case .desiredState:
             // Full-fleet syncs diff quickly and fan per-VM work out onto the VM lanes, so
             // they get their own lane: ordered among themselves, never stuck behind a VM.
@@ -125,19 +119,15 @@ extension MessageEnvelope {
         return keys.isEmpty ? [unkeyedSerializationLane] : keys
     }
 
-    /// The lane a volume's work runs on, matching `ReconcileWorkItem.laneKeys`
-    /// exactly — the id is canonicalized *before* the prefix goes on, because
-    /// the normalization below cannot see through it.
-    private static func volumeLane(_ rawVolumeId: String?) -> String? {
-        guard let rawVolumeId, !rawVolumeId.isEmpty else { return nil }
-        return "volume/" + (UUID(uuidString: rawVolumeId)?.uuidString ?? rawVolumeId)
-    }
+    // The volume lane helper went with the last volume frame (wire v33): no
+    // inbound message names a volume any more, so nothing routes to it. The
+    // reconciler still uses `volume/<id>` lanes for its own work items — see
+    // `ReconcileWorkItem.laneKeys` — but those never come off the wire.
 
     /// Minimal projection of the possible resource-identifying fields across frame payloads,
     /// decoded once for routing without paying for a full message decode.
     private struct RoutingFields: Decodable {
         let vmId: String?
-        let volumeId: String?
         let sessionId: String?
     }
 }

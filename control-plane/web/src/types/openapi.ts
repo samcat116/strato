@@ -320,7 +320,7 @@ export interface paths {
         put?: never;
         /**
          * Checkpoint a virtual machine
-         * @description Captures guest memory, device state, and disks at one instant. The VM must be running or paused, and keeps running. The request body is optional. Asynchronous — poll the returned operation.
+         * @description Captures guest memory, device state, and disks at one instant. The VM must be running or paused, and keeps running. The request body is optional. Asynchronous — refetch the checkpoint until its `conditions` converge.
          */
         post: operations["createVMSnapshot"];
         delete?: never;
@@ -344,7 +344,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete a virtual machine checkpoint */
+        /**
+         * Delete a virtual machine checkpoint
+         * @description Asynchronous. The record survives until the owning agent confirms the checkpoint's bytes are gone, so poll `GET /api/operations/{mutationId}` — a delete's success is the checkpoint's absence, which a `404` on the checkpoint itself cannot distinguish from never-existed.
+         */
         delete: operations["deleteVMSnapshot"];
         options?: never;
         head?: never;
@@ -563,7 +566,7 @@ export interface paths {
         put?: never;
         /**
          * Create a sandbox snapshot
-         * @description The request body is optional; an empty body snapshots without stopping.
+         * @description The request body is optional; an empty body snapshots without stopping. Asynchronous — refetch the snapshot until its `conditions` converge.
          */
         post: operations["createSandboxSnapshot"];
         delete?: never;
@@ -587,7 +590,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete a sandbox snapshot */
+        /**
+         * Delete a sandbox snapshot
+         * @description Asynchronous. The record survives until the owning agent confirms the artifacts are gone, so poll `GET /api/operations/{mutationId}`.
+         */
         delete: operations["deleteSandboxSnapshot"];
         options?: never;
         head?: never;
@@ -632,7 +638,7 @@ export interface paths {
         put?: never;
         /**
          * Export a sandbox snapshot to project storage
-         * @description Copies the snapshot's artifacts into durable project storage so it can be moved between agents (snapshot mobility). Asynchronous — poll the returned operation.
+         * @description Records that the snapshot's artifacts should also exist in durable project storage, so it can be moved between agents (snapshot mobility). A placement fact, not a command: the owning agent converges by streaming each artifact through the control plane, and the snapshot's `conditions` stay unconverged until every artifact has an integrity record the control plane computed itself. Asynchronous — refetch the snapshot.
          */
         post: operations["exportSandboxSnapshot"];
         delete?: never;
@@ -967,7 +973,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Snapshot a volume */
+        /**
+         * Snapshot a volume
+         * @description Captures a point-in-time copy of the volume's data as a qcow2 overlay. The volume must be detached — a snapshot of a volume a guest is writing would not be point-in-time. Asynchronous — refetch the snapshot until its `conditions` converge.
+         */
         post: operations["createVolumeSnapshot"];
         delete?: never;
         options?: never;
@@ -1030,7 +1039,10 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Delete a volume snapshot */
+        /**
+         * Delete a volume snapshot
+         * @description Asynchronous. The record survives until the owning agent confirms the overlay is gone, so poll `GET /api/operations/{mutationId}`.
+         */
         delete: operations["deleteVolumeSnapshot"];
         options?: never;
         head?: never;
@@ -5131,10 +5143,34 @@ export interface components {
             /** Format: uuid */
             mutationId: string;
         };
+        /** @description The body of a `202` from a checkpoint mutation. Checkpoints joined the reconciliation loop in ADR 0001 stage 8: a capture and a delete are desired state the owning agent converges on, not commands it is sent. */
+        AcceptedVMSnapshotMutation: {
+            resource: components["schemas"]["VMSnapshot"];
+            /** Format: int64 */
+            targetGeneration: number;
+            /** Format: uuid */
+            mutationId: string;
+        };
+        /** @description The body of a `202` from a sandbox-snapshot mutation, including export — which is a placement fact ("this snapshot should also exist in project storage") rather than a verb. */
+        AcceptedSandboxSnapshotMutation: {
+            resource: components["schemas"]["SandboxSnapshot"];
+            /** Format: int64 */
+            targetGeneration: number;
+            /** Format: uuid */
+            mutationId: string;
+        };
+        /** @description The body of a `202` from a volume-snapshot mutation. */
+        AcceptedVolumeSnapshotMutation: {
+            resource: components["schemas"]["VolumeSnapshot"];
+            /** Format: int64 */
+            targetGeneration: number;
+            /** Format: uuid */
+            mutationId: string;
+        };
         /**
          * @description A durable record of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal.
          *
-         *     Served from two sources. The verbs still dispatched as imperative agent commands — VM restart, and every snapshot verb — have real operation records. Everything else is synthesized on read from the mutation's audit record and the resource's `conditions`, so a client written against the older contract keeps working; those responses report no `completedAt` except for a completed delete.
+         *     Served from two sources. The verbs still dispatched as imperative agent commands — VM restart, and VM/sandbox restore — have real operation records. Everything else is synthesized on read from the mutation's audit record and the resource's `conditions`, so a client written against the older contract keeps working; those responses report no `completedAt` except for a completed delete.
          */
         ResourceOperation: {
             /** Format: uuid */
@@ -5266,6 +5302,7 @@ export interface components {
             maxCpu: number;
             /** Format: int64 */
             memory: number;
+            /** @description Display form of `memory` in binary units (e.g. `4 GiB`, `512 MiB`). */
             memoryFormatted: string;
             /**
              * Format: int64
@@ -5274,6 +5311,7 @@ export interface components {
             maxMemory: number;
             /** Format: int64 */
             disk: number;
+            /** @description Display form of `disk` in binary units (e.g. `40 GiB`). */
             diskFormatted: string;
             networkInterfaces: components["schemas"]["NetworkInterface"][];
             /** @description Whether the guest boots with UEFI Secure Boot. */
@@ -5282,6 +5320,44 @@ export interface components {
             tpmEnabled?: boolean;
             /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
             graphicsConsole?: boolean;
+            /** @description Whether the guest agent is responding. Absent until the agent's slow poll has seen the guest once. */
+            qgaAvailable?: boolean;
+            /** @description What the guest OS calls itself, when it reported one. Distinct from `hostname`, which is the DNS label Strato registers it under. */
+            observedHostname?: string;
+            /**
+             * Format: int64
+             * @description Total RAM the guest itself reports, via the virtio-balloon device. Absent until a guest with the driver reports.
+             */
+            guestMemoryTotalBytes?: number;
+            /**
+             * Format: int64
+             * @description Free RAM the guest itself reports. Absent alongside `guestMemoryTotalBytes`.
+             */
+            guestMemoryAvailableBytes?: number;
+            /**
+             * Format: int64
+             * @description Derived as `guestMemoryTotalBytes - guestMemoryAvailableBytes` — the committed-vs-used figure most callers want.
+             */
+            guestMemoryUsedBytes?: number;
+            /** @description Display form of `guestMemoryUsedBytes` in binary units (e.g. `1.4 GiB`). */
+            guestMemoryUsedFormatted?: string;
+            /**
+             * Format: date-time
+             * @description When the guest last reported the memory figures above.
+             */
+            guestMemoryStatsAt?: string;
+            /**
+             * Format: int64
+             * @description The size an operator asked the guest to be held to. Absent on a VM with no target set.
+             */
+            balloonTarget?: number;
+            /** @description Display form of `balloonTarget` in binary units (e.g. `2 GiB`). */
+            balloonTargetFormatted?: string;
+            /**
+             * Format: int64
+             * @description What the balloon has actually reached. Sits above `balloonTarget` while a newly set target is still being applied.
+             */
+            guestMemoryBalloonActualBytes?: number;
             /** @description Whether this VM's attached security groups are actually being enforced. False means a realizing agent — the host, or its site's network controller — registered with a protocol too old for security groups, or the site has no usable network controller to author the ACLs at all; either way the attached groups filter nothing until an operator fixes it. Absent means the VM is unplaced, so there is no realizer to judge yet. */
             securityGroupsEnforced?: boolean;
             conditions: components["schemas"]["ResourceConditions"];
@@ -5437,6 +5513,8 @@ export interface components {
             name?: string;
             /** @description When true, checkpoint and stop; defaults to false. */
             stop?: boolean;
+            /** @description How long to keep the snapshot. Omitted uses the fleet default (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it until someone deletes it, overriding that default. Resolved to an absolute `expiresAt` at creation. */
+            ttlSeconds?: number;
         };
         SandboxSnapshot: {
             /** Format: uuid */
@@ -5455,9 +5533,17 @@ export interface components {
             guestControlProtocolVersion?: number;
             forkLayoutVersion?: number;
             cpuTemplate?: string;
+            /** @description Whether an exported copy in project storage is wanted. Set by the export endpoint; `exportedAt` is when one last completed. */
+            exportDesired?: boolean;
             /** Format: date-time */
             exportedAt?: string;
             errorMessage?: string;
+            /**
+             * Format: date-time
+             * @description When retention will delete this snapshot; absent means it is kept until someone deletes it.
+             */
+            expiresAt?: string;
+            conditions?: components["schemas"]["ResourceConditions"];
             /** Format: uuid */
             createdById?: string;
             /** Format: date-time */
@@ -5473,6 +5559,8 @@ export interface components {
         CreateVMSnapshotRequest: {
             name?: string;
             description?: string;
+            /** @description How long to keep the snapshot. Omitted uses the fleet default (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it until someone deletes it, overriding that default. Resolved to an absolute `expiresAt` at creation. */
+            ttlSeconds?: number;
         };
         VMSnapshot: {
             /** Format: uuid */
@@ -5494,6 +5582,12 @@ export interface components {
             qemuVersion?: string;
             architecture?: string;
             errorMessage?: string;
+            /**
+             * Format: date-time
+             * @description When retention will delete this snapshot; absent means it is kept until someone deletes it.
+             */
+            expiresAt?: string;
+            conditions?: components["schemas"]["ResourceConditions"];
             /** Format: uuid */
             createdById?: string;
             /** Format: date-time */
@@ -5563,6 +5657,7 @@ export interface components {
             filename: string;
             /** Format: int64 */
             size: number;
+            /** @description Display form of `size` in binary units (e.g. `2.4 GiB`). */
             sizeFormatted: string;
             format: components["schemas"]["ImageFormat"];
             architecture: components["schemas"]["CPUArchitecture"];
@@ -5637,7 +5732,9 @@ export interface components {
         AttachVolumeRequest: {
             /** Format: uuid */
             vmId: string;
+            /** @description Stable device identifier within the VM (e.g. disk1), unique per VM. Generated as the next free `disk<N>` when omitted. The charset is what a hypervisor accepts as an object id; anything else is refused with 400, and a name already taken on the VM with 409. */
             deviceName?: string;
+            /** @description Boot priority, lower first. Unique per VM: reusing one another attached volume already holds is refused with 409, since two disks at one priority make the order of both arbitrary. */
             bootOrder?: number;
             readonly?: boolean;
         };
@@ -5651,6 +5748,8 @@ export interface components {
         CreateVolumeSnapshotRequest: {
             name: string;
             description?: string;
+            /** @description How long to keep the snapshot. Omitted uses the fleet default (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it until someone deletes it, overriding that default. Resolved to an absolute `expiresAt` at creation. */
+            ttlSeconds?: number;
         };
         Volume: {
             /** Format: uuid */
@@ -5661,6 +5760,7 @@ export interface components {
             projectId?: string;
             /** Format: int64 */
             size: number;
+            /** @description Display form of `size` in binary units (e.g. `10 GiB`). */
             sizeFormatted: string;
             format: components["schemas"]["VolumeFormat"];
             volumeType: components["schemas"]["VolumeType"];
@@ -5699,9 +5799,18 @@ export interface components {
             projectId?: string;
             /** Format: int64 */
             size: number;
+            /** @description Display form of `size` in binary units (e.g. `10 GiB`). */
             sizeFormatted: string;
             status: components["schemas"]["VolumeSnapshotStatus"];
             errorMessage?: string;
+            /** @description The agent holding the snapshot's overlay. */
+            agentId?: string;
+            /**
+             * Format: date-time
+             * @description When retention will delete this snapshot; absent means it is kept until someone deletes it.
+             */
+            expiresAt?: string;
+            conditions?: components["schemas"]["ResourceConditions"];
             /** Format: uuid */
             createdById?: string;
             /** Format: date-time */
@@ -5726,6 +5835,7 @@ export interface components {
             projectId?: string;
             dhcpEnabled?: boolean;
             dnsServers?: string[];
+            /** @description DHCP search domain for the network's guests. A sequence of RFC 1123 labels — `corp.example.com` or a bare `internal` — stored lowercased and without a trailing dot. An empty string clears it. */
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;
@@ -5743,6 +5853,7 @@ export interface components {
             ipv6Enabled?: boolean;
             dhcpEnabled?: boolean;
             dnsServers?: string[];
+            /** @description DHCP search domain for the network's guests. A sequence of RFC 1123 labels — `corp.example.com` or a bare `internal` — stored lowercased and without a trailing dot. An empty string clears it. */
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;
@@ -8930,6 +9041,33 @@ export interface components {
                 "application/json": components["schemas"]["AcceptedVolumeMutation"];
             };
         };
+        /** @description The mutation was accepted. Refetch the checkpoint until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. A delete's completion is the checkpoint's absence — poll `GET /api/operations/{mutationId}` for that one. */
+        AcceptedVMSnapshotMutation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AcceptedVMSnapshotMutation"];
+            };
+        };
+        /** @description The mutation was accepted. Refetch the snapshot until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        AcceptedSandboxSnapshotMutation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AcceptedSandboxSnapshotMutation"];
+            };
+        };
+        /** @description The mutation was accepted. Refetch the snapshot until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        AcceptedVolumeSnapshotMutation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AcceptedVolumeSnapshotMutation"];
+            };
+        };
         /** @description The log backend (Loki) could not be queried. */
         LogBackendUnavailable: {
             headers: {
@@ -9577,7 +9715,7 @@ export interface operations {
             };
         };
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMSnapshotMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9599,7 +9737,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMSnapshotMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9947,7 +10085,7 @@ export interface operations {
             };
         };
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxSnapshotMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9969,7 +10107,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxSnapshotMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -10013,7 +10151,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxSnapshotMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -10599,15 +10737,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The created snapshot. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["VolumeSnapshot"];
-                };
-            };
+            202: components["responses"]["AcceptedVolumeSnapshotMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -10685,11 +10815,12 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            204: components["responses"]["NoContent"];
+            202: components["responses"]["AcceptedVolumeSnapshotMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
         };
     };
     listNetworks: {

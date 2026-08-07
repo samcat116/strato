@@ -356,13 +356,112 @@ struct DesiredStateAssembler {
             volumes = nil
         }
 
+        // The agent's authoritative snapshot-artifact set (STR-150), with the
+        // same nil-versus-empty contract and the same skip-the-query reasoning
+        // as volumes above.
+        let snapshots: [DesiredSnapshotState]?
+        if agent.map({ WireProtocol.supportsSnapshotSync($0.wireProtocolVersion ?? 0) }) ?? true {
+            snapshots = try await desiredSnapshots(agentId: agentId, on: db)
+        } else {
+            snapshots = nil
+        }
+
         return DesiredStateMessage(
             vms: entries, sandboxes: sandboxEntries, networks: networkStates,
             networksAuthoritative: scope.authoritative,
             desiredAgentUpdate: await desiredAgentUpdateForSync(agent: agent),
             securityGroups: securityGroups,
             tombstones: try await tombstones(agentId: agentId, on: db),
-            volumes: volumes)
+            volumes: volumes,
+            snapshots: snapshots)
+    }
+
+    /// Every snapshot artifact this agent holds, as desired entries (STR-150).
+    ///
+    /// Three queries into one kind-tagged list, because that is the shape the
+    /// agent's reconciler wants: one inventory to diff, with the entry's own
+    /// `kind` routing the capture or the delete to a backend.
+    ///
+    /// Like volumes, nothing here carries a path or a size. The agent owns
+    /// artifact layout and is the only party that can measure what it wrote, so
+    /// both travel the other way, on the observed report.
+    private func desiredSnapshots(agentId: String, on db: any Database) async throws
+        -> [DesiredSnapshotState]
+    {
+        var entries: [DesiredSnapshotState] = []
+
+        let volumeSnapshots = try await VolumeSnapshot.placed(onAgent: agentId, on: db)
+        // One query for every parent volume's current attachment rather than
+        // one per snapshot: assembly runs on every poll of every agent, so an
+        // N+1 here is a per-sync cost that grows with the host's snapshot count.
+        var attachedVMIds: [UUID: UUID] = [:]
+        if !volumeSnapshots.isEmpty {
+            let volumeIDs = Set(volumeSnapshots.map(\.$volume.id))
+            for volume in try await Volume.query(on: db).filter(\.$id ~~ Array(volumeIDs)).all() {
+                guard let volumeID = volume.id, let vmID = volume.$vm.id else { continue }
+                attachedVMIds[volumeID] = vmID
+            }
+        }
+        for snapshot in volumeSnapshots {
+            guard let snapshotId = snapshot.id else { continue }
+            entries.append(
+                DesiredSnapshotState(
+                    snapshotId: snapshotId,
+                    kind: .volumeSnapshot,
+                    parentId: snapshot.$volume.id,
+                    desiredStatus: snapshot.desiredStatus,
+                    generation: snapshot.generation,
+                    // The capture strategy, read by the agent only when the
+                    // overlay does not exist yet. Naming the holder is what lets
+                    // the agent refuse rather than write a snapshot that is not
+                    // point-in-time (issue #747), even though the API refused
+                    // the same thing at admission: a level-triggered entry
+                    // outlives the request that made it, and the volume may have
+                    // been attached since.
+                    capture: DesiredSnapshotCapture(
+                        attachedVMId: attachedVMIds[snapshot.$volume.id])))
+        }
+
+        for snapshot in try await VMSnapshot.placed(onAgent: agentId, on: db) {
+            guard let snapshotId = snapshot.id else { continue }
+            entries.append(
+                DesiredSnapshotState(
+                    snapshotId: snapshotId,
+                    kind: .vmCheckpoint,
+                    parentId: snapshot.$vm.id,
+                    desiredStatus: snapshot.desiredStatus,
+                    generation: snapshot.generation))
+        }
+
+        for snapshot in try await SandboxSnapshot.placed(onAgent: agentId, on: db) {
+            guard let snapshotId = snapshot.id else { continue }
+            // The export placement fact: "this snapshot should also exist in
+            // the control plane's object store". Upload slots are
+            // control-plane-relative paths presented with the agent's SVID, so
+            // — like image downloads since v13 — nothing here expires and the
+            // entry is safe to sit in a sync indefinitely.
+            var export: DesiredSnapshotExport?
+            if snapshot.exportDesired {
+                export = DesiredSnapshotExport(
+                    uploads: SandboxSnapshotArtifactKind.allCases.map { kind in
+                        SandboxSnapshotArtifactUploadTarget(
+                            kind: kind,
+                            uploadURL: SandboxSnapshot.artifactTransferPath(
+                                sandboxId: snapshot.$sandbox.id, snapshotId: snapshotId, kind: kind))
+                    })
+            }
+            entries.append(
+                DesiredSnapshotState(
+                    snapshotId: snapshotId,
+                    kind: .sandboxSnapshot,
+                    parentId: snapshot.$sandbox.id,
+                    desiredStatus: snapshot.desiredStatus,
+                    generation: snapshot.generation,
+                    capture: DesiredSnapshotCapture(sandboxMode: snapshot.captureMode),
+                    export: export))
+        }
+
+        return entries
     }
 
     /// Every volume placed on this agent, as desired entries (STR-148).
@@ -418,11 +517,31 @@ struct DesiredStateAssembler {
             // `VMSpecBuilder.volumeSpecs` reads, so the two projections of one
             // fact cannot disagree — which is what used to let a volume be
             // `attached` in the VM's spec and detached in its own record.
+            //
+            // A name outside `VolumeDeviceName`'s charset cannot be stored (the
+            // API validates it and the schema's check constraint plus unique
+            // index hold the column to it), so the failed initializer below is
+            // unreachable. Where `VMSpecBuilder.volumeSpecs` answers the same
+            // impossible case by omitting the volume, this cannot: a desired
+            // entry with no attachment reads as *detach*, and dropping the
+            // entry entirely reads as a volume this agent should not hold. An
+            // attachment the agent would refuse is the worse of the three, so
+            // it is the one not sent — loudly, because a row that reached this
+            // state is a broken invariant, not a routine skip.
             var attachment: DesiredVolumeAttachment?
-            if let vmID = volume.$vm.id, let deviceName = volume.deviceName {
-                attachment = DesiredVolumeAttachment(
-                    vmId: vmID, deviceName: deviceName, readonly: volume.readonly,
-                    bootOrder: volume.bootOrder)
+            if let vmID = volume.$vm.id, let raw = volume.deviceName {
+                if let deviceName = VolumeDeviceName(raw) {
+                    attachment = DesiredVolumeAttachment(
+                        vmId: vmID, deviceName: deviceName, readonly: volume.readonly,
+                        bootOrder: volume.bootOrder)
+                } else {
+                    app.logger.error(
+                        "Volume stores a device name no hypervisor accepts; syncing it detached",
+                        metadata: [
+                            "volumeId": .string(volumeId.uuidString),
+                            "deviceName": .string(raw),
+                        ])
+                }
             }
 
             entries.append(

@@ -29,6 +29,8 @@ interface ResizeVolumeDialogProps {
   onSuccess?: () => void;
 }
 
+// The API request field is spelled `sizeGB`, but the unit has always been
+// binary — one of these is a gibibyte.
 const GB = 1024 * 1024 * 1024;
 
 export function ResizeVolumeDialog({
@@ -88,7 +90,7 @@ export function ResizeVolumeDialog({
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Label htmlFor="resizeSize" className="text-foreground">
-                New Size (GB)
+                New Size (GiB)
               </Label>
               <Input
                 id="resizeSize"

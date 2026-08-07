@@ -431,7 +431,7 @@ struct VolumeResponse: Content {
         self.description = volume.description
         self.projectId = volume.$project.id
         self.size = volume.size
-        self.sizeFormatted = VolumeResponse.formatSize(volume.size)
+        self.sizeFormatted = volume.size.formattedByteSize
         self.format = volume.format
         self.volumeType = volume.volumeType
         self.status = volume.status
@@ -449,18 +449,5 @@ struct VolumeResponse: Content {
         self.createdById = volume.$createdBy.id
         self.createdAt = volume.createdAt
         self.updatedAt = volume.updatedAt
-    }
-
-    static func formatSize(_ bytes: Int64) -> String {
-        let gb = Double(bytes) / 1024.0 / 1024.0 / 1024.0
-        if gb >= 1.0 {
-            return String(format: "%.2f GB", gb)
-        }
-        let mb = Double(bytes) / 1024.0 / 1024.0
-        if mb >= 1.0 {
-            return String(format: "%.2f MB", mb)
-        }
-        let kb = Double(bytes) / 1024.0
-        return String(format: "%.2f KB", kb)
     }
 }

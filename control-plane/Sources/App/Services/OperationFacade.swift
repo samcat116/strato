@@ -42,6 +42,9 @@ enum OperationFacade {
         case .virtualMachine: conditions = try await VM.find(id, on: db)?.conditions
         case .sandbox: conditions = try await Sandbox.find(id, on: db)?.conditions
         case .volume: conditions = try await Volume.find(id, on: db)?.conditions
+        case .volumeSnapshot: conditions = try await VolumeSnapshot.find(id, on: db)?.conditions
+        case .vmCheckpoint: conditions = try await VMSnapshot.find(id, on: db)?.conditions
+        case .sandboxSnapshot: conditions = try await SandboxSnapshot.find(id, on: db)?.conditions
         }
         // Only worth looking for once the resource is gone — the reap appends
         // it as the row goes, so a live resource cannot have one.

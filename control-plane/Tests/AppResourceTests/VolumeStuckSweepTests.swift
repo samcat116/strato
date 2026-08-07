@@ -74,6 +74,9 @@ final class VolumeStuckSweepTests {
         volume.generation = generation
         volume.observedGeneration = observedGeneration
         volume.$vm.id = vmID
+        // An attached row names its device: `NormalizeVolumeAttachments` makes
+        // that a check constraint (STR-129).
+        volume.deviceName = vmID == nil ? nil : "disk0"
         if let overdueBy {
             volume.convergenceDeadline = Date().addingTimeInterval(-overdueBy)
         }

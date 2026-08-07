@@ -125,7 +125,7 @@ struct ReconciliationTests {
                 if let desired = item.desired {
                     sizing[item.vmId] = VMSizing(cpus: desired.spec.cpus, memoryBytes: desired.spec.memoryBytes)
                 }
-            case .adopt: break
+            case .adopt, .export: break
             case .attach, .detach: break  // volume-only steps; never planned for a VM
             }
         }
@@ -147,7 +147,9 @@ struct ReconciliationTests {
     }
 
     private func makeReconciler(_ actuator: MockActuator) -> Reconciler {
-        Reconciler(actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+        Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
     }
 
     // MARK: - Pure diff engine
@@ -718,7 +720,7 @@ struct ReconciliationTests {
             presence: Dictionary(uniqueKeysWithValues: ids.map { ($0.uuidString, .managed(.running)) }))
         let reconciler = Reconciler(
             actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
-            teardownGuard: TeardownGuard(allowBulkTeardown: true))
+            teardownGuard: TeardownGuard(allowBulkTeardown: true), metadataStore: MetadataStore())
 
         await reconciler.apply(
             Self.sync(

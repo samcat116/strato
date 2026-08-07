@@ -124,28 +124,32 @@ struct SandboxProtocolTests {
         #expect(decoded.spec.restoreFrom == restore)
     }
 
-    @Test("Snapshot status advertises fork layout and decodes legacy omission")
+    @Test("Captured facts advertise fork layout and decode legacy omission")
     func snapshotForkLayoutCompatibility() throws {
-        let response = SandboxSnapshotStatusResponse(
-            snapshotId: "snapshot-1",
+        let facts = ObservedSnapshotFacts(
             sizeBytes: 10,
+            storagePath: "/snapshots/1",
+            architecture: .x86_64,
             memorySizeBytes: 4,
             vmstateSizeBytes: 2,
             rootfsSizeBytes: 4,
-            storagePath: "/snapshots/1",
             firecrackerVersion: "1.13.1",
-            architecture: .x86_64,
             guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
             forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion)
-        let decoded = try roundTrip(response)
+        let decoded = try roundTrip(facts)
         #expect(decoded.forkLayoutVersion == SandboxSnapshotForkLayout.currentVersion)
 
+        // Every field is optional and absence means "unknown", never "zero":
+        // a footprint the agent could not measure must not silently become a
+        // free one in quota accounting.
         let legacy = """
-            {"snapshotId":"snapshot-1","sizeBytes":10,"memorySizeBytes":4,
-             "vmstateSizeBytes":2,"rootfsSizeBytes":4,"storagePath":"/snapshots/1",
-             "firecrackerVersion":"1.13.1","architecture":"x86_64"}
+            {"sizeBytes":10,"memorySizeBytes":4,"vmstateSizeBytes":2,"rootfsSizeBytes":4,
+             "storagePath":"/snapshots/1","firecrackerVersion":"1.13.1","architecture":"x86_64"}
             """
-        #expect(try decodeJSON(SandboxSnapshotStatusResponse.self, from: legacy).forkLayoutVersion == nil)
+        let sparse = try decodeJSON(ObservedSnapshotFacts.self, from: legacy)
+        #expect(sparse.forkLayoutVersion == nil)
+        #expect(sparse.cpuTemplate == nil)
+        #expect(sparse.sizeBytes == 10)
     }
 
     @Test("Sandbox fields actually reach the wire")

@@ -212,14 +212,16 @@ public struct DesiredVolumeAttachment: Codable, Sendable, Equatable {
     public let vmId: UUID
     /// The control-plane-assigned slot ("disk1", ...). Stable across power
     /// cycles so a re-realized attachment lands where the guest's fstab
-    /// expects it.
-    public let deviceName: String
+    /// expects it, unique within its VM, and validated by its type — the slot
+    /// becomes a hypervisor object id, so a sync cannot carry one a hypervisor
+    /// would refuse (STR-129).
+    public let deviceName: VolumeDeviceName
     public let readonly: Bool
     /// Explicit boot priority; informational to the agent, which receives
     /// `VMSpec.volumes` pre-sorted.
     public let bootOrder: Int?
 
-    public init(vmId: UUID, deviceName: String, readonly: Bool = false, bootOrder: Int? = nil) {
+    public init(vmId: UUID, deviceName: VolumeDeviceName, readonly: Bool = false, bootOrder: Int? = nil) {
         self.vmId = vmId
         self.deviceName = deviceName
         self.readonly = readonly
@@ -453,6 +455,17 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// itself instead of relying on a `wireProtocolVersion` lookup being right.
     /// The agent skips its whole volume half when this is nil.
     public let volumes: [DesiredVolumeState]?
+    /// The full authoritative set of snapshot artifacts — volume snapshots, VM
+    /// checkpoints and sandbox snapshots, in one kind-tagged list — that should
+    /// exist on the receiving agent (ADR 0001 stage 8, STR-150).
+    ///
+    /// `Optional` for `volumes`' reason and with the same reading: nil is "the
+    /// sender has no opinion about snapshots", never "delete every checkpoint
+    /// on this host". One list rather than three because the diff, the
+    /// generation guard and the absent-then-confirm dance are identical across
+    /// the families; only the backend that captures the bytes differs, and the
+    /// entry's own `kind` says which.
+    public let snapshots: [DesiredSnapshotState]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -465,7 +478,8 @@ public struct DesiredStateMessage: WebSocketMessage {
         desiredAgentUpdate: DesiredAgentUpdate? = nil,
         securityGroups: [DesiredSecurityGroup]? = nil,
         tombstones: [DesiredWorkloadTombstone]? = nil,
-        volumes: [DesiredVolumeState]? = nil
+        volumes: [DesiredVolumeState]? = nil,
+        snapshots: [DesiredSnapshotState]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -478,6 +492,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.securityGroups = securityGroups
         self.tombstones = tombstones
         self.volumes = volumes
+        self.snapshots = snapshots
     }
 
     // Custom decode so `networks` and `sandboxes` tolerate absence: a sync
@@ -500,6 +515,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         securityGroups = try c.decodeIfPresent([DesiredSecurityGroup].self, forKey: .securityGroups)
         tombstones = try c.decodeIfPresent([DesiredWorkloadTombstone].self, forKey: .tombstones)
         volumes = try c.decodeIfPresent([DesiredVolumeState].self, forKey: .volumes)
+        snapshots = try c.decodeIfPresent([DesiredSnapshotState].self, forKey: .snapshots)
     }
 }
 
@@ -855,9 +871,16 @@ public struct ObservedSandboxState: Codable, Sendable {
 /// a `qemu-img info` subprocess per volume, and this report is assembled on
 /// every convergence action plus the heartbeat cadence; on a dense host that is
 /// not affordable. A resize is confirmed the same way a VM resize is, by
-/// `observedGeneration` catching up. When `volume_info` folds into this report
-/// (ADR stage 7) the size/dirty/encrypted fields land here and will need an
-/// agent-side cache to stay affordable.
+/// `observedGeneration` catching up.
+///
+/// ADR stage 7 (STR-149) settled the same question for the rest of what
+/// `volume_info` used to return, and settled it the same way: nothing was
+/// added. Format, path and attachment were already here; allocated bytes, the
+/// dirty flag and the encryption flag have no reader, and allocation in
+/// particular moves with every guest write, so it cannot be cached the way
+/// virtual size can and would cost a subprocess per volume per report. A
+/// per-volume usage surface — sampled on its own cadence, off the convergence
+/// path — is the right home for those if a reader ever appears.
 public struct ObservedVolumeState: Codable, Sendable {
     public let volumeId: UUID
     /// Whether the volume's data exists on this host. A `false` entry is a
@@ -1110,6 +1133,19 @@ public struct ObservedStateReport: WebSocketMessage {
     /// empty inventory. The second is the volume counterpart of
     /// `manifestStatus.inventoryComplete == false`.
     public let volumes: [ObservedVolumeState]?
+    /// Snapshot artifacts actually present on this agent (STR-150). Full-list
+    /// and kind-tagged, like the desired counterpart: an artifact missing from
+    /// this list does not exist here, which is how snapshot deletions are
+    /// confirmed and how the finalizer reap learns a checkpoint's bytes are
+    /// really gone.
+    ///
+    /// `Optional` for `volumes`' reason. Nil has the same two causes and the
+    /// same response — do nothing: an agent older than v33 does not speak the
+    /// field at all, and a v33 agent that cannot enumerate one of its artifact
+    /// stores says so this way rather than claiming an empty inventory. The
+    /// control plane must never read the absence as "every checkpoint on this
+    /// agent is gone".
+    public let snapshots: [ObservedSnapshotState]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -1122,7 +1158,8 @@ public struct ObservedStateReport: WebSocketMessage {
         unrecognized: [UnrecognizedWorkload] = [],
         teardownRefusal: ObservedTeardownRefusal? = nil,
         manifestStatus: ObservedManifestStatus? = nil,
-        volumes: [ObservedVolumeState]? = nil
+        volumes: [ObservedVolumeState]? = nil,
+        snapshots: [ObservedSnapshotState]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -1135,6 +1172,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.teardownRefusal = teardownRefusal
         self.manifestStatus = manifestStatus
         self.volumes = volumes
+        self.snapshots = snapshots
     }
 
     // Custom decode so `sandboxes` and `unrecognized` tolerate absence: a
@@ -1154,5 +1192,6 @@ public struct ObservedStateReport: WebSocketMessage {
         teardownRefusal = try c.decodeIfPresent(ObservedTeardownRefusal.self, forKey: .teardownRefusal)
         manifestStatus = try c.decodeIfPresent(ObservedManifestStatus.self, forKey: .manifestStatus)
         volumes = try c.decodeIfPresent([ObservedVolumeState].self, forKey: .volumes)
+        snapshots = try c.decodeIfPresent([ObservedSnapshotState].self, forKey: .snapshots)
     }
 }

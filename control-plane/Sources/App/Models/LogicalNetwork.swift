@@ -226,7 +226,8 @@ struct CreateNetworkRequest: Content {
     let dhcpEnabled: Bool?
     /// DNS resolvers advertised over DHCP.
     let dnsServers: [String]?
-    /// DNS search domain advertised over DHCP.
+    /// DNS search domain advertised over DHCP. Held to the same grammar as a
+    /// DNS zone name — it reaches guests as structured config, not as text.
     let domainName: String?
     /// DHCP lease time in seconds.
     let leaseTime: Int?
@@ -284,6 +285,8 @@ struct UpdateNetworkRequest: Content {
     /// DHCP settings; applied to the network and re-synced to affected agents.
     let dhcpEnabled: Bool?
     let dnsServers: [String]?
+    /// An empty string clears the search domain; anything else must be a
+    /// fully-qualified domain name.
     let domainName: String?
     let leaseTime: Int?
     /// Toggle outbound SNAT. Re-synced to agents, which add/remove the SNAT rule.

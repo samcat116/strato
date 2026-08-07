@@ -175,7 +175,7 @@ final class VolumeConvergenceTests {
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let attachment = try #require(message.volumes?.first?.attachment)
             #expect(attachment.vmId == vm.id)
-            #expect(attachment.deviceName == "disk1")
+            #expect(attachment.deviceName.rawValue == "disk1")
             #expect(attachment.readonly)
             #expect(attachment.bootOrder == 2)
         }

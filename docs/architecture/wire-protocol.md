@@ -63,7 +63,7 @@ ad-hoc checks scattered through the code:
 | `supportsSandboxSync` | 5 | Sandboxes in the desired-state sync |
 | `supportsDesiredAgentUpdate` | 7 | Agent self-update carried by the sync (the only update path since v28) |
 | `supportsSandboxExec` | 8 | Interactive sandbox exec streams |
-| `supportsSandboxSnapshots` | 9 | Sandbox snapshot/restore messages |
+| `supportsSandboxSnapshots` | 9 | `sandbox_restore` (capture/delete/export became desired state at v33) |
 | `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
 | `supportsFloatingIPs` | 12 | Floating IPs in the network desired state |
 | `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
@@ -72,21 +72,23 @@ ad-hoc checks scattered through the code:
 | `supportsBalloonTarget` | 19 | `VMSpec.balloonTargetBytes` — operator balloon targets on a running guest |
 | `supportsSecurityGroups` | 20 | Security groups: OVN port groups/ACLs from the sync, membership per NIC |
 | `supportsProjectNetworkIsolation` | 21 | Id-keyed OVN naming, so two same-named networks can coexist |
-| `supportsVMCheckpoint` | 22 | The `vm_checkpoint` / `vm_restore` / `vm_snapshot_delete` message trio |
+| `supportsVMCheckpoint` | 22 | `vm_restore` (capture/delete became desired state at v33) |
 | `supportsGraphicsConsole` | 23 | `ConsoleSpec.graphics` + `ConsoleConnectMessage.stream` — the VNC console |
 | `supportsWorkloadTombstones` | 25 | Omission is hold-and-report, not teardown (a legibility gate, not a send gate — see STR-98 below) |
 | `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
 | `supportsMetadataPort` | 27 | `metadataEnabled` on `DesiredNetworkState` **and** `NetworkSpec` — the OVN localport publishing the metadata addresses |
 | `supportsDesiredStatePull` | 29 | The control plane serves `GET /agent/desired-state`, so the agent may fetch its sync instead of waiting for a push |
 | `supportsVolumeSync` | 31 | Volumes in the desired-state sync — and a **placement** gate, not just a field gate: with the imperative volume frames gone there is no fallback path |
+| `supportsSnapshotSync` | 33 | Snapshot artifacts in the desired-state sync — and a **capture-admission** gate: an artifact has no placement decision to gate, so a capture requested against a pre-v33 agent is refused instead |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
 degrade around — they must upgrade.
 
 Versions 15 and 16 have no gates either: both add optional, nil-tolerant
-fields — `ObservedVMState.guestInfo` and `VolumeSnapshotMessage.attachedVMId`
-at v15 (the QEMU guest agent, issue #563), `ObservedVMState.memoryStats` at
+fields — `ObservedVMState.guestInfo` and the volume snapshot's attached-VM hint
+at v15 (the QEMU guest agent, issue #563; the hint lives on
+`DesiredSnapshotCapture` since v33), `ObservedVMState.memoryStats` at
 v16 (virtio-balloon statistics, issue #567). A nil from an older peer reads
 identically to "not known" and can never mean a destructive action, so no
 send-side gate is needed. One meaning did tighten without its shape changing:
@@ -157,10 +159,11 @@ the sync is the whole point of the design: the metadata store inherits
 level-triggering, generation guards, and replay safety from the machinery that
 already exists, so an operator's edit propagates on the next sync with no
 second control loop, no second transport, and nothing in the payload that can
-expire. Carrying the metadata on the sync is shipped; serving it is not — no
-agent yet answers HTTP on `169.254.169.254`, so the guest-facing IMDS listener
-is future work (only the v27 chassis/localport half exists agent-side, see
-[agent](./agent.md)).
+expire. Carrying the metadata on the sync is shipped, and so is holding it: the
+agent's `MetadataStore` records each VM's copy as syncs arrive (STR-52). Serving
+it is not — no agent yet answers HTTP on `169.254.169.254`, so the guest-facing
+IMDS listener is future work (the v27 chassis/localport half and the store are
+what exist agent-side, see [agent](./agent.md)).
 
 Absence is asymmetric in the v3/v5 sense rather than the harmless v7 sense,
 which is why `supportsInstanceMetadata` gates both directions. Agent-side it
@@ -255,6 +258,41 @@ reports say nothing about volumes — until the agent is upgraded. Deleting one
 still works: the delete path force-clears the agent-absence finalizer for an
 agent that cannot confirm.
 
+Version 32 removes `volume_info` (ADR 0001 stage 7, STR-149) — the v28 shape
+without even v28's skew hazard, because the message had no sender on either
+side of any version. Nothing was added to the observed report to replace it: a
+read is not desired state, and for every field the message carried, one side
+already knew the answer. Format, storage path and attachment have been on
+`ObservedVolumeState` since v31; the requested size is a control-plane column
+whose realization `observedGeneration` confirms. The remainder — allocated
+bytes, the qcow2 dirty flag, the encryption flag — has no reader, and
+allocation moves with every guest write, so it cannot be cached the way virtual
+size is and would cost a `qemu-img info` per volume on a report assembled on
+every convergence action. `StorageBackend.volumeInfo` survives as the agent's
+own probe behind the resize planner's size cache.
+
+Version 33 makes snapshots and checkpoints desired artifacts (ADR 0001 stage
+8, STR-150). `DesiredStateMessage` gains `snapshots` and `ObservedStateReport`
+gains its counterpart; seven imperative frames go — `volume_snapshot`,
+`volume_snapshot_delete`, `vm_checkpoint`, `vm_snapshot_delete`,
+`sandbox_snapshot_create`, `sandbox_snapshot_delete` and
+`sandbox_snapshot_export`. `vm_restore` and `sandbox_restore` survive; they are
+edges rather than states, and convert to nonces in ADR stage 9.
+
+Both hazard shapes are v31's, and the `Optional`-not-`[]` treatment is the
+same, one step more expensive to get wrong: an empty `snapshots` the control
+plane believed would reap every checkpoint row it holds for the agent, and a
+checkpoint is a point in time nothing can recreate.
+
+Where the gate sits is what differs from v31. A volume is *placed* by the
+control plane, so v31 could simply refuse to schedule one onto an agent that
+could not converge it; an artifact inherits its parent's host, so there is no
+placement decision to gate. `supportsSnapshotSync` gates **capture admission**
+instead — `POST .../snapshots` against a pre-v33 agent is refused with `409`,
+which is exactly what the pre-v22/v9 capability preflights already did, one
+floor higher. Artifacts already on such an agent freeze until it is upgraded;
+deleting one still works, by force-clearing the agent-absence finalizer.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -271,10 +309,8 @@ dual-mode rollout.
 | `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, echoes the protocol version |
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `vm_reboot` | Reboot — still imperative because a reboot is an action, not a state |
-| `vm_checkpoint`, `vm_restore`, `vm_snapshot_delete` | Full-VM checkpoints (v22+, issue #564): RAM + device state + disks as a qcow2 internal snapshot. Imperative for the same reason — a checkpoint is an action, not a state. Gated on the `vm_checkpoint` capability, since only a QEMU-capable agent can realize them |
-| `volume_snapshot`, `volume_snapshot_delete`, `volume_info` | What is left of the imperative volume verbs (QEMU-backed VMs only). Create, delete, attach, detach, resize and clone became desired state in v31 (STR-148); these two artifact verbs and the read convert in ADR 0001 stages 8 and 7 |
-| `sandbox_snapshot_create`, `sandbox_snapshot_delete`, `sandbox_restore` | Sandbox checkpoint/restore (v9+, issue #426) — imperative request/response pairs like the volume operations |
-| `sandbox_snapshot_export` | Export a checkpoint's artifacts off-node to control-plane object storage (v14+, issue #428) |
+| `vm_restore` | Load a full-VM checkpoint back into a live QEMU process and resume (v22+, issue #564). Still imperative because a restore is an *edge*: "this VM should be at checkpoint C" is not something an agent can re-converge on, since the guest starts writing the moment it resumes. Gated on the `snapshot:VMCheckpoint` capability, since only a QEMU-capable agent can realize it |
+| `sandbox_restore` | The sandbox counterpart (v9+, issue #426), with optional artifact descriptors for a cross-agent restore (v14+, issue #428) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
 | `sandbox_exec_start`, `sandbox_exec_input`, `sandbox_exec_resize`, `sandbox_exec_close` | Interactive exec into a sandbox (v8+) |
 
@@ -368,6 +404,57 @@ reading a volume's virtual size means a `qemu-img info` subprocess per volume,
 and the report is assembled on every convergence action plus the heartbeat
 cadence. A resize is confirmed the way a VM resize is, by `observedGeneration`
 catching up.
+
+### Desired snapshot artifacts (wire v33)
+
+`DesiredSnapshotState` carries one artifact's id, its **kind** — a volume
+snapshot, a VM checkpoint, or a sandbox snapshot — the parent it was captured
+from, a desired status (`present`/`absent`, since an artifact is frozen bytes
+with no run state), a generation, an optional **capture strategy**, and an
+optional **export**.
+
+One kind-tagged list rather than three, because the diff, the generation guard
+and the absent-then-confirm dance are identical across the families; only the
+backend that writes the bytes differs, and the entry's own `kind` says which.
+The families stay three *tables* on the control plane — three quota paths,
+three IAM node types, three very different completion budgets.
+
+Like a volume's entry it carries no path and no size: the agent owns artifact
+layout and is the only party that can measure what it wrote, so both travel the
+other way.
+
+`DesiredSnapshotCapture` is the create strategy — a sandbox's resume/stop mode,
+a volume's attached-VM hint — and the agent consults it **only** while the
+artifact is absent from the host. That is the safety property the whole
+conversion rests on: without it a level-triggered entry carrying "pause this
+guest and copy its RAM" would re-checkpoint a running VM on every replayed
+sync, over the point in time the user is holding. Checkpoint-and-stop writes
+both halves in one transaction — the capture mode here, the lasting intent on
+the *sandbox's* own desired status — because the first alone would last exactly
+until the next level-triggered pass.
+
+`DesiredSnapshotExport` is the placement fact: "this artifact should also exist
+in the control plane's object store". The agent converges it by streaming each
+artifact to an upload slot; the byte transfer beneath stays a transport concern
+(`SnapshotArtifactTransfer`), exactly as console and exec streams do. Dropping
+the field plans nothing — withdrawing an exported copy is the control plane's
+own object-store bookkeeping, not a teardown the agent can perform.
+
+`ObservedSnapshotState` reports presence, whether this host has finished
+exporting, the usual convergence quartet, and `ObservedSnapshotFacts` — the
+footprint, hypervisor version, device nodes, fork layout and CPU template that
+used to ride the RPC replies. Moving them here is not relocation: a reply is
+delivered once, so both old paths had to treat a dropped socket as a protocol
+error and mark a checkpoint that in fact existed `.error`. A report is re-sent
+on every heartbeat, so the same facts simply arrive again. Every field is
+optional and every consumer treats nil as *unknown*, never zero — a footprint
+the agent could not measure must not silently become a free one in quota
+accounting.
+
+A nil `snapshots` on the report has v31's two causes and the same response:
+an agent below v33 does not speak the field, and a v33 agent that cannot read
+its snapshot record file says so this way rather than claiming an empty
+inventory.
 
 ### Generations
 

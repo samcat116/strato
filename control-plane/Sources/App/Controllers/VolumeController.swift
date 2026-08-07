@@ -171,7 +171,7 @@ struct VolumeController: RouteCollection {
         guard request.sizeGB <= Volume.maxSizeGB else {
             throw Abort(
                 .badRequest,
-                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GB")
+                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GiB")
         }
         guard let sizeBytes = request.sizeGB.gbToBytes else {
             throw Abort(.badRequest, reason: "'sizeGB' is too large")
@@ -467,33 +467,41 @@ struct VolumeController: RouteCollection {
 
         try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
 
-        // Generate device name if not provided
-        let deviceName: String
-        if let providedName = request.deviceName {
-            deviceName = providedName
-        } else {
-            deviceName = try await generateDeviceName(for: vm, on: req.db)
+        // A device name from the request body becomes a hypervisor object id,
+        // so it is validated here rather than at the point it would otherwise
+        // fail — an opaque hot-plug rejection, or a recorded attachment that
+        // breaks the guest's next boot (STR-129).
+        let requestedDeviceName: VolumeDeviceName? = try request.deviceName.map {
+            guard let name = VolumeDeviceName($0) else {
+                throw Abort(.badRequest, reason: InvalidVolumeDeviceName(rawValue: $0).description)
+            }
+            return name
         }
 
         let userID = try user.requireID()
         let readonly = request.readonly ?? false
         let bootOrder = request.bootOrder
         let vmID = try vm.requireID()
-        let vmAgentId = vm.hypervisorId
 
         let accepted = try await req.resourceMutation.accept(
             .attach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable tx in
             // The desired attachment, and nothing else. There is no
             // `.attaching` status to set and revert: the agent reports what it
             // realized, and `conditions` is what a client watches.
-            volume.$vm.id = vmID
-            volume.deviceName = deviceName
-            volume.bootOrder = bootOrder
-            volume.readonly = readonly
-            volume.attachedAgentId = vmAgentId
-            volume.bumpGeneration()
+            //
+            // Choosing the device name belongs *here*, inside the mutation's
+            // transaction and under the per-VM advisory lock, not before it:
+            // generating the next free `disk<N>` is a read-then-write, and two
+            // attaches that read before either wrote both picked the same slot
+            // (STR-129).
+            try await VolumeAttachmentService.claim(
+                volume, to: vm,
+                deviceName: requestedDeviceName,
+                bootOrder: bootOrder,
+                readonly: readonly,
+                on: tx)
         }
 
         req.logger.info(
@@ -501,7 +509,7 @@ struct VolumeController: RouteCollection {
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
                 "vmId": .string(vmID.uuidString),
-                "deviceName": .string(deviceName),
+                "deviceName": .string(volume.deviceName ?? ""),
             ])
 
         return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
@@ -541,12 +549,10 @@ struct VolumeController: RouteCollection {
             .detach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable _ in
-            volume.$vm.id = nil
-            volume.deviceName = nil
-            volume.bootOrder = nil
-            volume.readonly = false
-            volume.attachedAgentId = nil
-            volume.bumpGeneration()
+            // Every attachment column at once, through the one function that
+            // owns the transition, so the row can never come to rest describing
+            // half an attachment (STR-129).
+            VolumeAttachmentService.clearAttachment(volume)
         }
 
         req.logger.info(
@@ -588,7 +594,7 @@ struct VolumeController: RouteCollection {
         guard request.sizeGB <= Volume.maxSizeGB else {
             throw Abort(
                 .badRequest,
-                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GB")
+                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GiB")
         }
         guard let newSizeBytes = request.sizeGB.gbToBytes else {
             throw Abort(.badRequest, reason: "'sizeGB' is too large")
@@ -636,9 +642,15 @@ struct VolumeController: RouteCollection {
 
     /// Create a snapshot of a volume
     /// POST /api/volumes/:volumeId/snapshot
-    /// Body: { "name": string, "description"?: string }
+    /// Body: { "name": string, "description"?: string, "ttlSeconds"?: int }
+    ///
+    /// Declarative since ADR 0001 stage 8 (STR-150): `202`, and the client
+    /// polls the snapshot's own `conditions`. The volume itself no longer moves
+    /// through a `.snapshotting` status — a snapshot is its own resource now,
+    /// so nothing has to be borrowed from the volume's status to represent it,
+    /// and nothing has to be restored afterwards on a failure path.
     @Sendable
-    func createSnapshot(req: Request) async throws -> SnapshotResponse {
+    func createSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "snapshot")
         let request = try req.content.decode(CreateSnapshotRequest.self)
@@ -647,7 +659,7 @@ struct VolumeController: RouteCollection {
         // message: refusing it is a deliberate correctness guard (issue #747),
         // not a transient state the caller should wait out.
         guard volume.canSnapshot else {
-            if volume.status == .attached {
+            if volume.$vm.id != nil {
                 throw Abort(
                     .conflict,
                     reason:
@@ -660,73 +672,60 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        guard volume.hypervisorId != nil, volume.storagePath != nil else {
+        // The agent is *recorded* on the snapshot rather than re-derived per
+        // request: a desired entry has to appear in exactly one agent's sync,
+        // and a volume that moves must not silently orphan its snapshots into
+        // another host's tombstone set.
+        guard let agentId = try await VolumeService.agentHolding(volume, on: req.db) else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
+        try await SnapshotArtifactMutation.requireCaptureCapableAgent(
+            agentId, kind: .volumeSnapshot, app: req.application)
 
-        // Mark volume as snapshotting
-        let previousStatus = volume.status
-        volume.status = .snapshotting
-        try await volume.save(on: req.db)
-
-        // Create snapshot record
+        let userID = try user.requireID()
         let snapshot = VolumeSnapshot(
             name: request.name,
             description: request.description ?? "",
-            volumeID: volume.id!,
+            volumeID: try volume.requireID(),
             projectID: volume.$project.id,
             size: volume.size,
-            status: .creating,
-            createdByID: user.id!
+            agentId: agentId,
+            expiresAt: try SnapshotRetention.expiry(requested: request.ttlSeconds),
+            createdByID: userID
         )
+        snapshot.extendConvergenceDeadline(
+            by: OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create))
 
         // Creator binding on the snapshot, in the same transaction as the row
-        // (issue #477).
-        try await req.db.transaction { db in
+        // (issue #477), alongside the attribution event.
+        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
             try await snapshot.save(on: db)
             try await RoleBindingService.grant(
                 principalType: .user,
-                principalID: user.id!,
+                principalID: userID,
                 role: .admin,
                 nodeType: .volumeSnapshot,
-                nodeID: snapshot.id!,
-                createdBy: user.id,
+                nodeID: snapshot.requireID(),
+                createdBy: userID,
                 on: db
             )
+            return try await SnapshotArtifactMutation.recordCapture(
+                snapshot, actor: .user(userID), on: db)
         }
 
-        // Create the snapshot on the hypervisor; the agent reports the actual
-        // snapshot storage path.
-        do {
-            let snapshotPath = try await req.application.volumeService.requestVolumeSnapshot(
-                volume: volume,
-                snapshot: snapshot
-            )
-            snapshot.storagePath = snapshotPath
-            snapshot.status = .available
-            try await snapshot.save(on: req.db)
-        } catch {
-            snapshot.status = .error
-            snapshot.errorMessage = error.localizedDescription
-            try await snapshot.save(on: req.db)
-            volume.status = previousStatus
-            try await volume.save(on: req.db)
-            throw Abort(.badGateway, reason: "Failed to create snapshot on hypervisor: \(error.localizedDescription)")
-        }
+        try SnapshotArtifactMutation.dispatchCapture(snapshot, app: req.application)
 
-        // Restore volume status
-        volume.status = previousStatus
-        try await volume.save(on: req.db)
-
+        let snapshotID = try snapshot.requireID()
+        let volumeID = try volume.requireID()
         req.logger.info(
-            "Snapshot created",
+            "Volume snapshot accepted",
             metadata: [
-                "snapshotId": .string(snapshot.id!.uuidString),
-                "volumeId": .string(volume.id!.uuidString),
+                "snapshotId": .string(snapshotID.uuidString),
+                "volumeId": .string(volumeID.uuidString),
                 "name": .string(snapshot.name),
             ])
 
-        return SnapshotResponse(from: snapshot)
+        return try AcceptedMutation(SnapshotResponse(from: snapshot), accepted).acceptedResponse()
     }
 
     // MARK: - Clone Volume
@@ -850,8 +849,12 @@ struct VolumeController: RouteCollection {
 
     /// Delete a snapshot
     /// DELETE /api/volumes/:volumeId/snapshots/:snapshotId
+    ///
+    /// Marks the snapshot absent and stamps the finalizers its teardown owes.
+    /// The row outlives this request: it goes only once the owning agent's
+    /// observed report stops listing the artifact (STR-150).
     @Sendable
-    func deleteSnapshot(req: Request) async throws -> HTTPStatus {
+    func deleteSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "read")
 
@@ -870,57 +873,22 @@ struct VolumeController: RouteCollection {
             throw Abort(.notFound, reason: "Snapshot not found")
         }
 
-        // Check permission to delete snapshot
         let hasPermission = try await req.can("delete", on: "volume_snapshot", id: snapshotId.uuidString)
-
         guard hasPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to delete this snapshot")
         }
 
-        // Validate snapshot can be deleted
-        guard snapshot.canDelete else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'. Must be 'available', 'error', or 'deleting'"
-            )
-        }
-
-        // Mark as deleting
-        snapshot.status = .deleting
-        try await snapshot.save(on: req.db)
-
-        // Delete the snapshot file on the hypervisor first; the database
-        // record is only removed once the agent confirms. Only snapshots of
-        // volumes that were never provisioned on a hypervisor skip the agent
-        // round-trip.
-        do {
-            try await req.application.volumeService.requestVolumeSnapshotDeletion(
-                volume: volume,
-                snapshot: snapshot
-            )
-        } catch {
-            snapshot.status = .error
-            snapshot.errorMessage = "Failed to delete snapshot on hypervisor: \(error.localizedDescription)"
-            try await snapshot.save(on: req.db)
-            throw Abort(.badGateway, reason: "Failed to delete snapshot on hypervisor: \(error.localizedDescription)")
-        }
-
-        try await req.db.transaction { db in
-            try await snapshot.delete(on: db)
-            // Drop the snapshot's bindings with the row.
-            try await RoleBindingService.revokeAll(
-                nodeType: .volumeSnapshot, nodeID: snapshotId, on: db)
-        }
+        let accepted = try await SnapshotArtifactMutation.delete(
+            snapshot, actor: .user(try user.requireID()), on: req.db, app: req.application)
 
         req.logger.info(
-            "Snapshot deleted",
+            "Volume snapshot deletion requested",
             metadata: [
                 "snapshotId": .string(snapshotId.uuidString),
                 "volumeId": .string(volume.id!.uuidString),
             ])
 
-        return .noContent
+        return try AcceptedMutation(SnapshotResponse(from: snapshot), accepted).acceptedResponse()
     }
 
     // MARK: - Helper Methods
@@ -990,15 +958,5 @@ struct VolumeController: RouteCollection {
         }
 
         return volume
-    }
-
-    /// Generate a device name for a new volume attachment
-    private func generateDeviceName(for vm: VM, on db: Database) async throws -> String {
-        // Get existing volumes attached to this VM
-        let attachedVolumes = try await Volume.query(on: db)
-            .filter(\.$vm.$id == vm.id!)
-            .all()
-
-        return VolumeNaming.nextDeviceName(existingDeviceNames: attachedVolumes.map { $0.deviceName })
     }
 }

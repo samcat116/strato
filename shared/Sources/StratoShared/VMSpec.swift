@@ -231,8 +231,11 @@ public enum BootSource: Codable, Sendable {
 public struct VolumeSpec: Codable, Sendable {
     /// The managed volume this refers to, when it is one (nil for legacy single-disk VMs).
     public let volumeId: UUID?
-    /// Stable device identifier within the VM (e.g. "disk0", "vdb").
-    public let deviceName: String
+    /// Stable device identifier within the VM (e.g. "disk0", "vdb"). Validated
+    /// by its type, so a spec cannot carry a name a hypervisor would refuse
+    /// (STR-129); unique per VM, enforced by the control plane's
+    /// `(vm_id, device_name)` index.
+    public let deviceName: VolumeDeviceName
     /// Host path of the volume as previously reported by the owning agent.
     /// Nil when the agent materializes the volume itself (e.g. boot volume from an
     /// image); the agent is the authority on paths and may ignore this hint.
@@ -243,7 +246,7 @@ public struct VolumeSpec: Codable, Sendable {
 
     public init(
         volumeId: UUID? = nil,
-        deviceName: String,
+        deviceName: VolumeDeviceName,
         storagePath: String? = nil,
         readonly: Bool = false,
         bootOrder: Int? = nil

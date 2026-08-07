@@ -81,7 +81,7 @@ export function CreateVolumeDialog({
 
     const sizeGB = parseInt(formData.sizeGB);
     if (!sizeGB || sizeGB < 1) {
-      toast.error("Size must be at least 1 GB");
+      toast.error("Size must be at least 1 GiB");
       return;
     }
 
@@ -165,7 +165,7 @@ export function CreateVolumeDialog({
             <div className="grid grid-cols-3 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="volumeSize" className="text-foreground">
-                  Size (GB)
+                  Size (GiB)
                 </Label>
                 <Input
                   id="volumeSize"

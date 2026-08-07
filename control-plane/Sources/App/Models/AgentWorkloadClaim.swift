@@ -134,6 +134,9 @@ extension WorkloadKind {
         case .vm: return .virtualMachine
         case .sandbox: return .sandbox
         case .volume: return .volume
+        case .volumeSnapshot: return .volumeSnapshot
+        case .vmCheckpoint: return .vmCheckpoint
+        case .sandboxSnapshot: return .sandboxSnapshot
         }
     }
 }
@@ -145,6 +148,9 @@ extension OperationResourceKind {
         case .virtualMachine: return .vm
         case .sandbox: return .sandbox
         case .volume: return .volume
+        case .volumeSnapshot: return .volumeSnapshot
+        case .vmCheckpoint: return .vmCheckpoint
+        case .sandboxSnapshot: return .sandboxSnapshot
         }
     }
 }

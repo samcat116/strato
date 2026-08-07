@@ -228,8 +228,8 @@ export function QuotaDialog({
             <div className="grid grid-cols-2 gap-4">
               {numberField("maxVCPUs", "Max vCPUs")}
               {numberField("maxVMs", "Max VMs")}
-              {numberField("maxMemoryGB", "Max Memory (GB)", "0.5")}
-              {numberField("maxStorageGB", "Max Storage (GB)", "0.5")}
+              {numberField("maxMemoryGB", "Max Memory (GiB)", "0.5")}
+              {numberField("maxStorageGB", "Max Storage (GiB)", "0.5")}
               {numberField("maxNetworks", "Max Networks")}
             </div>
 

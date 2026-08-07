@@ -181,6 +181,21 @@ extension ResourceEvent {
             scope.projectID = volume.$project.id
             scope.resourceName = volume.name
             scope.generation = volume.generation
+        case .volumeSnapshot:
+            guard let snapshot = try await VolumeSnapshot.find(id, on: db) else { return scope }
+            scope.projectID = snapshot.$project.id
+            scope.resourceName = snapshot.name
+            scope.generation = snapshot.generation
+        case .vmCheckpoint:
+            guard let snapshot = try await VMSnapshot.find(id, on: db) else { return scope }
+            scope.projectID = snapshot.$project.id
+            scope.resourceName = snapshot.name
+            scope.generation = snapshot.generation
+        case .sandboxSnapshot:
+            guard let snapshot = try await SandboxSnapshot.find(id, on: db) else { return scope }
+            scope.projectID = snapshot.$project.id
+            scope.resourceName = snapshot.name
+            scope.generation = snapshot.generation
         }
         guard let projectID = scope.projectID,
             let project = try await Project.find(projectID, on: db)
@@ -217,6 +232,21 @@ extension ResourceEvent {
                 .first()?.generation
         case .volume:
             return try await Volume.query(on: db)
+                .filter(\.$id == id)
+                .field(\.$generation)
+                .first()?.generation
+        case .volumeSnapshot:
+            return try await VolumeSnapshot.query(on: db)
+                .filter(\.$id == id)
+                .field(\.$generation)
+                .first()?.generation
+        case .vmCheckpoint:
+            return try await VMSnapshot.query(on: db)
+                .filter(\.$id == id)
+                .field(\.$generation)
+                .first()?.generation
+        case .sandboxSnapshot:
+            return try await SandboxSnapshot.query(on: db)
                 .filter(\.$id == id)
                 .field(\.$generation)
                 .first()?.generation

@@ -27,6 +27,7 @@ import {
   type CloudImageDistro,
   type CloudImageVersion,
 } from "@/lib/cloud-images";
+import { formatMemory } from "@/lib/format-bytes";
 import { cn } from "@/lib/utils";
 import type { CPUArchitecture, ImageFormat } from "@/types/api";
 
@@ -437,7 +438,7 @@ export function UploadImageDialog({
                       {selectedFile.name}
                     </div>
                     <div className="mt-0.5 font-mono text-[11.5px] text-muted-foreground">
-                      {(selectedFile.size / 1048576).toFixed(1)} MB · ready to upload
+                      {formatMemory(selectedFile.size)} · ready to upload
                     </div>
                   </div>
                   <button

@@ -2,38 +2,33 @@ import Foundation
 import StratoShared
 import Vapor
 
-/// Agent RPC client for sandbox snapshot operations (issue #426), mirroring
-/// `VolumeService`'s imperative request/response pattern: snapshot create,
-/// delete, and restore are actions — not states — so they ride correlated
-/// WebSocket messages (with cross-replica forwarding handled inside
-/// `AgentService.sendMessageToAgentWithResponse`) instead of the
-/// level-triggered desired-state sync.
+/// What is left of the sandbox-snapshot agent path after ADR 0001 stage 8
+/// (STR-150).
+///
+/// Capture, delete and export are desired state now — the last of those as a
+/// *placement fact* ("this snapshot should also exist in object storage")
+/// rather than a verb, with the byte transfer beneath left where it belongs, in
+/// the agent's `SnapshotArtifactTransfer`. None of the three goes through this
+/// type any more, and neither do their sizes and compatibility constraints:
+/// those ride the observed report, which is re-sent on every heartbeat instead
+/// of delivered once.
+///
+/// What remains is `sandbox_restore`, an edge for `vm_restore`'s reason, until
+/// STR-151 makes it a nonce.
 enum SandboxSnapshotService {
-    /// Checkpoint/restore move the guest memory file plus (without reflink
-    /// support) a full rootfs copy; just under the operation sweep budget so
-    /// the RPC verdict, not the sweep, decides the operation whenever the
-    /// dispatching process survives.
-    static let snapshotTimeout: Duration = .seconds(570)
-    static let deleteTimeout: Duration = .seconds(60)
-
-    /// Off-node transfers (issue #428) — export, and any restore that has to
-    /// stage the archive from object storage first — move the same bytes as a
-    /// local checkpoint but over the network, through the control plane, one
-    /// artifact at a time. Sizing them like a local copy meant the RPC always
-    /// expired first on anything but a small archive, and an export that
-    /// expires mid-flight leaves the snapshot permanently un-exported (the
-    /// agent keeps uploading, but nothing is left to stamp `exportedAt`).
-    /// Kept just under the matching `.snapshotExport` operation budget so the
-    /// RPC verdict still decides the operation.
+    /// A local restore is a file copy; one that has to stage the archive from
+    /// object storage first (issue #428) moves the same bytes over the network,
+    /// through the control plane, one artifact at a time. Both are kept just
+    /// under the matching `.restore` operation budget so the RPC verdict still
+    /// decides the operation.
+    static let restoreTimeout: Duration = .seconds(570)
     static let transferTimeout: Duration = .seconds(3570)
 
-    /// Preflight an agent for the sandbox-snapshot message set: it must be
-    /// known, online, and advertise the capability. The message types
-    /// postdate protocol version 8, so an older agent can't even decode the
-    /// envelope — the frame is dropped before any error response can be sent
-    /// and the request would burn its full timeout. Agents that understand
-    /// the trio advertise `sandbox_snapshot_create` at registration; fail
-    /// fast on ones that don't.
+    /// Preflight an agent for `sandbox_restore`: it must be known, online, and
+    /// advertise a sandbox snapshot backend. The message type postdates
+    /// protocol version 8, so an older agent can't even decode the envelope —
+    /// the frame is dropped before any error response can be sent and the
+    /// request would burn its full timeout.
     static func requireCapableAgent(_ agentId: String, app: Application) async throws {
         guard let agentInfo = await app.agentService.getAgentInfo(agentId) else {
             throw SandboxSnapshotServiceError.agentNotFound(agentId)
@@ -41,51 +36,9 @@ enum SandboxSnapshotService {
         guard agentInfo.status == .online else {
             throw SandboxSnapshotServiceError.agentOffline(agentId)
         }
-        guard agentInfo.capabilities.contains(MessageType.sandboxSnapshotCreate.rawValue) else {
+        guard agentInfo.capabilities.contains(SnapshotArtifactKind.sandboxSnapshot.agentCapability) else {
             throw SandboxSnapshotServiceError.operationUnsupportedByAgent(agentId)
         }
-    }
-
-    /// Ask the sandbox's agent to checkpoint it and await the artifact
-    /// report (sizes + compatibility constraints). The report is mandatory:
-    /// a success frame without a decodable payload is a protocol error, not a
-    /// completed snapshot — marking the row ready without sizes would corrupt
-    /// quota accounting and lose the restore-compat constraints.
-    static func requestSnapshotCreate(
-        sandboxId: UUID,
-        snapshotId: UUID,
-        mode: SandboxSnapshotMode,
-        agentId: String,
-        app: Application
-    ) async throws -> SandboxSnapshotStatusResponse {
-        let message = SandboxSnapshotCreateMessage(
-            sandboxId: sandboxId.uuidString,
-            snapshotId: snapshotId.uuidString,
-            mode: mode)
-        let response = try await send(message, toAgent: agentId, timeout: Self.snapshotTimeout, app: app)
-        guard let payload = response else {
-            throw SandboxSnapshotServiceError.malformedAgentResponse(
-                "agent confirmed the snapshot but sent no artifact report")
-        }
-        do {
-            return try payload.decode(as: SandboxSnapshotStatusResponse.self)
-        } catch {
-            throw SandboxSnapshotServiceError.malformedAgentResponse(
-                "agent snapshot report failed to decode: \(error.localizedDescription)")
-        }
-    }
-
-    /// Ask the agent to remove a snapshot's artifacts. Carries only IDs (the
-    /// agent re-derives the path), and agent-side deletion is idempotent.
-    static func requestSnapshotDelete(
-        sandboxId: UUID,
-        snapshotId: UUID,
-        agentId: String,
-        app: Application
-    ) async throws {
-        let message = SandboxSnapshotDeleteMessage(
-            sandboxId: sandboxId.uuidString, snapshotId: snapshotId.uuidString)
-        _ = try await send(message, toAgent: agentId, timeout: Self.deleteTimeout, app: app)
     }
 
     /// Ask the agent to restore the sandbox in place from a snapshot and
@@ -99,54 +52,27 @@ enum SandboxSnapshotService {
         artifacts: [SandboxSnapshotArtifactDescriptor]? = nil,
         app: Application
     ) async throws {
+        try await requireCapableAgent(agentId, app: app)
+
         let message = SandboxRestoreMessage(
             sandboxId: sandboxId.uuidString, snapshotId: snapshotId.uuidString,
             artifacts: artifacts)
-        // A local restore is a file copy; one carrying descriptors downloads
-        // the whole archive first and needs the transfer budget.
-        let timeout = artifacts == nil ? Self.snapshotTimeout : Self.transferTimeout
-        _ = try await send(message, toAgent: agentId, timeout: timeout, app: app)
-    }
-
-    /// Ask the agent holding a snapshot's artifacts to stream them to the
-    /// pre-signed object-storage upload targets (issue #428). Bounded by the
-    /// transfer budget, not the local-checkpoint one: these bytes cross the
-    /// network through the control plane.
-    static func requestSnapshotExport(
-        sandboxId: UUID,
-        snapshotId: UUID,
-        uploads: [SandboxSnapshotArtifactUploadTarget],
-        agentId: String,
-        app: Application
-    ) async throws {
-        let message = SandboxSnapshotExportMessage(
-            sandboxId: sandboxId.uuidString, snapshotId: snapshotId.uuidString, uploads: uploads)
-        _ = try await send(message, toAgent: agentId, timeout: Self.transferTimeout, app: app)
-    }
-
-    /// Send one message and await the correlated success/error response,
-    /// returning the success payload (if any) for the caller to decode.
-    private static func send<T: WebSocketMessage>(
-        _ message: T,
-        toAgent agentId: String,
-        timeout: Duration,
-        app: Application
-    ) async throws -> AnyCodableValue? {
-        try await requireCapableAgent(agentId, app: app)
-
         app.logger.info(
-            "Sending sandbox snapshot message to agent",
+            "Sending sandbox restore message to agent",
             metadata: [
                 "agentId": .string(agentId),
                 "messageType": .string(message.type.rawValue),
             ])
 
+        // A local restore is a file copy; one carrying descriptors downloads
+        // the whole archive first and needs the transfer budget.
+        let timeout = artifacts == nil ? Self.restoreTimeout : Self.transferTimeout
         let response = try await app.agentService.sendMessageToAgentWithResponse(
             message, agentId: agentId, timeout: timeout)
 
         switch response {
-        case .success(let data):
-            return data
+        case .success:
+            return
         case .error(let error, let details):
             throw SandboxSnapshotServiceError.agentOperationFailed(error, details)
         }
@@ -158,7 +84,6 @@ enum SandboxSnapshotServiceError: Error, LocalizedError {
     case agentOffline(String)
     case operationUnsupportedByAgent(String)
     case agentOperationFailed(String, String?)
-    case malformedAgentResponse(String)
 
     var errorDescription: String? {
         switch self {
@@ -168,14 +93,12 @@ enum SandboxSnapshotServiceError: Error, LocalizedError {
             return "Agent '\(id)' is offline"
         case .operationUnsupportedByAgent(let id):
             return
-                "Agent '\(id)' does not support sandbox snapshots (capability 'sandbox_snapshot_create' not advertised). Upgrade the agent."
+                "Agent '\(id)' does not support sandbox snapshots (capability '\(SnapshotArtifactKind.sandboxSnapshot.agentCapability)' not advertised). Upgrade the agent."
         case .agentOperationFailed(let error, let details):
             if let details, !details.isEmpty {
                 return "\(error): \(details)"
             }
             return error
-        case .malformedAgentResponse(let reason):
-            return reason
         }
     }
 }
