@@ -118,7 +118,7 @@ struct VolumeAgentSelectionTests {
 
     /// The one placement gate in this file that refuses rather than degrades
     /// (STR-148). With the imperative volume frames gone there is no fallback
-    /// path, so a volume placed on a pre-v30 agent could never be created — and
+    /// path, so a volume placed on a pre-v31 agent could never be created — and
     /// could only be deleted by force-clearing its finalizer.
     @Test("skips an agent too old to speak volume sync")
     func testSkipsPreVolumeSyncAgent() throws {

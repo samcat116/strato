@@ -448,7 +448,7 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// Optional rather than `[]`-defaulted, unlike `sandboxes` and `networks`,
     /// and that difference is load-bearing: nil means "the sender has no
     /// opinion about volumes", never "delete every volume on this host". A
-    /// control plane older than v30 omits the key entirely, and the cost of
+    /// control plane older than v31 omits the key entirely, and the cost of
     /// misreading its silence is destroyed user data, so the payload describes
     /// itself instead of relying on a `wireProtocolVersion` lookup being right.
     /// The agent skips its whole volume half when this is nil.
@@ -1097,12 +1097,18 @@ public struct ObservedStateReport: WebSocketMessage {
     /// volume deletions are confirmed.
     ///
     /// Optional rather than `[]`-defaulted, and that difference is the safety
-    /// property: an agent older than v31 omits the key, and the control plane
-    /// must read that as "this agent has no opinion about volumes" rather than
-    /// "every volume on this agent is gone" — which would reap every
-    /// terminating volume row it holds and error every live one. Making the
-    /// payload self-describing means a stale `wireProtocolVersion` on the agent
-    /// row cannot cause that.
+    /// property: the control plane must read a missing list as "this agent has
+    /// no opinion about volumes" rather than "every volume on this agent is
+    /// gone" — which would reap every terminating volume row it holds and error
+    /// every live one. Making the payload self-describing means a stale
+    /// `wireProtocolVersion` on the agent row cannot cause that.
+    ///
+    /// Nil has two causes, and the control plane treats them identically
+    /// because the right response to both is to do nothing: an agent older than
+    /// v31 does not speak the field at all, and a v31 agent that cannot
+    /// enumerate its volume store says so this way rather than claiming an
+    /// empty inventory. The second is the volume counterpart of
+    /// `manifestStatus.inventoryComplete == false`.
     public let volumes: [ObservedVolumeState]?
 
     public init(

@@ -58,7 +58,7 @@ actor VolumeService {
     ///
     /// The wire-version filter is new with STR-148 and is the one placement
     /// gate in this file that refuses rather than degrades: with the imperative
-    /// volume frames gone, an agent below v30 has no way to hear about a volume
+    /// volume frames gone, an agent below v31 has no way to hear about a volume
     /// at all, so placing one there would produce a resource that could never
     /// converge and could only be deleted by force-clearing its finalizer.
     static func selectVolumeAgent(from agents: [Agent], memberAgentIds: [String] = []) -> Agent? {

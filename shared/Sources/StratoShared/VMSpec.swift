@@ -10,6 +10,10 @@ import Foundation
 /// sockets, machine types, queue sizing — is derived by each agent-side
 /// `HypervisorService` when it translates the spec into its driver-native form
 /// (QEMU arguments, Firecracker API calls, ...).
+/// > Adding a stored property here also means adding it to `withVolumes(_:)`
+/// > below, which has to enumerate every field because they are all `let`. A
+/// > field left out of that list is silently dropped from the spec of every VM
+/// > whose attachments change.
 public struct VMSpec: Codable, Sendable {
     /// Number of vCPUs the VM boots with.
     public let cpus: Int
@@ -109,6 +113,9 @@ public struct VMSpec: Codable, Sendable {
     public var effectiveMachine: MachineProfile { machine ?? .default }
 
     /// A copy of this spec with a different volume list.
+    ///
+    /// Hand-enumerates every stored property because they are all `let`. Keep
+    /// it in step with the declarations above — see the note on the type.
     ///
     /// The agent uses this to keep a VM's manifest entry in step with the
     /// attachments the volume reconciler has realized (STR-148): the entry's

@@ -33,7 +33,7 @@ public enum MessageType: String, Codable, Sendable {
     // Volume operations (QEMU only - not supported for Firecracker).
     //
     // `volume_create`, `volume_delete`, `volume_attach`, `volume_detach`,
-    // `volume_resize` and `volume_clone` were removed in wire v30: volumes are
+    // `volume_resize` and `volume_clone` were removed in wire v31: volumes are
     // desired state now (ADR 0001 stage 5, STR-148), realized from
     // `DesiredStateMessage.volumes` and confirmed through
     // `ObservedStateReport.volumes`. What remains here are the artifact verbs

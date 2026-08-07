@@ -46,7 +46,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 30), stamped on
+`WireProtocol.swift` holds the protocol version (currently 31), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -358,7 +358,12 @@ attachment, and `VMSpec.volumes` is the boot-time convenience that rebuilds the
 same disk set.
 
 `ObservedVolumeState` reports presence, the agent-chosen path and format, the
-attachment, and the usual convergence quartet. It deliberately carries no size:
+attachment, and the usual convergence quartet. A nil `volumes` on the *report*
+has two causes and the control plane treats them identically, because the right
+response to both is to do nothing: an agent below v31 does not speak the field,
+and a v31 agent that cannot enumerate its volume store says so this way rather
+than claiming an empty inventory — the volume counterpart of
+`manifestStatus.inventoryComplete == false`. It deliberately carries no size:
 reading a volume's virtual size means a `qemu-img info` subprocess per volume,
 and the report is assembled on every convergence action plus the heartbeat
 cadence. A resize is confirmed the way a VM resize is, by `observedGeneration`

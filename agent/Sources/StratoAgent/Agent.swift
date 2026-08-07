@@ -2243,7 +2243,7 @@ extension Agent {
                 let message = try envelope.decode(as: SandboxSnapshotExportMessage.self)
                 await handleSandboxSnapshotExport(message)
             // Volume operations. Create/delete/attach/detach/resize/clone are
-            // desired state since wire v30 (STR-148); what remains here is the
+            // desired state since wire v31 (STR-148); what remains here is the
             // artifact verbs (ADR stage 8) and the read (stage 7).
             case .volumeSnapshot:
                 let message = try envelope.decode(as: VolumeSnapshotMessage.self)
@@ -3593,20 +3593,23 @@ extension Agent: ReconcileActuator {
     /// hypervisor query: a powered-off guest has no device list, and reading
     /// that silence as "detached" would plan an attach against a dead control
     /// channel on every sync.
-    func observedVolumePresence() async -> [String: VolumePresence] {
+    func observedVolumePresence() async -> [String: VolumePresence]? {
+        // No storage backend is an *answer*: such a host holds no volumes, and
+        // the control plane never places one on it.
         guard let storageBackend else { return [:] }
         let inventory: [String: DiskAttachment]
         do {
             inventory = try await storageBackend.listVolumes()
         } catch {
-            // Reporting an empty inventory would make the sync plan a create
-            // for every volume the control plane wants here. Reporting nothing
-            // at all is the safe failure: the reconciler skips this round and
-            // the next level-triggered sync tries again.
+            // Nil, not `[:]`. An empty inventory is authoritative to everything
+            // downstream — the reconciler would plan a create for every volume
+            // the control plane wants here, and the observed report's full-list
+            // semantics would confirm deletions that never happened. "I cannot
+            // answer" is the only honest thing to say, and it costs one sync.
             logger.error(
-                "Failed to list volumes; skipping volume convergence this sync",
+                "Cannot enumerate the volume store; reporting no volume inventory at all this sync",
                 metadata: ["error": .string(error.localizedDescription)])
-            return [:]
+            return nil
         }
 
         let attachments = recordedVolumeAttachments()
@@ -4356,10 +4359,11 @@ extension Agent: ReconcileActuator {
             // the lists above to be no inventory at all, so the control plane
             // reads no absence from them.
             manifestStatus: manifestStatus(),
-            // Always a list, never nil: this agent speaks volume sync, so an
-            // empty list is the honest "I hold no volumes" the control plane
-            // needs to confirm deletions. Nil is reserved for agents that
-            // cannot answer the question at all (STR-148).
+            // A list when this agent can account for its volume store — an
+            // empty one is the honest "I hold no volumes" the control plane
+            // needs to confirm deletions — and nil when it cannot enumerate the
+            // store at all, which the control plane reads as "no opinion"
+            // rather than as an inventory (STR-148).
             volumes: await observedVolumeStates(reconciler: reconciler)
         )
         // A newer report started while this one was assembling — which is
@@ -4531,11 +4535,19 @@ extension Agent: ReconcileActuator {
     /// list *omitting* the volume, so the in-flight and failed entries below
     /// matter — they are what keeps a slow create from reading as "already
     /// gone" and reaping a row whose data is about to appear.
-    private func observedVolumeStates(reconciler: Reconciler) async -> [ObservedVolumeState] {
+    private func observedVolumeStates(reconciler: Reconciler) async -> [ObservedVolumeState]? {
+        // Nil propagates all the way to the wire, where the control plane
+        // already reads it as "this agent has no opinion about volumes" and
+        // skips its whole volume half. That is the same treatment a pre-v31
+        // agent gets, and for the same reason: the alternative is an empty list
+        // the control plane would believe, reaping terminating volume rows
+        // whose bytes are still on disk and erroring every live one.
+        guard let present = await observedVolumePresence() else { return nil }
+
         var observed: [ObservedVolumeState] = []
         var reported = Set<String>()
 
-        for (volumeId, presence) in await observedVolumePresence() {
+        for (volumeId, presence) in present {
             guard let uuid = UUID(uuidString: volumeId), case .managed(let facts) = presence else { continue }
             observed.append(
                 ObservedVolumeState(

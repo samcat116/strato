@@ -216,6 +216,16 @@ interrupted `qemu-img create` would read as a converged volume; with it, the
 directory a crashed create left behind reports as absent and the next sync
 re-drives it.
 
+And an *empty* inventory means empty. `listVolumes` distinguishes a store that
+does not exist yet — the ordinary state of a fresh host, and genuinely no
+volumes — from one that exists but cannot be read or is not a directory, which
+throws. The distinction is load-bearing because an empty inventory is
+authoritative to everything downstream: the reconciler would plan a create for
+every volume the sync wants, over bytes almost certainly still on disk, and the
+observed report's full-list semantics would confirm deletions that never
+happened. An agent that cannot answer reports `volumes: nil` and converges no
+volumes that round, which costs one sync and nothing else.
+
 ### Volumes are desired state
 
 A volume's lifecycle runs on the reconciliation loop, not on RPCs (ADR 0001

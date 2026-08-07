@@ -169,7 +169,7 @@ struct ObservedStateApplier {
         }
 
         // Volumes (STR-148). `guard let` on the *field*, not on a version
-        // lookup: an agent below v30 omits `volumes` entirely, and the whole
+        // lookup: an agent below v31 omits `volumes` entirely, and the whole
         // loop below treats an unlisted volume as confirmed gone. Reading that
         // silence as authoritative would reap every terminating volume row the
         // agent holds and error every live one — a data-loss-shaped bug, so it
@@ -1107,14 +1107,21 @@ struct ObservedStateApplier {
             volume.status = derived
             changed = true
         }
-        // The attachment the agent actually realized. Written back so a
-        // convergence the control plane did not request — an operator
-        // unplugging a disk by hand — is visible rather than silently
-        // re-asserted forever.
+        // Where the realized attachment runs. Purely observed, and deliberately
+        // the *only* attachment column this path writes.
+        //
+        // `deviceName` is not written here even though the report carries it:
+        // the slot is the control plane's decision, read straight back out by
+        // `DesiredStateAssembler` as the desired attachment. Overwriting it
+        // from an observation would silently replace what the user asked for
+        // with what the agent happens to have — and, being a bare field write
+        // with no generation bump, would do it without the agent ever noticing
+        // the goalposts moved. When the two disagree the agent already plans
+        // `.detach` then `.attach` to correct the slot; that is the loop
+        // working, not a fact to absorb.
         if observed.attachedVMId != nil {
-            volume.attachedAgentId = agentId
-            if volume.deviceName != observed.deviceName, observed.deviceName != nil {
-                volume.deviceName = observed.deviceName
+            if volume.attachedAgentId != agentId {
+                volume.attachedAgentId = agentId
                 changed = true
             }
         } else if volume.attachedAgentId != nil {

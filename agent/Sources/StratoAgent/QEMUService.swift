@@ -1525,13 +1525,26 @@ actor QEMUService: HypervisorService {
     /// touched. The stored spec is updated alongside so an agent restart that
     /// re-adopts this VM sees the same disk set.
     func updateRecordedVolumes(vmId: String, volumes: [VolumeSpec]) async {
+        // Read before the overwrite below: deciding whether the boot disk is a
+        // volume needs the attachment list as it stood *before* this update.
+        let previousVolumePaths = Set((vmSpecs[vmId]?.volumes ?? []).compactMap(\.storagePath))
         if let spec = vmSpecs[vmId] {
             vmSpecs[vmId] = spec.withVolumes(volumes)
         }
         guard var config = vmConfigs[vmId] else { return }
-        // The boot disk is whatever the create resolved first — materialized
-        // from an image, and so not necessarily named by any volume spec.
-        let bootDisk = config.disks.first
+
+        // The first disk is only *unconditionally* the boot disk for an
+        // image-backed VM, where it was materialized into the VM's own
+        // directory and no `VolumeSpec` ever names it. A volume-booted VM
+        // resolved its whole disk list from `spec.volumes`, so `disks.first` is
+        // a volume — and re-prepending it here would keep a *detached* volume
+        // plugged in across the guest's next power cycle, while the control
+        // plane believed it free to attach elsewhere. Two QEMU processes on one
+        // image is the same failure this method exists to prevent, running the
+        // other way.
+        let bootDisk = config.disks.first.flatMap { disk in
+            previousVolumePaths.contains(disk.path) ? nil : disk
+        }
         var disks = bootDisk.map { [$0] } ?? []
         for volume in volumes {
             guard let path = volume.storagePath, path != bootDisk?.path else { continue }

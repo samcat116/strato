@@ -29,22 +29,25 @@ private actor SubprocessRecorder {
             results[arguments.first ?? ""]
             ?? ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
         // Mirror qemu-img's side effect: a successful `convert` or `create`
-        // produces the output file (its last positional argument for convert,
-        // the path before the size for create), which the backend then
-        // publishes with an atomic rename.
-        if result.terminationStatus == 0 {
-            switch arguments.first {
-            case "convert":
-                if let output = arguments.last {
-                    FileManager.default.createFile(atPath: output, contents: Data("converted-bytes".utf8))
-                }
-            case "create":
-                if arguments.count >= 2 {
-                    let output = arguments[arguments.count - 2]
-                    FileManager.default.createFile(atPath: output, contents: Data("created-bytes".utf8))
-                }
-            default:
-                break
+        // produces its output file, which the backend then publishes with an
+        // atomic rename.
+        //
+        // Locating that file needs care. `qemu-img create` puts it last for a
+        // snapshot overlay (`create -f qcow2 -b <base> -F <fmt> <out>`) but
+        // second-to-last for a sized volume (`create -f raw <out> <bytes>`), so
+        // the size argument is what discriminates. Reading the wrong slot wrote
+        // a file named after the *backing format* into the test's working
+        // directory — which is how `agent/raw` got committed.
+        if result.terminationStatus == 0, let subcommand = arguments.first,
+            subcommand == "convert" || subcommand == "create"
+        {
+            let output: String? =
+                (subcommand == "create" && Int64(arguments.last ?? "") != nil)
+                ? (arguments.count >= 2 ? arguments[arguments.count - 2] : nil)
+                : arguments.last
+            if let output {
+                FileManager.default.createFile(
+                    atPath: output, contents: Data("\(subcommand)d-bytes".utf8))
             }
         }
         return result
@@ -384,6 +387,39 @@ struct FileSystemStorageBackendTests {
         #expect(Set(listed.keys) == [published])
         #expect(listed[published]?.format == .qcow2)
         #expect(listed[published]?.path == "\(root)/\(published)/volume.qcow2")
+    }
+
+    /// A store that does not exist yet is genuinely empty — every host is in
+    /// that state before its first volume.
+    @Test func listVolumesTreatsAnAbsentStoreAsEmpty() async throws {
+        let root = try makeTempDir()
+        try FileManager.default.removeItem(atPath: root)
+        let backend = makeBackend(root: root, recorder: SubprocessRecorder())
+
+        #expect(try await backend.listVolumes().isEmpty)
+    }
+
+    /// A store that exists but cannot be *used* is not an empty store, and
+    /// saying it is would be a data-loss bug: an empty inventory is
+    /// authoritative to both consumers, so the reconciler would plan a create
+    /// for every volume the control plane wants here and the observed report
+    /// would confirm deletions that never happened.
+    ///
+    /// Provoked with a path that is a file rather than a directory. The other
+    /// route into the same guard — a directory the agent user cannot read —
+    /// is not testable everywhere, since a process holding `CAP_DAC_OVERRIDE`
+    /// (which this project's containers do) is never denied one; this branch
+    /// is deterministic and exercises the same refusal.
+    @Test func listVolumesThrowsWhenTheStoreIsNotUsable() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let storePath = "\(root)/store"
+        FileManager.default.createFile(atPath: storePath, contents: Data("not a directory".utf8))
+        let backend = makeBackend(root: storePath, recorder: SubprocessRecorder())
+
+        await #expect(throws: StorageBackendError.self) {
+            try await backend.listVolumes()
+        }
     }
 
     /// Create is idempotent at the "already satisfied" level, which the

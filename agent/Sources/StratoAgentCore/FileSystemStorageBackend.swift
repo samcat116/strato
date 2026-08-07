@@ -493,20 +493,41 @@ public actor FileSystemStorageBackend: StorageBackend {
     /// — this runs on every sync, and one subprocess per volume per sync is
     /// not affordable on a dense host.
     public func listVolumes() async throws -> [String: DiskAttachment] {
+        // "No store yet" and "a store I cannot read" are emphatically different
+        // answers, and collapsing them into `[:]` was a data-loss bug: an empty
+        // inventory is *authoritative* to both consumers — the reconciler plans
+        // a create for every volume the sync wants, and the observed report's
+        // full-list semantics confirm deletions that never happened. The store
+        // is created lazily on first write, so its genuine absence is the
+        // ordinary state of a fresh host and really is an empty inventory.
+        // Anything else — EACCES, EIO on a network-backed store, EMFILE on a
+        // dense host — is the agent being unable to answer, and it throws.
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: volumeStoragePath, isDirectory: &isDirectory) else {
+            logger.debug(
+                "Volume store does not exist yet; reporting no volumes",
+                metadata: ["storagePath": .string(volumeStoragePath)])
+            return [:]
+        }
+        guard isDirectory.boolValue else {
+            throw StorageBackendError.hostMisconfiguration(
+                "the volume store path \(volumeStoragePath) is a file, not a directory; "
+                    + "point `volume_storage_dir` at a directory the agent can write.")
+        }
+
         let entries: [String]
         do {
             entries = try FileManager.default.contentsOfDirectory(atPath: volumeStoragePath)
         } catch {
-            // The store is created lazily on first write; before that there is
-            // simply nothing here, which is not an error worth failing a whole
-            // sync over.
-            logger.debug(
-                "Volume store not readable; reporting no volumes",
+            logger.error(
+                "Volume store exists but cannot be read; this host cannot account for its volumes",
                 metadata: [
                     "storagePath": .string(volumeStoragePath),
                     "error": .string(error.localizedDescription),
                 ])
-            return [:]
+            throw StorageBackendError.hostMisconfiguration(
+                "cannot enumerate the volume store at \(volumeStoragePath): "
+                    + "\(error.localizedDescription). Ensure the agent user can read it.")
         }
 
         var volumes: [String: DiskAttachment] = [:]

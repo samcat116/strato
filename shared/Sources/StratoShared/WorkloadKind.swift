@@ -14,7 +14,7 @@ import Foundation
 /// `Codable` because the on-disk workload manifest tags each entry with its
 /// kind; manifests written before sandboxes existed have no kind and decode
 /// as `.vm`.
-public enum WorkloadKind: String, Codable, Hashable, Sendable {
+public enum WorkloadKind: String, Codable, Hashable, CaseIterable, Sendable {
     case vm
     case sandbox
     /// A managed volume (STR-148). Unlike the other two kinds, nothing is ever

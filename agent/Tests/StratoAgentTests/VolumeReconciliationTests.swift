@@ -61,11 +61,18 @@ struct VolumeReconciliationTests {
             self.volumes = volumes
         }
 
+        /// Nil simulates a storage backend that cannot enumerate the store —
+        /// as distinct from one that holds nothing.
+        var inventoryReadable = true
+
         func setPresenceComplete(_ complete: Bool) { presenceComplete = complete }
+        func setInventoryReadable(_ readable: Bool) { inventoryReadable = readable }
         func presenceIsComplete() -> Bool { presenceComplete }
         func observedPresence() -> [String: VMPresence] { [:] }
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
-        func observedVolumePresence() -> [String: VolumePresence] { volumes }
+        func observedVolumePresence() -> [String: VolumePresence]? {
+            inventoryReadable ? volumes : nil
+        }
 
         func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
             performed.append((step, item.id))
@@ -314,7 +321,7 @@ struct VolumeReconciliationTests {
     // MARK: - The asymmetric-absence guard
 
     /// The headline safety property of the whole conversion. A control plane
-    /// that says nothing about volumes — one below wire v30, or one mid-rollback
+    /// that says nothing about volumes — one below wire v31, or one mid-rollback
     /// — must leave every volume on the host exactly where it is. Planning
     /// against an empty desired list instead would report all of them as
     /// unaccounted for and invite a future reading of that silence as teardown.
@@ -335,7 +342,7 @@ struct VolumeReconciliationTests {
     /// The version gate is belt to the field's braces: even a payload that
     /// *does* carry volumes is ignored when the sender is too old to have meant
     /// it, matching how the sandbox half is gated.
-    @Test("A pre-v30 sender's volumes are ignored even when present")
+    @Test("A pre-v31 sender's volumes are ignored even when present")
     func versionGateSuppressesTheVolumeHalf() async {
         let id = UUID()
         let actuator = MockVolumeActuator(volumes: [id.uuidString: .managed(Self.facts())])
@@ -366,6 +373,122 @@ struct VolumeReconciliationTests {
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
+    }
+
+    /// The counterpart to the nil-`volumes`-field test, on the agent's own
+    /// side: a host that cannot *read* its volume store must not report an
+    /// empty inventory, because an empty inventory is authoritative — it would
+    /// make this sync plan a create for every volume the control plane wants
+    /// here, over bytes that are almost certainly still on disk.
+    @Test("A host that cannot enumerate its volume store converges nothing")
+    func unreadableStoreConvergesNothing() async {
+        let id = UUID()
+        let actuator = MockVolumeActuator()
+        await actuator.setInventoryReadable(false)
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(Self.sync(volumes: [Self.desired(id)]), includeVolumes: true)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await actuator.performed.isEmpty)
+        #expect(await reconciler.unrecognizedWorkloads().isEmpty)
+    }
+
+    /// A volume with no desired attachment but a leftover observed slot must
+    /// plan nothing, not an `.attach` with nothing to attach to — which the
+    /// actuator answers with a *permanent* failure.
+    @Test("A detached volume with a stale device name plans nothing")
+    func staleDeviceNameWithNoDesiredAttachmentPlansNothing() {
+        let observed = Self.facts(attachedVMId: nil, deviceName: "disk1")
+        #expect(Reconciler.volumeSteps(desired: Self.desired(UUID()), observed: observed).isEmpty)
+    }
+
+    @Test("A volume attached with no desired attachment is detached")
+    func unwantedAttachmentIsDetached() {
+        let observed = Self.facts(attachedVMId: UUID().uuidString, deviceName: "disk1")
+        #expect(Reconciler.volumeSteps(desired: Self.desired(UUID()), observed: observed) == [.detach])
+    }
+
+    // MARK: - The blast-radius guard is per kind
+
+    /// One pooled denominator would let a volume-dense host's volume count
+    /// dilute the bound protecting its guests: 4 VMs among 40 volumes would
+    /// pass at `400 > 1100` where the VM-only denominator refuses at
+    /// `400 > 100`.
+    @Test("Volumes do not dilute the teardown guard protecting VMs")
+    func teardownGuardIsEvaluatedPerKind() async {
+        let vmIds = (0..<4).map { _ in UUID() }
+        let volumeIds = (0..<40).map { _ in UUID() }
+
+        let actuator = MockGuardActuator(
+            vms: Dictionary(uniqueKeysWithValues: vmIds.map { ($0.uuidString, VMPresence.managed(.running)) }),
+            volumes: Dictionary(
+                uniqueKeysWithValues: volumeIds.map { ($0.uuidString, VolumePresence.managed(Self.facts())) }))
+        let reconciler = Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+
+        let sync = DesiredStateMessage(
+            vms: [],
+            tombstones: vmIds.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 1) },
+            volumes: [])
+        await reconciler.apply(sync, includeVolumes: true)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await actuator.performed.isEmpty)
+        let refusal = await reconciler.lastTeardownRefusal()
+        #expect(refusal != nil)
+        #expect(refusal?.requestedTeardowns == 4)
+        // The denominator is the VM population, not the whole host.
+        #expect(refusal?.presentWorkloads == 4)
+    }
+
+    /// A kind that passes its own guard still converges, for the same reason
+    /// the guard never stops boots and creates.
+    @Test("A refused kind does not block a kind that passed")
+    func onlyTheRefusedKindLosesItsTeardowns() async {
+        let vmIds = (0..<4).map { _ in UUID() }
+        let volumeIds = (0..<40).map { _ in UUID() }
+        let doomedVolume = volumeIds[0]
+
+        let actuator = MockGuardActuator(
+            vms: Dictionary(uniqueKeysWithValues: vmIds.map { ($0.uuidString, VMPresence.managed(.running)) }),
+            volumes: Dictionary(
+                uniqueKeysWithValues: volumeIds.map { ($0.uuidString, VolumePresence.managed(Self.facts())) }))
+        let reconciler = Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+
+        let sync = DesiredStateMessage(
+            vms: [],
+            tombstones: vmIds.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 1) }
+                + [DesiredWorkloadTombstone(kind: .volume, workloadId: doomedVolume, generation: 1)],
+            volumes: [])
+        await reconciler.apply(sync, includeVolumes: true)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        // One volume out of forty is well inside the guard; the four VMs are not.
+        let performed = await actuator.performed
+        #expect(performed.map(\.id) == [doomedVolume.uuidString])
+    }
+
+    /// Actuator double that holds both VMs and volumes, for the guard's
+    /// per-kind denominators.
+    private actor MockGuardActuator: ReconcileActuator {
+        var vms: [String: VMPresence]
+        var volumes: [String: VolumePresence]
+        private(set) var performed: [(step: ReconcileStep, id: String)] = []
+
+        init(vms: [String: VMPresence], volumes: [String: VolumePresence]) {
+            self.vms = vms
+            self.volumes = volumes
+        }
+
+        func observedPresence() -> [String: VMPresence] { vms }
+        func observedVolumePresence() -> [String: VolumePresence]? { volumes }
+        func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
+        func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
+            performed.append((step, item.id))
+        }
+        func convergenceDidChange() {}
     }
 
     // MARK: - End to end through the actor

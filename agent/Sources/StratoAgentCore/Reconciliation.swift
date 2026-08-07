@@ -269,6 +269,10 @@ extension Array {
 /// guard trips only when *both* halves are exceeded, so a small host losing its
 /// two stray workloads is unremarkable while a host losing all forty is not.
 ///
+/// Applied per workload *kind*, against that kind's own population — see
+/// `Reconciler.applyTeardownGuard`. One pooled denominator would let a
+/// volume-dense host's volume count dilute the bound protecting its guests.
+///
 /// Scoped to tombstoned teardowns on purpose. An explicit `.absent` entry is a
 /// per-workload API decision with a `ResourceOperation` row and an audit trail
 /// behind it — capping those would refuse an ordinary "delete these twelve
@@ -340,11 +344,20 @@ public protocol ReconcileActuator: Sendable {
     func observedSandboxPresence() async -> [String: SandboxPresence]
     /// Re-adopt an orphaned sandbox and return its observed status.
     func adoptSandbox(_ item: ReconcileWorkItem) async throws -> SandboxStatus
-    /// Snapshot of every volume whose data this host holds (STR-148). Always
-    /// `.managed`: a volume is a file, so there is no session to lose and
-    /// nothing to re-adopt — the storage backend's directory listing is the
-    /// whole truth.
-    func observedVolumePresence() async -> [String: VolumePresence]
+    /// Snapshot of every volume whose data this host holds (STR-148), or nil
+    /// when the agent cannot enumerate the store at all.
+    ///
+    /// Entries are always `.managed`: a volume is a file, so there is no
+    /// session to lose and nothing to re-adopt — the storage backend's
+    /// directory listing is the whole truth.
+    ///
+    /// The Optional is the volume counterpart of `presenceIsComplete` and
+    /// exists for the same reason: an empty inventory is *authoritative* to
+    /// everything downstream, so a host that cannot read its store must be able
+    /// to say so rather than claim it holds nothing. Nil skips the volume half
+    /// of the plan and makes the observed report carry `volumes: nil`, which
+    /// the control plane already reads as "no opinion".
+    func observedVolumePresence() async -> [String: VolumePresence]?
     /// Execute one non-adopt step; `item.kind` selects the runtime.
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws
     /// Called after every work item finishes (success or failure) so the agent
@@ -405,8 +418,10 @@ extension ReconcileActuator {
 
     /// Actuators without a storage backend hold no volumes; the reconciler
     /// then plans creates for anything the sync desires and the actuator's
-    /// `perform` decides what to do about it.
-    public func observedVolumePresence() async -> [String: VolumePresence] { [:] }
+    /// `perform` decides what to do about it. `[:]` rather than nil, because
+    /// "this actuator has no volumes" is an answer — nil is reserved for "I
+    /// cannot answer".
+    public func observedVolumePresence() async -> [String: VolumePresence]? { [:] }
 
     /// Actuators that cannot report per-VM sizing simply never have a resize
     /// planned for them; the change still lands at the VM's next boot.
@@ -685,12 +700,25 @@ public actor Reconciler {
         var volumePlan = ReconcilePlan()
         var presentVolumeCount = 0
         if includeVolumes, let desiredVolumes = message.volumes {
-            let presentVolumes = await actuator.observedVolumePresence()
-            presentVolumeCount = presentVolumes.count
-            volumePlan = Self.planVolumes(
-                desired: desiredVolumes, present: presentVolumes,
-                lastApplied: appliedGenerations(kind: .volume), tombstones: tombstones)
-            plan.unrecognized += volumePlan.unrecognized
+            // Nil is the storage backend saying it cannot enumerate the store —
+            // not that the store is empty. Planning against `[:]` would create
+            // every desired volume afresh, over (or under) bytes that are
+            // probably still there, so an unanswerable inventory skips the
+            // volume half exactly like a nil `volumes` field does.
+            if let presentVolumes = await actuator.observedVolumePresence() {
+                presentVolumeCount = presentVolumes.count
+                volumePlan = Self.planVolumes(
+                    desired: desiredVolumes, present: presentVolumes,
+                    lastApplied: appliedGenerations(kind: .volume), tombstones: tombstones)
+                plan.unrecognized += volumePlan.unrecognized
+            } else {
+                logger.error(
+                    "Skipping the volume half of this sync: this host cannot enumerate its volume store",
+                    metadata: [
+                        "syncId": .string(message.syncId),
+                        "desiredVolumes": .stringConvertible(desiredVolumes.count),
+                    ])
+            }
         }
 
         var presentSandboxCount = 0
@@ -721,7 +749,11 @@ public actor Reconciler {
         var items = plan.items
         let refusalChanged = applyTeardownGuard(
             to: &items, syncId: message.syncId,
-            present: presentVMs.count + presentSandboxCount + presentVolumeCount)
+            present: [
+                .vm: presentVMs.count,
+                .sandbox: presentSandboxCount,
+                .volume: presentVolumeCount,
+            ])
 
         logger.debug(
             "Applying desired-state sync",
@@ -787,25 +819,57 @@ public actor Reconciler {
     /// Everything else in the sync still converges: a guard that also stopped
     /// boots and creates would turn a suspicious teardown batch into a total
     /// convergence outage, which is the failure it exists to prevent.
+    /// Evaluated **per kind**, against that kind's own population.
+    ///
+    /// A single mixed denominator silently dilutes the protection for the kind
+    /// that matters most: a host with 4 VMs and 40 volumes would let all 4 VMs
+    /// be torn down (`400 > 1100` is false) where the VM-only denominator
+    /// refuses it (`400 > 100`). Volumes are cheap and numerous relative to
+    /// guests, so the dilution gets worse exactly as hosts get denser. Each
+    /// kind is bounded by its own count instead, which is also what the guard's
+    /// percentage means to an operator reading it.
     private func applyTeardownGuard(
-        to items: inout [ReconcileWorkItem], syncId: String, present: Int
+        to items: inout [ReconcileWorkItem], syncId: String, present: [WorkloadKind: Int]
     ) -> Bool {
-        let teardowns = items.filter(\.isTombstone).count
+        var refusedKinds: Set<WorkloadKind> = []
+        var reasons: [String] = []
+        var refusedTeardowns = 0
+        var refusedPresent = 0
+
+        for kind in WorkloadKind.allCases {
+            let teardowns = items.filter { $0.isTombstone && $0.kind == kind }.count
+            guard teardowns > 0 else { continue }
+            let population = present[kind] ?? 0
+            guard let reason = teardownGuard.refusal(teardowns: teardowns, present: population) else {
+                continue
+            }
+            refusedKinds.insert(kind)
+            reasons.append("\(kind.rawValue): \(reason)")
+            refusedTeardowns += teardowns
+            refusedPresent += population
+        }
+
         let previous = teardownRefusal
-        guard let reason = teardownGuard.refusal(teardowns: teardowns, present: present) else {
+        guard !refusedKinds.isEmpty else {
             teardownRefusal = nil
             return previous != nil
         }
-        items.removeAll(where: \.isTombstone)
+        // Only the refused kinds lose their teardowns; a kind that passed its
+        // own guard still converges, for the same reason the guard never stops
+        // boots and creates.
+        items.removeAll { $0.isTombstone && refusedKinds.contains($0.kind) }
+        let reason = reasons.joined(separator: " ")
         let refusal = ObservedTeardownRefusal(
-            syncId: syncId, requestedTeardowns: teardowns, presentWorkloads: present, reason: reason)
+            syncId: syncId, requestedTeardowns: refusedTeardowns, presentWorkloads: refusedPresent,
+            reason: reason)
         teardownRefusal = refusal
         logger.error(
             "Refusing this sync's workload teardowns; blast-radius guard tripped",
             metadata: [
                 "syncId": .string(syncId),
-                "requestedTeardowns": .stringConvertible(teardowns),
-                "presentWorkloads": .stringConvertible(present),
+                "kinds": .string(refusedKinds.map(\.rawValue).sorted().joined(separator: ",")),
+                "requestedTeardowns": .stringConvertible(refusedTeardowns),
+                "presentWorkloads": .stringConvertible(refusedPresent),
                 "reason": .string(reason),
             ])
         return previous != refusal
@@ -1292,9 +1356,18 @@ public actor Reconciler {
         if let size = observed.sizeBytes, desired.sizeBytes > size {
             return [.resize]
         }
-        let desiredVM = desired.attachment?.vmId.uuidString
-        let desiredDevice = desired.attachment?.deviceName
-        if observed.attachedVMId == desiredVM && observed.deviceName == desiredDevice {
+        // Detachment is decided on `attachedVMId` alone, before the slot is
+        // compared. Pairing the two in one equality check let a volume with no
+        // desired attachment but a stale `deviceName` fall through to `.attach`
+        // with nothing to attach to — which the actuator answers with a
+        // *permanent* failure, degrading a volume whose only problem was a
+        // leftover field.
+        guard let attachment = desired.attachment else {
+            return observed.attachedVMId == nil ? [] : [.detach]
+        }
+        if observed.attachedVMId == attachment.vmId.uuidString,
+            observed.deviceName == attachment.deviceName
+        {
             return []
         }
         // Attached to the wrong VM or in the wrong slot: unplug first, and let

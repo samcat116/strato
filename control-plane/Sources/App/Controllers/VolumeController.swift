@@ -341,10 +341,10 @@ struct VolumeController: RouteCollection {
         // Unplaced, or placed on an agent that is offline or too old to speak
         // volume sync: nothing will ever confirm the teardown, so clear the
         // agent's finalizer here. Dead and un-upgraded agents must not make
-        // their volumes undeletable — and an agent below wire v30 is
+        // their volumes undeletable — and an agent below wire v31 is
         // permanently in the second category until it is upgraded, which is the
         // one place the hard cutover leaves a rough edge worth naming.
-        let agentCanConverge = await Self.agentConvergesVolumes(volume.hypervisorId, app: app)
+        let agentCanConverge = try await Self.agentConvergesVolumes(volume.hypervisorId, app: app)
         let strategy: ResourceMutation.Dispatch =
             agentCanConverge
             ? .stateSync
@@ -926,16 +926,21 @@ struct VolumeController: RouteCollection {
     // MARK: - Helper Methods
 
     /// Whether the agent holding a volume can actually converge it: online, and
-    /// speaking wire v30 or later (STR-148).
+    /// speaking wire v31 or later (STR-148).
     ///
     /// With the imperative volume frames gone there is no fallback path, so an
-    /// agent below v30 cannot hear about a volume at all. `selectVolumeAgent`
+    /// agent below v31 cannot hear about a volume at all. `selectVolumeAgent`
     /// keeps new volumes off such agents; this answers the same question for
     /// volumes that were already there when the control plane was upgraded.
-    private static func agentConvergesVolumes(_ agentId: String?, app: Application) async -> Bool {
+    /// Throws rather than swallowing a lookup failure. `try?` would read a
+    /// transient database error as "no such agent", and on the delete path that
+    /// answer sends the request down the force-clear branch — removing the row
+    /// without any agent confirming the data is gone. A genuinely missing agent
+    /// row is still false; only "we could not find out" is an error.
+    private static func agentConvergesVolumes(_ agentId: String?, app: Application) async throws -> Bool {
         guard let agentId, await app.agentService.agentIsOnline(agentId: agentId) else { return false }
         guard let agentUUID = UUID(uuidString: agentId),
-            let agent = try? await Agent.find(agentUUID, on: app.db)
+            let agent = try await Agent.find(agentUUID, on: app.db)
         else { return false }
         return WireProtocol.supportsVolumeSync(agent.wireProtocolVersion ?? 0)
     }
@@ -948,9 +953,12 @@ struct VolumeController: RouteCollection {
     /// the control plane before the fleet would make those volumes permanently
     /// undeletable. An offline agent is allowed through here: it is expected to
     /// come back and converge, which is the whole point of level-triggering.
+    /// A lookup failure propagates rather than passing the check silently: the
+    /// point of the guard is to refuse a mutation that can never converge, and
+    /// a `try?` here would wave one through on a transient database error.
     private static func requireVolumeSyncCapableAgent(_ agentId: String?, app: Application) async throws {
         guard let agentId, let agentUUID = UUID(uuidString: agentId),
-            let agent = try? await Agent.find(agentUUID, on: app.db)
+            let agent = try await Agent.find(agentUUID, on: app.db)
         else { return }
         guard WireProtocol.supportsVolumeSync(agent.wireProtocolVersion ?? 0) else {
             throw Abort(

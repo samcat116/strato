@@ -136,10 +136,10 @@ final class VolumeConvergenceTests {
         }
     }
 
-    /// The asymmetric-absence hazard, assembly side. A pre-v30 agent gets nil
+    /// The asymmetric-absence hazard, assembly side. A pre-v31 agent gets nil
     /// rather than `[]`, because `[]` from a control plane that speaks the
     /// field would be an authoritative "you should have no volumes".
-    @Test("A pre-v30 agent's sync carries no volumes field at all")
+    @Test("A pre-v31 agent's sync carries no volumes field at all")
     func preV30AgentGetsNilVolumes() async throws {
         try await withVolumeApp { app, _, user, project in
             let agentId = try await registerAgent(
@@ -288,6 +288,40 @@ final class VolumeConvergenceTests {
         }
     }
 
+    /// `deviceName` is the *desired* slot, read straight back out by the
+    /// assembler. An observation that disagrees must not overwrite it: doing so
+    /// would replace what the user asked for with what the agent happens to
+    /// have, and — being a bare field write with no generation bump — would do
+    /// it without the agent ever noticing the goalposts moved. The disagreement
+    /// is the loop working; the agent plans detach-then-attach to correct it.
+    @Test("A reported device name never overwrites the desired slot")
+    func reportedDeviceNameDoesNotOverwriteDesire() async throws {
+        try await withVolumeApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "slot-agent")
+            let vm = try await builder.createVM(name: "slot-vm", project: project)
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                status: .available, generation: 2, observedGeneration: 1)
+            volume.$vm.id = vm.id
+            volume.deviceName = "disk1"
+            try await volume.save(on: app.db)
+            let volumeID = try #require(volume.id)
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true, storagePath: "/p", format: "qcow2",
+                            attachedVMId: vm.id, deviceName: "disk7", observedGeneration: 2)
+                    ]))
+
+            let after = try await #require(try await Volume.find(volumeID, on: app.db))
+            #expect(after.deviceName == "disk1")
+            #expect(after.generation == 2)
+        }
+    }
+
     /// Full-list omission is how a deletion is confirmed — and the only way.
     @Test("Omitting a terminating volume clears its finalizer and reaps the row")
     func omissionConfirmsDeletion() async throws {
@@ -312,7 +346,7 @@ final class VolumeConvergenceTests {
     }
 
     /// The headline safety test of the whole conversion. An agent below wire
-    /// v30 omits `volumes` entirely; reading that silence as an authoritative
+    /// v31 omits `volumes` entirely; reading that silence as an authoritative
     /// empty list would reap every terminating volume row it holds and error
     /// every live one.
     @Test("A report with no volumes field deletes nothing and errors nothing")
