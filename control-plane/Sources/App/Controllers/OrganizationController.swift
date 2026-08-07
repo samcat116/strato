@@ -28,7 +28,7 @@ struct OrganizationController: RouteCollection {
     /// isn't necessarily a member of the target. `index` stays membership-scoped
     /// for the normal org switcher.
     func listAll(req: Request) async throws -> [OrganizationResponse] {
-        _ = try req.requireSystemAdmin("System admin access required")
+        _ = try await req.requireSystemAdmin("System admin access required")
 
         let organizations = try await Organization.query(on: req.db)
             .sort(\.$name)
@@ -99,7 +99,7 @@ struct OrganizationController: RouteCollection {
         // Open by design: any authenticated user may start an organization
         // (they become its admin below). Declared so the default-deny
         // middleware's handler assertion knows this is deliberate.
-        req.markRowScopedAuthorization()
+        try await req.markRowScopedAuthorization()
 
         let createRequest = try req.content.decode(CreateOrganizationRequest.self)
 

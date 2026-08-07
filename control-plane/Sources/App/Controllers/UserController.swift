@@ -191,7 +191,7 @@ struct UserController: RouteCollection {
     /// check instead — so it stays on the decision-marking admin gate with the
     /// other node-less platform surfaces, rather than on the evaluator.
     func create(req: Request) async throws -> AdminCreateUserResponse {
-        let currentUser = try req.requireSystemAdmin("System admin access required")
+        let currentUser = try await req.requireSystemAdmin("System admin access required")
 
         let body = try req.content.decode(AdminCreateUserRequest.self)
         let username = body.username.trimmingCharacters(in: .whitespacesAndNewlines)

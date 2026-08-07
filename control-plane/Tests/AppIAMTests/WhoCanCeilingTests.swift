@@ -167,7 +167,7 @@ final class WhoCanCeilingTests {
                 userID: tree.user.id!, action: "vm:delete", node: tree.vmNode,
                 legacyEquivalent: nil,
                 context: IAMCheckContext(path: "/test", method: "GET", requestID: nil),
-                state: nil, app: app, db: app.db)
+                state: .detached, app: app, db: app.db)
             #expect(!decision.allowed)
             #expect(decision.tier == "guardrail")
         }
@@ -191,7 +191,7 @@ final class WhoCanCeilingTests {
                     userID: tree.user.id!, action: action, node: tree.vmNode,
                     legacyEquivalent: nil,
                     context: IAMCheckContext(path: "/test", method: "GET", requestID: nil),
-                    state: nil, app: app, db: app.db)
+                    state: .detached, app: app, db: app.db)
                 #expect(can == decision.allowed, "disagreement on \(action)")
             }
         }

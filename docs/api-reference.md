@@ -27,13 +27,19 @@ Every operation requires authentication unless the spec marks it public. Two
 schemes are accepted interchangeably:
 
 - **API key** (`Authorization: Bearer <key>`) — mint one with
-  `POST /api/api-keys`. Keys carry scopes (`read`, `write`, `admin`, ordered
-  least-to-most privileged: `admin` implies `write` implies `read`).
+  `POST /api/api-keys`. A key acts *on behalf of* its owner and may carry a
+  **restriction**: an action list (`vm:read`, `vm:*`, `*`) and optionally one
+  node it may act at or below. The effective permission is the owner's role
+  bindings intersected with it, so a restriction can only ever subtract. The
+  older `scopes` array (`read`, `write`, `admin`) is deprecated and read only
+  when no restriction is stored.
 - **Session cookie** (`vapor-session`) — set after a WebAuthn/passkey login.
 
-Per-object access is additionally enforced by the built-in IAM system (an
-in-process Cedar policy evaluator); an authenticated-but-unauthorized caller
-receives `403`.
+Per-object access is enforced by the built-in IAM system (an in-process Cedar
+policy evaluator), and a credential's restriction is intersected by that same
+evaluator rather than by a separate gate, so every refusal appears in the
+decision log with a tier. An authenticated-but-unauthorized caller receives
+`403`.
 
 ### Pagination
 

@@ -17,10 +17,15 @@ info:
     Two schemes are accepted interchangeably:
 
     - `bearerAuth` — an API key (`Authorization: Bearer <key>`) minted via
-      `POST /api/api-keys`. Keys carry scopes (`read`, `write`) enforced per
-      request. The same header also accepts a **SPIFFE JWT-SVID**, when the
-      deployment enables it, authenticating a registered service account or
-      workload rather than a user (see below).
+      `POST /api/api-keys`. A key acts *on behalf of* its owner and may carry a
+      **restriction** — an action list and an optional subtree — so its
+      effective permission is the owner's role bindings intersected with it.
+      The intersection is evaluated by the same Cedar evaluator that decides
+      every other request, so a restriction refusal is an ordinary logged
+      decision and organization guardrails ceiling credentials for free. The
+      same header also accepts a **SPIFFE JWT-SVID**, when the deployment
+      enables it, authenticating a registered service account or workload
+      rather than a user (see below).
     - `cookieAuth` — the `vapor-session` cookie set after a WebAuthn/passkey
       login.
 
@@ -167,7 +172,7 @@ tags:
   - name: Authentication
     description: WebAuthn/passkey login, account claim, and OAuth device flow.
   - name: API Keys
-    description: Programmatic credentials with read/write scopes.
+    description: Programmatic credentials, optionally restricted to an action set or a subtree.
   - name: Organizations
     description: Top-level tenants and their memberships.
   - name: Folders
@@ -2871,13 +2876,24 @@ paths:
     post:
       operationId: approveDeviceAuthorization
       summary: Approve a device authorization
-      description: Binds the pending authorization to the signed-in user so the CLI can redeem it.
+      description: >-
+        Binds the pending authorization to the signed-in user so the CLI can
+        redeem it. The approver may narrow what the client asked for — never
+        widen it — which is where a CLI login stops being all-or-nothing.
       tags: [Authentication]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveDeviceAuthorizationRequest"
       responses:
         "200":
           description: The authorization was approved (no body).
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The requested restriction is broader than the one the client asked for.
         "404": { $ref: "#/components/responses/NotFound" }
   /api/oauth/device/{userCode}/deny:
     parameters:
@@ -10622,7 +10638,7 @@ components:
     APIKeySummary:
       type: object
       description: An API key without its secret.
-      required: [name, keyPrefix, scopes, isActive]
+      required: [name, keyPrefix, scopes, restriction, isActive]
       properties:
         id:
           type: string
@@ -10636,6 +10652,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         isActive:
           type: boolean
         expiresAt:
@@ -10651,9 +10669,60 @@ components:
     APIKeyScope:
       type: string
       description: >-
-        Permission scope on an API key, ordered least-to-most privileged:
-        `admin` implies `write` implies `read`.
+        Deprecated. The legacy permission scope on an API key or CLI session.
+        Superseded by `CredentialRestriction`, which is what is actually
+        enforced; these values survive as the wire spelling existing clients
+        send and are read only when no restriction is stored. `write` and
+        `admin` both mean unrestricted — nothing ever required `admin` — and
+        `read` means the action set whose names say they read.
       enum: [read, write, admin]
+      deprecated: true
+
+    CredentialRestriction:
+      type: object
+      description: >-
+        What a credential may do, in the ordinary IAM action and node
+        vocabulary. A restriction only ever *subtracts*: the effective
+        permission is the principal's role bindings intersected with it, and it
+        is enforced by the Cedar evaluator like every other authorization
+        decision, so a refusal appears in `iam_decision_logs` under the
+        `credential` tier. An absent restriction means "everything this
+        credential's owner can do".
+
+
+        On a response this is the *effective* restriction, whether stored
+        outright or derived from the legacy `scopes`, so a client never has to
+        know which of the two a credential carries. On a device-authorization
+        request it is what the client is asking for — a request, not a grant:
+        the approving user sees it and may narrow it further.
+      properties:
+        role:
+          type: string
+          format: uuid
+          description: >-
+            Request only. Sugar for the role's action list, expanded at write
+            time so a later edit to the role cannot widen an issued credential.
+            Mutually exclusive with `actions`.
+        actions:
+          type: array
+          description: >-
+            Action patterns — an exact action (`vm:read`), a service wildcard
+            (`vm:*`, which covers actions shipped after the credential was
+            minted), or `*` for every action. An empty list is rejected; write
+            `["*"]` for an unrestricted credential.
+          items:
+            type: string
+        nodeType:
+          type: string
+          description: >-
+            The subtree the credential may act in. Both `nodeType` and `nodeId`
+            or neither. Identity-plane actions (`user:read` and friends) are
+            exempt, since a user record is parentless and would otherwise be
+            unreachable from any scoped credential.
+        nodeId:
+          type: string
+          format: uuid
+
 
     CreateAPIKeyRequest:
       type: object
@@ -10663,9 +10732,11 @@ components:
           type: string
         scopes:
           type: array
-          description: Defaults to `["read", "write"]`.
+          description: Deprecated; ignored when `restriction` is present. Defaults to `["read", "write"]`.
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         expiresInDays:
           type: integer
           description: Optional lifetime in days (1–365). Omit for a non-expiring key.
@@ -10675,7 +10746,7 @@ components:
     CreateAPIKeyResponse:
       type: object
       description: The created key. `key` is the full secret and is returned only here.
-      required: [name, key, keyPrefix, scopes]
+      required: [name, key, keyPrefix, scopes, restriction]
       properties:
         id:
           type: string
@@ -10691,6 +10762,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         expiresAt:
           type: string
           format: date-time
@@ -10700,7 +10773,10 @@ components:
 
     UpdateAPIKeyRequest:
       type: object
-      description: Partial update; omitted fields are left unchanged.
+      description: >-
+        Partial update; omitted fields are left unchanged. Sending `scopes`
+        alone clears any stored restriction, so the edit takes effect rather
+        than being silently shadowed.
       properties:
         name:
           type: string
@@ -10708,6 +10784,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         isActive:
           type: boolean
 
@@ -10720,7 +10798,9 @@ components:
           description: Human-readable client label shown on the approval page. Defaults to "Strato CLI".
         scope:
           type: string
-          description: Space-delimited scopes. Defaults to "read write".
+          description: Deprecated. Space-delimited legacy scopes. Defaults to "read write".
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
 
     DeviceAuthorizationResponse:
       type: object
@@ -10804,10 +10884,19 @@ components:
         error_description:
           type: string
 
+    ApproveDeviceAuthorizationRequest:
+      type: object
+      description: >-
+        Optional narrowing applied at approval time. Omit the body entirely to
+        approve exactly what the client requested.
+      properties:
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
+
     PendingDeviceAuthorization:
       type: object
       description: A device authorization awaiting approval, shown on the `/activate` page.
-      required: [userCode, clientName, scopes, expiresAt]
+      required: [userCode, clientName, scopes, restriction, expiresAt]
       properties:
         userCode:
           type: string
@@ -10817,6 +10906,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         requestIP:
           type: string
           description: The client IP that started the device flow.
@@ -10830,7 +10921,7 @@ components:
     CLISessionSummary:
       type: object
       description: An active CLI session minted through the device grant.
-      required: [clientName, scopes, accessTokenPrefix, refreshTokenExpiresAt]
+      required: [clientName, scopes, restriction, accessTokenPrefix, refreshTokenExpiresAt]
       properties:
         id:
           type: string
@@ -10841,6 +10932,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         accessTokenPrefix:
           type: string
         createdAt:
@@ -14003,7 +14096,7 @@ components:
           $ref: "#/components/schemas/IAMPolicyEffect"
     IAMActionCatalogEntry:
       type: object
-      required: [action, service, resourceTypes, roles, membershipDerived]
+      required: [action, service, resourceTypes, roles, membershipDerived, readOnly]
       properties:
         action:
           type: string
@@ -14030,6 +14123,12 @@ components:
             Granted by bare organization membership, with no binding behind it.
             Including such an action in a custom role is legal but buys nothing
             inside the org.
+        readOnly:
+          type: boolean
+          description: >-
+            Whether the action reads. This is the set a read-only credential is
+            limited to, published here rather than duplicated client-side so a
+            "read only" preset cannot drift from what the evaluator enforces.
     IAMActionCatalogService:
       type: object
       required: [service, actions]
@@ -14331,6 +14430,8 @@ components:
         historical (kept for API compatibility): `spicedbPermission` carries
         the permission as asked at the check site, and `spicedbDecision` is
         always `none` on rows written after the SpiceDB removal (#483).
+        `credentialType`/`credentialID` name the API key or CLI session the
+        request arrived on, on allows as well as denies (STR-115).
       required:
         - id
         - subject
@@ -14365,6 +14466,15 @@ components:
         nodeType:
           type: string
         nodeID:
+          type: string
+          format: uuid
+        credentialType:
+          type: string
+          description: >-
+            The credential the request authenticated with — `api_key` or
+            `cli_session`. Absent for a browser session or an agent JWT-SVID.
+          enum: [api_key, cli_session]
+        credentialID:
           type: string
           format: uuid
         organizationID:

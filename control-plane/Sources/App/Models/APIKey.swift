@@ -21,8 +21,21 @@ final class APIKey: Model, @unchecked Sendable {
     @Field(key: "key_prefix")
     var keyPrefix: String  // First 8 characters for identification
 
+    /// The legacy `read`/`write`/`admin` scopes. Superseded by the restriction
+    /// columns below (STR-115) and kept as the compatibility shim for keys
+    /// minted before them; `restriction` reads these only when
+    /// `restrictionActions` is nil.
     @Field(key: "scopes")
-    var scopes: [String]  // Permissions/scopes for this key
+    var scopes: [String]
+
+    @OptionalField(key: "restriction_actions")
+    var restrictionActions: [String]?
+
+    @OptionalField(key: "restriction_node_type")
+    var restrictionNodeType: String?
+
+    @OptionalField(key: "restriction_node_id")
+    var restrictionNodeID: UUID?
 
     @Field(key: "is_active")
     var isActive: Bool
@@ -95,26 +108,20 @@ final class APIKey: Model, @unchecked Sendable {
         return isActive && !isExpired
     }
 
-    // MARK: - Scopes
-
-    /// The recognized scopes this key actually holds. Unknown scope strings are
-    /// dropped so a bogus scope can never accidentally grant access.
-    var grantedScopes: Set<APIKeyScope> {
-        Set(scopes.compactMap(APIKeyScope.init(rawValue:)))
-    }
-
-    /// Whether this key grants at least `required`, honoring the
-    /// `admin` > `write` > `read` hierarchy (a `write` key can read, an `admin`
-    /// key can do anything).
-    func grants(_ required: APIKeyScope) -> Bool {
-        grantedScopes.contains { $0 >= required }
-    }
 }
 
 extension APIKey: Content {}
 
+extension APIKey: CredentialRestrictionStoring {}
+
 /// Permission scopes attachable to an API key. Ordered least-to-most
 /// privileged: `admin` implies `write` implies `read`.
+///
+/// These no longer gate anything on their own (STR-115): a credential's power
+/// is its `CredentialRestriction`, and these survive as the wire spelling
+/// existing clients send and as the shim `CredentialRestriction(legacyScopes:)`
+/// reads. `write` and `admin` both mean unrestricted, which is what they always
+/// meant — nothing ever *required* `admin`.
 enum APIKeyScope: String, CaseIterable, Comparable {
     case read
     case write
@@ -133,17 +140,6 @@ enum APIKeyScope: String, CaseIterable, Comparable {
     static func < (lhs: APIKeyScope, rhs: APIKeyScope) -> Bool {
         lhs.rank < rhs.rank
     }
-
-    /// The minimum scope required to service a request with the given HTTP
-    /// method: safe (non-mutating) methods need `read`, everything else `write`.
-    static func required(for method: HTTPMethod) -> APIKeyScope {
-        switch method {
-        case .GET, .HEAD, .OPTIONS:
-            return .read
-        default:
-            return .write
-        }
-    }
 }
 
 // MARK: - String Extension for Random Generation
@@ -159,7 +155,13 @@ extension String {
 
 struct CreateAPIKeyRequest: Content {
     let name: String
+    /// Deprecated (STR-115): the legacy scope array. Ignored when
+    /// `restriction` is present.
     let scopes: [String]?
+    /// What the key may do, in the IAM action and node vocabulary. Absent means
+    /// "everything its owner can" — the honest spelling of what `read write`
+    /// always meant.
+    let restriction: CredentialRestrictionPayload?
     let expiresInDays: Int?  // Optional expiration in days
 }
 
@@ -169,6 +171,7 @@ struct CreateAPIKeyResponse: Content {
     let key: String  // Full key - only shown once
     let keyPrefix: String
     let scopes: [String]
+    let restriction: CredentialRestrictionPayload
     let expiresAt: Date?
     let createdAt: Date?
 
@@ -178,6 +181,7 @@ struct CreateAPIKeyResponse: Content {
         self.key = fullKey
         self.keyPrefix = apiKey.keyPrefix
         self.scopes = apiKey.scopes
+        self.restriction = CredentialRestrictionPayload(apiKey.restriction)
         self.expiresAt = apiKey.expiresAt
         self.createdAt = apiKey.createdAt
     }
@@ -188,6 +192,10 @@ struct APIKeyResponse: Content {
     let name: String
     let keyPrefix: String
     let scopes: [String]
+    /// The effective restriction, whether stored outright or derived from the
+    /// legacy scopes — so a client never has to know which of the two a row
+    /// carries.
+    let restriction: CredentialRestrictionPayload
     let isActive: Bool
     let expiresAt: Date?
     let lastUsedAt: Date?
@@ -198,6 +206,7 @@ struct APIKeyResponse: Content {
         self.name = apiKey.name
         self.keyPrefix = apiKey.keyPrefix
         self.scopes = apiKey.scopes
+        self.restriction = CredentialRestrictionPayload(apiKey.restriction)
         self.isActive = apiKey.isActive
         self.expiresAt = apiKey.expiresAt
         self.lastUsedAt = apiKey.lastUsedAt
@@ -207,6 +216,8 @@ struct APIKeyResponse: Content {
 
 struct UpdateAPIKeyRequest: Content {
     let name: String?
+    /// Deprecated (STR-115); see `CreateAPIKeyRequest.scopes`.
     let scopes: [String]?
+    let restriction: CredentialRestrictionPayload?
     let isActive: Bool?
 }

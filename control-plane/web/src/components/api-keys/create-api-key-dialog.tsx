@@ -13,42 +13,63 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useCreateAPIKey } from "@/lib/hooks";
+import { useActionCatalog, useCreateAPIKey } from "@/lib/hooks";
 import { toast } from "sonner";
-import type { CreateAPIKeyResponse } from "@/types/api";
+import type { CreateAPIKeyResponse, CredentialRestriction } from "@/types/api";
 
 interface CreateAPIKeyDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-const AVAILABLE_SCOPES: { value: string; label: string; description: string }[] =
-  [
-    { value: "read", label: "Read", description: "View resources" },
-    { value: "write", label: "Write", description: "Create and modify resources" },
-    { value: "admin", label: "Admin", description: "Full administrative access" },
-  ];
+/**
+ * The two shapes worth a preset. Anything finer is an action list, which is
+ * what the "Specific actions" option is for — the point of STR-115 is that the
+ * vocabulary is the real IAM one, not three fixed tiers.
+ */
+type AccessMode = "full" | "readOnly" | "custom";
+
+const ACCESS_MODES: { value: AccessMode; label: string; description: string }[] = [
+  {
+    value: "full",
+    label: "Full access",
+    description: "Everything you can do. The key is still bound by your own role bindings.",
+  },
+  {
+    value: "readOnly",
+    label: "Read only",
+    description: "Every action whose name says it reads — no starts, no writes, no console.",
+  },
+  {
+    value: "custom",
+    label: "Specific actions",
+    description: "A comma-separated list, e.g. vm:read, vm:start, volume:*",
+  },
+];
 
 export function CreateAPIKeyDialog({
   open,
   onOpenChange,
 }: CreateAPIKeyDialogProps) {
   const createKey = useCreateAPIKey();
+  // The read-only action set comes from the server's action catalog, so the
+  // preset is exactly what the evaluator enforces for a read-limited
+  // credential rather than a second list to keep in step.
+  const catalog = useActionCatalog();
+  const readOnlyActions = (catalog.data ?? [])
+    .flatMap((service) => service.actions)
+    .filter((entry) => entry.readOnly)
+    .map((entry) => entry.action);
   const [name, setName] = useState("");
-  const [scopes, setScopes] = useState<string[]>(["read", "write"]);
+  const [accessMode, setAccessMode] = useState<AccessMode>("full");
+  const [customActions, setCustomActions] = useState("");
+  const [nodeType, setNodeType] = useState("");
+  const [nodeId, setNodeId] = useState("");
   const [expiresInDays, setExpiresInDays] = useState("");
   const [createdKey, setCreatedKey] = useState<CreateAPIKeyResponse | null>(
     null
   );
   const [copied, setCopied] = useState(false);
-
-  const toggleScope = (scope: string) => {
-    setScopes((prev) =>
-      prev.includes(scope)
-        ? prev.filter((s) => s !== scope)
-        : [...prev, scope]
-    );
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,10 +79,42 @@ export function CreateAPIKeyDialog({
       return;
     }
 
-    if (scopes.length === 0) {
-      toast.error("Please select at least one scope");
+    const actions =
+      accessMode === "full"
+        ? ["*"]
+        : accessMode === "readOnly"
+          ? readOnlyActions
+          : customActions
+              .split(",")
+              .map((action) => action.trim())
+              .filter(Boolean);
+
+    if (actions.length === 0) {
+      toast.error(
+        accessMode === "readOnly"
+          ? "The action catalog has not loaded yet — try again in a moment"
+          : "List at least one action, or choose a preset"
+      );
       return;
     }
+
+    if (!!nodeType.trim() !== !!nodeId.trim()) {
+      toast.error("A node scope needs both a resource type and an id");
+      return;
+    }
+
+    // Omitting the restriction entirely is what "everything my owner can do"
+    // means on the wire — sending `["*"]` says the same thing, but only when
+    // there is no node scope alongside it.
+    const restriction: CredentialRestriction | undefined =
+      accessMode === "full" && !nodeType.trim()
+        ? undefined
+        : {
+            actions,
+            ...(nodeType.trim()
+              ? { nodeType: nodeType.trim(), nodeId: nodeId.trim() }
+              : {}),
+          };
 
     const days = expiresInDays.trim() ? parseInt(expiresInDays, 10) : undefined;
     if (days !== undefined && (isNaN(days) || days < 1 || days > 365)) {
@@ -72,7 +125,7 @@ export function CreateAPIKeyDialog({
     try {
       const key = await createKey.mutateAsync({
         name: name.trim(),
-        scopes,
+        restriction,
         expiresInDays: days,
       });
       setCreatedKey(key);
@@ -96,7 +149,10 @@ export function CreateAPIKeyDialog({
     // Reset state after close animation
     setTimeout(() => {
       setName("");
-      setScopes(["read", "write"]);
+      setAccessMode("full");
+      setCustomActions("");
+      setNodeType("");
+      setNodeId("");
       setExpiresInDays("");
       setCreatedKey(null);
       setCopied(false);
@@ -180,31 +236,68 @@ export function CreateAPIKeyDialog({
               </div>
 
               <div className="space-y-2">
-                <Label className="text-foreground">Scopes</Label>
+                <Label className="text-foreground">Access</Label>
                 <div className="space-y-2">
-                  {AVAILABLE_SCOPES.map((scope) => (
+                  {ACCESS_MODES.map((mode) => (
                     <label
-                      key={scope.value}
+                      key={mode.value}
                       className="flex items-start gap-3 p-2 rounded-md hover:bg-accent/60 cursor-pointer"
                     >
                       <input
-                        type="checkbox"
-                        checked={scopes.includes(scope.value)}
-                        onChange={() => toggleScope(scope.value)}
+                        type="radio"
+                        name="accessMode"
+                        checked={accessMode === mode.value}
+                        onChange={() => setAccessMode(mode.value)}
                         disabled={createKey.isPending}
-                        className="mt-0.5 h-4 w-4 rounded border-input bg-background accent-blue-600"
+                        className="mt-0.5 h-4 w-4 border-input bg-background accent-blue-600"
                       />
                       <span>
                         <span className="block text-sm text-foreground">
-                          {scope.label}
+                          {mode.label}
                         </span>
                         <span className="block text-xs text-muted-foreground">
-                          {scope.description}
+                          {mode.description}
                         </span>
                       </span>
                     </label>
                   ))}
                 </div>
+                {accessMode === "custom" && (
+                  <Input
+                    id="customActions"
+                    placeholder="vm:read, vm:start, volume:*"
+                    value={customActions}
+                    onChange={(e) => setCustomActions(e.target.value)}
+                    className="bg-background border-border text-foreground font-mono text-sm"
+                    disabled={createKey.isPending}
+                  />
+                )}
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-foreground">Limit to one resource (optional)</Label>
+                <div className="flex gap-2">
+                  <Input
+                    id="nodeType"
+                    placeholder="project"
+                    value={nodeType}
+                    onChange={(e) => setNodeType(e.target.value)}
+                    className="bg-background border-border text-foreground font-mono text-sm"
+                    disabled={createKey.isPending}
+                  />
+                  <Input
+                    id="nodeId"
+                    placeholder="resource id"
+                    value={nodeId}
+                    onChange={(e) => setNodeId(e.target.value)}
+                    className="bg-background border-border text-foreground font-mono text-sm flex-1"
+                    disabled={createKey.isPending}
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The key can only act on this resource and everything beneath
+                  it — a CI token for one project, say.
+                </p>
               </div>
 
               <div className="space-y-2">

@@ -58,22 +58,41 @@ struct OAuthController: RouteCollection {
     struct DeviceAuthorizationRequest: Content {
         let clientName: String?
         let scope: String?
+        /// What the CLI is asking to be able to do (STR-115). A *request*, not
+        /// a grant: the approving user sees it and may narrow it further, and
+        /// nothing here can widen what their own bindings allow.
+        let restriction: CredentialRestrictionPayload?
 
         enum CodingKeys: String, CodingKey {
             case clientName = "client_name"
             case scope
+            case restriction
         }
     }
 
     func deviceAuthorization(req: Request) async throws -> DeviceAuthorizationResponse {
         let request =
             (try? req.content.decode(DeviceAuthorizationRequest.self))
-            ?? DeviceAuthorizationRequest(clientName: nil, scope: nil)
+            ?? DeviceAuthorizationRequest(clientName: nil, scope: nil, restriction: nil)
 
         let scopes = (request.scope ?? "read write").split(separator: " ").map(String.init)
         for scope in scopes {
             guard APIKeyScope.validValues.contains(scope) else {
                 throw OAuthError.invalidScope("Invalid scope: \(scope)")
+            }
+        }
+
+        // The device-grant endpoint is unauthenticated by design (RFC 8628: the
+        // CLI has no credentials yet), so there is no issuing credential to
+        // narrow against — `.unrestricted` here means "bounded by whoever
+        // approves", which is exactly right.
+        var restriction: CredentialRestriction?
+        if let payload = request.restriction {
+            do {
+                restriction = try await CredentialRestriction.resolve(
+                    payload, issuedUnder: .unrestricted, on: req.db)
+            } catch let abort as AbortError {
+                throw OAuthError.invalidScope(abort.reason)
             }
         }
 
@@ -105,6 +124,7 @@ struct OAuthController: RouteCollection {
             expiresAt: Date().addingTimeInterval(Self.deviceCodeLifetime),
             interval: Self.pollInterval
         )
+        authorization.store(restriction: restriction)
         try await authorization.save(on: req.db)
 
         let origin = Self.publicOrigin()
@@ -214,6 +234,13 @@ struct OAuthController: RouteCollection {
             refreshTokenHash: CLISession.hashToken(refreshToken),
             refreshTokenExpiresAt: Date().addingTimeInterval(CLISession.refreshTokenLifetime)
         )
+        // Carry the approval's restriction columns across verbatim rather than
+        // its resolved `restriction`: a request that stated none must leave the
+        // session's columns null too, so it keeps reading through the legacy
+        // shim instead of freezing today's `readActions` into a row.
+        session.restrictionActions = authorization.restrictionActions
+        session.restrictionNodeType = authorization.restrictionNodeType
+        session.restrictionNodeID = authorization.restrictionNodeID
 
         // Single redemption: consume the approval and create the session in
         // one transaction, guarded against a concurrent poll racing us — the
@@ -345,10 +372,19 @@ struct OAuthController: RouteCollection {
             userCode: authorization.userCode,
             clientName: authorization.clientName,
             scopes: authorization.scopes,
+            restriction: CredentialRestrictionPayload(authorization.restriction),
             requestIP: authorization.requestIP,
             createdAt: authorization.createdAt,
             expiresAt: authorization.expiresAt
         )
+    }
+
+    /// An approval may carry a restriction of its own. The approving user is
+    /// the only party in this flow who knows what the session is *for*, so this
+    /// is where a CLI login stops being all-or-nothing: they can hand the CLI a
+    /// session limited to one project, or to reads.
+    struct ApproveDeviceRequest: Content {
+        let restriction: CredentialRestrictionPayload?
     }
 
     func approveDevice(req: Request) async throws -> HTTPStatus {
@@ -356,6 +392,18 @@ struct OAuthController: RouteCollection {
             throw Abort(.unauthorized)
         }
         let authorization = try await pendingAuthorization(req: req)
+
+        let approval = (try? req.content.decode(ApproveDeviceRequest.self)) ?? ApproveDeviceRequest(restriction: nil)
+        if let payload = approval.restriction {
+            // Narrowing only: the approver may hand out less than the client
+            // asked for, never more. An approval that tried to widen a
+            // requested restriction would let a hostile client's phrasing —
+            // "just read access, honestly" — end up meaning something else.
+            authorization.store(
+                restriction: try await CredentialRestriction.resolve(
+                    payload, issuedUnder: authorization.restriction, on: req.db))
+        }
+
         authorization.status = DeviceAuthorization.Status.approved.rawValue
         authorization.$user.id = try user.requireID()
         try await authorization.save(on: req.db)

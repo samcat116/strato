@@ -27,8 +27,19 @@ final class CLISession: Model, @unchecked Sendable {
     @Field(key: "client_name")
     var clientName: String
 
+    /// The legacy `read`/`write`/`admin` scopes the user approved. Superseded
+    /// by the restriction columns below (STR-115); see `APIKey.scopes`.
     @Field(key: "scopes")
     var scopes: [String]
+
+    @OptionalField(key: "restriction_actions")
+    var restrictionActions: [String]?
+
+    @OptionalField(key: "restriction_node_type")
+    var restrictionNodeType: String?
+
+    @OptionalField(key: "restriction_node_id")
+    var restrictionNodeID: UUID?
 
     @Field(key: "access_token_hash")
     var accessTokenHash: String
@@ -120,16 +131,6 @@ final class CLISession: Model, @unchecked Sendable {
 
     var isRefreshTokenExpired: Bool { Date() > refreshTokenExpiresAt }
 
-    // MARK: - Scopes (same semantics as APIKey)
-
-    var grantedScopes: Set<APIKeyScope> {
-        Set(scopes.compactMap(APIKeyScope.init(rawValue:)))
-    }
-
-    func grants(_ required: APIKeyScope) -> Bool {
-        grantedScopes.contains { $0 >= required }
-    }
-
     /// Issue a fresh access/refresh pair for this session, returning the raw
     /// tokens (never persisted). The old refresh hash is kept one generation
     /// for replay detection.
@@ -147,6 +148,8 @@ final class CLISession: Model, @unchecked Sendable {
 }
 
 extension CLISession: Content {}
+
+extension CLISession: CredentialRestrictionStoring {}
 
 // MARK: - DTOs
 
@@ -204,6 +207,9 @@ struct PendingDeviceAuthorizationResponse: Content {
     let userCode: String
     let clientName: String
     let scopes: [String]
+    /// What the client asked to be able to do — what the approval page shows
+    /// the user before they hand over a session.
+    let restriction: CredentialRestrictionPayload
     let requestIP: String?
     let createdAt: Date?
     let expiresAt: Date
@@ -214,6 +220,7 @@ struct CLISessionResponse: Content {
     let id: UUID?
     let clientName: String
     let scopes: [String]
+    let restriction: CredentialRestrictionPayload
     let accessTokenPrefix: String
     let createdAt: Date?
     let lastUsedAt: Date?
@@ -224,6 +231,7 @@ struct CLISessionResponse: Content {
         self.id = session.id
         self.clientName = session.clientName
         self.scopes = session.scopes
+        self.restriction = CredentialRestrictionPayload(session.restriction)
         self.accessTokenPrefix = session.accessTokenPrefix
         self.createdAt = session.createdAt
         self.lastUsedAt = session.lastUsedAt

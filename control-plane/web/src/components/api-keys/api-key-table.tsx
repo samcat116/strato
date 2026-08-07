@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRevokeAPIKey } from "@/lib/hooks";
 import { toast } from "sonner";
+import { CredentialRestrictionBadges } from "@/components/credentials/credential-restriction-badges";
 import type { APIKey } from "@/types/api";
 
 interface APIKeyTableProps {
@@ -76,7 +77,7 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
         <TableRow className="border-border hover:bg-transparent">
           <TableHead className="text-muted-foreground font-medium">Name</TableHead>
           <TableHead className="text-muted-foreground font-medium">Key</TableHead>
-          <TableHead className="text-muted-foreground font-medium">Scopes</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Access</TableHead>
           <TableHead className="text-muted-foreground font-medium">Status</TableHead>
           <TableHead className="text-muted-foreground font-medium">Created</TableHead>
           <TableHead className="text-muted-foreground font-medium">Expires</TableHead>
@@ -101,17 +102,7 @@ export function APIKeyTable({ apiKeys, isLoading }: APIKeyTableProps) {
                 {key.keyPrefix}
               </TableCell>
               <TableCell>
-                <div className="flex flex-wrap gap-1">
-                  {key.scopes.map((scope) => (
-                    <Badge
-                      key={scope}
-                      variant="secondary"
-                      className="bg-muted text-foreground"
-                    >
-                      {scope}
-                    </Badge>
-                  ))}
-                </div>
+                <CredentialRestrictionBadges restriction={key.restriction} />
               </TableCell>
               <TableCell>
                 {expired ? (

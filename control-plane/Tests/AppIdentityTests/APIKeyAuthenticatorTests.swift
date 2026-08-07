@@ -26,7 +26,8 @@ struct APIKeyAuthenticatorTests {
         on db: Database,
         isActive: Bool = true,
         expiresAt: Date? = nil,
-        scopes: [String] = ["read", "write"]
+        scopes: [String] = ["read", "write"],
+        restriction: CredentialRestriction? = nil
     ) async throws -> (APIKey, String) {
         let fullKey = APIKey.generateAPIKey()
         let hashedKey = APIKey.hashAPIKey(fullKey)
@@ -41,6 +42,7 @@ struct APIKeyAuthenticatorTests {
             isActive: isActive,
             expiresAt: expiresAt
         )
+        apiKey.store(restriction: restriction)
         try await apiKey.save(on: db)
         return (apiKey, fullKey)
     }
@@ -417,10 +419,13 @@ struct APIKeyAuthenticatorTests {
         try await app.shutdownForTesting()
     }
 
-    // MARK: - Scope Enforcement Tests
+    // MARK: - Credential restriction backstop (STR-115)
 
     /// Registers a read (GET) and a write (POST) route behind the bearer
-    /// authenticator + scope middleware, mirroring the production pipeline.
+    /// authenticator + restriction middleware, mirroring the production
+    /// pipeline. The routes are declared as test-only login routes, so they
+    /// classify as `.loginOnly` — the class the backstop exists for, since no
+    /// evaluator decision is made there.
     private func registerScopedRoutes(on app: Application) {
         app.routes.all.removeAll()
         // Ad-hoc routes outside the production classification; declare them so
@@ -428,7 +433,7 @@ struct APIKeyAuthenticatorTests {
         app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
         let protected = app.grouped(
             BearerAuthorizationHeaderAuthenticator(),
-            APIKeyScopeMiddleware()
+            CredentialRestrictionMiddleware()
         )
         protected.get("resource") { _ in "read-ok" }
         protected.post("resource") { _ in "write-ok" }
@@ -457,7 +462,7 @@ struct APIKeyAuthenticatorTests {
         try await app.shutdownForTesting()
     }
 
-    @Test("Read-only key is forbidden from write requests")
+    @Test("Read-only key is forbidden from identity-plane writes")
     func testReadScopeForbidsPost() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
@@ -479,7 +484,52 @@ struct APIKeyAuthenticatorTests {
         try await app.shutdownForTesting()
     }
 
-    @Test("A scope denial writes a scope_denied decision row")
+    /// The same backstop covers CLI sessions, which the scope-era carve-outs
+    /// kept forgetting: the restriction hangs off the request, not off the
+    /// API-key storage key.
+    @Test("A read-scoped CLI session is forbidden from identity-plane writes")
+    func testReadScopedCLISessionForbidsPost() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app)
+        try await app.autoMigrate()
+
+        let user = try await createTestUser(on: app.db)
+        let accessToken = CLISession.generateAccessToken()
+        let session = CLISession(
+            userID: try user.requireID(),
+            clientName: "cli",
+            scopes: ["read"],
+            accessTokenHash: CLISession.hashToken(accessToken),
+            accessTokenPrefix: String(accessToken.prefix(12)) + "...",
+            accessTokenExpiresAt: Date().addingTimeInterval(3600),
+            refreshTokenHash: CLISession.hashToken(CLISession.generateRefreshToken()),
+            refreshTokenExpiresAt: Date().addingTimeInterval(86400)
+        )
+        try await session.save(on: app.db)
+        registerScopedRoutes(on: app)
+
+        try await app.test(
+            .GET, "/resource",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: accessToken)
+            }
+        ) { res async in
+            #expect(res.status == .ok)
+        }
+
+        try await app.test(
+            .POST, "/resource",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: accessToken)
+            }
+        ) { res async in
+            #expect(res.status == .forbidden)
+        }
+
+        try await app.shutdownForTesting()
+    }
+
+    @Test("A restriction denial outside the evaluator writes a credential_restricted decision row")
     func testScopeDenialRecorded() async throws {
         let app = try await Application.makeForTesting()
         try await configure(app)
@@ -501,25 +551,30 @@ struct APIKeyAuthenticatorTests {
             #expect(res.status == .forbidden)
         }
 
-        // A scope refusal never reaches the evaluator, so without an explicit
-        // row it would be an authorization denial the decision log cannot
-        // explain (STR-116). The row names the principal, the credential, and
-        // the scope the request needed. Filter to the scope_denied rows rather
-        // than assert on the whole table, so a future middleware that records
-        // something else on this request doesn't turn this into a flake.
+        // Identity-plane routes make no evaluator decision, so this refusal has
+        // no Cedar verdict behind it and would otherwise be an authorization
+        // denial the decision log cannot explain (STR-116). The row names the
+        // principal, the credential in its own columns, and which surface
+        // refused. Filter to the credential_restricted rows rather than assert
+        // on the whole table, so another middleware recording something on this
+        // request doesn't turn this into a flake.
         await app.iamDecisionRecorder.flush()
         let entries = try await IAMDecisionLog.query(on: app.db)
-            .filter(\.$cedarDecision == "scope_denied")
+            .filter(\.$cedarDecision == "credential_restricted")
             .all()
         #expect(entries.count == 1)
         let entry = try #require(entries.first)
         let userID = try user.requireID()
         let apiKeyID = try apiKey.requireID()
-        #expect(entry.cedarDecision == "scope_denied")
         #expect(entry.subject == userID.uuidString)
-        #expect(entry.spicedbPermission == "scope:write")
-        #expect(entry.resourceType == "api_key")
-        #expect(entry.resourceID == apiKeyID.uuidString)
+        #expect(entry.spicedbPermission == "credential:login_only_mutation")
+        #expect(entry.tier == "credential")
+        #expect(entry.credentialType == "api_key")
+        #expect(entry.credentialID == apiKeyID)
+        // The route, not the credential: the credential has columns of its own
+        // now, so the resource says what was being reached.
+        #expect(entry.resourceType == "route")
+        #expect(entry.resourceID == "POST /resource")
         #expect(entry.path == "/resource")
         #expect(entry.method == "POST")
 
@@ -581,41 +636,52 @@ struct APIKeyAuthenticatorTests {
         try await app.shutdownForTesting()
     }
 
-    @Test("APIKeyScope hierarchy grants higher scopes")
-    func testScopeHierarchy() {
-        let readOnly = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["read"])
-        #expect(readOnly.grants(.read))
-        #expect(!readOnly.grants(.write))
-        #expect(!readOnly.grants(.admin))
+    /// An explicitly restricted key is refused the identity plane whatever its
+    /// action list says: minting a wider successor is the escalation the
+    /// backstop exists for.
+    @Test("An action-restricted key cannot mutate the identity plane")
+    func testActionRestrictedKeyCannotMutateIdentityPlane() async throws {
+        let app = try await Application.makeForTesting()
+        try await configure(app)
+        try await app.autoMigrate()
 
-        let writer = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["write"])
-        #expect(writer.grants(.read))
-        #expect(writer.grants(.write))
-        #expect(!writer.grants(.admin))
+        let user = try await createTestUser(on: app.db)
+        let restriction = try CredentialRestriction.validated(
+            actions: ["vm:*"], nodeType: nil, nodeID: nil)
+        let (_, fullKey) = try await createTestAPIKey(
+            for: user, on: app.db, restriction: restriction)
+        registerScopedRoutes(on: app)
 
-        let admin = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["admin"])
-        #expect(admin.grants(.read))
-        #expect(admin.grants(.write))
-        #expect(admin.grants(.admin))
+        try await app.test(
+            .POST, "/resource",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
+            #expect(res.status == .forbidden)
+        }
+
+        try await app.shutdownForTesting()
     }
 
-    @Test("APIKeyScope required(for:) maps methods to scopes")
-    func testRequiredScopeForMethod() {
-        #expect(APIKeyScope.required(for: .GET) == .read)
-        #expect(APIKeyScope.required(for: .HEAD) == .read)
-        #expect(APIKeyScope.required(for: .OPTIONS) == .read)
-        #expect(APIKeyScope.required(for: .POST) == .write)
-        #expect(APIKeyScope.required(for: .PUT) == .write)
-        #expect(APIKeyScope.required(for: .PATCH) == .write)
-        #expect(APIKeyScope.required(for: .DELETE) == .write)
+    @Test("A legacy scope array resolves to the restriction it always meant")
+    func testLegacyScopesResolveToRestrictions() {
+        let readOnly = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["read"])
+        #expect(!readOnly.restriction.isUnrestricted)
+        #expect(readOnly.restriction.permits(action: "vm:read"))
+        #expect(!readOnly.restriction.permits(action: "vm:start"))
+
+        for scopes in [["write"], ["admin"], ["read", "write"]] {
+            let key = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: scopes)
+            #expect(key.restriction.isUnrestricted, "\(scopes) should be unrestricted")
+        }
     }
 
     @Test("Unknown scope strings do not grant access")
     func testUnknownScopesIgnored() {
         let bogus = APIKey(userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["superuser"])
-        #expect(!bogus.grants(.read))
-        #expect(!bogus.grants(.write))
-        #expect(bogus.grantedScopes.isEmpty)
+        #expect(bogus.restriction == .denyAll)
+        #expect(!bogus.restriction.permits(action: "vm:read"))
     }
 
     // MARK: - Hash Function Tests

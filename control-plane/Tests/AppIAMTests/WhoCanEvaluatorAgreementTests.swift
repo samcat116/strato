@@ -64,7 +64,7 @@ final class WhoCanEvaluatorAgreementTests {
             principal: principal, action: action, node: node,
             legacyEquivalent: nil,
             context: IAMCheckContext(path: "/test", method: "GET", requestID: nil),
-            state: nil, app: app, db: app.db)
+            state: .detached, app: app, db: app.db)
         return decision.allowed
     }
 

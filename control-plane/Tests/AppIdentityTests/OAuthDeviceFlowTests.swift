@@ -36,15 +36,19 @@ struct OAuthDeviceFlowTests {
     }
 
     func startDeviceFlow(
-        _ app: Application, scope: String? = nil, clientName: String? = "test-cli"
+        _ app: Application,
+        scope: String? = nil,
+        clientName: String? = "test-cli",
+        restriction: CredentialRestrictionPayload? = nil
     ) async throws -> DeviceAuthorizationResponse {
         var response: DeviceAuthorizationResponse?
         try await app.test(
             .POST, "/oauth/device_authorization",
             beforeRequest: { req in
                 try req.content.encode(
-                    OAuthController.DeviceAuthorizationRequest(clientName: clientName, scope: scope),
-                    as: .urlEncodedForm
+                    OAuthController.DeviceAuthorizationRequest(
+                        clientName: clientName, scope: scope, restriction: restriction),
+                    as: .json
                 )
             }
         ) { res async throws in
@@ -296,8 +300,9 @@ struct OAuthDeviceFlowTests {
                 .POST, "/oauth/device_authorization",
                 beforeRequest: { req in
                     try req.content.encode(
-                        OAuthController.DeviceAuthorizationRequest(clientName: "x", scope: "read superuser"),
-                        as: .urlEncodedForm
+                        OAuthController.DeviceAuthorizationRequest(
+                            clientName: "x", scope: "read superuser", restriction: nil),
+                        as: .json
                     )
                 }
             ) { res async in
@@ -491,7 +496,7 @@ struct OAuthDeviceFlowTests {
             app.testOnlyLoginRoutePrefixes = ["/resource"]
             let protected = app.grouped(
                 BearerAuthorizationHeaderAuthenticator(),
-                APIKeyScopeMiddleware()
+                CredentialRestrictionMiddleware()
             )
             protected.get("resource") { _ in "read-ok" }
             protected.post("resource") { _ in "write-ok" }

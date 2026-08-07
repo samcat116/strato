@@ -265,7 +265,7 @@ struct PolicyController: RouteCollection {
     /// handler that forgot its check.
     func validate(req: Request) async throws -> ValidatePolicyResponse {
         _ = try req.auth.require(User.self)
-        req.markRowScopedAuthorization()
+        try await req.markRowScopedAuthorization()
         let payload = try req.content.decode(ValidatePolicyRequest.self)
         // Containment is checked against the owner the editor is writing for,
         // so `validate` refuses an owner type a create would refuse too.

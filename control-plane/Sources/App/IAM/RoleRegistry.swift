@@ -291,6 +291,26 @@ enum IAMRoleRegistry {
     /// deliberately; nothing grants it by accident.
     static let systemAdminOnlyActions: Set<String> = ["agent:updateArtifact"]
 
+    /// Every action whose name says it reads — the action-vocabulary spelling
+    /// of the legacy `read` credential scope (STR-115).
+    ///
+    /// Derived from the names rather than curated, so an action shipped later
+    /// lands on the right side by default: a new `:read`/`:list` is readable, a
+    /// new verb is not. `image:download` and `iam:readPolicy` are named
+    /// explicitly because they read without saying so in their suffix, and a
+    /// `read`-scoped credential reaches both today.
+    ///
+    /// Three actions a `read` credential can reach on a safe method today are
+    /// deliberately *not* here, and lose that reach when their credential's
+    /// restriction is enforced against the act instead of the HTTP verb:
+    /// `sandbox:exec` (the exec-attach WebSocket is a GET), `vm:viewConsole`
+    /// (an editor action the console upgrade also reaches by GET), and
+    /// `vm:exec`/`vm:runCommand` (no routes yet). All three are the defect
+    /// STR-115 exists to close, not collateral.
+    static let readActions: Set<String> =
+        allActions.filter { $0.hasSuffix(":read") || $0.hasSuffix(":list") }
+        .union(["image:download", "iam:readPolicy"])
+
     /// The actions the tier-1 `platform-agent-foreign-workloads` forbid
     /// covers. Read by the policy text *and* by the entity-slice loader, which
     /// only pays for the workload-inventory attribute on these actions — one

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import StratoAPIClient
 import StratoCLICore
 
 struct Login: AsyncParsableCommand {
@@ -13,8 +14,22 @@ struct Login: AsyncParsableCommand {
     @Option(name: .long, help: "Context name to store the login under.")
     var context: String?
 
-    @Option(name: .long, help: "Requested scopes, space-separated (read, write, admin).")
+    @Option(name: .long, help: "Requested scopes, space-separated (read, write, admin). Deprecated; use --actions.")
     var scopes: String = "read write"
+
+    @Option(
+        name: .long,
+        help: "Limit this session to these actions, comma-separated (e.g. 'vm:*,volume:read'). Default: no limit.")
+    var actions: String?
+
+    @Option(name: .long, help: "Limit this session to one role's actions, by role id.")
+    var role: String?
+
+    @Option(name: .long, help: "Limit this session to one node, e.g. 'project'. Requires --node-id.")
+    var nodeType: String?
+
+    @Option(name: .long, help: "The id of the node named by --node-type.")
+    var nodeId: String?
 
     func run() async throws {
         try await runHandlingCLIErrors {
@@ -41,7 +56,8 @@ struct Login: AsyncParsableCommand {
 
             let clientName = "strato CLI on \(hostname())"
             let flow = DeviceFlow(serverURL: serverURL)
-            let authorization = try await flow.start(clientName: clientName, scopes: scopes)
+            let authorization = try await flow.start(
+                clientName: clientName, scopes: scopes, restriction: try requestedRestriction())
 
             print("To sign in, visit:\n")
             print("    \(authorization.verificationUriComplete)\n")
@@ -68,6 +84,38 @@ struct Login: AsyncParsableCommand {
 
             print("Signed in. Context '\(contextName)' -> \(contextConfig.server)")
         }
+    }
+
+    /// The restriction to ask for, or nil when none of the narrowing flags were
+    /// given. The server validates the contents; this only checks the shape, so
+    /// a typo costs a message rather than a round trip.
+    private func requestedRestriction() throws -> Components.Schemas.CredentialRestriction? {
+        let actionList = actions?
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+
+        if actionList != nil && role != nil {
+            throw CLIError.config("Pass either --actions or --role, not both.")
+        }
+        if (nodeType == nil) != (nodeId == nil) {
+            throw CLIError.config("--node-type and --node-id must be given together.")
+        }
+        guard actionList != nil || role != nil || nodeType != nil else { return nil }
+
+        if let role, Foundation.UUID(uuidString: role) == nil {
+            throw CLIError.config("--role must be a role id (UUID).")
+        }
+        if let nodeId, Foundation.UUID(uuidString: nodeId) == nil {
+            throw CLIError.config("--node-id must be a UUID.")
+        }
+        // A node scope with no action list is still a narrowing: everything the
+        // owner can do, but only inside that subtree.
+        return .init(
+            role: role,
+            actions: actionList ?? (role == nil ? ["*"] : nil),
+            nodeType: nodeType,
+            nodeId: nodeId)
     }
 
     private func hostname() -> String {

@@ -346,7 +346,7 @@ struct GuardrailController: RouteCollection {
     /// replica's compiled policy set. System-admin only: it describes the
     /// deployment, not any one organization's policy.
     func policySetVersion(req: Request) async throws -> PolicySetVersionResponse {
-        _ = try req.requireSystemAdmin("Reading the policy-set version requires system admin")
+        _ = try await req.requireSystemAdmin("Reading the policy-set version requires system admin")
         let latest = try await PolicySetVersion.query(on: req.db)
             .sort(\.$version, .descending)
             .first()

@@ -76,7 +76,7 @@ struct FloatingIPController: RouteCollection {
             // evaluate against, so only system admins may touch them
             // (defensive deny, mirroring scopeless quotas; the gate marks
             // the decision for the middleware's handler assertion).
-            _ = try req.requireSystemAdmin("This floating IP pool has no owning organization")
+            _ = try await req.requireSystemAdmin("This floating IP pool has no owning organization")
             return
         }
         let check = Self.poolScopeCheck(scope, manage: manage)
@@ -135,7 +135,9 @@ struct FloatingIPController: RouteCollection {
             readable.formUnion(try await req.canFilter(action, on: nodes))
         }
         let visible = pools.filter { pool in
-            guard let scope = pool.organizationScope else { return req.allowsScopelessPlatformRow() }
+            guard let scope = pool.organizationScope else {
+                return req.allowsScopelessPlatformRow(action: "floatingip:list")
+            }
             return readable.contains(Self.poolScopeCheck(scope, manage: false).node)
         }
 

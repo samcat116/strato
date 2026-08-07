@@ -135,10 +135,15 @@ enum CedarSchemaBuilder {
         // The fixed condition vocabulary (`mfa`, `ip_range`) rides here;
         // `expires_at` is enforced when bindings are read and
         // `tags`/`environment` match the resource, so neither needs context.
+        // `credentialRestricted` is the request's own credential saying it does
+        // not cover this action on this resource (STR-115). Optional, and
+        // emitted only when true, so an unrestricted request's context is
+        // byte-identical to what it was before restrictions existed.
         lines.append("type Context = {")
         lines.append("    \(CedarText.stringLiteral("grants")): Grants,")
         lines.append("    \(CedarText.stringLiteral("mfa"))?: Bool,")
         lines.append("    \(CedarText.stringLiteral("sourceIP"))?: ipaddr,")
+        lines.append("    \(CedarText.stringLiteral("credentialRestricted"))?: Bool,")
         lines.append("};")
         lines.append("")
 
