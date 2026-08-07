@@ -788,6 +788,13 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddCredentialRestrictions())
     app.migrations.add(AddCredentialToIAMDecisionLog())
 
+    // ADR 0001 stage 5 (STR-148): volumes become desired state. The columns
+    // that make a volume a converging, finalizable resource, and the widened
+    // CHECK constraints for the `volume` resource kind and the `attach`/
+    // `detach` mutations its endpoints record.
+    app.migrations.add(AddConvergenceToVolumes())
+    app.migrations.add(AddVolumeOperationKinds())
+
     // Volume attachment becomes a constrained relationship: stranded and
     // duplicate rows repaired, then a unique device name and boot order per VM,
     // and a RESTRICT foreign key so a VM delete cannot silently orphan a volume

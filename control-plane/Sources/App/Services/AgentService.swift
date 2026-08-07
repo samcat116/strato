@@ -1120,6 +1120,10 @@ actor AgentService {
         do {
             try await degradeOverdue(VM.self, now: now, on: db)
             try await degradeOverdue(Sandbox.self, now: now, on: db)
+            // Volumes joined the same backstop in STR-148, replacing the
+            // status-and-timestamp sweep that used to guess which transitional
+            // status had been abandoned.
+            try await degradeOverdue(Volume.self, now: now, on: db)
         } catch {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
@@ -1277,84 +1281,23 @@ actor AgentService {
                 },
                 kind: .sandbox, timeout: timeout, on: db)
 
-            // Volumes are the one resource kind mutated through the same
-            // async-agent-RPC pattern that was never brought under the
-            // ResourceOperation umbrella (issue #644), so there is no operation
-            // row to sweep. This backstop recovers them directly instead: a
-            // volume left in a transitional status past its budget — the only
-            // signal we have, since there is no pending operation to consult —
-            // is returned to a resting state. Without it, a crash mid-operation
-            // (rolling upgrade, OOM kill) strands the volume in that status
-            // permanently.
-            //
-            // The budget is per-status, so SQL filters on the *shortest* of
-            // them and the per-status check below narrows the rest: a superset
-            // that still keeps the scan off every freshly created volume.
-            let shortestVolumeBudget =
-                Self.transitionalVolumeStatuses.map(stuckVolumeBudgetSeconds(for:)).min() ?? 0
-            let volumeStuckBefore = now.addingTimeInterval(-shortestVolumeBudget)
-            let transitionalVolumes = try await Volume.query(on: db)
-                .filter(\.$status ~~ Self.transitionalVolumeStatuses)
-                .filterAged(before: volumeStuckBefore, by: \.$updatedAt, fallingBackTo: \.$createdAt)
-                .all()
-
-            for volume in transitionalVolumes {
-                guard let volumeID = volume.id else { continue }
-                // `updatedAt` is stamped on the transition into the transitional
-                // status; `createdAt` is the fallback for a `.creating` row whose
-                // provisioning never started.
-                let changedAt = volume.updatedAt ?? volume.createdAt ?? now
-                let budget = stuckVolumeBudgetSeconds(for: volume.status)
-                guard now.timeIntervalSince(changedAt) > budget else { continue }
-
-                let previous = volume.status
-                let resolved: VolumeStatus
-                switch previous {
-                case .snapshotting, .cloning:
-                    // The source volume's data is untouched by an interrupted
-                    // snapshot or clone (both read the source; the overlay/target
-                    // is a separate row). Return it to a healthy resting state
-                    // rather than error it. The orphaned snapshot/clone-target
-                    // row is a `.creating` volume/snapshot resolved on its own.
-                    resolved = volume.$vm.id != nil ? .attached : .available
-                default:
-                    // creating/attaching/detaching/resizing: the agent-side
-                    // outcome is unknown, so `.error` is the honest, recoverable
-                    // state (`canDelete` allows it). Attachment fields are left
-                    // as-is deliberately — clearing them and returning to
-                    // `.available` would risk re-attaching a volume the agent may
-                    // actually have connected to a guest.
-                    resolved = .error
-                    volume.errorMessage =
-                        "Volume operation did not complete (control-plane restart or lost agent "
-                        + "response); recovered by the stuck-operation sweep after \(Int(budget))s"
-                }
-                volume.status = resolved
-                try await volume.save(on: db)
-
-                app.logger.warning(
-                    "Volume stuck in transitional state past budget; recovered",
-                    metadata: [
-                        "volumeId": .string(volumeID.uuidString),
-                        "stuckStatus": .string(previous.rawValue),
-                        "resolvedStatus": .string(resolved.rawValue),
-                        "budgetSeconds": .string("\(Int(budget))"),
-                    ])
-            }
-
             // Stranded attachments (STR-129): a row that lost its VM but kept
-            // the rest of the attachment. The VM reap detaches volumes inside
+            // the rest of the attachment. The VM reap releases volumes inside
             // the delete transaction, so this should never fire — it is the
             // backstop for a replica still running an older build during a
             // rolling upgrade, and for any future path that removes a VM
-            // without going through the reap. No age budget: unlike a
-            // transitional status there is nothing in flight that could still
-            // land, so waiting only extends the window in which the volume is
-            // neither deletable nor attachable.
+            // without going through the reap.
+            //
+            // No age budget, unlike the convergence sweeps above: nothing is in
+            // flight that could still land, and until the columns are cleared
+            // the volume names a device on a VM that does not exist. The
+            // generation bump is what makes the agent act on it — a desired
+            // entry no newer than the last one applied is dropped, so clearing
+            // the columns alone would leave the disk plugged into a guest the
+            // control plane no longer describes.
             let strandedVolumes = try await Volume.query(on: db)
                 .filter(\.$vm.$id == nil)
                 .group(.or) { unresolved in
-                    unresolved.filter(\.$status == .attached)
                     unresolved.filter(\.$deviceName != nil)
                     unresolved.filter(\.$bootOrder != nil)
                     unresolved.filter(\.$attachedAgentId != nil)
@@ -1363,16 +1306,14 @@ actor AgentService {
 
             for volume in strandedVolumes {
                 guard let volumeID = volume.id else { continue }
-                let previous = volume.status
-                VolumeAttachmentService.clearStrandedAttachment(volume)
+                VolumeAttachmentService.clearAttachment(volume)
                 try await volume.save(on: db)
 
                 app.logger.warning(
-                    "Volume left attachment fields set with no VM; detached",
+                    "Volume left attachment fields set with no VM; released",
                     metadata: [
                         "volumeId": .string(volumeID.uuidString),
-                        "previousStatus": .string(previous.rawValue),
-                        "resolvedStatus": .string(volume.status.rawValue),
+                        "generation": .string("\(volume.generation)"),
                     ])
             }
         } catch {
@@ -1427,6 +1368,13 @@ actor AgentService {
                 .all()
             await reapOrphanedTerminating(
                 sandboxes.filter { $0.finalizers.isEmpty }, kind: "sandbox", on: db)
+
+            let volumes = try await Volume.query(on: db)
+                .filter(\.$desiredStatus == .absent)
+                .filterAged(before: cutoff, by: \.$updatedAt, fallingBackTo: \.$createdAt)
+                .all()
+            await reapOrphanedTerminating(
+                volumes.filter { $0.finalizers.isEmpty }, kind: "volume", on: db)
         } catch {
             app.logger.error("Orphaned-terminating sweep failed: \(error)")
         }
@@ -1483,6 +1431,10 @@ actor AgentService {
             switch kind {
             case .virtualMachine: ("VM", "vmId")
             case .sandbox: ("Sandbox", "sandboxId")
+            // Unreachable: volumes have no transitional-status backstop —
+            // `convergence_deadline` and `sweepStuckConvergence` replaced it
+            // wholesale in STR-148.
+            case .volume: ("Volume", "volumeId")
             }
 
         for resource in resources {
@@ -1505,42 +1457,6 @@ actor AgentService {
                     "stuckStatus": .string(resource.stuckStatus),
                     "timeoutSeconds": .string("\(Int(timeout))"),
                 ])
-        }
-    }
-
-    /// The volume statuses the stuck-volume backstop watches. Kept in one
-    /// place because `AddHotPathIndexes` indexes exactly this set (a partial
-    /// index on `volumes.status`) — widening the list means widening that
-    /// index too, or the sweep falls back to a sequential scan.
-    static let transitionalVolumeStatuses: [VolumeStatus] = [
-        .creating, .attaching, .detaching, .resizing, .snapshotting, .cloning,
-    ]
-
-    /// How long a volume may sit in a given transitional status before the
-    /// stuck-operation sweep treats it as lost (issue #644). Volumes carry no
-    /// `ResourceOperation` row, so — unlike the VM/sandbox backstops above,
-    /// which skip any resource with a pending operation — the sweep cannot tell
-    /// an operation still in flight on a live replica from one abandoned by a
-    /// crash. It has only elapsed time. Each budget therefore sits comfortably
-    /// above the matching `VolumeService` RPC timeout so a legitimately slow
-    /// operation on a live replica is never clobbered mid-flight; the extra
-    /// margin only delays recovery of a genuinely stuck volume, which is rare.
-    private func stuckVolumeBudgetSeconds(for status: VolumeStatus) -> TimeInterval {
-        switch status {
-        case .creating, .cloning:
-            // VolumeService.transferTimeout is 600s (image download / full-disk
-            // copy); a live create/clone resolves the row by then.
-            return 900
-        case .snapshotting:
-            // VolumeService.snapshotTimeout is 120s.
-            return 300
-        case .attaching, .detaching, .resizing:
-            // VolumeService.defaultTimeout is 30s.
-            return 180
-        case .available, .attached, .deleting, .error:
-            // Not transitional (or, for `.deleting`, deliberately left to the
-            // retryable-delete path); never queried by the sweep above.
-            return 300
         }
     }
 

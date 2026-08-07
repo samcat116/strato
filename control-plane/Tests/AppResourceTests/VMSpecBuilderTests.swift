@@ -311,12 +311,15 @@ struct VMSpecBuilderTests {
     }
 
     /// An attached volume, as `volumeSpecs` sees it after `.with(\.$volumes)`.
+    /// Filtered on the *desired* attachment since STR-148, so the VM binding —
+    /// not the observed status — is what puts it in the spec.
     private func attachedVolume(
         id: UUID, deviceName: String?, bootOrder: Int?, storagePath: String = "/var/lib/strato/v.qcow2"
     ) -> Volume {
         let volume = Volume(
             id: id, name: "v-\(id.uuidString.prefix(4))", description: "",
             projectID: UUID(), size: 1 << 30, status: .attached, createdByID: UUID())
+        volume.$vm.id = UUID()
         volume.deviceName = deviceName
         volume.bootOrder = bootOrder
         volume.storagePath = storagePath

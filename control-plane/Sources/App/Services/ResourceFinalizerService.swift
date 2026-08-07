@@ -309,3 +309,27 @@ extension Sandbox: FinalizableResource {
         return true
     }
 }
+
+// MARK: - Volume
+
+extension Volume: FinalizableResource {
+    static func reap(_ volume: Volume, on db: any Database, app: Application) async throws -> Bool {
+        let volumeID = try volume.requireID()
+
+        return try await db.transaction { tx in
+            guard try await ResourceFinalizerService.reapClaim(Volume.self, id: volumeID, in: tx) else {
+                return false
+            }
+            // Bindings first, for the same reason as VMs and sandboxes: the
+            // revoke reads the volume's snapshot rows, which the delete below
+            // cascades away.
+            try await ResourceBindingCleanup.revokeBindings(forDeletedVolume: volumeID, on: tx)
+            try await ResourceFinalizerService.recordDeletionCompleted(volume, in: tx)
+            try await volume.delete(on: tx)
+            return true
+        }
+        // No quota release and no placement reservation to give back: volumes
+        // draw on neither. Their `volume_replicas` and `volume_snapshots` rows
+        // cascade with the row above.
+    }
+}

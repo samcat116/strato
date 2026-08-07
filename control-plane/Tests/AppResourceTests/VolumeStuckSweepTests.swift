@@ -7,12 +7,14 @@ import StratoShared
 import AppTestSupport
 @testable import App
 
-/// Tests for the volume stuck-operation backstop (issue #644). Volumes are
-/// mutated through the same async-agent-RPC pattern as VMs and sandboxes but
-/// carry no `ResourceOperation` row, so a control-plane crash mid-operation
-/// could strand a volume in a transitional status forever. `sweepStuckOperations()`
-/// now recovers them: transitional volumes past their per-status budget return
-/// to a resting state.
+/// The volume backstop after STR-148.
+///
+/// This suite used to test a status-and-timestamp sweep that guessed which
+/// transitional status had been abandoned and how long each one deserved,
+/// because volumes carried no operation row to judge against. Both halves are
+/// gone: a volume now stamps a `convergence_deadline` on every accepted
+/// mutation, and `sweepStuckConvergence` — the same lock-free, exactly-once
+/// pass VMs and sandboxes use — degrades it past that deadline.
 @Suite("Volume Stuck Sweep Tests", .serialized)
 final class VolumeStuckSweepTests {
 
@@ -46,148 +48,174 @@ final class VolumeStuckSweepTests {
         try await app.shutdownForTesting()
     }
 
-    /// Persists a volume in `status` and backdates its `updated_at` by
-    /// `ageSeconds`. `updated_at` is a Fluent-managed `on: .update` timestamp —
-    /// every `save` resets it to now — so the sweep's clock can only be moved
-    /// with a direct SQL write after the row exists.
+    /// Persists a volume with an outstanding mutation whose deadline is
+    /// `overdueBy` seconds in the past.
     @discardableResult
     private func makeVolume(
-        status: VolumeStatus,
-        ageSeconds: TimeInterval,
+        deadlineOverdueBy overdueBy: TimeInterval?,
+        status: VolumeStatus = .creating,
+        desired: DesiredVolumeStatus = .present,
+        generation: Int64 = 1,
+        observedGeneration: Int64 = 0,
         vmID: UUID? = nil,
         on app: Application,
         user: User,
         project: Project
     ) async throws -> Volume {
         let volume = Volume(
-            name: "vol-\(status.rawValue)",
+            name: "vol-\(UUID().uuidString.prefix(8))",
             description: "",
             projectID: project.id!,
             size: 10 * 1024 * 1024 * 1024,
             status: status,
             createdByID: user.id!
         )
+        volume.desiredStatus = desired
+        volume.generation = generation
+        volume.observedGeneration = observedGeneration
         volume.$vm.id = vmID
         // An attached row names its device: `NormalizeVolumeAttachments` makes
         // that a check constraint (STR-129).
         volume.deviceName = vmID == nil ? nil : "disk0"
+        if let overdueBy {
+            volume.convergenceDeadline = Date().addingTimeInterval(-overdueBy)
+        }
         try await volume.save(on: app.db)
-
-        let sql = try #require(app.db as? any SQLDatabase)
-        let past = Date().addingTimeInterval(-ageSeconds)
-        try await sql.raw("UPDATE volumes SET updated_at = \(bind: past) WHERE id = \(bind: volume.id!)")
-            .run()
         return volume
     }
 
-    // MARK: - Recovery of stuck transitional volumes
+    // MARK: - Degrading overdue volumes
 
-    @Test("A stuck .creating volume past budget is recovered to .error")
-    func sweepRecoversStuckCreate() async throws {
+    @Test("A volume past its convergence deadline is degraded with a reason")
+    func overdueVolumeIsDegraded() async throws {
         try await withVolumeTestApp { app, user, project in
             let volume = try await makeVolume(
-                status: .creating, ageSeconds: 1000, on: app, user: user, project: project)
+                deadlineOverdueBy: 60, on: app, user: user, project: project)
 
-            await app.agentService.sweepStuckOperations()
+            await app.agentService.sweepStuckConvergence()
 
-            let swept = try await Volume.find(volume.id, on: app.db)
-            #expect(swept?.status == .error)
-            #expect(swept?.errorMessage?.isEmpty == false)
+            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            #expect(swept.conditions.degraded != nil)
+            #expect(swept.errorMessage?.isEmpty == false)
+            // Claimed: the deadline is cleared, so a second pass finds nothing.
+            #expect(swept.convergenceDeadline == nil)
         }
     }
 
-    @Test(
-        "A stuck volume in an unknown-outcome transitional state is recovered to .error",
-        arguments: [VolumeStatus.attaching, .detaching, .resizing]
-    )
-    func sweepRecoversUnknownOutcomeStates(status: VolumeStatus) async throws {
+    @Test("A volume inside its deadline is left alone")
+    func liveVolumeIsUntouched() async throws {
         try await withVolumeTestApp { app, user, project in
             let volume = try await makeVolume(
-                status: status, ageSeconds: 1000, on: app, user: user, project: project)
+                deadlineOverdueBy: -300, on: app, user: user, project: project)
 
-            await app.agentService.sweepStuckOperations()
+            await app.agentService.sweepStuckConvergence()
 
-            let swept = try await Volume.find(volume.id, on: app.db)
-            #expect(swept?.status == .error)
+            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            #expect(swept.conditions.degraded == nil)
+            #expect(swept.convergenceDeadline != nil)
         }
     }
 
-    @Test("A stuck detached .snapshotting volume is recovered to .available, not errored")
-    func sweepReturnsSnapshottingSourceToResting() async throws {
+    /// Nil means "nothing outstanding". A resting volume that has never had a
+    /// mutation — or whose last one converged — is not the sweep's business,
+    /// and the SQL `NULL` comparison is what keeps it out of the query.
+    @Test("A volume with no deadline is never swept")
+    func volumeWithoutDeadlineIsNeverSwept() async throws {
         try await withVolumeTestApp { app, user, project in
-            // The source volume's data is untouched by an interrupted snapshot,
-            // so it must not be errored.
             let volume = try await makeVolume(
-                status: .snapshotting, ageSeconds: 1000, on: app, user: user, project: project)
+                deadlineOverdueBy: nil, status: .available, observedGeneration: 1,
+                on: app, user: user, project: project)
 
-            await app.agentService.sweepStuckOperations()
+            await app.agentService.sweepStuckConvergence()
 
-            let swept = try await Volume.find(volume.id, on: app.db)
-            #expect(swept?.status == .available)
-            #expect(swept?.errorMessage == nil)
+            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            #expect(swept.conditions.degraded == nil)
+            #expect(swept.status == .available)
         }
     }
 
-    @Test("A stuck attached .cloning source is recovered to .attached")
-    func sweepReturnsCloningSourceToAttached() async throws {
+    /// The deadline is a backstop, not a verdict: a volume that converged
+    /// between the query and the claim is left alone, since the claim has
+    /// already dropped the deadline, which is all that was owed.
+    @Test("A volume that converged before the claim is not degraded")
+    func convergedVolumeIsNotDegraded() async throws {
         try await withVolumeTestApp { app, user, project in
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "clone-src-vm", project: project)
-
             let volume = try await makeVolume(
-                status: .cloning, ageSeconds: 1000, vmID: vm.id, on: app, user: user, project: project)
+                deadlineOverdueBy: 60, status: .available, generation: 1, observedGeneration: 1,
+                on: app, user: user, project: project)
 
-            await app.agentService.sweepStuckOperations()
+            await app.agentService.sweepStuckConvergence()
 
-            let swept = try await Volume.find(volume.id, on: app.db)
-            #expect(swept?.status == .attached)
+            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            #expect(swept.conditions.degraded == nil)
+            #expect(swept.convergenceDeadline == nil)
         }
     }
 
-    // MARK: - The sweep leaves live and resting volumes alone
-
-    @Test("A fresh transitional volume within budget is left alone")
-    func sweepIgnoresFreshTransitional() async throws {
+    /// A terminating volume never reports converged — it is on its way out, not
+    /// converging on anything — so a delete blocked on a finalizer falls
+    /// through and degrades, which is what a stuck delete should look like.
+    @Test("A stuck delete degrades rather than reading as converged")
+    func stuckDeleteDegrades() async throws {
         try await withVolumeTestApp { app, user, project in
-            // 60s is well under every transitional budget, so a create still in
-            // flight on a live replica must not be clobbered.
             let volume = try await makeVolume(
-                status: .creating, ageSeconds: 60, on: app, user: user, project: project)
+                deadlineOverdueBy: 60, status: .available, desired: .absent,
+                generation: 2, observedGeneration: 2, on: app, user: user, project: project)
+            volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+            try await volume.save(on: app.db)
 
-            await app.agentService.sweepStuckOperations()
+            await app.agentService.sweepStuckConvergence()
 
-            let swept = try await Volume.find(volume.id, on: app.db)
-            #expect(swept?.status == .creating)
+            let swept = try await #require(try await Volume.find(volume.id, on: app.db))
+            #expect(swept.conditions.degraded != nil)
+            // The delete's intent survives: reverting it would resurrect a
+            // volume the user deleted.
+            #expect(swept.desiredStatus == .absent)
         }
     }
 
-    @Test("A .creating volume older than the shortest budget but inside its own is left alone")
-    func sweepRespectsPerStatusBudgetPastTheSQLCutoff() async throws {
+    // MARK: - Orphaned terminating volumes
+
+    /// The other backstop: a terminating volume whose finalizers all cleared
+    /// but whose row survived — a crash between the last clear and the reap.
+    @Test("A terminating volume with no finalizers left is reaped")
+    func orphanedTerminatingVolumeIsReaped() async throws {
         try await withVolumeTestApp { app, user, project in
-            // The SQL age filter uses the *shortest* transitional budget (180s)
-            // so one query can serve every status; the per-status budget still
-            // decides. At 400s this row is admitted by the query and must then
-            // be rejected by `.creating`'s own 900s budget.
             let volume = try await makeVolume(
-                status: .creating, ageSeconds: 400, on: app, user: user, project: project)
+                deadlineOverdueBy: nil, status: .available, desired: .absent,
+                generation: 2, observedGeneration: 2, on: app, user: user, project: project)
+            let volumeID = try #require(volume.id)
 
-            await app.agentService.sweepStuckOperations()
+            let sql = try #require(app.db as? any SQLDatabase)
+            let past = Date().addingTimeInterval(-3600)
+            try await sql.raw("UPDATE volumes SET updated_at = \(bind: past) WHERE id = \(bind: volumeID)")
+                .run()
 
-            let swept = try await Volume.find(volume.id, on: app.db)
-            #expect(swept?.status == .creating)
+            await app.agentService.sweepOrphanedTerminatingResources()
+
+            #expect(try await Volume.find(volumeID, on: app.db) == nil)
         }
     }
 
-    @Test("A stuck .deleting volume is left to the retryable-delete path")
-    func sweepIgnoresDeleting() async throws {
+    @Test("A terminating volume still holding a finalizer survives the sweep")
+    func heldTerminatingVolumeSurvives() async throws {
         try await withVolumeTestApp { app, user, project in
             let volume = try await makeVolume(
-                status: .deleting, ageSeconds: 1000, on: app, user: user, project: project)
+                deadlineOverdueBy: nil, status: .available, desired: .absent,
+                generation: 2, observedGeneration: 2, on: app, user: user, project: project)
+            let volumeID = try #require(volume.id)
+            volume.hypervisorId = UUID().uuidString
+            volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+            try await volume.save(on: app.db)
 
-            await app.agentService.sweepStuckOperations()
+            let sql = try #require(app.db as? any SQLDatabase)
+            let past = Date().addingTimeInterval(-3600)
+            try await sql.raw("UPDATE volumes SET updated_at = \(bind: past) WHERE id = \(bind: volumeID)")
+                .run()
 
-            let swept = try await Volume.find(volume.id, on: app.db)
-            #expect(swept?.status == .deleting)
+            await app.agentService.sweepOrphanedTerminatingResources()
+
+            #expect(try await Volume.find(volumeID, on: app.db) != nil)
         }
     }
 }

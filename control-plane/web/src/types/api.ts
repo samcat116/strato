@@ -1129,7 +1129,12 @@ export type OperationKind =
   | "snapshot_delete"
   | "restore"
   // Snapshot mobility: off-node export (backend issue #428).
-  | "snapshot_export";
+  | "snapshot_export"
+  // Volume attachment (backend STR-148). Their own kinds rather than folded
+  // into create/delete because "who plugged this volume into that VM" is a
+  // different question from "who made the volume".
+  | "attach"
+  | "detach";
 
 export type OperationStatus = "pending" | "succeeded" | "failed";
 
@@ -1161,7 +1166,8 @@ export interface ResourceConditions {
 }
 
 /**
- * The 202 body of a VM or sandbox lifecycle mutation (backend STR-147): the
+ * The 202 body of a VM, sandbox, or volume lifecycle mutation (backend
+ * STR-147, extended to volumes by STR-148): the
  * resource as the mutation left it, the generation it now has to reach, and
  * the id of the mutation's audit record.
  *
@@ -1179,7 +1185,7 @@ export interface AcceptedMutation<Resource> {
 
 // The resource an operation targets. Operations are shared machinery across VMs
 // and sandboxes (backend issue #412), discriminated by `resourceKind`.
-export type OperationResourceKind = "virtual_machine" | "sandbox";
+export type OperationResourceKind = "virtual_machine" | "sandbox" | "volume";
 
 export interface Operation {
   id: string;
@@ -1551,6 +1557,14 @@ export interface Volume {
   vmId?: string;
   deviceName?: string;
   bootOrder?: number;
+  /** Whether the attachment presents the volume read-only. */
+  readonly: boolean;
+  /**
+   * Whether the owning agent has caught up with the last mutation (backend
+   * STR-148). Volume mutations are accepted, not performed: this is what says
+   * one finished, not the `status` string, which lags a generation behind.
+   */
+  conditions: ResourceConditions;
   sourceImageId?: string;
   sourceVolumeId?: string;
   createdById?: string;

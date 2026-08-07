@@ -15,6 +15,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
 import { toast } from "sonner";
+import {
+  acceptedMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
+
 import type { Volume } from "@/types/api";
 
 interface ResizeVolumeDialogProps {
@@ -34,6 +39,7 @@ export function ResizeVolumeDialog({
 }: ResizeVolumeDialogProps) {
   const currentSizeGB = Math.ceil(volume.size / GB);
   const [isLoading, setIsLoading] = useState(false);
+  const watch = useMutationsStore((state) => state.watch);
   const [sizeGB, setSizeGB] = useState(String(currentSizeGB));
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -49,8 +55,14 @@ export function ResizeVolumeDialog({
 
     setIsLoading(true);
     try {
-      await volumesApi.resize(volume.id!, { sizeGB: newSize });
-      toast.success(`Resizing ${volume.name} to ${newSize} GB`);
+      watch(
+        acceptedMutation(await volumesApi.resize(volume.id!, { sizeGB: newSize }), {
+          kind: "resize",
+          resourceKind: "volume",
+          resourceId: volume.id!,
+          resourceName: volume.name,
+        })
+      );
       onOpenChange(false);
       onSuccess?.();
     } catch (error) {

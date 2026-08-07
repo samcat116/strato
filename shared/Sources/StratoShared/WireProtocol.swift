@@ -492,7 +492,43 @@ public enum WireProtocol {
     /// works against any control plane, because it never needs permission to
     /// refuse. Upgrade the control plane first to get the operator-visible
     /// half.
-    public static let currentVersion = 30
+    /// Version 31: volumes become desired state (ADR 0001 stage 5, STR-148).
+    /// `DesiredStateMessage` gains `volumes: [DesiredVolumeState]?` and
+    /// `ObservedStateReport` gains `volumes: [ObservedVolumeState]?`; the six
+    /// imperative frames `volume_create`, `volume_delete`, `volume_attach`,
+    /// `volume_detach`, `volume_resize` and `volume_clone` are removed.
+    /// `volume_snapshot`, `volume_snapshot_delete` and `volume_info` survive —
+    /// they convert in stages 8 and 7.
+    ///
+    /// This bump carries two of the hazard shapes in this changelog at once.
+    ///
+    /// The *removal* half is the v28 shape and breaks in one direction only: a
+    /// pre-v31 control plane driving a v31 agent would send `volume_attach`
+    /// into an envelope the agent can no longer decode and burn the request's
+    /// timeout against silence. Upgrade the control plane first, as everywhere
+    /// else in this document.
+    ///
+    /// The *addition* half is the v3/v5/v26/v27 asymmetric-absence shape, in
+    /// its most expensive form: read wrong, silence deletes the only copy of a
+    /// user's data. Both new fields are therefore `Optional` rather than
+    /// `[]`-defaulted, so the payload describes itself and the reading is not
+    /// contingent on a version lookup being right. A sync whose `volumes` is
+    /// nil makes the agent skip its volume half entirely — it does not plan
+    /// against an empty desired list, which would put every volume on the host
+    /// into the unrecognized set. A report whose `volumes` is nil makes the
+    /// control plane skip *its* volume half, rather than reading the absence as
+    /// "every volume on this agent is gone" and reaping the rows.
+    ///
+    /// Unlike v26/v27 and like v18/v23, this gate **does** refuse placement:
+    /// there is no imperative fallback left, so a volume placed on a pre-v31
+    /// agent could never be created. `supportsVolumeSync` is consulted when
+    /// selecting an agent to host a new volume, and volumes already sitting on
+    /// a pre-v31 agent when the control plane upgrades simply freeze — their
+    /// rows are never reaped, because that agent's reports say nothing about
+    /// volumes — until the agent is upgraded. Deleting such a volume still
+    /// works: the delete path force-clears the agent-absence finalizer for an
+    /// agent that cannot confirm.
+    public static let currentVersion = 31
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -806,6 +842,24 @@ public enum WireProtocol {
     /// merely *understands* the endpoint may have been pinned to push mode.
     public static func supportsDesiredStatePull(_ version: Int) -> Bool {
         version >= desiredStatePullMinimumVersion
+    }
+
+    /// The lowest protocol version that carries volumes on the reconciliation
+    /// loop rather than through imperative RPCs (see `currentVersion` version
+    /// 31 notes).
+    public static let volumeSyncMinimumVersion = 31
+
+    /// Whether a peer at `version` speaks declarative volumes.
+    ///
+    /// Read in three places, for three different reasons. Agent-side it is the
+    /// belt to the `volumes`-is-nil braces: a sync from a pre-v31 control plane
+    /// says nothing about volumes and must not be planned against. Sync
+    /// assembly reads it to omit the field — and skip the query — for an agent
+    /// that would discard it. And unlike most gates in this file, *placement*
+    /// reads it: with the imperative frames gone there is no fallback path, so
+    /// a volume must never be scheduled onto an agent that cannot converge it.
+    public static func supportsVolumeSync(_ version: Int) -> Bool {
+        version >= volumeSyncMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

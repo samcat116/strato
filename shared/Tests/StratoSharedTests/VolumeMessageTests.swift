@@ -2,80 +2,12 @@ import Foundation
 import Testing
 import StratoShared
 
+/// The imperative volume frames that survive ADR 0001 stage 5 (STR-148):
+/// the two artifact verbs (stage 8) and the read (stage 7). Create, delete,
+/// attach, detach, resize and clone are desired state now and have no messages
+/// left to round-trip — `ReconciliationProtocolTests` pins their wire shape.
 @Suite("Volume operation messages")
 struct VolumeMessageTests {
-    @Test func volumeCreateRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            VolumeCreateMessage(
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                volumeId: "vol-1",
-                size: 10_737_418_240,
-                format: "raw",
-                sourceImageInfo: Fixtures.imageInfo,
-                sourceVolumePath: "/var/lib/strato/base.qcow2"
-            )
-        )
-        #expect(decoded.type == .volumeCreate)
-        #expect(decoded.volumeId == "vol-1")
-        #expect(decoded.size == 10_737_418_240)
-        #expect(decoded.format == "raw")
-        #expect(decoded.sourceImageInfo?.imageId == Fixtures.imageInfo.imageId)
-        #expect(decoded.sourceVolumePath == "/var/lib/strato/base.qcow2")
-    }
-
-    @Test func volumeDeleteRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            VolumeDeleteMessage(
-                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, volumeId: "vol-1")
-        )
-        #expect(decoded.type == .volumeDelete)
-        #expect(decoded.volumeId == "vol-1")
-    }
-
-    @Test func volumeAttachRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            VolumeAttachMessage(
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                vmId: "vm-1",
-                volumeId: "vol-1",
-                volumePath: "/var/lib/strato/vol-1.qcow2",
-                deviceName: "disk1",
-                readonly: true
-            )
-        )
-        #expect(decoded.type == .volumeAttach)
-        #expect(decoded.vmId == "vm-1")
-        #expect(decoded.volumeId == "vol-1")
-        #expect(decoded.deviceName == "disk1")
-        #expect(decoded.readonly)
-    }
-
-    @Test func volumeDetachRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            VolumeDetachMessage(
-                requestId: Fixtures.requestId, timestamp: Fixtures.timestamp, vmId: "vm-1", volumeId: "vol-1",
-                deviceName: "disk1")
-        )
-        #expect(decoded.type == .volumeDetach)
-        #expect(decoded.deviceName == "disk1")
-    }
-
-    @Test func volumeResizeRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            VolumeResizeMessage(
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                volumeId: "vol-1",
-                volumePath: "/var/lib/strato/vol-1.qcow2",
-                newSize: 21_474_836_480
-            )
-        )
-        #expect(decoded.type == .volumeResize)
-        #expect(decoded.newSize == 21_474_836_480)
-    }
-
     @Test func volumeSnapshotRoundTrip() throws {
         let decoded = try throughEnvelope(
             VolumeSnapshotMessage(
@@ -106,21 +38,6 @@ struct VolumeMessageTests {
             )
         )
         #expect(decoded.attachedVMId == "vm-42")
-    }
-
-    @Test func volumeCloneRoundTrip() throws {
-        let decoded = try throughEnvelope(
-            VolumeCloneMessage(
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                sourceVolumeId: "vol-1",
-                sourceVolumePath: "/var/lib/strato/vol-1.qcow2",
-                targetVolumeId: "vol-2"
-            )
-        )
-        #expect(decoded.type == .volumeClone)
-        #expect(decoded.sourceVolumeId == "vol-1")
-        #expect(decoded.targetVolumeId == "vol-2")
     }
 
     @Test func volumeInfoRoundTrip() throws {

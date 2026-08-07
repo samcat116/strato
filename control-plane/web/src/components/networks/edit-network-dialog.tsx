@@ -41,8 +41,10 @@ function dhcpFormFrom(network: Network): DhcpFormState {
 
 /**
  * Edits a network's gateway and DHCP/DNS configuration. Subnet and name are
- * intentionally left to the create flow / server constraints; changing DHCP
- * settings re-syncs the config to agents so running guests pick it up on renew.
+ * intentionally left to the create flow / server constraints; changing these
+ * settings re-syncs the config to agents, which running guests pick up on their
+ * next DHCP renew. Guests on a static network don't: cloud-init applies the
+ * network's DNS once at VM creation, so an edit there only reaches new VMs.
  */
 export function EditNetworkDialog({
   network,

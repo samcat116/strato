@@ -117,25 +117,28 @@ export function NetworkTable({
                 )}
               </TableCell>
               <TableCell className="text-foreground/80 text-sm">
-                {network.dhcpEnabled ? (
-                  <div className="space-y-0.5">
+                {/* The badge reports addressing; the DNS line is outside it
+                    because static networks carry resolvers too — cloud-init
+                    delivers them at VM creation. */}
+                <div className="space-y-0.5">
+                  {network.dhcpEnabled ? (
                     <Badge className="bg-blue-500/15 text-blue-700 border-blue-300">
                       DHCP
                     </Badge>
-                    <div className="text-xs text-muted-foreground font-mono">
-                      {network.dnsServers.length > 0
-                        ? network.dnsServers.join(", ")
-                        : "no DNS"}
-                    </div>
+                  ) : (
+                    <Badge
+                      variant="outline"
+                      className="border-input text-muted-foreground"
+                    >
+                      Static
+                    </Badge>
+                  )}
+                  <div className="text-xs text-muted-foreground font-mono">
+                    {network.dnsServers.length > 0
+                      ? network.dnsServers.join(", ")
+                      : "no DNS"}
                   </div>
-                ) : (
-                  <Badge
-                    variant="outline"
-                    className="border-input text-muted-foreground"
-                  >
-                    Static
-                  </Badge>
-                )}
+                </div>
               </TableCell>
               <TableCell className="text-foreground/80">
                 {network.projectId ? "Project" : "Global"}

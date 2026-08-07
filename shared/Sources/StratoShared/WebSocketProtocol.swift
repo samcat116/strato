@@ -30,15 +30,16 @@ public enum MessageType: String, Codable, Sendable {
     // projects may now share (issue #765) — and no control plane had sent them
     // since desired-state sync landed.
 
-    // Volume operations (QEMU only - not supported for Firecracker)
-    case volumeCreate = "volume_create"
-    case volumeDelete = "volume_delete"
-    case volumeAttach = "volume_attach"
-    case volumeDetach = "volume_detach"
-    case volumeResize = "volume_resize"
+    // Volume operations (QEMU only - not supported for Firecracker).
+    //
+    // `volume_create`, `volume_delete`, `volume_attach`, `volume_detach`,
+    // `volume_resize` and `volume_clone` were removed in wire v31: volumes are
+    // desired state now (ADR 0001 stage 5, STR-148), realized from
+    // `DesiredStateMessage.volumes` and confirmed through
+    // `ObservedStateReport.volumes`. What remains here are the artifact verbs
+    // (stage 8) and the read (stage 7), which have not converted yet.
     case volumeSnapshot = "volume_snapshot"
     case volumeSnapshotDelete = "volume_snapshot_delete"
-    case volumeClone = "volume_clone"
     case volumeInfo = "volume_info"
 
     // Console operations
@@ -751,135 +752,6 @@ public struct ConsoleDisconnectedMessage: WebSocketMessage {
 
 // MARK: - Volume Operation Messages (QEMU only)
 
-/// Message to create a new volume on an agent
-public struct VolumeCreateMessage: WebSocketMessage {
-    public var type: MessageType { .volumeCreate }
-    public let requestId: String
-    public let timestamp: Date
-    public let volumeId: String
-    public let size: Int64  // Size in bytes
-    public let format: String  // "qcow2" or "raw"
-    public let sourceImageInfo: ImageInfo?  // For volumes created from images
-    public let sourceVolumePath: String?  // For cloning existing volumes
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        volumeId: String,
-        size: Int64,
-        format: String = "qcow2",
-        sourceImageInfo: ImageInfo? = nil,
-        sourceVolumePath: String? = nil
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.volumeId = volumeId
-        self.size = size
-        self.format = format
-        self.sourceImageInfo = sourceImageInfo
-        self.sourceVolumePath = sourceVolumePath
-    }
-}
-
-/// Message to delete a volume from an agent. Carries no file path: the agent
-/// owns volume path layout and derives the volume's location from its ID, so
-/// deletion also cleans up volumes whose create failed before a path was ever
-/// recorded.
-public struct VolumeDeleteMessage: WebSocketMessage {
-    public var type: MessageType { .volumeDelete }
-    public let requestId: String
-    public let timestamp: Date
-    public let volumeId: String
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        volumeId: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.volumeId = volumeId
-    }
-}
-
-/// Message to attach a volume to a running VM (hot-plug)
-public struct VolumeAttachMessage: WebSocketMessage {
-    public var type: MessageType { .volumeAttach }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let volumeId: String
-    public let volumePath: String
-    public let deviceName: String  // e.g., "disk1", "disk2"
-    public let readonly: Bool
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        vmId: String,
-        volumeId: String,
-        volumePath: String,
-        deviceName: String,
-        readonly: Bool = false
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.volumeId = volumeId
-        self.volumePath = volumePath
-        self.deviceName = deviceName
-        self.readonly = readonly
-    }
-}
-
-/// Message to detach a volume from a running VM (hot-unplug)
-public struct VolumeDetachMessage: WebSocketMessage {
-    public var type: MessageType { .volumeDetach }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let volumeId: String
-    public let deviceName: String
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        vmId: String,
-        volumeId: String,
-        deviceName: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.volumeId = volumeId
-        self.deviceName = deviceName
-    }
-}
-
-/// Message to resize a volume (must be detached)
-public struct VolumeResizeMessage: WebSocketMessage {
-    public var type: MessageType { .volumeResize }
-    public let requestId: String
-    public let timestamp: Date
-    public let volumeId: String
-    public let volumePath: String
-    public let newSize: Int64  // New size in bytes
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        volumeId: String,
-        volumePath: String,
-        newSize: Int64
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.volumeId = volumeId
-        self.volumePath = volumePath
-        self.newSize = newSize
-    }
-}
-
 /// Message to create a snapshot of a volume. The agent owns snapshot path
 /// layout and reports the resulting path back in the response.
 public struct VolumeSnapshotMessage: WebSocketMessage {
@@ -940,31 +812,6 @@ public struct VolumeSnapshotDeleteMessage: WebSocketMessage {
         self.timestamp = timestamp
         self.volumeId = volumeId
         self.snapshotId = snapshotId
-    }
-}
-
-/// Message to clone a volume. The agent owns volume path layout and reports
-/// the clone's path back in the response.
-public struct VolumeCloneMessage: WebSocketMessage {
-    public var type: MessageType { .volumeClone }
-    public let requestId: String
-    public let timestamp: Date
-    public let sourceVolumeId: String
-    public let sourceVolumePath: String
-    public let targetVolumeId: String
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        sourceVolumeId: String,
-        sourceVolumePath: String,
-        targetVolumeId: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.sourceVolumeId = sourceVolumeId
-        self.sourceVolumePath = sourceVolumePath
-        self.targetVolumeId = targetVolumeId
     }
 }
 

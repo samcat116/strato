@@ -24,11 +24,21 @@ export const emptyDhcpForm: DhcpFormState = {
   leaseTime: "",
 };
 
-/** Normalizes the string-backed form into request fields. */
+/**
+ * Normalizes the string-backed form into request fields.
+ *
+ * An emptied search domain goes out as `""`, not `undefined`: the update
+ * endpoint reads an absent field as "leave alone", so sending `undefined` would
+ * make clearing the field impossible — and would leave a network holding a
+ * domain that predates validation permanently unsaveable, since every later
+ * edit resubmits the whole form and fails on a value the user did try to
+ * remove. The empty string is the documented clearing gesture, and the create
+ * path reads it as absent.
+ */
 export function parseDhcpForm(form: DhcpFormState): {
   dhcpEnabled: boolean;
   dnsServers: string[];
-  domainName?: string;
+  domainName: string;
   leaseTime?: number;
 } {
   const dnsServers = form.dnsServers
@@ -41,7 +51,7 @@ export function parseDhcpForm(form: DhcpFormState): {
   return {
     dhcpEnabled: form.dhcpEnabled,
     dnsServers,
-    domainName: form.domainName.trim() || undefined,
+    domainName: form.domainName.trim(),
     leaseTime: Number.isFinite(leaseTime) ? leaseTime : undefined,
   };
 }
@@ -53,8 +63,17 @@ interface DHCPFieldsProps {
 }
 
 /**
- * DHCP configuration inputs. When enabled, agents program OVN's DHCP responder
- * to deliver the control-plane-allocated IP plus this DNS/lease config to guests.
+ * DHCP and DNS configuration inputs. DHCP decides how guests are addressed:
+ * when enabled, agents program OVN's DHCP responder to deliver the
+ * control-plane-allocated IP plus this DNS/lease config. The DNS servers and
+ * search domain reach guests either way — over DHCP when it's on, and through
+ * cloud-init's `nameservers` block on statically addressed NICs when it's off —
+ * so only lease time is gated on the checkbox.
+ *
+ * The two paths differ in when they converge, which the help text spells out:
+ * DHCP guests re-read the config on renew, while the NoCloud seed keys on a
+ * stable `instance-id`, so a static NIC applies this DNS once at VM creation
+ * and never again.
  */
 export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
   return (
@@ -70,9 +89,11 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
         Manage guest addressing with OVN DHCP
       </label>
       <p className="text-xs text-muted-foreground">
-        When on, agents answer guest DHCP requests with the allocated IP,
-        gateway, and the DNS below. When off, VMs are configured statically via
-        cloud-init.
+        When on, agents answer guest DHCP requests with the allocated IP and
+        gateway, and running guests pick up edits to the DNS below on their next
+        renew. When off, VMs are configured statically via cloud-init, which
+        applies that DNS once at VM creation — later edits reach only VMs
+        created after them.
       </p>
 
       <div className="space-y-2">
@@ -85,11 +106,14 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           value={value.dnsServers}
           onChange={(e) => onChange({ ...value, dnsServers: e.target.value })}
           className="bg-background border-border text-foreground font-mono"
-          disabled={disabled || !value.dhcpEnabled}
+          disabled={disabled}
+          aria-describedby="dnsServersHelp"
         />
-        <p className="text-xs text-muted-foreground">
-          Comma- or space-separated IPv4 or IPv6 addresses advertised over
-          DHCP (each family&apos;s servers go to its own DHCP options).
+        <p id="dnsServersHelp" className="text-xs text-muted-foreground">
+          Comma- or space-separated IPv4 or IPv6 addresses. Advertised over DHCP
+          when it&apos;s on (each family&apos;s servers go to its own DHCP
+          option), and written into cloud-init&apos;s nameservers on statically
+          addressed NICs.
         </p>
       </div>
 
@@ -103,8 +127,14 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           value={value.domainName}
           onChange={(e) => onChange({ ...value, domainName: e.target.value })}
           className="bg-background border-border text-foreground"
-          disabled={disabled || !value.dhcpEnabled}
+          disabled={disabled}
+          aria-describedby="domainNameHelp"
         />
+        <p id="domainNameHelp" className="text-xs text-muted-foreground">
+          Appended to unqualified hostname lookups — a DHCP option when DHCP is
+          on, the cloud-init search list otherwise. Must be fully qualified: at
+          least two labels, like a DNS zone name.
+        </p>
       </div>
 
       <div className="space-y-2">

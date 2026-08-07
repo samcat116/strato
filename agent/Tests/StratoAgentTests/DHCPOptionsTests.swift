@@ -67,6 +67,41 @@ struct DHCPOptionsTests {
         #expect(options["domain_search"] == nil)
     }
 
+    @Test("a malformed domain is dropped from both families rather than emitted")
+    func malformedDomainIsDropped() {
+        // The control plane refuses these on write (issue #876); a row that
+        // predates the validation still holds one. A `"` would end OVN's quoted
+        // option early and make the whole DHCP_Options row unparseable, costing
+        // every VM on the network its lease — so the option is dropped and the
+        // guest simply gets no search domain. Everything else stays.
+        for bad in ["corp\".com", "corp.example.com\n routes:", "corp .com", "-corp.com", "corp..com"] {
+            let v4 = OVNDHCPOptionsBuilder.v4Options(
+                gateway: "10.0.0.1", dnsServers: ["1.1.1.1"], domainName: bad, leaseTime: nil,
+                subnet: "10.0.0.0/24")
+            #expect(v4["domain_name"] == nil, "'\(bad)' should not be advertised")
+            #expect(v4["dns_server"] == "{1.1.1.1}", "'\(bad)' should not cost the row its DNS")
+            #expect(v4["router"] == "10.0.0.1")
+
+            let v6 = OVNDHCPOptionsBuilder.v6Options(
+                dnsServers: ["fd00::53"], domainName: bad, subnet6: "fd00::/64")
+            #expect(v6["domain_search"] == nil, "'\(bad)' should not be advertised")
+            #expect(v6["dns_server"] == "{fd00::53}")
+        }
+    }
+
+    @Test("a single-label domain is advertised, and surrounding whitespace never reaches the guest")
+    func singleLabelAndTrimmedDomains() {
+        // `internal` is a legitimate search domain — the label grammar is what
+        // keeps the option well formed, not the label count.
+        let v4 = OVNDHCPOptionsBuilder.v4Options(
+            gateway: "10.0.0.1", dnsServers: [], domainName: "internal", leaseTime: nil, subnet: "10.0.0.0/24")
+        #expect(v4["domain_name"] == "\"internal\"")
+
+        let v6 = OVNDHCPOptionsBuilder.v6Options(
+            dnsServers: [], domainName: " corp.example.com \n", subnet6: "fd00::/64")
+        #expect(v6["domain_search"] == "\"corp.example.com\"")
+    }
+
     @Test("server MAC is stable per subnet and locally administered")
     func serverMACStability() {
         let a = OVNDHCPOptionsBuilder.serverMAC(for: "10.0.0.0/24")

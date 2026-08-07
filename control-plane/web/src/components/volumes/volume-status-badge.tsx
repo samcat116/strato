@@ -1,4 +1,6 @@
 import { Badge } from "@/components/ui/badge";
+import { pendingMutationLabel } from "@/lib/operation-labels";
+import { usePendingMutation } from "@/lib/stores/mutations-store";
 import type { VolumeStatus } from "@/types/api";
 
 const statusConfig: Record<VolumeStatus, { label: string; className: string }> =
@@ -56,7 +58,27 @@ const unknownConfig = {
   className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
 };
 
-export function VolumeStatusBadge({ status }: { status: VolumeStatus }) {
+const pendingClassName =
+  "bg-yellow-500/20 text-yellow-700 border-yellow-500/30 animate-pulse";
+
+export function VolumeStatusBadge({
+  status,
+  volumeId,
+}: {
+  status: VolumeStatus;
+  /** When provided, an in-flight mutation on this volume overrides the label. */
+  volumeId?: string;
+}) {
+  const pendingMutation = usePendingMutation(volumeId);
+
+  if (pendingMutation) {
+    return (
+      <Badge variant="outline" className={pendingClassName}>
+        {pendingMutationLabel(pendingMutation.kind)}
+      </Badge>
+    );
+  }
+
   const config = statusConfig[status] || unknownConfig;
 
   return (

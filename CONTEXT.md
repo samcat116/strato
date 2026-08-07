@@ -88,7 +88,18 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Generation** — a monotonic counter bumped on every desired-state change so
   agents treat a sync as newer than anything they have applied; syncs are
   level-triggered and safe to drop or replay.
-- **Conditions** — the `conditions` block VM and sandbox API responses carry:
+- **Create strategy** — how a resource that does not exist on an agent yet gets
+  its initial bytes, carried *on its desired entry* rather than as an operation:
+  a sandbox's `restoreFrom`, a volume's `source` (blank / image / clone). Read
+  only while the resource is absent, which is what makes a replayed sync unable
+  to overwrite live data with a fresh copy.
+- **Desired attachment** — which VM a volume should be presented to, and in
+  which slot. A *field* of the volume's desired entry, not a status: modelling
+  it as a status would make "present, but the attach failed" unrepresentable.
+  The agent keeps a durable record of what it realized, so an attachment
+  survives a guest power cycle and an agent restart.
+- **Conditions** — the `conditions` block VM, sandbox and volume API responses
+  carry:
   *converged* / *targetGeneration* / *observedGeneration* / *phase* /
   *degraded*. Derived on read, never stored, and never written by a mutation —
   it restates the reconciliation loop's own state, so refetching a resource
@@ -153,9 +164,10 @@ use in code, tests, docs, and review. Architecture-level maps live in
   sync. A latency optimization only — the periodic sync is the backstop, so a
   lost nudge is always safe.
 - **Cross-replica RPC** — the correlated request/reply forwarding for the
-  exchanges that are *actions, not states* (volume operations, VM reboot, VM
-  checkpoint/restore/snapshot-delete, sandbox snapshot operations) and so
-  cannot ride the level-triggered sync. When the serving replica lacks the
+  exchanges that are *actions, not states* (VM reboot, VM
+  checkpoint/restore/snapshot-delete, volume *snapshot* operations, sandbox
+  snapshot operations) and so cannot ride the level-triggered sync. A volume's
+  own lifecycle left this list in STR-148. When the serving replica lacks the
   socket, the exchange is forwarded to the holder and the verdict returns on
   the requester's reply channel.
 - **ReplicaMessageBridge** — the deep module (`app.replicaBridge`) that owns
@@ -171,18 +183,21 @@ use in code, tests, docs, and review. Architecture-level maps live in
 
 ## Volume attachment
 
-- **Attachment** — the volume↔VM relationship, recorded across `vm_id`,
-  `device_name`, `boot_order` and `attached_agent_id` on `volumes` plus its
-  `status`. Not four independent columns: `VolumeAttachmentService` is the only
-  thing that moves them, and it moves them together. The database enforces the
-  shape — unique `(vm_id, device_name)` and `(vm_id, boot_order)` per VM, an
-  attached row must name its device, and `vm_id` is `ON DELETE RESTRICT`.
+- **Attachment** — the **desired attachment** as it is stored: `vm_id`,
+  `device_name`, `boot_order`, `readonly` and `attached_agent_id` on `volumes`.
+  Not five independent columns — `VolumeAttachmentService` is the only thing
+  that moves them, and it moves them together, generation included. The
+  database enforces the shape: unique `(vm_id, device_name)` and
+  `(vm_id, boot_order)` per VM, an attached row must name its device, and
+  `vm_id` is `ON DELETE RESTRICT`.
 
 - **Claim / release** — the two transitions. A claim is one transaction under a
   per-VM advisory lock (the `IPAMService` idiom), so generating the next free
-  `disk<N>` cannot race another attach; a release returns the row to
-  `.available` with every column cleared. Deleting a VM releases its volumes
-  inside the delete transaction — the volume outlives the VM.
+  `disk<N>` cannot race another attach; a release clears every column. Both
+  bump the generation, which is what makes them reach the agent at all — and
+  neither writes `status`, which is only ever what the agent last observed.
+  Deleting a VM releases its volumes inside the delete transaction: the volume
+  outlives the VM.
 
 - **Device name** — the volume's stable label within its VM (`VolumeDeviceName`
   in `StratoShared`, validated at the API boundary). It is a *label*, not an

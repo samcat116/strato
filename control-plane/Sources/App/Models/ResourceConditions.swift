@@ -117,6 +117,7 @@ extension ConvergenceObservable {
 
 extension VM: ConvergenceObservable {}
 extension Sandbox: ConvergenceObservable {}
+extension Volume: ConvergenceObservable {}
 
 /// A workload whose API mutations are accepted asynchronously and judged by
 /// the reconciliation loop rather than by an operation row (ADR 0001 stage 4,
@@ -309,6 +310,60 @@ extension Sandbox: ConvergingResource {
     }
 }
 
+extension Volume: ConvergingResource {
+    static var operationResourceKind: OperationResourceKind { .volume }
+    var projectID: UUID { $project.id }
+
+    /// A volume's convergence progress and its most recent failure share one
+    /// column pair with its user-facing error, so `ConvergenceObservable`'s
+    /// `lastError` is `errorMessage` under another name.
+    var lastError: String? {
+        get { errorMessage }
+        set { errorMessage = newValue }
+    }
+
+    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Volume] {
+        try await Volume.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    }
+
+    func adoptReconciliationState(from committed: Volume) {
+        status = committed.status
+        desiredStatus = committed.desiredStatus
+        generation = committed.generation
+        observedGeneration = committed.observedGeneration
+        convergencePhase = committed.convergencePhase
+        errorMessage = committed.errorMessage
+        failedGeneration = committed.failedGeneration
+        convergenceDeadline = committed.convergenceDeadline
+        hypervisorId = committed.hypervisorId
+        storagePath = committed.storagePath
+        attachedAgentId = committed.attachedAgentId
+        finalizers = committed.finalizers
+    }
+
+    /// Resolves the in-flight state a failed mutation left on this volume.
+    ///
+    /// The *attachment* is reverted, because an unachieved attach left in place
+    /// replays destructively on every later sync — the repo's most expensive
+    /// bug shape. The *size* deliberately is not: the control plane does not
+    /// know the last size the agent actually realized, so "reverting" it would
+    /// be a guess, and a desired size larger than reality is harmless to
+    /// re-attempt under the agent's own attempt cap. A stuck delete keeps its
+    /// `.absent`, for the same reason a VM's does — reverting it would
+    /// resurrect a volume the user deleted.
+    @discardableResult
+    func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool {
+        guard desiredStatus != .absent else { return false }
+        guard mutation == .attach, $vm.id != nil else { return false }
+        $vm.id = nil
+        deviceName = nil
+        bootOrder = nil
+        readonly = false
+        bumpGeneration()
+        return true
+    }
+}
+
 extension VM {
     var conditions: ResourceConditions {
         ResourceConditions(
@@ -330,6 +385,23 @@ extension Sandbox {
             desiredSatisfied: desiredStatus.isSatisfied(by: status),
             phase: convergencePhase,
             lastError: lastError,
+            failedGeneration: failedGeneration
+        )
+    }
+}
+
+extension Volume {
+    var conditions: ResourceConditions {
+        ResourceConditions(
+            targetGeneration: generation,
+            observedGeneration: observedGeneration,
+            // A volume has no `DesiredVolumeStatus.isSatisfied(by:)` because
+            // `.absent` is confirmed by omission from the observed report and
+            // `.present` is confirmed by a resting status — the same rule
+            // `isConverged` states, reused so the two cannot disagree.
+            desiredSatisfied: status == .available || status == .attached,
+            phase: convergencePhase,
+            lastError: errorMessage,
             failedGeneration: failedGeneration
         )
     }

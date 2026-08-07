@@ -42,14 +42,19 @@ enum VolumeAttachmentService {
 
     // MARK: - Claim
 
-    /// Binds `volume` to `vm` under `deviceName`, generating one when the caller
-    /// named none, and leaves the row in `.attaching` for the agent round trip
-    /// to confirm.
+    /// Writes `volume`'s desired attachment to `vm` under `deviceName`,
+    /// generating one when the caller named none, and bumps the generation the
+    /// owning agent converges on.
     ///
-    /// Must be called inside a transaction that already holds `lock(vmID:)`:
-    /// both the generated name and the duplicate checks read the VM's current
-    /// attachments, and neither is meaningful if a concurrent attach can insert
-    /// between the read and the write.
+    /// Takes the lock itself, so no caller can forget it: both the generated
+    /// name and the duplicate checks read the VM's current attachments, and
+    /// neither is meaningful if a concurrent attach can write between the read
+    /// and this one. Call inside a transaction — `ResourceMutation.accept`'s,
+    /// in the attach path — since the lock is transaction-scoped.
+    ///
+    /// Nothing here touches `status`: since STR-148 that column is what the
+    /// agent last observed, and the control plane writing it would be inventing
+    /// an observation.
     ///
     /// - Returns: the device name the volume was claimed under.
     @discardableResult
@@ -58,13 +63,22 @@ enum VolumeAttachmentService {
         to vm: VM,
         deviceName requested: VolumeDeviceName?,
         bootOrder: Int?,
+        readonly: Bool,
         on db: any Database
     ) async throws -> VolumeDeviceName {
         let vmID = try vm.requireID()
+        try await lock(vmID: vmID, on: db)
 
-        // Every volume already pointing at this VM, whatever its status: a row
-        // mid-`.attaching` has claimed its name just as firmly as an attached
-        // one, and the unique index does not care about status either.
+        // Re-read under the lock: `canAttach` was answered against a snapshot
+        // taken before it, and a concurrent attach could have bound the volume
+        // in between.
+        guard volume.canAttach else {
+            throw Abort(.conflict, reason: "Volume is already attached to a VM. Detach it first.")
+        }
+
+        // Every volume already pointing at this VM: a desired attachment claims
+        // its name whether or not the agent has realized it yet, and the unique
+        // index does not care either.
         let siblings = try await Volume.query(on: db)
             .filter(\.$vm.$id == vmID)
             .all()
@@ -95,13 +109,14 @@ enum VolumeAttachmentService {
             }
         }
 
-        volume.status = .attaching
         volume.$vm.id = vmID
         volume.deviceName = deviceName.rawValue
         volume.bootOrder = bootOrder
+        volume.readonly = readonly
         // The volume's replica placement is set at provisioning and must not be
         // overwritten here; this records where the *attachment* runs.
         volume.attachedAgentId = vm.hypervisorId
+        volume.bumpGeneration()
         do {
             try await volume.save(on: db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -120,48 +135,33 @@ enum VolumeAttachmentService {
 
     // MARK: - Release
 
-    /// Returns `volume` to a detached resting state, in memory. All four
-    /// attachment columns and the status move together — the whole point of
+    /// Clears `volume`'s desired attachment, in memory. Every attachment column
+    /// moves together and the generation bumps with them — the whole point of
     /// routing every caller through one function.
+    ///
+    /// The bump is not bookkeeping: the agent drops a desired entry no newer
+    /// than the one it last applied, so clearing the columns without it would
+    /// leave the disk plugged into the guest forever.
+    ///
+    /// `status` is left alone. It is what the agent last observed, and the
+    /// detach it will observe is what moves it.
     static func clearAttachment(_ volume: Volume) {
         volume.$vm.id = nil
         volume.deviceName = nil
         volume.bootOrder = nil
+        volume.readonly = false
         volume.attachedAgentId = nil
-        volume.status = .available
+        volume.bumpGeneration()
     }
 
-    /// The same, for a row whose VM is already gone: the status moves only if it
-    /// still claims to be `.attached`.
-    ///
-    /// The sweep that calls this is repairing an *attachment*, not an operation.
-    /// A row caught mid-`.deleting` when its VM went away is still being
-    /// deleted, and answering `.available` would report a delete as undone.
-    static func clearStrandedAttachment(_ volume: Volume) {
-        let status = volume.status
-        clearAttachment(volume)
-        if status != .attached {
-            volume.status = status
-        }
-    }
-
-    /// Detaches and persists a single volume.
-    static func release(_ volume: Volume, on db: any Database) async throws {
-        clearAttachment(volume)
-        try await volume.save(on: db)
-    }
-
-    /// Detaches every volume attached to `vmID`, whatever state each is in.
+    /// Releases every volume attached to `vmID`, and returns their ids.
     ///
     /// Called from the VM reap inside the delete transaction: the guest is
-    /// going away, so there is no hot-unplug to perform and nothing to wait
-    /// for — the volume's data is intact on the agent and the row becomes
-    /// reusable. Unconditional on status on purpose: `volumes.vm_id` is
-    /// `ON DELETE RESTRICT`, so a row this skipped would fail the VM's delete,
-    /// and "a dead agent must not make its VM undeletable" outranks preserving
-    /// an in-flight volume operation that has nothing left to converge on.
-    ///
-    /// - Returns: the volumes it detached, for the caller's log.
+    /// going away, so there is no hot-unplug to arrange — the volume's data is
+    /// intact on the agent and the row becomes reusable. Unconditional on the
+    /// volume's own state on purpose: `volumes.vm_id` is `ON DELETE RESTRICT`,
+    /// so a row this skipped would fail the VM's delete, and "a dead agent must
+    /// not make its VM undeletable" outranks every other consideration here.
     @discardableResult
     static func releaseAll(fromVM vmID: UUID, on db: any Database) async throws -> [UUID] {
         let attached = try await Volume.query(on: db)

@@ -105,6 +105,7 @@ struct VolumeAttachmentTests {
             volume.attachedAgentId = "agent-a"
             try await volume.save(on: app.db)
             let vmID = try vm.requireID()
+            let generationBefore = volume.generation
 
             // The unplaced delete path: nothing has to confirm a teardown that
             // never reached an agent, so the first clear reaps the row.
@@ -117,17 +118,22 @@ struct VolumeAttachmentTests {
             #expect(outcome == .reaped)
             #expect(try await VM.find(vmID, on: app.db) == nil)
 
-            // Before the fix: status `.attached`, `vm_id` NULL from the FK, and
-            // a stale device name — a row that could never be deleted, attached,
-            // snapshotted or cloned again.
+            // Before the fix the FK cleared `vm_id` and left everything else,
+            // so the volume named a device on a VM that no longer existed.
             let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(reloaded.status == .available)
             #expect(reloaded.$vm.id == nil)
             #expect(reloaded.deviceName == nil)
             #expect(reloaded.bootOrder == nil)
             #expect(reloaded.attachedAgentId == nil)
             #expect(reloaded.canDelete)
             #expect(reloaded.canAttach)
+            // The bump is what the agent acts on: without it the desired entry
+            // is no newer than the one it applied, so the disk would stay
+            // plugged into a guest nothing describes.
+            #expect(reloaded.generation > generationBefore)
+            // `status` is observed, so the control plane does not move it — the
+            // agent's next report does.
+            #expect(reloaded.status == .attached)
         }
     }
 
@@ -142,12 +148,13 @@ struct VolumeAttachmentTests {
             try await vm.save(on: app.db)
             try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
 
-            // A fresh VM, and the volume goes back to work: it reaches the agent
-            // dispatch (500, no agent in a test app) rather than being refused
-            // as still attached.
+            // A fresh VM, and the volume goes back to work: the attach is
+            // accepted rather than refused as still attached to the VM that no
+            // longer exists. Only the acceptance is asserted — this fixture is
+            // on no agent, so `.stateSync` dispatch degrades the mutation and
+            // `resolveForStuckOperation` reverts the attachment behind us.
             let replacement = try await builder.createVM(name: "replacement-vm", project: project)
-            try await attach(
-                volume, to: replacement, token: token, on: app, expecting: .internalServerError)
+            try await attach(volume, to: replacement, token: token, on: app, expecting: .accepted)
         }
     }
 
@@ -219,19 +226,20 @@ struct VolumeAttachmentTests {
             let second = try await makeVolume(
                 named: "generated-name", on: app, user: admin, project: project)
 
-            // Through the service rather than the endpoint: a successful attach
-            // continues into the agent dispatch, which a test app cannot serve,
-            // and the claim is what is under test.
+            // Through the service rather than the endpoint, because the claim
+            // itself is what is under test: `disk0` is taken, so the generated
+            // name must not be it.
+            let generationBefore = second.generation
             let claimed = try await app.db.transaction { tx in
                 try await VolumeAttachmentService.claim(
-                    second, to: vm, deviceName: nil, bootOrder: nil, on: tx)
+                    second, to: vm, deviceName: nil, bootOrder: nil, readonly: false, on: tx)
             }
             #expect(claimed.rawValue == "disk1")
 
             let reloaded = try #require(try await Volume.find(second.id, on: app.db))
             #expect(reloaded.deviceName == "disk1")
-            #expect(reloaded.status == .attaching)
             #expect(reloaded.$vm.id == vm.id)
+            #expect(reloaded.generation > generationBefore)
         }
     }
 
@@ -354,10 +362,12 @@ struct VolumeAttachmentTests {
             try await NormalizeVolumeAttachments().prepare(on: app.db)
 
             let repairedStranded = try #require(try await Volume.find(stranded.id, on: app.db))
-            #expect(repairedStranded.status == .available)
             #expect(repairedStranded.deviceName == nil)
             #expect(repairedStranded.bootOrder == nil)
             #expect(repairedStranded.attachedAgentId == nil)
+            // Bumped, so the owning agent actually unplugs the disk rather than
+            // dropping an entry no newer than the one it already applied.
+            #expect(repairedStranded.generation > stranded.generation)
 
             let onBusy = try await Volume.query(on: app.db)
                 .filter(\.$vm.$id == (try busy.requireID()))
@@ -398,37 +408,22 @@ struct VolumeAttachmentTests {
             volume.status = .attached
             volume.deviceName = "disk0"
             volume.bootOrder = 0
+            volume.readonly = true
             volume.attachedAgentId = "agent-a"
             try await volume.save(on: app.db)
+            let generationBefore = volume.generation
 
             await app.agentService.sweepStuckOperations()
 
             let swept = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(swept.status == .available)
             #expect(swept.deviceName == nil)
             #expect(swept.bootOrder == nil)
+            #expect(swept.readonly == false)
             #expect(swept.attachedAgentId == nil)
-        }
-    }
-
-    @Test("The sweep clears a stranded row's columns without undoing a delete")
-    func sweepKeepsANonAttachedStatus() async throws {
-        try await withAttachmentApp { app, _, admin, project, _, _ in
-            let volume = try await makeVolume(
-                named: "stranded-deleting", on: app, user: admin, project: project)
-            volume.status = .deleting
-            volume.deviceName = "disk0"
-            volume.attachedAgentId = "agent-a"
-            try await volume.save(on: app.db)
-
-            await app.agentService.sweepStuckOperations()
-
-            // The attachment is repaired; the delete still in flight is not
-            // reported as undone.
-            let swept = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(swept.status == .deleting)
-            #expect(swept.deviceName == nil)
-            #expect(swept.attachedAgentId == nil)
+            #expect(swept.generation > generationBefore)
+            // `status` is the agent's observation, so the sweep does not invent
+            // one — it repairs the attachment and lets the next report speak.
+            #expect(swept.status == .attached)
         }
     }
 
@@ -438,13 +433,14 @@ struct VolumeAttachmentTests {
             let volume = try await makeVolume(
                 named: "healthy-attachment", attachedTo: vm, deviceName: "disk0", bootOrder: 0,
                 on: app, user: admin, project: project)
+            let generationBefore = volume.generation
 
             await app.agentService.sweepStuckOperations()
 
             let swept = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(swept.status == .attached)
             #expect(swept.deviceName == "disk0")
             #expect(swept.$vm.id == vm.id)
+            #expect(swept.generation == generationBefore)
         }
     }
 }

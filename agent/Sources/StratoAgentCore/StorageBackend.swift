@@ -137,6 +137,15 @@ public protocol StorageBackend: Actor {
 
     /// Queries a volume's on-disk state.
     func volumeInfo(volumePath: String) async throws -> VolumeInfoResult
+
+    /// Every volume whose data this backend currently holds, by id (STR-148).
+    ///
+    /// This is the agent's presence set for volume reconciliation: a volume is
+    /// a file, so the backend's own inventory is the whole truth and there is
+    /// no manifest to keep in step with it. Must tolerate a half-written
+    /// volume — a directory whose `qemu-img create` died partway through is
+    /// *not* present, so the next sync re-drives the create over it.
+    func listVolumes() async throws -> [String: DiskAttachment]
 }
 
 // MARK: - Errors

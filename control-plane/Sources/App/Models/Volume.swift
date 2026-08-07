@@ -1,6 +1,7 @@
 import Fluent
 import Vapor
 import Foundation
+import StratoShared
 
 /// Represents the format of a volume disk image
 public enum VolumeFormat: String, Codable, CaseIterable, Sendable {
@@ -61,12 +62,52 @@ final class Volume: Model, @unchecked Sendable {
     @Enum(key: "type")
     var volumeType: VolumeType
 
-    // Status tracking
+    // Status tracking. `status` is purely *observed* since STR-148 — the
+    // control plane no longer writes a transitional status before dispatching
+    // an RPC, because there is no RPC; `ObservedStateApplier` derives it from
+    // what the owning agent reports.
     @Enum(key: "status")
     var status: VolumeStatus
 
+    // Desired/observed state split (ADR 0001 stage 5, STR-148), mirroring the
+    // VM columns exactly: `desiredStatus` is the goal written by API
+    // mutations, `generation` bumps on every desired change, and
+    // `observedGeneration` records the last generation the owning agent
+    // confirmed converging to.
+    @Enum(key: "desired_status")
+    var desiredStatus: DesiredVolumeStatus
+
+    @Field(key: "generation")
+    var generation: Int64
+
+    @Field(key: "observed_generation")
+    var observedGeneration: Int64
+
+    // Convergence progress mirrored from the agent's observed-state report.
+    // `errorMessage` doubles as `lastError` — one column, because a volume has
+    // never had a second error to report and two would only invite them to
+    // disagree in the API response.
+    @OptionalField(key: "convergence_phase")
+    var convergencePhase: String?
+
     @OptionalField(key: "error_message")
     var errorMessage: String?
+
+    @OptionalField(key: "failed_generation")
+    var failedGeneration: Int64?
+
+    /// When the stuck-convergence sweep gives up on this volume's outstanding
+    /// mutations and marks it degraded. Written by the mutation path as
+    /// `max(existing, now + budget)`; nil means nothing is outstanding.
+    @OptionalField(key: "convergence_deadline")
+    var convergenceDeadline: Date?
+
+    /// Outstanding cleanup participants blocking this volume's removal.
+    /// Empty for a live volume; stamped when a `DELETE` marks
+    /// `desiredStatus = .absent`, and drained a token at a time until the row
+    /// is reaped. See `ResourceFinalizer`.
+    @Field(key: "finalizers")
+    var finalizers: [String]
 
     // Placement: the pool whose agents hold this volume's replicas. Nullable
     // at the schema level only; the backfill migration and the create path
@@ -96,6 +137,13 @@ final class Volume: Model, @unchecked Sendable {
 
     @OptionalField(key: "boot_order")
     var bootOrder: Int?
+
+    /// Whether the attachment presents the volume read-only. Persisted since
+    /// STR-148: it used to be passed straight to the attach RPC and forgotten,
+    /// so nothing could re-derive the attachment after the fact — which a
+    /// level-triggered desired entry has to do on every sync.
+    @Field(key: "readonly")
+    var readonly: Bool
 
     // Source tracking (for clones/volumes created from images)
     @OptionalParent(key: "source_image_id")
@@ -139,6 +187,11 @@ final class Volume: Model, @unchecked Sendable {
         self.format = format
         self.volumeType = volumeType
         self.status = status
+        self.desiredStatus = .present
+        self.generation = 0
+        self.observedGeneration = 0
+        self.readonly = false
+        self.finalizers = []
         self.$createdBy.id = createdByID
         self.$pool.id = poolID
         if let sourceImageID = sourceImageID {
@@ -173,6 +226,8 @@ extension Volume {
         let vmId: UUID?
         let deviceName: String?
         let bootOrder: Int?
+        let readonly: Bool
+        let conditions: ResourceConditions
         let sourceImageId: UUID?
         let sourceVolumeId: UUID?
         let createdById: UUID?
@@ -199,6 +254,8 @@ extension Volume {
             vmId: self.$vm.id,
             deviceName: self.deviceName,
             bootOrder: self.bootOrder,
+            readonly: self.readonly,
+            conditions: self.conditions,
             sourceImageId: self.$sourceImage.id,
             sourceVolumeId: self.$sourceVolume.id,
             createdById: self.$createdBy.id,
@@ -215,17 +272,56 @@ extension Volume {
         return Double(size) / 1024.0 / 1024.0 / 1024.0
     }
 
+    /// Records a new desired state and bumps the generation so the owning agent
+    /// treats it as newer than whatever it last applied.
+    func setDesiredStatus(_ newDesired: DesiredVolumeStatus) {
+        desiredStatus = newDesired
+        generation += 1
+    }
+
+    /// Bumps the generation without changing the desired status, for a change
+    /// to the volume's *shape* — its size, or where it is attached. The agent
+    /// drops any entry not newer than the one it last applied, so a mutation
+    /// that skipped this would be silently ignored.
+    func bumpGeneration() {
+        generation += 1
+    }
+
+    /// True once the owning agent has confirmed the current generation and
+    /// what it reports satisfies the desired state.
+    ///
+    /// The status clause is the volume's analogue of
+    /// `DesiredVMStatus.isSatisfied(by:)`: `observedGeneration >= generation`
+    /// on its own would call a volume converged whose file had been deleted out
+    /// of band, since nothing would have bumped the generation to notice.
+    var isConverged: Bool {
+        desiredStatus == .present && observedGeneration >= generation
+            && (status == .available || status == .attached)
+    }
+
+    /// Whether this volume is on its way out — a `DELETE` has been accepted and
+    /// the row survives only until its finalizers drain.
+    var isTerminating: Bool {
+        desiredStatus == .absent
+    }
+
+    // The guards below are expressed against *desired* attachment rather than
+    // observed status, which is what makes them stable under a level-triggered
+    // loop: the answer to "can this be attached?" must not flip while an agent
+    // is mid-convergence. The transitional escape hatches issue #644 added are
+    // gone with the transitional statuses that made them necessary.
+
     var canAttach: Bool {
-        return status == .available
+        return $vm.id == nil && desiredStatus == .present
     }
 
     var canDetach: Bool {
-        return status == .attached
+        return $vm.id != nil
     }
 
     var canResize: Bool {
         // Can only resize when not attached (offline resize)
-        return status == .available
+        return $vm.id == nil && desiredStatus == .present
     }
 
     /// Snapshots require a detached volume (issue #747). The filesystem
@@ -238,7 +334,7 @@ extension Volume {
     /// real live-snapshot path (QMP `blockdev-snapshot-sync` plus the layer
     /// bookkeeping it implies) exists.
     var canSnapshot: Bool {
-        return status == .available
+        return $vm.id == nil && desiredStatus == .present && isConverged
     }
 
     /// Cloning is `qemu-img convert` of the volume's file, so it has the same
@@ -246,27 +342,24 @@ extension Volume {
     /// torn image. Its own property rather than a reuse of `canSnapshot`, so
     /// the two rules can move independently — a live-snapshot path (issue #747)
     /// would relax one without relaxing the other.
+    /// Cloning and snapshotting both read the source's bytes, so both keep an
+    /// `isConverged` requirement even though the other guards dropped theirs.
+    /// This is the one place a mutex is genuinely load-bearing rather than
+    /// incidental: copying a volume whose create is still writing it yields a
+    /// torn image, and unlike a resize it cannot be re-driven into correctness.
     var canClone: Bool {
-        return status == .available
+        return $vm.id == nil && desiredStatus == .present && isConverged
     }
 
-    /// A volume is deletable from every state except while actively `.attached`
-    /// to a VM (detach it first). `.deleting` was always retryable — agent-side
-    /// directory removal is idempotent, so re-issuing the DELETE is safe — and
-    /// issue #644 extends the same escape hatch to the other transitional
-    /// states (`.creating`, `.attaching`, `.detaching`, `.resizing`,
-    /// `.snapshotting`, `.cloning`). A control-plane crash mid-operation could
-    /// otherwise strand a volume in one of those with no recovery but manual
-    /// database surgery. `sweepStuckOperations()` also recovers these back to a
-    /// resting state, but delete stays available as the immediate escape hatch.
+    /// A volume is deletable unless it is attached to a VM (detach it first).
+    ///
+    /// Every other state is fair game, including a create that never finished:
+    /// deletion is level-triggered and the agent's teardown is idempotent, so
+    /// re-issuing it is always safe. Under the old imperative path this needed
+    /// issue #644's explicit escape hatches for each transitional status; with
+    /// desired state there are no transitional statuses to be stranded in.
     var canDelete: Bool {
-        switch status {
-        case .attached:
-            return false
-        case .available, .error, .deleting,
-            .creating, .attaching, .detaching, .resizing, .snapshotting, .cloning:
-            return true
-        }
+        return $vm.id == nil
     }
 }
 
@@ -320,6 +413,12 @@ struct VolumeResponse: Content {
     let vmId: UUID?
     let deviceName: String?
     let bootOrder: Int?
+    let readonly: Bool
+    /// The client-facing answer to "is my mutation done?" (ADR 0001 stage 1),
+    /// derived on read from the generation pair and the agent's report. Volumes
+    /// join the same 202-and-converge flow as VMs in STR-148, so this is what
+    /// clients poll rather than the status string.
+    let conditions: ResourceConditions
     let sourceImageId: UUID?
     let sourceVolumeId: UUID?
     let createdById: UUID?
@@ -343,6 +442,8 @@ struct VolumeResponse: Content {
         self.vmId = volume.$vm.id
         self.deviceName = volume.deviceName
         self.bootOrder = volume.bootOrder
+        self.readonly = volume.readonly
+        self.conditions = volume.conditions
         self.sourceImageId = volume.$sourceImage.id
         self.sourceVolumeId = volume.$sourceVolume.id
         self.createdById = volume.$createdBy.id

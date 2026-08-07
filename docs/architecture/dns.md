@@ -22,6 +22,13 @@ network-config (`CloudInitProvisioner.networkConfigYAML`). They are seeded with
 public resolvers so guests can look up *public* names. Nothing resolves a
 Strato-owned name, and the OVN `DNS` table is never touched.
 
+`domainName` is held to the same grammar as a zone name (`DNSName.normalizedZoneName`),
+so the two names in this model agree on one spelling. That is also a safety
+property rather than tidiness: neither destination carries the value as text —
+one is a netplan document keyed by indentation, the other an option map with its
+own quoting — so an unvalidated domain edits the structure around it rather than
+appearing in it (issue #876).
+
 ## Why the control plane owns the record model
 
 The control plane already owns IPAM (`IPAMService`), so it is the only

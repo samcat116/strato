@@ -294,7 +294,14 @@ struct VMSpecBuilder {
         let sortedVolumes = volumes.sorted { sortKey($0) < sortKey($1) }
 
         var specs: [VolumeSpec] = []
-        for volume in sortedVolumes where volume.status == .attached {
+        // Filtered on the *desired* attachment, not the observed status
+        // (STR-148). This list and `DesiredVolumeState.attachment` are two
+        // projections of one fact, and reading them off different columns is
+        // what used to let them disagree — a volume the VM's spec called
+        // attached while the volume lane called it detached, or the reverse.
+        // The volume lane is authoritative for realizing an attachment; this
+        // list is the boot-time convenience that rebuilds the same disk set.
+        for volume in sortedVolumes where volume.$vm.id != nil && volume.desiredStatus == .present {
             guard let storagePath = volume.storagePath else { continue }
             // An attached row without a legal device name cannot exist: the API
             // validates one on the way in, and `NormalizeVolumeAttachments`
@@ -311,7 +318,7 @@ struct VMSpecBuilder {
                     volumeId: volume.id,
                     deviceName: deviceName,
                     storagePath: storagePath,
-                    readonly: false,  // Could be enhanced to track readonly per-volume
+                    readonly: volume.readonly,
                     bootOrder: volume.bootOrder
                 ))
         }

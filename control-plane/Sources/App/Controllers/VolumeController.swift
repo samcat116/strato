@@ -104,7 +104,7 @@ struct VolumeController: RouteCollection {
     /// Create a new volume
     /// POST /api/volumes
     @Sendable
-    func createVolume(req: Request) async throws -> VolumeResponse {
+    func createVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let request = try req.content.decode(CreateVolumeRequest.self)
 
@@ -195,6 +195,20 @@ struct VolumeController: RouteCollection {
             sourceImageID: request.sourceImageId
         )
 
+        let app = req.application
+        let userID = try user.requireID()
+        // Bind to a `let` so the `@Sendable` dispatch closure captures an
+        // immutable copy rather than the mutable `sourceImage` var.
+        let poolMemberIds = pool.memberAgentIds
+
+        // How long the create has to converge before the stuck-convergence
+        // sweep marks the volume degraded, stamped with the insert so a
+        // control-plane crash between here and placement still leaves a
+        // resource the sweep can judge.
+        volume.extendConvergenceDeadline(
+            by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
+        volume.setDesiredStatus(.present)
+
         // The creator's explicit, revocable binding on the volume, in the same
         // transaction as the row (issue #477).
         try await req.db.transaction { db in
@@ -210,31 +224,48 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        // Provision the volume on an agent in the background. The volume stays
-        // `.creating` until the agent confirms, then becomes `.available` with
-        // its real storage path and hypervisor — or `.error` on failure.
-        let volumeService = req.application.volumeService
-        let volumeId = volume.id!
-        // Bind to a `let` so the `@Sendable` spawn closure captures an
-        // immutable copy rather than the mutable `sourceImage` var.
-        let provisionImage = sourceImage
-        // Register with the drain registry (like the VM/sandbox completion
-        // paths) so shutdown waits for and cancels this rather than racing
-        // Fluent teardown; `provisionVolume` guards its own `app.db` access.
-        req.application.backgroundTasks.spawn {
-            await volumeService.provisionVolume(volumeId: volumeId, sourceImage: provisionImage)
-        }
+        let volumeId = try volume.requireID()
+
+        // Placement is a `.placement` dispatch rather than something resolved
+        // in-band, and it has to *commit* before the sync can carry the volume:
+        // `DesiredStateAssembler` finds a volume by its `hypervisorId`, so an
+        // unplaced one is in nobody's desired state. On throw, `dispatch`
+        // degrades the volume with the reason.
+        let accepted = try await req.resourceMutation.accept(
+            .create, on: volume, actor: .user(userID),
+            dispatch: .placement { @Sendable db in
+                let agents = await app.agentService.getAgentList()
+                guard
+                    let agent = VolumeService.selectVolumeAgent(
+                        from: agents, memberAgentIds: poolMemberIds),
+                    let agentId = agent.id?.uuidString
+                else {
+                    throw ResourceMutation.WorkError(
+                        "No agent available to host this volume: it needs an online, QEMU-capable "
+                            + "agent in the volume's pool speaking wire protocol "
+                            + "\(WireProtocol.volumeSyncMinimumVersion) or later.")
+                }
+                guard let placed = try await Volume.find(volumeId, on: db) else { return }
+                placed.hypervisorId = agentId
+                try await placed.save(on: db)
+                try await VolumeReplica(
+                    volumeID: volumeId, agentId: agentId, state: .provisioning
+                ).create(on: db)
+                await app.agentService.syncDesiredState(agentId: agentId)
+            },
+            on: req.db, app: app)
 
         req.logger.info(
             "Volume creation requested",
             metadata: [
-                "volumeId": .string(volume.id!.uuidString),
+                "volumeId": .string(volumeId.uuidString),
                 "name": .string(volume.name),
                 "projectId": .string(projectId.uuidString),
                 "sizeGB": .stringConvertible(request.sizeGB),
+                "sourceImageId": .string(sourceImage?.id?.uuidString ?? ""),
             ])
 
-        return VolumeResponse(from: volume)
+        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
     }
 
     // MARK: - Get Volume
@@ -282,68 +313,82 @@ struct VolumeController: RouteCollection {
     /// Delete a volume
     /// DELETE /api/volumes/:volumeId
     @Sendable
-    func deleteVolume(req: Request) async throws -> HTTPStatus {
+    func deleteVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "delete")
 
-        // Validate volume can be deleted. Only an actively attached volume is
-        // undeletable; every other state — including the transitional ones a
-        // crash can strand a volume in — is an escape hatch (issue #644).
+        // Only an attached volume is undeletable. Every other state is fair
+        // game: deletion is level-triggered now and the agent's teardown is
+        // idempotent, so there is no half-finished operation a delete could
+        // interrupt into an inconsistent state (which is what issue #644's
+        // per-status escape hatches existed to work around).
         guard volume.canDelete else {
             throw Abort(
                 .conflict,
-                reason:
-                    "Volume cannot be deleted in status '\(volume.status.rawValue)'. "
-                    + "Detach it from its VM first."
+                reason: "Volume is attached to a VM and cannot be deleted. Detach it first."
             )
         }
 
-        // Mark as deleting
-        volume.status = .deleting
-        try await volume.save(on: req.db)
-
-        // Delete the backing storage on the agent first; database records are
-        // only removed once the hypervisor confirms (deleting the volume
-        // directory also removes its snapshot files). Volumes that were never
-        // provisioned on an agent are deleted from the database directly.
-        do {
-            try await req.application.volumeService.requestVolumeDeletion(volume: volume)
-        } catch {
-            volume.status = .error
-            volume.errorMessage = "Failed to delete volume on hypervisor: \(error.localizedDescription)"
-            try await volume.save(on: req.db)
-            throw Abort(.badGateway, reason: "Failed to delete volume on hypervisor: \(error.localizedDescription)")
-        }
-
-        // Delete any snapshots first
-        let snapshots = try await VolumeSnapshot.query(on: req.db)
-            .filter(\.$volume.$id == volume.id!)
-            .all()
-
-        for snapshot in snapshots {
-            try await req.db.transaction { db in
-                try await snapshot.delete(on: db)
-                // Drop the snapshot's bindings with the row.
-                try await RoleBindingService.revokeAll(
-                    nodeType: .volumeSnapshot, nodeID: snapshot.id!, on: db)
+        // Deletion via state sync, exactly like a VM's: desired becomes
+        // `.absent`, the volume is stamped with the finalizers its teardown
+        // owes, the agent removes the data on its next sync, and the row goes
+        // only once the observed report stops listing the volume. Snapshot rows
+        // and role bindings are cleaned up by `Volume.reap` at that point, not
+        // here — the row has to outlive this request.
+        let volumeID = try volume.requireID()
+        let userID = try user.requireID()
+        let app = req.application
+        // Unplaced, or placed on an agent that is offline or too old to speak
+        // volume sync: nothing will ever confirm the teardown, so clear the
+        // agent's finalizer here. Dead and un-upgraded agents must not make
+        // their volumes undeletable — and an agent below wire v31 is
+        // permanently in the second category until it is upgraded, which is the
+        // one place the hard cutover leaves a rough edge worth naming.
+        let agentCanConverge = try await Self.agentConvergesVolumes(volume.hypervisorId, app: app)
+        let strategy: ResourceMutation.Dispatch =
+            agentCanConverge
+            ? .stateSync
+            : .directResolution { @Sendable db in
+                if volume.hypervisorId != nil {
+                    app.logger.warning(
+                        "Deleting volume record without agent teardown; its agent cannot converge volumes",
+                        metadata: ["volumeId": .string(volumeID.uuidString)])
+                }
+                let outcome: ResourceFinalizerService.ClearOutcome
+                do {
+                    outcome = try await ResourceFinalizerService.clear(
+                        .agentAbsent, from: volume, on: db, app: app)
+                } catch {
+                    throw ResourceMutation.WorkError(
+                        "Failed to delete volume record: \(error.localizedDescription)")
+                }
+                if case .held(let remaining) = outcome {
+                    app.logger.info(
+                        "Volume delete is waiting on finalizers other than the agent's",
+                        metadata: [
+                            "volumeId": .string(volumeID.uuidString),
+                            "finalizers": .string(remaining.joined(separator: ",")),
+                        ])
+                }
+                return outcome.isRemoved
             }
-        }
 
-        try await req.db.transaction { db in
-            try await volume.delete(on: db)
-            // Bindings have no FK to the resources they protect, so drop
-            // them with the node.
-            try await RoleBindingService.revokeAll(
-                nodeType: .volume, nodeID: volume.id!, on: db)
+        let accepted = try await req.resourceMutation.accept(
+            .delete, on: volume, actor: .user(userID), dispatch: strategy,
+            on: req.db, app: app
+        ) { @Sendable _ in
+            // Stamp before the mark: `stampForDeletion` reads whether the
+            // volume is already terminating, and re-stamping a second DELETE
+            // would resurrect tokens their participants have already cleared.
+            ResourceFinalizerService.stampForDeletion(volume)
+            volume.setDesiredStatus(.absent)
         }
 
         req.logger.info(
-            "Volume deleted",
-            metadata: [
-                "volumeId": .string(volume.id!.uuidString)
-            ])
+            "Volume deletion requested",
+            metadata: ["volumeId": .string(volumeID.uuidString)])
 
-        return .noContent
+        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
     }
 
     // MARK: - Attach Volume
@@ -352,16 +397,15 @@ struct VolumeController: RouteCollection {
     /// POST /api/volumes/:volumeId/attach
     /// Body: { "vmId": UUID, "deviceName"?: string, "bootOrder"?: int, "readonly"?: bool }
     @Sendable
-    func attachVolume(req: Request) async throws -> VolumeResponse {
+    func attachVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "attach")
         let request = try req.content.decode(AttachVolumeRequest.self)
 
-        // Validate volume can be attached
         guard volume.canAttach else {
             throw Abort(
                 .conflict,
-                reason: "Volume cannot be attached in status '\(volume.status.rawValue)'. Must be 'available'")
+                reason: "Volume is already attached to a VM. Detach it first.")
         }
 
         // Attaching changes the VM, so the caller needs update on it too. An
@@ -391,9 +435,12 @@ struct VolumeController: RouteCollection {
         // Pool-aware reachability guard: the VM's agent must be able to reach
         // the volume's data. For a `local` pool that means the agent holding
         // the volume's single replica — identical to the old same-hypervisor
-        // check; for a `replicated` pool, any member agent. Skipped when the
-        // VM has no agent yet, matching the old guard (the attachment request
-        // below then fails with vmNotScheduled).
+        // check; for a `replicated` pool, any member agent.
+        //
+        // Enforced synchronously, at accept time, rather than left for the
+        // reconciler to discover: a `400` now is a far better answer than a
+        // `202` that degrades a minute later, and the same-agent constraint is
+        // a fact about the request, not about convergence.
         if let vmHypervisorId = vm.hypervisorId {
             let pool = try await volume.$pool.get(on: req.db)
             var replicaAgentIds = try await VolumeReplica.query(on: req.db)
@@ -418,10 +465,12 @@ struct VolumeController: RouteCollection {
             }
         }
 
-        // A device name from the request body reaches the agent as a hypervisor
-        // object id, so it is validated here rather than at the point it would
-        // otherwise fail — an opaque hot-plug rejection, or a persisted spec
-        // that breaks the next boot (STR-129).
+        try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
+
+        // A device name from the request body becomes a hypervisor object id,
+        // so it is validated here rather than at the point it would otherwise
+        // fail — an opaque hot-plug rejection, or a recorded attachment that
+        // breaks the guest's next boot (STR-129).
         let requestedDeviceName: VolumeDeviceName? = try request.deviceName.map {
             guard let name = VolumeDeviceName($0) else {
                 throw Abort(.badRequest, reason: InvalidVolumeDeviceName(rawValue: $0).description)
@@ -429,62 +478,41 @@ struct VolumeController: RouteCollection {
             return name
         }
 
-        // Claim the device name and the VM binding in one transaction under the
-        // per-VM lock. Generating a name is a read-then-write, and the status
-        // checked above was read before it — so both are redone here, against
-        // the row as it is under the lock.
-        let volumeID = try volume.requireID()
+        let userID = try user.requireID()
+        let readonly = request.readonly ?? false
+        let bootOrder = request.bootOrder
         let vmID = try vm.requireID()
-        let (claimed, deviceName) = try await req.db.transaction {
-            tx -> (Volume, VolumeDeviceName) in
-            try await VolumeAttachmentService.lock(vmID: vmID, on: tx)
 
-            guard let current = try await Volume.find(volumeID, on: tx) else {
-                throw Abort(.notFound, reason: "Volume not found")
-            }
-            guard current.canAttach else {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Volume cannot be attached in status '\(current.status.rawValue)'. Must be 'available'")
-            }
-
-            let name = try await VolumeAttachmentService.claim(
-                current, to: vm,
+        let accepted = try await req.resourceMutation.accept(
+            .attach, on: volume, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable tx in
+            // The desired attachment, and nothing else. There is no
+            // `.attaching` status to set and revert: the agent reports what it
+            // realized, and `conditions` is what a client watches.
+            //
+            // Choosing the device name belongs *here*, inside the mutation's
+            // transaction and under the per-VM advisory lock, not before it:
+            // generating the next free `disk<N>` is a read-then-write, and two
+            // attaches that read before either wrote both picked the same slot
+            // (STR-129).
+            try await VolumeAttachmentService.claim(
+                volume, to: vm,
                 deviceName: requestedDeviceName,
-                bootOrder: request.bootOrder,
+                bootOrder: bootOrder,
+                readonly: readonly,
                 on: tx)
-            return (current, name)
         }
-
-        // Send hot-plug message to agent
-        do {
-            try await req.application.volumeService.requestVolumeAttachment(
-                volume: claimed,
-                vm: vm,
-                deviceName: deviceName.rawValue,
-                readonly: request.readonly ?? false
-            )
-        } catch {
-            // If hot-plug fails, give the claim back — every column at once, so
-            // the row cannot come to rest describing a half-attachment.
-            try await VolumeAttachmentService.release(claimed, on: req.db)
-            throw error
-        }
-
-        // Agent confirmed the hot-plug
-        claimed.status = .attached
-        try await claimed.save(on: req.db)
 
         req.logger.info(
-            "Volume attached to VM",
+            "Volume attachment requested",
             metadata: [
-                "volumeId": .string(volumeID.uuidString),
+                "volumeId": .string(volume.id!.uuidString),
                 "vmId": .string(vmID.uuidString),
-                "deviceName": .string(deviceName.rawValue),
+                "deviceName": .string(volume.deviceName ?? ""),
             ])
 
-        return VolumeResponse(from: claimed)
+        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
     }
 
     // MARK: - Detach Volume
@@ -492,18 +520,11 @@ struct VolumeController: RouteCollection {
     /// Detach a volume from a VM
     /// POST /api/volumes/:volumeId/detach
     @Sendable
-    func detachVolume(req: Request) async throws -> VolumeResponse {
+    func detachVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "detach")
 
-        // Validate volume can be detached
-        guard volume.canDetach else {
-            throw Abort(
-                .conflict, reason: "Volume cannot be detached in status '\(volume.status.rawValue)'. Must be 'attached'"
-            )
-        }
-
-        guard let vmId = volume.$vm.id else {
+        guard volume.canDetach, let vmId = volume.$vm.id else {
             throw Abort(.conflict, reason: "Volume is not attached to any VM")
         }
 
@@ -521,35 +542,27 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        // Mark as detaching
-        volume.status = .detaching
-        try await volume.save(on: req.db)
+        try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
 
-        // Send hot-unplug message to agent
-        do {
-            try await req.application.volumeService.requestVolumeDetachment(
-                volume: volume,
-                vm: vm
-            )
-        } catch {
-            // If hot-unplug fails, revert status
-            volume.status = .attached
-            try await volume.save(on: req.db)
-            throw error
+        let userID = try user.requireID()
+        let accepted = try await req.resourceMutation.accept(
+            .detach, on: volume, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
+            // Every attachment column at once, through the one function that
+            // owns the transition, so the row can never come to rest describing
+            // half an attachment (STR-129).
+            VolumeAttachmentService.clearAttachment(volume)
         }
 
-        // Agent confirmed the hot-unplug; clear the attachment — all four
-        // columns and the status together (STR-129).
-        try await VolumeAttachmentService.release(volume, on: req.db)
-
         req.logger.info(
-            "Volume detached from VM",
+            "Volume detachment requested",
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
                 "previousVmId": .string(vmId.uuidString),
             ])
 
-        return VolumeResponse(from: volume)
+        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
     }
 
     // MARK: - Resize Volume
@@ -558,17 +571,17 @@ struct VolumeController: RouteCollection {
     /// POST /api/volumes/:volumeId/resize
     /// Body: { "sizeGB": int }
     @Sendable
-    func resizeVolume(req: Request) async throws -> VolumeResponse {
+    func resizeVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "resize")
         let request = try req.content.decode(ResizeVolumeRequest.self)
 
-        // Validate volume can be resized
+        // Offline resize only: growing a disk under a running guest needs the
+        // guest to notice, which nothing here arranges.
         guard volume.canResize else {
             throw Abort(
                 .conflict,
-                reason: "Volume cannot be resized in status '\(volume.status.rawValue)'. Must be 'available' (detached)"
-            )
+                reason: "Volume is attached to a VM and cannot be resized. Detach it first.")
         }
 
         // Validate the requested size before converting, so an oversized value
@@ -587,48 +600,42 @@ struct VolumeController: RouteCollection {
             throw Abort(.badRequest, reason: "'sizeGB' is too large")
         }
 
-        // Validate new size is larger
+        // Validate new size is larger. Shrinking truncates the guest's
+        // filesystem, so the agent refuses it permanently too — this is the
+        // early, legible half of that refusal.
         guard newSizeBytes > volume.size else {
             throw Abort(
                 .badRequest,
                 reason: "New size (\(request.sizeGB) GB) must be larger than current size (\(volume.sizeGB) GB)")
         }
 
-        guard volume.hypervisorId != nil, volume.storagePath != nil else {
+        guard volume.hypervisorId != nil else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
+        try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
 
-        // Mark as resizing
         let previousSize = volume.size
-        volume.status = .resizing
-        try await volume.save(on: req.db)
-
-        // Grow the disk on the hypervisor; the database size is only updated
-        // once the agent confirms.
-        do {
-            try await req.application.volumeService.requestVolumeResize(volume: volume, newSizeBytes: newSizeBytes)
-        } catch {
-            // The agent didn't grow the disk; the volume is unchanged and usable.
-            volume.status = .available
-            volume.errorMessage = "Resize failed: \(error.localizedDescription)"
-            try await volume.save(on: req.db)
-            throw Abort(.badGateway, reason: "Failed to resize volume on hypervisor: \(error.localizedDescription)")
+        let userID = try user.requireID()
+        let accepted = try await req.resourceMutation.accept(
+            .resize, on: volume, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
+            // The size on the row is the *desired* size from here on. The agent
+            // grows the disk and confirms by generation, which is what makes a
+            // resize whose sync was dropped simply happen on the next one.
+            volume.size = newSizeBytes
+            volume.bumpGeneration()
         }
 
-        volume.size = newSizeBytes
-        volume.status = .available
-        volume.errorMessage = nil
-        try await volume.save(on: req.db)
-
         req.logger.info(
-            "Volume resized",
+            "Volume resize requested",
             metadata: [
                 "volumeId": .string(volume.id!.uuidString),
                 "previousSizeGB": .stringConvertible(Double(previousSize) / 1024.0 / 1024.0 / 1024.0),
                 "newSizeGB": .stringConvertible(request.sizeGB),
             ])
 
-        return VolumeResponse(from: volume)
+        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
     }
 
     // MARK: - Create Snapshot
@@ -734,39 +741,37 @@ struct VolumeController: RouteCollection {
     /// POST /api/volumes/:volumeId/clone
     /// Body: { "name": string, "description"?: string }
     @Sendable
-    func cloneVolume(req: Request) async throws -> VolumeResponse {
+    func cloneVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let sourceVolume = try await fetchVolumeWithPermission(req: req, user: user, permission: "clone")
         let request = try req.content.decode(CloneVolumeRequest.self)
 
-        // Validate source volume can be cloned. As with snapshots (issue #747),
-        // an attached volume gets a message naming the fix rather than the
-        // generic status text.
+        // Cloning reads the source's bytes, which is why it keeps a
+        // converged-and-detached requirement the other verbs dropped: copying a
+        // volume whose own create is still writing it yields a torn image, and
+        // unlike a resize that cannot be re-driven into correctness.
         guard sourceVolume.canClone else {
-            if sourceVolume.status == .attached {
+            if sourceVolume.$vm.id != nil {
                 throw Abort(
                     .conflict,
                     reason:
-                        "Volume is attached to a running VM. Cloning copies the volume's file, so a guest writing it mid-copy would produce a torn image; detach the volume first."
+                        "Volume is attached to a VM. Cloning copies the volume's file, so a guest writing it mid-copy would produce a torn image; detach the volume first."
                 )
             }
             throw Abort(
                 .conflict,
-                reason: "Volume cannot be cloned in status '\(sourceVolume.status.rawValue)'. Must be 'available'"
+                reason: "Volume is not ready to be cloned; wait for it to finish converging."
             )
         }
 
-        guard sourceVolume.hypervisorId != nil, sourceVolume.storagePath != nil else {
+        guard let sourceAgentId = sourceVolume.hypervisorId else {
             throw Abort(.conflict, reason: "Source volume is not provisioned on any hypervisor")
         }
+        try await Self.requireVolumeSyncCapableAgent(sourceAgentId, app: req.application)
 
-        // Mark source as cloning
-        let previousStatus = sourceVolume.status
-        sourceVolume.status = .cloning
-        try await sourceVolume.save(on: req.db)
-
-        // Create new volume record. The clone is materialized on the source's
-        // agent, so it lives in the source's pool.
+        // The clone is materialized on the source's agent — a clone reads the
+        // source's file, so the two must be co-located — and therefore lives in
+        // the source's pool and is placed at create time rather than scheduled.
         let newVolume = Volume(
             name: request.name,
             description: request.description ?? "Clone of \(sourceVolume.name)",
@@ -779,6 +784,10 @@ struct VolumeController: RouteCollection {
             poolID: sourceVolume.$pool.id,
             sourceVolumeID: sourceVolume.id
         )
+        newVolume.hypervisorId = sourceAgentId
+        newVolume.extendConvergenceDeadline(
+            by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
+        newVolume.setDesiredStatus(.present)
 
         // Creator binding on the cloned volume, in the same transaction as
         // the row (issue #477).
@@ -795,32 +804,32 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        // Clone on the agent in the background (copying a disk image can take
-        // minutes). The new volume stays `.creating` until the agent confirms,
-        // and the source returns to its prior status either way.
-        let volumeService = req.application.volumeService
-        let sourceVolumeId = sourceVolume.id!
-        let targetVolumeId = newVolume.id!
-        // Register with the drain registry (like the VM/sandbox completion
-        // paths) so shutdown waits for and cancels this rather than racing
-        // Fluent teardown; `performClone` guards its own `app.db` access.
-        req.application.backgroundTasks.spawn {
-            await volumeService.performClone(
-                sourceVolumeId: sourceVolumeId,
-                targetVolumeId: targetVolumeId,
-                restoreSourceStatusTo: previousStatus
-            )
-        }
+        // The clone is a create *strategy* on the new volume's desired entry,
+        // not an operation on the source (ADR 0001 stage 5). The source is
+        // therefore never marked busy and never has to be restored afterwards —
+        // it is simply read, by an agent that already holds it.
+        let newVolumeID = try newVolume.requireID()
+        let userID = try user.requireID()
+        let app = req.application
+        let accepted = try await req.resourceMutation.accept(
+            .create, on: newVolume, actor: .user(userID),
+            dispatch: .placement { @Sendable db in
+                try await VolumeReplica(
+                    volumeID: newVolumeID, agentId: sourceAgentId, state: .provisioning
+                ).create(on: db)
+                await app.agentService.syncDesiredState(agentId: sourceAgentId)
+            },
+            on: req.db, app: app)
 
         req.logger.info(
             "Volume clone requested",
             metadata: [
                 "sourceVolumeId": .string(sourceVolume.id!.uuidString),
-                "newVolumeId": .string(newVolume.id!.uuidString),
+                "newVolumeId": .string(newVolumeID.uuidString),
                 "name": .string(newVolume.name),
             ])
 
-        return VolumeResponse(from: newVolume)
+        return try AcceptedMutation(VolumeResponse(from: newVolume), accepted).acceptedResponse()
     }
 
     // MARK: - List Snapshots
@@ -921,6 +930,52 @@ struct VolumeController: RouteCollection {
     }
 
     // MARK: - Helper Methods
+
+    /// Whether the agent holding a volume can actually converge it: online, and
+    /// speaking wire v31 or later (STR-148).
+    ///
+    /// With the imperative volume frames gone there is no fallback path, so an
+    /// agent below v31 cannot hear about a volume at all. `selectVolumeAgent`
+    /// keeps new volumes off such agents; this answers the same question for
+    /// volumes that were already there when the control plane was upgraded.
+    /// Throws rather than swallowing a lookup failure. `try?` would read a
+    /// transient database error as "no such agent", and on the delete path that
+    /// answer sends the request down the force-clear branch — removing the row
+    /// without any agent confirming the data is gone. A genuinely missing agent
+    /// row is still false; only "we could not find out" is an error.
+    private static func agentConvergesVolumes(_ agentId: String?, app: Application) async throws -> Bool {
+        guard let agentId, await app.agentService.agentIsOnline(agentId: agentId) else { return false }
+        guard let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: app.db)
+        else { return false }
+        return WireProtocol.supportsVolumeSync(agent.wireProtocolVersion ?? 0)
+    }
+
+    /// Refuses a mutation whose volume sits on an agent that cannot converge
+    /// it, at accept time.
+    ///
+    /// Deliberately *not* applied to delete, which must keep working against a
+    /// stranded volume by force-clearing its finalizer — otherwise upgrading
+    /// the control plane before the fleet would make those volumes permanently
+    /// undeletable. An offline agent is allowed through here: it is expected to
+    /// come back and converge, which is the whole point of level-triggering.
+    /// A lookup failure propagates rather than passing the check silently: the
+    /// point of the guard is to refuse a mutation that can never converge, and
+    /// a `try?` here would wave one through on a transient database error.
+    private static func requireVolumeSyncCapableAgent(_ agentId: String?, app: Application) async throws {
+        guard let agentId, let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: app.db)
+        else { return }
+        guard WireProtocol.supportsVolumeSync(agent.wireProtocolVersion ?? 0) else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(agent.name)' speaks wire protocol \(agent.wireProtocolVersion ?? 0) and cannot "
+                    + "manage volumes; upgrade it to an agent speaking "
+                    + "\(WireProtocol.volumeSyncMinimumVersion) or later and retry."
+            )
+        }
+    }
 
     /// Fetch a volume and check permission
     private func fetchVolumeWithPermission(req: Request, user: User, permission: String) async throws -> Volume {

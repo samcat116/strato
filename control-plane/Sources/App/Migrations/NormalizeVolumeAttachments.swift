@@ -95,16 +95,21 @@ struct NormalizeVolumeAttachments: AsyncMigration {
     /// Rows whose VM went away: the FK cleared `vm_id` and nothing cleared the
     /// rest. Restores them to a detached resting state, which is the only thing
     /// the surviving columns could honestly mean.
+    ///
+    /// The generation bumps with them. A desired entry no newer than the one an
+    /// agent last applied is dropped, so a row repaired without the bump would
+    /// keep the disk plugged into a guest nothing describes — `status` is left
+    /// alone for the mirror-image reason, since it records what that agent last
+    /// observed and only its next report can move it.
     private func repairStrandedAttachments(on sql: any SQLDatabase, logger: Logger) async throws {
         let cleared = try await sql.raw(
             """
             UPDATE volumes
             SET device_name = NULL, boot_order = NULL, attached_agent_id = NULL,
-                status = CASE WHEN status = \(bind: VolumeStatus.attached.rawValue)
-                              THEN \(bind: VolumeStatus.available.rawValue) ELSE status END
+                readonly = false, generation = generation + 1
             WHERE vm_id IS NULL
               AND (device_name IS NOT NULL OR boot_order IS NOT NULL
-                   OR attached_agent_id IS NOT NULL OR status = \(bind: VolumeStatus.attached.rawValue))
+                   OR attached_agent_id IS NOT NULL OR readonly)
             RETURNING id
             """
         ).all()
@@ -187,22 +192,20 @@ struct NormalizeVolumeAttachments: AsyncMigration {
             takenOrders[row.vmID] = orders
 
             guard resolvedName != nil || clearBootOrder else { continue }
-            if let resolvedName, clearBootOrder {
-                try await sql.raw(
-                    """
-                    UPDATE volumes SET device_name = \(bind: resolvedName), boot_order = NULL
-                    WHERE id = \(bind: row.id)
-                    """
-                ).run()
-            } else if let resolvedName {
-                try await sql.raw(
-                    "UPDATE volumes SET device_name = \(bind: resolvedName) WHERE id = \(bind: row.id)"
-                ).run()
-            } else {
-                try await sql.raw(
-                    "UPDATE volumes SET boot_order = NULL WHERE id = \(bind: row.id)"
-                ).run()
-            }
+            // One statement, and always a generation bump: both columns are
+            // part of the volume's *desired* attachment, so an agent that
+            // already applied this generation would otherwise never learn the
+            // slot moved. `COALESCE` leaves the name alone when only the boot
+            // order collided.
+            try await sql.raw(
+                """
+                UPDATE volumes
+                SET device_name = COALESCE(\(bind: resolvedName), device_name),
+                    boot_order = CASE WHEN \(bind: clearBootOrder) THEN NULL ELSE boot_order END,
+                    generation = generation + 1
+                WHERE id = \(bind: row.id)
+                """
+            ).run()
         }
 
         if renamed > 0 || reordered > 0 {

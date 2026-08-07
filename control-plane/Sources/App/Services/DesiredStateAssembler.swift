@@ -344,12 +344,106 @@ struct DesiredStateAssembler {
             securityGroups = nil
         }
 
+        // The agent's authoritative volume set (STR-148). Nil — not `[]` — for
+        // an agent that does not speak volume sync, and the query is skipped
+        // entirely for one: assembling entries a receiver will discard costs a
+        // join and, worse, records image-download grants for a fetch that will
+        // never happen.
+        let volumes: [DesiredVolumeState]?
+        if agent.map({ WireProtocol.supportsVolumeSync($0.wireProtocolVersion ?? 0) }) ?? true {
+            volumes = try await desiredVolumes(agentId: agentId, on: db)
+        } else {
+            volumes = nil
+        }
+
         return DesiredStateMessage(
             vms: entries, sandboxes: sandboxEntries, networks: networkStates,
             networksAuthoritative: scope.authoritative,
             desiredAgentUpdate: await desiredAgentUpdateForSync(agent: agent),
             securityGroups: securityGroups,
-            tombstones: try await tombstones(agentId: agentId, on: db))
+            tombstones: try await tombstones(agentId: agentId, on: db),
+            volumes: volumes)
+    }
+
+    /// Every volume placed on this agent, as desired entries (STR-148).
+    ///
+    /// Two things are worth noting about what this does *not* do. It does not
+    /// carry a storage path: the agent owns path layout and reports it back, so
+    /// a path here would be the control plane telling the agent something the
+    /// agent told it. And it does not carry a pool: placement is expressed by
+    /// *which agent's sync the entry appears in*, and a second encoding of the
+    /// same fact is a thing that can drift.
+    private func desiredVolumes(agentId: String, on db: any Database) async throws -> [DesiredVolumeState] {
+        let volumes = try await Volume.query(on: db)
+            .filter(\.$hypervisorId == agentId)
+            .with(\.$sourceImage) { $0.with(\.$artifacts) }
+            .all()
+
+        var entries: [DesiredVolumeState] = []
+        for volume in volumes {
+            guard let volumeId = volume.id else { continue }
+
+            // The create strategy, read by the agent only when it does not
+            // already hold the volume. `sourceVolume` beats `sourceImage` when
+            // both are set, because a clone's bytes come from the source volume
+            // and its image lineage is only provenance.
+            var source: DesiredVolumeSource?
+            if let sourceVolumeID = volume.$sourceVolume.id {
+                source = .clone(from: sourceVolumeID, format: volume.format.rawValue)
+            } else if let image = volume.sourceImage, image.status == .ready, let imageId = image.id {
+                do {
+                    source = .image(try VMSpecBuilder.buildImageInfo(from: image))
+                    // Emitting the URLs is what authorizes the fetch, exactly as
+                    // it does for a VM's boot image (issue #562). This grant
+                    // moved here from the old create RPC's dispatch: with no
+                    // dispatch left, assembly is the only place that knows which
+                    // agent is about to be asked to download what.
+                    await app.coordination.grantImageDownload(agentId: agentId, imageId: imageId)
+                } catch {
+                    app.logger.warning(
+                        "Failed to build image info for a volume's desired state; syncing without it",
+                        metadata: [
+                            "volumeId": .string(volumeId.uuidString),
+                            "imageId": .string(imageId.uuidString),
+                            "error": .string(error.localizedDescription),
+                        ])
+                }
+            } else if volume.$sourceImage.id != nil {
+                app.logger.warning(
+                    "Volume references an image that is missing or not ready; syncing without image info",
+                    metadata: ["volumeId": .string(volumeId.uuidString)])
+            }
+
+            // The attachment is projected from the same columns
+            // `VMSpecBuilder.volumeSpecs` reads, so the two projections of one
+            // fact cannot disagree — which is what used to let a volume be
+            // `attached` in the VM's spec and detached in its own record.
+            //
+            // A name outside `VolumeDeviceName`'s charset cannot be stored (the
+            // API validates it and the schema constrains the column), so the
+            // failed initializer below is unreachable — and an unattached entry
+            // is the safe answer if it ever is not, since the agent's own
+            // record is what a wrong slot would corrupt.
+            var attachment: DesiredVolumeAttachment?
+            if let vmID = volume.$vm.id, let raw = volume.deviceName,
+                let deviceName = VolumeDeviceName(raw)
+            {
+                attachment = DesiredVolumeAttachment(
+                    vmId: vmID, deviceName: deviceName, readonly: volume.readonly,
+                    bootOrder: volume.bootOrder)
+            }
+
+            entries.append(
+                DesiredVolumeState(
+                    volumeId: volumeId,
+                    desiredStatus: volume.desiredStatus,
+                    generation: volume.generation,
+                    sizeBytes: volume.size,
+                    format: volume.format.rawValue,
+                    source: source,
+                    attachment: attachment))
+        }
+        return entries
     }
 
     /// The teardowns this sync authorizes (STR-98).

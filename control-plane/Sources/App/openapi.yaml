@@ -1196,12 +1196,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateVolumeRequest"
       responses:
-        "200":
-          description: The created volume (provisioning in the background).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Volume"
+        "202": { $ref: "#/components/responses/AcceptedVolumeMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1247,9 +1242,15 @@ paths:
     delete:
       operationId: deleteVolume
       summary: Delete a volume
+      description: >-
+        Accepted, not performed. The volume is marked absent and its row
+        survives until its agent confirms the data is gone; a client follows the
+        delete through `GET /api/operations/{operationID}` with the returned
+        `mutationId`, because a volume that is deleted and one that never
+        existed both answer `404`.
       tags: [Volumes]
       responses:
-        "204": { $ref: "#/components/responses/NoContent" }
+        "202": { $ref: "#/components/responses/AcceptedVolumeMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1280,12 +1281,7 @@ paths:
             schema:
               $ref: "#/components/schemas/AttachVolumeRequest"
       responses:
-        "200":
-          description: The attached volume.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Volume"
+        "202": { $ref: "#/components/responses/AcceptedVolumeMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1299,12 +1295,7 @@ paths:
       summary: Detach a volume from its VM
       tags: [Volumes]
       responses:
-        "200":
-          description: The detached volume.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Volume"
+        "202": { $ref: "#/components/responses/AcceptedVolumeMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1324,12 +1315,7 @@ paths:
             schema:
               $ref: "#/components/schemas/ResizeVolumeRequest"
       responses:
-        "200":
-          description: The resized volume.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Volume"
+        "202": { $ref: "#/components/responses/AcceptedVolumeMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1374,12 +1360,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CloneVolumeRequest"
       responses:
-        "200":
-          description: The new volume (cloning in the background).
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/Volume"
+        "202": { $ref: "#/components/responses/AcceptedVolumeMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -8529,6 +8510,14 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/AcceptedSandboxMutation"
+    AcceptedVolumeMutation:
+      description: >-
+        The mutation was accepted. Refetch the volume until its `conditions`
+        report `observedGeneration >= targetGeneration` with `converged` true.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AcceptedVolumeMutation"
     LogBackendUnavailable:
       description: The log backend (Loki) could not be queried.
       content:
@@ -8602,6 +8591,24 @@ components:
           type: integer
           format: int64
           description: The generation the sandbox's `observedGeneration` must reach.
+        mutationId:
+          type: string
+          format: uuid
+
+    AcceptedVolumeMutation:
+      type: object
+      description: >-
+        The body of a `202` from a volume lifecycle mutation — the volume
+        counterpart of `AcceptedVMMutation`, with the same contract. Volumes
+        joined the reconciliation loop in ADR 0001 stage 5.
+      required: [resource, targetGeneration, mutationId]
+      properties:
+        resource:
+          $ref: "#/components/schemas/Volume"
+        targetGeneration:
+          type: integer
+          format: int64
+          description: The generation the volume's `observedGeneration` must reach.
         mutationId:
           type: string
           format: uuid
@@ -9604,6 +9611,8 @@ components:
         - format
         - volumeType
         - status
+        - readonly
+        - conditions
       properties:
         id:
           type: string
@@ -9642,6 +9651,11 @@ components:
           type: string
         bootOrder:
           type: integer
+        readonly:
+          type: boolean
+          description: Whether the attachment presents the volume read-only.
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         sourceImageId:
           type: string
           format: uuid
@@ -9739,6 +9753,11 @@ components:
             type: string
         domainName:
           type: string
+          maxLength: 253
+          description: >-
+            DHCP search domain for the network's guests. A sequence of RFC 1123
+            labels — `corp.example.com` or a bare `internal` — stored lowercased
+            and without a trailing dot. An empty string clears it.
         leaseTime:
           type: integer
         externalAccess:
@@ -9774,6 +9793,11 @@ components:
             type: string
         domainName:
           type: string
+          maxLength: 253
+          description: >-
+            DHCP search domain for the network's guests. A sequence of RFC 1123
+            labels — `corp.example.com` or a bare `internal` — stored lowercased
+            and without a trailing dot. An empty string clears it.
         leaseTime:
           type: integer
         externalAccess:
