@@ -37,15 +37,15 @@ Most of the layered model below is implemented. What exists today:
   subnet by default, per-family NIC address rows, RA + DHCPv6 delivery.
 - **Instance metadata dataplane**: the per-VM metadata document rides the
   sync (wire v26), the OVN localport + per-chassis namespace exist (wire
-  v27), and guests are told how to reach the addresses (STR-53) — see
-  §Instance metadata (IMDS).
+  v27), guests are told how to reach the addresses (STR-53), and security
+  groups can't take that reachability away (STR-54) — see §Instance metadata
+  (IMDS).
 
 What genuinely remains missing (details in §Known gaps):
 
 - **No guest-visible metadata service yet**: nothing listens in the metadata
-  namespace (STR-56), and on a network with security groups attached the
-  implicit egress allow that would let a guest reach it is still missing
-  (STR-54).
+  namespace (STR-56). Everything around it is in place — the localport, the
+  advertised routes, and the implicit security-group egress allow (STR-54).
 - **Sandbox guest networking** is plumbed but off the wire — the guest can't
   configure the NIC (STR-101) and the fleet-wide flag awaits its per-agent
   gate (STR-103).
@@ -277,9 +277,9 @@ provisioning time, so an existing VM picks up the v6 route only on rebuild,
 and option 121 arrives with the next lease — within one `lease_time` (3600s by
 default) of enabling the service on a network.
 
-On a network with security groups attached, guest→metadata egress is still
-dropped by the default-drop port group until STR-54's implicit allow rules land
-— two rules, since OVN ACL matches are per-family.
+Reachability does not depend on the guest's security groups: the drop group
+carries an implicit, non-overridable egress allow to both metadata addresses
+(STR-54, §Security groups → The implicit metadata allow).
 
 ### Layer 2 — Edge / north-south
 
@@ -457,7 +457,9 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
   allow all ingress from the group itself, allow all egress. Every VM NIC
   belongs to at least one group (`vm_interface_security_groups`); VM create
   attaches the default group when the caller picks none, and detach refuses to
-  empty a NIC's set. `SeedDefaultSecurityGroups` backfilled pre-existing
+  empty a NIC's set. Tightening the default group's egress does **not** cut
+  instance metadata off — that has its own implicit allow, on purpose (see
+  §The implicit metadata allow). `SeedDefaultSecurityGroups` backfilled pre-existing
   projects, adding a **deletable allow-all-ingress rule** to projects that
   already had workloads so agent upgrades could never cut live inbound
   traffic — deleting that rule is how an operator opts a project into real
@@ -544,6 +546,51 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
 - Floating IPs compose without special casing: DNAT'd traffic still traverses
   the LSP, so `to-lport` ACLs see the post-DNAT destination and the external
   source — a FIP'd service is opened with an ordinary CIDR ingress rule.
+
+### The implicit metadata allow
+
+The drop group also carries two `allow-related` ACLs for egress to the instance
+metadata service — `169.254.169.254:80` and `[fd00:ec2::254]:80`, one per
+family because an OVN ACL match is — at priority **1003**, above every
+rule-derived allow. Since every managed port is a drop-group member, **this
+applies regardless of which security groups the NIC belongs to, and no rule can
+override it** (STR-54).
+
+It is deliberate, not a side effect of the `default` group shipping an
+allow-all egress rule. **Anyone tightening that group must not expect metadata
+to break with it**: without this ACL, a group with no permissive egress rule
+would silently blackhole IMDS, and the symptom — a guest hanging while its
+cloud-init datasource retries — reads as a broken metadata service rather than
+as the policy outcome it is. AWS draws the same line: IMDS reachability there
+is not subject to security-group rules either.
+
+The step above 1002 buys nothing *today* — a security-group rule can only
+allow, so nothing at rule priority could contradict this one. It is there
+because the rule vocabulary is control-plane data, and the switch-attached
+stateless NACLs below are the deny-capable shape: two ACLs matching at equal
+priority resolve arbitrarily in OVN, so sharing 1002 would make
+"non-overridable" a property of today's rule model rather than of this ACL.
+
+Three scoping decisions, each narrowing what the carve-out opens:
+
+- **Egress only, and stateful.** Replies return on the connection's conntrack
+  state (`allow-related` commits it; ovn-northd's established bypass in
+  `ls_out_acl` sits far above the drop). A standing `to-lport` allow would
+  instead admit *unsolicited* inbound traffic sourced from the metadata
+  address to every managed port in the site — which the DHCP carve-outs accept
+  because DHCP has no connection to key off, and this does not need to.
+- **Port 80 only**, not the whole address: the namespace terminates nothing
+  else, so a wider match would only widen what a guest may probe on its own
+  chassis.
+- **On the site-wide drop group**, so it also lands on ports whose network has
+  `metadataEnabled` off. Harmless — that switch publishes no localport, so the
+  frame has no destination — and the alternative, a per-network port group, is
+  a whole new object lifetime bought for the ability to deny traffic that
+  already goes nowhere.
+
+`dropGroupRevision` was bumped to **4** so deployments already carrying the
+revision-3 drop group rewrite it on agent upgrade instead of waiting for an
+unrelated rule edit.
 
 ### Known limitations / follow-ups
 
@@ -846,8 +893,8 @@ verification on real multi-node hardware (recipe in
   allocated, delivered (RA + DHCPv6), and realized; what remains open is
   IPv6-specific L3 work such as external egress.
 - **Metadata reachability** — the localport, its per-chassis namespace
-  (STR-49), and the advertised routes (STR-53) exist, but no implicit
-  security-group allow does (STR-54) and nothing listens in the namespace
+  (STR-49), the advertised routes (STR-53), and the implicit security-group
+  egress allow (STR-54) all exist, but nothing listens in the namespace
   (STR-56). Until STR-56 lands, the advertised route points at an address with
   no listener behind it: a guest's cloud-init Ec2 probe now *connects* to a
   namespace that RSTs rather than failing to route, which is a faster failure
@@ -864,6 +911,15 @@ verification on real multi-node hardware (recipe in
   half, and what caught the gateway-less `KeyError`, but silent on whether the
   per-chassis namespace converges and binds on real hardware. A boot test on
   Ubuntu 24.04/26.04, Debian 13, Fedora, and Rocky is still owed.
+- **STR-54's carve-out is verified as ACL construction, not as forwarding.**
+  The match strings and their priority are unit-tested; that a guest in a
+  no-egress group actually reaches the namespace is not, and cannot be until
+  STR-56 puts a listener there. The specific assumption to check then is that
+  `allow-related` on `from-lport` is enough for the reply — i.e. that
+  ovn-northd's established bypass in `ls_out_acl` admits it without a standing
+  `to-lport` allow. If it does not, the symptom is a guest whose SYN leaves and
+  whose SYN/ACK never arrives, which looks exactly like the missing listener it
+  would land alongside.
 - **Downgrading an agent below wire v27 leaks its metadata namespaces.** A
   pre-STR-49 agent has no concept of `strato-md-*` namespaces or `mdp*` ports, so
   it neither converges nor removes them — the mirror of the localport's nil

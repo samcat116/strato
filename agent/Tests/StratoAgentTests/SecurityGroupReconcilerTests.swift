@@ -178,7 +178,11 @@ struct SecurityGroupReconcilerTests {
             ])
 
         let allows = acls.filter { $0.action != "drop" }
-        #expect(allows.allSatisfy { $0.priority == SecurityGroupACLBuilder.allowPriority })
+        // Every carve-out except metadata egress (asserted on its own below,
+        // and deliberately a priority above the rest).
+        #expect(
+            allows.filter { $0.priority != SecurityGroupACLBuilder.metadataAllowPriority }
+                .allSatisfy { $0.priority == SecurityGroupACLBuilder.allowPriority })
         // DHCPv4+v6 both directions, ND/RA both directions.
         #expect(allows.contains { $0.match.contains("udp.dst == 67") })
         #expect(allows.contains { $0.match.contains("udp.dst == 547") })
@@ -218,6 +222,68 @@ struct SecurityGroupReconcilerTests {
                 planned: SecurityGroupACLBuilder.dropGroupRevision, observed: 1,
                 observedBuilderRevision: SecurityGroupACLBuilder.aclSchemaRevision))
         #expect(SecurityGroupACLBuilder.dropGroupRevision > 1)
+        // A deployment carrying revision 3 predates the metadata carve-out
+        // (STR-54), so it must be rewritten too — otherwise every port group
+        // already on 3 keeps silently dropping IMDS until some unrelated edit
+        // happens to bump it.
+        #expect(
+            SecurityGroupReconciler.needsACLRewrite(
+                planned: SecurityGroupACLBuilder.dropGroupRevision, observed: 3,
+                observedBuilderRevision: SecurityGroupACLBuilder.aclSchemaRevision))
+    }
+
+    // MARK: - Instance metadata carve-out (STR-54)
+
+    @Test("Metadata egress is allowed on every managed port, one ACL per family")
+    func metadataEgressCarveOut() {
+        let pgDrop = OVNNaming.dropPortGroupName
+        let acls = SecurityGroupACLBuilder.metadataEgressACLs()
+
+        #expect(acls.count == 2)
+        #expect(
+            acls.map(\.match) == [
+                "inport == @\(pgDrop) && ip4 && ip4.dst == 169.254.169.254 && tcp && tcp.dst == 80",
+                "inport == @\(pgDrop) && ip6 && ip6.dst == fd00:ec2::254 && tcp && tcp.dst == 80",
+            ])
+        // Stateful, so the service's replies return on conntrack state rather
+        // than through a standing inbound allow.
+        #expect(acls.allSatisfy { $0.action == "allow-related" })
+        #expect(acls.allSatisfy { $0.direction == "from-lport" })
+        // Never logged: an every-boot cloud-init probe on every guest in the
+        // site is exactly the chatter the drop group's carve-outs stay quiet
+        // about.
+        #expect(acls.allSatisfy { !$0.log })
+        #expect(acls.allSatisfy { $0.externalIDs["strato-managed"] == "true" })
+    }
+
+    @Test("Metadata egress outranks rule allows and the default deny")
+    func metadataEgressIsNonOverridable() {
+        // The point of the separate priority: a rule-derived ACL — including a
+        // deny-capable shape the model doesn't have yet — cannot tie with this
+        // one and win the coin flip.
+        #expect(SecurityGroupACLBuilder.metadataAllowPriority > SecurityGroupACLBuilder.allowPriority)
+        #expect(SecurityGroupACLBuilder.allowPriority > SecurityGroupACLBuilder.dropPriority)
+    }
+
+    @Test("A NIC in a group with no egress rule still reaches metadata")
+    func metadataSurvivesARestrictiveGroup() {
+        // The scenario STR-54 exists for: a group that permits nothing
+        // outbound. Its port group carries no egress allow at all, and the
+        // carve-out reaches the port anyway because membership always includes
+        // the drop group.
+        let restrictive = DesiredSecurityGroup(
+            id: groupId, generation: 1,
+            rules: [rule(direction: "ingress", protocolName: "tcp", portRangeMin: 22, portRangeMax: 22)])
+        let (plans, _) = SecurityGroupReconciler.plan(securityGroups: [restrictive])
+
+        #expect(plans[1].acls.allSatisfy { $0.direction != "from-lport" })
+        #expect(plans[0].name == OVNNaming.dropPortGroupName)
+        for metadata in SecurityGroupACLBuilder.metadataEgressACLs() {
+            #expect(plans[0].acls.contains(metadata))
+        }
+
+        let membership = DesiredPortMembership(portName: "lsp-vm", securityGroupIds: [groupId])
+        #expect(membership.desiredGroups?.contains(OVNNaming.dropPortGroupName) == true)
     }
 
     // MARK: - Plan and teardown
