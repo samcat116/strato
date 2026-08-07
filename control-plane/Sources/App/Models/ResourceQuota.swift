@@ -218,7 +218,7 @@ extension ResourceQuota {
             let requestedGB = Double(memory) / 1024 / 1024 / 1024
             return (
                 false,
-                "Insufficient memory quota: \(String(format: "%.2f", availableGB))GB available, \(String(format: "%.2f", requestedGB))GB requested"
+                "Insufficient memory quota: \(String(format: "%.2f", availableGB))GiB available, \(String(format: "%.2f", requestedGB))GiB requested"
             )
         }
 
@@ -228,7 +228,7 @@ extension ResourceQuota {
             let requestedGB = Double(storage) / 1024 / 1024 / 1024
             return (
                 false,
-                "Insufficient storage quota: \(String(format: "%.2f", availableGB))GB available, \(String(format: "%.2f", requestedGB))GB requested"
+                "Insufficient storage quota: \(String(format: "%.2f", availableGB))GiB available, \(String(format: "%.2f", requestedGB))GiB requested"
             )
         }
 
@@ -263,8 +263,8 @@ extension ResourceQuota {
                 let requestedGB = Double(memoryDelta) / 1024 / 1024 / 1024
                 return (
                     false,
-                    "Insufficient memory quota: \(String(format: "%.2f", availableGB))GB available, "
-                        + "\(String(format: "%.2f", requestedGB))GB requested"
+                    "Insufficient memory quota: \(String(format: "%.2f", availableGB))GiB available, "
+                        + "\(String(format: "%.2f", requestedGB))GiB requested"
                 )
             }
         }
@@ -304,7 +304,7 @@ extension ResourceQuota {
             let requestedGB = Double(memory) / 1024 / 1024 / 1024
             return (
                 false,
-                "Insufficient memory quota: \(String(format: "%.2f", availableGB))GB available, \(String(format: "%.2f", requestedGB))GB requested"
+                "Insufficient memory quota: \(String(format: "%.2f", availableGB))GiB available, \(String(format: "%.2f", requestedGB))GiB requested"
             )
         }
 
@@ -376,7 +376,7 @@ extension ResourceQuota {
             let requestedGB = Double(bytes) / 1024 / 1024 / 1024
             return (
                 false,
-                "Insufficient storage quota for the snapshot: \(String(format: "%.2f", availableGB))GB available, \(String(format: "%.2f", requestedGB))GB requested"
+                "Insufficient storage quota for the snapshot: \(String(format: "%.2f", availableGB))GiB available, \(String(format: "%.2f", requestedGB))GiB requested"
             )
         }
         return (true, nil)

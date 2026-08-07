@@ -587,10 +587,10 @@ struct VMDetailResponse: Content {
         self.cpu = vm.cpu
         self.maxCpu = vm.maxCpu
         self.memory = vm.memory
-        self.memoryFormatted = VMDetailResponse.formatSize(vm.memory)
+        self.memoryFormatted = vm.memory.formattedByteSize
         self.maxMemory = vm.maxMemory
         self.disk = vm.disk
-        self.diskFormatted = VMDetailResponse.formatSize(vm.disk)
+        self.diskFormatted = vm.disk.formattedByteSize
         // `.value ?? []` tolerates callers that didn't eager-load the children;
         // sorted to match the deterministic ordering agents receive in the spec.
         self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
@@ -608,30 +608,17 @@ struct VMDetailResponse: Content {
         if let total = vm.guestMemoryTotalBytes, let available = vm.guestMemoryAvailableBytes {
             let used = max(0, total - available)
             self.guestMemoryUsedBytes = used
-            self.guestMemoryUsedFormatted = VMDetailResponse.formatSize(used)
+            self.guestMemoryUsedFormatted = used.formattedByteSize
         } else {
             self.guestMemoryUsedBytes = nil
             self.guestMemoryUsedFormatted = nil
         }
         self.guestMemoryStatsAt = vm.guestMemoryStatsAt
         self.balloonTarget = vm.balloonTarget
-        self.balloonTargetFormatted = vm.balloonTarget.map(VMDetailResponse.formatSize)
+        self.balloonTargetFormatted = vm.balloonTarget?.formattedByteSize
         self.guestMemoryBalloonActualBytes = vm.guestMemoryBalloonActualBytes
         self.conditions = vm.conditions
         self.createdAt = vm.createdAt
         self.updatedAt = vm.updatedAt
-    }
-
-    static func formatSize(_ bytes: Int64) -> String {
-        let gb = Double(bytes) / 1024.0 / 1024.0 / 1024.0
-        if gb >= 1.0 {
-            return String(format: "%.2f GB", gb)
-        }
-        let mb = Double(bytes) / 1024.0 / 1024.0
-        if mb >= 1.0 {
-            return String(format: "%.2f MB", mb)
-        }
-        let kb = Double(bytes) / 1024.0
-        return String(format: "%.2f KB", kb)
     }
 }

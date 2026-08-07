@@ -37,12 +37,6 @@ export const vmStatusBadges: Record<VMStatus, { label: string; bg: string; fg: s
   Error: { label: "Error", bg: "#fef1f1", fg: "#b42318" },
 };
 
-export function formatBytes(bytes: number): string {
-  const gib = bytes / 1024 ** 3;
-  if (gib >= 1024) return `${(gib / 1024).toFixed(1)} TiB`;
-  return `${Math.round(gib)} GiB`;
-}
-
 /** Compact age like "12d", "3h", "45m" from an ISO timestamp. */
 export function formatAge(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();

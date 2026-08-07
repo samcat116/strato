@@ -23,14 +23,13 @@ import { EditImageDialog } from "@/components/images/edit-image-dialog";
 import { ImageStatusBadge } from "@/components/images/image-status-badge";
 import { useImage, useDeleteArtifact } from "@/lib/hooks/use-images";
 import { imagesApi } from "@/lib/api/images";
+import { formatCapacity, formatMemory } from "@/lib/format-bytes";
 import type { ArtifactKind } from "@/types/api";
 
-function formatBytes(bytes: number): string {
-  const gb = bytes / 1024 / 1024 / 1024;
-  if (gb >= 1) return `${gb.toFixed(2)} GB`;
-  const mb = bytes / 1024 / 1024;
-  if (mb >= 1) return `${mb.toFixed(2)} MB`;
-  return `${(bytes / 1024).toFixed(2)} KB`;
+// An image's boot defaults are optional. Missing *or* zero reads as unset — a
+// zero-byte default would boot nothing, so it is an absent value spelled badly.
+function formatDefault(bytes: number | undefined, format: (bytes: number) => string): string {
+  return bytes ? format(bytes) : "Not set";
 }
 
 export default function ImageDetailPage() {
@@ -83,22 +82,6 @@ export default function ImageDetailPage() {
       </div>
     );
   }
-
-  const formatMemory = (bytes: number | undefined) => {
-    if (!bytes) return "Not set";
-    const gb = bytes / 1024 / 1024 / 1024;
-    if (gb >= 1) {
-      return `${gb.toFixed(1)} GB`;
-    }
-    const mb = bytes / 1024 / 1024;
-    return `${mb.toFixed(0)} MB`;
-  };
-
-  const formatDisk = (bytes: number | undefined) => {
-    if (!bytes) return "Not set";
-    const gb = bytes / 1024 / 1024 / 1024;
-    return `${gb.toFixed(0)} GB`;
-  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -291,7 +274,7 @@ export default function ImageDetailPage() {
                     </span>
                     {artifact.status === "ready" ? (
                       <span className="text-xs text-muted-foreground">
-                        {formatBytes(artifact.size)}
+                        {formatMemory(artifact.size)}
                         {artifact.format ? ` · ${artifact.format}` : ""}
                       </span>
                     ) : artifact.status === "error" ? (
@@ -360,14 +343,14 @@ export default function ImageDetailPage() {
                 <MemoryStick className="h-4 w-4 text-muted-foreground" />
                 <div>
                   <p className="text-sm text-muted-foreground">Memory</p>
-                  <p className="text-foreground">{formatMemory(image.defaultMemory)}</p>
+                  <p className="text-foreground">{formatDefault(image.defaultMemory, formatMemory)}</p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
                 <HardDrive className="h-4 w-4 text-muted-foreground" />
                 <div>
                   <p className="text-sm text-muted-foreground">Disk</p>
-                  <p className="text-foreground">{formatDisk(image.defaultDisk)}</p>
+                  <p className="text-foreground">{formatDefault(image.defaultDisk, formatCapacity)}</p>
                 </div>
               </div>
             </div>

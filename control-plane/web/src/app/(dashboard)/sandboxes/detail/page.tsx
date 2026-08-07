@@ -23,7 +23,7 @@ import {
   SandboxTtlCard,
   SandboxSnapshotsCard,
 } from "@/components/sandboxes";
-import { formatMemory } from "@/lib/format-memory";
+import { formatMemory } from "@/lib/format-bytes";
 import { useSandbox, useInvalidateSandboxes } from "@/lib/hooks";
 
 // Dynamically import SandboxTerminal to avoid SSR issues with xterm.js

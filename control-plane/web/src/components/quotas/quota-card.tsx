@@ -82,7 +82,7 @@ export function QuotaCard({
           label="Memory"
           used={usage.reservedMemoryGB}
           limit={limits.maxMemoryGB}
-          unit="GB"
+          unit="GiB"
           decimals={1}
           percent={utilization.memoryPercent}
         />
@@ -90,7 +90,7 @@ export function QuotaCard({
           label="Storage"
           used={usage.reservedStorageGB}
           limit={limits.maxStorageGB}
-          unit="GB"
+          unit="GiB"
           decimals={1}
           percent={utilization.storagePercent}
         />

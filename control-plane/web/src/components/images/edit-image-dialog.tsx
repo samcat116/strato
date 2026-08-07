@@ -17,13 +17,15 @@ import { useUpdateImage } from "@/lib/hooks/use-images";
 import { toast } from "sonner";
 import type { CPUArchitecture, Image, UpdateImageRequest } from "@/types/api";
 
+// Binary, despite the name: these back the `defaultMemory`/`defaultDisk`
+// byte fields, which the rest of Strato reads as gibibytes.
 const BYTES_PER_GB = 1024 * 1024 * 1024;
 const ARCHITECTURES: CPUArchitecture[] = ["x86_64", "arm64"];
 
 function bytesToGBString(bytes: number | undefined): string {
   if (!bytes) return "";
   const gb = bytes / BYTES_PER_GB;
-  // Trim float noise while keeping fractional sizes like 0.5 GB
+  // Trim float noise while keeping fractional sizes like 0.5 GiB
   return String(Math.round(gb * 100) / 100);
 }
 
@@ -87,7 +89,7 @@ export function EditImageDialog({
     if (defaultMemoryGB.trim()) {
       const gb = parseFloat(defaultMemoryGB);
       if (isNaN(gb) || gb <= 0) {
-        toast.error("Default memory must be a positive size in GB");
+        toast.error("Default memory must be a positive size in GiB");
         return;
       }
       data.defaultMemory = Math.round(gb * BYTES_PER_GB);
@@ -95,7 +97,7 @@ export function EditImageDialog({
     if (defaultDiskGB.trim()) {
       const gb = parseFloat(defaultDiskGB);
       if (isNaN(gb) || gb <= 0) {
-        toast.error("Default disk must be a positive size in GB");
+        toast.error("Default disk must be a positive size in GiB");
         return;
       }
       data.defaultDisk = Math.round(gb * BYTES_PER_GB);
@@ -193,7 +195,7 @@ export function EditImageDialog({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-image-memory">Memory (GB)</Label>
+              <Label htmlFor="edit-image-memory">Memory (GiB)</Label>
               <Input
                 id="edit-image-memory"
                 type="number"
@@ -207,7 +209,7 @@ export function EditImageDialog({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="edit-image-disk">Disk (GB)</Label>
+              <Label htmlFor="edit-image-disk">Disk (GiB)</Label>
               <Input
                 id="edit-image-disk"
                 type="number"
