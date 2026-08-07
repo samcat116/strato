@@ -140,29 +140,19 @@ struct MessageOrderingTests {
         #expect(a != b)
     }
 
-    /// The volume verbs that are still imperative (ADR 0001 stages 7 and 8)
-    /// take the *reconciler's* volume lane, not a bare-id one — so a snapshot
-    /// can never run concurrently with the reconciler resizing or deleting the
-    /// same volume (STR-148).
-    @Test("Surviving volume frames share the reconciler's volume lane")
+    /// The one volume verb that is still imperative (ADR 0001 stage 7) takes
+    /// the *reconciler's* volume lane, not a bare-id one — so the read can
+    /// never run concurrently with the reconciler resizing or deleting the
+    /// same volume (STR-148, STR-150).
+    @Test("The surviving volume frame shares the reconciler's volume lane")
     func volumeFramesUseReconcilerLane() {
         let volumeId = UUID().uuidString
         let expected = ["volume/" + volumeId]
 
-        let snapshotKeys = MessageEnvelope.serializationKeys(
-            type: .volumeSnapshot,
-            payload: payload(["volumeId": volumeId, "snapshotId": UUID().uuidString, "volumePath": "/a"])
-        )
-        let snapshotDeleteKeys = MessageEnvelope.serializationKeys(
-            type: .volumeSnapshotDelete,
-            payload: payload(["volumeId": volumeId, "snapshotId": UUID().uuidString])
-        )
         let infoKeys = MessageEnvelope.serializationKeys(
             type: .volumeInfo, payload: payload(["volumeId": volumeId, "volumePath": "/a"])
         )
 
-        #expect(snapshotKeys == expected)
-        #expect(snapshotDeleteKeys == expected)
         #expect(infoKeys == expected)
     }
 

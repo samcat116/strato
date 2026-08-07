@@ -3,11 +3,12 @@ import Foundation
 import StratoShared
 import Vapor
 
-/// Lifecycle of a sandbox snapshot (issue #426). `creating` is the only
-/// non-terminal state a client polls through (the create operation record
-/// carries the verdict); `deleting` is retryable, like volume snapshots — a
-/// control-plane restart mid-delete leaves the record recoverable, and
-/// agent-side artifact deletion is idempotent.
+/// Lifecycle of a sandbox snapshot (issue #426).
+///
+/// Purely *observed* since STR-150, like `VolumeStatus` after STR-148: the
+/// control plane no longer writes a transitional status before dispatching an
+/// RPC, because there is no RPC. `ObservedStateApplier` derives this from what
+/// the owning agent reports about the artifacts.
 enum SandboxSnapshotStatus: String, Codable, CaseIterable, Sendable {
     case creating
     case ready
@@ -115,6 +116,59 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
     @OptionalField(key: "error_message")
     var errorMessage: String?
 
+    // Desired/observed state split (ADR 0001 stage 8, STR-150).
+    @Enum(key: "desired_status")
+    var desiredStatus: DesiredSnapshotStatus
+
+    @Field(key: "generation")
+    var generation: Int64
+
+    @Field(key: "observed_generation")
+    var observedGeneration: Int64
+
+    @OptionalField(key: "convergence_phase")
+    var convergencePhase: String?
+
+    @OptionalField(key: "failed_generation")
+    var failedGeneration: Int64?
+
+    @OptionalField(key: "convergence_deadline")
+    var convergenceDeadline: Date?
+
+    @Field(key: "finalizers")
+    var finalizers: [String]
+
+    /// Whether an exported copy in object storage is *wanted* (STR-150).
+    ///
+    /// Export used to be an imperative verb; it is a placement fact now — "this
+    /// snapshot should also exist off-node" — carried to the agent on the
+    /// desired entry and confirmed by `exportedAt` below. Sticky on purpose: a
+    /// re-export after the agent's copy was lost is the same desire restated,
+    /// not a new one.
+    @Field(key: "export_desired")
+    var exportDesired: Bool
+
+    /// How the guest proceeds once the checkpoint is captured: resume, or stay
+    /// stopped (checkpoint-and-stop).
+    ///
+    /// Persisted, not derived from the request, because it is a *create
+    /// strategy* the agent reads off the desired entry — and a desired entry is
+    /// re-assembled on every sync, including ones long after the request that
+    /// made it. A capture still pending across a control-plane restart would
+    /// otherwise silently become a resume.
+    ///
+    /// Read only while the artifact is absent from the host, which is what makes
+    /// it safe for a replayed sync to carry: it can never re-pause a guest whose
+    /// checkpoint already exists. The sandbox's own `desiredStatus` carries the
+    /// lasting half of "and stop", written in the same transaction.
+    @Enum(key: "capture_mode")
+    var captureMode: SandboxSnapshotMode
+
+    /// When the retention sweep marks this snapshot `.absent`, or nil to keep
+    /// it until someone deletes it (`SnapshotRetention`).
+    @OptionalField(key: "expires_at")
+    var expiresAt: Date?
+
     @Parent(key: "created_by_id")
     var createdBy: User
 
@@ -133,6 +187,8 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
         projectID: UUID,
         environment: String,
         agentId: String?,
+        captureMode: SandboxSnapshotMode = .resume,
+        expiresAt: Date? = nil,
         createdByID: UUID
     ) {
         self.id = id
@@ -142,6 +198,13 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
         self.environment = environment
         self.status = .creating
         self.agentId = agentId
+        self.desiredStatus = .present
+        self.generation = 1
+        self.observedGeneration = 0
+        self.finalizers = []
+        self.exportDesired = false
+        self.captureMode = captureMode
+        self.expiresAt = expiresAt
         self.$createdBy.id = createdByID
     }
 }
@@ -158,13 +221,16 @@ struct SandboxSnapshotExportedArtifact: Codable, Equatable, Sendable {
 }
 
 extension SandboxSnapshot {
-    var isReady: Bool { status == .ready }
+    var isReady: Bool { status == .ready && desiredStatus == .present }
 
-    var canRestore: Bool { status == .ready }
+    var canRestore: Bool { isReady }
 
-    /// `.creating` is deliberately not deletable — its create operation is
-    /// still pending and owns the row's resolution.
-    var canDelete: Bool { status == .ready || status == .error || status == .deleting }
+    /// Deletable in any state, for `VMSnapshot.canDelete`'s reason: deletion is
+    /// level-triggered and the agent's teardown is idempotent, so re-issuing it
+    /// is always safe. (The lineage guard in `SandboxSnapshotController` still
+    /// refuses a snapshot with live forks — that is a data-dependency rule, not
+    /// a lifecycle one.)
+    var canDelete: Bool { true }
 
     /// Whether a complete exported copy exists in object storage: the export
     /// completed (`exportedAt`) and every artifact kind has an integrity
@@ -180,6 +246,150 @@ extension SandboxSnapshot {
     }
 }
 
+// MARK: - Conditions and convergence (STR-150)
+
+extension SandboxSnapshot: ConvergenceObservable {
+    var lastError: String? {
+        get { errorMessage }
+        set { errorMessage = newValue }
+    }
+}
+
+extension SandboxSnapshot: SnapshotArtifactResource {
+    static var artifactKind: SnapshotArtifactKind { .sandboxSnapshot }
+    static var iamNodeType: IAMNodeType { .sandboxSnapshot }
+    static var operationResourceKind: OperationResourceKind { .sandboxSnapshot }
+
+    var projectID: UUID { $project.id }
+    var parentID: UUID { $sandbox.id }
+    var isPresentOnAgent: Bool { status == .ready }
+    var wantsExport: Bool { exportDesired }
+
+    /// An export is part of what this artifact's desired state asks for, so it
+    /// is part of whether that state is satisfied — otherwise a client would
+    /// see `converged` the moment the capture landed and have no way to wait
+    /// for the copy it asked for in the same request.
+    ///
+    /// `isExported` rather than the agent's own report, deliberately: the
+    /// agent's `exported` flag says it finished uploading, while this says the
+    /// control plane has an integrity record for every artifact — computed from
+    /// bytes it hashed itself as they landed, never from anything the agent
+    /// claimed.
+    var conditions: ResourceConditions {
+        ResourceConditions(
+            targetGeneration: generation,
+            observedGeneration: observedGeneration,
+            desiredSatisfied: isPresentOnAgent && (!exportDesired || isExported),
+            phase: convergencePhase,
+            lastError: errorMessage,
+            failedGeneration: failedGeneration
+        )
+    }
+
+    static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [SandboxSnapshot] {
+        try await SandboxSnapshot.query(on: db).filter(\.$convergenceDeadline <= now).all()
+    }
+
+    static func placed(onAgent agentId: String, on db: any Database) async throws -> [SandboxSnapshot] {
+        try await SandboxSnapshot.query(on: db).filter(\.$agentId == agentId).all()
+    }
+
+    static func expired(at now: Date, on db: any Database) async throws -> [SandboxSnapshot] {
+        try await SandboxSnapshot.query(on: db)
+            .filter(\.$expiresAt <= now)
+            .filter(\.$desiredStatus != DesiredSnapshotStatus.absent)
+            .all()
+    }
+
+    static func terminating(on db: any Database) async throws -> [SandboxSnapshot] {
+        try await SandboxSnapshot.query(on: db)
+            .filter(\.$desiredStatus == DesiredSnapshotStatus.absent)
+            .all()
+    }
+
+    func adoptReconciliationState(from committed: SandboxSnapshot) {
+        status = committed.status
+        desiredStatus = committed.desiredStatus
+        generation = committed.generation
+        observedGeneration = committed.observedGeneration
+        convergencePhase = committed.convergencePhase
+        errorMessage = committed.errorMessage
+        failedGeneration = committed.failedGeneration
+        convergenceDeadline = committed.convergenceDeadline
+        agentId = committed.agentId
+        size = committed.size
+        storagePath = committed.storagePath
+        firecrackerVersion = committed.firecrackerVersion
+        architecture = committed.architecture
+        guestControlProtocolVersion = committed.guestControlProtocolVersion
+        forkLayoutVersion = committed.forkLayoutVersion
+        cpuTemplate = committed.cpuTemplate
+        sourceCPUModel = committed.sourceCPUModel
+        captureMode = committed.captureMode
+        exportDesired = committed.exportDesired
+        exportedAt = committed.exportedAt
+        exportedArtifacts = committed.exportedArtifacts
+        finalizers = committed.finalizers
+        expiresAt = committed.expiresAt
+    }
+
+    @discardableResult
+    func applyCapturedFacts(_ facts: ObservedSnapshotFacts) -> Bool {
+        var changed = false
+        if let sizeBytes = facts.sizeBytes, size != sizeBytes {
+            size = sizeBytes
+            changed = true
+        }
+        if let path = facts.storagePath, storagePath != path {
+            storagePath = path
+            changed = true
+        }
+        if let version = facts.firecrackerVersion, firecrackerVersion != version {
+            firecrackerVersion = version
+            changed = true
+        }
+        if let architecture = facts.architecture?.rawValue, self.architecture != architecture {
+            self.architecture = architecture
+            changed = true
+        }
+        if let guestVersion = facts.guestControlProtocolVersion,
+            guestControlProtocolVersion != guestVersion
+        {
+            guestControlProtocolVersion = guestVersion
+            changed = true
+        }
+        if let layout = facts.forkLayoutVersion, forkLayoutVersion != layout {
+            forkLayoutVersion = layout
+            changed = true
+        }
+        if let template = facts.cpuTemplate, cpuTemplate != template {
+            cpuTemplate = template
+            changed = true
+        }
+        return changed
+    }
+
+    /// Deliberately does **not** stamp `exportedAt`.
+    ///
+    /// The agent saying "I uploaded" and the control plane having a complete,
+    /// hashed copy are different claims, and only the second one may authorize
+    /// a cross-agent restore. `exportedAt` is stamped by the artifact upload
+    /// route once every kind has an integrity record the control plane computed
+    /// itself — this only mirrors the agent's half so a re-driven sync does not
+    /// re-upload an archive that already landed.
+    @discardableResult
+    func applyExported(_ exported: Bool) -> Bool { false }
+
+    @discardableResult
+    func applyObservedPresence(present: Bool, failed: Bool) -> Bool {
+        let derived: SandboxSnapshotStatus =
+            present ? .ready : (failed ? .error : (desiredStatus == .absent ? .deleting : .creating))
+        guard status != derived else { return false }
+        status = derived
+        return true
+    }
+}
+
 // MARK: - Request/Response DTOs
 
 struct CreateSandboxSnapshotRequest: Content {
@@ -187,6 +397,10 @@ struct CreateSandboxSnapshotRequest: Content {
     /// `true` checkpoints-and-stops: the sandbox converges to `stopped` after
     /// the snapshot instead of resuming. Defaults to `false` (resume).
     let stop: Bool?
+    /// How long to keep the snapshot, in seconds. Omitted uses the fleet
+    /// default (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it
+    /// until someone deletes it, overriding that default.
+    let ttlSeconds: Int?
 }
 
 struct SandboxSnapshotResponse: Content {
@@ -202,10 +416,18 @@ struct SandboxSnapshotResponse: Content {
     let guestControlProtocolVersion: Int?
     let forkLayoutVersion: Int?
     let cpuTemplate: String?
+    /// Whether an exported copy is wanted (STR-150). `exportedAt` is when one
+    /// last completed; the pair is the desired/observed split for mobility.
+    let exportDesired: Bool
     /// When the artifacts were last fully exported to object storage; nil for
     /// an agent-local snapshot (issue #428).
     let exportedAt: Date?
     let errorMessage: String?
+    /// When retention will delete this snapshot; nil means it is kept until
+    /// someone deletes it.
+    let expiresAt: Date?
+    /// What clients poll instead of `status` (ADR 0001 stage 1, STR-150).
+    let conditions: ResourceConditions
     let createdById: UUID?
     let createdAt: Date?
 
@@ -222,8 +444,11 @@ struct SandboxSnapshotResponse: Content {
         self.guestControlProtocolVersion = snapshot.guestControlProtocolVersion
         self.forkLayoutVersion = snapshot.forkLayoutVersion
         self.cpuTemplate = snapshot.cpuTemplate
+        self.exportDesired = snapshot.exportDesired
         self.exportedAt = snapshot.exportedAt
         self.errorMessage = snapshot.errorMessage
+        self.expiresAt = snapshot.expiresAt
+        self.conditions = snapshot.conditions
         self.createdById = snapshot.$createdBy.id
         self.createdAt = snapshot.createdAt
     }

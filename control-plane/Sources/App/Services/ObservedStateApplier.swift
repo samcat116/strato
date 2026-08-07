@@ -195,6 +195,24 @@ struct ObservedStateApplier {
             }
         }
 
+        // Snapshot artifacts (STR-150). `guard let` on the field for exactly
+        // the volume reason above, one step more expensive to get wrong: an
+        // empty list the control plane believed would reap every checkpoint row
+        // it holds for this agent, and a checkpoint is a point in time nothing
+        // can recreate.
+        if let reportedSnapshotList = report.snapshots {
+            let reported = Dictionary(
+                reportedSnapshotList.map { ($0.snapshotId, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            try await applyObservedSnapshots(
+                VolumeSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+            try await applyObservedSnapshots(
+                VMSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+            try await applyObservedSnapshots(
+                SandboxSnapshot.self, reported: reported, agentId: report.agentId, on: db)
+        }
+
         return unrecognizedOutcome
     }
 
@@ -339,6 +357,18 @@ struct ObservedStateApplier {
             }
         }
 
+        // Snapshot artifacts (STR-150). One map across the three families,
+        // populated per family from its own table: ids are UUIDs, so an id can
+        // only ever belong to one, and merging them here keeps the lookup below
+        // a single expression per kind rather than three near-identical ones.
+        var snapshotPlacements: [UUID: WorkloadPlacement] = [:]
+        try await collectSnapshotPlacements(
+            VolumeSnapshot.self, kind: .volumeSnapshot, from: report, into: &snapshotPlacements, on: db)
+        try await collectSnapshotPlacements(
+            VMSnapshot.self, kind: .vmCheckpoint, from: report, into: &snapshotPlacements, on: db)
+        try await collectSnapshotPlacements(
+            SandboxSnapshot.self, kind: .sandboxSnapshot, from: report, into: &snapshotPlacements, on: db)
+
         // New claims accumulate for one batched create at the end — see the
         // stale-delete note above for why this path can't afford a round trip
         // per workload.
@@ -354,6 +384,9 @@ struct ObservedStateApplier {
             case .vm: placement = vmPlacements[entry.workloadId]
             case .sandbox: placement = sandboxPlacements[entry.workloadId]
             case .volume: placement = volumePlacements[entry.workloadId]
+            case .volumeSnapshot: placement = snapshotPlacements[entry.workloadId]
+            case .vmCheckpoint: placement = snapshotPlacements[entry.workloadId]
+            case .sandboxSnapshot: placement = snapshotPlacements[entry.workloadId]
             }
             let existing = claimsByKey[key]
 
@@ -1100,10 +1133,10 @@ struct ObservedStateApplier {
         } else {
             derived = .available
         }
-        // `.snapshotting` is still written by the imperative snapshot path
-        // (ADR stage 8) and must not be stomped by a report that knows nothing
-        // about it.
-        if volume.status != derived, volume.status != .snapshotting {
+        // `.snapshotting` is no longer written by anything (STR-150 made a
+        // volume snapshot its own converging resource), so there is nothing
+        // left to protect it from: the report is authoritative.
+        if volume.status != derived {
             volume.status = derived
             changed = true
         }
@@ -1154,6 +1187,189 @@ struct ObservedStateApplier {
                 try await volume.save(on: db)
             }
         }
+    }
+
+    /// The rows behind one family's reported-unrecognized ids, including rows
+    /// placed on *other* agents — which is the whole re-point signal.
+    private func collectSnapshotPlacements<A: SnapshotArtifactResource>(
+        _ type: A.Type,
+        kind: WorkloadKind,
+        from report: ObservedStateReport,
+        into placements: inout [UUID: WorkloadPlacement],
+        on db: Database
+    ) async throws {
+        let ids = report.unrecognized.filter { $0.kind == kind }.map(\.workloadId)
+        guard !ids.isEmpty else { return }
+        for artifact in try await A.query(on: db).filter(\._$id ~~ ids).all() {
+            guard let id = artifact.id else { continue }
+            placements[id] = WorkloadPlacement(agentId: artifact.agentId)
+        }
+    }
+
+    // MARK: - Snapshot artifacts (STR-150)
+
+    /// One family's half of a report. Written once and applied three times:
+    /// the diff, the convergence quartet, the derived status and the
+    /// absent-then-reap dance are identical across the families, and only what
+    /// the captured facts *mean* differs — which each model absorbs in
+    /// `applyCapturedFacts`.
+    private func applyObservedSnapshots<A: SnapshotArtifactResource>(
+        _ type: A.Type,
+        reported: [UUID: ObservedSnapshotState],
+        agentId: String,
+        on db: Database
+    ) async throws {
+        for artifact in try await A.placed(onAgent: agentId, on: db) {
+            guard let artifactID = artifact.id else { continue }
+            if let observed = reported[artifactID] {
+                // A kind mismatch means two families minted the same UUID,
+                // which cannot happen — but routing an entry to the wrong table
+                // would apply one family's facts to another's row, so it is
+                // checked rather than assumed.
+                guard observed.kind == A.artifactKind else { continue }
+                try await applyObservedSnapshotState(artifact: artifact, observed: observed, on: db)
+            } else {
+                try await handleReportedSnapshotAbsence(artifact: artifact, agentId: agentId, on: db)
+            }
+        }
+    }
+
+    /// Snapshot counterpart of `applyObservedVolumeState`, with the same
+    /// transition rules and the same reasons for the order they run in.
+    private func applyObservedSnapshotState<A: SnapshotArtifactResource>(
+        artifact: A,
+        observed: ObservedSnapshotState,
+        on db: Database
+    ) async throws {
+        let artifactID = try artifact.requireID()
+        // Captured before anything mutates, for the reasons the VM path
+        // documents: `recordConvergence` mirrors the agent's own
+        // `failedGeneration` onto the model and would otherwise satisfy the
+        // idempotence guard with nothing recorded.
+        let wasConverged = artifact.isConverged
+        let failedBefore = artifact.failedGeneration
+
+        var changed = artifact.recordConvergence(
+            phase: observed.convergencePhase,
+            lastError: observed.lastError,
+            failedGeneration: observed.failedGeneration
+        )
+
+        // The captured facts — footprint, hypervisor version, fork layout,
+        // architecture — are recorded before the converging early-return, and
+        // this is the whole reason they moved onto the report. As an RPC reply
+        // they were delivered once: a socket that dropped mid-flight lost them,
+        // and the old paths had to treat that as a protocol error and mark a
+        // checkpoint that in fact existed `.error`. A report is re-sent on every
+        // heartbeat, so they simply arrive again.
+        if let facts = observed.facts, artifact.applyCapturedFacts(facts) {
+            changed = true
+        }
+        if artifact.applyExported(observed.exported) {
+            changed = true
+        }
+
+        // Still converging: progress only, never a settled status.
+        if observed.convergencePhase != nil {
+            if changed {
+                try await artifact.save(on: db)
+            }
+            return
+        }
+
+        if observed.observedGeneration > artifact.observedGeneration {
+            artifact.observedGeneration = observed.observedGeneration
+            changed = true
+        }
+
+        // Status is derived, not reported: the agent describes the bytes, and
+        // that fact plus the desired state is the whole status vocabulary an
+        // artifact has.
+        let failed = observed.lastError != nil
+        if artifact.applyObservedPresence(present: observed.present, failed: failed) {
+            changed = true
+        }
+
+        let settlesConvergence =
+            artifact.desiredStatus != .absent
+            && ((!wasConverged && artifact.isConverged)
+                || (observed.lastError != nil && observed.failedGeneration == artifact.generation))
+        if !settlesConvergence {
+            if changed {
+                try await artifact.save(on: db)
+            }
+            return
+        }
+
+        if !wasConverged, artifact.isConverged {
+            try await ResourceConvergence.recordSuccess(artifact, on: db)
+        } else if let lastError = observed.lastError, observed.failedGeneration == artifact.generation {
+            let mutation =
+                try await ResourceEvent.latest(
+                    .requested, resourceKind: A.operationResourceKind, resourceID: artifactID, on: db
+                )?.mutation ?? .create
+            let recorded = try await ResourceConvergence.recordFailure(
+                artifact, mutation: mutation, reason: lastError,
+                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+            if !recorded, changed {
+                try await artifact.save(on: db)
+            }
+        }
+    }
+
+    /// A snapshot artifact the database maps to this agent is absent from its
+    /// full report: either a confirmed deletion (desired absent) or genuine
+    /// loss.
+    ///
+    /// This is the only place a snapshot row is ever removed. The agent
+    /// omitting the artifact from a full list is the confirmation that its
+    /// bytes are gone — the same contract VMs, sandboxes and volumes have, and
+    /// the reason a snapshot delete survives a control-plane restart at all.
+    private func handleReportedSnapshotAbsence<A: SnapshotArtifactResource>(
+        artifact: A,
+        agentId: String,
+        on db: Database
+    ) async throws {
+        let artifactID = try artifact.requireID()
+
+        if artifact.desiredStatus == .absent {
+            let outcome = try await ResourceFinalizerService.clear(
+                .agentAbsent, from: artifact, on: db, app: app)
+            if outcome.isRemoved {
+                app.logger.info(
+                    "Snapshot deletion confirmed by agent report; record removed",
+                    metadata: [
+                        "resourceKind": .string(A.operationResourceKind.rawValue),
+                        "resourceId": .string(artifactID.uuidString),
+                        "agentId": .string(agentId),
+                    ])
+            }
+            return
+        }
+
+        let convergenceCleared = artifact.recordConvergence(
+            phase: nil, lastError: artifact.lastError, failedGeneration: artifact.failedGeneration)
+
+        // Only escalate an artifact some agent has actually confirmed. A row at
+        // `observedGeneration == 0` is mid-capture — the agent has not written
+        // it yet, and its absence is expected rather than a loss.
+        guard artifact.observedGeneration > 0, artifact.isPresentOnAgent else {
+            if convergenceCleared {
+                try await artifact.save(on: db)
+            }
+            return
+        }
+
+        _ = artifact.applyObservedPresence(present: false, failed: true)
+        artifact.lastError = "snapshot artifacts are missing from their agent"
+        try await artifact.save(on: db)
+        app.logger.warning(
+            "Snapshot missing from agent observed-state report; marking as error until re-converged",
+            metadata: [
+                "resourceKind": .string(A.operationResourceKind.rawValue),
+                "resourceId": .string(artifactID.uuidString),
+                "agentId": .string(agentId),
+            ])
     }
 
     /// A volume the database maps to this agent is absent from its full report:

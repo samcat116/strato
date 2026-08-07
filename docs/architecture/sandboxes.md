@@ -450,7 +450,7 @@ time, plus recorded compatibility constraints:
 
 ### Checkpoint and restore in place
 
-**Checkpoint** (`sandbox_snapshot_create`): drain host-side vsock connections
+**Checkpoint** (a desired artifact since wire v32): drain host-side vsock connections
 (exec sessions end terminally, the log follow suspends keeping its seq
 checkpoint — Firecracker refuses to snapshot a vsock device with live
 connections) → pause → `PUT /snapshot/create` → copy rootfs + config drive →
@@ -475,16 +475,35 @@ seq checkpoint. The restored device topology re-binds the original vsock UDS
 path; the (future — STR-104) TAP devices come back under their original names
 the same way.
 
-### Snapshot rows and operations
+### Snapshot rows and convergence
 
 `SandboxSnapshot` rows track status (`creating`/`ready`/`deleting`/`error`),
 size, agent placement, and the compat constraints (Firecracker version,
-architecture). `POST /api/sandboxes/:id/snapshots` (+ list/delete/restore)
-ride the generalized 202-operation machinery (#412) with operation kinds
-`snapshot`/`snapshot_delete`/`restore`; the agent round-trip is an imperative
-request/response RPC like volume operations (replica-forwarded, capability-
-gated on `sandbox_snapshot_create`, wire protocol v9). Restore pins to the
-snapshot's agent — until the snapshot is exported (see
+architecture, guest control-protocol version, fork layout, CPU template).
+
+A snapshot is a **desired artifact** since ADR 0001 stage 8 (STR-150, wire
+v32): capture, delete and export are desired state the owning agent converges
+on, and the row is a `ConvergingResource` with its own generation and
+finalizer. `POST /api/sandboxes/:id/snapshots` and `DELETE` answer `202
+{resource, targetGeneration, mutationId}`; the client polls the snapshot's
+`conditions`. The delete's row survives until the agent's full-list report
+omits the artifact. See
+[the storage doc](./storage.md#snapshots-and-checkpoints-as-desired-artifacts)
+for the shared shape, including retention.
+
+Two sandbox-specific details. **Checkpoint-and-stop writes two halves in one
+transaction**: `captureMode: .stop` on the artifact — read by the agent only
+while the artifact is absent, so a replayed sync cannot re-pause a live guest —
+and `desiredStatus: .stopped` on the sandbox itself, without which "and stop"
+would last exactly until the next level-triggered pass. And the source host's
+**CPU model** is recorded at admission rather than waited for: it is a fact
+about the *agent*, which the agent's own report has no reason to carry, and an
+un-templated snapshot needs it to be mobile at all.
+
+`restore` is still an imperative operation (kind `restore`, capability-gated
+on `snapshot:SandboxSnapshot`, wire v9): loading a checkpoint back over a live
+microVM is an edge rather than a state, and converts to a nonce in ADR stage 9.
+Restore pins to the snapshot's agent — until the snapshot is exported (see
 [Snapshot mobility](#snapshot-mobility)) — and flips desired state to
 `running` in the same transaction (IPAM allocations stay held while
 checkpointed, so the sandbox keeps its addresses). Snapshot storage draws
@@ -645,9 +664,15 @@ The target retains the opaque lineage UUID for audit/display.
 ### Snapshot mobility
 
 Export makes a checkpoint durable and portable (#428):
-`POST /api/sandboxes/:id/snapshots/:snapshotId/export` (202 + operation,
-kind `snapshot_export`, wire protocol **version 14**) asks the snapshot's
-agent to stream all four artifacts to control-plane-relative upload paths.
+`POST /api/sandboxes/:id/snapshots/:snapshotId/export` (202, wire protocol
+**version 14** for the transfer client and **v32** for the entry) records that
+the snapshot's artifacts should *also* exist in project storage. A **placement
+fact**, not a verb, since STR-150: the desired entry carries one upload slot
+per artifact, the agent converges by streaming to them, and the snapshot's
+`conditions` stay unconverged until the copy is complete. Withdrawing an export
+plans nothing on the agent — un-exporting is the control plane's own
+object-store bookkeeping.
+
 Bytes flow through the control plane into the image object store
 (`ImageObjectStore`, filesystem or S3) under
 `sandbox-snapshots/{projectId}/{snapshotId}/...` — agents never talk to the
@@ -656,10 +681,13 @@ the agent's SPIFFE SVID forwarded by the Envoy mTLS sidecar
 (`AgentMTLSAuthenticator`, the v13 image-download model; both Envoy configs
 add an agents-only RBAC route for them), with deliberately no user-session
 fallback. The upload route hashes and sizes each stream as it lands
-(integrity material is never agent-supplied) and records per-artifact
-entries on the snapshot row; the export operation stamps `exported_at` only
-once every artifact is recorded. Deleting the snapshot (or cascading its
-sandbox) deletes the exported prefix.
+(integrity material is never agent-supplied), records per-artifact entries on
+the snapshot row, and stamps `exported_at` on the PUT that completes the set.
+The agent saying "I finished uploading" is deliberately never what stamps it:
+only a copy this route hashed itself may authorize a cross-agent restore. An
+existing `exported_at` is left alone by a re-upload, so a re-export that dies
+partway cannot demote a snapshot whose stored copy is still complete and valid.
+Deleting the snapshot (or cascading its sandbox) deletes the exported prefix.
 
 An exported snapshot unlocks:
 

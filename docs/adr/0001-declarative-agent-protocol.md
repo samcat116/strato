@@ -4,8 +4,8 @@
 - **Progress**: stages 1 (conditions, STR-142), 2 (`resource_events`,
   STR-143), 3 (finalizers, STR-144), 4 (202 → `{resource, targetGeneration}`,
   STR-147), 5 (volumes declarative, STR-148), 6 (`agent_update` removal,
-  STR-145), and 10 (pull transport, STR-146) have landed; later stages
-  pending.
+  STR-145), 8 (snapshots and checkpoints declarative, STR-150), and 10 (pull
+  transport, STR-146) have landed; later stages pending.
 - **Date**: 2026-08-02
 - **Deciders**: Sam Schmitt
 - **Scope**: control-plane ↔ agent protocol, `ResourceOperation` machinery,
@@ -106,8 +106,8 @@ observed state. Concretely:
 | --- | --- |
 | `volume_create/delete/attach/detach/resize` | Desired volume entries (exists, size, attachment) in the sync |
 | `volume_clone` | A create *strategy* on the desired entry — the `DesiredSandboxState.restoreFrom` pattern (issue #427), not an operation |
-| `volume_snapshot`, `volume_snapshot_delete`, `vm_checkpoint`, `vm_snapshot_delete`, `sandbox_snapshot_create/_delete` | Desired artifact entries; captured sizes/metadata return via observed state |
-| `sandbox_snapshot_export` | A placement fact ("snapshot S exists on agent B"); the byte transfer beneath remains a transport concern |
+| `volume_snapshot`, `volume_snapshot_delete`, `vm_checkpoint`, `vm_snapshot_delete`, `sandbox_snapshot_create/_delete` | Desired artifact entries; captured sizes/metadata return via observed state (**landed**, STR-150) |
+| `sandbox_snapshot_export` | A placement fact ("snapshot S exists on agent B"); the byte transfer beneath remains a transport concern (**landed**, STR-150) |
 | `agent_update` (imperative form) | Deleted; `DesiredAgentUpdate` (issue #434) already exists and is the proof this migration works |
 | `vm_reboot`, `vm_restore`, `sandbox_restore` | Edge-as-nonce: a monotonic `rebootGeneration` (and restore analog) on the desired entry; the agent persists last-applied in its manifest and acts when desired > applied |
 | `volume_info` | Deleted; the fields join the observed report |
@@ -308,7 +308,8 @@ surviving process boundaries; coordination is load-bearing. After:
   the per-resource work is real.
 - **Retention.** Durable snapshot/checkpoint objects need TTL/GC answers
   (the `Job.ttlSecondsAfterFinished` lesson) that fire-and-forget RPCs never
-  raised.
+  raised. *Answered in stage 8* — absolute `expires_at` plus a
+  cluster-singleton sweep; see the stage note below.
 - **Payload growth.** The sync gains volumes/snapshots/checkpoints; the
   observed report gains their full-list counterparts. The `304`/ETag fast
   path and (later) observed-state deltas are the mitigations; on dense
@@ -323,8 +324,7 @@ surviving process boundaries; coordination is load-bearing. After:
   `lastMutationKind` being maintained; a conservative single budget is the
   fallback if that proves fiddly.
 - **Coupling.** The side-table shrinks exactly as fast as RPCs convert, and
-  not faster; snapshot/restore verdicts complete off responses until their
-  conversions land. Sequencing below is chosen so every stage is
+  not faster; restore verdicts complete off responses until stage 9 lands. Sequencing below is chosen so every stage is
   independently shippable and valuable.
 
 ## Migration plan
@@ -367,6 +367,72 @@ agent is involved.
 7. **`volume_info` → observed report.**
 8. **Snapshots and checkpoints as desired artifacts** (retention design
    included).
+
+   *Amended in implementation (STR-150):* this stage shipped as a **hard
+   cutover**, following stage 5's precedent rather than the dual-mode window
+   the costs section anticipates — and for a sharper version of its reason.
+   Keeping the imperative path alive per-agent would have preserved the
+   RPC-and-verdict background halves this stage exists to delete, including the
+   one that had to *guess*, after a lost response, whether a checkpoint it could
+   not see existed. `volume_snapshot`, `volume_snapshot_delete`,
+   `vm_checkpoint`, `vm_snapshot_delete`, `sandbox_snapshot_create`,
+   `sandbox_snapshot_delete` and `sandbox_snapshot_export` are deleted outright
+   at wire v32.
+
+   Where the gate sits differs from stage 5, because an artifact has no
+   placement decision to gate: it inherits its parent's host. `supportsSnapshotSync`
+   therefore gates **capture admission** — `POST .../snapshots` against a
+   pre-v32 agent is refused with `409`, exactly as the pre-v22/v9 capability
+   preflights already did, one floor higher. Artifacts already sitting on such
+   an agent freeze until it is upgraded; deleting one still works, because the
+   delete path force-clears the agent-absence finalizer for an agent that cannot
+   confirm.
+
+   Three shapes are worth recording, because each answers a question the issue
+   raised rather than a detail of the code:
+
+   * **The three families share one desired/observed pair**, kind-tagged, rather
+     than three. A volume snapshot, a VM checkpoint and a sandbox snapshot
+     differ only in which backend captures them and what metadata comes back;
+     identity, the generation guard, the absent-then-confirm dance and the
+     export placement fact are the same shape three times over. They stay three
+     *tables* — three quota paths, three IAM node types, three very different
+     completion budgets — and share behavior through a protocol.
+   * **A capture is a create strategy** (`DesiredSnapshotCapture`), read only
+     while the artifact is absent from the host. That is the whole safety
+     property: without it, a level-triggered entry carrying "pause this guest
+     and copy its RAM" would re-checkpoint a running VM on every replayed sync,
+     over the point in time the user is holding. Checkpoint-and-stop writes both
+     halves — the capture mode on the artifact, the lasting intent on the
+     sandbox's own desired status — because the first alone would last exactly
+     until the next level-triggered pass.
+   * **The captured metadata moving onto the observed report is not relocation.**
+     An RPC reply is delivered once, so both old paths had to treat a dropped
+     socket as a protocol error and mark a checkpoint that in fact existed
+     `.error`. A report is re-sent on every heartbeat, so the same facts arrive
+     again until the control plane has them.
+
+   **Retention** is answered by an absolute `expires_at` per artifact, resolved
+   at creation from a per-request `ttlSeconds` or the fleet default
+   (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset — so an upgrade changes nothing until
+   an operator opts in), swept by a cluster-singleton pass that issues the same
+   delete an operator would, attributed to the `system` actor. Absolute rather
+   than relative, because a TTL re-evaluated against "now" on each pass drifts
+   with every restart and an artifact whose expiry keeps moving never expires.
+   Count-based retention ("keep the last N per parent") is deliberately *not*
+   implemented: it needs a per-parent ordering a delete has to re-evaluate
+   transactionally, and the interesting failure — a snapshot deleted out from
+   under a fork that depends on it — is one the lineage guard already refuses.
+   Time is enough to bound the leak; count can be layered on without changing
+   the artifact model.
+
+   The agent keeps a **durable record** of what it captured
+   (`SnapshotRecordStore`), for the reason `VMManifestStore` exists: a
+   Firecracker checkpoint's fork-layout version and CPU template are not
+   recoverable from its files at all, and a qcow2 internal snapshot's footprint
+   costs a subprocess per artifact per report. It inherits the same caveat — an
+   artifact deleted out of band reports present until something tries to use it —
+   which is affordable because every backend's deletion is idempotent.
 9. **Reboot/restore nonces** (3 messages).
 10. **Pull transport + broadcast doorbell**; delete targeted nudges and the
     four-way sync-routing branch. The `agent:{name}:replica` routing key

@@ -89,11 +89,11 @@ extension MessageEnvelope {
 
         let raws: [String?]
         switch type {
-        case .volumeSnapshot, .volumeSnapshotDelete, .volumeInfo:
-            // The volume verbs that have not converted to desired state yet
-            // (ADR 0001 stages 7 and 8). They take the *reconciler's* volume
-            // lane, not a bare-id one, so a snapshot can never run concurrently
-            // with the reconciler resizing or deleting the same volume.
+        case .volumeInfo:
+            // The one volume verb that has not converted to desired state yet
+            // (ADR 0001 stage 7). It takes the *reconciler's* volume lane, not
+            // a bare-id one, so the read can never run concurrently with the
+            // reconciler resizing or deleting the same volume.
             raws = [volumeLane(fields?.volumeId)]
         case .desiredState:
             // Full-fleet syncs diff quickly and fan per-VM work out onto the VM lanes, so

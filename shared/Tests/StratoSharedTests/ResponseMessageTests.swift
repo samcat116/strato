@@ -21,15 +21,15 @@ struct ResponseMessageTests {
 
     @Test func successWithTypedDataRoundTrip() throws {
         // The real handlers ship typed structs through AnyCodableValue —
-        // e.g. VolumeStatusResponse inside a SuccessMessage.
-        let status = VolumeStatusResponse(
-            volumeId: "vol-1", status: "attached", storagePath: "/var/lib/strato/vol-1.qcow2")
-        let message = SuccessMessage(requestId: Fixtures.requestId, data: try AnyCodableValue(status))
+        // e.g. a VolumeInfoResponse inside a SuccessMessage.
+        let info = VolumeInfoResponse(
+            volumeId: "vol-1", actualSize: 1_234, virtualSize: 10_240, format: "qcow2")
+        let message = SuccessMessage(requestId: Fixtures.requestId, data: try AnyCodableValue(info))
         let decoded = try throughEnvelope(message)
-        let extracted = try #require(try decoded.data?.decode(as: VolumeStatusResponse.self))
+        let extracted = try #require(try decoded.data?.decode(as: VolumeInfoResponse.self))
         #expect(extracted.volumeId == "vol-1")
-        #expect(extracted.status == "attached")
-        #expect(extracted.storagePath == "/var/lib/strato/vol-1.qcow2")
+        #expect(extracted.virtualSize == 10_240)
+        #expect(extracted.format == "qcow2")
     }
 
     @Test func errorRoundTrip() throws {

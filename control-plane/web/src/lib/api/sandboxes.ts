@@ -14,6 +14,7 @@ import type {
   Operation,
   Page,
   SandboxSnapshot,
+  CreateSandboxSnapshotRequest,
 } from "@/types/api";
 import { LIST_PAGE_LIMIT } from "@/types/api";
 
@@ -80,11 +81,35 @@ export const sandboxesApi = {
       .then((page) => page.items);
   },
 
-  // Copies a snapshot's artifacts into control-plane object storage (issue
-  // #428), making it durable against agent loss and eligible for cross-agent
-  // restore/fork. 202 + operation, like the other snapshot mutations.
-  exportSnapshot(id: string, snapshotId: string): Promise<Operation> {
-    return api.post<Operation>(
+  createSnapshot(
+    id: string,
+    data?: CreateSandboxSnapshotRequest
+  ): Promise<AcceptedMutation<SandboxSnapshot>> {
+    return api.post<AcceptedMutation<SandboxSnapshot>>(
+      `/api/sandboxes/${id}/snapshots`,
+      data ?? {}
+    );
+  },
+
+  deleteSnapshot(
+    id: string,
+    snapshotId: string
+  ): Promise<AcceptedMutation<SandboxSnapshot>> {
+    return api.delete<AcceptedMutation<SandboxSnapshot>>(
+      `/api/sandboxes/${id}/snapshots/${snapshotId}`
+    );
+  },
+
+  // Records that a snapshot's artifacts should also exist in control-plane
+  // object storage (issue #428), making it durable against agent loss and
+  // eligible for cross-agent restore/fork. A placement fact rather than a
+  // command since STR-150: the owning agent converges by uploading, and the
+  // snapshot stays unconverged until every artifact has landed.
+  exportSnapshot(
+    id: string,
+    snapshotId: string
+  ): Promise<AcceptedMutation<SandboxSnapshot>> {
+    return api.post<AcceptedMutation<SandboxSnapshot>>(
       `/api/sandboxes/${id}/snapshots/${snapshotId}/export`
     );
   },

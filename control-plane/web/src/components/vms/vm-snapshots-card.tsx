@@ -20,6 +20,7 @@ import { vmsApi } from "@/lib/api/vms";
 import { useVMSnapshots } from "@/lib/hooks";
 import {
   acceptedOperation,
+  acceptedSnapshotMutation,
   useMutationsStore,
 } from "@/lib/stores/mutations-store";
 import type { VM, VMSnapshot } from "@/types/api";
@@ -63,11 +64,17 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     setIsCreating(true);
     try {
       const trimmed = name.trim();
-      const operation = await vmsApi.createSnapshot(
+      const accepted = await vmsApi.createSnapshot(
         vm.id,
         trimmed ? { name: trimmed } : undefined
       );
-      watch(acceptedOperation(operation, trimmed || `${vm.name} checkpoint`));
+      watch(
+        acceptedSnapshotMutation(accepted, {
+          kind: "create",
+          resourceKind: "vm_checkpoint",
+          resourceName: trimmed || `${vm.name} checkpoint`,
+        })
+      );
       toast.success("Checkpointing VM");
       setShowCreate(false);
       setName("");
@@ -106,8 +113,14 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     const snapshot = deleting;
     setBusyId(snapshot.id);
     try {
-      const operation = await vmsApi.deleteSnapshot(vm.id, snapshot.id);
-      watch(acceptedOperation(operation, `${snapshot.name} delete`));
+      const accepted = await vmsApi.deleteSnapshot(vm.id, snapshot.id);
+      watch(
+        acceptedSnapshotMutation(accepted, {
+          kind: "delete",
+          resourceKind: "vm_checkpoint",
+          resourceName: snapshot.name,
+        })
+      );
       toast.success(`Deleting “${snapshot.name}”`);
       setDeleting(null);
     } catch (deleteError) {

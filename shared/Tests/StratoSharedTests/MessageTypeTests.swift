@@ -14,11 +14,7 @@ struct MessageTypeTests {
         case .agentHeartbeat: return "agent_heartbeat"
         case .agentUnregister: return "agent_unregister"
         case .vmReboot: return "vm_reboot"
-        case .vmCheckpoint: return "vm_checkpoint"
         case .vmRestore: return "vm_restore"
-        case .vmSnapshotDelete: return "vm_snapshot_delete"
-        case .volumeSnapshot: return "volume_snapshot"
-        case .volumeSnapshotDelete: return "volume_snapshot_delete"
         case .volumeInfo: return "volume_info"
         case .consoleConnect: return "console_connect"
         case .consoleDisconnect: return "console_disconnect"
@@ -39,24 +35,20 @@ struct MessageTypeTests {
         case .sandboxExecClose: return "sandbox_exec_close"
         case .sandboxExecClosed: return "sandbox_exec_closed"
         case .sandboxLog: return "sandbox_log"
-        case .sandboxSnapshotCreate: return "sandbox_snapshot_create"
-        case .sandboxSnapshotDelete: return "sandbox_snapshot_delete"
         case .sandboxRestore: return "sandbox_restore"
-        case .sandboxSnapshotExport: return "sandbox_snapshot_export"
         }
     }
 
     private static let allTypes: [MessageType] = [
         .agentRegister, .agentRegisterResponse, .agentHeartbeat, .agentUnregister,
-        .vmReboot, .vmCheckpoint, .vmRestore, .vmSnapshotDelete,
-        .volumeSnapshot, .volumeSnapshotDelete, .volumeInfo,
+        .vmReboot, .vmRestore, .volumeInfo,
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
         .desiredState, .observedState,
         .success, .error, .vmLog,
         .sandboxExecStart, .sandboxExecStarted, .sandboxExecInput, .sandboxExecOutput,
         .sandboxExecResize, .sandboxExecExit, .sandboxExecClose, .sandboxExecClosed,
         .sandboxLog,
-        .sandboxSnapshotCreate, .sandboxSnapshotDelete, .sandboxRestore, .sandboxSnapshotExport,
+        .sandboxRestore,
     ]
 
     @Test("every case keeps its wire string", arguments: allTypes)

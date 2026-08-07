@@ -233,8 +233,9 @@ stage 5). The control plane writes what it wants — the volume exists, at this
 size, in this format, attached here — bumps a per-volume generation, and
 returns `202 Accepted`; the agent converges and reports back, and the volume's
 `conditions` are what say a mutation finished. Six imperative messages
-(`volume_create/delete/attach/detach/resize/clone`) were deleted in wire v31;
-the snapshot verbs and `volume_info` have not converted yet.
+(`volume_create/delete/attach/detach/resize/clone`) were deleted in wire v31,
+and the two snapshot verbs at v32 (see below); only `volume_info` has not
+converted yet.
 
 What the agent gains from the move is what the imperative handlers uniquely
 lacked: retry with a per-generation attempt cap, per-volume serial lanes, a
@@ -284,14 +285,27 @@ Snapshots are external qcow2 overlays created with the volume as backing
 file. The backing format is detected per volume rather than assumed, so raw
 volumes snapshot correctly.
 
+They are **desired artifacts** since ADR 0001 stage 8 (wire v32): a snapshot is
+its own converging, finalizable resource with a generation, an agent, and a
+finalizer that keeps its row alive until that agent's report omits it. See
+[Snapshots and checkpoints as desired artifacts](#snapshots-and-checkpoints-as-desired-artifacts)
+below for what that means across all three families.
+
+One consequence is worth naming here, because it removed a borrowed status: a
+volume no longer passes through `snapshotting`. The status existed only to
+represent something happening *to* the volume that had nowhere else to live;
+with the snapshot as its own resource, there is nothing to borrow and nothing
+to restore on a failure path.
+
 **Only detached volumes can be snapshotted** (issue #747). The overlay reads
 through to the volume, and nothing switches a running QEMU's active layer onto
 it — the guest would keep writing the same base the overlay points at, so the
 "snapshot" would track the live volume instead of freezing a moment in time.
-The control plane rejects a snapshot of an `attached` volume with `409`
-(`Volume.canSnapshot` requires `.available`), and the agent refuses any request
-that still names an attached VM in `VolumeSnapshotMessage.attachedVMId` — a
-guard against an older control plane or drifted bookkeeping.
+The control plane rejects a snapshot of an attached volume with `409`
+(`Volume.canSnapshot`), and the agent refuses any capture whose entry still
+names an attached VM in `DesiredSnapshotCapture.attachedVMId` — which matters
+more now than it did as an RPC guard, because a level-triggered entry outlives
+the request that made it and the volume may have been attached since.
 
 Cloning has its own `canClone` with the same rule, for a related reason: it is
 a `qemu-img convert` of the volume's file, and a guest writing the source
@@ -356,17 +370,86 @@ hot-plug.
 Quota counts only the machine state (`VMSnapshot.size`), not the disks — those
 are already charged under the VM, and an internal snapshot does not copy them.
 
-Two operational consequences worth knowing before running this at scale:
+One operational consequence is worth knowing before running this at scale:
+**a checkpoint holds the VM's QMP stats monitor for the whole job** (up to the
+1200s agent budget). That monitor is single-client and is also where
+balloon/guest-memory stats come from, so `memoryStats` returns nil for the
+duration — and it swallows the failure, so the metrics gap looks like a guest
+that stopped reporting rather than a self-inflicted hole.
 
-- **A checkpoint holds the VM's QMP stats monitor for the whole job** (up to
-  the 1200s agent budget). That monitor is single-client and is also where
-  balloon/guest-memory stats come from, so `memoryStats` returns nil for the
-  duration — and it swallows the failure, so the metrics gap looks like a guest
-  that stopped reporting rather than a self-inflicted hole.
-- **A checkpoint occupies the VM's one pending operation slot.** With an 1800s
-  operation budget, a large checkpoint can block start/stop/delete on that VM
-  for up to half an hour, and the only feedback is `ResourceOperation.begin`'s
-  bare `409`.
+A second one is *gone* as of STR-150 and worth recording as such. A checkpoint
+used to occupy the VM's one pending operation slot, so a large one could block
+start/stop/delete on that VM for up to half an hour with no feedback beyond a
+bare `409`. A checkpoint is its own resource now, with its own generation and
+its own budget; it contends with the VM's lifecycle only for the agent's
+per-VM serial lane, which is real mutual exclusion for the duration of the
+capture rather than a half-hour API lockout.
+
+### Snapshots and checkpoints as desired artifacts
+
+All three artifact families — volume snapshots, full-VM checkpoints, and
+sandbox snapshots — run on the reconciliation loop since ADR 0001 stage 8
+(STR-150, wire v32). The header this replaced claimed a checkpoint "is an
+action rather than a state"; that is true of the verb and false of the result.
+**"Checkpoint C exists for VM V" is a durable artifact** with an identity, a
+footprint and a host, which an agent can enumerate, diff and converge on.
+
+What changes, uniformly:
+
+- **Capture and delete answer `202`** with `{resource, targetGeneration,
+  mutationId}`; the client polls the artifact's own `conditions`. A delete's
+  success is the artifact's absence, so it polls the operations façade with
+  `mutationId` instead — the rule everywhere else in ADR 0001.
+- **The row outlives the delete.** It goes only once the owning agent's
+  full-list report omits the artifact, which is the only thing that confirms
+  the bytes are gone. A delete against an agent that cannot confirm (offline,
+  or below v32) force-clears the token, because a dead agent must not make its
+  checkpoints undeletable.
+- **The captured metadata comes back on the observed report** — footprint,
+  QEMU/Firecracker version, device nodes, fork layout, CPU template. As an RPC
+  reply it was delivered once, so both old paths had to treat a dropped socket
+  as a protocol error and mark a checkpoint that in fact existed `.error`.
+- **A capture never re-runs.** It is a *create strategy* read only while the
+  artifact is absent from the host — the property that makes it safe for a
+  level-triggered sync to carry an instruction that pauses a live guest.
+- **Statuses are purely observed.** `creating`/`ready`/`available`/`error` are
+  derived by `ObservedStateApplier` from what the agent reports about the
+  bytes; the control plane writes none of them.
+
+The agent keeps a durable record of what it captured
+(`SnapshotRecordStore`, `<vmStoragePath>/snapshot-records.json`), for the
+reason `VMManifestStore` exists: a Firecracker checkpoint's fork-layout version
+and CPU template are not recoverable from its files at all, and enumerating
+qcow2 internal snapshots costs a subprocess per VM per report. It inherits the
+same caveat — an artifact deleted out of band reports present until something
+tries to use it — which is affordable because every backend's deletion is
+idempotent. A record file that cannot be *read* makes the agent report
+`snapshots: nil`, never an empty list: an empty inventory is authoritative
+downstream and would reap every checkpoint row the control plane holds.
+
+#### Retention
+
+Durable artifact objects need an end, which fire-and-forget RPCs never raised —
+the `Job.ttlSecondsAfterFinished` lesson ADR 0001 names as a cost of this
+stage. Every artifact carries an optional absolute `expires_at`, resolved at
+creation from a per-request `ttlSeconds` or the fleet default
+(`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default, so an upgrade changes
+nothing until an operator opts in); `ttlSeconds: 0` keeps one forever,
+overriding the default.
+
+`SnapshotRetentionSweep` is a cluster-singleton pass that marks expired
+artifacts absent down the same path an operator's `DELETE` takes — quota
+release, the audit trail and the tombstone dance all come for free — attributed
+to the `system` actor, the sandbox expiry sweep's arrangement. Absolute rather
+than relative, because a TTL re-evaluated against "now" on each pass drifts
+with every restart and an artifact whose expiry keeps moving never expires.
+
+Count-based retention ("keep the last N per parent") is deliberately not
+implemented: it needs a per-parent ordering a delete has to re-evaluate
+transactionally, and the interesting failure — a snapshot deleted out from
+under a fork that depends on it — is one the sandbox lineage guard already
+refuses (and which the sweep shares, so a clock is refused for exactly the
+reasons a human is). Time is enough to bound the leak.
 
 ### Volume placement across agents
 

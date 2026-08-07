@@ -6,27 +6,32 @@ import Vapor
 /// Full-VM checkpoint handlers for `/api/vms/:vmID/snapshots` (issue #564),
 /// registered by `VMController.boot`.
 ///
-/// Create, delete, and restore follow the generalized 202-operation machinery
-/// (#412): the pending operation row and the snapshot mutation commit in one
-/// transaction, the agent round-trip happens in the background over the
-/// imperative checkpoint RPC (the volume-ops precedent, forwarded across
-/// replicas by `AgentService`), and the RPC verdict completes the operation —
-/// with the stuck-operation sweep as backstop.
-///
 /// A checkpoint here is RAM + device state + disks at one instant, which is a
 /// different primitive from the disk-only volume snapshot: it lives *inside*
 /// the VM's qcow2 disks as a QEMU internal snapshot, so it never leaves the
 /// agent that took it and restore placement is pinned to that agent.
+///
+/// Create and delete became declarative in ADR 0001 stage 8 (STR-150). Both
+/// answer `202 {resource, targetGeneration, mutationId}` and the client polls
+/// the checkpoint's own `conditions`; the agent captures or removes the bytes
+/// on its next sync and reports what it did. The background RPC-and-verdict
+/// halves this file used to carry are gone with them — including the one that
+/// had to guess, after a lost response, whether a checkpoint it could not see
+/// existed.
+///
+/// Restore is still imperative: loading a captured RAM image back into a live
+/// QEMU process is an edge rather than a state, and converts to a nonce in
+/// STR-151.
 extension VMController {
 
     // MARK: - Create
 
     /// POST /api/vms/:vmID/snapshots
-    /// Body: { "name"?: string, "description"?: string }
+    /// Body: { "name"?: string, "description"?: string, "ttlSeconds"?: int }
     ///
     /// Checkpoints the VM: the agent has QEMU write guest RAM and device state
     /// into an internal snapshot of the disks. The guest keeps running — QEMU
-    /// pauses it only for the duration of the save — so no desired state
+    /// pauses it only for the duration of the save — so no VM desired state
     /// changes here.
     func createSnapshot(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Checkpointing a VM")
@@ -38,7 +43,7 @@ extension VMController {
         // something the caller never asked for.
         let request: CreateVMSnapshotRequest
         if req.body.data == nil {
-            request = CreateVMSnapshotRequest(name: nil, description: nil)
+            request = CreateVMSnapshotRequest(name: nil, description: nil, ttlSeconds: nil)
         } else {
             request = try req.content.decode(CreateVMSnapshotRequest.self)
         }
@@ -55,9 +60,13 @@ extension VMController {
                 reason:
                     "VM cannot be checkpointed in state '\(vm.status.rawValue)'; it must be running or paused")
         }
-        // Fail fast on an offline or incapable agent instead of parking the
-        // operation against silence.
-        try await Self.requireCheckpointCapableAgent(agentId, app: req.application)
+        // Capture admission, not placement: an artifact inherits its parent's
+        // host, so there is no scheduling decision to gate. With the imperative
+        // frames gone there is no fallback either, so a checkpoint requested
+        // against an agent that cannot converge one is refused here rather than
+        // accepted into a desired state nothing would ever realize.
+        try await SnapshotArtifactMutation.requireCaptureCapableAgent(
+            agentId, kind: .vmCheckpoint, app: req.application)
 
         guard let project = try await Project.find(vm.$project.id, on: req.db) else {
             throw Abort(.internalServerError, reason: "VM project not found")
@@ -76,21 +85,21 @@ extension VMController {
             projectID: vm.$project.id,
             environment: vm.environment,
             agentId: agentId,
+            expiresAt: try SnapshotRetention.expiry(requested: request.ttlSeconds),
             createdByID: userID)
         // Admission estimate: the machine state is bounded by the memory the
-        // guest was granted. Replaced by the agent's actual figure on
-        // completion.
+        // guest was granted. Replaced by the agent's actual figure once its
+        // observed report carries one.
         snapshot.size = vm.memory
+        // The capture has a budget to converge in; past it the stuck-convergence
+        // sweep marks the artifact degraded rather than leaving a client polling
+        // a checkpoint that will never appear.
+        snapshot.extendConvergenceDeadline(
+            by: OperationResourceKind.vmCheckpoint.completionBudgetSeconds(for: .create))
 
         let environment = vm.environment
         let memory = vm.memory
-        let operation = try await ResourceOperation.begin(
-            .snapshot,
-            resourceKind: .virtualMachine,
-            resourceID: vmID,
-            userID: userID,
-            on: req.db
-        ) { db in
+        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
             // Checkpoint state draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveVMSnapshot(
@@ -107,10 +116,12 @@ extension VMController {
                 createdBy: userID,
                 on: db
             )
+            return try await SnapshotArtifactMutation.recordCapture(
+                snapshot, actor: .user(userID), on: db)
         }
 
         let snapshotID = try snapshot.requireID()
-        Self.runCheckpoint(operation, snapshot: snapshot, agentId: agentId, app: req.application)
+        try SnapshotArtifactMutation.dispatchCapture(snapshot, app: req.application)
 
         req.logger.info(
             "VM checkpoint accepted",
@@ -118,89 +129,7 @@ extension VMController {
                 "vm_id": .string(vmID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
-        return try operation.acceptedResponse()
-    }
-
-    /// Background half of `createSnapshot`: the agent RPC and the verdict.
-    private static func runCheckpoint(
-        _ operation: ResourceOperation,
-        snapshot: VMSnapshot,
-        agentId: String,
-        app: Application
-    ) {
-        guard let operationId = operation.id, let snapshotId = snapshot.id else { return }
-        let vmID = operation.resourceID
-        let projectID = snapshot.$project.id
-        let environment = snapshot.environment
-
-        app.backgroundTasks.spawn {
-            do {
-                let report = try await VMSnapshotService.requestCheckpoint(
-                    vmId: vmID, snapshotId: snapshotId, agentId: agentId, app: app)
-
-                // The agent RPC above can span shutdown's drain; bail before the
-                // write-back if it cancelled us (see `Application.liveDB`), and
-                // reuse the captured handle for the rest of the body.
-                guard let db = app.liveDB else { return }
-                if let current = try await VMSnapshot.find(snapshotId, on: db) {
-                    current.status = .ready
-                    // A QEMU build that reported no size for the tag it just
-                    // wrote leaves the admission estimate standing — an
-                    // unknown footprint must not silently become a free one.
-                    if let size = report.vmStateSizeBytes {
-                        current.size = size
-                    }
-                    current.qemuVersion = report.qemuVersion
-                    current.architecture = report.architecture?.rawValue
-                    try await current.save(on: db)
-                }
-
-                // Admission reserved only an estimate (the memory grant); the
-                // real figure may differ either way. Resync the counters and,
-                // if that blew past an enabled storage quota, delete the
-                // checkpoint rather than keep over-quota storage.
-                if let violatedQuota = try await QuotaEnforcementService.storageOverCommit(
-                    projectID: projectID, environment: environment, on: db)
-                {
-                    try? await VMSnapshotService.requestDelete(
-                        vmId: vmID, snapshotId: snapshotId, agentId: agentId, app: app)
-                    if let current = try? await VMSnapshot.find(snapshotId, on: db) {
-                        current.status = .error
-                        current.errorMessage =
-                            "Checkpoint exceeded storage quota '\(violatedQuota)' and was deleted"
-                        current.size = 0
-                        try? await current.save(on: db)
-                    }
-                    await app.resourceOperationCoordinator.recordVerdict(
-                        operationID: operationId, as: .failed,
-                        error:
-                            "Checkpoint's actual size exceeded storage quota '\(violatedQuota)'; it was deleted",
-                        on: app)
-                    return
-                }
-
-                await app.resourceOperationCoordinator.recordVerdict(
-                    operationID: operationId, as: .succeeded, error: nil, on: app)
-            } catch {
-                // A clean agent-side failure leaves no tag behind. An ambiguous
-                // transport failure (timeout, disconnect) may have written one —
-                // attempt the idempotent delete so the charge dropped below
-                // matches reality; if the agent is unreachable the state lives
-                // inside the VM's own disks and goes with the VM.
-                try? await VMSnapshotService.requestDelete(
-                    vmId: vmID, snapshotId: snapshotId, agentId: agentId, app: app)
-                // `try?` does not catch the fatal unwrap a torn-down `app.db`
-                // produces, so short-circuit on cancellation before each access.
-                if let db = app.liveDB, let current = try? await VMSnapshot.find(snapshotId, on: db) {
-                    current.status = .error
-                    current.errorMessage = error.localizedDescription
-                    current.size = 0
-                    try? await current.save(on: db)
-                }
-                await app.resourceOperationCoordinator.recordVerdict(
-                    operationID: operationId, as: .failed, error: error.localizedDescription, on: app)
-            }
-        }
+        return try AcceptedMutation(VMSnapshotResponse(from: snapshot), accepted).acceptedResponse()
     }
 
     // MARK: - List
@@ -223,6 +152,11 @@ extension VMController {
     // MARK: - Delete
 
     /// DELETE /api/vms/:vmID/snapshots/:snapshotID
+    ///
+    /// Marks the checkpoint absent and stamps the finalizers its teardown owes.
+    /// The row outlives this request: it goes only once the owning agent's
+    /// observed report stops listing the artifact, which is what makes a delete
+    /// durable across a control-plane restart.
     func deleteSnapshot(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Deleting a VM checkpoint")
         let vm = try await authorizedVM(req: req, permission: "read")
@@ -233,76 +167,14 @@ extension VMController {
         guard canDelete else {
             throw Abort(.forbidden, reason: "You don't have permission to delete this checkpoint")
         }
-        guard snapshot.canDelete else {
-            throw Abort(
-                .conflict,
-                reason: "Checkpoint cannot be deleted in status '\(snapshot.status.rawValue)'")
-        }
 
-        let vmID = try vm.requireID()
-        let operation = try await ResourceOperation.begin(
-            .snapshotDelete,
-            resourceKind: .virtualMachine,
-            resourceID: vmID,
-            userID: try user.requireID(),
-            on: req.db
-        ) { db in
-            guard let current = try await VMSnapshot.find(snapshotID, on: db), current.canDelete else {
-                throw Abort(.conflict, reason: "Checkpoint is no longer deletable")
-            }
-            current.status = .deleting
-            try await current.save(on: db)
-        }
+        let accepted = try await SnapshotArtifactMutation.delete(
+            snapshot, actor: .user(try user.requireID()), on: req.db, app: req.application)
 
-        Self.runCheckpointDeletion(
-            operation, snapshot: snapshot, vmAgentId: vm.hypervisorId, app: req.application)
-        return try operation.acceptedResponse()
-    }
-
-    /// Background half of `deleteSnapshot`. A checkpoint whose VM is unplaced
-    /// has no state anyone can reach — the row goes directly; an offline agent
-    /// fails the operation so the delete can be retried once it returns.
-    private static func runCheckpointDeletion(
-        _ operation: ResourceOperation,
-        snapshot: VMSnapshot,
-        vmAgentId: String?,
-        app: Application
-    ) {
-        guard let operationId = operation.id, let snapshotId = snapshot.id else { return }
-        let vmID = operation.resourceID
-
-        app.backgroundTasks.spawn {
-            do {
-                if let agentId = snapshot.agentId ?? vmAgentId {
-                    try await VMSnapshotService.requestDelete(
-                        vmId: vmID, snapshotId: snapshotId, agentId: agentId, app: app)
-                }
-                // The agent RPC above can span shutdown's drain; bail before the
-                // row delete if it cancelled us (see `Application.liveDB`).
-                guard let db = app.liveDB else { return }
-                try await db.transaction { db in
-                    try await snapshot.delete(on: db)
-                    // Drop the checkpoint's bindings with the row.
-                    try await RoleBindingService.revokeAll(
-                        nodeType: .vmSnapshot, nodeID: snapshotId, on: db)
-                }
-                // Resync the storage pool now that the checkpoint's bytes are
-                // gone; the deleted row drops out of the recount.
-                _ = try? await QuotaEnforcementService.storageOverCommit(
-                    projectID: snapshot.$project.id, environment: snapshot.environment, on: db)
-                await app.resourceOperationCoordinator.recordVerdict(
-                    operationID: operationId, as: .succeeded, error: nil, on: app)
-            } catch {
-                if let db = app.liveDB, let current = try? await VMSnapshot.find(snapshotId, on: db) {
-                    // Keep `.deleting` — it is retryable (`canDelete`), and
-                    // agent-side deletion is idempotent.
-                    current.errorMessage = error.localizedDescription
-                    try? await current.save(on: db)
-                }
-                await app.resourceOperationCoordinator.recordVerdict(
-                    operationID: operationId, as: .failed, error: error.localizedDescription, on: app)
-            }
-        }
+        req.logger.info(
+            "VM checkpoint deletion requested",
+            metadata: ["snapshot_id": .string(snapshotID.uuidString)])
+        return try AcceptedMutation(VMSnapshotResponse(from: snapshot), accepted).acceptedResponse()
     }
 
     // MARK: - Restore
@@ -348,7 +220,7 @@ extension VMController {
                 .conflict,
                 reason: "VM cannot be restored in state '\(vm.status.rawValue)'")
         }
-        try await Self.requireCheckpointCapableAgent(agentId, app: req.application)
+        try await Self.requireRestoreCapableAgent(agentId, app: req.application)
 
         let userID = try user.requireID()
         let operation = try await ResourceOperation.begin(
@@ -413,9 +285,10 @@ extension VMController {
 
     // MARK: - Shared
 
-    /// Preflight the agent, translating the service's own errors into the
-    /// `409` the API contract uses for "this cannot be done right now".
-    private static func requireCheckpointCapableAgent(_ agentId: String, app: Application) async throws {
+    /// Preflight the agent for a restore, translating the service's own errors
+    /// into the `409` the API contract uses for "this cannot be done right
+    /// now".
+    private static func requireRestoreCapableAgent(_ agentId: String, app: Application) async throws {
         do {
             try await VMSnapshotService.requireCapableAgent(agentId, app: app)
         } catch let error as VMSnapshotServiceError {

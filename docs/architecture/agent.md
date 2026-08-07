@@ -374,9 +374,10 @@ pre-qga behavior:
 - **fs-freeze snapshots** (withdrawn in issue #747): the volume-snapshot
   handler used to freeze the attached guest's filesystems around overlay
   creation. Nothing made that overlay the guest's active layer, so the freeze
-  only lent an inconsistent snapshot a consistency signal. The handler now
-  refuses any snapshot whose `attachedVMId` is set; `QGAClient` keeps the
-  freeze/thaw verbs for the eventual QMP-based live snapshot. See
+  only lent an inconsistent snapshot a consistency signal. The capture now
+  refuses any artifact whose entry names an attached VM
+  (`DesiredSnapshotCapture.attachedVMId`); `QGAClient` keeps the freeze/thaw
+  verbs for the eventual QMP-based live snapshot. See
   [storage](./storage.md#snapshots).
 - **Guest info**: a throttled slow poll (folded into the heartbeat cadence)
   probes running QEMU VMs for hostname and configured addresses off the report's

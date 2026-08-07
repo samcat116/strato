@@ -636,9 +636,15 @@ struct VolumeController: RouteCollection {
 
     /// Create a snapshot of a volume
     /// POST /api/volumes/:volumeId/snapshot
-    /// Body: { "name": string, "description"?: string }
+    /// Body: { "name": string, "description"?: string, "ttlSeconds"?: int }
+    ///
+    /// Declarative since ADR 0001 stage 8 (STR-150): `202`, and the client
+    /// polls the snapshot's own `conditions`. The volume itself no longer moves
+    /// through a `.snapshotting` status — a snapshot is its own resource now,
+    /// so nothing has to be borrowed from the volume's status to represent it,
+    /// and nothing has to be restored afterwards on a failure path.
     @Sendable
-    func createSnapshot(req: Request) async throws -> SnapshotResponse {
+    func createSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "snapshot")
         let request = try req.content.decode(CreateSnapshotRequest.self)
@@ -647,7 +653,7 @@ struct VolumeController: RouteCollection {
         // message: refusing it is a deliberate correctness guard (issue #747),
         // not a transient state the caller should wait out.
         guard volume.canSnapshot else {
-            if volume.status == .attached {
+            if volume.$vm.id != nil {
                 throw Abort(
                     .conflict,
                     reason:
@@ -660,73 +666,60 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        guard volume.hypervisorId != nil, volume.storagePath != nil else {
+        // The agent is *recorded* on the snapshot rather than re-derived per
+        // request: a desired entry has to appear in exactly one agent's sync,
+        // and a volume that moves must not silently orphan its snapshots into
+        // another host's tombstone set.
+        guard let agentId = try await VolumeService.agentHolding(volume, on: req.db) else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
+        try await SnapshotArtifactMutation.requireCaptureCapableAgent(
+            agentId, kind: .volumeSnapshot, app: req.application)
 
-        // Mark volume as snapshotting
-        let previousStatus = volume.status
-        volume.status = .snapshotting
-        try await volume.save(on: req.db)
-
-        // Create snapshot record
+        let userID = try user.requireID()
         let snapshot = VolumeSnapshot(
             name: request.name,
             description: request.description ?? "",
-            volumeID: volume.id!,
+            volumeID: try volume.requireID(),
             projectID: volume.$project.id,
             size: volume.size,
-            status: .creating,
-            createdByID: user.id!
+            agentId: agentId,
+            expiresAt: try SnapshotRetention.expiry(requested: request.ttlSeconds),
+            createdByID: userID
         )
+        snapshot.extendConvergenceDeadline(
+            by: OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create))
 
         // Creator binding on the snapshot, in the same transaction as the row
-        // (issue #477).
-        try await req.db.transaction { db in
+        // (issue #477), alongside the attribution event.
+        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
             try await snapshot.save(on: db)
             try await RoleBindingService.grant(
                 principalType: .user,
-                principalID: user.id!,
+                principalID: userID,
                 role: .admin,
                 nodeType: .volumeSnapshot,
-                nodeID: snapshot.id!,
-                createdBy: user.id,
+                nodeID: snapshot.requireID(),
+                createdBy: userID,
                 on: db
             )
+            return try await SnapshotArtifactMutation.recordCapture(
+                snapshot, actor: .user(userID), on: db)
         }
 
-        // Create the snapshot on the hypervisor; the agent reports the actual
-        // snapshot storage path.
-        do {
-            let snapshotPath = try await req.application.volumeService.requestVolumeSnapshot(
-                volume: volume,
-                snapshot: snapshot
-            )
-            snapshot.storagePath = snapshotPath
-            snapshot.status = .available
-            try await snapshot.save(on: req.db)
-        } catch {
-            snapshot.status = .error
-            snapshot.errorMessage = error.localizedDescription
-            try await snapshot.save(on: req.db)
-            volume.status = previousStatus
-            try await volume.save(on: req.db)
-            throw Abort(.badGateway, reason: "Failed to create snapshot on hypervisor: \(error.localizedDescription)")
-        }
+        try SnapshotArtifactMutation.dispatchCapture(snapshot, app: req.application)
 
-        // Restore volume status
-        volume.status = previousStatus
-        try await volume.save(on: req.db)
-
+        let snapshotID = try snapshot.requireID()
+        let volumeID = try volume.requireID()
         req.logger.info(
-            "Snapshot created",
+            "Volume snapshot accepted",
             metadata: [
-                "snapshotId": .string(snapshot.id!.uuidString),
-                "volumeId": .string(volume.id!.uuidString),
+                "snapshotId": .string(snapshotID.uuidString),
+                "volumeId": .string(volumeID.uuidString),
                 "name": .string(snapshot.name),
             ])
 
-        return SnapshotResponse(from: snapshot)
+        return try AcceptedMutation(SnapshotResponse(from: snapshot), accepted).acceptedResponse()
     }
 
     // MARK: - Clone Volume
@@ -850,8 +843,12 @@ struct VolumeController: RouteCollection {
 
     /// Delete a snapshot
     /// DELETE /api/volumes/:volumeId/snapshots/:snapshotId
+    ///
+    /// Marks the snapshot absent and stamps the finalizers its teardown owes.
+    /// The row outlives this request: it goes only once the owning agent's
+    /// observed report stops listing the artifact (STR-150).
     @Sendable
-    func deleteSnapshot(req: Request) async throws -> HTTPStatus {
+    func deleteSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "read")
 
@@ -870,57 +867,22 @@ struct VolumeController: RouteCollection {
             throw Abort(.notFound, reason: "Snapshot not found")
         }
 
-        // Check permission to delete snapshot
         let hasPermission = try await req.can("delete", on: "volume_snapshot", id: snapshotId.uuidString)
-
         guard hasPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to delete this snapshot")
         }
 
-        // Validate snapshot can be deleted
-        guard snapshot.canDelete else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'. Must be 'available', 'error', or 'deleting'"
-            )
-        }
-
-        // Mark as deleting
-        snapshot.status = .deleting
-        try await snapshot.save(on: req.db)
-
-        // Delete the snapshot file on the hypervisor first; the database
-        // record is only removed once the agent confirms. Only snapshots of
-        // volumes that were never provisioned on a hypervisor skip the agent
-        // round-trip.
-        do {
-            try await req.application.volumeService.requestVolumeSnapshotDeletion(
-                volume: volume,
-                snapshot: snapshot
-            )
-        } catch {
-            snapshot.status = .error
-            snapshot.errorMessage = "Failed to delete snapshot on hypervisor: \(error.localizedDescription)"
-            try await snapshot.save(on: req.db)
-            throw Abort(.badGateway, reason: "Failed to delete snapshot on hypervisor: \(error.localizedDescription)")
-        }
-
-        try await req.db.transaction { db in
-            try await snapshot.delete(on: db)
-            // Drop the snapshot's bindings with the row.
-            try await RoleBindingService.revokeAll(
-                nodeType: .volumeSnapshot, nodeID: snapshotId, on: db)
-        }
+        let accepted = try await SnapshotArtifactMutation.delete(
+            snapshot, actor: .user(try user.requireID()), on: req.db, app: req.application)
 
         req.logger.info(
-            "Snapshot deleted",
+            "Volume snapshot deletion requested",
             metadata: [
                 "snapshotId": .string(snapshotId.uuidString),
                 "volumeId": .string(volume.id!.uuidString),
             ])
 
-        return .noContent
+        return try AcceptedMutation(SnapshotResponse(from: snapshot), accepted).acceptedResponse()
     }
 
     // MARK: - Helper Methods

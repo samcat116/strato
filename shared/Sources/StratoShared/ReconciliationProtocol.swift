@@ -453,6 +453,17 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// itself instead of relying on a `wireProtocolVersion` lookup being right.
     /// The agent skips its whole volume half when this is nil.
     public let volumes: [DesiredVolumeState]?
+    /// The full authoritative set of snapshot artifacts — volume snapshots, VM
+    /// checkpoints and sandbox snapshots, in one kind-tagged list — that should
+    /// exist on the receiving agent (ADR 0001 stage 8, STR-150).
+    ///
+    /// `Optional` for `volumes`' reason and with the same reading: nil is "the
+    /// sender has no opinion about snapshots", never "delete every checkpoint
+    /// on this host". One list rather than three because the diff, the
+    /// generation guard and the absent-then-confirm dance are identical across
+    /// the families; only the backend that captures the bytes differs, and the
+    /// entry's own `kind` says which.
+    public let snapshots: [DesiredSnapshotState]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -465,7 +476,8 @@ public struct DesiredStateMessage: WebSocketMessage {
         desiredAgentUpdate: DesiredAgentUpdate? = nil,
         securityGroups: [DesiredSecurityGroup]? = nil,
         tombstones: [DesiredWorkloadTombstone]? = nil,
-        volumes: [DesiredVolumeState]? = nil
+        volumes: [DesiredVolumeState]? = nil,
+        snapshots: [DesiredSnapshotState]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -478,6 +490,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.securityGroups = securityGroups
         self.tombstones = tombstones
         self.volumes = volumes
+        self.snapshots = snapshots
     }
 
     // Custom decode so `networks` and `sandboxes` tolerate absence: a sync
@@ -500,6 +513,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         securityGroups = try c.decodeIfPresent([DesiredSecurityGroup].self, forKey: .securityGroups)
         tombstones = try c.decodeIfPresent([DesiredWorkloadTombstone].self, forKey: .tombstones)
         volumes = try c.decodeIfPresent([DesiredVolumeState].self, forKey: .volumes)
+        snapshots = try c.decodeIfPresent([DesiredSnapshotState].self, forKey: .snapshots)
     }
 }
 
@@ -1110,6 +1124,19 @@ public struct ObservedStateReport: WebSocketMessage {
     /// empty inventory. The second is the volume counterpart of
     /// `manifestStatus.inventoryComplete == false`.
     public let volumes: [ObservedVolumeState]?
+    /// Snapshot artifacts actually present on this agent (STR-150). Full-list
+    /// and kind-tagged, like the desired counterpart: an artifact missing from
+    /// this list does not exist here, which is how snapshot deletions are
+    /// confirmed and how the finalizer reap learns a checkpoint's bytes are
+    /// really gone.
+    ///
+    /// `Optional` for `volumes`' reason. Nil has the same two causes and the
+    /// same response — do nothing: an agent older than v32 does not speak the
+    /// field at all, and a v32 agent that cannot enumerate one of its artifact
+    /// stores says so this way rather than claiming an empty inventory. The
+    /// control plane must never read the absence as "every checkpoint on this
+    /// agent is gone".
+    public let snapshots: [ObservedSnapshotState]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -1122,7 +1149,8 @@ public struct ObservedStateReport: WebSocketMessage {
         unrecognized: [UnrecognizedWorkload] = [],
         teardownRefusal: ObservedTeardownRefusal? = nil,
         manifestStatus: ObservedManifestStatus? = nil,
-        volumes: [ObservedVolumeState]? = nil
+        volumes: [ObservedVolumeState]? = nil,
+        snapshots: [ObservedSnapshotState]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -1135,6 +1163,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.teardownRefusal = teardownRefusal
         self.manifestStatus = manifestStatus
         self.volumes = volumes
+        self.snapshots = snapshots
     }
 
     // Custom decode so `sandboxes` and `unrecognized` tolerate absence: a
@@ -1154,5 +1183,6 @@ public struct ObservedStateReport: WebSocketMessage {
         teardownRefusal = try c.decodeIfPresent(ObservedTeardownRefusal.self, forKey: .teardownRefusal)
         manifestStatus = try c.decodeIfPresent(ObservedManifestStatus.self, forKey: .manifestStatus)
         volumes = try c.decodeIfPresent([ObservedVolumeState].self, forKey: .volumes)
+        snapshots = try c.decodeIfPresent([ObservedSnapshotState].self, forKey: .snapshots)
     }
 }

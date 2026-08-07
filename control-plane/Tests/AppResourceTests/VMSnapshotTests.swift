@@ -61,7 +61,7 @@ final class VMSnapshotTests {
     private func placeOnCapableAgent(
         app: Application,
         vm: VM,
-        capabilities: [String] = ["qemu", MessageType.vmCheckpoint.rawValue],
+        capabilities: [String] = ["qemu", SnapshotArtifactKind.vmCheckpoint.agentCapability],
         status: VMStatus = .running
     ) async throws -> String {
         let message = AgentRegisterMessage(
@@ -164,7 +164,7 @@ final class VMSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-                #expect(res.body.string.contains(MessageType.vmCheckpoint.rawValue))
+                #expect(res.body.string.contains(SnapshotArtifactKind.vmCheckpoint.agentCapability))
             }
         }
     }
@@ -186,29 +186,49 @@ final class VMSnapshotTests {
 
     // MARK: - Create
 
-    @Test("POST snapshots returns 202, inserts the estimated row, and fails cleanly without a live socket")
-    func createAcceptsAndResolvesFailure() async throws {
+    @Test("POST snapshots returns 202 and inserts the checkpoint as desired state")
+    func createAcceptsAsDesiredState() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
             try await placeOnCapableAgent(app: app, vm: vm)
 
-            var operation: OperationResponse?
+            var accepted: AcceptedMutation<VMSnapshotResponse>?
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(["name": "before-upgrade"])
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedMutation<VMSnapshotResponse>.self)
             }
 
-            let accepted = try #require(operation)
-            #expect(accepted.kind == .snapshot)
-            #expect(accepted.resourceKind == .virtualMachine)
-            #expect(accepted.resourceId == vm.id)
+            let body = try #require(accepted)
+            #expect(body.resource.name == "before-upgrade")
+            #expect(body.targetGeneration == 1)
+            // The client polls the checkpoint's own conditions now, and an
+            // unconverged artifact is exactly what it should see first.
+            #expect(!body.resource.conditions.converged)
+            #expect(body.resource.conditions.observedGeneration == 0)
 
             let snapshot = try #require(
                 await VMSnapshot.query(on: app.db).filter(\.$vm.$id == vm.id!).first())
-            #expect(snapshot.name == "before-upgrade")
             #expect(snapshot.agentId == vm.hypervisorId)
+            #expect(snapshot.desiredStatus == .present)
+            // Finalizers are stamped by the DELETE, not at create: re-stamping
+            // a list on a live resource would resurrect tokens their
+            // participants have already cleared.
+            #expect(snapshot.finalizers.isEmpty)
+            // The capture has a deadline, so a client is told the checkpoint
+            // failed rather than polling one that will never appear.
+            #expect(snapshot.convergenceDeadline != nil)
+            // The admission estimate stands until the agent reports a real one;
+            // an unknown footprint must never become a free one.
+            #expect(snapshot.size == vm.memory)
+
+            // The mutation is attributed in the same transaction as the insert.
+            let event = try #require(
+                await ResourceEvent.latest(
+                    .requested, resourceKind: .vmCheckpoint, resourceID: snapshot.id!, on: app.db))
+            #expect(event.id == body.mutationId)
+            #expect(event.mutation == .create)
 
             // Ownership: the creator gets an admin binding on the checkpoint
             // node in the create transaction.
@@ -221,40 +241,80 @@ final class VMSnapshotTests {
                 .count()
             #expect(ownerBindings == 1)
 
-            // No live agent socket: the background RPC fails fast, the
-            // operation records the failure, and the row goes error with its
-            // charge dropped.
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .failed)
-            let failed = try #require(await VMSnapshot.find(snapshot.id, on: app.db))
-            #expect(failed.status == .error)
-            #expect(failed.size == 0)
-
             // A checkpoint never touches the VM's desired state — the guest
-            // keeps running through it — so the generation never moves either,
-            // even across the failed operation's resolve-after-verdict.
+            // keeps running through it — so the VM's generation never moves.
             let settled = try #require(await VM.find(vm.id, on: app.db))
             #expect(settled.desiredStatus == .running)
             #expect(settled.generation == 1)
         }
     }
 
-    @Test("A second checkpoint while one is pending is refused")
-    func createRejectsConcurrentOperation() async throws {
-        try await withCheckpointTestApp { app, user, _, vm, token in
+    /// The "operation already pending" mutex is gone with the operation row
+    /// (STR-147, extended to artifacts here). Overlapping captures are safe:
+    /// each is its own artifact with its own generation, and a replayed sync
+    /// cannot re-capture one that already exists.
+    @Test("A second checkpoint while one is converging is accepted, not refused")
+    func createAllowsConcurrentCaptures() async throws {
+        try await withCheckpointTestApp { app, _, _, vm, token in
             try await placeOnCapableAgent(app: app, vm: vm)
 
-            // Park a pending operation on the VM by hand: the double-submit
-            // guard is what this asserts, not the RPC.
-            let pending = ResourceOperation(
-                vmID: try vm.requireID(), userID: try user.requireID(), kind: .snapshot)
-            try await pending.save(on: app.db)
+            for name in ["first", "second"] {
+                try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["name": name])
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                }
+            }
+            #expect(try await VMSnapshot.query(on: app.db).count() == 2)
+        }
+    }
+
+    /// Retention is the answer durable artifact objects need and
+    /// fire-and-forget RPCs never raised (`SnapshotRetention`).
+    @Test("A requested TTL becomes an absolute expiry; zero keeps it forever")
+    func createStampsRetention() async throws {
+        try await withCheckpointTestApp { app, _, _, vm, token in
+            try await placeOnCapableAgent(app: app, vm: vm)
 
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMSnapshotRequest(name: "expiring", description: nil, ttlSeconds: 3600))
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .accepted)
             }
+            let expiring = try #require(
+                await VMSnapshot.query(on: app.db).filter(\.$name == "expiring").first())
+            let expiresAt = try #require(expiring.expiresAt)
+            #expect(expiresAt.timeIntervalSinceNow > 3000)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMSnapshotRequest(name: "kept", description: nil, ttlSeconds: 0))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+            let kept = try #require(
+                await VMSnapshot.query(on: app.db).filter(\.$name == "kept").first())
+            #expect(kept.expiresAt == nil)
+        }
+    }
+
+    @Test("A negative TTL is rejected")
+    func createRejectsNegativeTTL() async throws {
+        try await withCheckpointTestApp { app, _, _, vm, token in
+            try await placeOnCapableAgent(app: app, vm: vm)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMSnapshotRequest(name: "bad", description: nil, ttlSeconds: -1))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+            #expect(try await VMSnapshot.query(on: app.db).count() == 0)
         }
     }
 
@@ -280,37 +340,69 @@ final class VMSnapshotTests {
 
     // MARK: - Delete
 
-    @Test("DELETE marks the checkpoint deleting and rides an operation")
-    func deleteAcceptsAndMarksDeleting() async throws {
+    @Test("DELETE marks the checkpoint absent and keeps the row until an agent confirms")
+    func deleteAcceptsAndMarksAbsent() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
             try await placeOnCapableAgent(app: app, vm: vm)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
 
-            var operation: OperationResponse?
             try await app.test(
                 .DELETE, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
             }
-            let accepted = try #require(operation)
-            #expect(accepted.kind == .snapshotDelete)
 
-            // Without a live socket the agent RPC fails, and the row stays
-            // `.deleting` — which is retryable, since agent-side deletion is
-            // idempotent.
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .failed)
+            // The row outlives the request. This is the whole durability
+            // property the imperative path could not offer: an RPC whose reply
+            // was lost left a row marked `.deleting` with nothing to retry it,
+            // where this one is re-driven by every level-triggered sync until
+            // the agent's report omits the artifact.
             let after = try #require(await VMSnapshot.find(snapshot.id, on: app.db))
-            #expect(after.status == .deleting)
-            #expect(after.canDelete)
+            #expect(after.desiredStatus == .absent)
+            #expect(after.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+            #expect(after.generation > snapshot.generation)
         }
     }
 
-    @Test("A checkpoint still creating cannot be deleted")
-    func deleteRefusesCreatingCheckpoint() async throws {
+    /// Deleting an artifact whose agent can never confirm — unplaced, offline,
+    /// or below wire v32 — force-clears the finalizer, so upgrading the control
+    /// plane before the fleet cannot make checkpoints permanently undeletable.
+    @Test("Deleting a checkpoint with no reachable agent removes the row directly")
+    func deleteWithoutAgentRemovesRow() async throws {
+        try await withCheckpointTestApp { app, user, _, vm, token in
+            try await placeOnCapableAgent(app: app, vm: vm)
+            let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
+            snapshot.agentId = nil
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .DELETE, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            var removed = false
+            for _ in 0..<40 {
+                if try await VMSnapshot.find(snapshot.id, on: app.db) == nil {
+                    removed = true
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            #expect(removed)
+        }
+    }
+
+    /// The `.creating` refusal is gone with the operation row that owned the
+    /// checkpoint's resolution. Deletion is level-triggered and the agent's
+    /// teardown is idempotent, so there is no half-finished capture a delete
+    /// could interrupt into an inconsistent state.
+    @Test("A checkpoint still capturing can be deleted")
+    func deleteAcceptsCreatingCheckpoint() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
             try await placeOnCapableAgent(app: app, vm: vm)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
@@ -322,7 +414,7 @@ final class VMSnapshotTests {
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
-                #expect(res.status == .conflict)
+                #expect(res.status == .accepted)
             }
         }
     }
