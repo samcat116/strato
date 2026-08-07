@@ -176,10 +176,12 @@ is the per-VM metadata document itself: the control plane builds it (the
 factory extension in `InstanceMetadataFactory.swift`) and
 `DesiredStateAssembler` attaches it to each VM's
 `DesiredVMState.metadata` (wire v26, STR-48/51;
-`shared/Sources/StratoShared/InstanceMetadata.swift`), so agents already hold,
-per VM, exactly what a metadata listener should serve. With both halves in
-place, the only piece missing for guest-visible IMDS is the HTTP listener
-inside the namespace (STR-56).
+`shared/Sources/StratoShared/InstanceMetadata.swift`). The agent keeps it in
+`MetadataStore` (STR-52), written by the reconciler as syncs arrive and read
+with no control-plane round trip, so it holds per VM exactly what a metadata
+listener should serve — see [agent](./agent.md) §Instance metadata store. With
+both halves in place, the only piece missing for guest-visible IMDS is the HTTP
+listener inside the namespace (STR-56).
 
 The localport realization itself has **two halves with two different owners**,
 and that shape is load-bearing rather than incidental:
