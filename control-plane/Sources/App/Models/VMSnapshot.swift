@@ -191,6 +191,12 @@ extension VMSnapshot: SnapshotArtifactResource {
     /// which exists for this family (issue #564 scope, STR-161).
     var wantsExport: Bool { false }
 
+    /// The machine state is charged to the project's storage pool; the disks it
+    /// lives inside are already charged under the VM.
+    var storageQuotaScope: (projectID: UUID, environment: String)? {
+        ($project.id, environment)
+    }
+
     var conditions: ResourceConditions {
         ResourceConditions(
             targetGeneration: generation,

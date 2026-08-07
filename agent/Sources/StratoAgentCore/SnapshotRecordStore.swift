@@ -66,10 +66,10 @@ public enum SnapshotInventory: Sendable {
 /// inventory and the report carries one list; the record's `kind` is what
 /// routes a capture or a delete to a backend.
 ///
-/// Records are decoded one at a time, `VMManifestStore`'s rule: one artifact
-/// this build cannot read must cost one artifact, not the host's whole
-/// inventory — which, read as an empty list, would reap every snapshot row the
-/// control plane holds for this agent.
+/// Records are decoded one at a time so the *reason* a load failed is per-entry
+/// and reportable — but unlike `VMManifestStore`, a single unreadable entry
+/// fails the whole load. See `load()` for why an artifact store cannot afford
+/// that rule: absence is the state a capture acts on.
 public struct SnapshotRecordStore: Sendable {
     public let path: String
     let logger: Logger
@@ -111,20 +111,33 @@ public struct SnapshotRecordStore: Sendable {
                 skipped.append(key)
             }
         }
-        if !skipped.isEmpty {
-            // Loud, and deliberately *not* fatal to the load: these artifacts
-            // stay on disk and are simply not reported, so the control plane
-            // treats them as absent. That is a leak an operator can see and
-            // clean up — the opposite trade from discarding the whole file,
-            // which would report a host full of artifacts as empty.
-            logger.error(
-                "Skipping snapshot records this build cannot read; their artifacts are leaked on this host",
-                metadata: [
-                    "path": .string(path),
-                    "skipped": .stringConvertible(skipped.count),
-                    "readable": .stringConvertible(records.count),
-                    "snapshotIds": .string(skipped.sorted().joined(separator: ",")),
-                ])
+        guard skipped.isEmpty else {
+            // One unreadable record makes the *whole* inventory unreadable, and
+            // this is where an artifact store has to depart from
+            // `VMManifestStore`'s "one bad entry costs one entry" rule.
+            //
+            // A manifest entry that drops out becomes a `.quarantined` presence:
+            // known to exist, unroutable, never re-created. There is no
+            // equivalent here, and not by omission — `planSnapshots` partitions
+            // the presence map by `artifact.kind`, and a record that failed to
+            // decode has no kind to partition by, so a quarantined entry would
+            // fall out of every family's map and read as absent anyway.
+            //
+            // Absent is the one state that *acts*: a capture is the create
+            // strategy for an artifact the host does not have, so a dropped
+            // record would make the reconciler re-checkpoint a live guest over
+            // the point in time the user is holding — silently, since the
+            // control-plane row is untouched and its entry keeps riding every
+            // sync. The safety property this conversion rests on holds against a
+            // replayed sync; it cannot hold against a lossy inventory read, so
+            // the read refuses to be lossy.
+            //
+            // The cost is one sync's worth of snapshot convergence on this host
+            // and a leak an operator can see. The artifacts stay on disk either
+            // way; what this buys is that none of them is overwritten.
+            return unreadable(
+                "contains \(skipped.count) record(s) this build cannot read "
+                    + "(\(skipped.sorted().joined(separator: ", ")))")
         }
         return .loaded(records)
     }

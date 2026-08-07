@@ -1262,8 +1262,10 @@ struct ObservedStateApplier {
         // and the old paths had to treat that as a protocol error and mark a
         // checkpoint that in fact existed `.error`. A report is re-sent on every
         // heartbeat, so they simply arrive again.
+        var footprintChanged = false
         if let facts = observed.facts, artifact.applyCapturedFacts(facts) {
             changed = true
+            footprintChanged = true
         }
         if artifact.applyExported(observed.exported) {
             changed = true
@@ -1314,6 +1316,64 @@ struct ObservedStateApplier {
             if !recorded, changed {
                 try await artifact.save(on: db)
             }
+        }
+
+        if footprintChanged {
+            try await enforceStorageQuota(on: artifact, on: db)
+        }
+    }
+
+    /// Re-checks the storage pool at the moment the agent's real footprint
+    /// replaces the admission estimate, deleting the artifact when that put an
+    /// enabled quota over its limit.
+    ///
+    /// This is the check the retired background create halves ran right after
+    /// the RPC reply, and it has to survive the conversion because the estimate
+    /// and the truth can differ by a lot: admission reserves a sandbox's guest
+    /// memory, while the artifact adds vmstate and — without reflink support —
+    /// a full rootfs copy. Without it a project sits over an enabled quota
+    /// indefinitely, the artifact converges `ready`, and the only symptom is the
+    /// *next* create being refused with no explanation of what consumed the
+    /// pool.
+    ///
+    /// Deleting rather than tolerating is the pre-existing contract, kept
+    /// deliberately: the alternative silently converts a quota into a
+    /// suggestion. Both are defensible, but changing which one holds is not this
+    /// conversion's business.
+    ///
+    /// Runs outside any transaction of ours — `storageOverCommit` resyncs and
+    /// saves each quota, and `SnapshotArtifactMutation.delete` opens its own —
+    /// so it is the last thing this method does. Failures are logged rather
+    /// than thrown: an observed report that could not enforce a quota must
+    /// still apply everything else it carried.
+    private func enforceStorageQuota<A: SnapshotArtifactResource>(
+        on artifact: A, on db: Database
+    ) async throws {
+        guard let scope = artifact.storageQuotaScope, artifact.desiredStatus == .present else { return }
+        do {
+            guard
+                let violated = try await QuotaEnforcementService.storageOverCommit(
+                    projectID: scope.projectID, environment: scope.environment, on: db)
+            else { return }
+
+            artifact.lastError =
+                "Snapshot's actual size exceeded storage quota '\(violated)' and was deleted"
+            try await artifact.save(on: db)
+            _ = try await SnapshotArtifactMutation.delete(
+                artifact, actor: .system, on: db, app: app)
+
+            let artifactID = try artifact.requireID()
+            app.logger.notice(
+                "Snapshot artifact's reported size exceeded a storage quota; deleting it",
+                metadata: [
+                    "resourceKind": .string(A.operationResourceKind.rawValue),
+                    "resourceId": .string(artifactID.uuidString),
+                    "quota": .string(violated),
+                ])
+        } catch {
+            app.logger.error(
+                "Failed to enforce the storage quota on a snapshot artifact: \(error)",
+                metadata: ["resourceKind": .string(A.operationResourceKind.rawValue)])
         }
     }
 

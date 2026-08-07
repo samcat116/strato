@@ -55,6 +55,20 @@ protocol SnapshotArtifactResource: ConvergingResource, FinalizableResource {
     /// `applyObservedPresence` is its only writer.
     var isPresentOnAgent: Bool { get }
 
+    /// Whether the copy this artifact's desired state asks for exists too.
+    /// Vacuously true for a family with nothing to export.
+    var exportSatisfied: Bool { get }
+
+    /// The quota pool this artifact's footprint is charged to, or nil for a
+    /// family that draws on none.
+    ///
+    /// Admission reserves an *estimate* — a checkpoint's memory grant, a
+    /// sandbox's guest RAM — and the agent's report replaces it with a figure
+    /// that can be much larger (a sandbox snapshot adds vmstate and, without
+    /// reflink support, a full rootfs copy). This is what lets the applier
+    /// re-check the pool at the moment the real number lands.
+    var storageQuotaScope: (projectID: UUID, environment: String)? { get }
+
     /// Records what the capturing agent measured. Called from the observed-state
     /// applier; does not persist.
     /// - Returns: whether anything changed.
@@ -85,6 +99,13 @@ extension SnapshotArtifactResource {
     var hypervisorId: String? { agentId }
     var isTerminating: Bool { desiredStatus == .absent }
 
+    /// Nothing to export, so nothing outstanding. Overridden by the one family
+    /// that has an off-node representation.
+    var exportSatisfied: Bool { true }
+
+    /// Most families draw on no storage pool; the two that do override this.
+    var storageQuotaScope: (projectID: UUID, environment: String)? { nil }
+
     /// Records a new desired state and bumps the generation so the owning agent
     /// treats it as newer than whatever it last applied.
     func setDesiredStatus(_ newDesired: DesiredSnapshotStatus) {
@@ -92,16 +113,24 @@ extension SnapshotArtifactResource {
         generation += 1
     }
 
-    /// True once the owning agent has confirmed the current generation and the
-    /// bytes are really here.
+    /// True once the owning agent has confirmed the current generation and
+    /// everything the desired state asks for exists.
     ///
     /// The presence clause is the artifact's analogue of
     /// `DesiredVMStatus.isSatisfied(by:)`, and it is what
     /// `observedGeneration >= generation` alone cannot say: an artifact whose
     /// files were removed out of band would otherwise stay "converged", because
     /// nothing bumps a generation to notice.
+    ///
+    /// `exportSatisfied` is here so this and `conditions.desiredSatisfied` stay
+    /// one predicate. They are read by different callers — this one fires the
+    /// convergence event and the completion webhook, that one answers the
+    /// client — and if they disagreed, a bare export request would emit
+    /// "converged" the moment the agent's generation caught up while the client
+    /// was still correctly waiting for the copy it asked for.
     var isConverged: Bool {
         desiredStatus == .present && observedGeneration >= generation && isPresentOnAgent
+            && exportSatisfied
     }
 
     /// The failure resolution for an artifact is deliberately *nothing*.

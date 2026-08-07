@@ -415,6 +415,15 @@ What changes, uniformly:
 - **Statuses are purely observed.** `creating`/`ready`/`available`/`error` are
   derived by `ObservedStateApplier` from what the agent reports about the
   bytes; the control plane writes none of them.
+- **The storage quota is re-checked when the real footprint arrives.**
+  Admission reserves an *estimate* — a checkpoint's memory grant, a sandbox's
+  guest RAM — and the agent's report replaces it with a number that can be much
+  larger (a sandbox snapshot adds vmstate and, without reflink support, a full
+  rootfs copy). If that puts an enabled quota over its limit the artifact is
+  deleted and its `errorMessage` names the quota, which is the pre-conversion
+  contract kept deliberately: tolerating the overage instead would silently
+  turn a quota into a suggestion. Volume snapshots draw on no pool and skip
+  this.
 
 The agent keeps a durable record of what it captured
 (`SnapshotRecordStore`, `<vmStoragePath>/snapshot-records.json`), for the

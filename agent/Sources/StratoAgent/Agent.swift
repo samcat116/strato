@@ -1153,6 +1153,14 @@ actor Agent {
         let sandboxCapable = sandboxProbe.capable && sandboxRuntime != nil
         if sandboxCapable {
             capabilities.append(SandboxRuntimeProbe.capabilityName)
+            // The sandbox-snapshot capture capability rides the same gate, and
+            // has to: `getAgentCapabilities` runs before the runtime probe, so
+            // advertising it there would claim a backend this host may not
+            // have. A capture admitted against a runtime-less agent lands in
+            // desired state, fails permanently, and leaves the client polling a
+            // `202` until the convergence deadline — the outcome capture
+            // admission exists to prevent (STR-150).
+            capabilities.append(SnapshotArtifactKind.sandboxSnapshot.agentCapability)
         } else if !isSimulationMode {
             #if os(Linux)
             // Only worth a log where the runtime could ever exist.
@@ -1454,12 +1462,14 @@ actor Agent {
         // The control plane reads these at capture admission: a checkpoint
         // requested against a host with no QEMU would otherwise be accepted
         // into a desired state that can only ever fail permanently.
-        capabilities.append(SnapshotArtifactKind.sandboxSnapshot.agentCapability)
+        //
+        // QEMU is the backend for two of the three: a VM checkpoint is a qcow2
+        // internal snapshot, and a volume snapshot is a qcow2 overlay the
+        // storage backend writes with `qemu-img`. The sandbox family's gate is
+        // the sandbox runtime probe, which is not resolved until after this
+        // returns — it is advertised beside `sandboxCapable` in
+        // `registerWithControlPlane` instead.
         if hypervisors.contains(where: { $0.type == .qemu && $0.available }) {
-            // QEMU is the backend for both: a VM checkpoint is a qcow2 internal
-            // snapshot, and a volume snapshot is a qcow2 overlay the storage
-            // backend writes with `qemu-img`. Firecracker's own checkpoints are
-            // a sandbox primitive and are advertised above regardless.
             capabilities.append(SnapshotArtifactKind.vmCheckpoint.agentCapability)
             capabilities.append(SnapshotArtifactKind.volumeSnapshot.agentCapability)
         }

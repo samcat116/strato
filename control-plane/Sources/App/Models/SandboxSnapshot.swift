@@ -265,21 +265,26 @@ extension SandboxSnapshot: SnapshotArtifactResource {
     var isPresentOnAgent: Bool { status == .ready }
     var wantsExport: Bool { exportDesired }
 
+    /// `isExported` rather than the agent's own `exported` flag, deliberately:
+    /// the agent's says it finished uploading, while this says the control
+    /// plane holds an integrity record for every artifact — computed from bytes
+    /// it hashed itself as they landed, never from anything the agent claimed.
+    var exportSatisfied: Bool { !exportDesired || isExported }
+
+    var storageQuotaScope: (projectID: UUID, environment: String)? {
+        ($project.id, environment)
+    }
+
     /// An export is part of what this artifact's desired state asks for, so it
     /// is part of whether that state is satisfied — otherwise a client would
     /// see `converged` the moment the capture landed and have no way to wait
-    /// for the copy it asked for in the same request.
-    ///
-    /// `isExported` rather than the agent's own report, deliberately: the
-    /// agent's `exported` flag says it finished uploading, while this says the
-    /// control plane has an integrity record for every artifact — computed from
-    /// bytes it hashed itself as they landed, never from anything the agent
-    /// claimed.
+    /// for the copy it asked for in the same request. `isConverged` reads the
+    /// same `exportSatisfied` so the two cannot disagree.
     var conditions: ResourceConditions {
         ResourceConditions(
             targetGeneration: generation,
             observedGeneration: observedGeneration,
-            desiredSatisfied: isPresentOnAgent && (!exportDesired || isExported),
+            desiredSatisfied: isPresentOnAgent && exportSatisfied,
             phase: convergencePhase,
             lastError: errorMessage,
             failedGeneration: failedGeneration
@@ -369,14 +374,16 @@ extension SandboxSnapshot: SnapshotArtifactResource {
         return changed
     }
 
-    /// Deliberately does **not** stamp `exportedAt`.
+    /// The agent's export report is deliberately **not** mirrored onto the row.
     ///
-    /// The agent saying "I uploaded" and the control plane having a complete,
-    /// hashed copy are different claims, and only the second one may authorize
-    /// a cross-agent restore. `exportedAt` is stamped by the artifact upload
-    /// route once every kind has an integrity record the control plane computed
-    /// itself — this only mirrors the agent's half so a re-driven sync does not
-    /// re-upload an archive that already landed.
+    /// "I uploaded" and "the control plane holds a complete, hashed copy" are
+    /// different claims, and only the second may authorize a cross-agent
+    /// restore. `exportedAt` is stamped by the artifact upload route, on the PUT
+    /// that completes the set, from bytes it hashed itself.
+    ///
+    /// Nothing is lost by ignoring the agent's half: what keeps a re-driven sync
+    /// from re-uploading an archive that already landed is the agent's own
+    /// durable `SnapshotRecord.exported`, which never leaves the host.
     @discardableResult
     func applyExported(_ exported: Bool) -> Bool { false }
 

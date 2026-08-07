@@ -380,6 +380,126 @@ final class SnapshotConvergenceTests {
         }
     }
 
+    /// Admission reserves an *estimate*; the agent's report replaces it with the
+    /// truth, and the truth can be much larger. This is the check the retired
+    /// background create halves ran right after the RPC reply — without it a
+    /// project sits over an enabled quota indefinitely while the artifact
+    /// converges `ready`, and the only symptom is the *next* create being
+    /// refused with nothing naming what consumed the pool.
+    @Test("A reported footprint that blows the storage quota deletes the artifact")
+    func oversizedFootprintIsDeleted() async throws {
+        try await withSnapshotApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "quota-agent")
+            let vm = try await placedVM(builder, project: project, agentId: agentId)
+            _ = try await builder.createResourceQuota(
+                name: "tiny-storage", maxStorageGB: 1.0, project: project)
+
+            let snapshot = try await makeCheckpoint(
+                on: app, user: user, project: project, vm: vm, agentId: agentId,
+                status: .creating, generation: 1, observedGeneration: 0)
+
+            // 8 GiB against a 1 GiB pool.
+            try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    snapshots: [
+                        ObservedSnapshotState(
+                            snapshotId: try snapshot.requireID(),
+                            kind: .vmCheckpoint,
+                            parentId: try vm.requireID(),
+                            present: true,
+                            facts: ObservedSnapshotFacts(sizeBytes: 8 << 30),
+                            observedGeneration: 1)
+                    ]))
+
+            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.db))
+            #expect(settled.desiredStatus == .absent)
+            // The quota's name reaches the user, which is the whole point of
+            // failing rather than tolerating.
+            #expect(settled.errorMessage?.contains("tiny-storage") == true)
+
+            // Unattributed teardown is still attributed: the sweep's `system`
+            // actor arrangement, reused.
+            let event = try #require(
+                await ResourceEvent.latest(
+                    .requested, resourceKind: .vmCheckpoint, resourceID: try snapshot.requireID(),
+                    on: app.db))
+            #expect(event.mutation == .delete)
+            #expect(event.actorType == .system)
+        }
+    }
+
+    @Test("A footprint that fits leaves the artifact alone")
+    func fittingFootprintIsKept() async throws {
+        try await withSnapshotApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "quota-ok-agent")
+            let vm = try await placedVM(builder, project: project, agentId: agentId)
+            _ = try await builder.createResourceQuota(
+                name: "roomy-storage", maxStorageGB: 100.0, project: project)
+
+            let snapshot = try await makeCheckpoint(
+                on: app, user: user, project: project, vm: vm, agentId: agentId,
+                status: .creating, generation: 1, observedGeneration: 0)
+
+            try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    snapshots: [
+                        ObservedSnapshotState(
+                            snapshotId: try snapshot.requireID(),
+                            kind: .vmCheckpoint,
+                            parentId: try vm.requireID(),
+                            present: true,
+                            facts: ObservedSnapshotFacts(sizeBytes: 2 << 30),
+                            observedGeneration: 1)
+                    ]))
+
+            let settled = try #require(await VMSnapshot.find(snapshot.id, on: app.db))
+            #expect(settled.desiredStatus == .present)
+            #expect(settled.status == .ready)
+            #expect(settled.size == 2 << 30)
+            #expect(settled.conditions.converged)
+        }
+    }
+
+    /// A bare export request must not read as converged the moment the agent's
+    /// generation catches up: `isConverged` (which fires the convergence event
+    /// and the completion webhook) and `conditions.desiredSatisfied` (which
+    /// answers the client) are one predicate, so both wait for the copy.
+    @Test("An outstanding export keeps the snapshot unconverged on both readers")
+    func outstandingExportBlocksConvergence() async throws {
+        try await withSnapshotApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "export-converge")
+            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            sandbox.hypervisorId = agentId
+            try await sandbox.save(on: app.db)
+
+            let snapshot = SandboxSnapshot(
+                name: "awaiting-export",
+                sandboxID: try sandbox.requireID(),
+                projectID: try project.requireID(),
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: try user.requireID())
+            snapshot.status = .ready
+            snapshot.observedGeneration = snapshot.generation
+            snapshot.exportDesired = true
+            try await snapshot.save(on: app.db)
+
+            #expect(!snapshot.isConverged)
+            #expect(!snapshot.conditions.converged)
+
+            // The upload route's completion is what settles it — never the
+            // agent's word.
+            snapshot.exportedArtifacts = SandboxSnapshotArtifactKind.allCases.map {
+                SandboxSnapshotExportedArtifact(kind: $0, sizeBytes: 1, sha256: "abc")
+            }
+            snapshot.exportedAt = Date()
+            #expect(snapshot.isConverged)
+            #expect(snapshot.conditions.converged)
+        }
+    }
+
     // MARK: - Retention
 
     /// The `ttlSecondsAfterFinished` answer durable artifact objects need and
