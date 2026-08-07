@@ -23,8 +23,7 @@ env:
   IMAGE_NAME_FRONTEND: ${{ github.repository }}-frontend
 
 jobs:
-  # Lightweight (changelog + one API call) — runs hosted so the static
-  # self-hosted runner is free for the Linux tarball build below.
+  # Lightweight (changelog + one API call).
   create-release:
     runs-on: ubuntu-latest
     outputs:
@@ -89,7 +88,7 @@ jobs:
 
       # gh replaces the archived actions/create-release@v1. The numeric
       # release id is exported for the binary jobs, which upload assets via
-      # the raw REST endpoint (the static self-hosted runner has no gh CLI).
+      # the raw REST endpoint (the swift build containers have no gh CLI).
       - name: Create Release
         id: create_release
         env:
@@ -119,17 +118,15 @@ jobs:
   # swift:6.3.2-noble, so a binary linked against a different Swift (the hosted
   # arm64 runner ships 6.3.3) would run against 6.3.2 runtime libs — and Swift on
   # Linux has no stable-ABI guarantee across versions. Pinning the container
-  # keeps build and runtime lockstep. This still keeps the heavy Swift compile
-  # off the single static self-hosted runner; build-image-digests below just
-  # copies these binaries, so the Docker steps stay light on GitHub-hosted
-  # runners.
+  # keeps build and runtime lockstep. build-image-digests below just copies
+  # these binaries, so the Docker steps stay light on GitHub-hosted runners.
   #
   # No build cache is configured here: releases are infrequent tag pushes where
   # a cold compile is acceptable, and main-build.yaml deliberately keeps the
   # repo under GitHub's 10GB actions/cache budget — a per-release Swift .build
   # cache would evict the caches main builds depend on. (`build-swift-binaries`
-  # below still produces the statically-linked release-asset tarballs on the
-  # self-hosted runner; those are separate from these jemalloc-linked binaries.)
+  # below still produces the statically-linked release-asset tarballs; those
+  # are separate from these jemalloc-linked binaries.)
   build-swift-release:
     name: Build Swift Release (${{ matrix.arch }})
     needs: create-release
@@ -511,8 +508,8 @@ jobs:
   build-swift-binaries:
     runs-on: ${{ matrix.os }}
     needs: create-release
-    # linux-arm64 pins the Swift toolchain via the swift:6.3.2-noble container
-    # (the hosted arm runner's preinstalled Swift is newer); the other legs run
+    # Both Linux legs pin the Swift toolchain via the swift:6.3.2-noble
+    # container (the hosted runners' preinstalled Swift is newer); macOS runs
     # container-less (empty string = no job container).
     container: ${{ matrix.container || '' }}
     # Backstop for a hung cold build (default would be 360 minutes).
@@ -524,15 +521,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: self-hosted
-            asset_name: strato-linux-x86_64
-          # linux-arm64 (issue #431): install.sh derives strato-linux-arm64
-          # from uname on aarch64 hosts, so this asset must exist. Built on
-          # the GitHub-hosted arm runner like the image-digest jobs, inside
-          # the 6.3.2 container for toolchain parity with the x86_64 leg.
+          # Both Linux legs build on GitHub-hosted runners inside the pinned
+          # swift:6.3.2-noble container: the same compiler everywhere, with no
+          # dependence on any host's swiftly state (a stale in-use 6.2.1
+          # toolchain on the old static self-hosted runner is what failed the
+          # v0.1.0 release — its release-mode compiler crashes on FluentKit).
           # --static-swift-stdlib makes the container choice irrelevant at
-          # runtime, so parity here is about identical language/compiler
-          # behavior, not ABI lockstep.
+          # runtime, so the pin is about identical language/compiler behavior,
+          # not ABI lockstep.
+          - os: ubuntu-24.04
+            asset_name: strato-linux-x86_64
+            container: swift:6.3.2-noble
+          # linux-arm64 (issue #431): install.sh derives strato-linux-arm64
+          # from uname on aarch64 hosts, so this asset must exist.
           - os: ubuntu-24.04-arm
             asset_name: strato-linux-arm64
             container: swift:6.3.2-noble
@@ -550,31 +551,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Swift (Linux)
-        if: matrix.os == 'self-hosted'
-        uses: vapor/swiftly-action@v0.2
-        with:
-          toolchain: "6.3.2"
-
-      # swiftly's `install --use` short-circuits when the requested toolchain
-      # is already present — it prints "already installed" and never switches
-      # the in-use toolchain. On the persistent self-hosted runner that means
-      # whatever toolchain was last selected on the host wins, not the pin
-      # above: the v0.1.0 release built with a stale 6.2.1 default, whose
-      # release-mode compiler crashes on FluentKit (SIL ownership verifier).
-      # Select the toolchain explicitly and refuse to build with anything else.
-      - name: Pin the in-use toolchain
-        if: matrix.os == 'self-hosted'
-        run: |
-          swiftly use --global-default --assume-yes "6.3.2"
-          swift --version
-          swift --version | grep -q "Swift version 6.3.2" || {
-            echo "swift on PATH is not the pinned 6.3.2 toolchain (see above)" >&2
-            exit 1
-          }
-
       # The asset upload below is raw curl; make sure the container has it
-      # (the self-hosted and macOS legs always do).
+      # (the macOS leg always does).
       - name: Install container dependencies
         if: matrix.container
         run: |
@@ -726,8 +704,8 @@ jobs:
           tar czf "${CLI_ASSET}.tar.gz" -C release strato
           checksum "${CLI_ASSET}.tar.gz"
 
-      # Raw REST upload rather than `gh release upload`: the static
-      # self-hosted runner has no gh CLI, and curl exists everywhere. This
+      # Raw REST upload rather than `gh release upload`: the swift build
+      # containers have no gh CLI, and curl exists everywhere. This
       # also replaces the archived actions/upload-release-asset@v1.
       - name: Upload release assets
         env:
@@ -991,9 +969,8 @@ jobs:
             "$TAP_REPO" strato.rb "${GITHUB_REF_NAME#v}" \
             "${GITHUB_REPOSITORY}@${GITHUB_SHA}"
 
-  # Lightweight (git archive + heredocs + uploads) — runs hosted so the static
-  # self-hosted runner is free for the Linux tarball build. Everything is
-  # staged first and uploaded in a single `gh release upload` at the end.
+  # Lightweight (git archive + heredocs + uploads). Everything is staged
+  # first and uploaded in a single `gh release upload` at the end.
   upload-source-assets:
     runs-on: ubuntu-latest
     needs: create-release

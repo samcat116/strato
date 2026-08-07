@@ -1,6 +1,6 @@
 # GitHub Actions Workflows
 
-This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: the heavy Swift compile and release binary jobs run on the `swift-runners-strato` runner scale set (self-hosted, managed by [actions-runner-controller](https://github.com/actions/actions-runner-controller)); the static self-hosted runner only builds the Linux release-asset tarball; everything else — Docker image assembly from prebuilt binaries, frontend lint/build, Helm tests, ARM64/macOS builds, release housekeeping — runs on GitHub-hosted runners so it doesn't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
+This directory contains GitHub Actions workflows for the Strato project. Workflows use a **hybrid runner strategy**: the heavy Swift compile and release binary jobs run on the `swift-runners-strato` runner scale set (self-hosted, managed by [actions-runner-controller](https://github.com/actions/actions-runner-controller)); everything else — Docker image assembly from prebuilt binaries, release-asset tarballs, frontend lint/build, Helm tests, ARM64/macOS builds, release housekeeping — runs on GitHub-hosted runners so it doesn't queue behind Swift work. PR and main-branch workflows also use `concurrency` groups to cancel superseded runs on new pushes.
 
 ## No Swift tests run automatically (read this first)
 
@@ -113,8 +113,7 @@ when docs change on the main branch.
 ## Runner Configuration
 
 Workflows use a hybrid approach: an ARC (actions-runner-controller) runner
-scale set for Swift work, one static self-hosted machine for Docker image
-builds, and GitHub-hosted runners for everything lightweight.
+scale set for Swift work, and GitHub-hosted runners for everything else.
 
 ### ARC Runner Scale Set: `swift-runners-strato` (x64)
 Used for:
@@ -122,8 +121,8 @@ Used for:
 - The manually dispatched full test suite (main-tests.yaml)
 - Main branch x64 Swift release binaries (main-build.yaml)
 - Release x64 Swift image binaries (release.yaml — the jemalloc-linked binaries
-  the container images copy in; the static-stdlib release-asset tarballs still
-  build on the static self-hosted runner)
+  the container images copy in; the static-stdlib release-asset tarballs build
+  on GitHub-hosted runners in the `swift:6.3.2-noble` container)
 
 Jobs target the scale set with `runs-on: swift-runners-strato`. ARC
 scale-set runners match on **exactly one label — the installation name** —
@@ -163,23 +162,17 @@ Requirements for the scale set's runner image / pods:
 
 When bumping the Swift toolchain, rebuild the runner image with the new
 toolchain and update the remaining `swift:x.y.z-noble` container tags
-(the main-build and release arm64 Swift legs) together with the Dockerfiles and
-the `vapor/swiftly-action` pin in the swift-format lint job.
+(the main-build arm64 leg and the release Swift binary/tarball legs) together
+with the Dockerfiles and the `vapor/swiftly-action` pin in the swift-format
+lint job.
 
 ### Static Self-Hosted Runner (x64/AMD64)
-Used for:
-- The Linux x86_64 release-asset binary tarball (release.yaml,
-  `build-swift-binaries`) — the only job left on this machine. Release
-  creation, source assets, and all Docker image assembly run on GitHub-hosted
-  runners.
-
-Requirements:
-- curl (release assets upload via the raw REST endpoint — the runner needs no
-  gh CLI)
-- swiftly-installable environment (the job installs Swift 6.3.2 via
-  vapor/swiftly-action, then pins it as the host's in-use toolchain — swiftly
-  state persists between runs on this machine, and `install --use` alone does
-  not switch an already-installed toolchain) and libjemalloc
+No workflow uses this machine anymore. The last job on it — the Linux x86_64
+release-asset tarball (release.yaml, `build-swift-binaries`) — moved to a
+GitHub-hosted runner inside the pinned `swift:6.3.2-noble` container, after
+the host's persistent swiftly state selected a stale 6.2.1 toolchain and
+failed the v0.1.0 release (`swiftly install --use` does not switch an
+already-installed toolchain). The runner can be decommissioned.
 
 ### GitHub-Hosted Runners
 Used for:
@@ -191,6 +184,9 @@ Used for:
 - Claude Code workflows (`ubuntu-latest`)
 - Docs deployment (`ubuntu-latest`)
 - Release x64 Docker image assembly from prebuilt binaries (`ubuntu-latest`)
+- Release binary tarballs for both Linux arches (`ubuntu-24.04` /
+  `ubuntu-24.04-arm`, inside the pinned `swift:6.3.2-noble` container so the
+  compiler never depends on host or runner-image toolchain state)
 - Main branch ARM64 builds (`ubuntu-24.04-arm`)
 - Release ARM64 Swift binaries + Docker images (`ubuntu-24.04-arm`; the arm64
   Swift build runs inside the pinned `swift:6.3.2-noble` container so it links
