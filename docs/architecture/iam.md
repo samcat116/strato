@@ -450,7 +450,10 @@ another to the catalog or the editor.
 **Ownership scopes a role.** `owner_type` is `platform` (the seeded defaults,
 with a zero-UUID sentinel owner), `organization`, or `project`. A role is
 bindable on its owner and everything beneath it, and nowhere else — the same
-containment the ancestor chain already gives bindings and ceilings. Deleting
+containment the ancestor chain already gives bindings and ceilings. That
+containment is one predicate (`IAMRoleOwnerType.ownerIDs(along:)`): the
+bindable listing filters with it and the grant path validates against it, so a
+new owner type cannot be bindable by one and invisible to the other. Deleting
 an org or project removes the roles it owns.
 
 **The role API** (`/api/iam/roles`, issue #605) is admin-gated on the owner
@@ -483,6 +486,23 @@ the code registry, and an edit would be reverted at the next boot. A role with
 live bindings cannot be deleted (`409` with the count) — dropping it would
 silently revoke whatever those bindings grant, with nothing in the bindings
 list to show it happened.
+
+**Granting names the role by id or by name** (`MemberRoleResolver`, STR-111).
+`GET /api/iam/roles/bindable?nodeType=&nodeId=` lists what can be granted at a
+node — the platform defaults plus every role owned along the ancestor chain —
+and the member endpoints (project, folder, org) accept every name it hands
+back, resolved in that same scope, for the same reason the action catalogue
+exists: the picker must not offer something the write path would reject. Order
+matters twice:
+
+- the **fixed vocabulary wins**. `viewer`/`operator`/`editor`/`admin` and the
+  legacy project names (`admin`/`member`/`viewer`) are resolved first, so they
+  keep meaning what they have always meant even in a deployment that names a
+  role of its own `viewer`. That role stays grantable by id.
+- an **ambiguous name is a `400` naming both ids**, never a silent pick. Names
+  are unique per owner, not globally, so an org and a project beneath it can
+  each define `deployer`; choosing one for the caller would grant access nobody
+  asked for.
 
 ### Authored policies (shipped with #606)
 

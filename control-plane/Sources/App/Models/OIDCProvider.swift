@@ -82,7 +82,8 @@ final class OIDCProvider: Model, @unchecked Sendable {
     var roleMappings: String  // JSON array of OIDCRoleMapping (claim value → org role id)
 
     // Org role for JIT-provisioned users when no claim matches, default
-    // "member". May also be an IAM role name or an org-owned role id (#611).
+    // "member". May also be an IAM role name, or an org-owned role by id or
+    // by name (#611, STR-111).
     @Field(key: "default_role")
     var defaultRole: String
 

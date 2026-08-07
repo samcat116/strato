@@ -6375,11 +6375,12 @@ export interface components {
         AddOrganizationMemberRequest: {
             /** @description Email address of an existing user to add. */
             userEmail: string;
-            /** @description The organization role to grant (`admin` grants an admin role binding). */
-            role: string;
+            role: components["schemas"]["OrganizationMemberRole"];
         };
+        /** @description The organization role to grant: `member` (bare membership) or `admin` (an admin role binding), a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), or a role bindable at the org named by id or by name — every name `GET /api/iam/roles/bindable` lists for the org is accepted. The fixed names above win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. */
+        OrganizationMemberRole: string;
         UpdateOrganizationMemberRoleRequest: {
-            role: string;
+            role: components["schemas"]["OrganizationMemberRole"];
         };
         /** @description A folder (an `OrganizationalUnit` on the wire) within an organization's hierarchy. */
         FolderDetail: {
@@ -6478,7 +6479,7 @@ export interface components {
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /** @description The role to grant on the folder: a role id, or a seeded role name (`viewer`/`operator`/`editor`/`admin`). A role id must name a role owned at or above the folder. The legacy project vocabulary (`member`) is not accepted here. */
+        /** @description The role to grant on the folder: a role id, a seeded role name (`viewer`/`operator`/`editor`/`admin`), or the name of a custom role bindable here — every name `GET /api/iam/roles/bindable` lists for this folder is accepted. Either form must name a role owned at or above the folder. A seeded name always wins over a custom role of the same name, and a name two bindable roles share is a `400` naming both ids. The legacy project vocabulary carries no meaning here: `member` is a valid folder grant only if a role bindable on the folder is named that. */
         FolderRole: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantFolderMemberRequest: {
@@ -6920,7 +6921,8 @@ export interface components {
             username: string;
             displayName: string;
             email: string;
-            role: components["schemas"]["ProjectRole"];
+            /** @description The role's `iam_roles` id; legacy rows storing a relational name are normalized to their seeded id. `roleDisplayName` carries the name to show. */
+            role: string;
             /** Format: date-time */
             joinedAt?: string;
             /** @description The user is not a member of the project's organization — a cross-org grant, which UIs should render prominently. */
@@ -6930,31 +6932,29 @@ export interface components {
             /** Format: uuid */
             groupId?: string;
             name: string;
-            role: components["schemas"]["ProjectRole"];
+            /** @description The role's `iam_roles` id, as on `ProjectMember`. */
+            role: string;
             /** Format: date-time */
             grantedAt?: string;
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /**
-         * @description A role grant on a project.
-         * @enum {string}
-         */
-        ProjectRole: "admin" | "member" | "viewer";
+        /** @description The role to grant on a project: a role id, a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), a legacy project role (`admin`/`member`/`viewer`), or the name of a custom role bindable on the project — every name `GET /api/iam/roles/bindable` lists for it is accepted. The fixed names above win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. */
+        ProjectMemberRoleInput: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantProjectMemberRequest: {
             userEmail?: string;
             /** Format: uuid */
             userID?: string;
-            role: components["schemas"]["ProjectRole"];
+            role: components["schemas"]["ProjectMemberRoleInput"];
         };
         UpdateProjectMemberRoleRequest: {
-            role: components["schemas"]["ProjectRole"];
+            role: components["schemas"]["ProjectMemberRoleInput"];
         };
         GrantProjectGroupRequest: {
             /** Format: uuid */
             groupID: string;
-            role: components["schemas"]["ProjectRole"];
+            role: components["schemas"]["ProjectMemberRoleInput"];
         };
         /**
          * @description A seeded IAM role. Each role implies the ones below it.
@@ -8297,7 +8297,7 @@ export interface components {
             adminClaimValues?: string[];
             /** @description Admin-only. Claim values mapped to org-scoped roles bound on login. */
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description Admin-only. Organization role for newly provisioned users when no claim matches: `member`, `admin`, an IAM role name, or a role id bindable at the org. */
+            /** @description Admin-only. Organization role for newly provisioned users when no claim matches: `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
             defaultRole?: string;
             /** Format: date-time */
             createdAt?: string;
@@ -8327,7 +8327,7 @@ export interface components {
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description `member`, `admin`, an IAM role name, or a role id bindable at the org. */
+            /** @description `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
             defaultRole?: string;
         };
         /** @description Every field is optional. Omitted URL fields keep their stored value; an empty string clears them. */
@@ -8348,7 +8348,7 @@ export interface components {
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description `member`, `admin`, an IAM role name, or a role id bindable at the org. */
+            /** @description `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
             defaultRole?: string;
         };
         /** @description The outcome of a provider configuration test. */
