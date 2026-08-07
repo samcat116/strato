@@ -22,12 +22,12 @@ public enum OVNDHCPOptionsBuilder {
         ]
         let cleanedDNS =
             dnsServers
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { IPv4Address($0) != nil }
         if !cleanedDNS.isEmpty {
             options["dns_server"] = "{\(cleanedDNS.joined(separator: ", "))}"
         }
-        if let domainName, !domainName.isEmpty {
+        if let domainName = wellFormedDomain(domainName) {
             options["domain_name"] = "\"\(domainName)\""
         }
         return options
@@ -48,15 +48,32 @@ public enum OVNDHCPOptionsBuilder {
         ]
         let v6DNS =
             dnsServers
-            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { IPv6Address($0) != nil }
         if !v6DNS.isEmpty {
             options["dns_server"] = "{\(v6DNS.joined(separator: ", "))}"
         }
-        if let domainName, !domainName.isEmpty {
+        if let domainName = wellFormedDomain(domainName) {
             options["domain_search"] = "\"\(domainName)\""
         }
         return options
+    }
+
+    /// The domain to advertise, or nil when there is none to advertise safely.
+    ///
+    /// The control plane validates this on write (issue #876), so a malformed
+    /// value here is a row that predates the validation. It is dropped rather
+    /// than emitted because OVN's option grammar has no escape for it: a `"`
+    /// ends the quoted value early and makes the whole `DHCP_Options` row
+    /// unparseable, which costs *every* VM on the network its lease. Escaping
+    /// is not the alternative — OVN's `str` parser strips the surrounding
+    /// quotes without interpreting escapes, so a `\` would reach the guest as
+    /// part of its domain. Degrading to "no search domain" is the failure worth
+    /// having; "no DHCP" is not.
+    private static func wellFormedDomain(_ domainName: String?) -> String? {
+        guard let trimmed = domainName?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty
+        else { return nil }
+        return DNSNameSyntax.isValidDomainName(trimmed) ? trimmed : nil
     }
 
     /// A stable locally-administered unicast MAC derived from the subnet, so the
