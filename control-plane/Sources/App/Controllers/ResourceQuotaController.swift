@@ -230,7 +230,7 @@ struct ResourceQuotaController: RouteCollection {
                 throw Abort(
                     .badRequest,
                     reason:
-                        "New memory limit (\(String(format: "%.2f", maxMemoryGB))GB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GB)"
+                        "New memory limit (\(String(format: "%.2f", maxMemoryGB))GiB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GiB)"
                 )
             }
             quota.maxMemory = maxMemoryBytes
@@ -243,7 +243,7 @@ struct ResourceQuotaController: RouteCollection {
                 throw Abort(
                     .badRequest,
                     reason:
-                        "New storage limit (\(String(format: "%.2f", maxStorageGB))GB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GB)"
+                        "New storage limit (\(String(format: "%.2f", maxStorageGB))GiB) cannot be below current reservation (\(String(format: "%.2f", currentReservedGB))GiB)"
                 )
             }
             quota.maxStorage = maxStorageBytes

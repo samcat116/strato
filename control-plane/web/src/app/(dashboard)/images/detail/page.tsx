@@ -26,7 +26,8 @@ import { imagesApi } from "@/lib/api/images";
 import { formatCapacity, formatMemory } from "@/lib/format-bytes";
 import type { ArtifactKind } from "@/types/api";
 
-// An image's boot defaults are optional; a missing one is unset, not zero.
+// An image's boot defaults are optional. Missing *or* zero reads as unset — a
+// zero-byte default would boot nothing, so it is an absent value spelled badly.
 function formatDefault(bytes: number | undefined, format: (bytes: number) => string): string {
   return bytes ? format(bytes) : "Not set";
 }

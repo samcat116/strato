@@ -19,7 +19,22 @@
  * the preformatted `memoryFormatted`/`sizeFormatted` DTO fields. Keep the two
  * in step: the VM detail page renders the server's string for configured
  * memory directly above a snapshots card this file formats, and they should
- * not read as two different unit systems.
+ * not read as two different unit systems. The parity the design rests on,
+ * which no test can assert because the two live in different languages:
+ *
+ *     bytes           formatMemory / formattedByteSize   formatCapacity
+ *     1023            1023 B                             1023 B
+ *     536870912       512 MiB                            1 GiB
+ *     1073741823      1 GiB                              1 GiB
+ *     1503238553      1.4 GiB                            1 GiB
+ *     4294967296      4 GiB                              4 GiB
+ *     1099511627776   1 TiB                              1 TiB
+ *     1649267441664   1.5 TiB                            1.5 TiB
+ *
+ * The two diverge only on degenerate input: this file renders `—`, because
+ * JSON can hand it a `NaN` or an `undefined`, while the server's copy — which
+ * the CLI prints verbatim into a table cell — clamps to `0 B` so the wire
+ * field is always a size.
  */
 
 const KIB = 1024;
@@ -63,6 +78,12 @@ export function formatMemory(bytes: number): string {
  * the whole-gibibyte rounding would land on zero it falls through to
  * `formatMemory`, so a small aggregate — an agent whose guests are using
  * 300 MiB, say — reads as itself rather than as "0 GiB".
+ *
+ * The rounding is deliberate even where the same quantity is shown with a
+ * decimal elsewhere: the agent detail page's guest-memory total reads `1 GiB`
+ * here while the VM detail page's `guestMemoryUsedFormatted` reads `1.4 GiB`
+ * for one VM's share of it. An aggregate's tail digit is noise. Don't
+ * "fix" this into `formatMemory`.
  */
 export function formatCapacity(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";

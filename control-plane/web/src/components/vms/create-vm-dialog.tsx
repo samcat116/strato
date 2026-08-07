@@ -132,7 +132,7 @@ export function CreateVMDialog({
     setIsLoading(true);
     setQuotaError(null);
     try {
-      const GB = 1024 * 1024 * 1024; // 1 GB in bytes
+      const GB = 1024 * 1024 * 1024; // 1 GiB in bytes; the API fields are named `memory`/`disk`
       // Creation is asynchronous: the server accepts the request and returns the
       // VM with the generation it is converging on, which the MutationWatcher
       // follows and reports on completion.
@@ -343,7 +343,7 @@ export function CreateVMDialog({
               </div>
               <div className="space-y-2">
                 <Label htmlFor="memory" className="text-foreground">
-                  Memory (GB)
+                  Memory (GiB)
                 </Label>
                 <Input
                   id="memory"
@@ -359,7 +359,7 @@ export function CreateVMDialog({
               </div>
               <div className="space-y-2">
                 <Label htmlFor="disk" className="text-foreground">
-                  Disk (GB)
+                  Disk (GiB)
                 </Label>
                 <Input
                   id="disk"

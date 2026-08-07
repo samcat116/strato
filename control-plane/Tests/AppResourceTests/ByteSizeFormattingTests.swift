@@ -33,6 +33,11 @@ struct ByteSizeFormattingTests {
         #expect(Int64(1024 * 1024 - 1).formattedByteSize == "1 MiB")
         #expect(Int64(1023).formattedByteSize == "1023 B")
         #expect(Int64(1024).formattedByteSize == "1 KiB")
+        // The GiB→TiB promotion is the one boundary where the shape changes:
+        // failing `< 1024` falls through to an unguarded final tier rather
+        // than to another test.
+        #expect((Int64(1024) * 1024 * 1024 * 1024).formattedByteSize == "1 TiB")
+        #expect((Int64(1023) * 1024 * 1024 * 1024).formattedByteSize == "1023 GiB")
     }
 
     @Test("Tebibytes are their own tier")
@@ -41,10 +46,14 @@ struct ByteSizeFormattingTests {
         #expect(Int64(1_649_267_441_664).formattedByteSize == "1.5 TiB")
     }
 
-    @Test("Zero and negative sizes render without inventing a unit")
+    @Test("Degenerate sizes still render as a size")
     func degenerateSizes() {
         #expect(Int64(0).formattedByteSize == "0 B")
-        // A stored size is never negative; say so rather than printing "-1 GiB".
-        #expect(Int64(-1).formattedByteSize == "—")
+        // This value is wire-visible and the CLI prints it verbatim, so an
+        // unreachable negative clamps rather than emitting a display sentinel
+        // (the browser's mirror renders "—", which JSON input can actually
+        // reach). No caller may see "-1 GiB" in a field documented as a size.
+        #expect(Int64(-1).formattedByteSize == "0 B")
+        #expect(Int64.min.formattedByteSize == "0 B")
     }
 }

@@ -9,7 +9,7 @@ interface UsageBarProps {
   unit?: string;
   /** Pre-computed percentage from the API; falls back to used/limit. */
   percent?: number;
-  /** Fractions rendered on the numeric label (e.g. GB values). */
+  /** Fractions rendered on the numeric label (e.g. GiB values). */
   decimals?: number;
 }
 

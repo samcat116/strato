@@ -106,7 +106,7 @@ function VMRow({ vm, depth }: { vm: VMSummaryNode; depth: number }) {
           <span>{vm.status}</span>
           <span className="text-muted-foreground">·</span>
           <span>
-            {vm.cpu} vCPU / {vm.memoryGB}GB
+            {vm.cpu} vCPU / {vm.memoryGB} GiB
           </span>
         </span>
       }

@@ -8889,6 +8889,54 @@ components:
           description: >-
             Whether the guest has a display device whose framebuffer the web UI
             can attach to. Fixed at creation.
+        qgaAvailable:
+          type: boolean
+          description: >-
+            Whether the guest agent is responding. Absent until the agent's slow
+            poll has seen the guest once.
+        observedHostname:
+          type: string
+          description: >-
+            What the guest OS calls itself, when it reported one. Distinct from
+            `hostname`, which is the DNS label Strato registers it under.
+        guestMemoryTotalBytes:
+          type: integer
+          format: int64
+          description: >-
+            Total RAM the guest itself reports, via the virtio-balloon device.
+            Absent until a guest with the driver reports.
+        guestMemoryAvailableBytes:
+          type: integer
+          format: int64
+          description: Free RAM the guest itself reports. Absent alongside `guestMemoryTotalBytes`.
+        guestMemoryUsedBytes:
+          type: integer
+          format: int64
+          description: >-
+            Derived as `guestMemoryTotalBytes - guestMemoryAvailableBytes` — the
+            committed-vs-used figure most callers want.
+        guestMemoryUsedFormatted:
+          type: string
+          description: Display form of `guestMemoryUsedBytes` in binary units (e.g. `1.4 GiB`).
+        guestMemoryStatsAt:
+          type: string
+          format: date-time
+          description: When the guest last reported the memory figures above.
+        balloonTarget:
+          type: integer
+          format: int64
+          description: >-
+            The size an operator asked the guest to be held to. Absent on a VM
+            with no target set.
+        balloonTargetFormatted:
+          type: string
+          description: Display form of `balloonTarget` in binary units (e.g. `2 GiB`).
+        guestMemoryBalloonActualBytes:
+          type: integer
+          format: int64
+          description: >-
+            What the balloon has actually reached. Sits above `balloonTarget`
+            while a newly set target is still being applied.
         securityGroupsEnforced:
           type: boolean
           description: >-

@@ -22,9 +22,15 @@ extension Int64 {
     /// `memoryFormatted` directly above a snapshots card the browser formats
     /// itself, and a client is free to format `memory` rather than read
     /// `memoryFormatted`. Change one and change the other.
+    ///
+    /// The one place the two deliberately diverge is degenerate input. This is
+    /// wire-visible — the CLI prints it straight into a table cell — so it is
+    /// always a size, clamping a negative (unreachable: every source is a
+    /// non-negative column) to `0 B`. The browser's copy renders `—` instead,
+    /// because JSON can hand it a `NaN` or an `undefined` that no `Int64` can be.
     var formattedByteSize: String {
-        // A size is never negative; say so rather than printing "-1 GiB".
-        if self < 0 { return "—" }
+        // Clamp rather than print "-1 GiB": callers document this field as a size.
+        if self < 0 { return "0 B" }
         let bytes = Double(self)
 
         // Each tier rounds *before* the next unit's test, so a value just under
