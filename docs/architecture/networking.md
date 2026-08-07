@@ -231,11 +231,15 @@ universal and nothing covers the v6 ULA — so STR-53 advertises both explicitly
 through **two mechanisms with different reach**:
 
 - **DHCP option 121** (`classless_static_route` on the network's OVN
-  `DHCP_Options` row) carries the v4 route to every DHCP client, whatever the
-  guest OS and whether or not it read a cloud-init seed. The option also
-  repeats the network's default route: RFC 3442 requires a client that
-  understands option 121 to ignore option 3 (`router`) outright, so advertising
-  only the metadata route would trade the guest's default gateway for it.
+  `DHCP_Options` row) carries the v4 route to any DHCP client that asks for the
+  option, whatever the guest OS and whether or not it read a cloud-init seed. A
+  client that leaves 121 out of its parameter request list — an older
+  `dhclient` without `rfc3442-classless-static-routes` in `request` — never
+  sees it, which is exactly why `router` stays in the map beside it. The option
+  also repeats the network's default route: RFC 3442 requires a client that
+  *does* understand option 121 to ignore option 3 (`router`) outright, so
+  advertising only the metadata route would trade the guest's default gateway
+  for it.
 - **The NoCloud `network-config`** (`CloudInitProvisioner.networkConfigYAML`)
   carries the v4 route for statically addressed NICs, and the **v6 route for
   every** NIC on a dual-stack network. There is no DHCPv6 counterpart to option
@@ -254,11 +258,24 @@ NetworkManager — raise `KeyError` on a gateway-less v2 route and abort the
 literal `via ::`, which iproute2 rejects); netplan/systemd-networkd and
 NetworkManager install it.
 
-Exactly one NIC carries the routes — the first whose network publishes the
-service — because two interfaces claiming the same destination is a duplicate
-route the guest resolves arbitrarily. That is AWS's `eth0`-only rule,
-generalized so a VM whose NIC 0 is on a metadata-disabled network still gets
-the route on a later NIC.
+Within the seed, one NIC per family carries the routes — the first that can
+discharge that family — because two interfaces claiming the same destination is
+a duplicate route the guest resolves arbitrarily. That is AWS's `eth0`-only
+rule, generalized so a VM whose NIC 0 is on a metadata-disabled network (or is
+v4-only while a later NIC is dual-stack) still gets the route.
+
+**That is a property of the seed, not an invariant of the feature.** Option 121
+is authored on the *network's* `DHCP_Options` row and delivered to every DHCP
+client on that network, which the seed does not arbitrate: a VM with NICs on
+two metadata-enabled DHCP networks receives the v4 route on both, and which one
+survives is down to the order its DHCP client writes them. Harmless — either
+route reaches a namespace serving that same VM — but the deduplication is not
+what makes it so, and a per-network option row cannot do better.
+
+Neither mechanism is retroactive for a *booted* guest: the seed is written at
+provisioning time, so an existing VM picks up the v6 route only on rebuild,
+and option 121 arrives with the next lease — within one `lease_time` (3600s by
+default) of enabling the service on a network.
 
 On a network with security groups attached, guest→metadata egress is still
 dropped by the default-drop port group until STR-54's implicit allow rules land
@@ -838,6 +855,15 @@ verification on real multi-node hardware (recipe in
   namespace failed to converge (see the reboot/tmpfs case above) gives the
   guest a route to a black hole and turns the probe into a minutes-long retry
   loop. That is the failure mode to watch for when rolling this out.
+- **STR-53 landed on renderer-level verification only.** The entry it replaced
+  gated it on STR-49 being verified against a live deployment first, for the
+  black-hole reason above. What was actually verified is that the generated
+  `network-config` renders correctly through all five of cloud-init's renderers
+  (`netplan`, `eni`, `network-manager`, `sysconfig`, `networkd`) and that the
+  resulting routes install in the kernel — strong evidence about the *guest*
+  half, and what caught the gateway-less `KeyError`, but silent on whether the
+  per-chassis namespace converges and binds on real hardware. A boot test on
+  Ubuntu 24.04/26.04, Debian 13, Fedora, and Rocky is still owed.
 - **Downgrading an agent below wire v27 leaks its metadata namespaces.** A
   pre-STR-49 agent has no concept of `strato-md-*` namespaces or `mdp*` ports, so
   it neither converges nor removes them — the mirror of the localport's nil

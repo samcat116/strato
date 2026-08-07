@@ -581,6 +581,8 @@ struct CloudInitNetworkConfigTests {
         let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
         #expect(yaml?.components(separatedBy: "169.254.169.254/32").count == 2)
         // ...and it is nic1's section that carries it.
+        // (v6 asserted separately in `dualStackNICsRenderOneIPv6MetadataRoute` —
+        // it has no option-121 backstop to hide a duplicate.)
         #expect(
             yaml?.contains(
                 """
@@ -594,6 +596,93 @@ struct CloudInitNetworkConfigTests {
                       - to: 169.254.169.254/32
                         via: 0.0.0.0
                 """) == true)
+    }
+
+    @Test("a v4-only NIC does not consume the v6 metadata claim")
+    func v4OnlyNICDoesNotConsumeTheIPv6MetadataClaim() {
+        // Same class of bug as `skippedNICDoesNotConsumeTheMetadataClaim`, on
+        // the family axis: nic0 settles v4 (its DHCP lease carries option 121)
+        // while rendering nothing, and one claim covering both families would
+        // let it swallow nic1's v6 route — the only v6 delivery path there is.
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "v4-only",
+                attachment: .tap(interface: "tapA"),
+                macAddress: "52:54:00:00:00:01",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                dhcpEnabled: true,
+                metadataEnabled: true
+            ),
+            ResolvedNetworkAttachment(
+                network: "dual-stack",
+                attachment: .tap(interface: "tapB"),
+                macAddress: "52:54:00:00:00:02",
+                ipAddress: "10.10.0.5",
+                netmask: "255.255.255.0",
+                ip6Address: "fd12:3456:789a::100",
+                prefixLength6: 64,
+                metadataEnabled: true
+            ),
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("- to: fd00:ec2::254/128") == true)
+        // ...while nic0's DHCP lease still settles v4, so the static nic1 does
+        // not write a second route to the same v4 destination.
+        #expect(yaml?.contains("169.254.169.254") == false)
+    }
+
+    @Test("a v4-only static NIC likewise leaves the v6 route to a later NIC")
+    func v4OnlyStaticNICDoesNotConsumeTheIPv6MetadataClaim() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "v4-only",
+                attachment: .tap(interface: "tapA"),
+                macAddress: "52:54:00:00:00:01",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                metadataEnabled: true
+            ),
+            ResolvedNetworkAttachment(
+                network: "dual-stack",
+                attachment: .tap(interface: "tapB"),
+                macAddress: "52:54:00:00:00:02",
+                ipAddress: "10.10.0.5",
+                netmask: "255.255.255.0",
+                ip6Address: "fd12:3456:789a::100",
+                prefixLength6: 64,
+                metadataEnabled: true
+            ),
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        // v4 rendered once, on the NIC that got there first...
+        #expect(yaml?.components(separatedBy: "169.254.169.254/32").count == 2)
+        // ...and v6 on the first NIC that actually has an address for it.
+        #expect(yaml?.components(separatedBy: "fd00:ec2::254/128").count == 2)
+    }
+
+    @Test("two dual-stack NICs render exactly one v6 metadata route")
+    func dualStackNICsRenderOneIPv6MetadataRoute() {
+        // v6 has no option-121 backstop, so a duplicate here would be visible
+        // to the guest rather than absorbed by the DHCP path.
+        let attachments = (1...2).map { index in
+            ResolvedNetworkAttachment(
+                network: "net\(index)",
+                attachment: .tap(interface: "tap\(index)"),
+                macAddress: "52:54:00:00:00:0\(index)",
+                ipAddress: "10.\(index).0.5",
+                netmask: "255.255.255.0",
+                ip6Address: "fd12:3456:789a::10\(index)",
+                prefixLength6: 64,
+                metadataEnabled: true
+            )
+        }
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.components(separatedBy: "fd00:ec2::254/128").count == 2)
+        #expect(yaml?.components(separatedBy: "169.254.169.254/32").count == 2)
     }
 
     @Test("a NIC skipped for want of an address does not consume the metadata claim")

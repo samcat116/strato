@@ -90,6 +90,20 @@ struct NetworkOrchestrator: Sendable {
                 // that degraded this NIC to user-mode did not program DHCP, so
                 // don't tell the guest to expect it.
                 let dhcpRealized = spec.dhcpEnabled && info.attachment.isTap
+                // Same gate for the metadata routes, and worth saying out loud:
+                // dropping them is guest-visible (no IMDS) but leaves no other
+                // trace, so "why has this VM no metadata route" would otherwise
+                // start from scratch.
+                let metadataRealized = spec.metadataEnabled == true && info.attachment.isTap
+                if spec.metadataEnabled == true && !metadataRealized {
+                    logger.debug(
+                        "NIC degraded to user-mode; withholding the guest's route to the metadata service",
+                        metadata: [
+                            "vmId": .string(vmId),
+                            "nicIndex": .stringConvertible(index),
+                            "network": .string(spec.network),
+                        ])
+                }
                 resolved.append(
                     ResolvedNetworkAttachment(
                         network: info.networkName,
@@ -112,7 +126,7 @@ struct NetworkOrchestrator: Sendable {
                         // degraded to user-mode has no OVN localport behind the
                         // metadata addresses, so telling the guest to route to
                         // them would only give it a route into a black hole.
-                        metadataEnabled: spec.metadataEnabled == true && info.attachment.isTap
+                        metadataEnabled: metadataRealized
                     ))
             } catch {
                 logger.error(
