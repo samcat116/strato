@@ -21,10 +21,12 @@ The two executable guards derived from this audit:
   `IAMShadowTranslationTests.translationPrivilegeTiers` pins each legacy
   permission name to the exact role set its action must sit at. A remap that
   shifts a gate across tiers (the STR-107 shape) fails the suite.
-- **Every authorization denial is attributable** — scope refusals now write a
-  `scope_denied` row to `iam_decision_logs`
+- **Every authorization denial is attributable** — credential refusals write a
+  `credential_restricted` row to `iam_decision_logs`
   (`APIKeyAuthenticatorTests.testScopeDenialRecorded`); previously they were the
-  one denial class that left no decision row.
+  one denial class that left no decision row. Since STR-115 almost all of them
+  are ordinary Cedar denies instead, and this row covers only the routes that
+  authorize by row scoping rather than by deciding.
 
 ---
 
@@ -205,21 +207,28 @@ honours a row-level forbid the way its item route does.
 
 ---
 
-## 3. The parallel credential-scope system (STR-115)
+## 3. The parallel credential-scope system (STR-115) — resolved
 
-API keys and CLI sessions carry a `read`/`write`/`admin` scope enforced by
-`APIKeyScopeMiddleware` from the HTTP method alone, entirely outside Cedar. This
-is `iam.md`'s "identity never carries authorization" invariant violated at the
-edge, and it means a request has two independent ways to be denied, only one of
-which the evaluator knows about. The direction — fold scopes into the evaluator
-as a `bindings ∩ restriction` intersection — is recorded in
-[`iam.md`](./iam.md#credential-scopes-are-a-parallel-gate-to-be-folded-in-str-115)
-and tracked as [#873](https://github.com/samcat116/strato/issues/873).
+API keys and CLI sessions carried a `read`/`write`/`admin` scope enforced by
+`APIKeyScopeMiddleware` from the HTTP method alone, entirely outside Cedar: a
+request had two independent ways to be denied, only one of which the evaluator
+knew about.
 
-The one repair made here: a scope refusal now writes a `scope_denied` row to
-`iam_decision_logs` (naming the principal, the credential, and the missing
-scope), so the audit trail that exists to explain 403s no longer has a blind
-spot for this denial class.
+Fixed in STR-115. A credential now carries a **restriction** in the ordinary
+action and node vocabulary, and the intersection `bindings ∩ restriction` is
+evaluated by a tier-1 Cedar forbid, so a restriction refusal is an ordinary
+decision-log row with a tier and a determining policy id, and guardrails ceiling
+credentials for free. The legacy scopes survive as a read-time shim. See
+[`iam.md`](./iam.md#credential-restrictions-str-115) for the model and the three
+behaviour tightenings it carried;
+[#873](https://github.com/samcat116/strato/issues/873) tracked the work.
+
+The `scope_denied` row this audit added became `credential_restricted`, and now
+covers only the surfaces that authorize by row scoping rather than by deciding
+(the identity plane, and the three handler helpers that satisfy the
+default-deny assertion without a Cedar decision) — the one credential-denial
+class still outside the evaluator, and deliberately so, since those routes name
+no action to intersect against.
 
 ---
 
@@ -230,7 +239,13 @@ the test suite on a *mutating* handler that served without evaluating any
 decision. It does **not** catch a handler that evaluates the *wrong* action, nor
 a *list* (GET) handler that filters on membership instead of the evaluator —
 `assertHandlerEvaluated` deliberately skips reads. The two guards this audit adds
-(privilege-tier table; scope-denial attribution) close the first-point and
+(privilege-tier table; credential-denial attribution) close the first-point and
 third-point acceptance items; a fully structural list-coverage guard — asserting
 every collection GET routes through `ProjectVisibility`/`canFilter` — remains the
 strongest available follow-up and is noted here so it is not forgotten.
+
+STR-115 leaves one residual of its own: an action-list restriction with no node
+scope can still reach admin *reads* through `requireSystemAdmin`, because those
+node-less platform surfaces have no action to check a restriction against. The
+honest fix is registering `platform:*` actions for them, which belongs with the
+`require*`-helper audit rather than with the credential model.

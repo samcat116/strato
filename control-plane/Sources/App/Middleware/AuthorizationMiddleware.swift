@@ -192,21 +192,33 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         return nil
     }
 
+    /// A request's class, with the test-only override applied.
+    ///
+    /// Individual tests register ad-hoc routes (a bare `/resource` behind the
+    /// credential-restriction middleware, say) that no production class covers.
+    /// They declare those prefixes via `testOnlyLoginRoutePrefixes`; honored
+    /// only under `.testing`, so production classification stays closed.
+    ///
+    /// Shared with `CredentialRestrictionMiddleware`, which decides whether an
+    /// evaluator decision is coming from the same classification this one
+    /// enforces. Two spellings of "is this route evaluator-gated" would be two
+    /// chances to disagree, and the disagreement that matters is the one where
+    /// both decide the other is handling it.
+    static func classify(request: Request) -> RouteClass? {
+        let path = request.url.path
+        if let classified = classify(path: path) { return classified }
+        if request.application.environment == .testing,
+            request.application.testOnlyLoginRoutePrefixes.contains(where: { path.hasPrefix($0) })
+        {
+            return .loginOnly
+        }
+        return nil
+    }
+
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
         let path = request.url.path
 
-        // Individual tests register ad-hoc routes (a bare `/resource` behind a
-        // scope middleware, say) that no production class covers. They declare
-        // those prefixes via `testOnlyLoginRoutePrefixes`; honored only under
-        // `.testing`, so production classification stays closed.
-        var classified = Self.classify(path: path)
-        if classified == nil, request.application.environment == .testing,
-            request.application.testOnlyLoginRoutePrefixes.contains(where: { path.hasPrefix($0) })
-        {
-            classified = .loginOnly
-        }
-
-        guard let routeClass = classified else {
+        guard let routeClass = Self.classify(request: request) else {
             // Boot refuses to start with an unclassified route registered
             // (`assertAllRoutesClassified`), so this is a request for a path
             // that matches no route at all — or a gap in that assertion.

@@ -35,8 +35,22 @@ final class DeviceAuthorization: Model, @unchecked Sendable {
     @Field(key: "client_name")
     var clientName: String
 
+    /// The legacy `read`/`write`/`admin` scopes the client asked for.
+    /// Superseded by the restriction columns below (STR-115); see
+    /// `APIKey.scopes`.
     @Field(key: "scopes")
     var scopes: [String]
+
+    /// The restriction the client requested, as narrowed by the approving user.
+    /// Copied onto the `CLISession` at redemption.
+    @OptionalField(key: "restriction_actions")
+    var restrictionActions: [String]?
+
+    @OptionalField(key: "restriction_node_type")
+    var restrictionNodeType: String?
+
+    @OptionalField(key: "restriction_node_id")
+    var restrictionNodeID: UUID?
 
     @Field(key: "status")
     var status: String
@@ -133,3 +147,5 @@ final class DeviceAuthorization: Model, @unchecked Sendable {
 }
 
 extension DeviceAuthorization: Content {}
+
+extension DeviceAuthorization: CredentialRestrictionStoring {}

@@ -35,11 +35,22 @@ public struct DeviceFlow: Sendable {
     }
 
     /// Starts the flow: the server mints a device/user code pair.
+    ///
+    /// - Parameter restriction: what this session is asking to be able to do
+    ///   (STR-115). A request, not a grant — the approving browser shows it and
+    ///   may narrow it further. A restriction is a nested object, so it goes
+    ///   over JSON; without one the form encoding stays, since the endpoint
+    ///   accepts both and the form shape is what RFC 8628 clients expect.
     public func start(
-        clientName: String, scopes: String
+        clientName: String,
+        scopes: String,
+        restriction: Components.Schemas.CredentialRestriction? = nil
     ) async throws -> Components.Schemas.DeviceAuthorizationResponse {
-        let output = try await client.oauthDeviceAuthorization(
-            body: .urlEncodedForm(.init(clientName: clientName, scope: scopes)))
+        let body: Operations.OauthDeviceAuthorization.Input.Body =
+            restriction == nil
+            ? .urlEncodedForm(.init(clientName: clientName, scope: scopes))
+            : .json(.init(clientName: clientName, scope: scopes, restriction: restriction))
+        let output = try await client.oauthDeviceAuthorization(body: body)
         switch output {
         case .ok(let ok):
             return try ok.body.json

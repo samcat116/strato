@@ -21,6 +21,21 @@ enum IAMRoleOwnerType: String, Codable, Sendable, CaseIterable {
         case .project: return .project
         }
     }
+
+    /// The owner ids on `chain` that a role of this type may be bound at or
+    /// below — nil for platform rows, which have no owner node and are
+    /// bindable everywhere.
+    ///
+    /// The one place ownership containment is expressed: `RoleStore.bindable`
+    /// filters the listing with it and `MemberRoleResolver` validates a by-id
+    /// grant against it, so the roles a node offers and the roles it accepts
+    /// cannot answer differently (STR-111 review). Both derive from
+    /// `nodeType`'s exhaustive switch, so a new owner type is a compile error
+    /// there rather than a role that binds by id but vanishes from the picker.
+    func ownerIDs(along chain: [IAMNode]) -> [UUID]? {
+        guard let nodeType else { return nil }
+        return chain.filter { $0.type == nodeType }.map(\.id)
+    }
 }
 
 /// A role definition: a named Cedar permit whose action scope is an explicit,

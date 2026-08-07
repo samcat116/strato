@@ -4,7 +4,6 @@ import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, Loader2, MonitorSmartphone, X } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -20,6 +19,10 @@ import {
   useDenyDevice,
   usePendingDeviceAuthorization,
 } from "@/lib/hooks";
+import {
+  CredentialRestrictionBadges,
+  isUnrestricted,
+} from "@/components/credentials/credential-restriction-badges";
 import { toast } from "sonner";
 
 /** Uppercase, strip separators, and re-insert the dash: `bcdfghjk` → `BCDF-GHJK`. */
@@ -38,6 +41,10 @@ function ActivateForm() {
     initialCode.length === 9 ? initialCode : null
   );
   const [outcome, setOutcome] = useState<"approved" | "denied" | null>(null);
+  // The approver is the only party here who knows what the session is *for*,
+  // so this is where a CLI login stops being all-or-nothing. Narrowing only:
+  // the server refuses anything wider than the client asked for.
+  const [narrowedActions, setNarrowedActions] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
   const pending = usePendingDeviceAuthorization(submittedCode);
@@ -57,8 +64,20 @@ function ActivateForm() {
 
   const handleApprove = async () => {
     if (!submittedCode) return;
+    const actions =
+      narrowedActions
+        ?.split(",")
+        .map((action) => action.trim())
+        .filter(Boolean) ?? null;
+    if (actions !== null && actions.length === 0) {
+      toast.error("List at least one action, or clear the field to approve as requested");
+      return;
+    }
     try {
-      await approve.mutateAsync(submittedCode);
+      await approve.mutateAsync({
+        userCode: submittedCode,
+        restriction: actions ? { actions } : undefined,
+      });
       setOutcome("approved");
     } catch (error) {
       toast.error(
@@ -132,18 +151,15 @@ function ActivateForm() {
                 {device.clientName}
               </span>
             </div>
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Requested access</span>
-              <span className="flex gap-1">
-                {device.scopes.map((scope) => (
-                  <Badge
-                    key={scope}
-                    variant="secondary"
-                    className="bg-muted text-foreground"
-                  >
-                    {scope}
-                  </Badge>
-                ))}
+            <div className="flex justify-between items-start gap-4">
+              <span className="text-muted-foreground shrink-0">
+                Requested access
+              </span>
+              <span className="flex justify-end">
+                <CredentialRestrictionBadges
+                  restriction={device.restriction}
+                  unrestrictedLabel="Everything you can do"
+                />
               </span>
             </div>
             {device.requestIP && (
@@ -163,6 +179,37 @@ function ActivateForm() {
               </div>
             )}
           </div>
+          {isUnrestricted(device.restriction) && (
+            <div className="space-y-2">
+              {narrowedActions === null ? (
+                <button
+                  type="button"
+                  className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                  onClick={() => setNarrowedActions("")}
+                >
+                  Limit what this device can do
+                </button>
+              ) : (
+                <>
+                  <Label htmlFor="narrowedActions" className="text-foreground">
+                    Limit to these actions
+                  </Label>
+                  <Input
+                    id="narrowedActions"
+                    placeholder="vm:read, vm:start"
+                    value={narrowedActions}
+                    onChange={(e) => setNarrowedActions(e.target.value)}
+                    className="bg-background border-border text-foreground font-mono text-sm"
+                    disabled={approve.isPending || deny.isPending}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Comma-separated. Wildcards work: <code>vm:*</code> covers
+                    every VM action, now and later.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
           <div className="flex gap-3">
             <Button
               variant="outline"

@@ -351,7 +351,12 @@ extension User {
         return "test-token-\(self.id?.uuidString ?? UUID().uuidString)"
     }
 
-    package func generateAPIKey(on db: Database, name: String = "Test API Key") async throws -> String {
+    package func generateAPIKey(
+        on db: Database,
+        name: String = "Test API Key",
+        scopes: [String] = ["read", "write"],
+        restriction: CredentialRestriction? = nil
+    ) async throws -> String {
         // Generate a proper API key for testing
         let apiKeyString = APIKey.generateAPIKey()
         let keyHash = APIKey.hashAPIKey(apiKeyString)
@@ -362,9 +367,10 @@ extension User {
             name: name,
             keyHash: keyHash,
             keyPrefix: keyPrefix,
-            scopes: ["read", "write"],
+            scopes: scopes,
             isActive: true
         )
+        apiKey.store(restriction: restriction)
         try await apiKey.save(on: db)
 
         return apiKeyString

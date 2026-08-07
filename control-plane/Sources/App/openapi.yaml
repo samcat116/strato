@@ -17,10 +17,15 @@ info:
     Two schemes are accepted interchangeably:
 
     - `bearerAuth` — an API key (`Authorization: Bearer <key>`) minted via
-      `POST /api/api-keys`. Keys carry scopes (`read`, `write`) enforced per
-      request. The same header also accepts a **SPIFFE JWT-SVID**, when the
-      deployment enables it, authenticating a registered service account or
-      workload rather than a user (see below).
+      `POST /api/api-keys`. A key acts *on behalf of* its owner and may carry a
+      **restriction** — an action list and an optional subtree — so its
+      effective permission is the owner's role bindings intersected with it.
+      The intersection is evaluated by the same Cedar evaluator that decides
+      every other request, so a restriction refusal is an ordinary logged
+      decision and organization guardrails ceiling credentials for free. The
+      same header also accepts a **SPIFFE JWT-SVID**, when the deployment
+      enables it, authenticating a registered service account or workload
+      rather than a user (see below).
     - `cookieAuth` — the `vapor-session` cookie set after a WebAuthn/passkey
       login.
 
@@ -167,7 +172,7 @@ tags:
   - name: Authentication
     description: WebAuthn/passkey login, account claim, and OAuth device flow.
   - name: API Keys
-    description: Programmatic credentials with read/write scopes.
+    description: Programmatic credentials, optionally restricted to an action set or a subtree.
   - name: Organizations
     description: Top-level tenants and their memberships.
   - name: Folders
@@ -2852,13 +2857,24 @@ paths:
     post:
       operationId: approveDeviceAuthorization
       summary: Approve a device authorization
-      description: Binds the pending authorization to the signed-in user so the CLI can redeem it.
+      description: >-
+        Binds the pending authorization to the signed-in user so the CLI can
+        redeem it. The approver may narrow what the client asked for — never
+        widen it — which is where a CLI login stops being all-or-nothing.
       tags: [Authentication]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveDeviceAuthorizationRequest"
       responses:
         "200":
           description: The authorization was approved (no body).
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403":
+          description: The requested restriction is broader than the one the client asked for.
         "404": { $ref: "#/components/responses/NotFound" }
   /api/oauth/device/{userCode}/deny:
     parameters:
@@ -10636,7 +10652,7 @@ components:
     APIKeySummary:
       type: object
       description: An API key without its secret.
-      required: [name, keyPrefix, scopes, isActive]
+      required: [name, keyPrefix, scopes, restriction, isActive]
       properties:
         id:
           type: string
@@ -10650,6 +10666,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         isActive:
           type: boolean
         expiresAt:
@@ -10665,9 +10683,61 @@ components:
     APIKeyScope:
       type: string
       description: >-
-        Permission scope on an API key, ordered least-to-most privileged:
-        `admin` implies `write` implies `read`.
+        Deprecated. The legacy permission scope on an API key or CLI session.
+        Superseded by `CredentialRestriction`, which is what is actually
+        enforced; these values survive as the wire spelling existing clients
+        send and are read only when no restriction is stored. `write` and
+        `admin` both mean unrestricted — nothing ever required `admin` — and
+        `read` means the action set whose names say they read.
       enum: [read, write, admin]
+      deprecated: true
+
+    CredentialRestriction:
+      type: object
+      description: >-
+        What a credential may do, in the ordinary IAM action and node
+        vocabulary. A restriction only ever *subtracts*: the effective
+        permission is the principal's role bindings intersected with it, and it
+        is enforced by the Cedar evaluator like every other authorization
+        decision, so a refusal appears in `iam_decision_logs` under the
+        `credential` tier. An absent restriction means "everything this
+        credential's owner can do".
+
+
+        On a response this is the *effective* restriction, whether stored
+        outright or derived from the legacy `scopes`, so a client never has to
+        know which of the two a credential carries. On a device-authorization
+        request it is what the client is asking for — a request, not a grant:
+        the approving user sees it and may narrow it further.
+      properties:
+        role:
+          type: string
+          format: uuid
+          description: >-
+            Request only. Sugar for the role's action list, expanded at write
+            time so a later edit to the role cannot widen an issued credential.
+            Mutually exclusive with `actions`.
+        actions:
+          type: array
+          description: >-
+            Action patterns — an exact action (`vm:read`), a service wildcard
+            (`vm:*`, which covers actions shipped after the credential was
+            minted), `read` (every action whose name says it reads, resolved on
+            every check so it stays current), or `*` for every action. An empty
+            list is rejected; write `["*"]` for an unrestricted credential.
+          items:
+            type: string
+        nodeType:
+          type: string
+          description: >-
+            The subtree the credential may act in. Both `nodeType` and `nodeId`
+            or neither. Identity-plane actions (`user:read` and friends) are
+            exempt, since a user record is parentless and would otherwise be
+            unreachable from any scoped credential.
+        nodeId:
+          type: string
+          format: uuid
+
 
     CreateAPIKeyRequest:
       type: object
@@ -10677,9 +10747,11 @@ components:
           type: string
         scopes:
           type: array
-          description: Defaults to `["read", "write"]`.
+          description: Deprecated; ignored when `restriction` is present. Defaults to `["read", "write"]`.
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         expiresInDays:
           type: integer
           description: Optional lifetime in days (1–365). Omit for a non-expiring key.
@@ -10689,7 +10761,7 @@ components:
     CreateAPIKeyResponse:
       type: object
       description: The created key. `key` is the full secret and is returned only here.
-      required: [name, key, keyPrefix, scopes]
+      required: [name, key, keyPrefix, scopes, restriction]
       properties:
         id:
           type: string
@@ -10705,6 +10777,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         expiresAt:
           type: string
           format: date-time
@@ -10714,7 +10788,10 @@ components:
 
     UpdateAPIKeyRequest:
       type: object
-      description: Partial update; omitted fields are left unchanged.
+      description: >-
+        Partial update; omitted fields are left unchanged. Sending `scopes`
+        alone clears any stored restriction, so the edit takes effect rather
+        than being silently shadowed.
       properties:
         name:
           type: string
@@ -10722,6 +10799,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         isActive:
           type: boolean
 
@@ -10734,7 +10813,9 @@ components:
           description: Human-readable client label shown on the approval page. Defaults to "Strato CLI".
         scope:
           type: string
-          description: Space-delimited scopes. Defaults to "read write".
+          description: Deprecated. Space-delimited legacy scopes. Defaults to "read write".
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
 
     DeviceAuthorizationResponse:
       type: object
@@ -10818,10 +10899,19 @@ components:
         error_description:
           type: string
 
+    ApproveDeviceAuthorizationRequest:
+      type: object
+      description: >-
+        Optional narrowing applied at approval time. Omit the body entirely to
+        approve exactly what the client requested.
+      properties:
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
+
     PendingDeviceAuthorization:
       type: object
       description: A device authorization awaiting approval, shown on the `/activate` page.
-      required: [userCode, clientName, scopes, expiresAt]
+      required: [userCode, clientName, scopes, restriction, expiresAt]
       properties:
         userCode:
           type: string
@@ -10831,6 +10921,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         requestIP:
           type: string
           description: The client IP that started the device flow.
@@ -10844,7 +10936,7 @@ components:
     CLISessionSummary:
       type: object
       description: An active CLI session minted through the device grant.
-      required: [clientName, scopes, accessTokenPrefix, refreshTokenExpiresAt]
+      required: [clientName, scopes, restriction, accessTokenPrefix, refreshTokenExpiresAt]
       properties:
         id:
           type: string
@@ -10855,6 +10947,8 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/APIKeyScope"
+        restriction:
+          $ref: "#/components/schemas/CredentialRestriction"
         accessTokenPrefix:
           type: string
         createdAt:
@@ -10935,15 +11029,26 @@ components:
           type: string
           description: Email address of an existing user to add.
         role:
-          type: string
-          description: The organization role to grant (`admin` grants an admin role binding).
+          $ref: "#/components/schemas/OrganizationMemberRole"
+
+    OrganizationMemberRole:
+      type: string
+      description: >-
+        The organization role to grant: `member` (bare membership) or `admin`
+        (an admin role binding), a seeded IAM role name
+        (`viewer`/`operator`/`editor`/`admin`), or a role bindable at the org
+        named by id or by name — every name
+        `GET /api/iam/roles/bindable` lists for the org is accepted. The fixed
+        names above win over a custom role that shares one, which stays
+        grantable by id; a name two bindable roles share is a `400` naming
+        both ids.
 
     UpdateOrganizationMemberRoleRequest:
       type: object
       required: [role]
       properties:
         role:
-          type: string
+          $ref: "#/components/schemas/OrganizationMemberRole"
 
     FolderDetail:
       type: object
@@ -11119,10 +11224,14 @@ components:
     FolderRole:
       type: string
       description: >-
-        The role to grant on the folder: a role id, or a seeded role name
-        (`viewer`/`operator`/`editor`/`admin`). A role id must name a role
-        owned at or above the folder. The legacy project vocabulary
-        (`member`) is not accepted here.
+        The role to grant on the folder: a role id, a seeded role name
+        (`viewer`/`operator`/`editor`/`admin`), or the name of a custom role
+        bindable here — every name `GET /api/iam/roles/bindable` lists for this
+        folder is accepted. Either form must name a role owned at or above the
+        folder. A seeded name always wins over a custom role of the same name,
+        and a name two bindable roles share is a `400` naming both ids. The
+        legacy project vocabulary carries no meaning here: `member` is a valid
+        folder grant only if a role bindable on the folder is named that.
 
     GrantFolderMemberRequest:
       type: object
@@ -12015,7 +12124,11 @@ components:
         email:
           type: string
         role:
-          $ref: "#/components/schemas/ProjectRole"
+          type: string
+          description: >-
+            The role's `iam_roles` id; legacy rows storing a relational name
+            are normalized to their seeded id. `roleDisplayName` carries the
+            name to show.
         joinedAt:
           type: string
           format: date-time
@@ -12035,7 +12148,8 @@ components:
         name:
           type: string
         role:
-          $ref: "#/components/schemas/ProjectRole"
+          type: string
+          description: The role's `iam_roles` id, as on `ProjectMember`.
         grantedAt:
           type: string
           format: date-time
@@ -12045,10 +12159,16 @@ components:
             The group belongs to another organization — a cross-org grant,
             which UIs should render prominently.
 
-    ProjectRole:
+    ProjectMemberRoleInput:
       type: string
-      description: A role grant on a project.
-      enum: [admin, member, viewer]
+      description: >-
+        The role to grant on a project: a role id, a seeded IAM role name
+        (`viewer`/`operator`/`editor`/`admin`), a legacy project role
+        (`admin`/`member`/`viewer`), or the name of a custom role bindable on
+        the project — every name `GET /api/iam/roles/bindable` lists for it is
+        accepted. The fixed names above win over a custom role that shares one,
+        which stays grantable by id; a name two bindable roles share is a `400`
+        naming both ids.
 
     GrantProjectMemberRequest:
       type: object
@@ -12061,14 +12181,14 @@ components:
           type: string
           format: uuid
         role:
-          $ref: "#/components/schemas/ProjectRole"
+          $ref: "#/components/schemas/ProjectMemberRoleInput"
 
     UpdateProjectMemberRoleRequest:
       type: object
       required: [role]
       properties:
         role:
-          $ref: "#/components/schemas/ProjectRole"
+          $ref: "#/components/schemas/ProjectMemberRoleInput"
 
     GrantProjectGroupRequest:
       type: object
@@ -12078,7 +12198,7 @@ components:
           type: string
           format: uuid
         role:
-          $ref: "#/components/schemas/ProjectRole"
+          $ref: "#/components/schemas/ProjectMemberRoleInput"
 
     SeededRoleName:
       type: string
@@ -14345,6 +14465,8 @@ components:
         historical (kept for API compatibility): `spicedbPermission` carries
         the permission as asked at the check site, and `spicedbDecision` is
         always `none` on rows written after the SpiceDB removal (#483).
+        `credentialType`/`credentialID` name the API key or CLI session the
+        request arrived on, on allows as well as denies (STR-115).
       required:
         - id
         - subject
@@ -14379,6 +14501,15 @@ components:
         nodeType:
           type: string
         nodeID:
+          type: string
+          format: uuid
+        credentialType:
+          type: string
+          description: >-
+            The credential the request authenticated with — `api_key` or
+            `cli_session`. Absent for a browser session or an agent JWT-SVID.
+          enum: [api_key, cli_session]
+        credentialID:
           type: string
           format: uuid
         organizationID:
@@ -14856,8 +14987,8 @@ components:
           type: string
           description: >-
             Admin-only. Organization role for newly provisioned users when no
-            claim matches: `member`, `admin`, an IAM role name, or a role id
-            bindable at the org.
+            claim matches: `member`, `admin`, an IAM role name, or a role
+            bindable at the org named by id or by name.
         createdAt:
           type: string
           format: date-time
@@ -14920,7 +15051,8 @@ components:
         defaultRole:
           type: string
           description: >-
-            `member`, `admin`, an IAM role name, or a role id bindable at the org.
+            `member`, `admin`, an IAM role name, or a role bindable at the org
+            named by id or by name.
 
     UpdateOIDCProviderRequest:
       type: object
@@ -14971,7 +15103,8 @@ components:
         defaultRole:
           type: string
           description: >-
-            `member`, `admin`, an IAM role name, or a role id bindable at the org.
+            `member`, `admin`, an IAM role name, or a role bindable at the org
+            named by id or by name.
 
     OIDCProviderTestResult:
       type: object

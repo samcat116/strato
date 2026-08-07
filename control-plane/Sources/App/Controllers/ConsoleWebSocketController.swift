@@ -154,23 +154,19 @@ struct ConsoleWebSocketController: RouteCollection {
 
             req.logger.debug("Console WebSocket authenticated as user: \(user.username)")
 
-            // The console is an interactive *write* surface: frames received on
-            // this socket are forwarded to the VM as console input (keystrokes).
-            // But it is reached over a GET WebSocket upgrade, which
-            // APIKeyScopeMiddleware treats as read-only — so a key minted with
-            // only the `read` scope would otherwise drive the console. Require
-            // `write` explicitly for API-key-authenticated console access.
-            if req.isAPIKeyAuthenticated, req.apiKey?.grants(.write) != true {
-                req.logger.warning(
-                    "Console access denied: API key lacks 'write' scope",
-                    metadata: ["userId": .string(userId)])
-                try? await ws.send("error: This API key lacks the required 'write' scope for the console")
-                try? await ws.close(code: .policyViolation)
-                return nil
-            }
-
             // Authorize before loading the VM, so unauthorized users cannot probe
             // arbitrary VM UUIDs via distinct "VM not found" / "not running" errors.
+            //
+            // The console is an interactive *write* surface — frames received on
+            // this socket are forwarded to the VM as keystrokes — reached over a
+            // GET upgrade. That used to need a hand-written "the API key must
+            // hold `write`" carve-out here, because the scope middleware scored
+            // the upgrade by its HTTP method. It does not anymore: the check
+            // below resolves to `vm:viewConsole`, an editor action, and a
+            // credential's restriction is intersected against *that* (STR-115).
+            // A read-only credential is refused by the evaluator, with a
+            // decision row — and CLI sessions, which the old carve-out never
+            // looked at, are covered by the same path.
             let hasPermission = try await req.can("view_console", on: "virtual_machine", id: vmId.uuidString)
 
             guard hasPermission else {

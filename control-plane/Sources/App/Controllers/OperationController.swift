@@ -96,8 +96,8 @@ struct OperationController: RouteCollection {
         // an admin sees it through the same scopeless-row gate the other
         // node-less surfaces use — which flags the read for the admin audit
         // trail rather than reading `isSystemAdmin` inline.
-        req.markRowScopedAuthorization()
-        guard isInitiator || req.allowsScopelessPlatformRow() else {
+        try await req.markRowScopedAuthorization()
+        guard isInitiator || req.allowsScopelessPlatformRow(action: "operation:read") else {
             throw Abort(.notFound)
         }
     }

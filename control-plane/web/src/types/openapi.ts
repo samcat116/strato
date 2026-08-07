@@ -2023,7 +2023,7 @@ export interface paths {
         put?: never;
         /**
          * Approve a device authorization
-         * @description Binds the pending authorization to the signed-in user so the CLI can redeem it.
+         * @description Binds the pending authorization to the signed-in user so the CLI can redeem it. The approver may narrow what the client asked for — never widen it — which is where a CLI login stops being all-or-nothing.
          */
         post: operations["approveDeviceAuthorization"];
         delete?: never;
@@ -6244,6 +6244,7 @@ export interface components {
             /** @description The first 12 characters of the key followed by an ellipsis. */
             keyPrefix: string;
             scopes: components["schemas"]["APIKeyScope"][];
+            restriction: components["schemas"]["CredentialRestriction"];
             isActive: boolean;
             /** Format: date-time */
             expiresAt?: string;
@@ -6253,14 +6254,34 @@ export interface components {
             createdAt?: string;
         };
         /**
-         * @description Permission scope on an API key, ordered least-to-most privileged: `admin` implies `write` implies `read`.
+         * @deprecated
+         * @description Deprecated. The legacy permission scope on an API key or CLI session. Superseded by `CredentialRestriction`, which is what is actually enforced; these values survive as the wire spelling existing clients send and are read only when no restriction is stored. `write` and `admin` both mean unrestricted — nothing ever required `admin` — and `read` means the action set whose names say they read.
          * @enum {string}
          */
         APIKeyScope: "read" | "write" | "admin";
+        /**
+         * @description What a credential may do, in the ordinary IAM action and node vocabulary. A restriction only ever *subtracts*: the effective permission is the principal's role bindings intersected with it, and it is enforced by the Cedar evaluator like every other authorization decision, so a refusal appears in `iam_decision_logs` under the `credential` tier. An absent restriction means "everything this credential's owner can do".
+         *
+         *     On a response this is the *effective* restriction, whether stored outright or derived from the legacy `scopes`, so a client never has to know which of the two a credential carries. On a device-authorization request it is what the client is asking for — a request, not a grant: the approving user sees it and may narrow it further.
+         */
+        CredentialRestriction: {
+            /**
+             * Format: uuid
+             * @description Request only. Sugar for the role's action list, expanded at write time so a later edit to the role cannot widen an issued credential. Mutually exclusive with `actions`.
+             */
+            role?: string;
+            /** @description Action patterns — an exact action (`vm:read`), a service wildcard (`vm:*`, which covers actions shipped after the credential was minted), `read` (every action whose name says it reads, resolved on every check so it stays current), or `*` for every action. An empty list is rejected; write `["*"]` for an unrestricted credential. */
+            actions?: string[];
+            /** @description The subtree the credential may act in. Both `nodeType` and `nodeId` or neither. Identity-plane actions (`user:read` and friends) are exempt, since a user record is parentless and would otherwise be unreachable from any scoped credential. */
+            nodeType?: string;
+            /** Format: uuid */
+            nodeId?: string;
+        };
         CreateAPIKeyRequest: {
             name: string;
-            /** @description Defaults to `["read", "write"]`. */
+            /** @description Deprecated; ignored when `restriction` is present. Defaults to `["read", "write"]`. */
             scopes?: components["schemas"]["APIKeyScope"][];
+            restriction?: components["schemas"]["CredentialRestriction"];
             /** @description Optional lifetime in days (1–365). Omit for a non-expiring key. */
             expiresInDays?: number;
         };
@@ -6273,23 +6294,26 @@ export interface components {
             key: string;
             keyPrefix: string;
             scopes: components["schemas"]["APIKeyScope"][];
+            restriction: components["schemas"]["CredentialRestriction"];
             /** Format: date-time */
             expiresAt?: string;
             /** Format: date-time */
             createdAt?: string;
         };
-        /** @description Partial update; omitted fields are left unchanged. */
+        /** @description Partial update; omitted fields are left unchanged. Sending `scopes` alone clears any stored restriction, so the edit takes effect rather than being silently shadowed. */
         UpdateAPIKeyRequest: {
             name?: string;
             scopes?: components["schemas"]["APIKeyScope"][];
+            restriction?: components["schemas"]["CredentialRestriction"];
             isActive?: boolean;
         };
         /** @description RFC 8628 §3.1 device authorization request. */
         DeviceAuthorizationRequest: {
             /** @description Human-readable client label shown on the approval page. Defaults to "Strato CLI". */
             client_name?: string;
-            /** @description Space-delimited scopes. Defaults to "read write". */
+            /** @description Deprecated. Space-delimited legacy scopes. Defaults to "read write". */
             scope?: string;
+            restriction?: components["schemas"]["CredentialRestriction"];
         };
         /** @description RFC 8628 §3.2 device authorization response (OAuth snake_case field names). */
         DeviceAuthorizationResponse: {
@@ -6330,11 +6354,16 @@ export interface components {
             error: "invalid_request" | "invalid_grant" | "invalid_scope" | "unsupported_grant_type" | "authorization_pending" | "slow_down" | "access_denied" | "expired_token";
             error_description?: string;
         };
+        /** @description Optional narrowing applied at approval time. Omit the body entirely to approve exactly what the client requested. */
+        ApproveDeviceAuthorizationRequest: {
+            restriction?: components["schemas"]["CredentialRestriction"];
+        };
         /** @description A device authorization awaiting approval, shown on the `/activate` page. */
         PendingDeviceAuthorization: {
             userCode: string;
             clientName: string;
             scopes: components["schemas"]["APIKeyScope"][];
+            restriction: components["schemas"]["CredentialRestriction"];
             /** @description The client IP that started the device flow. */
             requestIP?: string;
             /** Format: date-time */
@@ -6348,6 +6377,7 @@ export interface components {
             id?: string;
             clientName: string;
             scopes: components["schemas"]["APIKeyScope"][];
+            restriction: components["schemas"]["CredentialRestriction"];
             accessTokenPrefix: string;
             /** Format: date-time */
             createdAt?: string;
@@ -6392,11 +6422,12 @@ export interface components {
         AddOrganizationMemberRequest: {
             /** @description Email address of an existing user to add. */
             userEmail: string;
-            /** @description The organization role to grant (`admin` grants an admin role binding). */
-            role: string;
+            role: components["schemas"]["OrganizationMemberRole"];
         };
+        /** @description The organization role to grant: `member` (bare membership) or `admin` (an admin role binding), a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), or a role bindable at the org named by id or by name — every name `GET /api/iam/roles/bindable` lists for the org is accepted. The fixed names above win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. */
+        OrganizationMemberRole: string;
         UpdateOrganizationMemberRoleRequest: {
-            role: string;
+            role: components["schemas"]["OrganizationMemberRole"];
         };
         /** @description A folder (an `OrganizationalUnit` on the wire) within an organization's hierarchy. */
         FolderDetail: {
@@ -6495,7 +6526,7 @@ export interface components {
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /** @description The role to grant on the folder: a role id, or a seeded role name (`viewer`/`operator`/`editor`/`admin`). A role id must name a role owned at or above the folder. The legacy project vocabulary (`member`) is not accepted here. */
+        /** @description The role to grant on the folder: a role id, a seeded role name (`viewer`/`operator`/`editor`/`admin`), or the name of a custom role bindable here — every name `GET /api/iam/roles/bindable` lists for this folder is accepted. Either form must name a role owned at or above the folder. A seeded name always wins over a custom role of the same name, and a name two bindable roles share is a `400` naming both ids. The legacy project vocabulary carries no meaning here: `member` is a valid folder grant only if a role bindable on the folder is named that. */
         FolderRole: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantFolderMemberRequest: {
@@ -6937,7 +6968,8 @@ export interface components {
             username: string;
             displayName: string;
             email: string;
-            role: components["schemas"]["ProjectRole"];
+            /** @description The role's `iam_roles` id; legacy rows storing a relational name are normalized to their seeded id. `roleDisplayName` carries the name to show. */
+            role: string;
             /** Format: date-time */
             joinedAt?: string;
             /** @description The user is not a member of the project's organization — a cross-org grant, which UIs should render prominently. */
@@ -6947,31 +6979,29 @@ export interface components {
             /** Format: uuid */
             groupId?: string;
             name: string;
-            role: components["schemas"]["ProjectRole"];
+            /** @description The role's `iam_roles` id, as on `ProjectMember`. */
+            role: string;
             /** Format: date-time */
             grantedAt?: string;
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /**
-         * @description A role grant on a project.
-         * @enum {string}
-         */
-        ProjectRole: "admin" | "member" | "viewer";
+        /** @description The role to grant on a project: a role id, a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), a legacy project role (`admin`/`member`/`viewer`), or the name of a custom role bindable on the project — every name `GET /api/iam/roles/bindable` lists for it is accepted. The fixed names above win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. */
+        ProjectMemberRoleInput: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantProjectMemberRequest: {
             userEmail?: string;
             /** Format: uuid */
             userID?: string;
-            role: components["schemas"]["ProjectRole"];
+            role: components["schemas"]["ProjectMemberRoleInput"];
         };
         UpdateProjectMemberRoleRequest: {
-            role: components["schemas"]["ProjectRole"];
+            role: components["schemas"]["ProjectMemberRoleInput"];
         };
         GrantProjectGroupRequest: {
             /** Format: uuid */
             groupID: string;
-            role: components["schemas"]["ProjectRole"];
+            role: components["schemas"]["ProjectMemberRoleInput"];
         };
         /**
          * @description A seeded IAM role. Each role implies the ones below it.
@@ -8066,7 +8096,7 @@ export interface components {
             /** @description The newest version-log entry, absent when the log is empty. */
             latest?: components["schemas"]["IAMPolicySetVersion"];
         };
-        /** @description One authorization decision record. The `spicedb*` field names are historical (kept for API compatibility): `spicedbPermission` carries the permission as asked at the check site, and `spicedbDecision` is always `none` on rows written after the SpiceDB removal (#483). */
+        /** @description One authorization decision record. The `spicedb*` field names are historical (kept for API compatibility): `spicedbPermission` carries the permission as asked at the check site, and `spicedbDecision` is always `none` on rows written after the SpiceDB removal (#483). `credentialType`/`credentialID` name the API key or CLI session the request arrived on, on allows as well as denies (STR-115). */
         IAMDecisionLogEntry: {
             /** Format: uuid */
             id: string;
@@ -8083,6 +8113,13 @@ export interface components {
             nodeType?: string;
             /** Format: uuid */
             nodeID?: string;
+            /**
+             * @description The credential the request authenticated with — `api_key` or `cli_session`. Absent for a browser session or an agent JWT-SVID.
+             * @enum {string}
+             */
+            credentialType?: "api_key" | "cli_session";
+            /** Format: uuid */
+            credentialID?: string;
             /** Format: uuid */
             organizationID?: string;
             spicedbDecision: string;
@@ -8314,7 +8351,7 @@ export interface components {
             adminClaimValues?: string[];
             /** @description Admin-only. Claim values mapped to org-scoped roles bound on login. */
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description Admin-only. Organization role for newly provisioned users when no claim matches: `member`, `admin`, an IAM role name, or a role id bindable at the org. */
+            /** @description Admin-only. Organization role for newly provisioned users when no claim matches: `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
             defaultRole?: string;
             /** Format: date-time */
             createdAt?: string;
@@ -8344,7 +8381,7 @@ export interface components {
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description `member`, `admin`, an IAM role name, or a role id bindable at the org. */
+            /** @description `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
             defaultRole?: string;
         };
         /** @description Every field is optional. Omitted URL fields keep their stored value; an empty string clears them. */
@@ -8365,7 +8402,7 @@ export interface components {
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description `member`, `admin`, an IAM role name, or a role id bindable at the org. */
+            /** @description `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
             defaultRole?: string;
         };
         /** @description The outcome of a provider configuration test. */
@@ -12482,7 +12519,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ApproveDeviceAuthorizationRequest"];
+            };
+        };
         responses: {
             /** @description The authorization was approved (no body). */
             200: {
@@ -12493,6 +12534,13 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            /** @description The requested restriction is broader than the one the client asked for. */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
             404: components["responses"]["NotFound"];
         };
     };

@@ -20,7 +20,7 @@ struct WorkloadIdentityController: RouteCollection {
     }
 
     func overview(req: Request) async throws -> WorkloadIdentityResponse {
-        _ = try req.requireSystemAdmin()
+        _ = try await req.requireSystemAdmin()
 
         let spireService = req.application.spireService
         let registration = req.application.spireRegistrationService

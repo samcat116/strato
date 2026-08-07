@@ -133,8 +133,18 @@ struct CedarEntitySlice: Equatable, Sendable {
     /// would merge in at check time; nothing wires the ambient half yet, which
     /// is why conditioned bindings are skipped and counted rather than
     /// evaluated (and, since STR-108, refused at write time).
-    func baseContextValue(roleIDs: Set<UUID>) -> CedarValue {
-        .record(["grants": grants.contextValue(roleIDs: roleIDs)])
+    ///
+    /// `credentialRestricted` is the first of those request-side attributes to
+    /// be wired (STR-115). It is emitted only when *true* — an unrestricted
+    /// request builds the same one-key record it always did, which is what
+    /// makes "restrictions changed nothing for credentials that have none" a
+    /// property you can assert rather than a claim.
+    func baseContextValue(roleIDs: Set<UUID>, credentialRestricted: Bool = false) -> CedarValue {
+        var fields: [String: CedarValue] = ["grants": grants.contextValue(roleIDs: roleIDs)]
+        if credentialRestricted {
+            fields["credentialRestricted"] = .bool(true)
+        }
+        return .record(fields)
     }
 }
 

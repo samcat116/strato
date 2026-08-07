@@ -348,7 +348,7 @@ struct RoleController: RouteCollection {
     /// "mutating handler forgot its check" assertion.
     func validate(req: Request) async throws -> ValidateRoleResponse {
         _ = try req.auth.require(User.self)
-        req.markRowScopedAuthorization()
+        try await req.markRowScopedAuthorization()
         let payload = try req.content.decode(ValidateRoleRequest.self)
         let id = payload.id ?? UUID()
         let prepared = try await prepare(

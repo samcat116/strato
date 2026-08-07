@@ -583,6 +583,28 @@ final class OIDCIdentityMappingTests {
         }
     }
 
+    @Test("A default role named by an org-owned role's name provisions and binds it (STR-111)")
+    func jitDefaultRoleCustomRoleByName() async throws {
+        var auditorID: UUID!
+        try await withIdentityTestApp(defaultRole: { builder, org in
+            let auditor = try await self.makeOrgRole(name: "auditor", orgID: org.id!, on: builder.db)
+            auditorID = auditor.id!
+            return "auditor"
+        }) { app, org, provider, service in
+            let user = try await service.resolveUser(
+                userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
+
+            // Login resolves the stored name to the role itself. The lenient
+            // fallback would have landed a bare "member" instead, which is the
+            // failure this pins.
+            let membership = try await UserOrganization.query(on: app.db)
+                .filter(\.$user.$id == user.id!).first()
+            #expect(membership?.role == auditorID.uuidString)
+            let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.db)
+            #expect(bindings == [auditorID.uuidString])
+        }
+    }
+
     @Test("Role mappings drive reconciliation without admin claim values, and reset to default when the claim is lost")
     func reconcileCustomRoleAndBack() async throws {
         var auditorID: UUID!

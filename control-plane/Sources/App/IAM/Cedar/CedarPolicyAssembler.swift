@@ -122,6 +122,30 @@ enum CedarPolicyAssembler {
                     when { resource in principal.memberOfOrgs };
                     """))
 
+        // The credential's own ceiling (STR-115). API keys and CLI sessions
+        // used to be gated by a middleware that read the HTTP method and never
+        // consulted the evaluator — a second authorization system, invisible to
+        // the decision log and unreachable by guardrails. Here the credential's
+        // restriction is just a forbid: the intersection `bindings ∩
+        // restriction` falls out of Cedar's "forbid beats permit" rule, a
+        // restricted system admin is bound like anyone else, and the refusal
+        // names a policy id like every other decision.
+        //
+        // The `when` is a single boolean because the restriction's *vocabulary*
+        // (action patterns, a subtree) is richer than Cedar's context types
+        // conveniently express, and matching it is the same pattern match
+        // guardrails already do in Swift (`GuardrailRendering.patternsCover`).
+        // The slice loader computes it per check; this policy is what makes the
+        // answer binding.
+        policies.append(
+            CedarPolicySource(
+                id: CedarCheckDecision.credentialRestrictionPolicyID,
+                text: """
+                    @id("\(CedarCheckDecision.credentialRestrictionPolicyID)")
+                    forbid (principal, action, resource)
+                    when { context has credentialRestricted && context.credentialRestricted };
+                    """))
+
         // One permit per role-definition row, compiled from the row's Cedar
         // text verbatim (the text's action side is an explicit action list;
         // its principal side is the flattened per-request grants the loader

@@ -10,10 +10,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useRevokeCLISession } from "@/lib/hooks";
+import { CredentialRestrictionBadges } from "@/components/credentials/credential-restriction-badges";
 import { toast } from "sonner";
 import type { CLISession } from "@/types/api";
 
@@ -73,7 +73,7 @@ export function CLISessionTable({ sessions, isLoading }: CLISessionTableProps) {
         <TableRow className="border-border hover:bg-transparent">
           <TableHead className="text-muted-foreground font-medium">Device</TableHead>
           <TableHead className="text-muted-foreground font-medium">Token</TableHead>
-          <TableHead className="text-muted-foreground font-medium">Scopes</TableHead>
+          <TableHead className="text-muted-foreground font-medium">Access</TableHead>
           <TableHead className="text-muted-foreground font-medium">Signed In</TableHead>
           <TableHead className="text-muted-foreground font-medium">Last Used</TableHead>
           <TableHead className="text-muted-foreground font-medium">Expires</TableHead>
@@ -99,17 +99,7 @@ export function CLISessionTable({ sessions, isLoading }: CLISessionTableProps) {
               {session.accessTokenPrefix}
             </TableCell>
             <TableCell>
-              <div className="flex flex-wrap gap-1">
-                {session.scopes.map((scope) => (
-                  <Badge
-                    key={scope}
-                    variant="secondary"
-                    className="bg-muted text-foreground"
-                  >
-                    {scope}
-                  </Badge>
-                ))}
-              </div>
+              <CredentialRestrictionBadges restriction={session.restriction} />
             </TableCell>
             <TableCell className="text-muted-foreground text-sm">
               {session.createdAt

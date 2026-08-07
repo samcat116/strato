@@ -72,15 +72,12 @@ struct VNCWebSocketController: RouteCollection {
             throw Abort(.unauthorized, reason: "Authentication required")
         }
 
-        // A graphics console is a keyboard and a mouse: unambiguously a write
-        // surface, reached over methods `APIKeyScopeMiddleware` would otherwise
-        // score as read-only. Same carve-out the serial console makes.
-        if req.isAPIKeyAuthenticated, req.apiKey?.grants(.write) != true {
-            throw Abort(.forbidden, reason: "This API key lacks the required 'write' scope for the console")
-        }
-
         // Authorize before loading the VM, so unauthorized users cannot probe
-        // arbitrary VM UUIDs by telling the failure modes apart.
+        // arbitrary VM UUIDs by telling the failure modes apart. A graphics
+        // console is a keyboard and a mouse, and `vm:viewConsole` says so — a
+        // restricted credential is intersected against that action rather than
+        // against the request's HTTP method (STR-115), which is what the
+        // scope-era carve-out here had to approximate.
         guard try await req.can("view_console", on: "virtual_machine", id: vmId.uuidString) else {
             req.logger.warning(
                 "Graphics console access denied",

@@ -58,6 +58,28 @@ extension Request {
     var isAPIKeyAuthenticated: Bool {
         return apiKey != nil
     }
+
+    /// The credential this request authenticated with, if it was a bearer
+    /// credential that can carry a restriction. Nil for a session cookie
+    /// (the user is present in person) and for an agent's JWT-SVID (a workload
+    /// identity names a principal and never narrows one).
+    ///
+    /// The three bearer authenticators guard on disjoint token prefixes
+    /// (`sk_` / `st_` / compact JWS), so at most one of these is ever set.
+    var credential: CredentialReference? {
+        if let apiKey { return CredentialReference(kind: .apiKey, id: apiKey.id) }
+        if let cliSession { return CredentialReference(kind: .cliSession, id: cliSession.id) }
+        return nil
+    }
+
+    /// What this request's credential permits (STR-115). `.unrestricted` when
+    /// there is no credential to narrow — the authenticators already hold the
+    /// full row, so this costs no query.
+    var credentialRestriction: CredentialRestriction {
+        if let apiKey { return apiKey.restriction }
+        if let cliSession { return cliSession.restriction }
+        return .unrestricted
+    }
 }
 
 // MARK: - Bearer Authorization Header Authenticator
@@ -77,70 +99,57 @@ struct BearerAuthorizationHeaderAuthenticator: AsyncMiddleware {
     }
 }
 
-// MARK: - API Key Scope Enforcement
+// MARK: - Credential restriction backstop
 
-/// Enforces an API key's scopes at request time.
+/// The one thing a credential restriction cannot be enforced by the evaluator:
+/// a mutation on a route that never asks the evaluator anything.
 ///
-/// Scopes were validated when a key was created but never checked afterward, so
-/// a key minted as read-only still wielded the full write/admin power of its
-/// owning user (issue #173). This middleware closes that gap: for any request
-/// authenticated with an API key it derives the scope the HTTP method requires
-/// (`read` for safe methods, `write` for mutations) and rejects the request
-/// with 403 when the key lacks it. `admin` is a superset that grants everything.
+/// A restriction is `bindings ∩ restriction`, evaluated inside Cedar
+/// (STR-115) — so on every route the evaluator gates, this middleware has
+/// nothing to do. The exceptions are the route classes that authorize by
+/// construction rather than by decision: `loginOnly` (the caller's own API
+/// keys, passkeys and OAuth sessions — row-scoped to their user record) and
+/// `isPublic` (registration, the device-grant surface). Those handlers never
+/// name an action, so there is no question to ask Cedar and no restriction to
+/// intersect; a restricted credential mutating through them would slip both
+/// systems.
 ///
-/// Requests that are not API-key authenticated (session cookie, dev bypass, or
-/// no credentials at all) carry no `request.apiKey` and pass through untouched.
+/// The concrete escalation this stops: `POST /api/api-keys` is `loginOnly`, so
+/// without this a credential restricted to `vm:read` could mint an
+/// unrestricted one.
 ///
-/// A refusal here is an authorization denial the Cedar evaluator never sees,
-/// so it is recorded in `iam_decision_logs` as `scope_denied` before the 403
-/// is thrown — otherwise it would be the one kind of denial with no decision
-/// row behind it (STR-116).
-struct APIKeyScopeMiddleware: AsyncMiddleware {
+/// Reads pass. `loginOnly` reads are the caller's own rows, and denying a
+/// restricted credential its own key list would break `strato` without
+/// protecting anything.
+struct CredentialRestrictionMiddleware: AsyncMiddleware {
     func respond(to request: Request, chainingTo next: AsyncResponder) async throws -> Response {
-        let required = APIKeyScope.required(for: request.method)
-
-        if let apiKey = request.apiKey, !apiKey.grants(required) {
-            await recordDenial(
-                request: request,
-                denial: CredentialScopeDenial(
-                    credentialType: "api_key",
-                    credentialID: apiKey.id,
-                    requiredScope: required.rawValue
-                ))
-            throw Abort(
-                .forbidden,
-                reason: "API key lacks the required '\(required.rawValue)' scope for this operation"
-            )
+        guard !request.credentialRestriction.isUnrestricted else {
+            return try await next.respond(to: request)
+        }
+        switch request.method {
+        case .GET, .HEAD, .OPTIONS:
+            return try await next.respond(to: request)
+        default:
+            break
         }
 
-        // CLI access tokens carry the scopes the user approved at login and
-        // are enforced identically.
-        if let cliSession = request.cliSession, !cliSession.grants(required) {
-            await recordDenial(
-                request: request,
-                denial: CredentialScopeDenial(
-                    credentialType: "cli_session",
-                    credentialID: cliSession.id,
-                    requiredScope: required.rawValue
-                ))
-            throw Abort(
-                .forbidden,
-                reason: "CLI session lacks the required '\(required.rawValue)' scope for this operation"
-            )
+        let reason: CredentialDenialReason
+        switch AuthorizationMiddleware.classify(request: request) {
+        case .loginOnly:
+            reason = .loginOnlyMutation
+        case .isPublic:
+            reason = .publicMutation
+        case .resource, .handlerChecked:
+            // The evaluator sees this mutation and intersects the restriction
+            // itself, with a real decision row behind whatever it answers.
+            return try await next.respond(to: request)
+        case nil:
+            // An unclassified path is denied by `AuthorizationMiddleware`
+            // anyway; let it produce that denial rather than shadowing it.
+            return try await next.respond(to: request)
         }
 
-        return try await next.respond(to: request)
-    }
-
-    private func recordDenial(request: Request, denial: CredentialScopeDenial) async {
-        // The acting principal's own subject spelling, so the row matches every
-        // other decision-log subject rather than reconstructing the user UUID
-        // here and drifting if that convention ever changes.
-        let subject = request.actingPrincipal?.subject ?? ""
-        await request.application.iamDecisionRecorder.recordScopeDenial(
-            subject: subject,
-            denial: denial,
-            context: IAMCheckContext(
-                path: request.url.path, method: request.method.rawValue, requestID: request.id))
+        await request.recordCredentialRestrictionDenial(reason)
+        throw Abort(.forbidden, reason: reason.deniedReason)
     }
 }
