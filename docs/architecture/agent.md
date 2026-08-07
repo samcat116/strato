@@ -781,6 +781,15 @@ Reads are answered entirely from here, with no control-plane round trip —
 the same fail-static posture as the rest of the reconciler, and deliberate,
 because a guest that cannot read its metadata may fail to boot.
 
+**That guarantee holds across a control-plane outage, for the life of the
+agent process — not across an agent restart.** The store is in memory while
+the VM manifest is durable, so a restarted agent re-adopts running VMs it can
+serve nothing for until the first sync lands, and indefinitely if the control
+plane is unreachable then. Harmless only because nothing serves reads yet:
+the listener (STR-56) has to close it, either by persisting the store beside
+the manifest or by refusing to answer until the first sync has been applied.
+Serving a guest a confidently empty document is worse than making it wait.
+
 Three rules keep it honest, and each is a place the obvious implementation
 would be wrong:
 
@@ -801,13 +810,20 @@ would be wrong:
   wire version, since an address outlives the VM it was allocated to and the
   IMDS identifies its caller by source address; a tombstoned teardown drops
   it only once the delete has actually converged, so a teardown the
-  blast-radius guard refused keeps serving. That second withdrawal is *not*
-  generation guarded — a teardown is authorized from the observed generation
-  the agent reported, which lags the sync generations the store records
-  whenever convergence is failing — but it keeps the high-water mark and
-  remembers the teardown, so no replay resurrects the payload. Withdrawn
-  records are kept rather than deleted for exactly that guard. A VM the sync
-  merely *omits* keeps its metadata (STR-98: omission is not an instruction).
+  blast-radius guard refused keeps serving. The two therefore sit on opposite
+  sides of the delete, and deliberately: the `.absent` withdrawal *leads* the
+  VM off the host because it must also cover the VM that was already gone
+  when the sync arrived — which plans no work item to hook — so a VM whose
+  delete keeps failing is still running with its metadata already withdrawn.
+  That is the safe end of the trade; the other end serves a released VM's SSH
+  keys and user data to whoever next holds its address. The teardown
+  withdrawal is also *not* generation guarded, because a teardown is
+  authorized from the observed generation the agent reported, which lags the
+  sync generations the store records whenever convergence is failing. Both
+  withdrawals seal their generation, so only a strictly newer sync can serve
+  the VM again, and withdrawn records are kept rather than deleted for
+  exactly that guard. A VM the sync merely *omits* keeps its metadata
+  (STR-98: omission is not an instruction).
 
 The payload half is gated on `supportsInstanceMetadata(senderVersion)` for
 the `networks`/`sandboxes` reason: from a v26+ control plane a nil `metadata`

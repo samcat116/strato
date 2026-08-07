@@ -573,13 +573,16 @@ public actor Reconciler {
     private var teardownRefusal: ObservedTeardownRefusal?
 
     /// `metadataStore` is passed in rather than owned, because the reconciler
-    /// only writes it — the guest-facing listener reads the same instance.
+    /// only writes it — the guest-facing listener reads the same instance. It
+    /// is required rather than defaulted for exactly that reason: a reconciler
+    /// handed its own private store would write metadata nobody can serve, and
+    /// nothing about that failure is visible from either side.
     public init(
         actuator: any ReconcileActuator,
         queue: SerialTaskQueue,
         logger: Logger,
         teardownGuard: TeardownGuard = TeardownGuard(),
-        metadataStore: MetadataStore = MetadataStore()
+        metadataStore: MetadataStore
     ) {
         self.actuator = actuator
         self.queue = queue
@@ -920,7 +923,12 @@ public actor Reconciler {
     ///   leaving this host: the IMDS identifies its caller by source address,
     ///   and an address outlives the VM it was allocated to. This also covers
     ///   the VM that was already gone when the sync arrived, for which the
-    ///   planner has no work to do and therefore no teardown to hook.
+    ///   planner has no work to do and therefore no teardown to hook — and it
+    ///   is why this withdrawal *leads* the VM off the host while the
+    ///   tombstoned one trails it. The consequence is deliberate: a VM whose
+    ///   delete keeps failing is still running with its metadata already gone,
+    ///   which is the safe end of a trade whose other end serves a released
+    ///   VM's SSH keys and user data to whoever next holds its address.
     /// * Otherwise the payload is written only when the sender speaks the
     ///   field, so that an older control plane's silence leaves what this host
     ///   serves alone.
@@ -928,14 +936,29 @@ public actor Reconciler {
     /// Staleness is the store's own guard rather than `lastApplied`, which
     /// tracks convergence and so lags behind: a VM whose create keeps failing
     /// holds `lastApplied` still while generations advance, and every one of
-    /// those syncs would look equally current to a guard reading it.
+    /// those syncs would look equally current to a guard reading it. A refused
+    /// write is logged rather than swallowed — "the metadata the operator
+    /// edited never took" is otherwise invisible in a service with no request
+    /// log of its own.
     private func recordMetadata(_ desired: [DesiredVMState], includeMetadata: Bool) async {
         for entry in desired {
+            let outcome: MetadataWriteOutcome
             if entry.wantsAbsent {
-                await metadataStore.apply(nil, generation: entry.generation, for: entry.vmId)
+                outcome = await metadataStore.withdraw(
+                    entry.vmId, generation: entry.generation, because: .desiredAbsent)
             } else if includeMetadata {
-                await metadataStore.apply(entry.metadata, generation: entry.generation, for: entry.vmId)
+                outcome = await metadataStore.apply(entry.metadata, generation: entry.generation, for: entry.vmId)
+            } else {
+                continue
             }
+            guard case .stale(let recorded) = outcome else { continue }
+            logger.debug(
+                "Ignoring stale instance metadata; a newer sync is already recorded for this VM",
+                metadata: [
+                    "vmId": .string(entry.vmId.uuidString),
+                    "generation": .stringConvertible(entry.generation),
+                    "recordedGeneration": .stringConvertible(recorded),
+                ])
         }
     }
 
@@ -1027,8 +1050,16 @@ public actor Reconciler {
             // when the tombstone is planned is what keeps a teardown the
             // blast-radius guard refused from silently blinding a VM this agent
             // deliberately kept running.
+            //
+            // Reading `.delete` as "the VM is gone" rests on it never sharing
+            // an item with the steps that would put it back: every planner site
+            // emits `[.delete]` alone, because there is no recreate flow. A
+            // future one — say a resize that cannot happen in place planning
+            // `delete` then `create` — must withdraw from the delete's own
+            // completion instead, or it would blind a VM that is still here,
+            // and the withdrawal's seal would hold until the generation moves.
             if item.kind == .vm, item.steps.contains(.delete), let vmId = UUID(uuidString: item.id) {
-                await metadataStore.withdraw(vmId, generation: item.generation)
+                await metadataStore.withdraw(vmId, generation: item.generation, because: .tornDown)
             }
             lastApplied[ref] = item.generation
             failures.removeValue(forKey: ref)
