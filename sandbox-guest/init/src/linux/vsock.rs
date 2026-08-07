@@ -261,6 +261,7 @@ fn control_response(request: Request, state: &GuestState) -> Response {
             image_config,
             overrides,
             entropy,
+            hostname,
         } => handle_launch(
             state,
             sandbox_id,
@@ -268,6 +269,7 @@ fn control_response(request: Request, state: &GuestState) -> Response {
             image_config,
             overrides,
             entropy,
+            hostname,
         ),
         Request::Reidentify {
             expected_sandbox_id,
@@ -317,6 +319,7 @@ fn control_response(request: Request, state: &GuestState) -> Response {
 /// swap to success is what keeps an interrupted launch recoverable (a host
 /// that reconnects later still sees template identity + `held` and can
 /// retry the launch or demote).
+#[allow(clippy::too_many_arguments)]
 fn handle_launch(
     state: &GuestState,
     sandbox_id: String,
@@ -324,6 +327,7 @@ fn handle_launch(
     image_config: Box<ImageConfig>,
     overrides: Box<ProcessOverrides>,
     entropy: Option<String>,
+    hostname: Option<String>,
 ) -> Response {
     {
         let mut s = state.status.lock().expect("status poisoned");
@@ -342,6 +346,16 @@ fn handle_launch(
     // because the reseed did — the proper reseed story is #427.
     if let Some(b64) = entropy.as_deref() {
         seed_entropy(b64);
+    }
+    // Adopt the restored-into sandbox's hostname before the workload starts,
+    // so it sees the same name a cold boot would have given it. Best effort
+    // for the same reason as the reseed, and applied before the identity swap
+    // below because a failure here must leave the guest recoverably `held`
+    // rather than half-renamed.
+    if let Some(hostname) = hostname.as_deref() {
+        if let Err(e) = super::net::set_hostname(hostname) {
+            eprintln!("[sandbox-init] could not set hostname '{hostname}' on launch: {e}");
+        }
     }
 
     let process = match config::resolve_process(&image_config, &overrides) {
@@ -430,7 +444,7 @@ fn handle_reidentify(
             };
         }
     };
-    if let Err(e) = set_guest_hostname(hostname) {
+    if let Err(e) = crate::linux::net::set_hostname(hostname) {
         return Response::Error {
             message: format!("set hostname failed: {e}"),
         };
@@ -460,18 +474,6 @@ fn handle_reidentify(
     s.sandbox_id = sandbox_id;
     s.nonce = identity_nonce;
     Response::Reidentified
-}
-
-fn set_guest_hostname(hostname: &str) -> Result<(), String> {
-    if hostname.is_empty() || hostname.len() > 63 || hostname.as_bytes().contains(&0) {
-        return Err("hostname must contain 1...63 non-NUL bytes".to_string());
-    }
-    let rc = unsafe { libc::sethostname(hostname.as_ptr().cast(), hostname.len()) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error().to_string())
-    }
 }
 
 fn reset_machine_id(entropy: &[u8]) -> Result<(), String> {

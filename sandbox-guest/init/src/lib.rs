@@ -3,16 +3,20 @@
 //! The binary (`src/main.rs`) is a Linux-only PID-1 init that boots inside a
 //! Firecracker microVM. This library holds the parts that carry no Linux
 //! syscall dependency — the config-drive format, the OCI process-config merge,
-//! and the vsock control protocol — so they can be unit-tested on any host.
+//! the vsock control protocol, and the resolver files guest networking writes
+//! into the rootfs — so they can be unit-tested on any host.
 //!
 //! Boot contract (produced host-side by the sandbox runtime, issue #421):
 //!   * kernel + initramfs (this init) via Firecracker `boot-source`;
 //!   * `/dev/vda` — the flattened container rootfs (issue #418), left pristine;
 //!   * `/dev/vdb` — a read-only config drive carrying [`config::GuestConfig`];
 //!   * a vsock device the host connects to for [`protocol`] control ops,
-//!     exec sessions, and workload-log follow streams (backed by [`logbuf`]).
+//!     exec sessions, and workload-log follow streams (backed by [`logbuf`]);
+//!   * optionally one virtio-net NIC, configured statically from the config
+//!     drive's network block (see [`net`] and `linux::net`).
 
 pub mod config;
 pub mod identity;
 pub mod logbuf;
+pub mod net;
 pub mod protocol;
