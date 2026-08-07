@@ -31,6 +31,23 @@ enum SSFValidation {
     /// endpoints — a compromised transmitter must not be able to point the
     /// recurring sweep at internal services either.
     static func validateTransmitterURL(_ raw: String, label: String = "transmitterURL") throws {
+        try validateTransmitterURL(
+            raw,
+            label: label,
+            allowedHosts: Environment.get("SSF_TRANSMITTER_ALLOWED_HOSTS")
+                .map { Set(OIDCValidation.parseAllowList($0)) } ?? OIDCValidation.allowedHosts(),
+            allowedSuffixes: Environment.get("SSF_TRANSMITTER_ALLOWED_SUFFIXES")
+                .map(OIDCValidation.parseAllowList) ?? OIDCValidation.allowedDomainSuffixes())
+    }
+
+    /// The rule itself, with the lists passed in — so it can be exercised
+    /// without reaching for process environment that other suites share.
+    static func validateTransmitterURL(
+        _ raw: String,
+        label: String,
+        allowedHosts: Set<String>,
+        allowedSuffixes: [String]
+    ) throws {
         guard let url = URL(string: raw),
             url.scheme?.lowercased() == "https",
             let host = url.host?.lowercased()
@@ -38,14 +55,16 @@ enum SSFValidation {
             throw Abort(.unprocessableEntity, reason: "\(label) must be a valid HTTPS URL")
         }
 
-        let allowedHosts =
-            Environment.get("SSF_TRANSMITTER_ALLOWED_HOSTS")
-            .map { Set(OIDCValidation.parseAllowList($0)) } ?? OIDCValidation.allowedHosts()
-        let allowedSuffixes =
-            Environment.get("SSF_TRANSMITTER_ALLOWED_SUFFIXES")
-            .map(OIDCValidation.parseAllowList) ?? OIDCValidation.allowedDomainSuffixes()
-
-        guard allowedHosts.contains(host) || allowedSuffixes.contains(where: { host.hasSuffix($0) })
+        // Label-boundary matching, shared with the OIDC allow-list rather than
+        // re-spelled: these lists default to the OIDC ones, so an operator who
+        // sets `OIDC_DISCOVERY_ALLOWED_SUFFIXES=example.com` configures both —
+        // and a bare `hasSuffix` here would keep allowing `evilexample.com`
+        // through SSF after the OIDC path stopped.
+        guard
+            allowedHosts.contains(where: { $0.lowercased() == host })
+                || allowedSuffixes.contains(where: {
+                    OIDCValidation.hostMatchesSuffix(host, suffix: $0)
+                })
         else {
             throw Abort(
                 .unprocessableEntity,

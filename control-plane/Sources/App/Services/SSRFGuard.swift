@@ -41,10 +41,22 @@ enum SSRFGuard {
     ///
     /// Off by default (production). The redirect tests fetch from `127.0.0.1`
     /// and local dev mirrors are commonly private, so `.testing`/`.development`
-    /// allow them, as does an explicit `IMAGE_FETCH_ALLOW_PRIVATE_HOSTS=true`
+    /// allow them, as does an explicit `OUTBOUND_FETCH_ALLOW_PRIVATE_HOSTS=true`
     /// opt-out for operators who run an internal mirror on purpose.
+    ///
+    /// The name matters: this one switch governs **every** guarded fetch — image
+    /// downloads, OCI registry calls, webhook deliveries, and the OIDC token
+    /// exchange that carries a decrypted client secret — and turning it on also
+    /// turns off the connection pin, because there is then no approved address
+    /// to pin to. `IMAGE_FETCH_ALLOW_PRIVATE_HOSTS` is still honored as a
+    /// deprecated alias so existing deployments keep working, but it reads as
+    /// image-scoped and isn't: an operator enabling it for an internal mirror
+    /// would have no hint they also opened the OIDC path.
     static func allowsPrivateHosts(for environment: Environment) -> Bool {
-        if let override = Environment.get("IMAGE_FETCH_ALLOW_PRIVATE_HOSTS").flatMap(Bool.init) {
+        let override =
+            Environment.get("OUTBOUND_FETCH_ALLOW_PRIVATE_HOSTS")
+            ?? Environment.get("IMAGE_FETCH_ALLOW_PRIVATE_HOSTS")
+        if let override = override.flatMap(Bool.init) {
             return override
         }
         return environment == .testing || environment == .development
@@ -53,9 +65,16 @@ enum SSRFGuard {
     /// Validates that `url` is safe to fetch server-side, returning the IP
     /// literals that passed validation (empty when private hosts are allowed).
     ///
-    /// Requires an http/https URL with a host, and — unless private hosts are
-    /// allowed for this environment — that every address the host resolves to
-    /// is a routable public address. Throws `BlockedHostError` otherwise.
+    /// Requires an http/https URL with a host and no embedded credentials, and
+    /// — unless private hosts are allowed for this environment — that every
+    /// address the host resolves to is a routable public address. Throws
+    /// `BlockedHostError` otherwise.
+    ///
+    /// The credential rule lives here, not only in `GuardedHTTPClient`, so that
+    /// the create-time pre-flight rejects exactly what the fetch will: a
+    /// `user:pass@host` webhook URL accepted at create time would otherwise be
+    /// stored, fail every delivery attempt, and auto-disable the subscription
+    /// days later with no signal the operator could act on.
     ///
     /// Resolution runs on `threadPool` because `getaddrinfo` is a blocking
     /// syscall: called inline it would park a NIO event-loop thread (or a
@@ -70,6 +89,9 @@ enum SSRFGuard {
         }
         guard let host = url.host, !host.isEmpty else {
             throw BlockedHostError(reason: "Source URL is missing a host")
+        }
+        guard url.user == nil, url.password == nil else {
+            throw BlockedHostError(reason: "Source URL must not embed credentials")
         }
 
         if allowsPrivateHosts(for: environment) {

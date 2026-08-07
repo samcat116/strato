@@ -352,6 +352,14 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             ) { response -> HopOutcome in
                 // 3xx with a Location: resolve against the current URL and loop,
                 // so the next hop is validated and pinned before it is connected.
+                //
+                // The redirect's own body is deliberately left unread. The
+                // streaming contract is consume-or-cancel, and this is the
+                // cancel: returning without iterating drops the body sequence,
+                // and the guarded client then shuts this hop's client down —
+                // which closes the connection rather than leaving a half-read
+                // response holding it. Reading a redirect body would mean
+                // buffering an attacker-chosen payload for nothing.
                 if (300...399).contains(response.status.code),
                     let location = response.headers.first(name: "location"),
                     let next = URL(string: location, relativeTo: currentURL)?.absoluteURL

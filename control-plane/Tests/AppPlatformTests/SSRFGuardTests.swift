@@ -77,6 +77,23 @@ struct SSRFGuardTests {
         }
     }
 
+    /// A `user:pass@host` URL is refused in every environment, and refused here
+    /// rather than only at fetch time so the create-time 400 rejects exactly
+    /// what the fetch would: a webhook subscription stored with credentials in
+    /// its URL would otherwise fail every delivery and auto-disable itself days
+    /// later, with nothing the owner could act on.
+    @Test("Rejects URLs with embedded credentials, including where private hosts are allowed")
+    func rejectsEmbeddedCredentials() async throws {
+        try await withThreadPool { pool in
+            for environment in [Environment.production, .development] {
+                let url = try #require(URL(string: "https://user:pass@example.com/img"))
+                await #expect(throws: SSRFGuard.BlockedHostError.self) {
+                    try await SSRFGuard.validate(url: url, environment: environment, on: pool)
+                }
+            }
+        }
+    }
+
     /// In `.testing`/`.development`, private hosts are intentionally allowed so
     /// the redirect tests and local dev registries/mirrors work; validation
     /// short-circuits without resolving.

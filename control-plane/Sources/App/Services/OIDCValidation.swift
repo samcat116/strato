@@ -401,7 +401,7 @@ struct OIDCValidation {
         let isHostAllowed =
             allowedHosts().contains { $0.lowercased() == lowercasedHost }
             || allowedDomainSuffixes().contains { hostMatchesSuffix(host, suffix: $0) }
-            || perProviderHosts.contains(host)
+            || perProviderHosts.contains { $0.lowercased() == lowercasedHost }
         guard isHostAllowed else {
             throw Abort(
                 .badRequest,

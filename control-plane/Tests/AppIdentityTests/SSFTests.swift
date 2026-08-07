@@ -788,3 +788,52 @@ final class UserSecurityMiddlewareTests {
         }
     }
 }
+
+// MARK: - Transmitter URL allow-list
+
+/// The transmitter URL is org-admin supplied and drives server-side fetches
+/// (discovery, stream management, polling) over the *shared* HTTP client, so
+/// this allow-list is the only gate on that path — there is no address
+/// classification or connection pin behind it, unlike the guarded fetches.
+/// That makes the matching rule load-bearing, and it is exercised through the
+/// list-taking overload so no process-wide environment is disturbed.
+@Suite("SSF Transmitter URL Validation")
+struct SSFTransmitterURLValidationTests {
+    private func validate(_ url: String, suffixes: [String], hosts: Set<String> = []) throws {
+        try SSFValidation.validateTransmitterURL(
+            url, label: "transmitterURL", allowedHosts: hosts, allowedSuffixes: suffixes)
+    }
+
+    /// The trap: `SSF_TRANSMITTER_ALLOWED_SUFFIXES` defaults to the OIDC suffix
+    /// list, so an operator who writes `example.com` there (or in
+    /// `OIDC_DISCOVERY_ALLOWED_SUFFIXES`, which feeds this) must not thereby
+    /// allow `evilexample.com` to receive stream-management calls.
+    @Test("A dotless suffix entry does not match a lookalike domain")
+    func dotlessSuffixMatchesOnLabelBoundary() throws {
+        try validate("https://events.example.com/ssf", suffixes: ["example.com"])
+        try validate("https://example.com/ssf", suffixes: ["example.com"])
+
+        #expect(throws: (any Error).self) {
+            try self.validate("https://evilexample.com/ssf", suffixes: ["example.com"])
+        }
+    }
+
+    @Test("A leading-dot entry still matches subdomains only")
+    func leadingDotSuffixMatchesSubdomains() throws {
+        try validate("https://events.example.com/ssf", suffixes: [".example.com"])
+
+        #expect(throws: (any Error).self) {
+            try self.validate("https://evilexample.com/ssf", suffixes: [".example.com"])
+        }
+    }
+
+    @Test("Plaintext and unlisted hosts are refused")
+    func rejectsPlaintextAndUnlistedHosts() throws {
+        #expect(throws: (any Error).self) {
+            try self.validate("http://events.example.com/ssf", suffixes: ["example.com"])
+        }
+        #expect(throws: (any Error).self) {
+            try self.validate("https://169.254.169.254/ssf", suffixes: ["example.com"])
+        }
+    }
+}

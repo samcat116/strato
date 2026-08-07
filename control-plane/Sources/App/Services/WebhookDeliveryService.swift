@@ -233,6 +233,19 @@ final class WebhookDeliveryService: @unchecked Sendable {
                 error: "Endpoint answered HTTP \(statusCode)", at: now, on: db)
         } catch {
             delivery.responseStatus = nil
+            // A guard refusal is a property of the *subscription*, not of this
+            // attempt: retrying eight times and auto-disabling days later
+            // wouldn't tell the owner why. Rows predating the create-time
+            // credential check are the case that matters — say so once per
+            // attempt, naming the subscription.
+            if let blocked = error as? SSRFGuard.BlockedHostError {
+                logger.warning(
+                    "Webhook target refused by the outbound guard",
+                    metadata: [
+                        "subscriptionId": .string(delivery.$subscription.id.uuidString),
+                        "reason": .string(blocked.reason),
+                    ])
+            }
             try? await recordFailure(
                 delivery, subscription: subscription,
                 error: String("\(error)".prefix(500)), at: now, on: db)

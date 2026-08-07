@@ -3,6 +3,7 @@ import Foundation
 import NIOCore
 import NIOHTTP1
 import NIOPosix
+import NIOSSL
 import Vapor
 
 /// The single outbound path for server-side fetches whose destination a tenant
@@ -52,6 +53,13 @@ final class GuardedHTTPClient: Sendable {
     private let app: Application
     private let validator: AddressValidator
 
+    /// TLS settings for the pinned clients. Nil in production (AsyncHTTPClient's
+    /// defaults: the system trust store, full hostname verification). A seam so
+    /// tests can trust a throwaway CA and assert the load-bearing property of
+    /// the whole design — that certificates are still verified against the
+    /// *hostname* while only resolution is overridden.
+    private let tlsConfiguration: TLSConfiguration?
+
     /// Ceiling on a buffered response body. The buffered API serves control
     /// documents — JWKS, OIDC token/UserInfo payloads, OCI manifests — none of
     /// which are anywhere near this size; bulk transfers use the streaming API,
@@ -74,8 +82,13 @@ final class GuardedHTTPClient: Sendable {
     /// routable address that takes longer than this is already broken.
     static let connectTimeout: TimeAmount = .seconds(5)
 
-    init(app: Application, validator: AddressValidator? = nil) {
+    init(
+        app: Application,
+        validator: AddressValidator? = nil,
+        tlsConfiguration: TLSConfiguration? = nil
+    ) {
         self.app = app
+        self.tlsConfiguration = tlsConfiguration
         self.validator =
             validator
             ?? { url in
@@ -93,9 +106,13 @@ final class GuardedHTTPClient: Sendable {
     /// a scripted client installed with `app.clients.use` still work in tests.
     func send(_ request: ClientRequest) async throws -> ClientResponse {
         let target = try await prepare(request.url.string)
+        let timeout = request.timeout ?? Self.defaultTimeout
         var request = request
         request.url = URI(string: target.requestURL)
-        let timeout = request.timeout ?? Self.defaultTimeout
+        // Stamp the resolved timeout rather than leaving the fallback on Vapor's
+        // default: a fetch that hangs should hang for the same length of time
+        // whichever path it took, or the local repro won't match production.
+        request.timeout = timeout
 
         guard target.needsPinning else {
             return try await app.client.send(request)
@@ -202,7 +219,10 @@ final class GuardedHTTPClient: Sendable {
     /// on case alone, and rejects embedded credentials outright: a `user:pass@`
     /// URL is where the two parsers are most likely to disagree about which
     /// part is the host, and no guarded fetch has a reason to carry credentials
-    /// in the URL.
+    /// in the URL. `SSRFGuard.validate` enforces the same credential rule, so
+    /// the create-time pre-flights refuse what this would refuse; the check is
+    /// repeated here because it must hold even where a caller supplies its own
+    /// validator.
     private func prepare(_ raw: String) async throws -> Target {
         guard var components = URLComponents(string: raw) else {
             throw SSRFGuard.BlockedHostError(reason: "Fetch URL could not be parsed")
@@ -224,6 +244,23 @@ final class GuardedHTTPClient: Sendable {
         }
         guard let normalized = components.url else {
             throw SSRFGuard.BlockedHostError(reason: "Fetch URL could not be normalized")
+        }
+
+        // Fail closed on parser disagreement. The host above came from
+        // `URLComponents`; AsyncHTTPClient re-parses the string it is handed
+        // with `URL(string:)` and keys `dnsOverride` on *that* parse's host. The
+        // two agree today, which is why the pin lands — but if they ever didn't,
+        // the override key would miss and the fetch would proceed unpinned while
+        // validation still "passed". Refusing is the only safe direction: an
+        // unpinned fetch is exactly the bug this type exists to prevent.
+        // Literal hosts are exempt because they are never pinned, and the two
+        // parsers spell IPv6 brackets differently across platforms.
+        if !hostIsIPLiteral {
+            let requestHost = URL(string: normalized.absoluteString)?.host?.lowercased()
+            guard requestHost == lowercasedHost else {
+                throw SSRFGuard.BlockedHostError(
+                    reason: "Fetch URL host is ambiguous and cannot be safely pinned")
+            }
         }
 
         let approvedAddresses = try await validator(normalized)
@@ -256,6 +293,16 @@ final class GuardedHTTPClient: Sendable {
     ///
     /// Each attempt gets the caller's full timeout budget, so a fetch that
     /// fails over can outrun it — bounded by `connectTimeout` per dead address.
+    ///
+    /// KNOWN COST: a client per attempt means no connection reuse. `dnsOverride`
+    /// is fixed at construction, so a pooled client can only be shared by
+    /// requests that pin the same host to the same address — cacheable in
+    /// principle, keyed on (host, address) with a TTL and a shutdown at app
+    /// teardown, but not free. Until then the registry sync pays a handshake per
+    /// call (three per repository: manifest, `/v2/` challenge, token realm) and
+    /// each JWKS refresh pays one, where both previously shared Vapor's pool.
+    /// Correctness first: an unpinned pooled connection is the bug this exists
+    /// to prevent.
     private func withPinnedClient<T>(
         _ target: Target,
         _ body: (HTTPClient) async throws -> T
@@ -268,15 +315,21 @@ final class GuardedHTTPClient: Sendable {
             configuration.redirectConfiguration = .disallow
             configuration.dnsOverride = [target.host: address]
             configuration.timeout.connect = Self.connectTimeout
+            // Resolution is the only thing the override changes: AsyncHTTPClient
+            // carries the original host through as the SNI/verification name, so
+            // the certificate is still checked against the name, not the pin.
+            if let tlsConfiguration {
+                configuration.tlsConfiguration = tlsConfiguration
+            }
             let client = HTTPClient(
                 eventLoopGroupProvider: .shared(app.eventLoopGroup),
                 configuration: configuration)
             do {
                 let value = try await body(client)
-                try? await client.shutdown()
+                await shutdown(client, host: target.host)
                 return value
             } catch {
-                try? await client.shutdown()
+                await shutdown(client, host: target.host)
                 let hasAnotherAddress = index + 1 < target.approvedAddresses.count
                 guard hasAnotherAddress, Self.isConnectionFailure(error) else { throw error }
                 app.logger.debug(
@@ -292,6 +345,21 @@ final class GuardedHTTPClient: Sendable {
         throw lastError
             ?? SSRFGuard.BlockedHostError(
                 reason: "No approved address for host '\(target.host)'")
+    }
+
+    /// Shuts a transient client down, logging rather than discarding the
+    /// failure: a pool that refuses to close leaks event-loop resources for the
+    /// process lifetime, and swallowing the error makes that undiagnosable.
+    /// The shutdown itself must not fail the fetch — the response is already in
+    /// hand — so this never rethrows.
+    private func shutdown(_ client: HTTPClient, host: String) async {
+        do {
+            try await client.shutdown()
+        } catch {
+            app.logger.debug(
+                "Guarded fetch could not shut down its pinned client",
+                metadata: ["host": .string(host), "error": .string("\(error)")])
+        }
     }
 
     /// True only for failures that happened before the request reached the
