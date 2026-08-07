@@ -100,8 +100,7 @@ struct ReconciliationTests {
             edgeNonces
         }
 
-        func recordAppliedEdges(_ item: ReconcileWorkItem) {
-            let applied = AppliedEdgeNonces(applying: item.desiredEdges)
+        func recordAppliedEdges(_ item: ReconcileWorkItem, _ applied: AppliedEdgeNonces) {
             edgeNonces[item.id] = applied
             recordedEdges.append((item.id, applied))
         }
@@ -287,7 +286,12 @@ struct ReconciliationTests {
         let plan = Reconciler.plan(
             desired: [Self.desired(vmId, status: .running, generation: 3)],
             present: [vmId.uuidString: .managed(.running)],
-            lastApplied: [vmId.uuidString: 3]
+            lastApplied: [vmId.uuidString: 3],
+            // Already recorded, so this is purely the converged case. Without
+            // it the planner emits a work-free item to adopt the edge nonces —
+            // covered by `EdgeNonceReconciliationTests`, and beside the point
+            // here.
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()]
         )
         #expect(plan.items.isEmpty)
     }
@@ -809,7 +813,8 @@ struct ReconciliationTests {
             desired: [Self.desiredSized(vmId, generation: 2, cpus: 2)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 2],
-            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()]
         )
         #expect(plan.items.isEmpty)
     }
@@ -853,7 +858,8 @@ struct ReconciliationTests {
             lastApplied: [vmId.uuidString: 2],
             presentSizing: [
                 vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30, balloonTargetBytes: 512 << 20)
-            ]
+            ],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()]
         )
         #expect(plan.items.isEmpty)
     }

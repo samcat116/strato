@@ -45,6 +45,28 @@ public enum WorkloadPresence<Status: Equatable & Sendable>: Equatable, Sendable 
     case quarantined
 }
 
+extension WorkloadPresence {
+    /// Whether this host is actively managing the workload — the only presence
+    /// an edge nonce can be planned or adopted against (STR-151).
+    public var isManaged: Bool {
+        if case .managed = self { return true }
+        return false
+    }
+}
+
+extension WorkloadKind {
+    /// Whether workloads of this kind carry edge nonces (STR-151). Volumes and
+    /// snapshot artifacts are bytes: no run state, so no edges, so no record —
+    /// and the planner must not owe them one, or it would emit an adoption item
+    /// for them on every sync forever.
+    var carriesEdgeNonces: Bool {
+        switch self {
+        case .vm, .sandbox: return true
+        case .volume, .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot: return false
+        }
+    }
+}
+
 public typealias VMPresence = WorkloadPresence<VMStatus>
 public typealias SandboxPresence = WorkloadPresence<SandboxStatus>
 public typealias VolumePresence = WorkloadPresence<ObservedVolumeFacts>
@@ -261,6 +283,17 @@ public struct ReconcileWorkItem: Sendable {
     public let steps: [ReconcileStep]
     /// What the control plane asked for.
     public let target: ReconcileTarget
+    /// What this host will have applied for the workload's edges once this item
+    /// completes (STR-151), or nil when there is nothing to record.
+    ///
+    /// Decided by the *planner*, which is the only place that knows all three
+    /// inputs — the entry's nonces, the existing record, and which edges it
+    /// actually planned — and carried here so the actuator only has to persist
+    /// it. Nil for a volume or artifact (no edges), for an item that adopted an
+    /// orphan (its state was unknown until the runtime reconnected, so its edges
+    /// belong to the next sync) and for one that deleted the workload (there is
+    /// no entry left to record against).
+    public let appliedEdges: AppliedEdgeNonces?
 
     /// The workload id under its historical name from the VM-only reconciler.
     /// VM actuation and the existing tests read this; new kind-aware code
@@ -357,12 +390,20 @@ public struct ReconcileWorkItem: Sendable {
     /// multi-lane items; scheduling reads `laneKeys`.
     public var laneKey: String { laneKeys[0] }
 
-    public init(kind: WorkloadKind, id: String, generation: Int64, steps: [ReconcileStep], target: ReconcileTarget) {
+    public init(
+        kind: WorkloadKind,
+        id: String,
+        generation: Int64,
+        steps: [ReconcileStep],
+        target: ReconcileTarget,
+        appliedEdges: AppliedEdgeNonces? = nil
+    ) {
         self.kind = kind
         self.id = id
         self.generation = generation
         self.steps = steps
         self.target = target
+        self.appliedEdges = appliedEdges
     }
 }
 
@@ -522,21 +563,20 @@ public protocol ReconcileActuator: Sendable {
     /// A workload missing from this map has *no record*, which is emphatically
     /// not "has applied nothing" — see `AppliedEdgeNonces`.
     func observedEdgeNonces() async -> [String: AppliedEdgeNonces]
-    /// Durably record that `item`'s workload has applied every edge nonce its
-    /// desired entry carries (STR-151).
+    /// Durably record the edge nonces `item` has applied (STR-151), as its
+    /// `appliedEdges` decided at plan time.
     ///
     /// Called once per converged item, including one that planned no work,
-    /// because **an edge is consumed by being superseded as much as by being
+    /// because **an edge can be consumed by being superseded as much as by being
     /// performed**: a VM that was asked to reboot and then asked to stop should
     /// end up stopped, not stopped-and-then-surprised-by-a-reboot the next time
-    /// it starts. The reconciler skips it only where recording would be a lie —
-    /// an item that adopted an orphan (whose real state was unknown until the
-    /// runtime reconnected, so its edges are planned on the next sync) or one
-    /// that deleted the workload outright.
+    /// it starts. Which edges that covers is not this method's decision — the
+    /// planner already made it, and a restore it chose to defer is absent from
+    /// `nonces` rather than silently swallowed here.
     ///
     /// Must be cheap when nothing changed: it runs for every converged workload
     /// of every sync.
-    func recordAppliedEdges(_ item: ReconcileWorkItem) async
+    func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) async
     /// Execute one non-adopt step; `item.kind` selects the runtime.
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws
     /// Called after every work item finishes (success or failure) so the agent
@@ -648,7 +688,7 @@ extension ReconcileActuator {
     public func observedEdgeNonces() async -> [String: AppliedEdgeNonces] { [:] }
 
     /// Nothing to write when there is nowhere durable to write it.
-    public func recordAppliedEdges(_ item: ReconcileWorkItem) async {}
+    public func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) async {}
 
     public func adoptSandbox(_ item: ReconcileWorkItem) async throws -> SandboxStatus {
         throw SandboxActuationUnsupportedError()
@@ -1180,7 +1220,7 @@ public actor Reconciler {
             if item.steps.isEmpty {
                 lastApplied[ref] = item.generation
                 failures.removeValue(forKey: ref)
-                if Self.recordsEdges(item) { await actuator.recordAppliedEdges(item) }
+                if let edges = item.appliedEdges { await actuator.recordAppliedEdges(item, edges) }
                 advancedWithoutWork = true
                 continue
             }
@@ -1336,30 +1376,6 @@ public actor Reconciler {
         return result
     }
 
-    /// Whether converging `item` means its workload has applied the edges its
-    /// desired entry carries (STR-151).
-    ///
-    /// Two exclusions, both cases where recording would be a lie the manifest
-    /// then makes permanent:
-    ///
-    /// * **Adoption.** An orphan's real state is unknown until its runtime
-    ///   session is reconnected, so `planCore` deliberately plans no edge for
-    ///   one — and recording here would consume a pending restore without
-    ///   performing it. Skipping leaves the nonce outstanding; the workload is
-    ///   `.managed` by the next sync, which plans the edge properly. That is the
-    ///   one place this stage is slower than the RPC it replaces, and it is the
-    ///   trade the whole design is for: one sync interval of latency instead of
-    ///   a rewind nobody asked for.
-    /// * **Deletion.** There is no manifest entry left to record against.
-    private static func recordsEdges(_ item: ReconcileWorkItem) -> Bool {
-        switch item.target {
-        case .vm, .sandbox:
-            return !item.steps.contains(.adopt) && !item.steps.contains(.delete)
-        case .volume, .snapshot, .tombstone:
-            return false
-        }
-    }
-
     private func shouldExecute(_ item: ReconcileWorkItem) -> Bool {
         let ref = WorkloadRef(item)
         if let running = inFlight[ref], running >= item.generation {
@@ -1458,7 +1474,7 @@ public actor Reconciler {
             // if it was planned as a step, superseded if it was not. Recorded
             // only after the whole item succeeded, so a failed reboot retries
             // on the next sync instead of being silently swallowed.
-            if Self.recordsEdges(item) { await actuator.recordAppliedEdges(item) }
+            if let edges = item.appliedEdges { await actuator.recordAppliedEdges(item, edges) }
             logger.info(
                 "Workload converged to desired state",
                 metadata: [
@@ -1617,7 +1633,8 @@ public actor Reconciler {
             desired: desired, tombstones: tombstones, present: present, lastApplied: lastApplied,
             appliedEdges: appliedEdges)
         addResizes(
-            to: &plan.items, desired: desired, present: present, lastApplied: lastApplied, sizing: presentSizing)
+            to: &plan.items, desired: desired, present: present, lastApplied: lastApplied,
+            sizing: presentSizing, appliedEdges: appliedEdges)
         return plan
     }
 
@@ -1636,7 +1653,8 @@ public actor Reconciler {
         desired: [DesiredVMState],
         present: [String: VMPresence],
         lastApplied: [String: Int64],
-        sizing: [String: VMSizing]
+        sizing: [String: VMSizing],
+        appliedEdges: [String: AppliedEdgeNonces]
     ) {
         guard !sizing.isEmpty else { return }
         for entry in desired where !entry.wantsAbsent {
@@ -1652,12 +1670,19 @@ public actor Reconciler {
 
             if let index = items.firstIndex(where: { $0.kind == .vm && $0.id == id }) {
                 guard items[index].steps.isEmpty else { continue }
+                // The item this replaces may exist *only* to write the edge
+                // record (`planCore`'s adoption case), so carry that decision
+                // over rather than losing it to a resize.
                 items[index] = ReconcileWorkItem(
-                    kind: .vm, id: id, generation: entry.generation, steps: [.resize], target: entry.asTarget)
+                    kind: .vm, id: id, generation: entry.generation, steps: [.resize],
+                    target: entry.asTarget, appliedEdges: items[index].appliedEdges)
             } else {
                 items.append(
                     ReconcileWorkItem(
-                        kind: .vm, id: id, generation: entry.generation, steps: [.resize], target: entry.asTarget))
+                        kind: .vm, id: id, generation: entry.generation, steps: [.resize],
+                        target: entry.asTarget,
+                        appliedEdges: Self.edgesAfter(
+                            entry.edges, applied: appliedEdges[id], planning: [.resize])))
             }
         }
     }
@@ -1800,8 +1825,9 @@ public actor Reconciler {
                 continue  // stale: an older sync must never undo a newer one
             }
 
+            let presence = present[id]
             let steps: [ReconcileStep]
-            switch present[id] {
+            switch presence {
             case .managed(let observed):
                 if entry.wantsAbsent {
                     steps = [.delete]
@@ -1841,13 +1867,38 @@ public actor Reconciler {
                 }
             }
 
+            // What this item will have applied for the workload's edges once it
+            // finishes — nil when there is nothing to record. Computed here,
+            // where the entry's nonces, the existing record and the steps
+            // actually planned are all in hand.
+            let itemEdges: AppliedEdgeNonces? =
+                kind.carriesEdgeNonces && !steps.contains(.adopt) && !steps.contains(.delete)
+                ? Self.edgesAfter(entry.edges, applied: appliedEdges[id], planning: steps)
+                : nil
+
             // Nothing to do and nothing to record — skip entirely.
-            if steps.isEmpty, let applied = lastApplied[id], applied >= entry.generation {
+            //
+            // "Nothing to record" is not the same as "no work", and that
+            // distinction is what closes a window this stage would otherwise
+            // leave open for the life of a workload. A host whose manifest
+            // predates the nonce record adopts on its first *item*; without the
+            // second clause a converged, idle VM never produces one, so the
+            // record stays absent until something else bumps its generation —
+            // and the thing that finally does is usually the very restart the
+            // absent record then swallows. Emitting the empty-step item instead
+            // costs one manifest write per workload, once, and makes the
+            // adoption window exactly one sync (STR-151).
+            let owesEdgeRecord =
+                presence?.isManaged == true && kind.carriesEdgeNonces && appliedEdges[id] == nil
+            if steps.isEmpty, let applied = lastApplied[id], applied >= entry.generation,
+                !owesEdgeRecord
+            {
                 continue
             }
             items.append(
                 ReconcileWorkItem(
-                    kind: kind, id: id, generation: entry.generation, steps: steps, target: entry.asTarget))
+                    kind: kind, id: id, generation: entry.generation, steps: steps,
+                    target: entry.asTarget, appliedEdges: itemEdges))
         }
 
         // Everything on this host the sync did not list: torn down only where
@@ -1915,21 +1966,25 @@ public actor Reconciler {
     ///   predates the field, or a workload it has never converged. Reading that
     ///   as zero would make a re-registered agent replay every reboot and
     ///   restore in the workload's history, rewinding a live guest to a
-    ///   checkpoint from weeks ago. The caller adopts the nonces instead (see
-    ///   `ReconcileActuator.recordAppliedEdges`), which costs at most the one
-    ///   request in flight across the gap and never a replay.
+    ///   checkpoint from weeks ago. The record is written instead, unperformed,
+    ///   by the first item the workload produces — which `planCore` makes sure
+    ///   is the very next sync rather than whenever its generation happens to
+    ///   move next, so the adoption window is one sync and not the life of an
+    ///   idle VM.
     /// * **A boot supersedes a reboot**, and so does anything that leaves the
     ///   workload stopped. A guest built from scratch this sync is at least as
     ///   restarted as a reboot would make it, and rebooting a VM the control
     ///   plane wants shut down is not a smaller version of anything the user
     ///   asked for. Superseded is not deferred: the nonce is consumed either
-    ///   way, or a stop-then-start weeks later would surprise the guest with an
-    ///   ancient reboot.
-    /// * **A boot does not supersede a restore.** Loading a checkpoint needs a
-    ///   process to load it into, so `[.boot, .restore]` is the correct
-    ///   sequence for a stopped VM — and it is what makes "restore after an
-    ///   agent restart" work with no extra message, exactly as the imperative
-    ///   path relied on the sync re-creating the QEMU process first.
+    ///   way (see `edgesAfter`), or a stop-then-start weeks later would surprise
+    ///   the guest with an ancient reboot.
+    /// * **Nothing supersedes a restore — it waits.** A boot does not, because
+    ///   loading a checkpoint needs a process to load it into: `[.boot,
+    ///   .restore]` is the correct sequence for a stopped VM, and it is what
+    ///   makes "restore after an agent restart" work with no extra message. Nor
+    ///   does a stop, for the same reason read the other way — a restore is
+    ///   about *state*, not power, so a power decision cannot answer it. It
+    ///   stays outstanding until the workload is next wanted running.
     ///
     /// Both steps are emitted together when both nonces outrank, reboot first:
     /// restoring last is what leaves the guest in the state the checkpoint
@@ -1940,17 +1995,53 @@ public actor Reconciler {
         after statusSteps: [ReconcileStep],
         wantsRunning: Bool
     ) -> [ReconcileStep] {
-        guard let applied, wantsRunning else { return [] }
+        guard let applied else { return [] }
         var steps: [ReconcileStep] = []
-        if let wanted = edges.rebootGeneration, wanted > (applied.reboot ?? 0),
+        if wantsRunning, let wanted = edges.rebootGeneration, wanted > (applied.reboot ?? 0),
             !statusSteps.contains(.boot)
         {
             steps.append(.reboot)
         }
-        if let restore = edges.restore, restore.generation > (applied.restore ?? 0) {
+        // A restore is guarded by `wantsRunning` too, but *only* as a wait: see
+        // `edgesAfter`, which does not consume a restore it did not plan.
+        if wantsRunning, let restore = edges.restore, restore.generation > (applied.restore ?? 0) {
             steps.append(.restore)
         }
         return steps
+    }
+
+    /// What the host will have applied once an item planning `steps` completes.
+    ///
+    /// This is where "superseded" and "deferred" are told apart, and the two
+    /// edges answer differently — which is the point, because they are different
+    /// kinds of intent:
+    ///
+    /// * **A reboot is always consumed.** Whatever the sync planned, the request
+    ///   has been answered: performed if `.reboot` was planned, superseded
+    ///   otherwise (by a boot that restarts the guest more thoroughly, or by a
+    ///   desired status that wants it stopped, where rebooting is not a smaller
+    ///   version of anything the user asked for). Leaving it outstanding is what
+    ///   would surprise a guest with an ancient restart the next time it starts.
+    /// * **A restore is consumed only when it is performed.** A restore is about
+    ///   *state*, not power — which is exactly why a `.boot` does not supersede
+    ///   one — so a stop landing between the request and the next sync cannot
+    ///   answer it either. It waits instead, and lands as `[.boot, .restore]`
+    ///   whenever the workload is next wanted running. Consuming it there would
+    ///   silently discard a data-integrity request the API had already reported
+    ///   converged.
+    ///
+    /// The one case that consumes everything is **adoption** (`applied == nil`):
+    /// a host with no record cannot tell a request made a moment ago from one
+    /// made months ago, so it writes down what the entry asks for and performs
+    /// none of it. That asymmetry is the no-replay invariant; see
+    /// `AppliedEdgeNonces`.
+    static func edgesAfter(
+        _ edges: DesiredEdges, applied: AppliedEdgeNonces?, planning steps: [ReconcileStep]
+    ) -> AppliedEdgeNonces {
+        guard let applied else { return AppliedEdgeNonces(applying: edges) }
+        return AppliedEdgeNonces(
+            reboot: edges.rebootGeneration ?? applied.reboot,
+            restore: steps.contains(.restore) ? edges.restore?.generation : applied.restore)
     }
 
     /// The steps that take a VM from `observed` to `desired`. Empty when the

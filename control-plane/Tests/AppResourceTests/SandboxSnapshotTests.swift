@@ -566,6 +566,39 @@ final class SandboxSnapshotTests {
         }
     }
 
+    /// Version and capability are two different questions (issue #415): a v34
+    /// agent with no sandbox-snapshot backend reads the nonce and can do nothing
+    /// with it, which would surface as a `degraded` condition an hour later
+    /// rather than a `409` naming the remedy.
+    @Test("Restore is refused when the agent advertises no snapshot backend")
+    func restoreRefusesAgentWithoutSnapshotCapability() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            let agentId = try await placeOnCapableAgent(
+                app: app, sandbox: sandbox, capabilities: ["firecracker"], status: .stopped)
+            let snapshot = SandboxSnapshot(
+                name: "checkpoint",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("capability"))
+            }
+
+            #expect(try await Sandbox.find(sandbox.id, on: app.db)?.restoreGeneration == 0)
+        }
+    }
+
     // MARK: - Quota accounting
 
     @Test("Quota resync counts non-error snapshot sizes into reserved storage")

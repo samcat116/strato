@@ -14,8 +14,11 @@ import Vapor
 /// layout and CPU template included, on a report that is re-sent every
 /// heartbeat rather than a reply that a dropped socket could lose.
 ///
-/// Restore is still imperative: loading a checkpoint back over a live microVM
-/// is an edge rather than a state, and converts to a nonce in STR-151.
+/// Restore followed in stage 9 (STR-151). Loading a checkpoint back over a live
+/// microVM really is an edge rather than a state, so it became one by being
+/// *counted*: `Sandbox.requestRestore` bumps a monotonic nonce naming the
+/// snapshot, and the agent applies it once against its own durable record.
+/// Nothing in this file awaits an agent response any more.
 extension SandboxController {
 
     // MARK: - Create
@@ -240,10 +243,15 @@ extension SandboxController {
         guard let targetAgent = await req.application.agentService.getAgentInfo(agentId) else {
             throw Abort(.conflict, reason: "Sandbox's agent '\(agentId)' is unknown")
         }
+        // Both signals, the issue #415 rule the capture path also follows: the
+        // wire version proves the agent applies the nonce, the capability proves
+        // a backend that can load a checkpoint is usable on that host.
+        //
         // With `sandbox_restore` gone (STR-151) there is no fallback path, and a
         // pre-v34 agent would ignore the nonce and report the bumped generation
-        // as converged — the API claiming a rewind that never happened. Refused
-        // at admission instead, exactly like a capture against a pre-v33 agent.
+        // as converged — the API claiming a rewind that never happened. A host
+        // with no sandbox-snapshot backend fails later still, as a `degraded`
+        // condition an hour after admission. Both are refused here instead.
         guard WireProtocol.supportsEdgeNonces(targetAgent.wireProtocolVersion ?? 0) else {
             throw Abort(
                 .conflict,
@@ -251,6 +259,15 @@ extension SandboxController {
                     "Agent '\(agentId)' is too old to apply restores from the desired-state sync "
                     + "(wire protocol v\(WireProtocol.edgeNonceMinimumVersion) required). Upgrade the agent."
             )
+        }
+        guard targetAgent.capabilities.contains(SnapshotArtifactKind.sandboxSnapshot.agentCapability)
+        else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(agentId)' cannot restore sandbox snapshots (capability "
+                    + "'\(SnapshotArtifactKind.sandboxSnapshot.agentCapability)' not advertised); "
+                    + "upgrade the agent.")
         }
         // Cross-agent restore (issue #428): when the sandbox no longer lives
         // on the agent that took the snapshot, the restore rides the exported

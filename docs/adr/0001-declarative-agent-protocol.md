@@ -494,17 +494,33 @@ agent is involved.
      written down without being performed. Reading a missing record as zero is
      precisely the failure the issue names, and it is not a small one: it would
      have a re-registered agent replay every restore in a VM's history, rewinding
-     a live guest to a checkpoint from weeks ago. The cost of adopting instead is
-     at most the one request in flight across the gap.
-   * **An edge is consumed by being superseded, not only by being performed.** A
-     VM asked to reboot and then asked to stop should end up stopped — not
-     stopped and then surprised by an ancient reboot the next time it starts —
-     so the nonce is recorded on *every* convergence, including one that planned
-     no work at all. A boot supersedes a reboot for the same reason (a guest
-     built from scratch is at least as restarted). A boot deliberately does *not*
-     supersede a restore: loading a checkpoint needs a process to load it into,
-     so `[.boot, .restore]` is the correct sequence for a stopped VM, and it is
-     what makes "restore after an agent restart" work with no extra message.
+     a live guest to a checkpoint from weeks ago.
+
+     Adoption has to be **eager** to be worth anything, which is subtler than it
+     looks and was got wrong first. Writing the record only when an item exists
+     to write it leaves an idle, converged VM with no record indefinitely — its
+     generation is not moving, so it produces no items — and the thing that
+     eventually moves that generation is the user's own restart request, which
+     the still-absent record then swallows while `conditions` report it
+     converged. So a managed workload with no record produces an empty-step item
+     on the very next sync purely to adopt, which costs one manifest write per
+     workload, once, and bounds the window to a single sync.
+   * **A reboot is consumed by being superseded; a restore is not.** A VM asked
+     to reboot and then asked to stop should end up stopped — not stopped and
+     then surprised by an ancient reboot the next time it starts — so the reboot
+     nonce is recorded on *every* convergence, including one that planned no work
+     at all. A boot supersedes a reboot for the same reason (a guest built from
+     scratch is at least as restarted).
+
+     A restore is the other way, from the same premise: it is about *state*, not
+     power. That is why a boot cannot supersede one — loading a checkpoint needs
+     a process to load it into, so `[.boot, .restore]` is the correct sequence
+     for a stopped VM and is what makes "restore after an agent restart" work
+     with no extra message — and, read the other way, why a *stop* cannot answer
+     one either. A restore the planner did not perform is left outstanding and
+     lands whenever the workload is next wanted running. Consuming it there would
+     silently discard a data-integrity request the API had already reported
+     converged.
    * **Adoption defers edges by one sync.** An orphan's real state is unknown
      until its runtime session is reconnected, so the planner emits no edge for
      one and the reconciler records nothing for an item that adopted; the

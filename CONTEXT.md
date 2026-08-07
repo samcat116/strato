@@ -70,11 +70,11 @@ use in code, tests, docs, and review. Architecture-level maps live in
   no principal behind it — the sandbox expiry sweep — and is the one actor
   with no id, because it is not a row.
 
-- **AgentDispatch** — the seam the coordinator depends on to reach agents
-  (`agentIsOnline`, `syncDesiredState`, `performOperationAwaitingResponse`).
-  Production adapter: `AgentService`. Test adapter: an in-memory fake, so the
-  lifecycle is testable through the coordinator's interface without an agent
-  socket or an HTTP round-trip.
+- **AgentDispatch** — the seam a mutation depends on to reach agents
+  (`agentIsOnline`, `syncDesiredState`). Production adapter: `AgentService`.
+  Test adapter: an in-memory fake, so the lifecycle is testable without an agent
+  socket or an HTTP round-trip. `performOperationAwaitingResponse` — the
+  correlated-command half — went with the last verb that used it (STR-151).
 
 ## Desired state
 
@@ -268,5 +268,10 @@ use in code, tests, docs, and review. Architecture-level maps live in
   else made it moot: a stop (the user's later intent wins), or a boot (a guest
   built from scratch is at least as restarted as a reboot would make it). The
   nonce is recorded either way, or a stop-then-start weeks later would surprise
-  the guest with an ancient reboot. A boot deliberately does *not* supersede a
-  restore — a checkpoint needs a process to load into.
+  the guest with an ancient reboot.
+
+  **Only a reboot is ever superseded.** A restore is about *state*, not power,
+  which is why a boot cannot supersede one (a checkpoint needs a process to load
+  into) and, read the other way, why a stop cannot answer one either. An
+  unperformed restore is **deferred**: left outstanding, and applied as
+  `[.boot, .restore]` whenever the workload is next wanted running.

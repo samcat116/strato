@@ -1221,7 +1221,22 @@ struct VMController: RouteCollection {
     /// converged — so the API would tell the user their VM restarted when it
     /// never did. `409` up front is the `supportsSnapshotSync` posture applied
     /// to a verb, and it names the remedy.
-    static func requireEdgeNonceCapableAgent(_ agentId: String?, app: Application) async throws {
+    ///
+    /// `capability` is the second of the two signals issue #415 established, for
+    /// the callers that need it: the version proves the agent *reads* the nonce,
+    /// the capability proves a backend that can realize it is usable on that
+    /// host. A restore needs both — admitting one against a QEMU-less host
+    /// surfaces as a `degraded` condition half an hour later instead of a `409`
+    /// naming the remedy — while a restart needs no snapshot backend and passes
+    /// nil.
+    ///
+    /// Deliberately *not* checked: `status == .online`. The old
+    /// `requireCapableAgent` preflight refused an offline agent because its RPC
+    /// had nowhere to go; a nonce is desired state, so it converges when the
+    /// agent comes back, exactly like start and stop.
+    static func requireEdgeNonceCapableAgent(
+        _ agentId: String?, requiring capability: String? = nil, app: Application
+    ) async throws {
         guard let agentId else {
             throw Abort(.conflict, reason: "VM is not placed on any agent")
         }
@@ -1235,6 +1250,13 @@ struct VMController: RouteCollection {
                     "Agent '\(agentId)' is too old to apply restarts and restores from the desired-state "
                     + "sync (wire protocol v\(WireProtocol.edgeNonceMinimumVersion) required). Upgrade the agent."
             )
+        }
+        if let capability, !agent.capabilities.contains(capability) {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(agentId)' cannot realize this request (capability '\(capability)' not "
+                    + "advertised); upgrade the agent, or place the VM on a host with a backend that can.")
         }
     }
 }

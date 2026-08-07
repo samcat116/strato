@@ -223,7 +223,13 @@ extension VMController {
                 .conflict,
                 reason: "VM cannot be restored in state '\(vm.status.rawValue)'")
         }
-        try await Self.requireEdgeNonceCapableAgent(agentId, app: req.application)
+        // Both signals: the wire version proves the agent applies the nonce,
+        // the capability proves a QEMU backend that can load a checkpoint is
+        // usable on that host (issue #415). The capture path checks the same
+        // pair, so admission is symmetric.
+        try await Self.requireEdgeNonceCapableAgent(
+            agentId, requiring: SnapshotArtifactKind.vmCheckpoint.agentCapability,
+            app: req.application)
 
         let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(

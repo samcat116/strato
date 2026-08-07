@@ -3114,24 +3114,27 @@ extension Agent: ReconcileActuator {
     /// record" the moment the workload matters most.
     func observedEdgeNonces() async -> [String: AppliedEdgeNonces] {
         var nonces: [String: AppliedEdgeNonces] = [:]
-        for map in [managedVMs, orphanedVMs, managedSandboxes, orphanedSandboxes] {
+        // Managed entries first, so an id somehow in both maps resolves to the
+        // live one. Assigning a nil `appliedEdges` through the subscript stores
+        // nothing, which is exactly the contract the planner reads: an entry
+        // that has no record is *absent* from this map, never present-and-empty.
+        for map in [managedVMs, managedSandboxes, orphanedVMs, orphanedSandboxes] {
             for (id, entry) in map where nonces[id] == nil {
                 nonces[id] = entry.appliedEdges
             }
         }
-        // A `nil` inside an entry is "no record", which the planner must see as
-        // an absent key rather than a present-but-empty one.
-        return nonces.compactMapValues { $0 }
+        return nonces
     }
 
-    /// Write the edges `item`'s desired entry carries into its manifest entry.
+    /// Write the edge nonces the planner decided this item applied into its
+    /// manifest entry.
     ///
     /// Cheap when nothing moved — this runs for every converged workload of
     /// every sync, and the manifest write is a whole-file atomic replace, so an
     /// unconditional `persistManifest()` here would rewrite it once per workload
-    /// per sync forever.
-    func recordAppliedEdges(_ item: ReconcileWorkItem) async {
-        let applied = AppliedEdgeNonces(applying: item.desiredEdges)
+    /// per sync forever. The equality check is also what bounds the one-time
+    /// adoption sweep after an upgrade to a single write per workload.
+    func recordAppliedEdges(_ item: ReconcileWorkItem, _ applied: AppliedEdgeNonces) async {
         var changed = false
         switch item.kind {
         case .vm:
@@ -3978,6 +3981,14 @@ extension Agent: ReconcileActuator {
         // the first one right after) *and* for an orphan whose hypervisor
         // process turned out to be gone — where dropping it would read as "no
         // record" next sync and quietly discard a restore the user asked for.
+        //
+        // A workload that arrives on a *different* host has no record here to
+        // carry, so it adopts its nonces rather than applying them: a pending
+        // restore issued before the move is dropped. For a VM that is right —
+        // the checkpoint lives inside the disks that did not move — and a
+        // sandbox's placement is pinned today, so it is unreachable rather than
+        // merely rare. It stops being unreachable the day a sandbox can move
+        // with a restore outstanding.
         let appliedEdges = (managedVMs[item.vmId] ?? orphanedVMs[item.vmId])?.appliedEdges
         managedVMs[item.vmId] = VMManifestEntry(
             hypervisorType: desired.hypervisorType, spec: desired.spec, appliedEdges: appliedEdges)

@@ -496,6 +496,30 @@ final class VMSnapshotTests {
         }
     }
 
+    /// The second of the two signals issue #415 established. A v34 agent on a
+    /// host with no usable QEMU reads the nonce and can do nothing with it, so
+    /// admitting the restore would surface as a `degraded` condition half an
+    /// hour later instead of a `409` naming the remedy. The capture path checks
+    /// the same pair, so admission stays symmetric.
+    @Test("Restore is refused when the agent advertises no checkpoint backend")
+    func restoreRefusesAgentWithoutCheckpointCapability() async throws {
+        try await withCheckpointTestApp { app, user, _, vm, token in
+            try await placeOnCapableAgent(app: app, vm: vm, capabilities: ["qemu"])
+            let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
+
+            try await app.test(
+                .POST, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("capability"))
+            }
+
+            #expect(try await VM.find(vm.id, on: app.db)?.restoreGeneration == 0)
+        }
+    }
+
     @Test("Restoring a checkpoint that is not ready is refused")
     func restoreRefusesUnreadyCheckpoint() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
