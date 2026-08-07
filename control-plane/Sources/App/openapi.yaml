@@ -9742,6 +9742,11 @@ components:
             type: string
         domainName:
           type: string
+          maxLength: 253
+          description: >-
+            DHCP search domain for the network's guests. A sequence of RFC 1123
+            labels — `corp.example.com` or a bare `internal` — stored lowercased
+            and without a trailing dot. An empty string clears it.
         leaseTime:
           type: integer
         externalAccess:
@@ -9777,6 +9782,11 @@ components:
             type: string
         domainName:
           type: string
+          maxLength: 253
+          description: >-
+            DHCP search domain for the network's guests. A sequence of RFC 1123
+            labels — `corp.example.com` or a bare `internal` — stored lowercased
+            and without a trailing dot. An empty string clears it.
         leaseTime:
           type: integer
         externalAccess:
