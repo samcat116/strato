@@ -5302,6 +5302,7 @@ export interface components {
             maxCpu: number;
             /** Format: int64 */
             memory: number;
+            /** @description Display form of `memory` in binary units (e.g. `4 GiB`, `512 MiB`). */
             memoryFormatted: string;
             /**
              * Format: int64
@@ -5310,6 +5311,7 @@ export interface components {
             maxMemory: number;
             /** Format: int64 */
             disk: number;
+            /** @description Display form of `disk` in binary units (e.g. `40 GiB`). */
             diskFormatted: string;
             networkInterfaces: components["schemas"]["NetworkInterface"][];
             /** @description Whether the guest boots with UEFI Secure Boot. */
@@ -5318,6 +5320,44 @@ export interface components {
             tpmEnabled?: boolean;
             /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
             graphicsConsole?: boolean;
+            /** @description Whether the guest agent is responding. Absent until the agent's slow poll has seen the guest once. */
+            qgaAvailable?: boolean;
+            /** @description What the guest OS calls itself, when it reported one. Distinct from `hostname`, which is the DNS label Strato registers it under. */
+            observedHostname?: string;
+            /**
+             * Format: int64
+             * @description Total RAM the guest itself reports, via the virtio-balloon device. Absent until a guest with the driver reports.
+             */
+            guestMemoryTotalBytes?: number;
+            /**
+             * Format: int64
+             * @description Free RAM the guest itself reports. Absent alongside `guestMemoryTotalBytes`.
+             */
+            guestMemoryAvailableBytes?: number;
+            /**
+             * Format: int64
+             * @description Derived as `guestMemoryTotalBytes - guestMemoryAvailableBytes` — the committed-vs-used figure most callers want.
+             */
+            guestMemoryUsedBytes?: number;
+            /** @description Display form of `guestMemoryUsedBytes` in binary units (e.g. `1.4 GiB`). */
+            guestMemoryUsedFormatted?: string;
+            /**
+             * Format: date-time
+             * @description When the guest last reported the memory figures above.
+             */
+            guestMemoryStatsAt?: string;
+            /**
+             * Format: int64
+             * @description The size an operator asked the guest to be held to. Absent on a VM with no target set.
+             */
+            balloonTarget?: number;
+            /** @description Display form of `balloonTarget` in binary units (e.g. `2 GiB`). */
+            balloonTargetFormatted?: string;
+            /**
+             * Format: int64
+             * @description What the balloon has actually reached. Sits above `balloonTarget` while a newly set target is still being applied.
+             */
+            guestMemoryBalloonActualBytes?: number;
             /** @description Whether this VM's attached security groups are actually being enforced. False means a realizing agent — the host, or its site's network controller — registered with a protocol too old for security groups, or the site has no usable network controller to author the ACLs at all; either way the attached groups filter nothing until an operator fixes it. Absent means the VM is unplaced, so there is no realizer to judge yet. */
             securityGroupsEnforced?: boolean;
             conditions: components["schemas"]["ResourceConditions"];
@@ -5617,6 +5657,7 @@ export interface components {
             filename: string;
             /** Format: int64 */
             size: number;
+            /** @description Display form of `size` in binary units (e.g. `2.4 GiB`). */
             sizeFormatted: string;
             format: components["schemas"]["ImageFormat"];
             architecture: components["schemas"]["CPUArchitecture"];
@@ -5719,6 +5760,7 @@ export interface components {
             projectId?: string;
             /** Format: int64 */
             size: number;
+            /** @description Display form of `size` in binary units (e.g. `10 GiB`). */
             sizeFormatted: string;
             format: components["schemas"]["VolumeFormat"];
             volumeType: components["schemas"]["VolumeType"];
@@ -5757,6 +5799,7 @@ export interface components {
             projectId?: string;
             /** Format: int64 */
             size: number;
+            /** @description Display form of `size` in binary units (e.g. `10 GiB`). */
             sizeFormatted: string;
             status: components["schemas"]["VolumeSnapshotStatus"];
             errorMessage?: string;

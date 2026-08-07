@@ -62,6 +62,26 @@ public protocol SPIREServerAPI: Sendable {
     /// that ID is currently attested — eviction is idempotent.
     func evictAgent(spiffeID: String) async throws -> Bool
 
+    /// Mint a one-off JWT-SVID, outside the normal node/workload attestation
+    /// path. The SPIRE server signs whatever identity is asked for, so the
+    /// caller must be admin — the entitlement the control plane's own SVID
+    /// carries — and the caller, not SPIRE, is what vouches for the workload.
+    ///
+    /// This is how a VM gets an identity it can present to the Strato API: a
+    /// guest is not a local process, so there are no selectors for SPIRE to
+    /// attest against and no registration entry to issue from.
+    ///
+    /// - Parameters:
+    ///   - audience: Who the token is for. At least one is required, and it is
+    ///     the only thing stopping a token minted for one verifier from being
+    ///     replayed against another. Blank entries are dropped, and a list with
+    ///     nothing left is rejected before the round trip.
+    ///   - ttlSeconds: Desired lifetime. `0` takes the server default; negative
+    ///     is rejected. Advisory either way — SPIRE caps it at the remaining
+    ///     life of its signing key, so read the returned `expiresAt` rather
+    ///     than assuming this held.
+    func mintJWTSVID(spiffeID: String, audience: [String], ttlSeconds: Int32) async throws -> SPIREJWTSVID
+
     /// List every workload registration entry known to the SPIRE server.
     /// Read-only; used to surface the trust domain's identities in the UI.
     func listEntries() async throws -> [SPIREEntry]
@@ -133,6 +153,44 @@ public struct SPIREJoinToken: Sendable {
         self.value = value
         self.expiresAt = expiresAt
     }
+}
+
+/// A minted JWT-SVID: the signed token plus the claims a caller needs to hand
+/// it on without re-parsing the JWT.
+///
+/// Unlike an X509-SVID there is no rotation stream and no trust bundle behind
+/// this — it is a one-shot bearer token, valid until `expiresAt` to anyone
+/// holding it. Treat it as a credential, not as a workload identity a SPIFFE
+/// library can attach to.
+public struct SPIREJWTSVID: Sendable, Equatable {
+    /// The serialized JWT, ready to present as a bearer token.
+    public let token: String
+    /// The SPIFFE ID the token asserts.
+    public let spiffeID: String
+    /// When the token stops being valid.
+    public let expiresAt: Date
+    /// When SPIRE signed it; nil when the server did not report an issuance
+    /// time.
+    public let issuedAt: Date?
+
+    public init(token: String, spiffeID: String, expiresAt: Date, issuedAt: Date? = nil) {
+        self.token = token
+        self.spiffeID = spiffeID
+        self.expiresAt = expiresAt
+        self.issuedAt = issuedAt
+    }
+}
+
+extension SPIREJWTSVID: CustomStringConvertible, CustomDebugStringConvertible {
+    /// Default reflection prints the JWT itself, so an interpolated value in a
+    /// log line or a test failure message would publish a live bearer token.
+    /// Everything a caller would actually want to read is here without it.
+    public var description: String {
+        "SPIREJWTSVID(spiffeID: \(spiffeID), expiresAt: \(expiresAt), token: <redacted>)"
+    }
+
+    /// `debugPrint` and `#expect` take this path rather than `description`.
+    public var debugDescription: String { description }
 }
 
 public struct SPIRESelector: Sendable, Equatable {
@@ -618,6 +676,11 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
         method: "DeleteAgent"
     )
 
+    private static let mintJWTSVIDDescriptor = MethodDescriptor(
+        service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.svid.v1.SVID"),
+        method: "MintJWTSVID"
+    )
+
     private static let listAgentsDescriptor = MethodDescriptor(
         service: ServiceDescriptor(fullyQualifiedService: "spire.api.server.agent.v1.Agent"),
         method: "ListAgents"
@@ -847,6 +910,62 @@ public struct SPIREServerAPIClient: SPIREServerAPI {
             // The node never attested (or was already evicted): nothing to do.
             return false
         }
+    }
+
+    public func mintJWTSVID(
+        spiffeID: String,
+        audience: [String],
+        ttlSeconds: Int32
+    ) async throws -> SPIREJWTSVID {
+        // A token with no audience is worth refusing locally: it would be
+        // accepted by every verifier that trusts the trust domain, not just
+        // the one it was minted for. SPIRE rejects an empty *list*, but an
+        // empty audience string reaches the same outcome, and whether any
+        // given SPIRE version rejects that is not something to lean on.
+        // Dropping the blank entries can only narrow the token's scope.
+        let audience = audience.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        guard !audience.isEmpty else {
+            throw SPIREServerAPIError.invalidArgument("MintJWTSVID requires at least one non-empty audience")
+        }
+        // A negative TTL mints an already-expired token, and expired in a way
+        // the response guard below cannot catch: its `expires_at` is a
+        // perfectly positive epoch that happens to be in the past.
+        guard ttlSeconds >= 0 else {
+            throw SPIREServerAPIError.invalidArgument("MintJWTSVID TTL cannot be negative: \(ttlSeconds)")
+        }
+
+        var request = Spire_Api_Server_Svid_V1_MintJWTSVIDRequest()
+        request.id = try Self.spiffeIDPayload(spiffeID)
+        request.audience = audience
+        request.ttl = ttlSeconds
+
+        let response: Spire_Api_Server_Svid_V1_MintJWTSVIDResponse = try await unary(
+            request, descriptor: Self.mintJWTSVIDDescriptor)
+        let svid = response.svid
+
+        guard !svid.token.isEmpty else {
+            throw SPIREServerAPIError.requestFailed("MintJWTSVID returned an empty token")
+        }
+        // An expiry-less bearer token is one a caller would cache forever.
+        guard let expiresAt = Self.date(fromEpochSeconds: svid.expiresAt) else {
+            throw SPIREServerAPIError.requestFailed("MintJWTSVID returned a token with no expiry")
+        }
+
+        // SPIRE mints the identity it was asked for, so falling back to the
+        // requested ID when the denormalized echo is unusable cannot report the
+        // wrong subject — and beats failing a mint that succeeded. `hasID` is
+        // presence rather than content, so an explicitly-set but default
+        // submessage has to fall back too: it would assert "spiffe://".
+        let echoedID =
+            svid.hasID && !svid.id.trustDomain.isEmpty
+            ? Self.spiffeIDString(from: svid.id) : nil
+
+        return SPIREJWTSVID(
+            token: svid.token,
+            spiffeID: echoedID ?? spiffeID,
+            expiresAt: expiresAt,
+            issuedAt: Self.date(fromEpochSeconds: svid.issuedAt)
+        )
     }
 
     /// Page size requested from the SPIRE server's list APIs. SPIRE only engages

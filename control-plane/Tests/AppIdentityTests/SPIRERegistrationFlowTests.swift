@@ -795,8 +795,15 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
         let admin: Bool
     }
 
+    struct MintJWTSVIDRequest: Sendable {
+        let spiffeID: String
+        let audience: [String]
+        let ttlSeconds: Int32
+    }
+
     private(set) var joinTokenRequests: [JoinTokenRequest] = []
     private(set) var createdEntries: [CreateEntryRequest] = []
+    private(set) var mintedJWTSVIDs: [MintJWTSVIDRequest] = []
     private(set) var entryUpdates: [SPIREEntryUpdate] = []
     private(set) var deletedSPIFFEIDs: [String] = []
     private(set) var evictedAgentIDs: [String] = []
@@ -903,6 +910,16 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
         }
         evictedAgentIDs.append(spiffeID)
         return true
+    }
+
+    func mintJWTSVID(spiffeID: String, audience: [String], ttlSeconds: Int32) async throws -> SPIREJWTSVID {
+        mintedJWTSVIDs.append(
+            MintJWTSVIDRequest(spiffeID: spiffeID, audience: audience, ttlSeconds: ttlSeconds))
+        return SPIREJWTSVID(
+            token: "fake-jwt-svid",
+            spiffeID: spiffeID,
+            expiresAt: Date().addingTimeInterval(TimeInterval(ttlSeconds))
+        )
     }
 
     func listEntries() async throws -> [SPIREEntry] { entries }

@@ -171,7 +171,7 @@ struct VolumeController: RouteCollection {
         guard request.sizeGB <= Volume.maxSizeGB else {
             throw Abort(
                 .badRequest,
-                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GB")
+                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GiB")
         }
         guard let sizeBytes = request.sizeGB.gbToBytes else {
             throw Abort(.badRequest, reason: "'sizeGB' is too large")
@@ -594,7 +594,7 @@ struct VolumeController: RouteCollection {
         guard request.sizeGB <= Volume.maxSizeGB else {
             throw Abort(
                 .badRequest,
-                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GB")
+                reason: "'sizeGB' exceeds the maximum volume size of \(Volume.maxSizeGB) GiB")
         }
         guard let newSizeBytes = request.sizeGB.gbToBytes else {
             throw Abort(.badRequest, reason: "'sizeGB' is too large")

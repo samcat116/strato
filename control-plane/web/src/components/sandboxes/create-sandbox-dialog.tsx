@@ -91,7 +91,7 @@ export function CreateSandboxDialog({
     setIsLoading(true);
     setQuotaError(null);
     try {
-      const GB = 1024 * 1024 * 1024; // 1 GB in bytes
+      const GB = 1024 * 1024 * 1024; // 1 GiB in bytes; the API field is named `memory`
       const env = parseEnv(formData.env);
       const ttl = parseInt(formData.ttlSeconds, 10);
       // Creation is asynchronous: the server accepts the request and returns
@@ -216,7 +216,7 @@ export function CreateSandboxDialog({
               </div>
               <div className="space-y-2">
                 <Label htmlFor="memory" className="text-foreground">
-                  Memory (GB)
+                  Memory (GiB)
                 </Label>
                 <Input
                   id="memory"

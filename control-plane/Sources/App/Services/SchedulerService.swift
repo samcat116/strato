@@ -136,7 +136,7 @@ struct SchedulableAgent: Sendable {
         // Normalize to common scale and sum
         let cpuScore = Int64(availableCPU) * 1000
         let memoryScore = availableMemory / (1024 * 1024)  // MB
-        let diskScore = availableDisk / (1024 * 1024 * 1024)  // GB
+        let diskScore = availableDisk / (1024 * 1024 * 1024)  // GiB
         return cpuScore + memoryScore + diskScore
     }
 

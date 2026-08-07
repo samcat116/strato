@@ -26,7 +26,7 @@ import {
 } from "@/lib/stores/mutations-store";
 import { useProjectContext } from "@/providers";
 import type { Sandbox, SandboxSnapshot } from "@/types/api";
-import { formatMemory } from "@/lib/format-memory";
+import { formatMemory } from "@/lib/format-bytes";
 
 export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const router = useRouter();

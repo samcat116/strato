@@ -8,6 +8,50 @@ extension Int64 {
     var bytesToGB: Double {
         Double(self) / 1024 / 1024 / 1024
     }
+
+    /// This byte count as a human-readable string in binary units.
+    ///
+    /// Backs every preformatted `…Formatted` field the API ships — a VM's
+    /// memory and disk, an image's size, a volume's and a volume snapshot's
+    /// size — which previously each carried their own identical copy of this
+    /// arithmetic, labelling a `/ 1024` result `GB`/`MB`/`KB` (issue #1007).
+    ///
+    /// This deliberately mirrors the web UI's `formatMemory`
+    /// (`control-plane/web/src/lib/format-bytes.ts`) tier for tier, because
+    /// the two appear side by side: the VM detail page renders the server's
+    /// `memoryFormatted` directly above a snapshots card the browser formats
+    /// itself, and a client is free to format `memory` rather than read
+    /// `memoryFormatted`. Change one and change the other.
+    ///
+    /// The one place the two deliberately diverge is degenerate input. This is
+    /// wire-visible — the CLI prints it straight into a table cell — so it is
+    /// always a size, clamping a negative (unreachable: every source is a
+    /// non-negative column) to `0 B`. The browser's copy renders `—` instead,
+    /// because JSON can hand it a `NaN` or an `undefined` that no `Int64` can be.
+    var formattedByteSize: String {
+        // Clamp rather than print "-1 GiB": callers document this field as a size.
+        if self < 0 { return "0 B" }
+        let bytes = Double(self)
+
+        // Each tier rounds *before* the next unit's test, so a value just under
+        // the boundary can't both fail the larger unit and round up to
+        // "1024 MiB".
+        if self < 1024 { return "\(self) B" }
+        let kib = (bytes / 1024).rounded()
+        if kib < 1024 { return "\(Int64(kib)) KiB" }
+        let mib = (bytes / (1024 * 1024)).rounded()
+        if mib < 1024 { return "\(Int64(mib)) MiB" }
+        let gib = ((bytes / (1024 * 1024 * 1024)) * 10).rounded() / 10
+        if gib < 1024 { return Self.oneDecimal(gib, unit: "GiB") }
+        return Self.oneDecimal(bytes / (1024 * 1024 * 1024 * 1024), unit: "TiB")
+    }
+
+    /// One decimal place, dropped entirely when the value lands whole.
+    private static func oneDecimal(_ value: Double, unit: String) -> String {
+        let rounded = (value * 10).rounded() / 10
+        let digits = rounded == rounded.rounded() ? String(format: "%.0f", rounded) : String(format: "%.1f", rounded)
+        return "\(digits) \(unit)"
+    }
 }
 
 extension Int {
