@@ -875,7 +875,14 @@ jobs:
   # fine-grained PAT limited to that one repo with Contents: read and write.
   bump-homebrew-formula:
     name: Bump Homebrew Formula
-    runs-on: ubuntu-latest
+    # macos-latest, not ubuntu-latest: GitHub removed Homebrew from the
+    # ubuntu-24.04 runner image, so the smoke test below has no `brew` on
+    # Linux (this job's first-ever run, v0.1.1, failed exactly there). macOS
+    # runners ship brew preinstalled, and the smoke test then exercises the
+    # macos-arm64 leg — the asset most brew users install. Everything else in
+    # the job (gh, git, sed/awk/ruby in the scripts) is on the macOS image
+    # too, and both scripts are written to stay Mac-runnable.
+    runs-on: macos-latest
     needs: [create-release, build-swift-binaries]
     # Prereleases keep the tap on the last stable version: `brew install`
     # should never hand someone an rc. Reuses create-release's decision rather
@@ -933,7 +940,7 @@ jobs:
       # failure this job can introduce — and it gives the formula's `test do`
       # block its only caller, so a release that skipped the CompiledBuildInfo
       # bake fails here instead of shipping a formula whose `strato --version`
-      # says "dev". Only the leg matching the runner (linux-x86_64) is
+      # says "dev". Only the leg matching the runner (macos-arm64) is
       # exercised; the other two ride the same rendering and sidecar plumbing.
       #
       # Runs BEFORE the push, so the job fails closed: a bad formula never
