@@ -1,26 +1,10 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { vmsApi } from "@/lib/api/vms";
-import type { VMLogsQueryParams } from "@/types/api";
+import type { VMLogEntry, VMLogsQueryParams } from "@/types/api";
+import { makeResourceLogsHooks } from "./use-resource-logs";
 
-export function useVMLogs(vmId: string, params?: VMLogsQueryParams) {
-  return useQuery({
-    queryKey: ["vm-logs", vmId, params],
-    queryFn: () => vmsApi.getLogs(vmId, params),
-    enabled: !!vmId,
-    // Poll every 5 seconds when viewing logs
-    refetchInterval: 5000,
-    // Keep previous data while refetching for smoother UX
-    placeholderData: (previousData) => previousData,
-  });
-}
+const { useLogs, useInvalidateLogs } = makeResourceLogsHooks<
+  VMLogsQueryParams,
+  VMLogEntry
+>("vm-logs", (id, params) => vmsApi.getLogs(id, params));
 
-export function useInvalidateVMLogs() {
-  const queryClient = useQueryClient();
-  return (vmId?: string) => {
-    if (vmId) {
-      queryClient.invalidateQueries({ queryKey: ["vm-logs", vmId] });
-    } else {
-      queryClient.invalidateQueries({ queryKey: ["vm-logs"] });
-    }
-  };
-}
+export { useLogs as useVMLogs, useInvalidateLogs as useInvalidateVMLogs };
