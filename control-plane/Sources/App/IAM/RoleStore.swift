@@ -125,29 +125,28 @@ enum RoleStore {
     static func bindable(
         named name: String, along chain: [IAMNode], on db: any Database
     ) async throws -> [IAMRoleDefinition] {
-        try await bindableQuery(along: chain, on: db).filter(\.$name == name).sort(\.$name).all()
+        try await bindableQuery(along: chain, on: db).filter(\.$name == name).all()
     }
 
-    /// The owner predicate both `bindable` forms share: platform rows, plus
-    /// the rows owned by an organization or project on the chain.
+    /// The owner predicate both `bindable` forms share, assembled from
+    /// `IAMRoleOwnerType.ownerIDs(along:)` — the same containment
+    /// `MemberRoleResolver` validates a by-id grant against, so the listing
+    /// and the write path cannot disagree about what a node can bind.
     private static func bindableQuery(
         along chain: [IAMNode], on db: any Database
     ) -> QueryBuilder<IAMRoleDefinition> {
-        let organizationIDs = chain.filter { $0.type == .organization }.map(\.id)
-        let projectIDs = chain.filter { $0.type == .project }.map(\.id)
-        return IAMRoleDefinition.query(on: db)
+        IAMRoleDefinition.query(on: db)
             .group(.or) { anyOwner in
-                anyOwner.filter(\.$ownerType == IAMRoleOwnerType.platform.rawValue)
-                if !organizationIDs.isEmpty {
-                    anyOwner.group(.and) { owner in
-                        owner.filter(\.$ownerType == IAMRoleOwnerType.organization.rawValue)
-                        owner.filter(\.$ownerID ~~ organizationIDs)
+                for ownerType in IAMRoleOwnerType.allCases {
+                    guard let ownerIDs = ownerType.ownerIDs(along: chain) else {
+                        // No owner node: platform rows, bindable everywhere.
+                        anyOwner.filter(\.$ownerType == ownerType.rawValue)
+                        continue
                     }
-                }
-                if !projectIDs.isEmpty {
+                    guard !ownerIDs.isEmpty else { continue }
                     anyOwner.group(.and) { owner in
-                        owner.filter(\.$ownerType == IAMRoleOwnerType.project.rawValue)
-                        owner.filter(\.$ownerID ~~ projectIDs)
+                        owner.filter(\.$ownerType == ownerType.rawValue)
+                        owner.filter(\.$ownerID ~~ ownerIDs)
                     }
                 }
             }

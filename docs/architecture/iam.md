@@ -450,7 +450,10 @@ another to the catalog or the editor.
 **Ownership scopes a role.** `owner_type` is `platform` (the seeded defaults,
 with a zero-UUID sentinel owner), `organization`, or `project`. A role is
 bindable on its owner and everything beneath it, and nowhere else — the same
-containment the ancestor chain already gives bindings and ceilings. Deleting
+containment the ancestor chain already gives bindings and ceilings. That
+containment is one predicate (`IAMRoleOwnerType.ownerIDs(along:)`): the
+bindable listing filters with it and the grant path validates against it, so a
+new owner type cannot be bindable by one and invisible to the other. Deleting
 an org or project removes the roles it owns.
 
 **The role API** (`/api/iam/roles`, issue #605) is admin-gated on the owner

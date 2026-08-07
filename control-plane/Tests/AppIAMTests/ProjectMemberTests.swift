@@ -462,6 +462,47 @@ final class ProjectMemberTests {
         }
     }
 
+    @Test("updateRole takes a custom role's name too")
+    func updateRoleByRoleName() async throws {
+        try await withApp { app, project, _, target, _, token in
+            try await ProjectMember(
+                projectID: project.id!, userID: target.id!, role: IAMRole.viewer.seededID.uuidString
+            ).save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: target.id!, role: .viewer,
+                nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
+
+            let role = try await makeRole(
+                name: "vm-restarter", ownerType: .project, ownerID: project.id!,
+                actions: ["vm:read", "vm:restart"], on: app.db)
+
+            try await app.test(.PATCH, "/api/projects/\(project.id!)/members/\(target.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    ProjectMemberController.UpdateMemberRoleRequest(role: "vm-restarter"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            // The old viewer binding is revoked and the named role bound in its
+            // place — the same handling the by-id form gets.
+            let roles = try await RoleBinding.query(on: app.db)
+                .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                .filter(\.$principalID == target.id!)
+                .filter(\.$nodeType == IAMNodeType.project.rawValue)
+                .filter(\.$nodeID == project.id!)
+                .all()
+                .map(\.role)
+            #expect(roles == [role.id!.uuidString])
+
+            let member = try await ProjectMember.query(on: app.db)
+                .filter(\.$project.$id == project.id!)
+                .filter(\.$user.$id == target.id!)
+                .first()
+            #expect(member?.role == role.id!.uuidString)
+        }
+    }
+
     @Test("A custom role named 'viewer' does not shadow the seeded viewer")
     func fixedVocabularyWinsOverCustomName() async throws {
         try await withApp { app, project, _, target, _, token in

@@ -6479,7 +6479,7 @@ export interface components {
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /** @description The role to grant on the folder: a role id, a seeded role name (`viewer`/`operator`/`editor`/`admin`), or the name of a custom role bindable here — every name `GET /api/iam/roles/bindable` lists for this folder is accepted. Either form must name a role owned at or above the folder. A seeded name always wins over a custom role of the same name, and a name two bindable roles share is a `400` naming both ids. The legacy project vocabulary (`member`) is not accepted here. */
+        /** @description The role to grant on the folder: a role id, a seeded role name (`viewer`/`operator`/`editor`/`admin`), or the name of a custom role bindable here — every name `GET /api/iam/roles/bindable` lists for this folder is accepted. Either form must name a role owned at or above the folder. A seeded name always wins over a custom role of the same name, and a name two bindable roles share is a `400` naming both ids. The legacy project vocabulary carries no meaning here: `member` is a valid folder grant only if a role bindable on the folder is named that. */
         FolderRole: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantFolderMemberRequest: {
@@ -6921,7 +6921,8 @@ export interface components {
             username: string;
             displayName: string;
             email: string;
-            role: components["schemas"]["ProjectRole"];
+            /** @description The role's `iam_roles` id; legacy rows storing a relational name are normalized to their seeded id. `roleDisplayName` carries the name to show. */
+            role: string;
             /** Format: date-time */
             joinedAt?: string;
             /** @description The user is not a member of the project's organization — a cross-org grant, which UIs should render prominently. */
@@ -6931,28 +6932,29 @@ export interface components {
             /** Format: uuid */
             groupId?: string;
             name: string;
-            role: components["schemas"]["ProjectRole"];
+            /** @description The role's `iam_roles` id, as on `ProjectMember`. */
+            role: string;
             /** Format: date-time */
             grantedAt?: string;
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /** @description A role grant on a project. Written as a role id, a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), a legacy project role (`admin`/`member`/`viewer`), or the name of a custom role bindable on the project — every name `GET /api/iam/roles/bindable` lists for it is accepted. The fixed names win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. Read back, it is always a role id (member listings carry the display name alongside). */
-        ProjectRole: string;
+        /** @description The role to grant on a project: a role id, a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), a legacy project role (`admin`/`member`/`viewer`), or the name of a custom role bindable on the project — every name `GET /api/iam/roles/bindable` lists for it is accepted. The fixed names above win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. */
+        ProjectMemberRoleInput: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantProjectMemberRequest: {
             userEmail?: string;
             /** Format: uuid */
             userID?: string;
-            role: components["schemas"]["ProjectRole"];
+            role: components["schemas"]["ProjectMemberRoleInput"];
         };
         UpdateProjectMemberRoleRequest: {
-            role: components["schemas"]["ProjectRole"];
+            role: components["schemas"]["ProjectMemberRoleInput"];
         };
         GrantProjectGroupRequest: {
             /** Format: uuid */
             groupID: string;
-            role: components["schemas"]["ProjectRole"];
+            role: components["schemas"]["ProjectMemberRoleInput"];
         };
         /**
          * @description A seeded IAM role. Each role implies the ones below it.

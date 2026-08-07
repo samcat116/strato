@@ -184,17 +184,22 @@ enum MemberRoleResolver {
     /// A non-platform role is bindable only at or below its owner: the owner
     /// node must sit on the target's ancestor chain, or the grant is refused
     /// with the mismatch named (issue #608).
+    ///
+    /// Decided by `IAMRoleOwnerType.ownerIDs(along:)`, the same predicate
+    /// `RoleStore.bindable` filters the listing with — so a role granted by id
+    /// here is exactly a role the picker offers, and a new owner type cannot
+    /// be accepted by one path while the other silently drops it (STR-111
+    /// review).
     private static func requireInScope(
         _ role: IAMRoleDefinition, scopeNode: IAMNode, on db: any Database
     ) async throws {
         guard let ownerType = IAMRoleOwnerType(rawValue: role.ownerType) else {
             throw Abort(.internalServerError, reason: "Role row names an unknown owner type '\(role.ownerType)'.")
         }
-        // Platform roles apply everywhere; only owned roles are scope-bound.
-        guard let ownerNodeType = ownerType.nodeType else { return }
-        let ownerNode = IAMNode(type: ownerNodeType, id: role.ownerID)
         let chain = try await IAMResourceTree.ancestors(of: scopeNode, on: db)
-        guard chain.contains(ownerNode) else {
+        // Platform roles apply everywhere; only owned roles are scope-bound.
+        guard let ownerIDs = ownerType.ownerIDs(along: chain) else { return }
+        guard ownerIDs.contains(role.ownerID) else {
             throw Abort(
                 .badRequest,
                 reason:
