@@ -51,7 +51,10 @@ struct NetworkOrchestrator: Sendable {
                     // run; fall back to static guest config.
                     dhcpEnabled: false,
                     dnsServers: spec.dnsServers,
-                    domainName: spec.domainName
+                    domainName: spec.domainName,
+                    // ...and no OVN means no metadata localport either, so the
+                    // guest gets no route to an address nothing terminates.
+                    metadataEnabled: false
                 )
             }
         }
@@ -74,7 +77,10 @@ struct NetworkOrchestrator: Sendable {
                 domainName: spec.domainName,
                 leaseTime: spec.leaseTime,
                 securityGroupIds: spec.securityGroupIds,
-                mtu: spec.mtu
+                mtu: spec.mtu,
+                // `== true`: nil is a control plane with no opinion on the
+                // metadata service, which advertises no route to it.
+                metadataEnabled: spec.metadataEnabled == true
             )
 
             do {
@@ -101,7 +107,12 @@ struct NetworkOrchestrator: Sendable {
                         mtu: spec.mtu,
                         dhcpEnabled: dhcpRealized,
                         dnsServers: spec.dnsServers,
-                        domainName: spec.domainName
+                        domainName: spec.domainName,
+                        // Same reasoning as `dhcpRealized`: a NIC the service
+                        // degraded to user-mode has no OVN localport behind the
+                        // metadata addresses, so telling the guest to route to
+                        // them would only give it a route into a black hole.
+                        metadataEnabled: spec.metadataEnabled == true && info.attachment.isTap
                     ))
             } catch {
                 logger.error(

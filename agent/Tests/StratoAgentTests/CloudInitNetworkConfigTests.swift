@@ -401,6 +401,226 @@ struct CloudInitNetworkConfigTests {
         #expect(yaml?.contains("ipv6-address-generation") == false)
     }
 
+    @Test("a static NIC on a metadata network carries an on-link route to the IMDS")
+    func staticNICCarriesMetadataRoute() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                metadataEnabled: true
+            )
+        ]
+
+        #expect(
+            CloudInitProvisioner.networkConfigYAML(for: attachments) == """
+                version: 2
+                ethernets:
+                  nic0:
+                    match:
+                      macaddress: "52:54:00:aa:bb:cc"
+                    set-name: nic0
+                    addresses:
+                      - 192.168.1.5/24
+                    gateway4: 192.168.1.1
+                    routes:
+                      - to: 169.254.169.254/32
+                        via: 0.0.0.0
+                """)
+    }
+
+    @Test("a dual-stack static NIC carries both families' metadata routes")
+    func dualStackStaticNICCarriesBothMetadataRoutes() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                ip6Address: "fd12:3456:789a::100",
+                prefixLength6: 64,
+                gateway6: "fd12:3456:789a::1",
+                metadataEnabled: true
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("- to: 169.254.169.254/32") == true)
+        #expect(yaml?.contains("- to: fd00:ec2::254/128") == true)
+        // Quoted, or the document is a YAML scanner error rather than a config.
+        #expect(yaml?.contains(#"via: "::""#) == true)
+    }
+
+    @Test("a DHCP NIC takes its v4 metadata route from option 121, not the seed")
+    func dhcpNICOmitsIPv4MetadataRoute() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                dhcpEnabled: true,
+                metadataEnabled: true
+            )
+        ]
+
+        // v4-only and DHCP-managed: OVN's responder already delivers the route,
+        // so this section is byte-identical to a network without the service.
+        #expect(
+            CloudInitProvisioner.networkConfigYAML(for: attachments) == """
+                version: 2
+                ethernets:
+                  nic0:
+                    match:
+                      macaddress: "52:54:00:aa:bb:cc"
+                    set-name: nic0
+                    dhcp4: true
+                """)
+    }
+
+    @Test("a dual-stack DHCP NIC still needs the seed for its v6 metadata route")
+    func dualStackDHCPNICCarriesIPv6MetadataRouteOnly() {
+        // DHCPv6 has no option 121 and an RA cannot carry an on-link route to
+        // the localport, so this document is the only path the v6 route has.
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                ip6Address: "fd12:3456:789a::100",
+                prefixLength6: 64,
+                dhcpEnabled: true,
+                metadataEnabled: true
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("- to: fd00:ec2::254/128") == true)
+        #expect(yaml?.contains("169.254.169.254") == false)
+    }
+
+    @Test("a v4-only NIC gets no route to the v6 metadata address")
+    func v4OnlyNICOmitsIPv6MetadataRoute() {
+        // With no global IPv6 address the guest has no valid source address for
+        // a ULA destination, so the route would only ever fail.
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                metadataEnabled: true
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("- to: 169.254.169.254/32") == true)
+        #expect(yaml?.contains("fd00:ec2") == false)
+    }
+
+    @Test("a NIC whose network has the metadata service off carries no route")
+    func metadataDisabledNICCarriesNoRoute() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:cc",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                ip6Address: "fd12:3456:789a::100",
+                prefixLength6: 64
+            )
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("routes:") == false)
+    }
+
+    @Test("exactly one NIC carries the metadata routes — the first eligible one")
+    func onlyOneNICCarriesTheMetadataRoutes() {
+        // Two interfaces claiming the same destination is a duplicate route the
+        // guest resolves arbitrarily. NIC 0 is on a network with the service
+        // off, so the claim falls to NIC 1 rather than being dropped.
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "unmanaged",
+                attachment: .tap(interface: "tapA"),
+                macAddress: "52:54:00:00:00:01",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0"
+            ),
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tapB"),
+                macAddress: "52:54:00:00:00:02",
+                ipAddress: "10.10.0.5",
+                netmask: "255.255.255.0",
+                metadataEnabled: true
+            ),
+            ResolvedNetworkAttachment(
+                network: "second",
+                attachment: .tap(interface: "tapC"),
+                macAddress: "52:54:00:00:00:03",
+                ipAddress: "10.20.0.5",
+                netmask: "255.255.255.0",
+                metadataEnabled: true
+            ),
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.components(separatedBy: "169.254.169.254/32").count == 2)
+        // ...and it is nic1's section that carries it.
+        #expect(
+            yaml?.contains(
+                """
+                  nic1:
+                    match:
+                      macaddress: "52:54:00:00:00:02"
+                    set-name: nic1
+                    addresses:
+                      - 10.10.0.5/24
+                    routes:
+                      - to: 169.254.169.254/32
+                        via: 0.0.0.0
+                """) == true)
+    }
+
+    @Test("a NIC skipped for want of an address does not consume the metadata claim")
+    func skippedNICDoesNotConsumeTheMetadataClaim() {
+        // The static branch drops a NIC with no allocation before it renders
+        // anything, so claiming the route on it would lose it entirely.
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tapA"),
+                macAddress: "52:54:00:00:00:01",
+                metadataEnabled: true
+            ),
+            ResolvedNetworkAttachment(
+                network: "default",
+                attachment: .tap(interface: "tapB"),
+                macAddress: "52:54:00:00:00:02",
+                ipAddress: "10.10.0.5",
+                netmask: "255.255.255.0",
+                metadataEnabled: true
+            ),
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("- to: 169.254.169.254/32") == true)
+    }
+
     @Test("multiple NICs render as separate entries with stable names")
     func multipleNICs() {
         let attachments = [

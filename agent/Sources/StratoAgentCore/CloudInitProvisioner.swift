@@ -543,11 +543,17 @@ public struct CloudInitProvisioner {
     /// get an explicit address/gateway/nameservers block, including the
     /// network's search domain.
     ///
+    /// A NIC on a network publishing the instance metadata service also carries
+    /// on-link routes to its addresses — see `metadataRoutesBlock`.
+    ///
     /// Returns nil when no NIC needs configuring — no `network-config` is written
     /// and the guest keeps its default behavior (DHCP), which is also what
     /// user-mode (SLIRP) NICs need.
     public static func networkConfigYAML(for attachments: [ResolvedNetworkAttachment]) -> String? {
         var sections: [String] = []
+        // Claimed by the first NIC that actually renders a section, so exactly
+        // one interface owns the metadata routes — see `metadataRoutesBlock`.
+        var metadataRouteClaimed = false
 
         for (index, nic) in attachments.enumerated() {
             // User-mode NICs are addressed by SLIRP's built-in DHCP.
@@ -566,6 +572,7 @@ public struct CloudInitProvisioner {
             // Every v6 line below is gated on this so v4-only NICs render
             // byte-identical config to pre-IPv6 agents.
             let hasIPv6 = nic.ip6Address != nil
+            let carriesMetadataRoutes = nic.metadataEnabled && !metadataRouteClaimed
 
             if nic.dhcpEnabled {
                 // OVN's DHCP responder delivers IP, gateway, and DNS; just bring
@@ -579,6 +586,15 @@ public struct CloudInitProvisioner {
                     section += "\n    dhcp6: true"
                     section += "\n    accept-ra: true"
                     section += "\n    ipv6-address-generation: eui64"
+                }
+                if carriesMetadataRoutes {
+                    metadataRouteClaimed = true
+                    // v4 needs nothing here: OVN's responder already hands this
+                    // guest the same route as DHCP option 121, which reaches
+                    // every DHCP client rather than only the ones booting from
+                    // this seed. v6 has no such option, so the seed is the only
+                    // way to deliver it.
+                    section += metadataRoutesBlock(includeIPv4: false, includeIPv6: hasIPv6)
                 }
                 sections.append(section)
                 continue
@@ -634,6 +650,12 @@ public struct CloudInitProvisioner {
             if let mtu = nic.mtu {
                 section += "\n    mtu: \(mtu)"
             }
+            if carriesMetadataRoutes {
+                metadataRouteClaimed = true
+                // No DHCP responder on this NIC, so the seed carries both
+                // families' metadata routes.
+                section += metadataRoutesBlock(includeIPv4: true, includeIPv6: hasIPv6)
+            }
             sections.append(section)
         }
 
@@ -644,5 +666,53 @@ public struct CloudInitProvisioner {
             ethernets:
             \(sections.joined(separator: "\n"))
             """
+    }
+
+    /// The `routes:` block giving a guest on-link routes to the instance
+    /// metadata addresses (STR-53). Neither address belongs to the network's
+    /// subnets, so without this the guest has no path to the `localport` that
+    /// terminates them (STR-49) — most Linux images carry a `169.254.0.0/16`
+    /// link-local route that covers the v4 address by accident, but that is not
+    /// universal and nothing covers the v6 ULA.
+    ///
+    /// **One NIC carries them.** Two interfaces claiming the same destination
+    /// is a duplicate route the guest resolves arbitrarily, so the first
+    /// rendered NIC whose network publishes the service wins — the `eth0`-only
+    /// rule AWS uses, generalized to "the first *eligible* NIC" because NIC 0
+    /// may be on a network with the service turned off.
+    ///
+    /// **Both routes carry an explicit zero next hop** rather than being
+    /// written gateway-less, which is the more natural netplan spelling and the
+    /// one this renderer would otherwise use. cloud-init's `eni` and
+    /// `sysconfig` renderers — first and second in its renderer priority, so
+    /// Debian/ifupdown and RHEL-family images reach them ahead of netplan and
+    /// NetworkManager — index `route["gateway"]` unconditionally while
+    /// converting network-config v2, and raise `KeyError` on a route that has
+    /// none. That aborts the *entire* network render, leaving the guest with no
+    /// configuration at all: a far worse failure than the missing metadata
+    /// route it was meant to fix. A zero next hop is also exactly what RFC 3442
+    /// encodes for the on-link route in DHCP option 121, so both halves of
+    /// STR-53 say the same thing.
+    ///
+    /// Known gap: the v6 route reaches guests rendered by netplan/networkd and
+    /// NetworkManager, but not by `eni`/`sysconfig` — those emit a literal
+    /// `via ::`, which iproute2 rejects as an invalid gateway. Gateway-less
+    /// would crash them outright (above) and a self-referential next hop needs
+    /// an `onlink` flag that cloud-init's v2 conversion drops, so a no-op on
+    /// those two renderers is the best available outcome.
+    static func metadataRoutesBlock(includeIPv4: Bool, includeIPv6: Bool) -> String {
+        var block = ""
+        if includeIPv4 {
+            block += "\n      - to: \(InstanceMetadataEndpoint.cidr)"
+            block += "\n        via: 0.0.0.0"
+        }
+        if includeIPv6 {
+            // Quoted: `via: ::` is a YAML scanner error (a plain scalar may not
+            // open with a `:` indicator), and an unparseable network-config
+            // costs the guest every other setting in this document too.
+            block += "\n      - to: \(InstanceMetadataEndpoint.cidrV6)"
+            block += "\n        via: \"::\""
+        }
+        return block.isEmpty ? "" : "\n    routes:" + block
     }
 }

@@ -1168,7 +1168,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             v4 = try await ensureDHCPOptions(
                 networkId: config.networkId, networkName: config.networkName, subnet: subnet,
                 gateway: gateway,
-                dnsServers: config.dnsServers, domainName: config.domainName, leaseTime: config.leaseTime)
+                dnsServers: config.dnsServers, domainName: config.domainName, leaseTime: config.leaseTime,
+                metadataEnabled: config.metadataEnabled)
         } else {
             logger.warning(
                 "DHCP enabled but subnet/gateway unknown; using static guest config",
@@ -1244,16 +1245,21 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// return its UUID. Idempotent across restarts and reconvergence: the
     /// network's existing row for the same CIDR is updated in place (so
     /// DNS/lease edits converge) rather than duplicated.
+    ///
+    /// `metadataEnabled` must be derived from the same `LogicalNetwork` column
+    /// on both callers — the NIC path reads `NetworkSpec.metadataEnabled`, the
+    /// network path `DesiredNetworkState.metadataEnabled` — or the two would
+    /// author different option maps for one row and rewrite it on every pass.
     private func ensureDHCPOptions(
         networkId: UUID, networkName: String, subnet: String, gateway: String,
-        dnsServers: [String], domainName: String?, leaseTime: Int?
+        dnsServers: [String], domainName: String?, leaseTime: Int?, metadataEnabled: Bool
     ) async throws -> String? {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         let options = OVNDHCPOptionsBuilder.v4Options(
             gateway: gateway, dnsServers: dnsServers, domainName: domainName, leaseTime: leaseTime,
-            subnet: subnet)
+            subnet: subnet, metadataEnabled: metadataEnabled)
         let externalIDs = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: networkName)
         let dhcp = OVNDHCPOptions(cidr: subnet, options: options, external_ids: externalIDs)
 
@@ -1643,7 +1649,12 @@ extension NetworkServiceLinux {
                     subnet: "\(cidr.networkAddress)/\(cidr.prefix)",
                     gateway: gateway,
                     dnsServers: network.dnsServers ?? [], domainName: network.domainName,
-                    leaseTime: network.leaseTime)
+                    leaseTime: network.leaseTime,
+                    // `== true`, matching how the topology plan reads this
+                    // field: a control plane with no opinion advertises no
+                    // metadata route rather than one to an address it never
+                    // asked to have published.
+                    metadataEnabled: network.metadataEnabled == true)
             }
             if let subnet6 = network.subnet6 {
                 _ = try await ensureDHCPOptions6(
