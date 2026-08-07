@@ -95,6 +95,16 @@ enum ResourceBindingCleanup {
         try await RoleBindingService.revokeAll(nodeType: .sandbox, nodeID: sandboxID, on: db)
     }
 
+    /// Volume counterpart: the volume node plus the snapshots that cascade away
+    /// with it (STR-148). Same read-before-delete ordering requirement.
+    static func revokeBindings(forDeletedVolume volumeID: UUID, on db: any Database) async throws {
+        let snapshotIDs = try await VolumeSnapshot.query(on: db)
+            .filter(\.$volume.$id == volumeID)
+            .all(\.$id)
+        try await RoleBindingService.revokeAll(nodeType: .volumeSnapshot, nodeIDs: snapshotIDs, on: db)
+        try await RoleBindingService.revokeAll(nodeType: .volume, nodeID: volumeID, on: db)
+    }
+
     /// Revoke every binding on a DNS zone node and on the authored records that
     /// cascade away with it. Records hang off the zone, not the project, so
     /// this is the one project child collected through its own parent rather

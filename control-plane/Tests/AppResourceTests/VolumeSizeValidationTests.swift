@@ -121,26 +121,26 @@ final class VolumeSizeValidationTests {
         }
     }
 
-    @Test("POST /api/volumes accepts a valid sizeGB")
+    @Test("POST /api/volumes accepts a valid sizeGB (202)")
     func createAcceptsValidSize() async throws {
         try await withVolumeTestApp { app, _, project, token in
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(self.createBody(project: project, sizeGB: 10))
             } afterResponse: { res in
-                #expect(res.status == .ok)
+                #expect(res.status == .accepted)
             }
 
-            // createVolume provisions on a detached task that touches app.db;
-            // wait for it to settle (no agents connected → `.error`) so it
-            // can't race application shutdown during test teardown.
-            var provisioned: Volume?
+            // Placement runs on a detached task that touches app.db; wait for it
+            // to settle (no agents connected → degraded) so it can't race
+            // application shutdown during test teardown.
+            var placed: Volume?
             for _ in 0..<100 {
-                provisioned = try await Volume.query(on: app.db).first()
-                if provisioned?.status == .error { break }
+                placed = try await Volume.query(on: app.db).first()
+                if placed?.conditions.degraded != nil { break }
                 try await Task.sleep(for: .milliseconds(50))
             }
-            #expect(provisioned?.status == .error)
+            #expect(placed?.conditions.degraded != nil)
         }
     }
 

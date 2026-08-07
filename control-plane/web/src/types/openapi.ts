@@ -880,7 +880,10 @@ export interface paths {
         /** Update a volume's metadata */
         put: operations["updateVolume"];
         post?: never;
-        /** Delete a volume */
+        /**
+         * Delete a volume
+         * @description Accepted, not performed. The volume is marked absent and its row survives until its agent confirms the data is gone; a client follows the delete through `GET /api/operations/{operationID}` with the returned `mutationId`, because a volume that is deleted and one that never existed both answer `404`.
+         */
         delete: operations["deleteVolume"];
         options?: never;
         head?: never;
@@ -5117,6 +5120,17 @@ export interface components {
             /** Format: uuid */
             mutationId: string;
         };
+        /** @description The body of a `202` from a volume lifecycle mutation — the volume counterpart of `AcceptedVMMutation`, with the same contract. Volumes joined the reconciliation loop in ADR 0001 stage 5. */
+        AcceptedVolumeMutation: {
+            resource: components["schemas"]["Volume"];
+            /**
+             * Format: int64
+             * @description The generation the volume's `observedGeneration` must reach.
+             */
+            targetGeneration: number;
+            /** Format: uuid */
+            mutationId: string;
+        };
         /**
          * @description A durable record of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal.
          *
@@ -5660,6 +5674,9 @@ export interface components {
             vmId?: string;
             deviceName?: string;
             bootOrder?: number;
+            /** @description Whether the attachment presents the volume read-only. */
+            readonly: boolean;
+            conditions: components["schemas"]["ResourceConditions"];
             /** Format: uuid */
             sourceImageId?: string;
             /** Format: uuid */
@@ -8904,6 +8921,15 @@ export interface components {
                 "application/json": components["schemas"]["AcceptedSandboxMutation"];
             };
         };
+        /** @description The mutation was accepted. Refetch the volume until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        AcceptedVolumeMutation: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["AcceptedVolumeMutation"];
+            };
+        };
         /** @description The log backend (Loki) could not be queried. */
         LogBackendUnavailable: {
             headers: {
@@ -10405,15 +10431,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The created volume (provisioning in the background). */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Volume"];
-                };
-            };
+            202: components["responses"]["AcceptedVolumeMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -10489,7 +10507,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            204: components["responses"]["NoContent"];
+            202: components["responses"]["AcceptedVolumeMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -10513,15 +10531,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The attached volume. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Volume"];
-                };
-            };
+            202: components["responses"]["AcceptedVolumeMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -10541,15 +10551,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The detached volume. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Volume"];
-                };
-            };
+            202: components["responses"]["AcceptedVolumeMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -10573,15 +10575,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The resized volume. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Volume"];
-                };
-            };
+            202: components["responses"]["AcceptedVolumeMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -10637,15 +10631,7 @@ export interface operations {
             };
         };
         responses: {
-            /** @description The new volume (cloning in the background). */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Volume"];
-                };
-            };
+            202: components["responses"]["AcceptedVolumeMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];

@@ -2,6 +2,7 @@
 
 import { api } from "./client";
 import type {
+  AcceptedMutation,
   Volume,
   VolumeSnapshot,
   CreateVolumeRequest,
@@ -14,6 +15,15 @@ import type {
 } from "@/types/api";
 import { LIST_PAGE_LIMIT } from "@/types/api";
 
+// Volume lifecycle mutations are asynchronous since backend STR-148: the
+// server responds 202 Accepted with the volume, the generation it now has to
+// converge on, and the id of the mutation's audit record. The work completes in
+// the background; MutationWatcher refetches the volume until its `conditions`
+// say it converged — or, for a delete, polls operationsApi.get(mutationId),
+// because a deleted volume has nothing left to refetch.
+//
+// Snapshot verbs are the exception and still answer synchronously: they have
+// not converted to desired state yet (backend ADR 0001 stage 8).
 export const volumesApi = {
   list(projectId?: string): Promise<Volume[]> {
     return api
@@ -28,28 +38,34 @@ export const volumesApi = {
     return api.get<Volume>(`/api/volumes/${id}`);
   },
 
-  create(data: CreateVolumeRequest): Promise<Volume> {
-    return api.post<Volume>("/api/volumes", data);
+  create(data: CreateVolumeRequest): Promise<AcceptedMutation<Volume>> {
+    return api.post<AcceptedMutation<Volume>>("/api/volumes", data);
   },
 
   update(id: string, data: UpdateVolumeRequest): Promise<Volume> {
     return api.put<Volume>(`/api/volumes/${id}`, data);
   },
 
-  delete(id: string): Promise<void> {
-    return api.delete(`/api/volumes/${id}`);
+  delete(id: string): Promise<AcceptedMutation<Volume>> {
+    return api.delete<AcceptedMutation<Volume>>(`/api/volumes/${id}`);
   },
 
-  attach(id: string, data: AttachVolumeRequest): Promise<Volume> {
-    return api.post<Volume>(`/api/volumes/${id}/attach`, data);
+  attach(
+    id: string,
+    data: AttachVolumeRequest
+  ): Promise<AcceptedMutation<Volume>> {
+    return api.post<AcceptedMutation<Volume>>(`/api/volumes/${id}/attach`, data);
   },
 
-  detach(id: string): Promise<Volume> {
-    return api.post<Volume>(`/api/volumes/${id}/detach`);
+  detach(id: string): Promise<AcceptedMutation<Volume>> {
+    return api.post<AcceptedMutation<Volume>>(`/api/volumes/${id}/detach`);
   },
 
-  resize(id: string, data: ResizeVolumeRequest): Promise<Volume> {
-    return api.post<Volume>(`/api/volumes/${id}/resize`, data);
+  resize(
+    id: string,
+    data: ResizeVolumeRequest
+  ): Promise<AcceptedMutation<Volume>> {
+    return api.post<AcceptedMutation<Volume>>(`/api/volumes/${id}/resize`, data);
   },
 
   snapshot(
@@ -59,8 +75,8 @@ export const volumesApi = {
     return api.post<VolumeSnapshot>(`/api/volumes/${id}/snapshot`, data);
   },
 
-  clone(id: string, data: CloneVolumeRequest): Promise<Volume> {
-    return api.post<Volume>(`/api/volumes/${id}/clone`, data);
+  clone(id: string, data: CloneVolumeRequest): Promise<AcceptedMutation<Volume>> {
+    return api.post<AcceptedMutation<Volume>>(`/api/volumes/${id}/clone`, data);
   },
 
   listSnapshots(id: string): Promise<VolumeSnapshot[]> {

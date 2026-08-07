@@ -89,7 +89,7 @@ export function VolumeTable({
                 )}
               </TableCell>
               <TableCell>
-                <VolumeStatusBadge status={volume.status} />
+                <VolumeStatusBadge status={volume.status} volumeId={volume.id} />
               </TableCell>
               <TableCell className="text-foreground/80">
                 {volume.volumeType}

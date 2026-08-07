@@ -11,6 +11,7 @@ import StratoShared
 enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
     case virtualMachine = "virtual_machine"
     case sandbox = "sandbox"
+    case volume = "volume"
 
     /// Short noun for client-facing messages ("An operation is already
     /// pending for this VM").
@@ -20,6 +21,8 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
             return "VM"
         case .sandbox:
             return "sandbox"
+        case .volume:
+            return "volume"
         }
     }
 
@@ -68,6 +71,10 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 // disks, and moving one off-node is out of scope for v1
                 // (issue #564). The budget function stays total.
                 return 300
+            case .attach, .detach:
+                // Volume-only kinds (STR-148); unreachable for VMs. Total
+                // function, unreachable arm.
+                return 120
             }
         case .sandbox:
             switch kind {
@@ -97,6 +104,34 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 // so it is bounded by the network, not local disk.
                 return 3600
             case .snapshotDelete:
+                return 120
+            case .attach, .detach:
+                // Unreachable for sandboxes (no endpoint issues them); the
+                // budget function stays total.
+                return 120
+            }
+        case .volume:
+            switch kind {
+            case .create:
+                // Covers the two slow create strategies: materializing a
+                // multi-gigabyte image, and `qemu-img convert`-ing a full
+                // clone of another volume.
+                return 900
+            case .delete:
+                return 300
+            case .resize:
+                // `qemu-img resize` grows metadata, not data; the budget
+                // covers a sync round trip and the agent's next report.
+                return 180
+            case .attach, .detach:
+                // A QMP hot-plug, or — for a powered-off guest — just the
+                // agent recording the attachment.
+                return 120
+            case .boot, .shutdown, .reboot, .pause, .resume,
+                .snapshot, .snapshotDelete, .restore, .snapshotExport:
+                // A volume has no run state, and its snapshot verbs are still
+                // imperative (ADR 0001 stage 8). Total function, unreachable
+                // arms.
                 return 120
             }
         }

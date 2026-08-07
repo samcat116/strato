@@ -10,6 +10,10 @@ import Foundation
 /// sockets, machine types, queue sizing — is derived by each agent-side
 /// `HypervisorService` when it translates the spec into its driver-native form
 /// (QEMU arguments, Firecracker API calls, ...).
+/// > Adding a stored property here also means adding it to `withVolumes(_:)`
+/// > below, which has to enumerate every field because they are all `let`. A
+/// > field left out of that list is silently dropped from the spec of every VM
+/// > whose attachments change.
 public struct VMSpec: Codable, Sendable {
     /// Number of vCPUs the VM boots with.
     public let cpus: Int
@@ -107,6 +111,36 @@ public struct VMSpec: Codable, Sendable {
     /// The machine profile to realize, defaulting to today's behavior when the
     /// sending control plane predates the field.
     public var effectiveMachine: MachineProfile { machine ?? .default }
+
+    /// A copy of this spec with a different volume list.
+    ///
+    /// Hand-enumerates every stored property because they are all `let`. Keep
+    /// it in step with the declarations above — see the note on the type.
+    ///
+    /// The agent uses this to keep a VM's manifest entry in step with the
+    /// attachments the volume reconciler has realized (STR-148): the entry's
+    /// `volumes` is the agent's durable record of what is plugged into the VM,
+    /// and it is what the spawn path rebuilds the guest's disk set from after
+    /// a power cycle or an agent restart.
+    public func withVolumes(_ volumes: [VolumeSpec]) -> VMSpec {
+        VMSpec(
+            cpus: cpus,
+            maxCpus: maxCpus,
+            memoryBytes: memoryBytes,
+            maxMemoryBytes: maxMemoryBytes,
+            balloonTargetBytes: balloonTargetBytes,
+            diskBytes: diskBytes,
+            sharedMemory: sharedMemory,
+            hugepages: hugepages,
+            boot: boot,
+            machine: machine,
+            volumes: volumes,
+            networks: networks,
+            console: console,
+            sshAuthorizedKeys: sshAuthorizedKeys,
+            userData: userData
+        )
+    }
 
     // Custom decode so `sshAuthorizedKeys`, `diskBytes`, `maxMemoryBytes`,
     // `balloonTargetBytes`, `machine`, and `userData` tolerate absence: a spec produced by an older

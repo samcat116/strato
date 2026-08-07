@@ -103,21 +103,30 @@ struct VolumeAttachProjectContainmentTests {
                 try req.content.encode(
                     AttachVolumeRequest(vmId: vm.id!, deviceName: nil, bootOrder: nil, readonly: nil))
             } afterResponse: { res in
-                // Pin the *specific* downstream failure, not merely the absence
-                // of the containment message: an attach that clears every guard
-                // dies at the agent dispatch (`VolumeServiceError.agentNotFound`
-                // is not an `AbortError`, so it surfaces as 500). Asserting only
-                // that the containment reason is missing would still pass if a
-                // refactor moved some earlier-firing check ahead of the guard —
-                // any such check answers 400/403/404/409 and fails here.
-                #expect(res.status == .internalServerError)
+                // Pin the *specific* success, not merely the absence of the
+                // containment message: an attach that clears every guard is
+                // accepted (STR-148 — there is no in-band agent dispatch left to
+                // fail, so this used to be a 500 from `agentNotFound`).
+                // Asserting only that the containment reason is missing would
+                // still pass if a refactor moved some earlier-firing check ahead
+                // of the guard — any such check answers 400/403/404/409 and
+                // fails here.
+                #expect(res.status == .accepted)
                 #expect(!res.body.string.contains("belongs to a different project"))
             }
 
-            // The agent-side failure path restores the volume, so a rejected
-            // hot-plug is indistinguishable from never having been requested.
-            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
-            #expect(reloaded.status == .available)
+            // The volume in this fixture is on no agent, so `.stateSync`
+            // dispatch degrades it immediately and `resolveForStuckOperation`
+            // reverts the attachment — an unachieved intent left in place would
+            // replay on every later sync. A rejected attach is therefore still
+            // indistinguishable from never having been requested, just by a
+            // different mechanism than the old in-band revert.
+            var reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            for _ in 0..<100 where reloaded.conditions.degraded == nil {
+                try await Task.sleep(for: .milliseconds(50))
+                reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            }
+            #expect(reloaded.conditions.degraded != nil)
             #expect(reloaded.$vm.id == nil)
         }
     }

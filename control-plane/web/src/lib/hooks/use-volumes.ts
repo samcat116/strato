@@ -6,8 +6,11 @@ export function useVolumes(projectId?: string) {
   return useQuery({
     queryKey: ["volumes", { projectId: projectId ?? null }],
     queryFn: () => volumesApi.list(projectId),
-    // Poll so async transitions (creating, cloning, deleting) resolve in the UI
-    refetchInterval: 5000,
+    // Still polled, but as a backstop rather than the mechanism: since backend
+    // STR-148 a volume's own mutations are followed by MutationWatcher off its
+    // `conditions`, and this only has to catch changes nothing in this tab
+    // requested (another operator's, or an agent reporting drift).
+    refetchInterval: 10000,
   });
 }
 

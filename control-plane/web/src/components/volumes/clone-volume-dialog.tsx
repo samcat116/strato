@@ -15,6 +15,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
 import { toast } from "sonner";
+import {
+  acceptedMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
+
 import type { Volume } from "@/types/api";
 
 interface CloneVolumeDialogProps {
@@ -31,6 +36,7 @@ export function CloneVolumeDialog({
   onSuccess,
 }: CloneVolumeDialogProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const watch = useMutationsStore((state) => state.watch);
   const [name, setName] = useState(`${volume.name}-clone`);
   const [description, setDescription] = useState("");
 
@@ -45,11 +51,21 @@ export function CloneVolumeDialog({
 
     setIsLoading(true);
     try {
-      await volumesApi.clone(volume.id!, {
+      // The accepted mutation is a `create` on the *clone*, not an operation
+      // on the source: cloning is a create strategy on the new volume's
+      // desired entry (backend STR-148), so the source is only ever read.
+      const accepted = await volumesApi.clone(volume.id!, {
         name: trimmedName,
         description: description.trim() || undefined,
       });
-      toast.success(`Cloning ${volume.name} to "${trimmedName}"`);
+      watch(
+        acceptedMutation(accepted, {
+          kind: "create",
+          resourceKind: "volume",
+          resourceId: accepted.resource.id!,
+          resourceName: trimmedName,
+        })
+      );
       onOpenChange(false);
       onSuccess?.();
     } catch (error) {

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { operationsApi } from "@/lib/api/operations";
 import { sandboxesApi } from "@/lib/api/sandboxes";
 import { vmsApi } from "@/lib/api/vms";
+import { volumesApi } from "@/lib/api/volumes";
 import {
   useMutationsStore,
   type WatchedMutation,
@@ -25,6 +26,8 @@ const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = 
   snapshot_delete: { succeeded: "Snapshot deleted", infinitive: "delete the snapshot of" },
   restore: { succeeded: "Restored", infinitive: "restore" },
   snapshot_export: { succeeded: "Snapshot exported", infinitive: "export the snapshot of" },
+  attach: { succeeded: "Attached", infinitive: "attach" },
+  detach: { succeeded: "Detached", infinitive: "detach" },
 };
 
 // The list query key to refresh when a mutation settles, so a create/delete/
@@ -32,6 +35,7 @@ const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = 
 const listQueryKey: Record<WatchedMutation["resourceKind"], string> = {
   virtual_machine: "vms",
   sandbox: "sandboxes",
+  volume: "volumes",
 };
 
 const POLL_INTERVAL_MS = 2000;
@@ -68,7 +72,8 @@ function outcome(
 
 /**
  * Follows every watched mutation to a terminal state, then toasts the outcome
- * and refreshes the relevant resource queries (VMs or sandboxes). Mounted once
+ * and refreshes the relevant resource queries (VMs, sandboxes, volumes).
+ * Mounted once
  * in the dashboard layout so this survives navigation away from the page that
  * started the mutation.
  *
@@ -98,7 +103,9 @@ export function MutationWatcher() {
       const resource =
         entry.resourceKind === "virtual_machine"
           ? await vmsApi.get(entry.resourceId)
-          : await sandboxesApi.get(entry.resourceId);
+          : entry.resourceKind === "volume"
+            ? await volumesApi.get(entry.resourceId)
+            : await sandboxesApi.get(entry.resourceId);
       return outcome(resource.conditions, entry.targetGeneration);
     };
 

@@ -168,6 +168,33 @@ struct ObservedStateApplier {
             }
         }
 
+        // Volumes (STR-148). `guard let` on the *field*, not on a version
+        // lookup: an agent below v31 omits `volumes` entirely, and the whole
+        // loop below treats an unlisted volume as confirmed gone. Reading that
+        // silence as authoritative would reap every terminating volume row the
+        // agent holds and error every live one — a data-loss-shaped bug, so it
+        // is guarded by the payload describing itself rather than by a
+        // `wireProtocolVersion` column being current.
+        if let reportedVolumeList = report.volumes {
+            let reportedVolumes = Dictionary(
+                reportedVolumeList.map { ($0.volumeId, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let dbVolumes = try await Volume.query(on: db)
+                .filter(\.$hypervisorId == report.agentId)
+                .all()
+            for volume in dbVolumes {
+                guard let volumeID = volume.id else { continue }
+                if let observed = reportedVolumes[volumeID] {
+                    try await applyObservedVolumeState(
+                        volume: volume, observed: observed, agentId: report.agentId, on: db)
+                } else {
+                    try await handleReportedVolumeAbsence(
+                        volume: volume, agentId: report.agentId, on: db)
+                }
+            }
+        }
+
         return unrecognizedOutcome
     }
 
@@ -303,6 +330,14 @@ struct ObservedStateApplier {
                 sandboxPlacements[id] = WorkloadPlacement(agentId: sandbox.hypervisorId)
             }
         }
+        let volumeIDs = report.unrecognized.filter { $0.kind == .volume }.map(\.workloadId)
+        var volumePlacements: [UUID: WorkloadPlacement] = [:]
+        if !volumeIDs.isEmpty {
+            for volume in try await Volume.query(on: db).filter(\.$id ~~ volumeIDs).all() {
+                guard let id = volume.id else { continue }
+                volumePlacements[id] = WorkloadPlacement(agentId: volume.hypervisorId)
+            }
+        }
 
         // New claims accumulate for one batched create at the end — see the
         // stale-delete note above for why this path can't afford a round trip
@@ -310,8 +345,16 @@ struct ObservedStateApplier {
         var newClaims: [AgentWorkloadClaim] = []
         for entry in report.unrecognized {
             let key = ResourceKey(kind: entry.kind.resourceKind, id: entry.workloadId)
-            let placement: WorkloadPlacement? =
-                entry.kind == .vm ? vmPlacements[entry.workloadId] : sandboxPlacements[entry.workloadId]
+            // An exhaustive switch, not a ternary: the two-kind ternary this
+            // replaces would have silently bucketed a volume entry into the
+            // sandbox lookup, and "no sandbox row with that id" reads as "no
+            // row at all" — which is what authorizes a teardown.
+            let placement: WorkloadPlacement?
+            switch entry.kind {
+            case .vm: placement = vmPlacements[entry.workloadId]
+            case .sandbox: placement = sandboxPlacements[entry.workloadId]
+            case .volume: placement = volumePlacements[entry.workloadId]
+            }
             let existing = claimsByKey[key]
 
             guard let placement else {
@@ -989,6 +1032,220 @@ struct ObservedStateApplier {
                 "agentId": .string(agentId),
                 "previousStatus": .string(previous.rawValue),
             ])
+    }
+
+    // MARK: - Volumes (STR-148)
+
+    /// Volume counterpart of `applyObservedVMState`. Same shape and the same
+    /// transition rules; what differs is that a volume's status is *entirely*
+    /// derived here, since the control plane no longer writes a transitional
+    /// status of its own before dispatching anything.
+    private func applyObservedVolumeState(
+        volume: Volume,
+        observed: ObservedVolumeState,
+        agentId: String,
+        on db: Database
+    ) async throws {
+        let volumeID = try volume.requireID()
+        // Captured before anything mutates, for exactly the reasons the VM
+        // path documents: `recordConvergence` mirrors the agent's own
+        // `failedGeneration` onto the model and would otherwise satisfy the
+        // idempotence guard with nothing recorded.
+        let wasConverged = volume.isConverged
+        let failedBefore = volume.failedGeneration
+
+        var changed = volume.recordConvergence(
+            phase: observed.convergencePhase,
+            lastError: observed.lastError,
+            failedGeneration: observed.failedGeneration
+        )
+
+        // The agent owns path layout, so this is the only place a volume's
+        // storage path is ever written. Recorded before the converging
+        // early-return: a create reports its path as soon as the bytes land,
+        // and `VMSpecBuilder.volumeSpecs` needs it to project the attachment.
+        if observed.present, let path = observed.storagePath, volume.storagePath != path {
+            volume.storagePath = path
+            changed = true
+        }
+        if observed.present {
+            try await recordReplica(
+                volumeID: volumeID, agentId: agentId, datasetPath: observed.storagePath, on: db)
+        }
+
+        // Still converging: progress only, never a settled status.
+        if observed.convergencePhase != nil {
+            if changed {
+                try await volume.save(on: db)
+            }
+            return
+        }
+
+        if observed.observedGeneration > volume.observedGeneration {
+            volume.observedGeneration = observed.observedGeneration
+            changed = true
+        }
+
+        // Status is derived, not reported: the agent describes the bytes and
+        // the attachment, and those two facts plus the desired state are the
+        // whole status vocabulary a volume has left.
+        let derived: VolumeStatus
+        if !observed.present {
+            // Bytes not (yet) on disk with nothing in flight. Distinguishing a
+            // create that has not started from one that failed is the
+            // `lastError` check below; `.creating` is the honest reading here.
+            derived = observed.lastError == nil ? .creating : .error
+        } else if observed.attachedVMId != nil {
+            derived = .attached
+        } else {
+            derived = .available
+        }
+        // `.snapshotting` is still written by the imperative snapshot path
+        // (ADR stage 8) and must not be stomped by a report that knows nothing
+        // about it.
+        if volume.status != derived, volume.status != .snapshotting {
+            volume.status = derived
+            changed = true
+        }
+        // Where the realized attachment runs. Purely observed, and deliberately
+        // the *only* attachment column this path writes.
+        //
+        // `deviceName` is not written here even though the report carries it:
+        // the slot is the control plane's decision, read straight back out by
+        // `DesiredStateAssembler` as the desired attachment. Overwriting it
+        // from an observation would silently replace what the user asked for
+        // with what the agent happens to have — and, being a bare field write
+        // with no generation bump, would do it without the agent ever noticing
+        // the goalposts moved. When the two disagree the agent already plans
+        // `.detach` then `.attach` to correct the slot; that is the loop
+        // working, not a fact to absorb.
+        if observed.attachedVMId != nil {
+            if volume.attachedAgentId != agentId {
+                volume.attachedAgentId = agentId
+                changed = true
+            }
+        } else if volume.attachedAgentId != nil {
+            volume.attachedAgentId = nil
+            changed = true
+        }
+
+        let settlesConvergence =
+            volume.desiredStatus != .absent
+            && ((!wasConverged && volume.isConverged)
+                || (observed.lastError != nil && observed.failedGeneration == volume.generation))
+        if !settlesConvergence {
+            if changed {
+                try await volume.save(on: db)
+            }
+            return
+        }
+
+        if !wasConverged, volume.isConverged {
+            try await ResourceConvergence.recordSuccess(volume, on: db)
+        } else if let lastError = observed.lastError, observed.failedGeneration == volume.generation {
+            let mutation =
+                try await ResourceEvent.latest(
+                    .requested, resourceKind: .volume, resourceID: volumeID, on: db
+                )?.mutation ?? .create
+            let recorded = try await ResourceConvergence.recordFailure(
+                volume, mutation: mutation, reason: lastError,
+                telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
+            if !recorded, changed {
+                try await volume.save(on: db)
+            }
+        }
+    }
+
+    /// A volume the database maps to this agent is absent from its full report:
+    /// either a confirmed deletion (desired absent) or genuine loss.
+    ///
+    /// This is the only place a volume row is ever removed. The agent omitting
+    /// the volume from a full list is the confirmation that its data is gone —
+    /// the same contract VMs and sandboxes have, and the reason a volume delete
+    /// can be re-driven indefinitely without ever orphaning bytes.
+    private func handleReportedVolumeAbsence(
+        volume: Volume,
+        agentId: String,
+        on db: Database
+    ) async throws {
+        let volumeID = try volume.requireID()
+
+        if volume.desiredStatus == .absent {
+            switch try await ResourceFinalizerService.clear(
+                .agentAbsent, from: volume, on: db, app: app)
+            {
+            case .reaped:
+                app.logger.info(
+                    "Volume deletion confirmed by agent report; record removed",
+                    metadata: ["volumeId": .string(volumeID.uuidString), "agentId": .string(agentId)])
+            case .held(let remaining):
+                app.logger.debug(
+                    "Volume teardown confirmed by agent report; awaiting finalizers",
+                    metadata: [
+                        "volumeId": .string(volumeID.uuidString), "agentId": .string(agentId),
+                        "finalizers": .string(remaining.joined(separator: ",")),
+                    ])
+            case .alreadyGone, .notTerminating:
+                break
+            }
+            return
+        }
+
+        // Nothing to report means no progress to report — same rationale as the
+        // VM and sandbox paths.
+        let convergenceCleared = volume.recordConvergence(
+            phase: nil, lastError: nil, failedGeneration: nil)
+
+        // Only escalate a volume some agent has actually confirmed. A row at
+        // `observedGeneration == 0` may simply be waiting for its first sync to
+        // reach the agent, and calling that an error would make every create
+        // flash red before it went green.
+        guard volume.observedGeneration > 0, volume.status != .error else {
+            if convergenceCleared {
+                try await volume.save(on: db)
+            }
+            return
+        }
+
+        let previous = volume.status
+        volume.status = .error
+        volume.errorMessage = "volume data is missing from its agent"
+        try await volume.save(on: db)
+        app.logger.warning(
+            "Volume missing from agent observed-state report; marking as error until re-converged",
+            metadata: [
+                "volumeId": .string(volumeID.uuidString),
+                "agentId": .string(agentId),
+                "previousStatus": .string(previous.rawValue),
+            ])
+    }
+
+    /// Record the physical copy an agent just confirmed it holds. Idempotent:
+    /// a replica already recorded for that agent is updated in place.
+    ///
+    /// Moved here from `VolumeService` with STR-148: the replica row is a
+    /// record of *observed* placement, so it belongs on the path that ingests
+    /// observations rather than on one that used to await an RPC response.
+    private func recordReplica(
+        volumeID: UUID, agentId: String, datasetPath: String?, on db: Database
+    ) async throws {
+        if let existing = try await VolumeReplica.query(on: db)
+            .filter(\.$volume.$id == volumeID)
+            .filter(\.$agentId == agentId)
+            .first()
+        {
+            guard existing.datasetPath != datasetPath || existing.state != .healthy else { return }
+            existing.datasetPath = datasetPath
+            existing.state = .healthy
+            try await existing.save(on: db)
+            return
+        }
+        try await VolumeReplica(
+            volumeID: volumeID,
+            agentId: agentId,
+            datasetPath: datasetPath,
+            state: .healthy
+        ).create(on: db)
     }
 }
 

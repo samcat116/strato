@@ -2,8 +2,10 @@
 
 - **Status**: Accepted
 - **Progress**: stages 1 (conditions, STR-142), 2 (`resource_events`,
-  STR-143), 3 (finalizers, STR-144), and 6 (`agent_update` removal, STR-145)
-  have landed; later stages pending.
+  STR-143), 3 (finalizers, STR-144), 4 (202 → `{resource, targetGeneration}`,
+  STR-147), 5 (volumes declarative, STR-148), 6 (`agent_update` removal,
+  STR-145), and 10 (pull transport, STR-146) have landed; later stages
+  pending.
 - **Date**: 2026-08-02
 - **Deciders**: Sam Schmitt
 - **Scope**: control-plane ↔ agent protocol, `ResourceOperation` machinery,
@@ -341,6 +343,26 @@ agent is involved.
 5. **Volumes declarative** (6 messages) — the clearest durable noun, the
    biggest single win; retires its operation kinds and `VolumeService`'s
    await-response path.
+
+   *Amended in implementation (STR-148):* this stage shipped as a **hard
+   cutover** rather than the dual-mode window the costs section below
+   anticipates. The six messages are deleted outright at wire v31, and
+   `supportsVolumeSync` gates *placement*: a volume is never scheduled onto an
+   agent that cannot converge it. The dual-mode alternative — keeping the
+   imperative path alive per-agent behind the 202 — was rejected because it
+   would have preserved every hand-rolled status revert this stage exists to
+   delete, for the duration of a fleet upgrade. The cost is that volumes
+   already sitting on a pre-v31 agent freeze until it is upgraded; deleting one
+   still works, because the delete path force-clears the agent-absence
+   finalizer for an agent that cannot confirm.
+
+   The conversion also required a fix outside its own scope. An image-backed
+   VM's spawn path treated `VMSpec.volumes` as a *fallback* it never reached,
+   and `respawn` rebuilds a guest from the configuration captured at create
+   time — so a hot-plugged disk silently vanished at the next power cycle while
+   the control plane still called the volume attached. "Attachment is desired
+   state" cannot converge over that, so the agent now keeps a durable
+   attachment record and merges it into the spawn configuration.
 6. **Drop imperative `agent_update`** (one caller; declarative path exists).
 7. **`volume_info` → observed report.**
 8. **Snapshots and checkpoints as desired artifacts** (retention design

@@ -93,13 +93,13 @@ struct EnforcePersistedEnumValues: AsyncMigration {
         ),
         .init(
             table: "resource_operations", column: "resource_kind",
-            allowedValues: ["virtual_machine", "sandbox"], defaultValue: "virtual_machine"
+            allowedValues: ["virtual_machine", "sandbox", "volume"], defaultValue: "virtual_machine"
         ),
         .init(
             table: "resource_operations", column: "kind",
             allowedValues: [
                 "create", "boot", "shutdown", "reboot", "pause", "resume", "delete", "resize",
-                "snapshot", "snapshot_delete", "restore", "snapshot_export",
+                "snapshot", "snapshot_delete", "restore", "snapshot_export", "attach", "detach",
             ]
         ),
         .init(

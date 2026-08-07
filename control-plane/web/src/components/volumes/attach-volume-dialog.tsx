@@ -16,6 +16,11 @@ import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
 import { useVMs } from "@/lib/hooks/use-vms";
 import { toast } from "sonner";
+import {
+  acceptedMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
+
 import type { Volume } from "@/types/api";
 
 interface AttachVolumeDialogProps {
@@ -35,6 +40,7 @@ export function AttachVolumeDialog({
   onSuccess,
 }: AttachVolumeDialogProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const watch = useMutationsStore((state) => state.watch);
   const [vmId, setVmId] = useState("");
   const [deviceName, setDeviceName] = useState("");
   const { data: vms, isLoading: vmsLoading } = useVMs();
@@ -58,11 +64,22 @@ export function AttachVolumeDialog({
 
     setIsLoading(true);
     try {
-      await volumesApi.attach(volume.id!, {
-        vmId,
-        deviceName: deviceName.trim() || undefined,
-      });
-      toast.success(`Attached ${volume.name}`);
+      // Accepted, not performed: MutationWatcher toasts once the agent has
+      // actually presented the disk (backend STR-148).
+      watch(
+        acceptedMutation(
+          await volumesApi.attach(volume.id!, {
+            vmId,
+            deviceName: deviceName.trim() || undefined,
+          }),
+          {
+            kind: "attach",
+            resourceKind: "volume",
+            resourceId: volume.id!,
+            resourceName: volume.name,
+          }
+        )
+      );
       onOpenChange(false);
       onSuccess?.();
       setVmId("");

@@ -43,7 +43,12 @@ final class ImageDownloadScopingTests {
     }
 
     /// Registers an online agent that supports QEMU and returns its UUID string.
-    private func registerAgent(app: Application, named name: String) async throws -> String {
+    /// `protocolVersion` defaults to the current wire version because the
+    /// volume cases below need an agent that speaks volume sync (STR-148); the
+    /// VM cases are indifferent to it.
+    private func registerAgent(
+        app: Application, named name: String, protocolVersion: Int = WireProtocol.currentVersion
+    ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: name,
             hostname: "\(name).test",
@@ -54,7 +59,7 @@ final class ImageDownloadScopingTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: 2
+            protocolVersion: protocolVersion
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let uuid = try await app.agentService.registerAgent(
@@ -112,11 +117,14 @@ final class ImageDownloadScopingTests {
         }
     }
 
-    @Test("A volume create from an image grants the agent it is dispatched to")
-    func volumeCreateGrantsSelectedAgent() async throws {
+    /// The volume-from-image grant moved from RPC dispatch to sync assembly
+    /// with STR-148, because there is no dispatch left: a volume's image is
+    /// fetched by the agent converging its desired entry, and assembly is the
+    /// only place that knows which agent that is. Same invariant as the VM
+    /// case above — emitting the URLs is what authorizes the fetch.
+    @Test("Assembling a volume's desired state grants its agent the source image")
+    func volumeAssemblyGrantsPlacedAgent() async throws {
         try await withScopingApp { app, builder, project, user in
-            // The volume path is the one image fetch with no VM placement to
-            // authorize it: the volume has no replica until the agent answers.
             let image = try await builder.createImage(
                 project: project, uploadedBy: user, storagePath: "scoping/volume-source.qcow2")
             let agentId = try await self.registerAgent(app: app, named: "volume-agent")
@@ -128,16 +136,44 @@ final class ImageDownloadScopingTests {
                 size: 10 * 1024 * 1024 * 1024,
                 format: .qcow2,
                 volumeType: .boot,
-                createdByID: user.id!
+                createdByID: user.id!,
+                sourceImageID: image.id
             )
+            volume.hypervisorId = agentId
             try await volume.save(on: app.db)
 
-            // No socket is attached, so the request itself fails — but the
-            // grant is written before the message goes out, which is the
-            // ordering that keeps a fast agent from racing its own URL.
-            _ = try? await app.volumeService.requestVolumeCreation(volume: volume, sourceImage: image)
-
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            #expect(message.volumes?.first?.source?.kind == DesiredVolumeSource.image)
             #expect(await self.hasGrant(app: app, agentId: agentId, image: image))
+        }
+    }
+
+    /// The other half of the scoping rule: a volume placed elsewhere must not
+    /// appear in — or grant anything through — this agent's sync.
+    @Test("A volume placed on another agent grants nothing here")
+    func volumeOnOtherAgentIsNotGranted() async throws {
+        try await withScopingApp { app, builder, project, user in
+            let image = try await builder.createImage(
+                project: project, uploadedBy: user, storagePath: "scoping/volume-elsewhere.qcow2")
+            let owner = try await self.registerAgent(app: app, named: "volume-owner")
+            let other = try await self.registerAgent(app: app, named: "volume-bystander")
+
+            let volume = Volume(
+                name: "elsewhere-volume",
+                description: "volume from image",
+                projectID: project.id!,
+                size: 10 * 1024 * 1024 * 1024,
+                format: .qcow2,
+                volumeType: .boot,
+                createdByID: user.id!,
+                sourceImageID: image.id
+            )
+            volume.hypervisorId = owner
+            try await volume.save(on: app.db)
+
+            let message = try await app.desiredStateAssembler.assemble(agentId: other)
+            #expect(message.volumes?.isEmpty == true)
+            #expect(await self.hasGrant(app: app, agentId: other, image: image) == false)
         }
     }
 

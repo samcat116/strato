@@ -214,6 +214,25 @@ public actor MockStorageBackend: StorageBackend {
         return DiskAttachment(path: path, format: source.format)
     }
 
+    /// The simulated inventory, keyed the way the reconciler keys workloads
+    /// (canonical uppercase UUID). Entries whose id is not a UUID are dropped
+    /// rather than reported: the wire cannot name them, so they could never be
+    /// reconciled anyway.
+    public func listVolumes() async throws -> [String: DiskAttachment] {
+        var result: [String: DiskAttachment] = [:]
+        for (id, volume) in volumes {
+            guard let canonical = UUID(uuidString: id)?.uuidString else { continue }
+            result[canonical] = DiskAttachment(path: volume.path, format: volume.format)
+        }
+        return result
+    }
+
+    /// The virtual size recorded for a volume, so the mock actuator can answer
+    /// resize convergence without a `qemu-img info`.
+    public func recordedSize(volumeId: String) -> Int64? {
+        volumes[volumeId]?.sizeBytes
+    }
+
     public func volumeInfo(volumePath: String) async throws -> VolumeInfoResult {
         guard let volume = volumes.first(where: { $0.value.path == volumePath })?.value else {
             throw StorageBackendError.volumeNotFound(volumePath)

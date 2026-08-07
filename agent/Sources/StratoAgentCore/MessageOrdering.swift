@@ -89,16 +89,12 @@ extension MessageEnvelope {
 
         let raws: [String?]
         switch type {
-        case .volumeClone:
-            // A clone reads a source volume and writes a target volume; serialize against both
-            // so it can't race a delete/resize/info on either resource.
-            raws = [fields?.sourceVolumeId, fields?.targetVolumeId]
-        case .volumeAttach, .volumeDetach:
-            // Hot-plug/unplug acts on both the volume and the target VM (the handler drives
-            // QEMU with vmId), so serialize against the VM's lifecycle lane too.
-            raws = [fields?.volumeId, fields?.vmId]
-        case .volumeCreate, .volumeDelete, .volumeResize, .volumeSnapshot, .volumeSnapshotDelete, .volumeInfo:
-            raws = [fields?.volumeId]
+        case .volumeSnapshot, .volumeSnapshotDelete, .volumeInfo:
+            // The volume verbs that have not converted to desired state yet
+            // (ADR 0001 stages 7 and 8). They take the *reconciler's* volume
+            // lane, not a bare-id one, so a snapshot can never run concurrently
+            // with the reconciler resizing or deleting the same volume.
+            raws = [volumeLane(fields?.volumeId)]
         case .desiredState:
             // Full-fleet syncs diff quickly and fan per-VM work out onto the VM lanes, so
             // they get their own lane: ordered among themselves, never stuck behind a VM.
@@ -129,13 +125,19 @@ extension MessageEnvelope {
         return keys.isEmpty ? [unkeyedSerializationLane] : keys
     }
 
+    /// The lane a volume's work runs on, matching `ReconcileWorkItem.laneKeys`
+    /// exactly — the id is canonicalized *before* the prefix goes on, because
+    /// the normalization below cannot see through it.
+    private static func volumeLane(_ rawVolumeId: String?) -> String? {
+        guard let rawVolumeId, !rawVolumeId.isEmpty else { return nil }
+        return "volume/" + (UUID(uuidString: rawVolumeId)?.uuidString ?? rawVolumeId)
+    }
+
     /// Minimal projection of the possible resource-identifying fields across frame payloads,
     /// decoded once for routing without paying for a full message decode.
     private struct RoutingFields: Decodable {
         let vmId: String?
         let volumeId: String?
-        let sourceVolumeId: String?
-        let targetVolumeId: String?
         let sessionId: String?
     }
 }

@@ -195,6 +195,25 @@ public protocol HypervisorService: Actor, Sendable {
     /// - Throws: `HypervisorServiceError.notSupported` if this backend cannot
     ///   take checkpoints in the first place
     func deleteVMCheckpoint(vmId: String, snapshotId: String) async throws
+
+    /// Whether this backend currently holds a live control session for the VM
+    /// — a hypervisor process it can issue hot-plug against (STR-148).
+    ///
+    /// False for a VM that exists but is powered off, and for an orphan whose
+    /// session has not been reattached. The volume reconciler uses it to decide
+    /// whether an attachment needs a QMP round trip or is already realized by
+    /// having been recorded, since the spawn path rebuilds a VM's disk set from
+    /// the recorded volumes.
+    func hasLiveSession(vmId: String) async -> Bool
+
+    /// Replaces the volume list this backend will rebuild the VM's disk set
+    /// from at its next spawn (STR-148).
+    ///
+    /// Hot-plug alone does not survive a power cycle: the backend respawns from
+    /// the configuration the VM was created with, which a later `attachDisk`
+    /// never touched. This is what keeps that configuration in step with the
+    /// agent's durable attachment record.
+    func updateRecordedVolumes(vmId: String, volumes: [VolumeSpec]) async
 }
 
 // MARK: - Default Implementations
@@ -213,6 +232,15 @@ public extension HypervisorService {
         throw HypervisorServiceError.notSupported(
             "\(hypervisorType.displayName) does not support re-adopting orphaned VMs")
     }
+
+    /// Backends that cannot hot-plug report no live session, so the volume
+    /// reconciler records the attachment and lets the next boot realize it.
+    func hasLiveSession(vmId: String) async -> Bool { false }
+
+    /// Backends that rebuild a VM from its spec on every spawn (rather than
+    /// from a stored configuration) need nothing here: the manifest they are
+    /// handed at create time already carries the recorded volumes.
+    func updateRecordedVolumes(vmId: String, volumes: [VolumeSpec]) async {}
     /// Backends must opt in to full-VM checkpoints (issue #564). Without an
     /// explicit implementation the control plane's capability gate keeps the
     /// request away in the first place; this default is the belt-and-braces

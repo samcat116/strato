@@ -72,6 +72,10 @@ const kindToAction: Record<OperationKind, SandboxAction | null> = {
   restore: null,
   // Export is driven from the snapshot card, not a lifecycle button.
   snapshot_export: null,
+  // Volume-only kinds (backend STR-148); sandboxes never carry them, but the
+  // map stays total.
+  attach: null,
+  detach: null,
 };
 
 export function SandboxActions({

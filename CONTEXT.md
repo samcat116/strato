@@ -88,7 +88,18 @@ use in code, tests, docs, and review. Architecture-level maps live in
 - **Generation** — a monotonic counter bumped on every desired-state change so
   agents treat a sync as newer than anything they have applied; syncs are
   level-triggered and safe to drop or replay.
-- **Conditions** — the `conditions` block VM and sandbox API responses carry:
+- **Create strategy** — how a resource that does not exist on an agent yet gets
+  its initial bytes, carried *on its desired entry* rather than as an operation:
+  a sandbox's `restoreFrom`, a volume's `source` (blank / image / clone). Read
+  only while the resource is absent, which is what makes a replayed sync unable
+  to overwrite live data with a fresh copy.
+- **Desired attachment** — which VM a volume should be presented to, and in
+  which slot. A *field* of the volume's desired entry, not a status: modelling
+  it as a status would make "present, but the attach failed" unrepresentable.
+  The agent keeps a durable record of what it realized, so an attachment
+  survives a guest power cycle and an agent restart.
+- **Conditions** — the `conditions` block VM, sandbox and volume API responses
+  carry:
   *converged* / *targetGeneration* / *observedGeneration* / *phase* /
   *degraded*. Derived on read, never stored, and never written by a mutation —
   it restates the reconciliation loop's own state, so refetching a resource
@@ -153,9 +164,10 @@ use in code, tests, docs, and review. Architecture-level maps live in
   sync. A latency optimization only — the periodic sync is the backstop, so a
   lost nudge is always safe.
 - **Cross-replica RPC** — the correlated request/reply forwarding for the
-  exchanges that are *actions, not states* (volume operations, VM reboot, VM
-  checkpoint/restore/snapshot-delete, sandbox snapshot operations) and so
-  cannot ride the level-triggered sync. When the serving replica lacks the
+  exchanges that are *actions, not states* (VM reboot, VM
+  checkpoint/restore/snapshot-delete, volume *snapshot* operations, sandbox
+  snapshot operations) and so cannot ride the level-triggered sync. A volume's
+  own lifecycle left this list in STR-148. When the serving replica lacks the
   socket, the exchange is forwarded to the holder and the verdict returns on
   the requester's reply channel.
 - **ReplicaMessageBridge** — the deep module (`app.replicaBridge`) that owns

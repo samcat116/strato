@@ -140,87 +140,48 @@ struct MessageOrderingTests {
         #expect(a != b)
     }
 
-    @Test("Volume lifecycle operations are keyed by volume id")
-    func volumeOperationsKeyedByVolumeId() {
+    /// The volume verbs that are still imperative (ADR 0001 stages 7 and 8)
+    /// take the *reconciler's* volume lane, not a bare-id one — so a snapshot
+    /// can never run concurrently with the reconciler resizing or deleting the
+    /// same volume (STR-148).
+    @Test("Surviving volume frames share the reconciler's volume lane")
+    func volumeFramesUseReconcilerLane() {
         let volumeId = UUID().uuidString
-        let createKeys = MessageEnvelope.serializationKeys(
-            type: .volumeCreate, payload: payload(["volumeId": volumeId])
-        )
-        let deleteKeys = MessageEnvelope.serializationKeys(
-            type: .volumeDelete, payload: payload(["volumeId": volumeId])
-        )
-        let resizeKeys = MessageEnvelope.serializationKeys(
-            type: .volumeResize, payload: payload(["volumeId": volumeId])
+        let expected = ["volume/" + volumeId]
+
+        let snapshotKeys = MessageEnvelope.serializationKeys(
+            type: .volumeSnapshot,
+            payload: payload(["volumeId": volumeId, "snapshotId": UUID().uuidString, "volumePath": "/a"])
         )
         let snapshotDeleteKeys = MessageEnvelope.serializationKeys(
             type: .volumeSnapshotDelete,
             payload: payload(["volumeId": volumeId, "snapshotId": UUID().uuidString])
         )
-        #expect(createKeys == [volumeId])
-        #expect(deleteKeys == [volumeId])
-        #expect(resizeKeys == [volumeId])
-        // Snapshot deletion removes a file inside the volume's directory, so it
-        // must share the volume lane with create/delete/resize/snapshot.
-        #expect(snapshotDeleteKeys == [volumeId])
+        let infoKeys = MessageEnvelope.serializationKeys(
+            type: .volumeInfo, payload: payload(["volumeId": volumeId, "volumePath": "/a"])
+        )
+
+        #expect(snapshotKeys == expected)
+        #expect(snapshotDeleteKeys == expected)
+        #expect(infoKeys == expected)
     }
 
-    @Test("Attach then detach of the same volume share the volume lane")
-    func attachDetachShareVolumeLane() {
-        let volumeId = UUID().uuidString
-        let attachKeys = MessageEnvelope.serializationKeys(
-            type: .volumeAttach,
-            payload: payload(["vmId": UUID().uuidString, "volumeId": volumeId])
+    /// The lane string is built from the *canonical* uuid, because the
+    /// reconciler's `laneKeys` are and a prefix defeats the normalization that
+    /// happens after the switch.
+    @Test("Volume lanes normalize uuid casing before prefixing")
+    func volumeLaneNormalizesCasing() {
+        let volumeId = UUID()
+        let lower = MessageEnvelope.serializationKeys(
+            type: .volumeInfo,
+            payload: payload(["volumeId": volumeId.uuidString.lowercased(), "volumePath": "/a"])
         )
-        let detachKeys = MessageEnvelope.serializationKeys(
-            type: .volumeDetach,
-            payload: payload(["vmId": UUID().uuidString, "volumeId": volumeId])
+        let upper = MessageEnvelope.serializationKeys(
+            type: .volumeInfo,
+            payload: payload(["volumeId": volumeId.uuidString, "volumePath": "/a"])
         )
-        // Even attached to / detached from different VMs, they still serialize on the volume.
-        #expect(!Set(attachKeys).isDisjoint(with: detachKeys))
-        #expect(attachKeys.contains(volumeId))
-    }
-
-    @Test("Volume attach/detach also serialize against the target VM's lane")
-    func volumeHotPlugSpansVMLane() {
-        let vmId = UUID().uuidString
-        let volumeId = UUID().uuidString
-        let attachKeys = MessageEnvelope.serializationKeys(
-            type: .volumeAttach,
-            payload: payload(["vmId": vmId, "volumeId": volumeId])
-        )
-        // Hot-plugging must serialize against an action on the same VM.
-        let vmActionKeys = MessageEnvelope.serializationKeys(
-            type: .vmReboot, payload: payload(["vmId": vmId])
-        )
-        #expect(Set(attachKeys) == Set([vmId, volumeId]))
-        #expect(!Set(attachKeys).isDisjoint(with: vmActionKeys))
-    }
-
-    @Test("Volume clone serializes against both its source and target volume lanes")
-    func volumeCloneSpansBothVolumeLanes() {
-        let sourceId = UUID().uuidString
-        let targetId = UUID().uuidString
-        let cloneKeys = MessageEnvelope.serializationKeys(
-            type: .volumeClone,
-            payload: payload([
-                "sourceVolumeId": sourceId, "sourceVolumePath": "/a",
-                "targetVolumeId": targetId,
-            ])
-        )
-
-        // The clone participates in both volumes' lanes, so a resize of the source or a
-        // delete of the target cannot slip past it.
-        let sourceResizeKeys = MessageEnvelope.serializationKeys(
-            type: .volumeResize, payload: payload(["volumeId": sourceId])
-        )
-        let targetDeleteKeys = MessageEnvelope.serializationKeys(
-            type: .volumeDelete, payload: payload(["volumeId": targetId])
-        )
-
-        #expect(Set(cloneKeys) == Set([sourceId, targetId]))
-        #expect(!Set(cloneKeys).isDisjoint(with: sourceResizeKeys))
-        #expect(!Set(cloneKeys).isDisjoint(with: targetDeleteKeys))
-        #expect(!cloneKeys.contains(MessageEnvelope.unkeyedSerializationLane))
+        #expect(lower == upper)
+        #expect(lower == ["volume/" + volumeId.uuidString])
     }
 
     // The network-frame lanes are gone with the imperative network path itself

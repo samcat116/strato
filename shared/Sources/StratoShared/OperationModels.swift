@@ -24,6 +24,12 @@ public enum VMOperationKind: String, Codable, CaseIterable, Sendable {
     /// Off-node export of a sandbox snapshot's artifacts to control-plane
     /// object storage (issue #428).
     case snapshotExport = "snapshot_export"
+    // Volume attachment (STR-148). Their own kinds rather than folded into
+    // `create`/`delete` because attribution is the point of `resource_events`:
+    // "who plugged this volume into that VM" is a different question from "who
+    // made the volume", and an audit trail that conflated them would be a lie.
+    case attach
+    case detach
 }
 
 /// Terminal-or-not state of an asynchronous VM operation. `pending` is the only

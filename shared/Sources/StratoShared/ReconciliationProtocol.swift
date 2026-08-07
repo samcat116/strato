@@ -129,6 +129,155 @@ public struct DesiredSandboxState: Codable, Sendable {
     }
 }
 
+// MARK: - Desired Volume State
+
+/// The state the control plane wants a volume's *data* to be in.
+///
+/// Two cases, deliberately: a volume has no run state, so attachment is a
+/// *field* of the entry rather than a status. Modelling attach as a status
+/// would make "present, but the attach failed" unrepresentable, and it would
+/// collide with size, which moves independently of where the volume is
+/// plugged in.
+///
+/// Decoded strictly, like `DesiredVMStatus` and for a sharper version of the
+/// same reason: misreading a desired volume status destroys the only copy of
+/// user data. An unknown value fails the whole sync and the agent keeps what
+/// it has.
+public enum DesiredVolumeStatus: String, Codable, CaseIterable, Sendable {
+    case present = "Present"
+    /// The volume should not exist on the agent at all (deletion in progress).
+    /// Rows are removed from the control-plane database only after an agent
+    /// confirms absence by omitting the volume from its observed report.
+    case absent = "Absent"
+}
+
+/// How a volume that does not yet exist on this host gets its initial bytes: a
+/// create *strategy*, not an operation — the `DesiredSandboxState.restoreFrom`
+/// pattern (issue #427) applied to what used to be `volume_clone`.
+///
+/// Consulted only when the volume is absent from the host. A volume that
+/// already exists ignores this field forever, which is what makes a replayed
+/// or re-driven sync unable to re-clone over live data.
+///
+/// A `String` discriminator rather than a Swift enum with associated values:
+/// an unrecognized `kind` must fail *this volume* — surfacing as its
+/// `lastError` — never the whole `DesiredStateMessage`.
+public struct DesiredVolumeSource: Codable, Sendable {
+    /// Allocate an empty disk of `DesiredVolumeState.sizeBytes`.
+    public static let blank = "blank"
+    /// Materialize from an image artifact; `imageInfo` carries the locator.
+    public static let image = "image"
+    /// Copy another volume on this same agent; `sourceVolumeId` names it.
+    public static let clone = "clone"
+
+    public let kind: String
+    /// Present for `image`. Download URLs are control-plane-relative paths
+    /// fetched over SVID mTLS — no signature, so nothing here expires and the
+    /// entry stays safe to sit in a sync indefinitely.
+    public let imageInfo: ImageInfo?
+    /// Present for `clone`. The volume/VM co-location constraint guarantees the
+    /// source lives on this same agent, and the agent derives the source path
+    /// from its own layout — no path travels on the wire (STR-180).
+    public let sourceVolumeId: UUID?
+    /// The source volume's format, when known, so the agent can pick a copy
+    /// strategy without probing. Advisory: the backend detects rather than
+    /// assumes.
+    public let sourceFormat: String?
+
+    public init(
+        kind: String,
+        imageInfo: ImageInfo? = nil,
+        sourceVolumeId: UUID? = nil,
+        sourceFormat: String? = nil
+    ) {
+        self.kind = kind
+        self.imageInfo = imageInfo
+        self.sourceVolumeId = sourceVolumeId
+        self.sourceFormat = sourceFormat
+    }
+
+    public static func image(_ info: ImageInfo) -> DesiredVolumeSource {
+        DesiredVolumeSource(kind: Self.image, imageInfo: info)
+    }
+
+    public static func clone(from volumeId: UUID, format: String? = nil) -> DesiredVolumeSource {
+        DesiredVolumeSource(kind: Self.clone, sourceVolumeId: volumeId, sourceFormat: format)
+    }
+}
+
+/// Where a volume should be plugged in. Nil on the desired entry means
+/// "detached"; a value means the agent should have this volume presented to
+/// `vmId` as `deviceName`.
+public struct DesiredVolumeAttachment: Codable, Sendable, Equatable {
+    public let vmId: UUID
+    /// The control-plane-assigned slot ("disk1", ...). Stable across power
+    /// cycles so a re-realized attachment lands where the guest's fstab
+    /// expects it.
+    public let deviceName: String
+    public let readonly: Bool
+    /// Explicit boot priority; informational to the agent, which receives
+    /// `VMSpec.volumes` pre-sorted.
+    public let bootOrder: Int?
+
+    public init(vmId: UUID, deviceName: String, readonly: Bool = false, bootOrder: Int? = nil) {
+        self.vmId = vmId
+        self.deviceName = deviceName
+        self.readonly = readonly
+        self.bootOrder = bootOrder
+    }
+}
+
+/// One volume's authoritative desired state (ADR 0001 stage 5, STR-148).
+/// Mirrors `DesiredVMState` semantics exactly: level-triggered,
+/// generation-guarded, safe to drop or replay.
+///
+/// Two fields are deliberately absent. There is no `poolId`, because nothing
+/// on the agent consumes a pool — placement is expressed by *which agent's
+/// sync the entry appears in*, and a second encoding of it is a thing that can
+/// drift. There is no `storagePath`, because the agent owns path layout; the
+/// path travels the other way, on the observed report.
+public struct DesiredVolumeState: Codable, Sendable {
+    public let volumeId: UUID
+    public let desiredStatus: DesiredVolumeStatus
+    /// Monotonic per-volume counter, bumped by the control plane on every
+    /// desired change. The agent records the generation it last applied and
+    /// rejects older ones, so replayed or reordered syncs cannot roll a volume
+    /// backward.
+    public let generation: Int64
+    /// Desired virtual size in bytes. Growth plans a `.resize`; a *shrink* is a
+    /// permanent failure the agent refuses rather than a truncation it
+    /// performs.
+    public let sizeBytes: Int64
+    /// "qcow2" or "raw", parsed by the agent with `DiskFormat(rawValue:)` and
+    /// rejected there. A `String` at the boundary for the same reason
+    /// `VolumeCreateMessage.format` was one: an unknown format must fail this
+    /// volume, not the sync. Immutable after create — a mismatch is a
+    /// permanent failure, never a silent conversion.
+    public let format: String
+    /// How to fill a volume that does not exist yet. Nil means blank.
+    public let source: DesiredVolumeSource?
+    /// Nil means the volume should be detached.
+    public let attachment: DesiredVolumeAttachment?
+
+    public init(
+        volumeId: UUID,
+        desiredStatus: DesiredVolumeStatus,
+        generation: Int64,
+        sizeBytes: Int64,
+        format: String,
+        source: DesiredVolumeSource? = nil,
+        attachment: DesiredVolumeAttachment? = nil
+    ) {
+        self.volumeId = volumeId
+        self.desiredStatus = desiredStatus
+        self.generation = generation
+        self.sizeBytes = sizeBytes
+        self.format = format
+        self.source = source
+        self.attachment = attachment
+    }
+}
+
 // MARK: - Workload tombstones
 
 /// The control plane's explicit instruction to remove a workload an agent
@@ -292,6 +441,18 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// then simply "nothing authorized": such a control plane never confirms a
     /// teardown, so a stray workload leaks rather than a live one dying.
     public let tombstones: [DesiredWorkloadTombstone]?
+    /// The full authoritative set of volumes that should exist on the receiving
+    /// agent (ADR 0001 stage 5, STR-148), with the same full-list semantics as
+    /// `vms`.
+    ///
+    /// Optional rather than `[]`-defaulted, unlike `sandboxes` and `networks`,
+    /// and that difference is load-bearing: nil means "the sender has no
+    /// opinion about volumes", never "delete every volume on this host". A
+    /// control plane older than v31 omits the key entirely, and the cost of
+    /// misreading its silence is destroyed user data, so the payload describes
+    /// itself instead of relying on a `wireProtocolVersion` lookup being right.
+    /// The agent skips its whole volume half when this is nil.
+    public let volumes: [DesiredVolumeState]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -303,7 +464,8 @@ public struct DesiredStateMessage: WebSocketMessage {
         networksAuthoritative: Bool = true,
         desiredAgentUpdate: DesiredAgentUpdate? = nil,
         securityGroups: [DesiredSecurityGroup]? = nil,
-        tombstones: [DesiredWorkloadTombstone]? = nil
+        tombstones: [DesiredWorkloadTombstone]? = nil,
+        volumes: [DesiredVolumeState]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -315,6 +477,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.desiredAgentUpdate = desiredAgentUpdate
         self.securityGroups = securityGroups
         self.tombstones = tombstones
+        self.volumes = volumes
     }
 
     // Custom decode so `networks` and `sandboxes` tolerate absence: a sync
@@ -336,6 +499,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         desiredAgentUpdate = try c.decodeIfPresent(DesiredAgentUpdate.self, forKey: .desiredAgentUpdate)
         securityGroups = try c.decodeIfPresent([DesiredSecurityGroup].self, forKey: .securityGroups)
         tombstones = try c.decodeIfPresent([DesiredWorkloadTombstone].self, forKey: .tombstones)
+        volumes = try c.decodeIfPresent([DesiredVolumeState].self, forKey: .volumes)
     }
 }
 
@@ -681,6 +845,77 @@ public struct ObservedSandboxState: Codable, Sendable {
     }
 }
 
+// MARK: - Observed Volume State
+
+/// One volume's state as actually observed on an agent (ADR 0001 stage 5,
+/// STR-148). Field semantics for the convergence quartet match
+/// `ObservedVMState` — see the doc comments there.
+///
+/// There is deliberately no `sizeBytes`. Reading a volume's virtual size means
+/// a `qemu-img info` subprocess per volume, and this report is assembled on
+/// every convergence action plus the heartbeat cadence; on a dense host that is
+/// not affordable. A resize is confirmed the same way a VM resize is, by
+/// `observedGeneration` catching up. When `volume_info` folds into this report
+/// (ADR stage 7) the size/dirty/encrypted fields land here and will need an
+/// agent-side cache to stay affordable.
+public struct ObservedVolumeState: Codable, Sendable {
+    public let volumeId: UUID
+    /// Whether the volume's data exists on this host. A `false` entry is a
+    /// volume the agent is listing because it is mid-create or failed with no
+    /// bytes yet — the mirror of the VM report's in-flight and
+    /// failed-convergence sections. *Absence from the list* is what confirms a
+    /// deletion; `present: false` explicitly does not.
+    public let present: Bool
+    /// Where the agent put it. The agent owns path layout, so this is the only
+    /// direction a volume path travels: the control plane stores what it is
+    /// told and never derives one.
+    public let storagePath: String?
+    /// The format the volume actually has on disk ("qcow2"/"raw"), as detected
+    /// rather than assumed.
+    public let format: String?
+    /// The VM this volume is attached to, from the agent's *durable attachment
+    /// record* rather than a live hypervisor query. A powered-off guest has no
+    /// QMP device list, and reporting "detached" for it would plan an attach
+    /// against a dead control channel on every sync and degrade the volume for
+    /// the crime of having a stopped VM.
+    public let attachedVMId: UUID?
+    public let deviceName: String?
+    /// The desired-state generation this observation reflects (0 if none yet).
+    public let observedGeneration: Int64
+    /// Human-readable convergence stage ("creating", "cloning", ...) while the
+    /// agent is still working toward a newer generation. Progress only.
+    public let convergencePhase: String?
+    /// The most recent convergence failure, if the last attempt failed.
+    public let lastError: String?
+    /// The generation whose convergence produced `lastError` (see
+    /// `ObservedVMState.failedGeneration` for why the control plane needs it).
+    public let failedGeneration: Int64?
+
+    public init(
+        volumeId: UUID,
+        present: Bool,
+        storagePath: String? = nil,
+        format: String? = nil,
+        attachedVMId: UUID? = nil,
+        deviceName: String? = nil,
+        observedGeneration: Int64,
+        convergencePhase: String? = nil,
+        lastError: String? = nil,
+        failedGeneration: Int64? = nil
+    ) {
+        self.volumeId = volumeId
+        self.present = present
+        self.storagePath = storagePath
+        self.format = format
+        self.attachedVMId = attachedVMId
+        self.deviceName = deviceName
+        self.observedGeneration = observedGeneration
+        self.convergencePhase = convergencePhase
+        self.lastError = lastError
+        self.failedGeneration = failedGeneration
+    }
+}
+
 // MARK: - Observed Agent Update Status
 
 /// Why an agent is not converging on the sync's `DesiredAgentUpdate`
@@ -857,6 +1092,24 @@ public struct ObservedStateReport: WebSocketMessage {
     /// field. `inventoryComplete == false` suspends this report's full-list
     /// semantics — see `ObservedManifestStatus`.
     public let manifestStatus: ObservedManifestStatus?
+    /// Volumes actually present on this agent (STR-148). Full-list, like
+    /// `vms`: a volume missing from the list does not exist here, which is how
+    /// volume deletions are confirmed.
+    ///
+    /// Optional rather than `[]`-defaulted, and that difference is the safety
+    /// property: the control plane must read a missing list as "this agent has
+    /// no opinion about volumes" rather than "every volume on this agent is
+    /// gone" — which would reap every terminating volume row it holds and error
+    /// every live one. Making the payload self-describing means a stale
+    /// `wireProtocolVersion` on the agent row cannot cause that.
+    ///
+    /// Nil has two causes, and the control plane treats them identically
+    /// because the right response to both is to do nothing: an agent older than
+    /// v31 does not speak the field at all, and a v31 agent that cannot
+    /// enumerate its volume store says so this way rather than claiming an
+    /// empty inventory. The second is the volume counterpart of
+    /// `manifestStatus.inventoryComplete == false`.
+    public let volumes: [ObservedVolumeState]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -868,7 +1121,8 @@ public struct ObservedStateReport: WebSocketMessage {
         agentUpdateStatus: ObservedAgentUpdateStatus? = nil,
         unrecognized: [UnrecognizedWorkload] = [],
         teardownRefusal: ObservedTeardownRefusal? = nil,
-        manifestStatus: ObservedManifestStatus? = nil
+        manifestStatus: ObservedManifestStatus? = nil,
+        volumes: [ObservedVolumeState]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -880,6 +1134,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.unrecognized = unrecognized
         self.teardownRefusal = teardownRefusal
         self.manifestStatus = manifestStatus
+        self.volumes = volumes
     }
 
     // Custom decode so `sandboxes` and `unrecognized` tolerate absence: a
@@ -898,5 +1153,6 @@ public struct ObservedStateReport: WebSocketMessage {
         unrecognized = try c.decodeIfPresent([UnrecognizedWorkload].self, forKey: .unrecognized) ?? []
         teardownRefusal = try c.decodeIfPresent(ObservedTeardownRefusal.self, forKey: .teardownRefusal)
         manifestStatus = try c.decodeIfPresent(ObservedManifestStatus.self, forKey: .manifestStatus)
+        volumes = try c.decodeIfPresent([ObservedVolumeState].self, forKey: .volumes)
     }
 }
