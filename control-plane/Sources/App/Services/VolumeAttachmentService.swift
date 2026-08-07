@@ -69,9 +69,12 @@ enum VolumeAttachmentService {
         let vmID = try vm.requireID()
         try await lock(vmID: vmID, on: db)
 
-        // Re-read under the lock: `canAttach` was answered against a snapshot
-        // taken before it, and a concurrent attach could have bound the volume
-        // in between.
+        // Asked again, and this time of the row as it is: the caller's
+        // `canAttach` was answered against the snapshot the request loaded,
+        // while `ResourceMutation.accept`'s `lockAndRefresh` has since taken
+        // the row lock and adopted the committed attachment. Two attaches of
+        // one volume to two different VMs serialize on that row lock, and this
+        // is what makes the second of them a `409` rather than a silent move.
         guard volume.canAttach else {
             throw Abort(.conflict, reason: "Volume is already attached to a VM. Detach it first.")
         }
@@ -136,12 +139,22 @@ enum VolumeAttachmentService {
     // MARK: - Release
 
     /// Clears `volume`'s desired attachment, in memory. Every attachment column
-    /// moves together and the generation bumps with them — the whole point of
-    /// routing every caller through one function.
+    /// moves together, and the generation and convergence deadline move with
+    /// them — the whole point of routing every caller through one function.
     ///
     /// The bump is not bookkeeping: the agent drops a desired entry no newer
     /// than the one it last applied, so clearing the columns without it would
     /// leave the disk plugged into the guest forever.
+    ///
+    /// Nor is the deadline. Two of the three callers — the VM reap and the
+    /// stranded-attachment sweep — go around `ResourceMutation.accept` and so
+    /// never reach its `extendConvergenceDeadline`, which would leave the
+    /// volume at `observedGeneration < generation` with nothing for the
+    /// stuck-convergence sweep to grade: an agent that never reports the
+    /// detach (the dead-agent case this exists for) would read as quietly
+    /// un-converged instead of visibly degraded. Extending rather than setting
+    /// keeps a longer mutation's runway, so the detach path's own stamp inside
+    /// `accept` is unaffected.
     ///
     /// `status` is left alone. It is what the agent last observed, and the
     /// detach it will observe is what moves it.
@@ -152,6 +165,8 @@ enum VolumeAttachmentService {
         volume.readonly = false
         volume.attachedAgentId = nil
         volume.bumpGeneration()
+        volume.extendConvergenceDeadline(
+            by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
     }
 
     /// Releases every volume attached to `vmID`, and returns their ids.

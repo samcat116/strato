@@ -243,6 +243,44 @@ struct VolumeAttachmentTests {
         }
     }
 
+    @Test("An attach against a stale snapshot loses to the one that committed first")
+    func aStaleSnapshotCannotMoveAnAttachment() async throws {
+        try await withAttachmentApp { app, builder, admin, project, vm, _ in
+            let volume = try await makeVolume(
+                named: "contended-volume", on: app, user: admin, project: project)
+            let other = try await builder.createVM(name: "second-vm", project: project)
+
+            // The instance a request loaded before a competing attach committed.
+            // `claim` runs against exactly this: `ResourceMutation.accept` hands
+            // the closure the model the controller fetched, refreshed by
+            // `lockAndRefresh` — so the guard is only as good as what that
+            // refresh adopts.
+            let stale = try #require(try await Volume.find(volume.id, on: app.db))
+
+            try await app.db.transaction { tx in
+                let winner = try #require(try await Volume.find(volume.id, on: tx))
+                try await VolumeAttachmentService.claim(
+                    winner, to: vm, deviceName: nil, bootOrder: nil, readonly: false, on: tx)
+            }
+
+            // Before `adoptReconciliationState` carried the attachment, the
+            // stale `$vm.id == nil` passed `canAttach` and the save moved the
+            // volume off the VM that already had it — both callers answered
+            // `202`, and the unique index could not see it, since the two
+            // rows-in-time name different VMs.
+            await #expect(throws: (any Error).self) {
+                try await app.db.transaction { tx in
+                    #expect(try await stale.lockAndRefresh(on: tx))
+                    try await VolumeAttachmentService.claim(
+                        stale, to: other, deviceName: nil, bootOrder: nil, readonly: false, on: tx)
+                }
+            }
+
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            #expect(reloaded.$vm.id == vm.id)
+        }
+    }
+
     @Test("The database refuses two volumes claiming one device name on a VM")
     func theDatabaseRefusesDuplicateDeviceNames() async throws {
         try await withAttachmentApp { app, _, admin, project, vm, _ in

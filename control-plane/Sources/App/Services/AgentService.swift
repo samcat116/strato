@@ -1295,12 +1295,16 @@ actor AgentService {
             // entry no newer than the last one applied is dropped, so clearing
             // the columns alone would leave the disk plugged into a guest the
             // control plane no longer describes.
+            // The same predicate `NormalizeVolumeAttachments` repairs on, column
+            // for column: they describe one state, so they must agree or a row
+            // the one-off repair fixes is one this backstop never sees again.
             let strandedVolumes = try await Volume.query(on: db)
                 .filter(\.$vm.$id == nil)
                 .group(.or) { unresolved in
                     unresolved.filter(\.$deviceName != nil)
                     unresolved.filter(\.$bootOrder != nil)
                     unresolved.filter(\.$attachedAgentId != nil)
+                    unresolved.filter(\.$readonly == true)
                 }
                 .all()
 

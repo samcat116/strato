@@ -228,28 +228,32 @@ extension VM: FinalizableResource {
         let vmID = try vm.requireID()
 
         let reaped = try await db.transaction { tx in
-            // The attach lock first, before the row lock `reapClaim` takes:
-            // an attach holds this while its insert waits on a KEY SHARE lock
-            // of the same VM row, so taking them in the other order here would
-            // close a deadlock cycle between the two transactions.
-            try await VolumeAttachmentService.lock(vmID: vmID, on: tx)
+            // Attached volumes are released, not deleted: the volume outlives
+            // the VM and its data is intact on the agent (STR-129). Necessary
+            // because `volumes.vm_id` is `ON DELETE RESTRICT` — a volume still
+            // pointing here fails the delete rather than being silently
+            // stranded the way `SET NULL` left it.
+            //
+            // *Before* the claim, which is the whole reason it is up here: an
+            // attach locks the volume row first (`lockAndRefresh`) and only then
+            // touches its VM, through the foreign key's `FOR KEY SHARE`. A reap
+            // that claimed the VM row first would take those two in the opposite
+            // order and deadlock with it. Running before the claim is safe on
+            // the claim's own terms — everything ahead of it must tolerate
+            // running twice, and releasing an already-released volume finds no
+            // rows to release.
+            let released = try await VolumeAttachmentService.releaseAll(fromVM: vmID, on: tx)
+            if !released.isEmpty {
+                app.logger.info(
+                    "Released volumes from deleted VM",
+                    metadata: [
+                        "vm_id": .string(vmID.uuidString),
+                        "volume_ids": .array(released.map { .string($0.uuidString) }),
+                    ])
+            }
 
             guard try await ResourceFinalizerService.reapClaim(VM.self, id: vmID, in: tx) else {
                 return false
-            }
-            // Attached volumes are detached, not deleted: the volume outlives
-            // the VM and its data is intact on the agent (STR-129). Before the
-            // delete, because `volumes.vm_id` is `ON DELETE RESTRICT` — a volume
-            // still pointing here fails the delete rather than being silently
-            // stranded the way `SET NULL` left it.
-            let detached = try await VolumeAttachmentService.releaseAll(fromVM: vmID, on: tx)
-            if !detached.isEmpty {
-                app.logger.info(
-                    "Detached volumes from deleted VM",
-                    metadata: [
-                        "vm_id": .string(vmID.uuidString),
-                        "volume_ids": .array(detached.map { .string($0.uuidString) }),
-                    ])
             }
             // Bindings first, unlike the delete-then-revoke order the other
             // controllers use: the revoke reads the VM's checkpoints, whose

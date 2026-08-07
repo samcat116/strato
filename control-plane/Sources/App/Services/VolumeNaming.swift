@@ -30,9 +30,9 @@ struct VolumeNaming {
     /// One past the highest `disk<N>` rather than the lowest free slot, so a name
     /// a detach freed is not immediately handed to a different volume — a guest's
     /// `/dev/disk/by-id` link and the operator's memory both outlive the
-    /// attachment. The result is free by construction, and the caller's uniqueness
-    /// check ([[VolumeAttachmentService]]) is what covers a name that is not of
-    /// this shape (`VolumeAttachmentService.claim`).
+    /// attachment. The result is free by construction, and
+    /// `VolumeAttachmentService.claim`'s uniqueness check is what covers a name
+    /// that is not of this shape.
     static func nextDeviceName(existingDeviceNames: [String?]) -> VolumeDeviceName {
         var maxDiskNum = -1
         for name in existingDeviceNames {
