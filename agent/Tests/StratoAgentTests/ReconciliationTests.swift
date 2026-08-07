@@ -125,7 +125,7 @@ struct ReconciliationTests {
                 if let desired = item.desired {
                     sizing[item.vmId] = VMSizing(cpus: desired.spec.cpus, memoryBytes: desired.spec.memoryBytes)
                 }
-            case .adopt: break
+            case .adopt, .export: break
             case .attach, .detach: break  // volume-only steps; never planned for a VM
             }
         }

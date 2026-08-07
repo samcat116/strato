@@ -65,7 +65,7 @@ struct VolumeSnapshotGuardTests {
     }
 
     private func snapshotBody() -> CreateSnapshotRequest {
-        CreateSnapshotRequest(name: "guard-snapshot", description: "taken under test")
+        CreateSnapshotRequest(name: "guard-snapshot", description: "taken under test", ttlSeconds: nil)
     }
 
     @Test("Snapshotting an attached volume is refused with 409")
@@ -109,6 +109,11 @@ struct VolumeSnapshotGuardTests {
         }
     }
 
+    /// The status guard admits it and the *capture-admission* guard is what
+    /// refuses next: no agent is registered in this suite, so nothing could
+    /// converge the artifact (STR-150). Distinguishing the two messages is the
+    /// point — a caller told "detach the volume first" when the real problem is
+    /// an unreachable agent would do the wrong thing about it.
     @Test("Snapshotting a detached volume passes the status guard")
     func detachedVolumeIsAdmitted() async throws {
         try await withVolume(status: .available) { app, volume, token in
@@ -116,16 +121,14 @@ struct VolumeSnapshotGuardTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(self.snapshotBody())
             } afterResponse: { res in
-                // The status guard admits it; the request then fails at the
-                // agent round-trip, since no agent is connected in tests.
-                #expect(res.status == .badGateway)
+                #expect(res.status == .conflict)
                 #expect(!res.body.string.contains("detach the volume first"))
             }
 
-            // The snapshot row survives as an `.error` record, and the volume
-            // is put back the way it was found.
-            let snapshot = try #require(try await VolumeSnapshot.query(on: app.db).first())
-            #expect(snapshot.status == .error)
+            // Nothing was admitted, so no row was inserted — and the volume,
+            // which no longer borrows a `.snapshotting` status to represent a
+            // snapshot, is untouched.
+            #expect(try await VolumeSnapshot.query(on: app.db).count() == 0)
             let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
             #expect(reloaded.status == .available)
         }

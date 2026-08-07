@@ -194,10 +194,11 @@ struct ResourceOperationCoordinator {
                 {
                     try await sandbox.save(on: db)
                 }
-            case .volume:
-                // Unreachable: volumes write no operation rows at all (STR-148).
-                // Their failed mutations resolve through the stuck-convergence
-                // sweep, which calls the same `resolveForStuckOperation`.
+            case .volume, .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot:
+                // Unreachable: none of these write operation rows at all
+                // (STR-148, STR-150). Their failed mutations resolve through
+                // the stuck-convergence sweep, which calls the same
+                // `resolveForStuckOperation`.
                 break
             }
             return true

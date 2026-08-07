@@ -32,10 +32,18 @@ const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = 
 
 // The list query key to refresh when a mutation settles, so a create/delete/
 // lifecycle change is reflected immediately.
+//
+// A snapshot mutation refreshes its *parent's* list, which is where the
+// snapshot list query lives (`["vms", id, "snapshots"]` and friends): the
+// invalidation is by key prefix, so refreshing the parent refreshes its
+// snapshots with it.
 const listQueryKey: Record<WatchedMutation["resourceKind"], string> = {
   virtual_machine: "vms",
   sandbox: "sandboxes",
   volume: "volumes",
+  vm_checkpoint: "vms",
+  sandbox_snapshot: "sandboxes",
+  volume_snapshot: "volumes",
 };
 
 const POLL_INTERVAL_MS = 2000;

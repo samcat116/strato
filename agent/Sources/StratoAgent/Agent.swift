@@ -170,6 +170,25 @@ actor Agent {
     // truth that could drift from the disk.
     private var volumeSizes: [String: Int64] = [:]
 
+    // Snapshot artifacts this host holds (STR-150), across all three families.
+    //
+    // Durable, unlike `volumeSizes`, because none of what it holds can be
+    // re-derived: a Firecracker checkpoint's fork-layout version and CPU
+    // template are not recoverable from its files at all, and a qcow2 internal
+    // snapshot's footprint costs a subprocess per artifact per report. The
+    // control plane learns every one of these facts from the observed report,
+    // so they are recorded once, when the only party that can measure them
+    // does.
+    //
+    // `snapshotInventoryUnreadable` is the artifact counterpart of
+    // `manifestReadFailure` and does the same job: an empty inventory is
+    // authoritative downstream — omission from a full list is how a deletion is
+    // confirmed — so a host that could not read the file reports *no* list
+    // rather than an empty one, and never writes over what it could not read.
+    private let snapshotRecordStore: SnapshotRecordStore
+    private var snapshotRecords: [UUID: SnapshotRecord] = [:]
+    private var snapshotInventoryUnreadable = false
+
     // Sandbox exec/attach bridging and workload log shipping (issue #423).
     // The runtime's callbacks yield into these streams *synchronously*, so
     // per-session event order and per-sandbox line order survive the hop out
@@ -404,6 +423,10 @@ actor Agent {
             legacyQEMUManifestPath: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
             logger: logger
         )
+        self.snapshotRecordStore = SnapshotRecordStore(
+            path: (vmStoragePath as NSString).appendingPathComponent("snapshot-records.json"),
+            logger: logger
+        )
 
         let (stream, continuation) = AsyncStream.makeStream(of: MessageEnvelope.self)
         self.inboundMessages = stream
@@ -434,6 +457,7 @@ actor Agent {
         // when the backend supports it — but they stay routable to the backend that
         // owns them and keep reserving capacity until deleted or re-created.
         applyManifestLoad(manifestStore.load())
+        applySnapshotInventory(snapshotRecordStore.load())
 
         // Simulation mode drives no real network backend. `NetworkOrchestrator`
         // already degrades to a no-op when `networkService` is nil, so
@@ -1135,6 +1159,14 @@ actor Agent {
         let sandboxCapable = sandboxProbe.capable && sandboxRuntime != nil
         if sandboxCapable {
             capabilities.append(SandboxRuntimeProbe.capabilityName)
+            // The sandbox-snapshot capture capability rides the same gate, and
+            // has to: `getAgentCapabilities` runs before the runtime probe, so
+            // advertising it there would claim a backend this host may not
+            // have. A capture admitted against a runtime-less agent lands in
+            // desired state, fails permanently, and leaves the client polling a
+            // `202` until the convergence deadline — the outcome capture
+            // admission exists to prevent (STR-150).
+            capabilities.append(SnapshotArtifactKind.sandboxSnapshot.agentCapability)
         } else if !isSimulationMode {
             #if os(Linux)
             // Only worth a log where the runtime could ever exist.
@@ -1426,20 +1458,26 @@ actor Agent {
         // that would silently drop the frame (an undecodable MessageType
         // fails envelope decoding before any error response can be sent,
         // leaving the control plane to time out).
-        capabilities.append(MessageType.volumeSnapshotDelete.rawValue)
-        // Sandbox snapshot/checkpoint message set (issue #426). One marker
-        // for the trio (create/delete/restore) — they ship together.
-        capabilities.append(MessageType.sandboxSnapshotCreate.rawValue)
-        // Full-VM checkpoint message set (issue #564). One marker for the trio
-        // (checkpoint/restore/delete), and only when a backend that can
-        // realize it is actually usable on this host. QEMU is that backend:
-        // the mechanism is a qcow2 internal snapshot, and Firecracker's
-        // checkpoints are a sandbox primitive with their own message set. A
-        // QEMU-less agent understands the frames but would answer every one
-        // with `notSupported`, so the control plane should route around it
-        // rather than turn that into a failed operation.
+        // Snapshot-artifact capabilities (STR-150). Since wire v33 these name
+        // no message: a capture is desired state, and the version gate already
+        // says the sync's `snapshots` list will be understood. What a version
+        // cannot say is whether a *backend that can realize the capture* is
+        // usable on this host — the `sandboxCapable` rule — so each family is
+        // advertised separately and only when its backend is really there.
+        //
+        // The control plane reads these at capture admission: a checkpoint
+        // requested against a host with no QEMU would otherwise be accepted
+        // into a desired state that can only ever fail permanently.
+        //
+        // QEMU is the backend for two of the three: a VM checkpoint is a qcow2
+        // internal snapshot, and a volume snapshot is a qcow2 overlay the
+        // storage backend writes with `qemu-img`. The sandbox family's gate is
+        // the sandbox runtime probe, which is not resolved until after this
+        // returns — it is advertised beside `sandboxCapable` in
+        // `registerWithControlPlane` instead.
         if hypervisors.contains(where: { $0.type == .qemu && $0.available }) {
-            capabilities.append(MessageType.vmCheckpoint.rawValue)
+            capabilities.append(SnapshotArtifactKind.vmCheckpoint.agentCapability)
+            capabilities.append(SnapshotArtifactKind.volumeSnapshot.agentCapability)
         }
 
         for hypervisor in hypervisors {
@@ -2133,16 +2171,11 @@ extension Agent {
             case .vmReboot:
                 let message = try envelope.decode(as: VMOperationMessage.self)
                 await handleVMReboot(message)
-            // Full-VM checkpoint / restore (issue #564)
-            case .vmCheckpoint:
-                let message = try envelope.decode(as: VMCheckpointMessage.self)
-                await handleVMCheckpoint(message)
+            // Full-VM restore (issue #564). Capture and delete are desired
+            // state since wire v33 (STR-150).
             case .vmRestore:
                 let message = try envelope.decode(as: VMRestoreMessage.self)
                 await handleVMRestore(message)
-            case .vmSnapshotDelete:
-                let message = try envelope.decode(as: VMSnapshotDeleteMessage.self)
-                await handleVMSnapshotDelete(message)
             case .desiredState:
                 let message = try envelope.decode(as: DesiredStateMessage.self)
                 // Realize logical networks (per-project routers, SNAT uplinks)
@@ -2211,6 +2244,7 @@ extension Agent {
                     message,
                     includeSandboxes: WireProtocol.supportsSandboxSync(envelope.senderVersion),
                     includeVolumes: WireProtocol.supportsVolumeSync(envelope.senderVersion),
+                    includeSnapshots: WireProtocol.supportsSnapshotSync(envelope.senderVersion),
                     includeMetadata: WireProtocol.supportsInstanceMetadata(envelope.senderVersion))
                 // Declarative agent self-update (issue #434), after the
                 // reconciler so freshly enqueued work items are visible to the
@@ -2239,29 +2273,15 @@ extension Agent {
             case .sandboxExecClose:
                 let message = try envelope.decode(as: SandboxExecCloseMessage.self)
                 await handleSandboxExecClose(message)
-            // Sandbox snapshots / checkpoint-resume (issue #426)
-            case .sandboxSnapshotCreate:
-                let message = try envelope.decode(as: SandboxSnapshotCreateMessage.self)
-                await handleSandboxSnapshotCreate(message)
-            case .sandboxSnapshotDelete:
-                let message = try envelope.decode(as: SandboxSnapshotDeleteMessage.self)
-                await handleSandboxSnapshotDelete(message)
+            // Sandbox checkpoint-resume (issue #426). Capture, delete and
+            // export are desired state since wire v33 (STR-150).
             case .sandboxRestore:
                 let message = try envelope.decode(as: SandboxRestoreMessage.self)
                 await handleSandboxRestore(message)
-            case .sandboxSnapshotExport:
-                let message = try envelope.decode(as: SandboxSnapshotExportMessage.self)
-                await handleSandboxSnapshotExport(message)
-            // Volume operations. Create/delete/attach/detach/resize/clone are
-            // desired state since wire v31 (STR-148) and `volume_info` is gone
-            // as of v32 (STR-149); what remains here is the artifact verbs
-            // (ADR stage 8).
-            case .volumeSnapshot:
-                let message = try envelope.decode(as: VolumeSnapshotMessage.self)
-                await handleVolumeSnapshot(message)
-            case .volumeSnapshotDelete:
-                let message = try envelope.decode(as: VolumeSnapshotDeleteMessage.self)
-                await handleVolumeSnapshotDelete(message)
+            // No volume frames remain: create/delete/attach/detach/resize/clone
+            // became desired state at wire v31 (STR-148), `volume_info` was
+            // deleted at v32 as a read that was never an action (STR-149), and
+            // both snapshot verbs became desired artifacts at v33 (STR-150).
             case .success:
                 // ACK to a control-plane-initiated request (incl. every heartbeat).
                 // Logged at debug so it stops surfacing as "unknown message type".
@@ -2436,42 +2456,7 @@ extension Agent {
         }
     }
 
-    // MARK: - Full-VM checkpoints (issue #564)
-
-    private func handleVMCheckpoint(_ message: VMCheckpointMessage) async {
-        logger.info(
-            "VM checkpoint request received",
-            metadata: ["vmId": .string(message.vmId), "snapshotId": .string(message.snapshotId)])
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            return
-        }
-
-        do {
-            let report = try await service.checkpointVM(
-                vmId: message.vmId, snapshotId: message.snapshotId)
-            let response = VMCheckpointStatusResponse(
-                snapshotId: message.snapshotId,
-                vmStateSizeBytes: report.vmStateSizeBytes,
-                deviceNodes: report.deviceNodes,
-                qemuVersion: report.hypervisorVersion,
-                architecture: CPUArchitecture.current)
-            let data = try AnyCodableValue(response)
-            await sendSuccess(for: message.requestId, message: "VM checkpoint created", data: data)
-        } catch {
-            await sendError(
-                for: message.requestId,
-                error: "Failed to checkpoint VM: \(error.localizedDescription)")
-            logger.error(
-                "Failed to checkpoint VM",
-                metadata: [
-                    "vmId": .string(message.vmId),
-                    "snapshotId": .string(message.snapshotId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
+    // MARK: - Full-VM restore (issue #564)
 
     private func handleVMRestore(_ message: VMRestoreMessage) async {
         logger.info(
@@ -2497,26 +2482,6 @@ extension Agent {
                     "snapshotId": .string(message.snapshotId),
                     "error": .string(error.localizedDescription),
                 ])
-        }
-    }
-
-    private func handleVMSnapshotDelete(_ message: VMSnapshotDeleteMessage) async {
-        logger.info(
-            "VM checkpoint delete request received",
-            metadata: ["vmId": .string(message.vmId), "snapshotId": .string(message.snapshotId)])
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            return
-        }
-
-        do {
-            try await service.deleteVMCheckpoint(vmId: message.vmId, snapshotId: message.snapshotId)
-            await sendSuccess(for: message.requestId, message: "VM checkpoint deleted")
-        } catch {
-            await sendError(
-                for: message.requestId,
-                error: "Failed to delete VM checkpoint: \(error.localizedDescription)")
         }
     }
 
@@ -3002,76 +2967,7 @@ extension Agent {
         }
     }
 
-    // MARK: - Sandbox snapshots / checkpoint-resume (issue #426)
-
-    private func handleSandboxSnapshotCreate(_ message: SandboxSnapshotCreateMessage) async {
-        logger.info(
-            "Sandbox snapshot create request received",
-            metadata: [
-                "sandboxId": .string(message.sandboxId),
-                "snapshotId": .string(message.snapshotId),
-                "mode": .string(message.mode.rawValue),
-            ])
-
-        guard let runtime = sandboxRuntime else {
-            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
-            return
-        }
-
-        do {
-            let result = try await runtime.snapshotSandbox(
-                sandboxId: message.sandboxId, snapshotId: message.snapshotId, mode: message.mode)
-            let response = SandboxSnapshotStatusResponse(
-                snapshotId: message.snapshotId,
-                sizeBytes: result.totalSizeBytes,
-                memorySizeBytes: result.memorySizeBytes,
-                vmstateSizeBytes: result.vmstateSizeBytes,
-                rootfsSizeBytes: result.rootfsSizeBytes,
-                storagePath: result.storagePath,
-                firecrackerVersion: result.firecrackerVersion,
-                architecture: CPUArchitecture.current,
-                guestControlProtocolVersion: result.guestControlProtocolVersion,
-                forkLayoutVersion: result.forkLayoutVersion,
-                cpuTemplate: result.cpuTemplate)
-            let data = try AnyCodableValue(response)
-            await sendSuccess(for: message.requestId, message: "Sandbox snapshot created", data: data)
-        } catch {
-            await sendError(
-                for: message.requestId,
-                error: "Failed to snapshot sandbox: \(error.localizedDescription)")
-            logger.error(
-                "Failed to snapshot sandbox",
-                metadata: [
-                    "sandboxId": .string(message.sandboxId),
-                    "snapshotId": .string(message.snapshotId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
-    private func handleSandboxSnapshotDelete(_ message: SandboxSnapshotDeleteMessage) async {
-        logger.info(
-            "Sandbox snapshot delete request received",
-            metadata: [
-                "sandboxId": .string(message.sandboxId),
-                "snapshotId": .string(message.snapshotId),
-            ])
-
-        guard let runtime = sandboxRuntime else {
-            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
-            return
-        }
-
-        do {
-            try await runtime.deleteSandboxSnapshot(
-                sandboxId: message.sandboxId, snapshotId: message.snapshotId)
-            await sendSuccess(for: message.requestId, message: "Sandbox snapshot deleted")
-        } catch {
-            await sendError(
-                for: message.requestId,
-                error: "Failed to delete sandbox snapshot: \(error.localizedDescription)")
-        }
-    }
+    // MARK: - Sandbox checkpoint-resume (issue #426)
 
     private func handleSandboxRestore(_ message: SandboxRestoreMessage) async {
         logger.info(
@@ -3097,38 +2993,6 @@ extension Agent {
                 error: "Failed to restore sandbox: \(error.localizedDescription)")
             logger.error(
                 "Failed to restore sandbox from snapshot",
-                metadata: [
-                    "sandboxId": .string(message.sandboxId),
-                    "snapshotId": .string(message.snapshotId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
-    private func handleSandboxSnapshotExport(_ message: SandboxSnapshotExportMessage) async {
-        logger.info(
-            "Sandbox snapshot export request received",
-            metadata: [
-                "sandboxId": .string(message.sandboxId),
-                "snapshotId": .string(message.snapshotId),
-            ])
-
-        guard let runtime = sandboxRuntime else {
-            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
-            return
-        }
-
-        do {
-            try await runtime.exportSandboxSnapshot(
-                sandboxId: message.sandboxId, snapshotId: message.snapshotId,
-                uploads: message.uploads)
-            await sendSuccess(for: message.requestId, message: "Sandbox snapshot exported")
-        } catch {
-            await sendError(
-                for: message.requestId,
-                error: "Failed to export sandbox snapshot: \(error.localizedDescription)")
-            logger.error(
-                "Failed to export sandbox snapshot",
                 metadata: [
                     "sandboxId": .string(message.sandboxId),
                     "snapshotId": .string(message.snapshotId),
@@ -3273,121 +3137,11 @@ extension Agent {
         }
     }
 
-    // MARK: - Volume Message Handlers
-
-    private func handleVolumeSnapshot(_ message: VolumeSnapshotMessage) async {
-        logger.info(
-            "Creating volume snapshot",
-            metadata: [
-                "volumeId": .string(message.volumeId),
-                "snapshotId": .string(message.snapshotId),
-            ])
-
-        guard let storageBackend = storageBackend else {
-            await sendError(for: message.requestId, error: "Storage backend not available")
-            return
-        }
-
-        // Refuse to snapshot a volume a guest is still writing (issue #747).
-        // `createSnapshot` makes a qcow2 overlay whose backing file is the
-        // volume; nothing redirects the running QEMU's active layer onto that
-        // overlay, so the guest keeps writing the base the overlay reads
-        // through. The result tracks the live volume forever and captures no
-        // point-in-time state — quiescing the guest first (the fs-freeze this
-        // path used to do, issue #563) only made that silent inconsistency
-        // look trustworthy. The control plane no longer admits snapshots of
-        // an attached volume; this catches an older control plane and any
-        // drift in its bookkeeping.
-        if let attachedVMId = message.attachedVMId {
-            let reason =
-                "Volume \(message.volumeId) is attached to running VM \(attachedVMId). "
-                + "A snapshot taken while a guest is writing the volume would not be point-in-time; detach the volume first."
-            await sendError(for: message.requestId, error: reason)
-            logger.warning(
-                "Refusing snapshot of an attached volume",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "snapshotId": .string(message.snapshotId),
-                    "attachedVMId": .string(attachedVMId),
-                ])
-            return
-        }
-
-        do {
-            let snapshotPath = try await storageBackend.createSnapshot(
-                volumeId: message.volumeId,
-                snapshotId: message.snapshotId,
-                volumePath: message.volumePath
-            )
-            let response = VolumeStatusResponse(
-                volumeId: message.volumeId,
-                status: "available",
-                storagePath: snapshotPath
-            )
-            // Encoding the reply is its own failure mode: the snapshot exists,
-            // so it must not be reported as a failed create.
-            do {
-                let data = try AnyCodableValue(response)
-                await sendSuccess(for: message.requestId, message: "Snapshot created successfully", data: data)
-            } catch {
-                await sendError(
-                    for: message.requestId, error: "Failed to encode snapshot response: \(error.localizedDescription)")
-            }
-            logger.info(
-                "Volume snapshot created successfully",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "snapshotId": .string(message.snapshotId),
-                    "path": .string(snapshotPath),
-                ])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to create snapshot: \(error.localizedDescription)")
-            logger.error(
-                "Failed to create snapshot",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "snapshotId": .string(message.snapshotId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
-    private func handleVolumeSnapshotDelete(_ message: VolumeSnapshotDeleteMessage) async {
-        logger.info(
-            "Deleting volume snapshot",
-            metadata: [
-                "volumeId": .string(message.volumeId),
-                "snapshotId": .string(message.snapshotId),
-            ])
-
-        guard let storageBackend = storageBackend else {
-            await sendError(for: message.requestId, error: "Storage backend not available")
-            return
-        }
-
-        do {
-            try await storageBackend.deleteSnapshot(volumeId: message.volumeId, snapshotId: message.snapshotId)
-            await sendSuccess(for: message.requestId, message: "Snapshot deleted successfully")
-            logger.info(
-                "Volume snapshot deleted successfully",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "snapshotId": .string(message.snapshotId),
-                ])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to delete snapshot: \(error.localizedDescription)")
-            logger.error(
-                "Failed to delete snapshot",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "snapshotId": .string(message.snapshotId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
+    // MARK: - Volume frames (none remain)
 
     // `handleVolumeInfo` is gone with the `volume_info` frame (wire v32, ADR
-    // 0001 stage 7, STR-149). `StorageBackend.volumeInfo` remains, as the
+    // 0001 stage 7, STR-149), and `handleVolumeSnapshot`/`...Delete` with the
+    // two artifact verbs (v33, stage 8, STR-150). `StorageBackend.volumeInfo` remains, as the
     // agent's own probe behind `volumeVirtualSize` — the size cache the resize
     // planner reads. Nothing asks the agent to read a volume on the control
     // plane's behalf anymore.
@@ -3642,7 +3396,41 @@ extension Agent: ReconcileActuator {
         }
     }
 
+    /// Every snapshot artifact this host holds (STR-150), from the durable
+    /// record store.
+    ///
+    /// The record is the inventory, not the filesystem — which is a real
+    /// tradeoff and worth naming. Two of the three families cannot be
+    /// enumerated cheaply (a qcow2 internal snapshot costs a `qemu-img info`
+    /// subprocess per VM) and none of them can be *described* by their bytes at
+    /// all: a Firecracker checkpoint's fork-layout version and CPU template are
+    /// not recoverable from the files. So the agent remembers what it captured,
+    /// exactly as `VMManifestStore` remembers what it runs, and inherits the
+    /// same caveat — an artifact deleted out of band still reports present
+    /// until something tries to use it. Deletion is idempotent on every
+    /// backend, so converging over it costs nothing.
+    func observedSnapshotPresence() async -> [String: SnapshotPresence]? {
+        // Nil, not `[:]`. An empty inventory is authoritative downstream: the
+        // control plane reads omission from a full list as confirmation that an
+        // artifact's bytes are gone and reaps the row, so a host that could not
+        // read its record file must say it does not know.
+        guard !snapshotInventoryUnreadable else { return nil }
+
+        var presence: [String: SnapshotPresence] = [:]
+        for (snapshotId, record) in snapshotRecords {
+            presence[snapshotId.uuidString] = .managed(
+                ObservedSnapshotArtifact(
+                    kind: record.kind, parentId: record.parentId,
+                    facts: record.facts, exported: record.exported))
+        }
+        return presence
+    }
+
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        if item.kind.isSnapshotArtifact {
+            try await performSnapshot(step, item: item)
+            return
+        }
         if item.kind == .volume {
             try await performVolume(step, item: item)
             return
@@ -3670,9 +3458,9 @@ extension Agent: ReconcileActuator {
             try await reconcileService(for: item.vmId).shutdownVM(vmId: item.vmId)
         case .delete:
             try await reconcileDelete(item)
-        case .attach, .detach:
-            // Volume-only steps; `item.kind == .volume` was handled above and
-            // the planner never emits these for a VM or sandbox.
+        case .attach, .detach, .export:
+            // Volume- and snapshot-only steps; both kinds were handled above
+            // and the planner never emits these for a VM or sandbox.
             throw HypervisorServiceError.invalidConfiguration(
                 "step \(step) is not applicable to a \(item.kind.rawValue) workload")
         }
@@ -3696,10 +3484,276 @@ extension Agent: ReconcileActuator {
             try await volumeReconcileAttach(item)
         case .detach:
             try await volumeReconcileDetach(item)
-        case .adopt, .boot, .pause, .resume, .shutdown:
-            // A volume has no run state; the planner never emits these.
+        case .adopt, .boot, .pause, .resume, .shutdown, .export:
+            // A volume has no run state and nowhere to be exported to; the
+            // planner never emits these.
             throw VolumeConvergenceError.unsupported("step \(step) is not applicable to a volume")
         }
+    }
+
+    // MARK: - Snapshot artifact convergence (ADR 0001 stage 8, STR-150)
+
+    private func performSnapshot(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        switch step {
+        case .create:
+            try await snapshotReconcileCapture(item)
+        case .delete:
+            try await snapshotReconcileDelete(item)
+        case .export:
+            try await snapshotReconcileExport(item)
+        case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach:
+            // An artifact is frozen bytes: it has no run state, no size that
+            // can change, and nothing to plug in. The planner never emits any
+            // of these.
+            throw SnapshotConvergenceError.unsupported(
+                "step \(step) is not applicable to a snapshot artifact")
+        }
+    }
+
+    /// Capture one artifact. Runs **only** when the artifact is absent from
+    /// this host — `planCore` plans `.create` for nothing else — which is what
+    /// makes the whole conversion safe: a replayed sync can never re-checkpoint
+    /// a live guest over the point in time the user is holding.
+    ///
+    /// Everything the control plane will ever learn about the capture is
+    /// recorded here, because this is the only moment the agent can measure it.
+    private func snapshotReconcileCapture(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desiredSnapshot else {
+            throw SnapshotConvergenceError.unsupported("snapshot capture requires a desired entry")
+        }
+        try requireWritableSnapshotInventory()
+        let snapshotId = desired.snapshotId.uuidString
+        let parentId = desired.parentId.uuidString
+
+        let facts: ObservedSnapshotFacts
+        switch desired.kind {
+        case .volumeSnapshot:
+            // The backend's snapshot is a qcow2 overlay backed by the volume,
+            // and nothing switches a running QEMU's active layer onto it — so a
+            // snapshot taken while a guest is writing the base is not
+            // point-in-time however well the guest was quiesced (issue #747).
+            // The control plane refuses this at admission; the agent refuses it
+            // again because a level-triggered entry outlives the request that
+            // made it, and the volume may have been attached since.
+            if let holder = desired.capture?.attachedVMId {
+                throw SnapshotConvergenceError.unsupported(
+                    "volume \(parentId) is attached to VM \(holder.uuidString); "
+                        + "detach it before snapshotting, or the snapshot would not be point-in-time")
+            }
+            let backend = try requireStorageBackend()
+            guard let disk = try await backend.listVolumes()[parentId] else {
+                // The volume may be mid-create in this very sync; a dependency
+                // wait burns no attempt and retries on the next one.
+                throw SnapshotConvergenceError.sourceNotReady(
+                    "volume \(parentId) is not present on this host yet")
+            }
+            let path = try await backend.createSnapshot(
+                volumeId: parentId, snapshotId: snapshotId, volumePath: disk.path)
+            facts = ObservedSnapshotFacts(
+                sizeBytes: Self.fileSizeBytes(at: path),
+                storagePath: path,
+                architecture: CPUArchitecture.current)
+
+        case .vmCheckpoint:
+            guard let service = getHypervisorServiceForVM(vmId: parentId) else {
+                throw SnapshotConvergenceError.sourceNotReady(
+                    "VM \(parentId) is not present on this host yet")
+            }
+            let report = try await service.checkpointVM(vmId: parentId, snapshotId: snapshotId)
+            facts = ObservedSnapshotFacts(
+                // The machine state alone: the disks it lives inside are
+                // already charged as volume storage, and an internal snapshot
+                // does not copy them. Nil is "the build reported no size",
+                // never "empty" — the control plane keeps its estimate.
+                sizeBytes: report.vmStateSizeBytes,
+                architecture: CPUArchitecture.current,
+                deviceNodes: report.deviceNodes,
+                qemuVersion: report.hypervisorVersion)
+
+        case .sandboxSnapshot:
+            guard let runtime = sandboxRuntime else {
+                throw SnapshotConvergenceError.unsupported("this agent has no sandbox runtime")
+            }
+            let result = try await runtime.snapshotSandbox(
+                sandboxId: parentId, snapshotId: snapshotId,
+                mode: desired.capture?.sandboxMode ?? .resume)
+            facts = ObservedSnapshotFacts(
+                sizeBytes: result.totalSizeBytes,
+                storagePath: result.storagePath,
+                architecture: CPUArchitecture.current,
+                memorySizeBytes: result.memorySizeBytes,
+                vmstateSizeBytes: result.vmstateSizeBytes,
+                rootfsSizeBytes: result.rootfsSizeBytes,
+                firecrackerVersion: result.firecrackerVersion,
+                guestControlProtocolVersion: result.guestControlProtocolVersion,
+                forkLayoutVersion: result.forkLayoutVersion,
+                cpuTemplate: result.cpuTemplate)
+        }
+
+        snapshotRecords[desired.snapshotId] = SnapshotRecord(
+            snapshotId: desired.snapshotId, kind: desired.kind, parentId: desired.parentId,
+            facts: facts)
+        persistSnapshotRecords()
+        logger.info(
+            "Snapshot artifact captured",
+            metadata: [
+                "kind": .string(desired.kind.rawValue),
+                "snapshotId": .string(snapshotId),
+                "parentId": .string(parentId),
+            ])
+    }
+
+    /// Remove an artifact's bytes from this host, then forget it.
+    ///
+    /// The record goes **after** the backend confirms, and only then: the
+    /// record's absence is what the observed report turns into "this artifact
+    /// is gone", which is what authorizes the control plane to reap the row.
+    /// Forgetting first would confirm a deletion that had not happened and
+    /// leak the bytes with nothing left pointing at them.
+    ///
+    /// A tombstoned artifact carries no desired entry, so its kind and parent
+    /// come from the record — the same derivation the capture used, which is
+    /// exactly why no path ever travels on the wire.
+    private func snapshotReconcileDelete(_ item: ReconcileWorkItem) async throws {
+        try requireWritableSnapshotInventory()
+        guard let snapshotId = UUID(uuidString: item.id) else {
+            throw SnapshotConvergenceError.unsupported("snapshot id '\(item.id)' is not a UUID")
+        }
+        let kind: SnapshotArtifactKind
+        let parentId: UUID
+        if let desired = item.desiredSnapshot {
+            kind = desired.kind
+            parentId = desired.parentId
+        } else if let record = snapshotRecords[snapshotId] {
+            kind = record.kind
+            parentId = record.parentId
+        } else {
+            // Nothing here and nothing recorded: already converged.
+            return
+        }
+
+        // Every backend's deletion is idempotent, so a re-driven delete over
+        // bytes that are already gone confirms cleanly rather than failing.
+        switch kind {
+        case .volumeSnapshot:
+            try await requireStorageBackend().deleteSnapshot(
+                volumeId: parentId.uuidString, snapshotId: snapshotId.uuidString)
+        case .vmCheckpoint:
+            guard let service = getHypervisorServiceForVM(vmId: parentId.uuidString) else {
+                // The checkpoint lives inside the VM's own disks. No VM here
+                // means no disks here means no checkpoint here — the deletion
+                // is satisfied, and refusing would strand the row forever on
+                // the one host that can never confirm it.
+                snapshotRecords.removeValue(forKey: snapshotId)
+                persistSnapshotRecords()
+                return
+            }
+            try await service.deleteVMCheckpoint(
+                vmId: parentId.uuidString, snapshotId: snapshotId.uuidString)
+        case .sandboxSnapshot:
+            guard let runtime = sandboxRuntime else {
+                throw SnapshotConvergenceError.unsupported("this agent has no sandbox runtime")
+            }
+            try await runtime.deleteSandboxSnapshot(
+                sandboxId: parentId.uuidString, snapshotId: snapshotId.uuidString)
+        }
+
+        snapshotRecords.removeValue(forKey: snapshotId)
+        persistSnapshotRecords()
+        logger.info(
+            "Snapshot artifact deleted",
+            metadata: [
+                "kind": .string(kind.rawValue),
+                "snapshotId": .string(snapshotId.uuidString),
+                "parentId": .string(parentId.uuidString),
+            ])
+    }
+
+    /// Converge the placement fact "this artifact also exists in the control
+    /// plane's object store" by streaming it there (issue #428, STR-150).
+    ///
+    /// The transfer itself stays a transport concern — one sequential mTLS PUT
+    /// per artifact, hashed and sized control-plane-side as it lands — and only
+    /// its *outcome* is state. Uploads are idempotent (each PUT replaces the
+    /// object at its deterministic key), so a re-driven export after a lost
+    /// report converges on the same bytes instead of duplicating them.
+    private func snapshotReconcileExport(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desiredSnapshot, let export = desired.export else {
+            throw SnapshotConvergenceError.unsupported("snapshot export requires an export target")
+        }
+        try requireWritableSnapshotInventory()
+        guard desired.kind == .sandboxSnapshot else {
+            // A VM checkpoint lives inside disks it does not own, and a volume
+            // snapshot's overlay is meaningless without its backing chain;
+            // neither has an off-node representation to upload. Permanent, so
+            // the control plane degrades the artifact with the reason instead
+            // of retrying an impossibility.
+            throw SnapshotConvergenceError.unsupported(
+                "\(desired.kind.rawValue) artifacts cannot be exported off this host")
+        }
+        guard let runtime = sandboxRuntime else {
+            throw SnapshotConvergenceError.unsupported("this agent has no sandbox runtime")
+        }
+        try await runtime.exportSandboxSnapshot(
+            sandboxId: desired.parentId.uuidString, snapshotId: desired.snapshotId.uuidString,
+            uploads: export.uploads)
+
+        snapshotRecords[desired.snapshotId]?.exported = true
+        persistSnapshotRecords()
+        logger.info(
+            "Snapshot artifact exported",
+            metadata: [
+                "snapshotId": .string(desired.snapshotId.uuidString),
+                "parentId": .string(desired.parentId.uuidString),
+                "artifacts": .stringConvertible(export.uploads.count),
+            ])
+    }
+
+    /// Refuse to converge snapshot work while the record file is unreadable.
+    ///
+    /// The first write after a failed read is what turns a recoverable file
+    /// into a permanent loss (`VMManifestStore.save`'s rule), and every step
+    /// here writes one. The reconciler already skips the snapshot half of a
+    /// sync in this state — this is the belt to those braces, for work already
+    /// queued when the read failed.
+    private func requireWritableSnapshotInventory() throws {
+        guard snapshotInventoryUnreadable else { return }
+        throw SnapshotConvergenceError.unsupported(
+            "this host cannot read its snapshot record file, so it will not write over it")
+    }
+
+    private func persistSnapshotRecords() {
+        guard !snapshotInventoryUnreadable else { return }
+        snapshotRecordStore.save(snapshotRecords)
+    }
+
+    private func applySnapshotInventory(_ inventory: SnapshotInventory) {
+        switch inventory {
+        case .fresh:
+            snapshotRecords = [:]
+            snapshotInventoryUnreadable = false
+        case .loaded(let records):
+            snapshotRecords = records
+            snapshotInventoryUnreadable = false
+            if !records.isEmpty {
+                logger.info(
+                    "Recovered snapshot artifacts recorded by a previous incarnation of this agent",
+                    metadata: ["count": .stringConvertible(records.count)])
+            }
+        case .unreadable:
+            // The store has already logged this loudly.
+            snapshotInventoryUnreadable = true
+        }
+    }
+
+    /// The allocated size of a file, or nil when it cannot be read. Nil is
+    /// "unknown", never "empty" — a footprint the agent could not measure must
+    /// not silently become a free one in the control plane's quota accounting.
+    private static func fileSizeBytes(at path: String) -> Int64? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
+            let size = attributes[.size] as? NSNumber
+        else { return nil }
+        return size.int64Value
     }
 
     private func requireStorageBackend() throws -> any StorageBackend {
@@ -4081,9 +4135,10 @@ extension Agent: ReconcileActuator {
             try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
         case .delete:
             try await sandboxReconcileDelete(item)
-        case .pause, .resume, .resize, .attach, .detach:
+        case .pause, .resume, .resize, .attach, .detach, .export:
             // Not in the sandbox step vocabulary (v1); the planner never
-            // emits these for sandbox items.
+            // emits these for sandbox items. `.export` acts on a sandbox's
+            // *snapshot*, not on the sandbox, and arrives as a snapshot item.
             throw SandboxRuntimeError.unsupportedStep(String(describing: step))
         }
     }
@@ -4337,7 +4392,12 @@ extension Agent: ReconcileActuator {
             // needs to confirm deletions — and nil when it cannot enumerate the
             // store at all, which the control plane reads as "no opinion"
             // rather than as an inventory (STR-148).
-            volumes: await observedVolumeStates(reconciler: reconciler)
+            volumes: await observedVolumeStates(reconciler: reconciler),
+            // Same list-or-nil contract as `volumes`, one step more expensive
+            // to get wrong: an empty list the control plane believed would reap
+            // every checkpoint row it holds for this agent, and a checkpoint is
+            // a point in time nothing can recreate (STR-150).
+            snapshots: await observedSnapshotStates(reconciler: reconciler)
         )
         // A newer report started while this one was assembling — which is
         // exactly what happens when this one overran its budget and was
@@ -4496,6 +4556,89 @@ extension Agent: ReconcileActuator {
                     lastError: failure.error,
                     failedGeneration: failure.generation
                 ))
+        }
+
+        return observed
+    }
+
+    /// Every snapshot artifact this host holds, plus the ones still being
+    /// captured or failed with nothing written (STR-150).
+    ///
+    /// Full-list, like `vms` and `volumes`: the control plane confirms a
+    /// deletion by this list *omitting* the artifact, so the in-flight and
+    /// failed entries below matter — they are what keeps a slow capture from
+    /// reading as "already gone" and reaping a row whose bytes are about to
+    /// appear.
+    private func observedSnapshotStates(reconciler: Reconciler) async -> [ObservedSnapshotState]? {
+        guard let present = await observedSnapshotPresence() else { return nil }
+
+        var observed: [ObservedSnapshotState] = []
+        var reported = Set<String>()
+
+        for (snapshotId, presence) in present {
+            guard let uuid = UUID(uuidString: snapshotId), case .managed(let artifact) = presence
+            else { continue }
+            let kind = artifact.kind.workloadKind
+            observed.append(
+                ObservedSnapshotState(
+                    snapshotId: uuid,
+                    kind: artifact.kind,
+                    parentId: artifact.parentId,
+                    present: true,
+                    exported: artifact.exported,
+                    facts: artifact.facts,
+                    observedGeneration: await reconciler.observedGeneration(for: snapshotId, kind: kind),
+                    convergencePhase: await reconciler.convergencePhase(for: snapshotId, kind: kind),
+                    lastError: await reconciler.lastError(for: snapshotId, kind: kind),
+                    failedGeneration: await reconciler.failedGeneration(for: snapshotId, kind: kind)
+                ))
+            reported.insert(snapshotId)
+        }
+
+        // In-flight and failed captures have no record yet — a capture writes
+        // one only once it succeeds — so the artifact's identity has to come
+        // from the reconciler's own bookkeeping, which is keyed by kind. That
+        // is exactly what the three `WorkloadKind` cases buy: the family is
+        // known without a record to read it from. The parent is not, and is
+        // deliberately left as the artifact's own id rather than guessed: the
+        // control plane only reads `parentId` from an entry it can act on, and
+        // an entry with `present: false` is progress, not an inventory.
+        for family in SnapshotArtifactKind.allCases {
+            let kind = family.workloadKind
+            for (snapshotId, _) in await reconciler.inFlightWorkloads(kind: kind)
+            where !reported.contains(snapshotId) {
+                guard let uuid = UUID(uuidString: snapshotId) else { continue }
+                observed.append(
+                    ObservedSnapshotState(
+                        snapshotId: uuid,
+                        kind: family,
+                        parentId: uuid,
+                        present: false,
+                        observedGeneration: await reconciler.observedGeneration(for: snapshotId, kind: kind),
+                        convergencePhase: await reconciler.convergencePhase(for: snapshotId, kind: kind)
+                            ?? "converging",
+                        lastError: await reconciler.lastError(for: snapshotId, kind: kind),
+                        failedGeneration: await reconciler.failedGeneration(for: snapshotId, kind: kind)
+                    ))
+                reported.insert(snapshotId)
+            }
+
+            for (snapshotId, failure) in await reconciler.failedConvergences(kind: kind)
+            where !reported.contains(snapshotId) {
+                guard let uuid = UUID(uuidString: snapshotId) else { continue }
+                observed.append(
+                    ObservedSnapshotState(
+                        snapshotId: uuid,
+                        kind: family,
+                        parentId: uuid,
+                        present: false,
+                        observedGeneration: await reconciler.observedGeneration(for: snapshotId, kind: kind),
+                        convergencePhase: nil,
+                        lastError: failure.error,
+                        failedGeneration: failure.generation
+                    ))
+                reported.insert(snapshotId)
+            }
         }
 
         return observed

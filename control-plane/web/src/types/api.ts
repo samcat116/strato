@@ -1185,7 +1185,16 @@ export interface AcceptedMutation<Resource> {
 
 // The resource an operation targets. Operations are shared machinery across VMs
 // and sandboxes (backend issue #412), discriminated by `resourceKind`.
-export type OperationResourceKind = "virtual_machine" | "sandbox" | "volume";
+// Snapshot artifacts became their own resource kinds in ADR 0001 stage 8: a
+// checkpoint is a durable noun with its own lifecycle, not a verb on its
+// parent.
+export type OperationResourceKind =
+  | "virtual_machine"
+  | "sandbox"
+  | "volume"
+  | "volume_snapshot"
+  | "vm_checkpoint"
+  | "sandbox_snapshot";
 
 export interface Operation {
   id: string;
@@ -1299,6 +1308,10 @@ export interface VMSnapshot {
   qemuVersion?: string | null;
   architecture?: string | null;
   errorMessage?: string | null;
+  // When retention will delete this checkpoint; null means it is kept until
+  // someone deletes it.
+  expiresAt?: string | null;
+  conditions: ResourceConditions;
   createdById?: string | null;
   createdAt?: string | null;
 }
@@ -1306,6 +1319,8 @@ export interface VMSnapshot {
 export interface CreateVMSnapshotRequest {
   name?: string;
   description?: string;
+  // Omitted uses the fleet default; 0 keeps the checkpoint until deleted.
+  ttlSeconds?: number;
 }
 
 export type SandboxSnapshotStatus =
@@ -1327,12 +1342,25 @@ export interface SandboxSnapshot {
   guestControlProtocolVersion?: number | null;
   forkLayoutVersion?: number | null;
   cpuTemplate?: string | null;
+  // Whether an exported copy in project storage is wanted; `exportedAt` is
+  // when one last completed (issue #428, STR-150).
+  exportDesired?: boolean;
   // When the snapshot was last fully exported to object storage (issue
   // #428); null means agent-local only.
   exportedAt?: string | null;
   errorMessage?: string | null;
+  expiresAt?: string | null;
+  conditions: ResourceConditions;
   createdById?: string | null;
   createdAt?: string | null;
+}
+
+export interface CreateSandboxSnapshotRequest {
+  name?: string;
+  // When true, checkpoint and stop; defaults to false.
+  stop?: boolean;
+  // Omitted uses the fleet default; 0 keeps the snapshot until deleted.
+  ttlSeconds?: number;
 }
 
 export interface UpdateSandboxRequest {
@@ -1589,6 +1617,10 @@ export interface VolumeSnapshot {
   sizeFormatted: string;
   status: SnapshotStatus;
   errorMessage?: string;
+  // The agent holding the snapshot's overlay (STR-150).
+  agentId?: string | null;
+  expiresAt?: string | null;
+  conditions: ResourceConditions;
   createdById?: string;
   createdAt?: string;
 }
@@ -1627,6 +1659,8 @@ export interface CloneVolumeRequest {
 export interface CreateVolumeSnapshotRequest {
   name: string;
   description?: string;
+  // Omitted uses the fleet default; 0 keeps the snapshot until deleted.
+  ttlSeconds?: number;
 }
 
 // VM Log types

@@ -8,10 +8,15 @@
 // * **Generation-backed lifecycle mutations** — 202 with `{resource,
 //   targetGeneration, mutationId}`. Followed by refetching the resource and
 //   reading its `conditions`. No operation object exists.
-// * **Imperative verbs** — VM restart and every snapshot verb, which still
+// * **Imperative verbs** — VM and sandbox restore, and VM restart, which still
 //   answer with an `Operation` record, plus **deletes**, whose success is the
 //   resource ceasing to exist and so cannot be read off it. Followed by
 //   polling the operations endpoint.
+//
+// Snapshot artifacts became generation-backed resources in ADR 0001 stage 8,
+// but they are watched through the operations endpoint anyway: there is no
+// single-snapshot GET to refetch, and the operations façade already answers
+// for every kind from the artifact's own conditions.
 //
 // `source` is what tells them apart, so the watcher never has to guess from
 // the verb.
@@ -90,6 +95,33 @@ export function acceptedMutation(
     source: options.kind === "delete" ? "operation" : "conditions",
     resourceKind: options.resourceKind,
     resourceId: options.resourceId ?? accepted.resource.id!,
+    targetGeneration: accepted.targetGeneration,
+    kind: options.kind,
+    resourceName: options.resourceName,
+  };
+}
+
+/**
+ * A watchable entry from a snapshot mutation's 202 (STR-150).
+ *
+ * Followed through the operations façade rather than by refetching the
+ * artifact: snapshots are listed under their parent and have no
+ * single-resource GET, and the façade answers for a snapshot id from exactly
+ * the conditions a refetch would have read.
+ */
+export function acceptedSnapshotMutation(
+  accepted: AcceptedMutation<{ id?: string }>,
+  options: {
+    kind: OperationKind;
+    resourceKind: OperationResourceKind;
+    resourceName: string;
+  }
+): WatchedMutation {
+  return {
+    mutationId: accepted.mutationId,
+    source: "operation",
+    resourceKind: options.resourceKind,
+    resourceId: accepted.resource.id!,
     targetGeneration: accepted.targetGeneration,
     kind: options.kind,
     resourceName: options.resourceName,

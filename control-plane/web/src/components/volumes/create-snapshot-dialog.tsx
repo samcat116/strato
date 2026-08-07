@@ -14,6 +14,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
+import {
+  acceptedSnapshotMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
 import { toast } from "sonner";
 import type { Volume } from "@/types/api";
 
@@ -37,6 +41,7 @@ export function CreateSnapshotDialog({
   onOpenChange,
   onSuccess,
 }: CreateSnapshotDialogProps) {
+  const watch = useMutationsStore((state) => state.watch);
   const [isLoading, setIsLoading] = useState(false);
   const [volumeId, setVolumeId] = useState(volume?.id ?? "");
   const [name, setName] = useState("");
@@ -67,10 +72,17 @@ export function CreateSnapshotDialog({
 
     setIsLoading(true);
     try {
-      await volumesApi.snapshot(targetId, {
+      const accepted = await volumesApi.snapshot(targetId, {
         name: trimmedName,
         description: description.trim() || undefined,
       });
+      watch(
+        acceptedSnapshotMutation(accepted, {
+          kind: "create",
+          resourceKind: "volume_snapshot",
+          resourceName: trimmedName,
+        })
+      );
       toast.success(`Snapshot "${trimmedName}" is being created`);
       onOpenChange(false);
       onSuccess?.();

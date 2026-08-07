@@ -801,6 +801,16 @@ public func configure(_ app: Application) async throws {
     // (STR-129).
     app.migrations.add(NormalizeVolumeAttachments())
 
+    // ADR 0001 stage 8 (STR-150): snapshots and checkpoints become desired
+    // artifacts. The columns that make each of the three snapshot tables a
+    // converging, finalizable resource — plus the retention deadline durable
+    // artifact objects need and fire-and-forget RPCs never raised — and the
+    // widened CHECK constraints for their three resource kinds. Ordered after
+    // STR-129's repair, matching the order the two landed on main; they touch
+    // disjoint tables, so nothing depends on it beyond reproducibility.
+    app.migrations.add(AddConvergenceToSnapshots())
+    app.migrations.add(AddSnapshotOperationKinds())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

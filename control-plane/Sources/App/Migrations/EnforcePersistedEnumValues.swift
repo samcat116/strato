@@ -93,7 +93,16 @@ struct EnforcePersistedEnumValues: AsyncMigration {
         ),
         .init(
             table: "resource_operations", column: "resource_kind",
-            allowedValues: ["virtual_machine", "sandbox", "volume"], defaultValue: "virtual_machine"
+            allowedValues: [
+                "virtual_machine", "sandbox", "volume",
+                // Snapshot artifacts (STR-150). They write no operation rows —
+                // their mutations are level-triggered — but the constraint is
+                // widened anyway, because `AddSnapshotOperationKinds` installs
+                // it from this list and `PersistedEnumConstraintTests` pins it
+                // against `OperationResourceKind.allCases`.
+                "volume_snapshot", "vm_checkpoint", "sandbox_snapshot",
+            ],
+            defaultValue: "virtual_machine"
         ),
         .init(
             table: "resource_operations", column: "kind",

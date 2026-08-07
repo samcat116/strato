@@ -48,6 +48,39 @@ public enum WorkloadPresence<Status: Equatable & Sendable>: Equatable, Sendable 
 public typealias VMPresence = WorkloadPresence<VMStatus>
 public typealias SandboxPresence = WorkloadPresence<SandboxStatus>
 public typealias VolumePresence = WorkloadPresence<ObservedVolumeFacts>
+public typealias SnapshotPresence = WorkloadPresence<ObservedSnapshotArtifact>
+
+/// What this agent can see about one snapshot artifact it holds (STR-150), and
+/// the `ObservedStatus` the generic diff engine converges.
+///
+/// A struct rather than a status enum for `ObservedVolumeFacts`' reason,
+/// sharpened: an artifact is frozen bytes, so it has no run state at all. The
+/// only thing about it that can diverge from desire is *where it exists* — on
+/// this host, and optionally in the control plane's object store.
+///
+/// Entries are always `.managed`: an artifact has no runtime session to lose,
+/// so it is never orphaned and never re-adopted.
+public struct ObservedSnapshotArtifact: Equatable, Sendable {
+    public let kind: SnapshotArtifactKind
+    public let parentId: UUID
+    /// What the capture produced, as measured when it happened. Nil for an
+    /// artifact the agent knows the identity of but has not finished writing.
+    public let facts: ObservedSnapshotFacts?
+    /// Whether this host has already streamed the artifact to its export slots.
+    public let exported: Bool
+
+    public init(
+        kind: SnapshotArtifactKind,
+        parentId: UUID,
+        facts: ObservedSnapshotFacts? = nil,
+        exported: Bool = false
+    ) {
+        self.kind = kind
+        self.parentId = parentId
+        self.facts = facts
+        self.exported = exported
+    }
+}
 
 /// What this agent can see about one volume it holds, and the `ObservedStatus`
 /// the generic diff engine converges (STR-148).
@@ -136,6 +169,11 @@ public enum ReconcileStep: Equatable, Sendable {
     case attach
     /// Remove a volume from the VM it is presented to (STR-148). Volume-only.
     case detach
+    /// Stream a snapshot artifact to the export slots its desired entry names
+    /// (STR-150). Snapshot-only, and idempotent at the "already satisfied"
+    /// level like every other step: an artifact this host has already exported
+    /// plans nothing.
+    case export
 }
 
 /// The control-plane instruction driving a work item, tagged by workload kind.
@@ -147,6 +185,9 @@ public enum ReconcileTarget: Sendable {
     case vm(DesiredVMState)
     case sandbox(DesiredSandboxState)
     case volume(DesiredVolumeState)
+    /// A snapshot artifact of any family — the entry's own `kind` routes the
+    /// capture or delete to a backend (STR-150).
+    case snapshot(DesiredSnapshotState)
     /// Confirmed teardown of a workload the control plane has no row for.
     case tombstone(DesiredWorkloadTombstone)
 }
@@ -187,6 +228,12 @@ public struct ReconcileWorkItem: Sendable {
         return nil
     }
 
+    /// The snapshot desired entry, when this item is driven by one (STR-150).
+    public var desiredSnapshot: DesiredSnapshotState? {
+        if case .snapshot(let entry) = target { return entry }
+        return nil
+    }
+
     /// Whether this item is a confirmed teardown of a workload with no
     /// control-plane row. These are the only items the blast-radius guard
     /// counts, and the only ones exempt from the attempt cap.
@@ -205,6 +252,12 @@ public struct ReconcileWorkItem: Sendable {
     /// because realizing it drives that VM's hypervisor session. This is the
     /// same two-lane guarantee `MessageEnvelope.serializationKeys` gave the
     /// imperative `volume_attach` frame, carried over rather than reinvented.
+    ///
+    /// A snapshot item holds its own lane plus its **parent's**, for the same
+    /// reason (STR-150): capturing a checkpoint pauses the guest and drives the
+    /// parent's hypervisor session, so it must never interleave with that
+    /// parent's own convergence — a capture racing a delete would checkpoint a
+    /// VM out from under its teardown.
     public var laneKeys: [String] {
         switch kind {
         case .vm: return [id]
@@ -212,6 +265,22 @@ public struct ReconcileWorkItem: Sendable {
         case .volume:
             guard let vmId = desiredVolume?.attachment?.vmId.uuidString else { return ["volume/" + id] }
             return ["volume/" + id, vmId]
+        case .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot:
+            let own = "snapshot/" + id
+            guard let entry = desiredSnapshot else { return [own] }
+            return [own, Self.lane(kind: entry.kind.parentKind, id: entry.parentId.uuidString)]
+        }
+    }
+
+    /// The lane a workload of `kind` runs on. Kept beside `laneKeys` so a
+    /// snapshot naming its parent's lane cannot spell it differently from the
+    /// parent itself.
+    static func lane(kind: WorkloadKind, id: String) -> String {
+        switch kind {
+        case .vm: return id
+        case .sandbox: return "sandbox/" + id
+        case .volume: return "volume/" + id
+        case .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot: return "snapshot/" + id
         }
     }
 
@@ -363,6 +432,16 @@ public protocol ReconcileActuator: Sendable {
     /// of the plan and makes the observed report carry `volumes: nil`, which
     /// the control plane already reads as "no opinion".
     func observedVolumePresence() async -> [String: VolumePresence]?
+    /// Snapshot of every snapshot artifact this host holds (STR-150), across
+    /// all three families, or nil when the agent cannot enumerate them.
+    ///
+    /// Nil is the snapshot counterpart of `presenceIsComplete` and carries the
+    /// same instruction: an empty inventory is *authoritative* downstream —
+    /// omission from a full list is how the control plane confirms a
+    /// checkpoint's bytes are gone and reaps its row — so a host that cannot
+    /// read its record file must be able to say it does not know, rather than
+    /// claim it holds nothing.
+    func observedSnapshotPresence() async -> [String: SnapshotPresence]?
     /// Execute one non-adopt step; `item.kind` selects the runtime.
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws
     /// Called after every work item finishes (success or failure) so the agent
@@ -404,6 +483,36 @@ public enum VolumeConvergenceError: ClassifiableError, LocalizedError, Sendable 
     }
 }
 
+/// Why a snapshot artifact could not be converged (STR-150). Same two
+/// classifications as `VolumeConvergenceError`, and for the same reason: the
+/// difference decides whether an operator ever sees it.
+public enum SnapshotConvergenceError: ClassifiableError, LocalizedError, Sendable {
+    /// Something this host cannot do however many times it is asked: capture a
+    /// volume snapshot of an attached volume, export a family that has no
+    /// off-node representation, run a backend it does not have. Permanent, so
+    /// the attempt cap short-circuits and the control plane degrades the
+    /// artifact with the reason instead of waiting out a completion budget.
+    case unsupported(String)
+    /// The artifact's *parent* has not converged yet — the volume or VM being
+    /// captured may be mid-create in this very sync. A dependency wait: it
+    /// burns no attempt, records no error, and retries on the next
+    /// level-triggered sync.
+    case sourceNotReady(String)
+
+    public var failureClassification: FailureClassification {
+        switch self {
+        case .unsupported: return .permanent
+        case .sourceNotReady: return .waitingOnDependency
+        }
+    }
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupported(let reason), .sourceNotReady(let reason): return reason
+        }
+    }
+}
+
 public struct SandboxActuationUnsupportedError: ClassifiableError, LocalizedError {
     public var failureClassification: FailureClassification { .permanent }
     public var errorDescription: String? { "this actuator does not support sandbox workloads" }
@@ -427,6 +536,11 @@ extension ReconcileActuator {
     /// "this actuator has no volumes" is an answer — nil is reserved for "I
     /// cannot answer".
     public func observedVolumePresence() async -> [String: VolumePresence]? { [:] }
+
+    /// Actuators without a snapshot record store hold no artifacts. `[:]`
+    /// rather than nil for `observedVolumePresence`'s reason: "this actuator
+    /// has none" is an answer; nil is reserved for "I cannot answer".
+    public func observedSnapshotPresence() async -> [String: SnapshotPresence]? { [:] }
 
     /// Actuators that cannot report per-VM sizing simply never have a resize
     /// planned for them; the change still lands at the VM's next boot.
@@ -507,6 +621,60 @@ extension DesiredVolumeState: ReconcilableDesired {
 
     static func describe(_ observed: ObservedVolumeFacts) -> String {
         observed.attachedVMId.map { "attached to \($0)" } ?? "detached"
+    }
+}
+
+// MARK: Snapshot artifacts (STR-150)
+
+/// One artifact family as a *type*.
+///
+/// The diff engine is generic over a desired-state DTO and reads its
+/// `WorkloadKind` statically — one kind per desired list — because that kind
+/// namespaces generations, failures, tombstones and the held set. Snapshot
+/// artifacts arrive as one mixed list of three kinds, so the list is partitioned
+/// by kind and each slice is planned through this phantom parameter. The
+/// alternative — making the kind an instance property — would have meant
+/// teaching `planCore` to bucket *present* entries by kind too, which it cannot
+/// do for an `.orphaned` presence that carries no status. Three empty enums
+/// keep the engine untouched.
+protocol SnapshotArtifactFamily: Sendable {
+    static var artifactKind: SnapshotArtifactKind { get }
+}
+
+enum VolumeSnapshotFamily: SnapshotArtifactFamily {
+    static var artifactKind: SnapshotArtifactKind { .volumeSnapshot }
+}
+
+enum VMCheckpointFamily: SnapshotArtifactFamily {
+    static var artifactKind: SnapshotArtifactKind { .vmCheckpoint }
+}
+
+enum SandboxSnapshotFamily: SnapshotArtifactFamily {
+    static var artifactKind: SnapshotArtifactKind { .sandboxSnapshot }
+}
+
+/// A desired snapshot entry viewed as one family's, so `planCore` can plan it.
+struct FamilyScopedSnapshot<Family: SnapshotArtifactFamily>: ReconcilableDesired {
+    let entry: DesiredSnapshotState
+
+    static var workloadKind: WorkloadKind { Family.artifactKind.workloadKind }
+    var workloadId: UUID { entry.snapshotId }
+    var generation: Int64 { entry.generation }
+    var wantsAbsent: Bool { entry.desiredStatus == .absent }
+    var asTarget: ReconcileTarget { .snapshot(entry) }
+
+    /// A freshly captured artifact exists on this host and nowhere else, so the
+    /// only step that can remain after a `.create` is the export.
+    var statusAfterCreate: ObservedSnapshotArtifact {
+        ObservedSnapshotArtifact(kind: entry.kind, parentId: entry.parentId, exported: false)
+    }
+
+    func convergenceSteps(from observed: ObservedSnapshotArtifact) -> [ReconcileStep] {
+        Reconciler.snapshotSteps(desired: entry, observed: observed)
+    }
+
+    static func describe(_ observed: ObservedSnapshotArtifact) -> String {
+        observed.exported ? "present, exported" : "present"
     }
 }
 
@@ -670,6 +838,12 @@ public actor Reconciler {
     /// empty desired list instead would report every volume on the host as
     /// unaccounted for and invite a future reading of that silence as
     /// teardown — of the only copy of a user's data.
+    /// `includeSnapshots` gates the snapshot half exactly like `includeVolumes`
+    /// gates the volume half, and the message's own `snapshots` field is the
+    /// primary and stricter signal for the same reason (STR-150): planning
+    /// against an empty desired list would report every checkpoint on the host
+    /// as unaccounted for, and invite a future reading of that silence as
+    /// teardown — of a point in time the user chose to keep and cannot recreate.
     ///
     /// `includeMetadata` gates the payload half of instance metadata (STR-52)
     /// on `WireProtocol.supportsInstanceMetadata(senderVersion)`, for the
@@ -678,7 +852,10 @@ public actor Reconciler {
     /// an older one it is silence — reading that as an instruction would empty
     /// every VM's metadata the moment a control plane is rolled back.
     public func apply(
-        _ message: DesiredStateMessage, includeSandboxes: Bool = false, includeVolumes: Bool = false,
+        _ message: DesiredStateMessage,
+        includeSandboxes: Bool = false,
+        includeVolumes: Bool = false,
+        includeSnapshots: Bool = false,
         includeMetadata: Bool = false
     ) async {
         let tombstones = message.tombstones ?? []
@@ -758,6 +935,33 @@ public actor Reconciler {
             }
         }
 
+        var snapshotPlan = ReconcilePlan()
+        var presentSnapshotCounts: [WorkloadKind: Int] = [:]
+        if includeSnapshots, let desiredSnapshots = message.snapshots {
+            // Nil is the record store saying it cannot enumerate what this host
+            // holds — not that it holds nothing. Planning against `[:]` would
+            // re-capture every desired artifact, checkpointing live guests over
+            // the ones already there, so an unanswerable inventory skips the
+            // snapshot half exactly like a nil `snapshots` field does.
+            if let presentSnapshots = await actuator.observedSnapshotPresence() {
+                for presence in presentSnapshots.values {
+                    guard case .managed(let artifact) = presence else { continue }
+                    presentSnapshotCounts[artifact.kind.workloadKind, default: 0] += 1
+                }
+                snapshotPlan = Self.planSnapshots(
+                    desired: desiredSnapshots, present: presentSnapshots,
+                    lastApplied: appliedSnapshotGenerations(), tombstones: tombstones)
+                plan.unrecognized += snapshotPlan.unrecognized
+            } else {
+                logger.error(
+                    "Skipping the snapshot half of this sync: this host cannot enumerate the artifacts it holds",
+                    metadata: [
+                        "syncId": .string(message.syncId),
+                        "desiredSnapshots": .stringConvertible(desiredSnapshots.count),
+                    ])
+            }
+        }
+
         var presentSandboxCount = 0
         var sandboxPlan = ReconcilePlan()
         if includeSandboxes {
@@ -775,8 +979,15 @@ public actor Reconciler {
         // a VM that references it is built, and volume *attachment* work goes
         // after the VM items so it queues behind that VM's create/boot on the
         // VM's own lane instead of racing it and burning a dependency wait.
+        //
+        // Snapshot work goes last for the same reason volume attachment does:
+        // a capture holds its parent's lane, so enqueuing it after the parent's
+        // own items is what makes it queue *behind* that parent's create/boot
+        // instead of racing it — and a checkpoint of a guest that is still
+        // being built is not a checkpoint of anything.
         let (volumeData, volumeAttachment) = volumePlan.items.partitioned { $0.laneKeys.count == 1 }
-        plan.items = volumeData + vmPlan.items + volumeAttachment + sandboxPlan.items
+        plan.items =
+            volumeData + vmPlan.items + volumeAttachment + sandboxPlan.items + snapshotPlan.items
 
         // Wholesale replacement, including the sandbox half's absence when the
         // control plane doesn't speak sandbox sync: the report must describe
@@ -784,13 +995,14 @@ public actor Reconciler {
         let heldChanged = unrecognized != plan.unrecognized
         unrecognized = plan.unrecognized
         var items = plan.items
+        var population: [WorkloadKind: Int] = [
+            .vm: presentVMs.count,
+            .sandbox: presentSandboxCount,
+            .volume: presentVolumeCount,
+        ]
+        population.merge(presentSnapshotCounts) { _, new in new }
         let refusalChanged = applyTeardownGuard(
-            to: &items, syncId: message.syncId,
-            present: [
-                .vm: presentVMs.count,
-                .sandbox: presentSandboxCount,
-                .volume: presentVolumeCount,
-            ])
+            to: &items, syncId: message.syncId, present: population)
 
         logger.debug(
             "Applying desired-state sync",
@@ -802,6 +1014,9 @@ public actor Reconciler {
                 "presentSandboxes": .stringConvertible(presentSandboxCount),
                 "desiredVolumes": .stringConvertible(includeVolumes ? (message.volumes?.count ?? 0) : 0),
                 "presentVolumes": .stringConvertible(presentVolumeCount),
+                "desiredSnapshots": .stringConvertible(
+                    includeSnapshots ? (message.snapshots?.count ?? 0) : 0),
+                "presentSnapshots": .stringConvertible(presentSnapshotCounts.values.reduce(0, +)),
                 "unrecognized": .stringConvertible(plan.unrecognized.count),
                 "workItems": .stringConvertible(items.count),
             ])
@@ -912,6 +1127,18 @@ public actor Reconciler {
         return previous != refusal
     }
 
+    /// Applied generations across all three artifact families in one map.
+    /// `planSnapshots` partitions its *desired* list by kind but shares this,
+    /// which is safe because ids are UUIDs: an id can only ever belong to one
+    /// family, so no two families can read each other's entries.
+    private func appliedSnapshotGenerations() -> [String: Int64] {
+        var result: [String: Int64] = [:]
+        for (ref, generation) in lastApplied where ref.kind.isSnapshotArtifact {
+            result[ref.id] = generation
+        }
+        return result
+    }
+
     /// Project this sync's per-VM metadata onto the store the guest-facing
     /// metadata service reads (STR-52).
     ///
@@ -1010,9 +1237,10 @@ public actor Reconciler {
         case .sandbox(let desired):
             let observed = try await actuator.adoptSandbox(item)
             return Self.sandboxStatusSteps(desired: desired.desiredStatus, observed: observed)
-        case .volume:
-            // Volumes are files: there is no runtime session to lose, so the
-            // planner never marks one orphaned and never emits `.adopt`.
+        case .volume, .snapshot:
+            // Volumes and snapshot artifacts are files: there is no runtime
+            // session to lose, so the planner never marks one orphaned and
+            // never emits `.adopt`.
             return []
         case .tombstone:
             // The planner never emits `.adopt` for a tombstone (its single
@@ -1028,7 +1256,7 @@ public actor Reconciler {
             var index = 0
             while index < steps.count {
                 let step = steps[index]
-                let phase = phaseDescription(step)
+                let phase = phaseDescription(step, kind: item.kind)
                 currentPhase[ref] = phase
                 if step == .adopt {
                     steps =
@@ -1184,9 +1412,12 @@ public actor Reconciler {
         return try await operation()
     }
 
-    private func phaseDescription(_ step: ReconcileStep) -> String {
+    private func phaseDescription(_ step: ReconcileStep, kind: WorkloadKind) -> String {
         switch step {
-        case .create: return "creating"
+        // A snapshot's `.create` is a capture, and the phase string is what an
+        // operator reads while it runs — "creating" would describe the wrong
+        // thing entirely for a step that pauses a live guest.
+        case .create: return kind.isSnapshotArtifact ? "capturing" : "creating"
         case .adopt: return "re-adopting"
         case .boot: return "booting"
         case .pause: return "pausing"
@@ -1196,6 +1427,7 @@ public actor Reconciler {
         case .delete: return "deleting"
         case .attach: return "attaching"
         case .detach: return "detaching"
+        case .export: return "exporting"
         }
     }
 
@@ -1266,6 +1498,79 @@ public actor Reconciler {
         tombstones: [DesiredWorkloadTombstone] = []
     ) -> ReconcilePlan {
         planCore(desired: desired, tombstones: tombstones, present: present, lastApplied: lastApplied)
+    }
+
+    /// Compute the snapshot-artifact convergence plan for one sync (STR-150).
+    ///
+    /// The desired list is mixed-kind, so it is split by family and each slice
+    /// runs through the same engine as VMs, sandboxes and volumes — including
+    /// the staleness guard, the held set, and the tombstone round trip. An
+    /// artifact whose presence is not `.managed` is dropped rather than planned:
+    /// artifacts have no runtime session, so the record store only ever yields
+    /// `.managed`, and inventing an orphan for one would plan an `.adopt` no
+    /// backend can perform.
+    public static func planSnapshots(
+        desired: [DesiredSnapshotState],
+        present: [String: SnapshotPresence],
+        lastApplied: [String: Int64],
+        tombstones: [DesiredWorkloadTombstone] = []
+    ) -> ReconcilePlan {
+        var plan = ReconcilePlan()
+        for family in SnapshotArtifactKind.allCases {
+            let familyDesired = desired.filter { $0.kind == family }
+            let familyPresent = present.filter { _, presence in
+                guard case .managed(let artifact) = presence else { return false }
+                return artifact.kind == family
+            }
+            guard !familyDesired.isEmpty || !familyPresent.isEmpty else { continue }
+            let familyPlan = planFamily(
+                family, desired: familyDesired, present: familyPresent,
+                lastApplied: lastApplied, tombstones: tombstones)
+            plan.items += familyPlan.items
+            plan.unrecognized += familyPlan.unrecognized
+        }
+        return plan
+    }
+
+    private static func planFamily(
+        _ family: SnapshotArtifactKind,
+        desired: [DesiredSnapshotState],
+        present: [String: SnapshotPresence],
+        lastApplied: [String: Int64],
+        tombstones: [DesiredWorkloadTombstone]
+    ) -> ReconcilePlan {
+        func planned<F: SnapshotArtifactFamily>(_: F.Type) -> ReconcilePlan {
+            planCore(
+                desired: desired.map { FamilyScopedSnapshot<F>(entry: $0) },
+                tombstones: tombstones, present: present, lastApplied: lastApplied)
+        }
+        switch family {
+        case .volumeSnapshot: return planned(VolumeSnapshotFamily.self)
+        case .vmCheckpoint: return planned(VMCheckpointFamily.self)
+        case .sandboxSnapshot: return planned(SandboxSnapshotFamily.self)
+        }
+    }
+
+    /// The steps that take an existing snapshot artifact from `observed` to
+    /// `desired` (STR-150). Empty when it already matches.
+    ///
+    /// An artifact's bytes are immutable, so there is exactly one thing that can
+    /// still be wrong about one that exists: whether the copy the control plane
+    /// asked for exists too. Nothing here ever re-captures — that is the whole
+    /// safety property of modelling a capture as a create *strategy*
+    /// (`DesiredSnapshotCapture`), which is read only while the artifact is
+    /// absent. Without it a replayed sync would checkpoint a running guest again
+    /// over the point in time the user is holding.
+    ///
+    /// A desired export that this host has already satisfied plans nothing, and
+    /// an export field that goes *away* plans nothing either: withdrawing an
+    /// exported copy is the control plane's own object-store bookkeeping, not a
+    /// teardown the agent can perform.
+    public static func snapshotSteps(
+        desired: DesiredSnapshotState, observed: ObservedSnapshotArtifact
+    ) -> [ReconcileStep] {
+        guard desired.export != nil, !observed.exported else { return [] }
+        return [.export]
     }
 
     /// Compute the sandbox convergence plan for one sync. Same engine, same

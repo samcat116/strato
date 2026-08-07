@@ -556,7 +556,41 @@ public enum WireProtocol {
     /// `StorageBackend.volumeInfo` stays. It is the agent's own probe, used to
     /// seed the virtual-size cache the resize planner reads, and it never had
     /// anything to do with the wire.
-    public static let currentVersion = 32
+    ///
+    /// Version 33: snapshots and checkpoints become desired artifacts (ADR 0001
+    /// stage 8, STR-150). `DesiredStateMessage` gains
+    /// `snapshots: [DesiredSnapshotState]?` and `ObservedStateReport` gains
+    /// `snapshots: [ObservedSnapshotState]?`; the six imperative frames
+    /// `volume_snapshot`, `volume_snapshot_delete`, `vm_checkpoint`,
+    /// `vm_snapshot_delete`, `sandbox_snapshot_create` and
+    /// `sandbox_snapshot_delete` are removed, and so is
+    /// `sandbox_snapshot_export`. `vm_restore` and `sandbox_restore` survive —
+    /// they are edges, and convert to nonces in STR-151.
+    ///
+    /// The bump carries the same two hazard shapes as v31, for the same
+    /// reasons, and the *addition* half gets the same `Optional`-not-`[]`
+    /// treatment: a nil `snapshots` is "the sender has no opinion", never
+    /// "delete every checkpoint on this host". Read wrong, silence here
+    /// destroys the point in time a user chose to keep, so the payload
+    /// describes itself rather than depending on a `wireProtocolVersion` column
+    /// being current.
+    ///
+    /// Where this differs from v31 is what the gate can protect. A volume is
+    /// *placed* by the control plane, so v31 could simply refuse to schedule
+    /// one onto an agent that could not converge it. An artifact's placement is
+    /// its parent's, and the parent is already there — so `supportsSnapshotSync`
+    /// gates **capture admission** instead: `POST .../snapshots` against a
+    /// pre-v33 agent is refused with "upgrade the agent", which is exactly what
+    /// the pre-v22/v9 capability preflights already did, one floor higher.
+    /// Artifacts already sitting on such an agent freeze until it is upgraded,
+    /// and deleting one still works because the delete path force-clears the
+    /// agent-absence finalizer for an agent that cannot confirm.
+    ///
+    /// The *removal* half is the v28/v31/v32 shape and breaks in one direction
+    /// only: a pre-v33 control plane driving a v33 agent would send
+    /// `vm_checkpoint` into an envelope the agent can no longer decode and burn
+    /// the request's timeout against silence. Upgrade the control plane first.
+    public static let currentVersion = 33
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -651,10 +685,12 @@ public enum WireProtocol {
     /// (see `currentVersion` version 9 notes).
     public static let sandboxSnapshotMinimumVersion = 9
 
-    /// Whether an agent registered with `version` can be sent sandbox
-    /// snapshot/restore messages. A pre-v9 agent cannot decode the envelope
-    /// (unknown `MessageType` case) and never replies, so the control plane
-    /// must refuse the request up front rather than time out against silence.
+    /// Whether an agent registered with `version` can be sent a
+    /// `sandbox_restore`. A pre-v9 agent cannot decode the envelope (unknown
+    /// `MessageType` case) and never replies, so the control plane must refuse
+    /// the request up front rather than time out against silence. Since v33
+    /// this covers restore alone: capture, delete and export are desired state
+    /// and gate on `supportsSnapshotSync`.
     public static func supportsSandboxSnapshots(_ version: Int) -> Bool {
         version >= sandboxSnapshotMinimumVersion
     }
@@ -665,12 +701,13 @@ public enum WireProtocol {
     /// 14 notes).
     public static let sandboxSnapshotMobilityMinimumVersion = 14
 
-    /// Whether an agent registered with `version` can be sent a
-    /// `SandboxSnapshotExportMessage`, an `artifacts`-carrying restore/fork,
-    /// or a templated `SandboxSpec`. A pre-v14 agent either cannot decode the
-    /// envelope (export) or silently ignores the field (artifacts,
-    /// cpuTemplate) and mis-converges, so the control plane must refuse all
-    /// three up front.
+    /// Whether an agent registered with `version` can be sent an export
+    /// instruction, an `artifacts`-carrying restore/fork, or a templated
+    /// `SandboxSpec`. A pre-v14 agent silently ignores the field and
+    /// mis-converges, so the control plane must refuse all three up front. (The
+    /// export half now travels on the desired entry, where the stricter
+    /// `supportsSnapshotSync` floor applies anyway; this gate survives for
+    /// restore artifacts and CPU templates.)
     public static func supportsSandboxSnapshotMobility(_ version: Int) -> Bool {
         version >= sandboxSnapshotMobilityMinimumVersion
     }
@@ -769,15 +806,17 @@ public enum WireProtocol {
     /// trio (see `currentVersion` version 22 notes).
     public static let vmCheckpointMinimumVersion = 22
 
-    /// Whether an agent registered with `version` can decode a checkpoint,
-    /// restore, or snapshot-delete request. Below this the envelope's
-    /// `MessageType` does not decode, so the frame is dropped silently and the
-    /// control plane would wait out the operation budget for a response that
-    /// can never come — the control plane refuses the request up front
-    /// instead. Necessary but not sufficient: eligibility additionally
-    /// requires the agent to advertise the `vm_checkpoint` capability, since a
-    /// v22 build on a QEMU-less host understands the trio but cannot realize
-    /// it.
+    /// Whether an agent registered with `version` can decode a `vm_restore`
+    /// request. Below this the envelope's `MessageType` does not decode, so the
+    /// frame is dropped silently and the control plane would wait out the
+    /// operation budget for a response that can never come — it refuses the
+    /// request up front instead. Necessary but not sufficient: eligibility
+    /// additionally requires the agent to advertise the `vm_restore`
+    /// capability, since a v22 build on a QEMU-less host understands the frame
+    /// but cannot realize it.
+    ///
+    /// Since v33 this covers restore alone: capture and delete are desired
+    /// state and gate on `supportsSnapshotSync` instead.
     public static func supportsVMCheckpoint(_ version: Int) -> Bool {
         version >= vmCheckpointMinimumVersion
     }
@@ -888,6 +927,29 @@ public enum WireProtocol {
     /// a volume must never be scheduled onto an agent that cannot converge it.
     public static func supportsVolumeSync(_ version: Int) -> Bool {
         version >= volumeSyncMinimumVersion
+    }
+
+    /// The lowest protocol version that carries snapshot artifacts on the
+    /// reconciliation loop rather than through imperative RPCs (see
+    /// `currentVersion` version 33 notes).
+    public static let snapshotSyncMinimumVersion = 33
+
+    /// Whether a peer at `version` speaks declarative snapshot artifacts.
+    ///
+    /// Read in three places, like `supportsVolumeSync` and for the same three
+    /// reasons — agent-side as the belt to the `snapshots`-is-nil braces, at
+    /// sync assembly to omit the field (and skip the query) for an agent that
+    /// would discard it, and as a refusal.
+    ///
+    /// The refusal is where snapshots differ. A volume's gate is at
+    /// *placement*, because the control plane chooses a volume's host; an
+    /// artifact inherits its parent's host, so there is no placement decision
+    /// to gate. This one sits at **capture admission** instead: with the
+    /// imperative frames gone there is no fallback, so a checkpoint requested
+    /// against a pre-v33 agent is refused with `409` rather than accepted into
+    /// a state nothing can converge.
+    public static func supportsSnapshotSync(_ version: Int) -> Bool {
+        version >= snapshotSyncMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

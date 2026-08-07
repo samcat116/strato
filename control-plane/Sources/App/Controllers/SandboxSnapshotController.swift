@@ -7,18 +7,21 @@ import Vapor
 /// Snapshot / checkpoint-resume handlers for `/api/sandboxes/:id/snapshots`
 /// (issue #426), registered by `SandboxController.boot`.
 ///
-/// Create, delete, and restore all follow the generalized 202-operation
-/// machinery (#412): the pending operation row and the snapshot/desired-state
-/// mutation commit in one transaction, the agent round-trip happens in the
-/// background over the imperative snapshot RPC (the volume-ops precedent,
-/// forwarded across replicas by `AgentService`), and the RPC verdict
-/// completes the operation — with the stuck-operation sweep as backstop.
+/// Create and delete became declarative in ADR 0001 stage 8 (STR-150): both
+/// answer `202 {resource, targetGeneration, mutationId}`, the client polls the
+/// snapshot's own `conditions`, and the agent captures or removes the artifacts
+/// on its next sync and reports what it did — sizes, Firecracker version, fork
+/// layout and CPU template included, on a report that is re-sent every
+/// heartbeat rather than a reply that a dropped socket could lose.
+///
+/// Restore is still imperative: loading a checkpoint back over a live microVM
+/// is an edge rather than a state, and converts to a nonce in STR-151.
 extension SandboxController {
 
     // MARK: - Create
 
     /// POST /api/sandboxes/:sandboxID/snapshots
-    /// Body: { "name"?: string, "stop"?: bool }
+    /// Body: { "name"?: string, "stop"?: bool, "ttlSeconds"?: int }
     ///
     /// Checkpoints the sandbox: the agent drains guest connections, pauses
     /// the microVM, captures memory + vmstate, copies the rootfs, then
@@ -32,7 +35,7 @@ extension SandboxController {
         // wrong checkpoint mode.
         let request: CreateSandboxSnapshotRequest
         if req.body.data == nil {
-            request = CreateSandboxSnapshotRequest(name: nil, stop: nil)
+            request = CreateSandboxSnapshotRequest(name: nil, stop: nil, ttlSeconds: nil)
         } else {
             request = try req.content.decode(CreateSandboxSnapshotRequest.self)
         }
@@ -54,13 +57,11 @@ extension SandboxController {
                 .conflict,
                 reason: "Sandbox cannot be snapshotted in state '\(sandbox.status.rawValue)'")
         }
-        // Fail fast on an offline or incapable agent instead of parking the
-        // operation against silence.
-        do {
-            try await SandboxSnapshotService.requireCapableAgent(agentId, app: req.application)
-        } catch let error as SandboxSnapshotServiceError {
-            throw Abort(.conflict, reason: error.localizedDescription)
-        }
+        // Capture admission: with the imperative frames gone there is no
+        // fallback, so an agent that cannot converge a snapshot is refused here
+        // rather than handed a desired state nothing would ever realize.
+        try await SnapshotArtifactMutation.requireCaptureCapableAgent(
+            agentId, kind: .sandboxSnapshot, app: req.application)
 
         guard let project = try await Project.find(sandbox.$project.id, on: req.db) else {
             throw Abort(.internalServerError, reason: "Sandbox project not found")
@@ -78,20 +79,26 @@ extension SandboxController {
             projectID: sandbox.$project.id,
             environment: sandbox.environment,
             agentId: agentId,
+            captureMode: stopAfterSnapshot ? .stop : .resume,
+            expiresAt: try SnapshotRetention.expiry(requested: request.ttlSeconds),
             createdByID: userID)
         // Admission estimate: the memory file dominates and is bounded by
-        // guest RAM. Replaced by the agent's actual sizes on completion.
+        // guest RAM. Replaced by the agent's actual sizes once its observed
+        // report carries them.
         snapshot.size = sandbox.memory
+        // The source host's CPU model, recorded now rather than on completion:
+        // it is a fact about the *agent*, which the agent's own report has no
+        // reason to carry, and an un-templated snapshot needs it to be mobile
+        // at all (issue #428).
+        snapshot.sourceCPUModel =
+            (await req.application.agentService.getAgentInfo(agentId))?
+            .hostInfo?.cpuModel
+        snapshot.extendConvergenceDeadline(
+            by: OperationResourceKind.sandboxSnapshot.completionBudgetSeconds(for: .create))
 
         let environment = sandbox.environment
         let memory = sandbox.memory
-        let operation = try await ResourceOperation.begin(
-            .snapshot,
-            resourceKind: .sandbox,
-            resourceID: sandboxID,
-            userID: userID,
-            on: req.db
-        ) { db in
+        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
             // Snapshot storage draws from the shared storage quota pool
             // (issue #415 enforcement points).
             try await QuotaEnforcementService.reserveSandboxSnapshot(
@@ -109,20 +116,22 @@ extension SandboxController {
                 on: db
             )
             if stopAfterSnapshot {
-                // Checkpoint-and-stop: the agent leaves the microVM paused
-                // after the capture, and the desired state must agree so the
-                // reconciler doesn't immediately resume it.
+                // Checkpoint-and-stop has two halves and they live in two
+                // places on purpose. The *capture* leaves the microVM paused,
+                // which the agent reads off `captureMode` as a create strategy;
+                // the *lasting* intent is the sandbox's own desired state, so
+                // the reconciler does not resume it on the next sync. Writing
+                // only the first would make "and stop" last exactly until the
+                // next level-triggered pass.
                 sandbox.setDesiredStatus(.stopped)
                 try await sandbox.save(on: db)
             }
+            return try await SnapshotArtifactMutation.recordCapture(
+                snapshot, actor: .user(userID), on: db)
         }
 
         let snapshotID = try snapshot.requireID()
-
-        Self.runSnapshotCreation(
-            operation, snapshot: snapshot, sandbox: sandbox,
-            mode: stopAfterSnapshot ? .stop : .resume,
-            agentId: agentId, app: req.application)
+        try SnapshotArtifactMutation.dispatchCapture(snapshot, app: req.application)
 
         req.logger.info(
             "Sandbox snapshot accepted",
@@ -132,108 +141,8 @@ extension SandboxController {
                 "stop": .stringConvertible(stopAfterSnapshot),
             ])
 
-        return try operation.acceptedResponse()
-    }
-
-    /// Background half of `createSnapshot`: the agent RPC and the verdict.
-    private static func runSnapshotCreation(
-        _ operation: ResourceOperation,
-        snapshot: SandboxSnapshot,
-        sandbox: Sandbox,
-        mode: SandboxSnapshotMode,
-        agentId: String,
-        app: Application
-    ) {
-        guard let operationId = operation.id, let snapshotId = snapshot.id else { return }
-        let sandboxID = operation.resourceID
-
-        let projectID = snapshot.$project.id
-        let environment = snapshot.environment
-
-        app.backgroundTasks.spawn {
-            do {
-                let report = try await SandboxSnapshotService.requestSnapshotCreate(
-                    sandboxId: sandboxID, snapshotId: snapshotId, mode: mode,
-                    agentId: agentId, app: app)
-
-                // The agent RPC above can span shutdown's drain; bail before the
-                // write-back if it cancelled us (see `Application.liveDB`), and
-                // reuse the captured handle for the rest of the body.
-                guard let db = app.liveDB else { return }
-                if let current = try await SandboxSnapshot.find(snapshotId, on: db) {
-                    current.status = .ready
-                    current.size = report.sizeBytes
-                    current.storagePath = report.storagePath
-                    current.firecrackerVersion = report.firecrackerVersion
-                    current.architecture = report.architecture?.rawValue
-                    current.guestControlProtocolVersion = report.guestControlProtocolVersion
-                    current.forkLayoutVersion = report.forkLayoutVersion
-                    // Mobility constraints (issue #428): the template the
-                    // guest actually booted with (agent-authoritative), and
-                    // the source host's CPU model — the identity check an
-                    // un-templated snapshot needs to move at all.
-                    current.cpuTemplate = report.cpuTemplate
-                    current.sourceCPUModel =
-                        (await app.agentService.getAgentInfo(agentId))?.hostInfo?.cpuModel
-                    try await current.save(on: db)
-                }
-
-                // Admission reserved only an estimate (guest memory); the
-                // actual footprint adds vmstate + the rootfs copy. Resync the
-                // counters to the reported figures and, if that blew past an
-                // enabled storage quota, delete the snapshot rather than keep
-                // over-quota storage.
-                if let violatedQuota = try await QuotaEnforcementService.storageOverCommit(
-                    projectID: projectID, environment: environment, on: db)
-                {
-                    try? await SandboxSnapshotService.requestSnapshotDelete(
-                        sandboxId: sandboxID, snapshotId: snapshotId, agentId: agentId, app: app)
-                    if let current = try? await SandboxSnapshot.find(snapshotId, on: db) {
-                        current.status = .error
-                        current.errorMessage =
-                            "Snapshot exceeded storage quota '\(violatedQuota)' and was deleted"
-                        current.size = 0
-                        try? await current.save(on: db)
-                    }
-                    try? await QuotaEnforcementService.release(for: sandbox, on: db)
-                    await completeOperation(
-                        operationId, sandboxID: sandboxID, as: .failed,
-                        error:
-                            "Snapshot's actual size exceeded storage quota '\(violatedQuota)'; its artifacts were deleted",
-                        settingSandboxStatus: nil, app: app)
-                    return
-                }
-
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
-                    settingSandboxStatus: nil, app: app)
-            } catch {
-                // A clean agent-side failure already removed its partial
-                // artifacts. An ambiguous transport failure (timeout,
-                // disconnect) may have left real files behind — attempt the
-                // idempotent delete so the charge we drop below matches
-                // reality; if the agent is unreachable, the artifacts live
-                // under the sandbox's storage directory and are removed with
-                // the sandbox by the authoritative desired-state sync.
-                try? await SandboxSnapshotService.requestSnapshotDelete(
-                    sandboxId: sandboxID, snapshotId: snapshotId, agentId: agentId, app: app)
-                // `try?` does not catch the fatal unwrap a torn-down `app.db`
-                // produces, so short-circuit on cancellation before each access.
-                if let db = app.liveDB, let current = try? await SandboxSnapshot.find(snapshotId, on: db) {
-                    current.status = .error
-                    current.errorMessage = error.localizedDescription
-                    current.size = 0
-                    try? await current.save(on: db)
-                }
-                if let db = app.liveDB {
-                    try? await QuotaEnforcementService.release(for: sandbox, on: db)
-                }
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .failed,
-                    error: error.localizedDescription,
-                    settingSandboxStatus: nil, app: app)
-            }
-        }
+        return try AcceptedMutation(SandboxSnapshotResponse(from: snapshot), accepted)
+            .acceptedResponse()
     }
 
     // MARK: - List
@@ -257,6 +166,11 @@ extension SandboxController {
     // MARK: - Delete
 
     /// DELETE /api/sandboxes/:sandboxID/snapshots/:snapshotID
+    ///
+    /// Marks the snapshot absent and stamps the finalizers its teardown owes.
+    /// The row outlives this request: it goes only once the owning agent's
+    /// observed report stops listing the artifact, and `SandboxSnapshot.reap`
+    /// removes the exported copy and the role bindings at that point.
     func deleteSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
@@ -268,86 +182,24 @@ extension SandboxController {
             throw Abort(.forbidden, reason: "You don't have permission to delete this snapshot")
         }
 
-        guard snapshot.canDelete else {
-            throw Abort(
-                .conflict,
-                reason: "Snapshot cannot be deleted in status '\(snapshot.status.rawValue)'")
-        }
-        let operation = try await ResourceOperation.begin(
-            .snapshotDelete,
-            resourceKind: .sandbox,
-            resourceID: try sandbox.requireID(),
-            userID: try user.requireID(),
-            on: req.db
-        ) { db in
-            try await Self.lockSnapshotLineage([snapshotID], on: db)
-            guard let current = try await SandboxSnapshot.find(snapshotID, on: db), current.canDelete else {
-                throw Abort(.conflict, reason: "Snapshot is no longer deletable")
-            }
-            guard try await Self.liveForkCount(from: snapshotID, on: db) == 0 else {
-                throw Abort(
-                    .conflict,
-                    reason: "Snapshot cannot be deleted while sandboxes forked from it still exist")
-            }
-            current.status = .deleting
-            try await current.save(on: db)
+        // The lineage guard is a data-dependency rule, not a lifecycle one:
+        // deleting a checkpoint that live forks were built from would break
+        // them. Checked here and again under the lineage lock inside the
+        // mutation, and shared with the retention sweep so a clock is refused
+        // for exactly the reasons a human is.
+        try await Self.lockSnapshotLineage([snapshotID], on: req.db)
+        if let blocker = try await SnapshotDeletionGuard.blocker(for: snapshot, on: req.db) {
+            throw Abort(.conflict, reason: blocker)
         }
 
-        Self.runSnapshotDeletion(operation, snapshot: snapshot, sandbox: sandbox, app: req.application)
-        return try operation.acceptedResponse()
-    }
+        let accepted = try await SnapshotArtifactMutation.delete(
+            snapshot, actor: .user(try user.requireID()), on: req.db, app: req.application)
 
-    /// Background half of `deleteSnapshot`. A snapshot whose agent is gone
-    /// (sandbox unplaced) has no artifacts anyone can reach — the row is
-    /// removed directly; an offline agent fails the operation so the delete
-    /// can be retried once it returns.
-    private static func runSnapshotDeletion(
-        _ operation: ResourceOperation,
-        snapshot: SandboxSnapshot,
-        sandbox: Sandbox,
-        app: Application
-    ) {
-        guard let operationId = operation.id, let snapshotId = snapshot.id else { return }
-        let sandboxID = operation.resourceID
-
-        app.backgroundTasks.spawn {
-            do {
-                if let agentId = snapshot.agentId ?? sandbox.hypervisorId {
-                    try await SandboxSnapshotService.requestSnapshotDelete(
-                        sandboxId: sandboxID, snapshotId: snapshotId,
-                        agentId: agentId, app: app)
-                }
-                // The exported copy goes with the snapshot (issue #428);
-                // best-effort.
-                await snapshot.deleteExportedObjects(app: app)
-                // The agent RPC above can span shutdown's drain; bail before the
-                // row delete if it cancelled us (see `Application.liveDB`).
-                guard let db = app.liveDB else { return }
-                try await db.transaction { db in
-                    try await snapshot.delete(on: db)
-                    // Drop the snapshot's bindings with the row.
-                    try await RoleBindingService.revokeAll(
-                        nodeType: .sandboxSnapshot, nodeID: snapshotId, on: db)
-                }
-                try? await QuotaEnforcementService.release(for: sandbox, on: db)
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
-                    settingSandboxStatus: nil, app: app)
-            } catch {
-                // `try?` does not catch the fatal unwrap a torn-down `app.db`
-                // produces, so short-circuit on cancellation before the access.
-                if let db = app.liveDB, let current = try? await SandboxSnapshot.find(snapshotId, on: db) {
-                    // Keep `.deleting` — it is retryable (`canDelete`), and
-                    // agent-side deletion is idempotent.
-                    current.errorMessage = error.localizedDescription
-                    try? await current.save(on: db)
-                }
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .failed,
-                    error: error.localizedDescription,
-                    settingSandboxStatus: nil, app: app)
-            }
-        }
+        req.logger.info(
+            "Sandbox snapshot deletion requested",
+            metadata: ["snapshot_id": .string(snapshotID.uuidString)])
+        return try AcceptedMutation(SandboxSnapshotResponse(from: snapshot), accepted)
+            .acceptedResponse()
     }
 
     // MARK: - Restore
