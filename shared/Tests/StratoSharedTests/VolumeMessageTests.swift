@@ -41,16 +41,9 @@ struct VolumeMessageTests {
         #expect(decoded.attachedVMId == "vm-42")
     }
 
-    /// `volume_info` is not a `MessageType` anymore (wire v32, STR-149), and
-    /// `MessageType` has no tolerant fallback — so a stale peer's frame fails
-    /// to route rather than decoding into something else. Pinned here because
-    /// the wire string must stay retired: reusing it for a different payload
-    /// would misroute against any agent still in the fleet.
-    @Test func volumeInfoWireStringNoLongerDecodes() {
-        #expect(throws: DecodingError.self) {
-            try decodeJSON([MessageType].self, from: #"["volume_info"]"#)
-        }
-    }
+    // `volume_info` no longer has a message to round-trip (wire v32, STR-149).
+    // Its wire string is pinned as retired alongside every other removed one in
+    // `MessageTypeTests.retiredWireStrings`, rather than here.
 
     @Test func volumeStatusResponseRoundTrip() throws {
         let decoded = try roundTrip(VolumeStatusResponse(volumeId: "vol-1", status: "creating", storagePath: nil))
