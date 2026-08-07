@@ -1,3 +1,4 @@
+import StratoShared
 import Testing
 import Vapor
 @testable import App
@@ -9,20 +10,29 @@ struct VolumeNamingTests {
 
     @Test("nextDeviceName starts at disk0 when nothing is attached")
     func testNextDeviceNameEmpty() {
-        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: []) == "disk0")
-        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: [nil, nil]) == "disk0")
+        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: []).rawValue == "disk0")
+        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: [nil, nil]).rawValue == "disk0")
     }
 
     @Test("nextDeviceName picks one past the highest existing disk number")
     func testNextDeviceNameIncrements() {
-        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: ["disk0"]) == "disk1")
-        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: ["disk0", "disk2", "disk1"]) == "disk3")
+        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: ["disk0"]).rawValue == "disk1")
+        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: ["disk0", "disk2", "disk1"]).rawValue == "disk3")
     }
 
     @Test("nextDeviceName ignores names that don't match the disk<N> shape")
     func testNextDeviceNameIgnoresNonMatching() {
-        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: ["cdrom", "vda", nil]) == "disk0")
-        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: ["disk5", "sda", "cdrom"]) == "disk6")
+        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: ["cdrom", "vda", nil]).rawValue == "disk0")
+        #expect(VolumeNaming.nextDeviceName(existingDeviceNames: ["disk5", "sda", "cdrom"]).rawValue == "disk6")
+    }
+
+    @Test("A generated name is always one a hypervisor accepts")
+    func testGeneratedNamesAreValid() {
+        // The generator is non-failable, so this is the check that keeps it
+        // honest as `VolumeDeviceName`'s rules move.
+        for index in [0, 1, 9, 10, 999] {
+            #expect(VolumeDeviceName.isValid(VolumeDeviceName.disk(index).rawValue))
+        }
     }
 
     // MARK: - Format parsing

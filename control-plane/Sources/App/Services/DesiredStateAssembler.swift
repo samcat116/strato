@@ -418,11 +418,31 @@ struct DesiredStateAssembler {
             // `VMSpecBuilder.volumeSpecs` reads, so the two projections of one
             // fact cannot disagree — which is what used to let a volume be
             // `attached` in the VM's spec and detached in its own record.
+            //
+            // A name outside `VolumeDeviceName`'s charset cannot be stored (the
+            // API validates it and the schema's check constraint plus unique
+            // index hold the column to it), so the failed initializer below is
+            // unreachable. Where `VMSpecBuilder.volumeSpecs` answers the same
+            // impossible case by omitting the volume, this cannot: a desired
+            // entry with no attachment reads as *detach*, and dropping the
+            // entry entirely reads as a volume this agent should not hold. An
+            // attachment the agent would refuse is the worse of the three, so
+            // it is the one not sent — loudly, because a row that reached this
+            // state is a broken invariant, not a routine skip.
             var attachment: DesiredVolumeAttachment?
-            if let vmID = volume.$vm.id, let deviceName = volume.deviceName {
-                attachment = DesiredVolumeAttachment(
-                    vmId: vmID, deviceName: deviceName, readonly: volume.readonly,
-                    bootOrder: volume.bootOrder)
+            if let vmID = volume.$vm.id, let raw = volume.deviceName {
+                if let deviceName = VolumeDeviceName(raw) {
+                    attachment = DesiredVolumeAttachment(
+                        vmId: vmID, deviceName: deviceName, readonly: volume.readonly,
+                        bootOrder: volume.bootOrder)
+                } else {
+                    app.logger.error(
+                        "Volume stores a device name no hypervisor accepts; syncing it detached",
+                        metadata: [
+                            "volumeId": .string(volumeId.uuidString),
+                            "deviceName": .string(raw),
+                        ])
+                }
             }
 
             entries.append(
