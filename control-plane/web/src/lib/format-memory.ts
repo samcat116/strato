@@ -10,10 +10,16 @@
  * is 1024.
  */
 export function formatMemory(bytes: number): string {
-  const gib = bytes / 1024 ** 3;
-  if (gib >= 1) {
+  // A shared util has callers it can't see, so it refuses garbage rather than
+  // rendering "NaN MiB" — same stance as `formatDuration`'s opening guard.
+  if (!Number.isFinite(bytes) || bytes < 0) return "—";
+
+  // Round to mebibytes *before* choosing the unit: a value just under 1 GiB
+  // would otherwise fail the GiB test and then round up to "1024 MiB".
+  const mib = Math.round(bytes / 1024 ** 2);
+  if (mib >= 1024) {
+    const gib = bytes / 1024 ** 3;
     return `${Number.isInteger(gib) ? gib : gib.toFixed(1)} GiB`;
   }
-  const mib = bytes / 1024 ** 2;
-  return `${Math.round(mib)} MiB`;
+  return `${mib} MiB`;
 }
