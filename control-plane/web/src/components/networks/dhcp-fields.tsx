@@ -59,6 +59,11 @@ interface DHCPFieldsProps {
  * search domain reach guests either way — over DHCP when it's on, and through
  * cloud-init's `nameservers` block on statically addressed NICs when it's off —
  * so only lease time is gated on the checkbox.
+ *
+ * The two paths differ in when they converge, which the help text spells out:
+ * DHCP guests re-read the config on renew, while the NoCloud seed keys on a
+ * stable `instance-id`, so a static NIC applies this DNS once at VM creation
+ * and never again.
  */
 export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
   return (
@@ -75,8 +80,10 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
       </label>
       <p className="text-xs text-muted-foreground">
         When on, agents answer guest DHCP requests with the allocated IP and
-        gateway. When off, VMs are configured statically via cloud-init. Either
-        way, guests get the DNS settings below.
+        gateway, and running guests pick up edits to the DNS below on their next
+        renew. When off, VMs are configured statically via cloud-init, which
+        applies that DNS once at VM creation — later edits reach only VMs
+        created after them.
       </p>
 
       <div className="space-y-2">
@@ -90,11 +97,13 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           onChange={(e) => onChange({ ...value, dnsServers: e.target.value })}
           className="bg-background border-border text-foreground font-mono"
           disabled={disabled}
+          aria-describedby="dnsServersHelp"
         />
-        <p className="text-xs text-muted-foreground">
+        <p id="dnsServersHelp" className="text-xs text-muted-foreground">
           Comma- or space-separated IPv4 or IPv6 addresses. Advertised over DHCP
           when it&apos;s on (each family&apos;s servers go to its own DHCP
-          option), and written into cloud-init on statically addressed NICs.
+          option), and written into cloud-init&apos;s nameservers on statically
+          addressed NICs.
         </p>
       </div>
 
@@ -109,10 +118,11 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           onChange={(e) => onChange({ ...value, domainName: e.target.value })}
           className="bg-background border-border text-foreground"
           disabled={disabled}
+          aria-describedby="domainNameHelp"
         />
-        <p className="text-xs text-muted-foreground">
-          Appended to unqualified hostname lookups — delivered as a DHCP option
-          when DHCP is on, and as the cloud-init search list otherwise.
+        <p id="domainNameHelp" className="text-xs text-muted-foreground">
+          Appended to unqualified hostname lookups — a DHCP option when DHCP is
+          on, the cloud-init search list otherwise.
         </p>
       </div>
 
