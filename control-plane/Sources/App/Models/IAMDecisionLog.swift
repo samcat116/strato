@@ -67,9 +67,10 @@ final class IAMDecisionLog: Model, @unchecked Sendable {
 
     /// `allow` / `deny` — what actually gated the request — or why there is no
     /// verdict: `untranslated` (no IAM mapping), `skipped` (no compiled policy
-    /// set yet), `error` (evaluation failed), `scope_denied` (refused by the
-    /// credential-scope middleware before any evaluation; `resource_type`
-    /// names the credential kind and `spicedb_permission` the missing scope).
+    /// set yet), `error` (evaluation failed), `credential_restricted` (a
+    /// restricted credential on a surface the evaluator does not gate;
+    /// `spicedb_permission` names which surface). Historical rows also carry
+    /// `scope_denied`, its pre-STR-115 spelling.
     @Field(key: "cedar_decision")
     var cedarDecision: String
 
@@ -84,6 +85,7 @@ final class IAMDecisionLog: Model, @unchecked Sendable {
     var determiningPoliciesJSON: String?
 
     /// The tier that produced Cedar's decision: `platform`, `guardrail`,
+    /// `credential` (the request's own credential restriction, STR-115),
     /// `policy` (an authored permit/forbid, issue #606), `grant`, or
     /// `default-deny` — plus `unknown`, which is unreachable with today's
     /// policy ids and therefore means a new id prefix arrived without
@@ -103,6 +105,16 @@ final class IAMDecisionLog: Model, @unchecked Sendable {
     /// grant the loader deliberately would not flatten.
     @OptionalField(key: "skipped_conditioned_bindings")
     var skippedConditionedBindings: Int?
+
+    /// The credential the request authenticated with — `api_key` or
+    /// `cli_session` (STR-115). Nil for a browser session and for an agent's
+    /// JWT-SVID. Recorded on allows too, so a decision log answers "what has
+    /// this token been doing" and not only "what was it refused".
+    @OptionalField(key: "credential_type")
+    var credentialType: String?
+
+    @OptionalField(key: "credential_id")
+    var credentialID: UUID?
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?

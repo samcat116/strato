@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { oauthApi } from "@/lib/api/oauth";
+import type { CredentialRestriction } from "@/types/api";
 
 export function useCLISessions() {
   return useQuery({
@@ -30,7 +31,13 @@ export function usePendingDeviceAuthorization(userCode: string | null) {
 
 export function useApproveDevice() {
   return useMutation({
-    mutationFn: (userCode: string) => oauthApi.approveDevice(userCode),
+    mutationFn: ({
+      userCode,
+      restriction,
+    }: {
+      userCode: string;
+      restriction?: CredentialRestriction;
+    }) => oauthApi.approveDevice(userCode, restriction),
   });
 }
 

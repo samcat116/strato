@@ -40,6 +40,10 @@ struct IAMDecisionLogController: RouteCollection {
         let cedarErrors: String?
         let policyVersion: Int?
         let skippedConditionedBindings: Int?
+        /// The credential the request arrived on (STR-115), so an audit can ask
+        /// "everything this token did" of the log directly.
+        let credentialType: String?
+        let credentialID: UUID?
         let createdAt: Date?
 
         init(_ entry: IAMDecisionLog) throws {
@@ -63,6 +67,8 @@ struct IAMDecisionLogController: RouteCollection {
             self.cedarErrors = entry.cedarErrors
             self.policyVersion = entry.policyVersion
             self.skippedConditionedBindings = entry.skippedConditionedBindings
+            self.credentialType = entry.credentialType
+            self.credentialID = entry.credentialID
             self.createdAt = entry.createdAt
         }
     }
@@ -85,7 +91,7 @@ struct IAMDecisionLogController: RouteCollection {
     /// previous page, verbatim: responses encode dates as ISO8601, so the
     /// cursor a caller reads back is the cursor it can pass in.
     func list(req: Request) async throws -> [DecisionLogDTO] {
-        try requireSystemAdmin(req)
+        try await requireSystemAdmin(req)
 
         let limit = try req.intQuery("limit", default: 100, in: 1...500)
         let mismatchesOnly = (try? req.query.get(Bool.self, at: "mismatchesOnly")) ?? false
@@ -113,7 +119,7 @@ struct IAMDecisionLogController: RouteCollection {
     /// window — the endpoint an operator refreshes most would be the one that
     /// pins the database. The `created_at` index bounds the scan instead.
     func summary(req: Request) async throws -> [DecisionSummaryDTO] {
-        try requireSystemAdmin(req)
+        try await requireSystemAdmin(req)
 
         guard let sql = req.db as? SQLDatabase else {
             throw Abort(.internalServerError, reason: "Decision-log summary requires an SQL database")
@@ -184,9 +190,9 @@ struct IAMDecisionLogController: RouteCollection {
             reason: "Query parameter '\(name)' must be an ISO8601 timestamp (e.g. 2026-07-19T12:00:00Z)")
     }
 
-    private func requireSystemAdmin(_ req: Request) throws {
+    private func requireSystemAdmin(_ req: Request) async throws {
         // The shared decision-marking gate, so these admin-only reads are
         // flagged for the admin audit trail like every other admin surface.
-        _ = try req.requireSystemAdmin("Decision logs require system administrator access")
+        _ = try await req.requireSystemAdmin("Decision logs require system administrator access")
     }
 }

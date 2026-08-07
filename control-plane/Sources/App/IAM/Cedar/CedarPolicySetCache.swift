@@ -39,6 +39,14 @@ extension CedarEngine {
 
 /// One evaluated authorization decision from the compiled set.
 struct CedarCheckDecision: Equatable, Sendable {
+    /// The `@id` of the tier-1 forbid that enforces a credential's restriction
+    /// (STR-115). One constant: the assembler emits it, `tier` attributes it,
+    /// and the decision-log rows for the few surfaces the evaluator does not
+    /// gate borrow its tier name.
+    static let credentialRestrictionPolicyID = "credential-restriction"
+    /// The tier name a credential-restriction denial is attributed to.
+    static let credentialTier = "credential"
+
     let allowed: Bool
     /// Ids of the policies that determined the decision — the assembler's
     /// `@id`s (`role-editor`, `guardrail-<id>`, `platform-system-admin`, …),
@@ -59,8 +67,14 @@ struct CedarCheckDecision: Equatable, Sendable {
     /// permit that allowed. A guardrail forbid still outranks an authored one
     /// in attribution — the guardrail check above runs first — because a
     /// tier-2 ceiling is the stronger statement about why the request failed.
+    ///
+    /// The credential restriction (STR-115) sits just below the guardrail for
+    /// the same reason: a ceiling denies this request and every future one from
+    /// anybody, while a restriction denies only this token. Both ids are always
+    /// in `determining_policies`, so nothing is lost either way.
     var tier: String {
         if determiningPolicyIDs.contains(where: { $0.hasPrefix("guardrail-") }) { return "guardrail" }
+        if determiningPolicyIDs.contains(Self.credentialRestrictionPolicyID) { return Self.credentialTier }
         if allowed {
             if determiningPolicyIDs.contains(where: { $0.hasPrefix("platform-") || $0 == "org-membership" }) {
                 return "platform"

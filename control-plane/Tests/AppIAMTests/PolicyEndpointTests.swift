@@ -132,7 +132,7 @@ final class PolicyEndpointTests {
             principal: .user(user.id!), permission: permission, resourceType: resourceType,
             resourceID: resourceID,
             context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: "policy-test"),
-            state: nil, app: app, db: app.db)
+            state: .detached, app: app, db: app.db)
     }
 
     private func onlyDecision(_ app: Application) async throws -> IAMDecisionLog {

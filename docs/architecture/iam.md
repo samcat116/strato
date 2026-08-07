@@ -621,36 +621,125 @@ of the current system are unchanged by the migration:
 - SCIM- and OIDC-claim-driven group/role sync is **blessed as provisioning**:
   claims mutate persistent membership/bindings at login time and are evaluated
   from the store per-request — the token itself is never a standing grant.
-- API keys are unchanged. The short-lived-credential successor path is
-  JWT-SVIDs (below), which sits alongside them rather than replacing them.
+- API keys name a user principal and may narrow what that principal can do
+  (below). The short-lived-credential successor path is JWT-SVIDs (below),
+  which sits alongside them rather than replacing them.
 
-### Credential scopes are a parallel gate, to be folded in (STR-115)
+### Credential restrictions (STR-115)
 
-API keys and CLI sessions carry a `scopes` array (`read`/`write`/`admin`)
-enforced by `APIKeyScopeMiddleware` entirely outside the evaluator, with the
-required scope derived from the HTTP method alone. That is this section's
-invariant violated in-tree: a scoped credential is identity carrying
-authorization. The consequences are concrete: `admin` is never *required* by
-anything (safe methods need `read`, everything else `write`), so `read`+`write`
-is full account power; a default CLI login asks for and receives `read write`;
-guardrails cannot ceiling what a credential may do; and none of the canonical
-narrowing use cases (a CI token for one project, a monitoring key that reads
-VMs but not images) is expressible.
+A credential is issued **on behalf of** a principal and may carry a
+**restriction** in the ordinary action and node vocabulary. The restriction
+only ever subtracts: the effective permission is `bindings ∩ restriction`.
+There is no spelling of a restriction that grants anything, which is what keeps
+the invariant above true — the credential still names a principal, it just
+declines some of what that principal can do.
 
-**Decided direction** (STR-115 is the implementation): a credential is issued
-*on behalf of* a principal and optionally carries a **restriction** in the
-existing action/role vocabulary — a role id, an action list, or a node scope —
-and enforcement moves into the evaluator so the effective permission is
-`bindings ∩ restriction`, recorded in `iam_decision_logs` with tier
-attribution like every other decision. Guardrails then cover credentials for
-free. The current scopes become a compatibility shim (`read` → the viewer
-action set; `write`/`admin` → unrestricted) so existing keys keep working;
-the bespoke three-value enum takes on no new consumers.
+A restriction has two halves:
 
-Until then, the one repair already made (STR-116): a scope refusal writes a
-`scope_denied` row to `iam_decision_logs` naming the principal, the credential
-(`api_key`/`cli_session` + id), and the missing scope — previously it was the
-only authorization denial that left no decision row at all.
+- **actions** — guardrail-vocabulary patterns: an exact action (`vm:read`), a
+  service wildcard (`vm:*`, which covers actions shipped after the credential
+  was minted), or `*`. Matching is `GuardrailRendering.patternsCover`, the same
+  function ceilings use, so a restriction and a ceiling can never disagree
+  about what a pattern names. An **empty** action list permits nothing, and the
+  write path rejects it — note the deliberate asymmetry with
+  `GuardrailActions.canonicalize`, where empty means the broadest *ceiling*.
+
+  One pattern is this vocabulary's own: **`read`**, resolved against
+  `IAMRoleRegistry.readActions` at check time. It has to be symbolic rather than
+  an expansion stored on the row, because `readActions` is derived from action
+  *names* precisely so an action shipped later lands on the right side by
+  default — a credential holding today's expansion would 403 on next release's
+  `dnsrecord:read` under a forbid nobody wrote, while a legacy `read`-scoped key
+  picked it up for free. The legacy shim and a key minted read-only through the
+  API therefore carry the *same* value.
+- **a node scope** (optional) — the credential may only act at or below one
+  tree node. Identity-plane *reads* are exempt from this half: a user record is
+  parentless, so a project-scoped credential could otherwise not read its own
+  user record. The exemption stops at reads — extending it to `user:update` and
+  `user:delete` would make the identity plane the one global surface a
+  project-scoped token could still mutate.
+
+The API also accepts a **role id** as sugar for that role's action list. It is
+expanded at write time, not stored as a reference: a credential must not widen
+because somebody later edited the role it was minted from.
+
+**Enforcement is the evaluator's**, not a middleware's. `IAMDecisionEngine`
+computes "does this credential cover this action on this resource?" per check
+and puts the answer in the Cedar request context as `credentialRestricted`; a
+tier-1 policy does the denying:
+
+```
+@id("credential-restriction")
+forbid (principal, action, resource)
+when { context has credentialRestricted && context.credentialRestricted };
+```
+
+Three things fall out of it being a real `forbid` rather than a Swift
+short-circuit. A restriction refusal is an ordinary decision-log row with a
+tier (`credential`) and a determining policy id. A restricted credential binds
+a **system admin** too, because a forbid beats every permit including
+`platform-system-admin` — otherwise the narrowest credential in the system
+would be the most powerful one whenever an admin held it. And guardrails cover
+credentials for free, since both are forbids over the same actions; when a
+ceiling and a restriction both deny, the row is attributed to `guardrail` — the
+ceiling denies this request and every future one from anybody, the restriction
+denies only this token — and `determining_policies` names both.
+
+The context attribute is emitted **only when true**, so an unrestricted
+request's context is byte-identical to what it was before restrictions existed.
+
+Every decision made under a credential records `credential_type` and
+`credential_id`, on allows as well as denies, so "what has this token been
+doing" is a query rather than an inference.
+
+**The legacy scopes are a compatibility shim.** A row with no restriction
+columns resolves through `CredentialRestriction(legacyScopes:)`:
+`write`/`admin` → unrestricted (which is what they always meant — nothing ever
+*required* `admin`, so `read`+`write` was full account power); `read` → the
+`read` pattern, every action whose name says it reads; and no recognized scope
+at all → **nothing**, because such a key is already dead
+(`grants(_:)` answered false for every scope) and a shim that read it as "read"
+would resurrect it.
+
+Folding scopes into the evaluator tightened three things a `read` credential
+could previously reach on a safe method, all of them the defect rather than
+collateral: the sandbox exec-attach WebSocket (`sandbox:exec`, a GET), the VM
+console upgrade (`vm:viewConsole`, an editor action — and CLI sessions, which
+the hand-written scope carve-out never checked, are now covered by the same
+path), and `vm:exec`/`vm:runCommand` when their routes land.
+
+A fourth follows from the same rule but surfaces differently, and operators
+driving enrollment tooling with a read-scoped credential need to widen it before
+upgrading. `GET /api/agent-enrollments` is the one list in the app whose read is
+gated on a write-shaped action (`agent:manage`, matching the item routes), so a
+read-restricted credential now matches no row — and a filtered list answers with
+an **empty page, not a 403**, which is indistinguishable from "there are no
+enrollments". Giving the listing a read-shaped action of its own would fix the
+shape, but it would also widen which principals may see enrollments; that is a
+binding question, and it belongs with the `require*`-helper audit rather than
+with the credential model.
+
+**One backstop remains outside the evaluator**, and it is deliberate.
+`loginOnly` and public routes authorize by row scoping rather than by deciding,
+so they name no action for a restriction to intersect with;
+`CredentialRestrictionMiddleware` refuses a *restricted* credential any
+**mutation** there, which is what stops a `vm:read` key from minting an
+unrestricted successor at `POST /api/api-keys`. The same rule covers the three
+handler-side helpers that satisfy the default-deny assertion without a Cedar
+decision (`requireSystemAdmin`, `allowsScopelessPlatformRow`,
+`markRowScopedAuthorization`). Those refusals write a `credential_restricted`
+decision row naming the route and the credential, so they remain attributable
+(STR-116); they are the only credential denials without a Cedar verdict behind
+them.
+
+A restriction belongs to the credential, not the principal, so it survives an
+impersonation: a user acting as a service account through a restricted key
+stays restricted.
+
+Still not structurally prevented: an action-list restriction with no node scope
+can still reach admin *reads* through `requireSystemAdmin`, because those
+surfaces have no action to check against. The honest fix is registering
+`platform:*` actions for them — STR-116's audit, not this issue.
 
 ### The workload registry (issue #491)
 
@@ -829,9 +918,10 @@ The schema, the static policies, the loader, and the compiled-set cache are in
   inventory, and the condition vocabulary as the request `Context` (`mfa`,
   `sourceIP`; `expires_at` is enforced when bindings are read, and
   `environment` matches the resource). The `Context` shape is declared;
-  nothing populates the ambient half yet, which is why binding conditions are
-  unimplemented (STR-108) — a role's or guardrail's own `when` clause is what
-  carries a condition today.
+  `credentialRestricted` is the one request-side attribute wired so far
+  (STR-115), and the ambient condition half (`mfa`, `sourceIP`) is still
+  unpopulated, which is why binding conditions are unimplemented (STR-108) — a
+  role's or guardrail's own `when` clause is what carries a condition today.
 - **Roles are nested action groups, lower-inside-higher**: `vm:read` is a
   member of `role:viewer`, and `role:viewer` of `role:operator`, up the chain
   — so `action in Action::"role:admin"` transitively reaches everything while
@@ -959,7 +1049,8 @@ records the shadow evaluation and its retirement). The pieces that matter:
   remaining cleanup.
 - **Decision rows record why, not just what**: the determining policy ids
   (which is why the engine compiles policies under their assembler ids), the
-  derived tier (`platform` / `guardrail` / `grant` / `default-deny`), the
+  derived tier (`platform` / `guardrail` / `credential` / `grant` /
+  `default-deny`), the credential the request arrived on, the
   policy-set version, the containing org, and the count of conditioned
   bindings the slice deliberately skipped. Cedar-side failures are verdicts of
   their own (`skipped`, `error`) — a replica that never compiled its set shows

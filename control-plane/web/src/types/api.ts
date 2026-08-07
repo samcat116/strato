@@ -745,11 +745,34 @@ export interface UpdateSiteRequest {
   labels?: Record<string, string>;
 }
 
+/**
+ * What a credential may do, in the IAM action and node vocabulary (STR-115).
+ * A restriction only subtracts: the effective permission is the owner's role
+ * bindings intersected with it, enforced by the Cedar evaluator like any other
+ * authorization decision. `actions: ["*"]` with no node is unrestricted.
+ */
+export interface CredentialRestriction {
+  /** Request only: sugar for a role's action list, expanded at write time. */
+  role?: string;
+  /**
+   * Exact actions (`vm:read`), service wildcards (`vm:*`), `read` (every
+   * action whose name says it reads, resolved server-side on every check), or
+   * `*`.
+   */
+  actions?: string[];
+  /** The subtree the credential may act in; both fields or neither. */
+  nodeType?: string;
+  nodeId?: string;
+}
+
 export interface APIKey {
   id: string;
   name: string;
   keyPrefix: string;
+  /** @deprecated Superseded by `restriction`; kept for older clients. */
   scopes: string[];
+  /** The effective restriction, stored or derived from `scopes`. */
+  restriction: CredentialRestriction;
   isActive: boolean;
   createdAt: string;
   expiresAt?: string;
@@ -765,7 +788,9 @@ export interface CreateAPIKeyResponse {
   name: string;
   key: string;
   keyPrefix: string;
+  /** @deprecated Superseded by `restriction`. */
   scopes: string[];
+  restriction: CredentialRestriction;
   expiresAt?: string;
   createdAt?: string;
 }
@@ -1387,7 +1412,10 @@ export interface UpdateOrganizationRequest {
 
 export interface CreateAPIKeyRequest {
   name: string;
+  /** @deprecated Ignored when `restriction` is present. */
   scopes?: string[];
+  /** Omit for a key as wide as its owner. */
+  restriction?: CredentialRestriction;
   expiresInDays?: number;
 }
 
@@ -2013,7 +2041,10 @@ export interface WorkloadIdentityOverview {
 export interface PendingDeviceAuthorization {
   userCode: string;
   clientName: string;
+  /** @deprecated Superseded by `restriction`. */
   scopes: string[];
+  /** What the client asked to be able to do. */
+  restriction: CredentialRestriction;
   requestIP?: string;
   createdAt?: string;
   expiresAt: string;
@@ -2023,7 +2054,9 @@ export interface PendingDeviceAuthorization {
 export interface CLISession {
   id: string;
   clientName: string;
+  /** @deprecated Superseded by `restriction`. */
   scopes: string[];
+  restriction: CredentialRestriction;
   accessTokenPrefix: string;
   createdAt?: string;
   lastUsedAt?: string;

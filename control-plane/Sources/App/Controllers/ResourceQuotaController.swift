@@ -569,7 +569,7 @@ struct ResourceQuotaController: RouteCollection {
     private func verifyQuotaAccess(quota: ResourceQuota, on req: Request) async throws {
         guard QuotaVisibility.measuredNode(of: quota) != nil else {
             // A scopeless row measures nothing and belongs to no organization.
-            try requireSystemAdminForScopelessQuota(on: req)
+            try await requireSystemAdminForScopelessQuota(on: req)
             return
         }
         guard try await QuotaVisibility.canRead(quota, on: req) else {
@@ -589,7 +589,7 @@ struct ResourceQuotaController: RouteCollection {
             let project = try await req.requireProject(id: projectID)
             try await OrganizationAccessService.requireProjectQuotaAdmin(project: project, on: req)
         } else {
-            try requireSystemAdminForScopelessQuota(on: req)
+            try await requireSystemAdminForScopelessQuota(on: req)
         }
     }
 
@@ -599,8 +599,8 @@ struct ResourceQuotaController: RouteCollection {
     /// authenticated user could read and mutate such a row (issue #482
     /// pre-cutover audit). Only system admins may touch it — enough to
     /// inspect and delete a corrupt row without widening access.
-    private func requireSystemAdminForScopelessQuota(on req: Request) throws {
-        _ = try req.requireSystemAdmin("Quota has no scope")
+    private func requireSystemAdminForScopelessQuota(on req: Request) async throws {
+        _ = try await req.requireSystemAdmin("Quota has no scope")
     }
 
     private func validateQuotaNameUniqueness(

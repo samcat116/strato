@@ -246,16 +246,18 @@ public func configure(_ app: Application) async throws {
     // flows, and system-admin activity, fanned out to configurable backends
     // (AUDIT_BACKENDS; database by default). Registered after the
     // authenticators (so events carry the resolved actor) and rate limiter
-    // (so throttled spam is not audited), and before the scope and
-    // authorization middleware so denied requests — API-key scope 403s
-    // included — are audited with their real status. No-ops when
+    // (so throttled spam is not audited), and before the credential-restriction
+    // and authorization middleware so denied requests — restricted-credential
+    // 403s included — are audited with their real status. No-ops when
     // AUDIT_ENABLED=false.
     app.middleware.use(AuditMiddleware())
 
-    // Enforce the scopes attached to an API key. Must run after the bearer
-    // authenticator above (which populates request.apiKey) so it can see the
-    // key; a no-op for session-authenticated requests (issue #173).
-    app.middleware.use(APIKeyScopeMiddleware())
+    // Backstop for the routes a credential restriction cannot reach through the
+    // evaluator: the identity-plane and public mutations that authorize by row
+    // scoping rather than by decision (STR-115). Everything else is enforced
+    // inside Cedar. Must run after the bearer authenticator above, which
+    // populates request.apiKey / request.cliSession.
+    app.middleware.use(CredentialRestrictionMiddleware())
 
     // Enforce per-user security state set by SSF signal handlers (issue #38):
     // disabled accounts and revoked sessions (session-epoch mismatch). After
@@ -780,6 +782,11 @@ public func configure(_ app: Application) async throws {
     // Also runs late: it recomputes derived data over the folder and project
     // tables, so it wants them in their final shape.
     app.migrations.add(RebuildDriftedHierarchyPaths())
+
+    // Credentials carry an action/node restriction the evaluator enforces,
+    // instead of a scope enum a separate middleware did (STR-115).
+    app.migrations.add(AddCredentialRestrictions())
+    app.migrations.add(AddCredentialToIAMDecisionLog())
 
     try await app.autoMigrate()
 

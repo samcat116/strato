@@ -56,21 +56,46 @@ enum PendingIAMDecision: Sendable {
     /// A check the legacy-vocabulary boundary could not translate, denied
     /// closed at the boundary before any evaluation happened.
     case untranslated(subject: String, equivalent: LegacyCheckEquivalent, context: IAMCheckContext)
-    /// A request refused by `APIKeyScopeMiddleware` because the credential's
-    /// scopes do not cover the HTTP method — a denial the evaluator never
-    /// sees, recorded so every authorization refusal is attributable here
-    /// (STR-116; the scope system itself is STR-115's business).
-    case scopeDenied(subject: String, denial: CredentialScopeDenial, context: IAMCheckContext)
+    /// A request refused because a restricted credential reached a surface the
+    /// evaluator does not gate — the only credential denial left without a
+    /// Cedar verdict behind it, recorded so every authorization refusal is
+    /// attributable here (STR-116, STR-115).
+    case credentialRestricted(
+        subject: String,
+        credential: CredentialReference?,
+        reason: CredentialDenialReason,
+        context: IAMCheckContext)
 }
 
-/// The coordinates of a credential-scope refusal: which credential, and the
-/// scope the request needed but the credential lacks.
-struct CredentialScopeDenial: Sendable {
-    /// `api_key` or `cli_session` — carried in the row's `resource_type`
-    /// column, since the denied "resource" here is the credential itself.
-    let credentialType: String
-    let credentialID: UUID?
-    let requiredScope: String
+/// Why a restricted credential was refused without an evaluator decision. Each
+/// case names a surface that authorizes by construction rather than by
+/// deciding, so there was no action to intersect the restriction with.
+enum CredentialDenialReason: String, Sendable {
+    /// A mutation on an identity-plane route (`/api/api-keys`, `/api/oauth`, …)
+    /// whose authorization is row scoping to the caller's own record.
+    case loginOnlyMutation = "login_only_mutation"
+    /// A mutation on a session-free public route (registration, the device
+    /// grant).
+    case publicMutation = "public_mutation"
+    /// A node-less platform surface gated by `requireSystemAdmin()`.
+    case platformAdminSurface = "platform_admin_surface"
+    /// A mutation whose handler declared its authorization to be row scoping
+    /// (`markRowScopedAuthorization`).
+    case rowScopedMutation = "row_scoped_mutation"
+
+    /// The 403 reason phrase. Deliberately says *restricted*, not "forbidden":
+    /// the caller's bindings may well permit this, and the fix is a wider
+    /// credential rather than a wider grant.
+    var deniedReason: String {
+        switch self {
+        case .loginOnlyMutation, .publicMutation:
+            return "This credential is restricted and cannot perform identity or account operations"
+        case .platformAdminSurface:
+            return "This credential is restricted and cannot reach platform administration"
+        case .rowScopedMutation:
+            return "This credential is restricted and cannot perform this operation"
+        }
+    }
 }
 
 /// The buffer between a check and its decision row (issue #736).
@@ -208,6 +233,10 @@ struct IAMDecisionRecord: Sendable {
     /// The legacy-vocabulary question the check was phrased in, when it has
     /// one. Checks born in the IAM action vocabulary have none.
     let legacyEquivalent: LegacyCheckEquivalent?
+    /// The API key or CLI session the request arrived on, when it arrived on
+    /// one. Recorded for allows as well as denies: "what has this token been
+    /// doing" is the question an audit asks first.
+    let credential: CredentialReference?
     let context: IAMCheckContext
 }
 
@@ -273,14 +302,19 @@ final class IAMDecisionRecorder: Sendable {
         await enqueue([.untranslated(subject: subject, equivalent: equivalent, context: context)])
     }
 
-    /// Record a credential-scope refusal. Scope enforcement is the one
-    /// authorization gate outside the evaluator (STR-115), and until it folds
-    /// in, its denials were the one kind that left no decision row — an
-    /// unexplainable 403 in the log that exists to explain 403s.
-    func recordScopeDenial(
-        subject: String, denial: CredentialScopeDenial, context: IAMCheckContext
+    /// Record a restricted credential refused on a surface the evaluator does
+    /// not gate. Every other restriction denial is an ordinary Cedar deny row
+    /// carrying the `credential-restriction` policy id; these few have no
+    /// verdict behind them and would otherwise be 403s the decision log cannot
+    /// explain.
+    func recordCredentialRestriction(
+        subject: String,
+        credential: CredentialReference?,
+        reason: CredentialDenialReason,
+        context: IAMCheckContext
     ) async {
-        await enqueue([.scopeDenied(subject: subject, denial: denial, context: context)])
+        await enqueue(
+            [.credentialRestricted(subject: subject, credential: credential, reason: reason, context: context)])
     }
 
     private func enqueue(_ decisions: [PendingIAMDecision]) async {
@@ -382,19 +416,26 @@ final class IAMDecisionRecorder: Sendable {
             entry.spicedbDecision = Self.noComparison
             entry.cedarDecision = "untranslated"
             return entry
-        case .scopeDenied(let subject, let denial, let context):
+        case .credentialRestricted(let subject, let credential, let reason, let context):
             let entry = IAMDecisionLog()
             entry.requestID = context.requestID
             entry.path = context.path
             entry.method = context.method
             entry.subject = subject
-            // The "permission" asked for was a credential scope, not an IAM
-            // action; the prefix keeps the two namespaces unmistakable.
-            entry.spicedbPermission = "scope:\(denial.requiredScope)"
-            entry.resourceType = denial.credentialType
-            entry.resourceID = denial.credentialID?.uuidString ?? ""
+            // No IAM action was resolved — that is precisely why this row
+            // exists — so the "permission" names the refusal itself. The prefix
+            // keeps it from being mistaken for an action.
+            entry.spicedbPermission = "credential:\(reason.rawValue)"
+            // The route, not the credential: the credential has its own columns
+            // now, and overwriting the resource with it (as the old scope rows
+            // did) lost what was actually being reached.
+            entry.resourceType = "route"
+            entry.resourceID = "\(context.method) \(context.path)"
             entry.spicedbDecision = Self.noComparison
-            entry.cedarDecision = "scope_denied"
+            entry.cedarDecision = "credential_restricted"
+            entry.tier = CedarCheckDecision.credentialTier
+            entry.credentialType = credential?.kind.rawValue
+            entry.credentialID = credential?.id
             return entry
         }
     }
@@ -436,6 +477,9 @@ final class IAMDecisionRecorder: Sendable {
         entry.resourceType = record.legacyEquivalent?.resourceType ?? record.node.type.rawValue
         entry.resourceID = record.legacyEquivalent?.resourceID ?? record.node.id.uuidString
         entry.spicedbDecision = Self.noComparison
+
+        entry.credentialType = record.credential?.kind.rawValue
+        entry.credentialID = record.credential?.id
 
         return entry
     }

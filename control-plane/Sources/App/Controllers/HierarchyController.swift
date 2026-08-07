@@ -272,7 +272,7 @@ struct HierarchyController: RouteCollection {
     func validateHierarchy(req: Request) async throws -> HierarchyValidationResponse {
         // Platform plumbing with no node to attach a policy to: the
         // decision-marking admin gate, not a bypass.
-        _ = try req.requireSystemAdmin()
+        _ = try await req.requireSystemAdmin()
 
         let issues = try await HierarchyMaintenanceService.findHierarchyIssues(on: req.db)
 
@@ -291,7 +291,7 @@ struct HierarchyController: RouteCollection {
     func repairHierarchy(req: Request) async throws -> HierarchyRepairResponse {
         // Platform plumbing with no node to attach a policy to: the
         // decision-marking admin gate, not a bypass.
-        _ = try req.requireSystemAdmin()
+        _ = try await req.requireSystemAdmin()
 
         let repairRequest = try req.content.decode(HierarchyRepairRequest.self)
 

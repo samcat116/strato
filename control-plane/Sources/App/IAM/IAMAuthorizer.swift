@@ -46,6 +46,49 @@ final class IAMRequestAuthState: Sendable {
     /// so a handler that forgets its check fails loudly instead of silently
     /// serving.
     let decisionEvaluated = NIOLockedValueBox(false)
+    /// What the credential this request arrived on permits (STR-115). Rides
+    /// here rather than as a parameter on `authorize` because it has exactly
+    /// this object's lifetime — per-request, ambient, set once — and because a
+    /// defaulted parameter is fail-*open* when a call site forgets it, which is
+    /// the wrong failure mode for a ceiling.
+    ///
+    /// It belongs to the credential, not the principal, so it survives an
+    /// impersonation: a user acting as a service account through a restricted
+    /// key stays restricted.
+    ///
+    /// Held in a box rather than a `let` for the same fail-open reason. This
+    /// object is created on first use, and "first use" is only guaranteed to be
+    /// after authentication by middleware *ordering*, which nothing enforces —
+    /// a future middleware registered above the authenticators that so much as
+    /// reads `adminBypassUsed` would otherwise freeze `.unrestricted` here and
+    /// hand every restricted credential on that request full principal power.
+    /// `Request.iamAuthState` refreshes both fields on every access instead, so
+    /// the answer is derived from the request rather than snapshotted from it.
+    private let restrictionBox: NIOLockedValueBox<CredentialRestriction>
+    private let credentialBox: NIOLockedValueBox<CredentialReference?>
+
+    var restriction: CredentialRestriction { restrictionBox.withLockedValue { $0 } }
+    /// Which credential that was, for decision-log attribution.
+    var credential: CredentialReference? { credentialBox.withLockedValue { $0 } }
+
+    init(restriction: CredentialRestriction = .unrestricted, credential: CredentialReference? = nil) {
+        self.restrictionBox = NIOLockedValueBox(restriction)
+        self.credentialBox = NIOLockedValueBox(credential)
+    }
+
+    /// Re-derive the credential half from the request that owns this state.
+    fileprivate func refreshCredential(
+        restriction: CredentialRestriction, credential: CredentialReference?
+    ) {
+        restrictionBox.withLockedValue { $0 = restriction }
+        credentialBox.withLockedValue { $0 = credential }
+    }
+
+    /// The state for a check that is not serving a request: `WhoCanService`'s
+    /// reporting, the policy simulator, tests. Named rather than defaulted so
+    /// "this check has no credential behind it" is a deliberate, greppable
+    /// statement instead of an omission.
+    static let detached = IAMRequestAuthState()
 }
 
 extension Request {
@@ -54,9 +97,17 @@ extension Request {
     }
 
     /// This request's authorization state, created on first use.
+    ///
+    /// The audit flags accumulate across the request, so the object persists;
+    /// the credential half is re-derived on every access, so a state that
+    /// happened to be created before the authenticators ran cannot leave a
+    /// restricted credential looking unrestricted (see `restrictionBox`).
     var iamAuthState: IAMRequestAuthState {
-        if let existing = storage[IAMRequestAuthStateKey.self] { return existing }
-        let created = IAMRequestAuthState()
+        if let existing = storage[IAMRequestAuthStateKey.self] {
+            existing.refreshCredential(restriction: credentialRestriction, credential: credential)
+            return existing
+        }
+        let created = IAMRequestAuthState(restriction: credentialRestriction, credential: credential)
         storage[IAMRequestAuthStateKey.self] = created
         return created
     }
@@ -73,7 +124,7 @@ enum IAMAuthorizer {
         node: IAMNode,
         legacyEquivalent: LegacyCheckEquivalent?,
         context: IAMCheckContext,
-        state: IAMRequestAuthState?,
+        state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
         app: Application,
         db: any Database
@@ -116,7 +167,7 @@ enum IAMAuthorizer {
         node: IAMNode,
         legacyEquivalent: LegacyCheckEquivalent?,
         context: IAMCheckContext,
-        state: IAMRequestAuthState?,
+        state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
         app: Application,
         db: any Database
@@ -182,7 +233,7 @@ enum IAMAuthorizer {
         nodes: [IAMNode],
         legacyEquivalents: [IAMNode: LegacyCheckEquivalent] = [:],
         context: IAMCheckContext,
-        state: IAMRequestAuthState?,
+        state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
         app: Application,
         db: any Database
@@ -238,10 +289,10 @@ enum IAMAuthorizer {
     /// memoized answer is still an answer this request acted on, and the
     /// default-deny middleware's "did the handler check anything?" assertion
     /// must see it.
-    private static func markAuditState(_ decision: CedarCheckDecision, state: IAMRequestAuthState?) {
-        state?.decisionEvaluated.withLockedValue { $0 = true }
+    private static func markAuditState(_ decision: CedarCheckDecision, state: IAMRequestAuthState) {
+        state.decisionEvaluated.withLockedValue { $0 = true }
         if decision.allowed, decision.determiningPolicyIDs.contains("platform-system-admin") {
-            state?.adminPolicyUsed.withLockedValue { $0 = true }
+            state.adminPolicyUsed.withLockedValue { $0 = true }
         }
     }
 
@@ -257,7 +308,7 @@ enum IAMAuthorizer {
         nodes: [IAMNode],
         legacyEquivalents: [IAMNode: LegacyCheckEquivalent],
         context: IAMCheckContext,
-        state: IAMRequestAuthState?,
+        state: IAMRequestAuthState,
         cache: IAMRequestCache?,
         app: Application,
         db: any Database
@@ -268,7 +319,7 @@ enum IAMAuthorizer {
         let outcomes: [IAMCheckTarget: IAMDecisionEngine.Decision]
         do {
             outcomes = try await IAMDecisionEngine.decide(
-                targets, action: action, built: built, cache: cache, on: db)
+                targets, action: action, built: built, cache: cache, restriction: state.restriction, on: db)
         } catch let failure as IAMDecisionEngine.EvaluationFailure {
             app.logger.error(
                 "Cedar evaluation failed; failing closed",
@@ -329,6 +380,7 @@ enum IAMAuthorizer {
                     decision: outcome.verdict,
                     policyVersion: built.version,
                     legacyEquivalent: legacyEquivalents[node],
+                    credential: state.credential,
                     context: context
                 ))
         }
@@ -357,7 +409,7 @@ enum IAMAuthorizer {
         resourceType: String,
         resourceID: String,
         context: IAMCheckContext,
-        state: IAMRequestAuthState?,
+        state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
         app: Application,
         db: any Database
@@ -378,7 +430,7 @@ enum IAMAuthorizer {
                     "resource": .string("\(resourceType):\(resourceID)"),
                     "path": .string(context.path),
                 ])
-            state?.decisionEvaluated.withLockedValue { $0 = true }
+            state.decisionEvaluated.withLockedValue { $0 = true }
             await app.iamDecisionRecorder.recordUntranslatedDenial(
                 subject: principal.subject, equivalent: equivalent, context: context)
             return false
@@ -531,9 +583,15 @@ extension Request {
     /// would produce: the credential authenticated, it simply cannot hold this
     /// privilege (issue #495).
     ///
+    /// A restricted credential is refused here too, because there is no action
+    /// to intersect its restriction with (STR-115). A node-scoped credential is
+    /// refused outright — a token issued for one project has no business on a
+    /// global platform surface — and an action-limited one only on mutations,
+    /// which is exactly what the legacy `read` scope did.
+    ///
     /// - Throws: `.unauthorized` if unauthenticated, `.forbidden` for
-    ///   non-admins and for workload principals.
-    func requireSystemAdmin(_ deniedReason: String = "System administrator access required") throws -> User {
+    ///   non-admins, workload principals, and restricted credentials.
+    func requireSystemAdmin(_ deniedReason: String = "System administrator access required") async throws -> User {
         guard let user = auth.get(User.self) else {
             iamAuthState.decisionEvaluated.withLockedValue { $0 = true }
             if isWorkloadAuthenticated {
@@ -545,6 +603,7 @@ extension Request {
         guard user.isSystemAdmin else {
             throw Abort(.forbidden, reason: deniedReason)
         }
+        try await denyRestrictedCredential(on: .platformAdminSurface)
         // Admin-privileged access outside the IAM tree still belongs in the
         // admin audit trail (pre-cutover, the middleware bypass flagged every
         // admin request; the evaluator now flags evaluator-gated ones, and
@@ -562,9 +621,29 @@ extension Request {
     ///
     /// Like the throwing form this can only *deny*: a scoped row never reaches
     /// it, because a scoped row has a node and goes through `can`.
-    func allowsScopelessPlatformRow() -> Bool {
+    ///
+    /// - Parameter action: the action the row would be listed under
+    ///   (`agent:list`, `operation:read`). A credential restriction applies
+    ///   here as far as it can: the action half against `action`, and the node
+    ///   half by refusing outright — a scopeless row is by definition outside
+    ///   every subtree, so a subtree-scoped credential should not see it. A
+    ///   legacy `read` credential, whose restriction is every `:read` and
+    ///   `:list` and has no node, keeps seeing exactly the rows it sees today.
+    func allowsScopelessPlatformRow(action: String) -> Bool {
+        // An action the registry does not know matches no restriction pattern,
+        // so a typo here would quietly hide every scopeless row from every
+        // restricted credential — a filtering bug that looks like policy.
+        // `precondition`, not `assert`: `assert` compiles out under `-O`, which
+        // is exactly the build the failure would ship in. Every call site
+        // passes a literal, so this can only fire on a wrong binary — never on
+        // input — and it fires on the first such request in any environment.
+        precondition(
+            IAMRoleRegistry.allActions.contains(action),
+            "allowsScopelessPlatformRow called with '\(action)', which is not a registry action")
         iamAuthState.decisionEvaluated.withLockedValue { $0 = true }
         guard let user = auth.get(User.self), user.isSystemAdmin else { return false }
+        let restriction = iamAuthState.restriction
+        guard restriction.node == nil, restriction.permits(action: action) else { return false }
         iamAuthState.adminPolicyUsed.withLockedValue { $0 = true }
         return true
     }
@@ -574,7 +653,45 @@ extension Request {
     /// may start an org). Satisfies the default-deny middleware's handler
     /// assertion; using it is an explicit, greppable statement that "no
     /// evaluator decision" is the design, not an omission.
-    func markRowScopedAuthorization() {
+    ///
+    /// Throws for a restricted credential on a mutation: row scoping says who
+    /// the rows belong to, not what a token may do to them, so there is nothing
+    /// here for a restriction to intersect with (STR-115).
+    func markRowScopedAuthorization() async throws {
         iamAuthState.decisionEvaluated.withLockedValue { $0 = true }
+        try await denyRestrictedCredential(on: .rowScopedMutation)
+    }
+
+    /// Refuse a restricted credential that reached a surface with no evaluator
+    /// decision behind it, recording the refusal so it is attributable in
+    /// `iam_decision_logs` like every other denial.
+    ///
+    /// Safe methods pass: these surfaces read the caller's own rows or platform
+    /// inventory, and the restriction's action half is checked where an action
+    /// exists to check it (`allowsScopelessPlatformRow`). A node-scoped
+    /// credential is refused on any method — nothing here lives under a node.
+    private func denyRestrictedCredential(on reason: CredentialDenialReason) async throws {
+        let restriction = iamAuthState.restriction
+        guard !restriction.isUnrestricted else { return }
+        if restriction.node == nil {
+            switch method {
+            case .GET, .HEAD, .OPTIONS: return
+            default: break
+            }
+        }
+        await recordCredentialRestrictionDenial(reason)
+        throw Abort(.forbidden, reason: reason.deniedReason)
+    }
+
+    /// Write the decision row for a credential refused outside the evaluator.
+    func recordCredentialRestrictionDenial(_ reason: CredentialDenialReason) async {
+        // The acting principal's own subject spelling, so the row matches every
+        // other decision-log subject rather than reconstructing the user UUID
+        // here and drifting if that convention ever changes.
+        await application.iamDecisionRecorder.recordCredentialRestriction(
+            subject: actingPrincipal?.subject ?? "",
+            credential: credential,
+            reason: reason,
+            context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: id))
     }
 }

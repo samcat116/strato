@@ -53,7 +53,7 @@ final class WorkloadPrincipalTests {
             node: node,
             legacyEquivalent: nil,
             context: IAMCheckContext(path: "/test", method: "GET", requestID: "test"),
-            state: nil,
+            state: .detached,
             app: app,
             db: app.db
         ).allowed

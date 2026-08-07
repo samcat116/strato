@@ -41,7 +41,7 @@ struct WorkloadRegistrationController: RouteCollection {
     /// GET /api/workload-registrations — the full registry: agents, service
     /// accounts, and directly registered workloads.
     func list(req: Request) async throws -> [ServiceAccountController.WorkloadRegistrationResponse] {
-        _ = try req.requireSystemAdmin()
+        _ = try await req.requireSystemAdmin()
         return try await WorkloadRegistration.query(on: req.db)
             .sort(\.$spiffeID)
             .all()
@@ -52,7 +52,7 @@ struct WorkloadRegistrationController: RouteCollection {
     /// SPIFFE identity as a principal in its own right. The registration row
     /// *is* the principal (`principal_type = workload`, id = row id).
     func create(req: Request) async throws -> Response {
-        let admin = try req.requireSystemAdmin()
+        let admin = try await req.requireSystemAdmin()
         let body = try req.content.decode(CreateWorkloadRegistrationRequest.self)
 
         // Same reserved-namespace rule as the service-account endpoint: even
@@ -84,7 +84,7 @@ struct WorkloadRegistrationController: RouteCollection {
     /// revocation lever, for any kind. Deleting a workload-kind row deletes
     /// the principal, so its bindings go with it (the offboarding rule).
     func delete(req: Request) async throws -> HTTPStatus {
-        _ = try req.requireSystemAdmin()
+        _ = try await req.requireSystemAdmin()
         guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid registration ID")
         }

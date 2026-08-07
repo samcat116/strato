@@ -59,7 +59,7 @@ final class IAMAuthorizerTests {
         resourceType: String,
         resourceID: String,
         path: String = "/api/vms",
-        state: IAMRequestAuthState? = nil,
+        state: IAMRequestAuthState = .detached,
         cache: IAMRequestCache? = nil
     ) async throws -> Bool {
         try await IAMAuthorizer.checkLegacyVocabulary(
@@ -261,7 +261,7 @@ final class IAMAuthorizerTests {
                 node: IAMNode(type: .virtualMachine, id: UUID()),
                 legacyEquivalent: nil,
                 context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: nil),
-                state: nil,
+                state: .detached,
                 app: app,
                 db: app.db
             )
@@ -509,7 +509,7 @@ final class IAMAuthorizerBackstopTests {
             // with global networks themselves (issue #765).
             let ungranted = try await IAMAuthorizer.authorize(
                 userID: user.id!, action: "network:read", node: node, legacyEquivalent: nil,
-                context: context, state: nil, app: app, db: app.db)
+                context: context, state: .detached, app: app, db: app.db)
             #expect(!ungranted.allowed)
 
             try await RoleBindingService.grant(
@@ -518,7 +518,7 @@ final class IAMAuthorizerBackstopTests {
 
             let granted = try await IAMAuthorizer.authorize(
                 userID: user.id!, action: "network:read", node: node, legacyEquivalent: nil,
-                context: context, state: nil, app: app, db: app.db)
+                context: context, state: .detached, app: app, db: app.db)
             #expect(granted.allowed)
         }
     }
@@ -535,7 +535,7 @@ final class IAMAuthorizerBackstopTests {
                 application: app, method: .GET, url: "/api/audit-events", on: app.eventLoopGroup.next())
             denied.auth.login(user)
             var thrown: (any Error)?
-            do { _ = try denied.requireSystemAdmin() } catch { thrown = error }
+            do { _ = try await denied.requireSystemAdmin() } catch { thrown = error }
             #expect((thrown as? any AbortError)?.status == .forbidden)
             #expect(denied.iamAuthState.decisionEvaluated.withLockedValue { $0 })
             #expect(!denied.iamAuthState.adminPolicyUsed.withLockedValue { $0 })
@@ -543,13 +543,13 @@ final class IAMAuthorizerBackstopTests {
             let allowed = Request(
                 application: app, method: .GET, url: "/api/audit-events", on: app.eventLoopGroup.next())
             allowed.auth.login(admin)
-            _ = try allowed.requireSystemAdmin()
+            _ = try await allowed.requireSystemAdmin()
             #expect(allowed.iamAuthState.adminPolicyUsed.withLockedValue { $0 })
 
             let anonymous = Request(
                 application: app, method: .GET, url: "/api/audit-events", on: app.eventLoopGroup.next())
             var anonThrown: (any Error)?
-            do { _ = try anonymous.requireSystemAdmin() } catch { anonThrown = error }
+            do { _ = try await anonymous.requireSystemAdmin() } catch { anonThrown = error }
             #expect((anonThrown as? any AbortError)?.status == .unauthorized)
         }
     }
@@ -581,7 +581,7 @@ final class IAMAuthorizerBackstopTests {
             let checked = Request(
                 application: app, method: .POST, url: "/api/sites", on: app.eventLoopGroup.next())
             checked.auth.login(user)
-            checked.markRowScopedAuthorization()
+            try await checked.markRowScopedAuthorization()
             let res = try await AuthorizationMiddleware().respond(to: checked, chainingTo: SilentOK())
             #expect(res.status == .ok)
         }

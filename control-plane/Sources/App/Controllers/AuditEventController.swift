@@ -30,7 +30,7 @@ struct AuditEventController: RouteCollection {
     }
 
     func listAll(req: Request) async throws -> AuditEventListResponse {
-        _ = try req.requireSystemAdmin()
+        _ = try await req.requireSystemAdmin()
         let query = try req.query.decode(ListQuery.self)
         return try await list(query: query, organizationID: query.organizationID, on: req)
     }

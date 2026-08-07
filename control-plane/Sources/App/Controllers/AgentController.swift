@@ -44,11 +44,11 @@ struct AgentController: RouteCollection {
     // is (`manage_agents`), and system admins retain unconditional access.
     // Defense in depth — do not rely on route-level middleware.
 
-    private func requireSystemAdmin(_ req: Request) throws {
+    private func requireSystemAdmin(_ req: Request) async throws {
         // The decision-marking gate, so admin-only mutations (scopeless
         // enrollments, org reassignment) satisfy the middleware's
         // handler-evaluated assertion.
-        _ = try req.requireSystemAdmin()
+        _ = try await req.requireSystemAdmin()
     }
 
     /// The (resourceType, id) pair naming the scope's owning node for
@@ -73,7 +73,7 @@ struct AgentController: RouteCollection {
         // gate, mirroring scopeless enrollments. This is what keeps orphaned
         // agents repairable (deregister, reassign) at all.
         guard agent.organizationScope != nil else {
-            _ = try req.requireSystemAdmin("This agent has no owning organization")
+            _ = try await req.requireSystemAdmin("This agent has no owning organization")
             return
         }
         let allowed = try await req.can(permission, on: "agent", id: try agent.requireID().uuidString)
@@ -420,10 +420,21 @@ struct AgentController: RouteCollection {
         // asks through the translator — and the request memo is keyed on the
         // translated action, so a listed row and the item route it links to are
         // decided once, not twice.
+        //
+        // This is the one list in the app whose *read* is gated on a write-shaped
+        // action, which STR-115 gave a consequence: `agent:manage` is not a read,
+        // so a read-restricted credential now matches no row and gets an empty
+        // page rather than a 403 — indistinguishable from "no enrollments". It is
+        // called out in `docs/architecture/iam.md` alongside the other
+        // tightenings. Gating the listing on a read-shaped action instead would
+        // fix the shape but widen who may see enrollments, which is a binding
+        // question and not this issue's to answer.
         let manageable = try await req.canFilter(
             "agent:manage", on: enrollments.compactMap { $0.organizationScope?.checkNode })
         let visible = enrollments.filter { enrollment in
-            guard let scope = enrollment.organizationScope else { return req.allowsScopelessPlatformRow() }
+            guard let scope = enrollment.organizationScope else {
+                return req.allowsScopelessPlatformRow(action: "agent:manage")
+            }
             return manageable.contains(scope.checkNode)
         }
 
@@ -445,7 +456,7 @@ struct AgentController: RouteCollection {
             try await requireManageAgents(req, scope: scope)
         } else {
             // Scopeless rows have no org to delegate revocation to.
-            try requireSystemAdmin(req)
+            try await requireSystemAdmin(req)
         }
 
         // Revoking withdraws the SPIRE grant this enrollment created — but only
@@ -573,7 +584,7 @@ struct AgentController: RouteCollection {
         for agent in agents {
             guard let agentId = agent.id else { continue }
             guard agent.organizationScope != nil else {
-                if req.allowsScopelessPlatformRow() { visible.append(agent) }
+                if req.allowsScopelessPlatformRow(action: "agent:read") { visible.append(agent) }
                 continue
             }
             if readable.contains(IAMNode(type: .agent, id: agentId)) { visible.append(agent) }
@@ -1312,7 +1323,7 @@ struct AgentController: RouteCollection {
     /// into their own org (or donate theirs away). Same drain invariants as a
     /// token-driven move — no hosted VMs, not in a site.
     func reassignOrganization(req: Request) async throws -> AgentResponse {
-        try requireSystemAdmin(req)
+        try await requireSystemAdmin(req)
 
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
