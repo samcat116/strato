@@ -430,7 +430,7 @@ fn handle_reidentify(
             };
         }
     };
-    if let Err(e) = set_guest_hostname(hostname) {
+    if let Err(e) = crate::linux::net::set_hostname(hostname) {
         return Response::Error {
             message: format!("set hostname failed: {e}"),
         };
@@ -460,18 +460,6 @@ fn handle_reidentify(
     s.sandbox_id = sandbox_id;
     s.nonce = identity_nonce;
     Response::Reidentified
-}
-
-fn set_guest_hostname(hostname: &str) -> Result<(), String> {
-    if hostname.is_empty() || hostname.len() > 63 || hostname.as_bytes().contains(&0) {
-        return Err("hostname must contain 1...63 non-NUL bytes".to_string());
-    }
-    let rc = unsafe { libc::sethostname(hostname.as_ptr().cast(), hostname.len()) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error().to_string())
-    }
 }
 
 fn reset_machine_id(entropy: &[u8]) -> Result<(), String> {

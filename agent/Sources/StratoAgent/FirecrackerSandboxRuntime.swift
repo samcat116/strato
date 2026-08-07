@@ -335,7 +335,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let nonce = UUID().uuidString
         let configDrive = SandboxConfigDrive(
             sandboxId: sandboxId, identityNonce: nonce,
-            guestConfig: materialized.guestConfig, spec: spec)
+            guestConfig: materialized.guestConfig, spec: spec,
+            network: try guestNetwork(sandboxId: sandboxId, attachments: networkAttachments))
         let configData = try configDrive.blockImage(
             minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
 
@@ -413,6 +414,22 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             maybeStartWarmTemplateBuild(
                 key: warmKey, materialized: materialized, guestImage: guestImage, spec: spec)
         }
+    }
+
+    /// The config-drive network block for a sandbox's realized NIC, or nil
+    /// when it has none (STR-101).
+    ///
+    /// The guest configures its interface statically from this — it runs no
+    /// DHCP client — so a networked sandbox whose block is missing or
+    /// incomplete boots with a dead interface. Everything that could make it
+    /// incomplete throws instead.
+    private func guestNetwork(
+        sandboxId: String, attachments: [ResolvedNetworkAttachment]
+    ) throws -> SandboxConfigDrive.NetworkConfig? {
+        // A spec is capped at one NIC, so the first attachment is the whole set.
+        guard let nic = attachments.first else { return nil }
+        return try SandboxConfigDrive.network(
+            for: nic, hostname: SandboxConfigDrive.guestHostname(sandboxId: sandboxId))
     }
 
     /// Provision a cold microVM and register it as this sandbox. Shared by
@@ -808,9 +825,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
             let nonce = UUID().uuidString
             let entropy = Self.freshEntropy()
-            let hostname =
-                "strato-"
-                + String(sandboxId.replacingOccurrences(of: "-", with: "").prefix(12))
+            let hostname = SandboxConfigDrive.guestHostname(sandboxId: sandboxId)
             let response = try await sendControl(
                 .reidentify(
                     SandboxControlProtocol.ReidentifyRequest(
@@ -1091,7 +1106,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let nonce = UUID().uuidString
         let configDrive = SandboxConfigDrive(
             sandboxId: sandboxId, identityNonce: nonce,
-            guestConfig: materialized.guestConfig, spec: managed.spec)
+            guestConfig: materialized.guestConfig, spec: managed.spec,
+            network: try guestNetwork(
+                sandboxId: sandboxId, attachments: managed.networkAttachments))
         let configData = try configDrive.blockImage(
             minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
 

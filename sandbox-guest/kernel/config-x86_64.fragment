@@ -35,6 +35,17 @@ CONFIG_UNIX=y
 CONFIG_PACKET=y
 CONFIG_NETDEVICES=y
 
+# IPv6, stated rather than inherited: a dual-stack LogicalNetwork's address is
+# assigned by the init (STR-101), and `defconfig` deciding whether that stack
+# exists is not something the guest should discover at boot. No IP
+# autoconfiguration is enabled — the config drive carries the address, so the
+# guest neither DHCPs nor uses the kernel's `ip=` bootarg. SIT is off because
+# with modules disabled a tristate `default y` would build the IPv6-in-IPv4
+# tunnel into every guest that will never encapsulate anything.
+CONFIG_IPV6=y
+# CONFIG_IPV6_SIT is not set
+# CONFIG_IP_PNP is not set
+
 # Block layer + ext4 rootfs (issue #418 flattens the OCI image to ext4)
 CONFIG_BLOCK=y
 CONFIG_EXT4_FS=y

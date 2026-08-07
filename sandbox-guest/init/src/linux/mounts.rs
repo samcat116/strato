@@ -17,7 +17,10 @@ use strato_sandbox_init::config::RootfsSpec;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const NEW_ROOT: &str = "/newroot";
+/// Where the container rootfs is mounted before the switch. Visible to the
+/// rest of the init so files can be staged into the image (the resolver files
+/// STR-101 writes) while it still has a path of its own.
+pub const NEW_ROOT: &str = "/newroot";
 
 /// Mount the pseudo-filesystems the init needs before it can do anything else:
 /// `devtmpfs` on `/dev` (so block-device nodes like `/dev/vda` exist), `proc`,

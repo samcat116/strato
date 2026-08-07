@@ -26,16 +26,20 @@ as PID 1 and:
 2. reads the **config drive** (a raw block device, default `/dev/vdb`, named on
    the kernel cmdline as `strato.config=<dev>`) carrying the merged OCI process
    spec + guest params as JSON;
-3. mounts the flattened container rootfs ([#418]) from its block device (default
-   `/dev/vda`) and `switch_root`s onto it, leaving that image **pristine** — the
+3. brings up `lo`, and — when the config drive carries a `network` block —
+   the NIC: matched by MAC, addressed statically, given its default route and
+   MTU ([STR-101]);
+4. mounts the flattened container rootfs ([#418]) from its block device (default
+   `/dev/vda`), writes `/etc/resolv.conf` and `/etc/hosts` into it, and
+   `switch_root`s onto it, leaving that image otherwise **pristine** — the
    init is never written into it;
-4. resolves the process to run by merging the image's OCI config with the
+5. resolves the process to run by merging the image's OCI config with the
    sandbox's overrides (entrypoint/cmd/env/workdir/user);
-5. execs the workload as a child (stdin `/dev/null`; stdout/stderr captured
+6. execs the workload as a child (stdin `/dev/null`; stdout/stderr captured
    via pipes, mirrored byte-for-byte to the console **and** retained in a
    256 KiB ring buffer), keeping PID 1 as a forever-running reaper that routes
    every child's exit code;
-6. serves the **vsock** control surface — health `ping` / `get_status`,
+7. serves the **vsock** control surface — health `ping` / `get_status`,
    interactive `exec` sessions (PTY or pipes), and `stream_logs` follow
    streams of the workload's captured stdio ([#423]).
 
@@ -47,7 +51,7 @@ size (no filesystem). Fields: see [`init/src/config.rs`](init/src/config.rs)
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "sandbox_id": "…",
   "identity_nonce": "…",
   "rootfs": { "device": "/dev/vda", "fstype": "ext4", "readonly": false },
@@ -55,9 +59,47 @@ size (no filesystem). Fields: see [`init/src/config.rs`](init/src/config.rs)
   "image_config": { "Env": ["PATH=…"], "Entrypoint": ["/app"], "Cmd": ["…"],
                     "WorkingDir": "/", "User": "0:0" },
   "overrides": { "entrypoint": null, "cmd": null, "env": {"K":"V"},
-                 "workdir": null, "user": null }
+                 "workdir": null, "user": null },
+  "network": {
+    "mac_address": "06:00:ac:10:00:05",
+    "ipv4": { "address": "172.16.0.5", "prefix_length": 24, "gateway": "172.16.0.1" },
+    "ipv6": { "address": "fd12:3456:789a::5", "prefix_length": 64, "gateway": "fd12:3456:789a::1" },
+    "mtu": 1442,
+    "nameservers": ["172.16.0.2"],
+    "search_domains": ["proj.strato.internal"],
+    "hostname": "strato-0f1e2d3c4b5a"
+  }
 }
 ```
+
+`network` is absent for a sandbox with no NIC (and for warm-start templates,
+which carry no network device at all); everything inside it but the addresses
+is optional.
+
+**The schema version is a hard pairing requirement, deliberately.** Both sides
+refuse a version they do not recognize rather than guessing, so an agent that
+writes v2 documents onto a host still running a v1 guest image fails every
+sandbox boot with `unsupported config-drive schema version` on the serial
+console. Install the guest image and the agent together.
+
+### Guest networking ([STR-101])
+
+Static, not DHCP: the control plane's IPAM has already picked the address by
+the time the microVM boots, so a DHCP exchange would spend a cold-start round
+trip — and an extra binary in a size-optimized initramfs — rediscovering it.
+OVN's DHCP responder is still programmed for the port, so an image that runs
+its own client keeps working; the guest just does not depend on one.
+
+Bring-up is hand-rolled `ioctl` plus one rtnetlink `RTM_NEWROUTE` per family
+rather than a crate, for the same size reason. It is fatal on failure: the
+host cannot tell a half-configured interface from a healthy one, so a sandbox
+that reports `running` has to actually be on its network. The two files
+written into the rootfs (`/etc/resolv.conf`, `/etc/hosts`) are best effort by
+contrast — a read-only rootfs is a legitimate shape — and `/etc` is created
+rather than assumed, since scratch and distroless images may not have one.
+
+Testable end to end with a hand-plugged TAP on a dev host: boot the guest with
+a `network` block and a `tap` device, no OVN or control plane involved.
 
 ### vsock control protocol (v2)
 
@@ -107,11 +149,24 @@ Or, on a suitably provisioned host, directly:
 ./build.sh --arch x86_64 --out ./build/out    # kernel + initramfs + guest.json
 ```
 
-The init's portable logic (config merge, vsock protocol) is unit-tested on any
-host, including macOS/CI:
+The init's portable logic (config merge, vsock protocol, resolver-file
+rendering) is unit-tested on any host, including macOS/CI:
 
 ```sh
 cargo test --manifest-path init/Cargo.toml --lib
+```
+
+The Linux-only halves — the network ioctls and the rtnetlink route — have unit
+tests too (`cargo test` on a Linux host runs them), but their real check is a
+namespace, which needs no microVM, no OVN, and no control plane:
+
+```sh
+sudo ip netns add guest-test
+sudo ip netns exec guest-test ip link add veth0 type veth peer name veth1
+sudo ip netns exec guest-test ip link set veth0 address 06:00:ac:10:00:05
+# …drive net::configure_interface with a matching config, then:
+sudo ip netns exec guest-test ip -br addr; sudo ip netns exec guest-test ip route
+sudo ip netns del guest-test
 ```
 
 ## Versioning & publishing
@@ -137,3 +192,4 @@ and its sha256 together.
 [#421]: https://github.com/samcat116/strato/issues/421
 [#423]: https://github.com/samcat116/strato/issues/423
 [#426]: https://github.com/samcat116/strato/issues/426
+[STR-101]: https://github.com/samcat116/strato/issues/846

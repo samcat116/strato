@@ -20,7 +20,10 @@ import StratoShared
 public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     /// Config-drive schema version understood by both host and guest. Must match
     /// `SCHEMA_VERSION` in the guest init.
-    public static let schemaVersion: UInt32 = 1
+    ///
+    /// * v1 — identity, rootfs, vsock, process config.
+    /// * v2 — adds the optional ``NetworkConfig`` block (STR-101).
+    public static let schemaVersion: UInt32 = 2
 
     /// The guest vsock port the control agent listens on. Matches the guest's
     /// `DEFAULT_VSOCK_PORT`; the runtime connects here for health/status.
@@ -52,6 +55,9 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     /// snapshotted. Encoded only when true so ordinary config documents are
     /// byte-identical to pre-warm-start ones.
     public let warmHold: Bool?
+    /// The sandbox's single NIC, when it has one (STR-101). Encoded only when
+    /// present, so a network-free sandbox's document is unchanged.
+    public let network: NetworkConfig?
 
     public init(
         sandboxId: String,
@@ -60,7 +66,8 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         vsockPort: UInt32 = SandboxConfigDrive.defaultVsockPort,
         imageConfig: ImageConfig,
         overrides: ProcessOverrides,
-        warmHold: Bool? = nil
+        warmHold: Bool? = nil,
+        network: NetworkConfig? = nil
     ) {
         self.schemaVersion = SandboxConfigDrive.schemaVersion
         self.sandboxId = sandboxId
@@ -70,6 +77,7 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         self.imageConfig = imageConfig
         self.overrides = overrides
         self.warmHold = warmHold
+        self.network = network
     }
 
     /// Build the config-drive document for a sandbox from its spec and the
@@ -82,7 +90,8 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         sandboxId: String,
         identityNonce: String,
         guestConfig: SandboxGuestConfig,
-        spec: SandboxSpec
+        spec: SandboxSpec,
+        network: NetworkConfig? = nil
     ) {
         self.init(
             sandboxId: sandboxId,
@@ -98,7 +107,16 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
                 cmd: spec.cmd,
                 env: spec.env,
                 workdir: spec.workingDir,
-                user: nil))
+                user: nil),
+            network: network)
+    }
+
+    /// The hostname a sandbox's guest boots under: a DNS-safe label derived
+    /// from the sandbox id, since a sandbox has no user-chosen name. Shared
+    /// with the fork re-identification path, so a restored guest is renamed
+    /// under the same rule it would have booted under.
+    public static func guestHostname(sandboxId: String) -> String {
+        "strato-" + String(sandboxId.replacingOccurrences(of: "-", with: "").prefix(12))
     }
 
     /// How the guest should mount the container rootfs.
@@ -116,6 +134,133 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
             self.fstype = fstype
             self.readonly = readonly
         }
+    }
+
+    /// The guest's static L3 configuration for the sandbox's single NIC
+    /// (STR-101).
+    ///
+    /// Static, not DHCP: the control plane's IPAM has already chosen the
+    /// address by the time the microVM boots, so a DHCP exchange would cost a
+    /// cold-start round trip (and a client binary in a size-optimized
+    /// initramfs) to rediscover it. OVN's DHCP responder is still programmed
+    /// for the port, so an image that runs its own client keeps working — the
+    /// guest just does not depend on it, which is why this block is written
+    /// even for a `dhcpEnabled` NIC.
+    public struct NetworkConfig: Codable, Equatable, Sendable {
+        /// MAC of the NIC to configure — how the guest picks the interface,
+        /// since kernel names are enumeration order.
+        public let macAddress: String?
+        public let ipv4: AddressConfig?
+        public let ipv6: AddressConfig?
+        public let mtu: Int?
+        public let nameservers: [String]
+        public let searchDomains: [String]
+        public let hostname: String?
+
+        public init(
+            macAddress: String?,
+            ipv4: AddressConfig? = nil,
+            ipv6: AddressConfig? = nil,
+            mtu: Int? = nil,
+            nameservers: [String] = [],
+            searchDomains: [String] = [],
+            hostname: String? = nil
+        ) {
+            self.macAddress = macAddress
+            self.ipv4 = ipv4
+            self.ipv6 = ipv6
+            self.mtu = mtu
+            self.nameservers = nameservers
+            self.searchDomains = searchDomains
+            self.hostname = hostname
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case macAddress = "mac_address"
+            case ipv4
+            case ipv6
+            case mtu
+            case nameservers
+            case searchDomains = "search_domains"
+            case hostname
+        }
+    }
+
+    /// One address family's assignment: address, on-link prefix, and gateway.
+    /// The prefix travels as a number for both families — IPv6 has no
+    /// dotted-netmask form — so the host is where a v4 netmask becomes one.
+    public struct AddressConfig: Codable, Equatable, Sendable {
+        public let address: String
+        public let prefixLength: Int
+        public let gateway: String?
+
+        public init(address: String, prefixLength: Int, gateway: String?) {
+            self.address = address
+            self.prefixLength = prefixLength
+            self.gateway = gateway
+        }
+
+        enum CodingKeys: String, CodingKey {
+            case address
+            case prefixLength = "prefix_length"
+            case gateway
+        }
+    }
+
+    /// Build the guest's network block from the NIC the agent actually
+    /// realized.
+    ///
+    /// Throws when the attachment carries an address the guest could not be
+    /// told how to use — an IPv4 address whose netmask is missing or not a
+    /// contiguous mask, or an unparsable IPv6 prefix. Silently dropping the
+    /// family would boot a sandbox with a link-up, unaddressed interface and
+    /// report it `running`, which is the exact mis-convergence in-guest
+    /// networking exists to avoid.
+    public static func network(
+        for attachment: ResolvedNetworkAttachment,
+        hostname: String?
+    ) throws -> NetworkConfig {
+        var ipv4: AddressConfig?
+        if let address = attachment.ipAddress, !address.isEmpty {
+            guard let prefix = attachment.netmask.flatMap({ IPv4Address($0)?.prefixLength }) else {
+                throw SandboxRuntimeError.networkingUnsupported(
+                    "the NIC has IPv4 address \(address) but no usable netmask "
+                        + "(\(attachment.netmask ?? "none")), so the guest cannot be told its prefix")
+            }
+            ipv4 = AddressConfig(
+                address: address, prefixLength: prefix, gateway: nonEmpty(attachment.gateway))
+        }
+
+        var ipv6: AddressConfig?
+        if let address = attachment.ip6Address, !address.isEmpty {
+            // Unlike v4 there is a defensible default: /64 is the tenant
+            // prefix every dual-stack LogicalNetwork allocates from, and it is
+            // what the VM path's cloud-init seed already falls back to.
+            let prefix = attachment.prefixLength6 ?? 64
+            guard (0...128).contains(prefix) else {
+                throw SandboxRuntimeError.networkingUnsupported(
+                    "the NIC has IPv6 address \(address) with prefix length \(prefix), "
+                        + "which is out of range")
+            }
+            ipv6 = AddressConfig(
+                address: address, prefixLength: prefix, gateway: nonEmpty(attachment.gateway6))
+        }
+
+        return NetworkConfig(
+            macAddress: nonEmpty(attachment.macAddress),
+            ipv4: ipv4,
+            ipv6: ipv6,
+            mtu: attachment.mtu,
+            nameservers: attachment.dnsServers.compactMap { nonEmpty($0) },
+            searchDomains: [nonEmpty(attachment.domainName)].compactMap { $0 },
+            hostname: hostname)
+    }
+
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !trimmed.isEmpty
+        else { return nil }
+        return trimmed
     }
 
     /// The OCI image `config` subset the guest applies. Field names are the OCI
@@ -173,6 +318,7 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         case imageConfig = "image_config"
         case overrides
         case warmHold = "warm_hold"
+        case network
     }
 
     /// Encode the document as compact JSON (the guest parses raw bytes, so no
