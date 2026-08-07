@@ -8,15 +8,14 @@ import StratoShared
 enum SandboxSpecBuilder {
     /// Whether sandbox NICs go on the wire at all.
     ///
-    /// Agents can now realize one: STR-100 attaches a veth + TAP into the jail's
-    /// network namespace and binds it to OVN. Two things still gate the wire.
-    /// The guest image has no in-guest networking — the init never brings up
-    /// eth0 and the guest kernel has no IP autoconfiguration (STR-101) — so a
-    /// NIC sent today would come up unconfigured inside the workload. And this
-    /// flag is fleet-wide, while the capability is per-agent: an agent that is
-    /// unjailed, non-Linux, or too old cannot realize a sandbox NIC and would
-    /// fail every placement it received. STR-103 replaces this constant with
-    /// that per-agent gate, and is what flips it.
+    /// Agents can now realize one end to end: STR-100 attaches a veth + TAP
+    /// into the jail's network namespace and binds it to OVN, and STR-101 has
+    /// the guest configure the interface from the config drive's `network`
+    /// block. One thing still gates the wire: this flag is fleet-wide, while
+    /// the capability is per-agent. An agent that is unjailed, non-Linux, too
+    /// old, or paired with a pre-schema-v2 guest image cannot realize a sandbox
+    /// NIC and would fail every placement it received. STR-103 replaces this
+    /// constant with that per-agent gate, and is what flips it.
     ///
     /// Meanwhile the sandbox's interface row and its IPAM allocation exist only
     /// control-plane-side: the address stays reserved and stable, but the wire
