@@ -522,13 +522,13 @@ failed resize is re-planned by the next sync rather than looking applied.
 ## The reconciler
 
 `StratoAgentCore/Reconciliation.swift` — two layers, generalized over
-`WorkloadKind` so VMs and sandboxes share one engine:
+`WorkloadKind` so VMs, sandboxes and volumes share one engine:
 
 - **A pure diff** (`Reconciler.plan`): desired list vs observed presence
   (`.managed(status)` or `.orphaned`) → a `ReconcilePlan` of
   `[ReconcileWorkItem]` steps (`create`, `adopt`, `boot`, `pause`, `resume`,
-  `resize`, `shutdown`, `delete`) plus the workloads this host holds that the
-  sync didn't account for.
+  `resize`, `shutdown`, `delete`, `attach`, `detach`) plus the workloads this
+  host holds that the sync didn't account for.
   Entries older than the last applied generation are dropped (replays can't
   roll state back); equal generations still re-plan (drift correction);
   present-but-unlisted workloads are **held**, not deleted (below).
@@ -540,6 +540,32 @@ failed resize is re-planned by the next sync rather than looking applied.
   generation with a 3-attempt budget (permanent failures exhaust it
   immediately; a new generation re-arms it). `.adopt` executes first and
   then re-plans from the adopted workload's actual status.
+
+### Volume lanes and the enqueue order (STR-148)
+
+Volumes joined the engine as a third `WorkloadKind` rather than a forked
+planner: the staleness guard, the attempt cap, the failure classification and
+the hold-and-report logic are all shared. A volume's presence comes from the
+storage backend's own inventory, not the manifest — a volume is a file, so
+there is nothing to adopt and no session to lose.
+
+Two things are volume-specific. First, a work item can hold **more than one
+lane**: an attach or detach drives the target VM's hypervisor session, so it
+takes the VM's lane alongside `volume/<id>`, reproducing exactly what the
+imperative `volume_attach` frame's routing gave it. Second, enqueue *order*
+matters even though multi-lane items already give mutual exclusion, because
+holding two lanes guarantees isolation and not sequence. One sync enqueues in
+four passes: volume data-plane work (create/resize/delete) first, so a volume
+exists before a VM referencing it is built; then VM items; then volume
+*attachment* work, so an attach queues behind that VM's create/boot on the VM's
+own lane rather than racing it into a dependency wait; then sandboxes.
+
+The convergence steps for a volume are planned one at a time, on purpose: a
+grow lands before an attachment moves, and an attachment that is merely *wrong*
+is unplugged before it is re-plugged elsewhere. Two things are deliberately not
+steps at all — a shrink and a format change — because neither is something the
+agent can converge, so they surface as permanent failures rather than as work
+that silently never completes.
 
 After every item the agent sends a full `ObservedStateReport` — live status
 plus `observedGeneration`, `convergencePhase`, and error/failed-generation

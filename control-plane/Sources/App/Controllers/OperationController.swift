@@ -83,6 +83,11 @@ struct OperationController: RouteCollection {
                 _ = try await req.authorizedSandbox(resourceID, permission: "read")
                 return
             }
+        case .volume:
+            if try await Volume.find(resourceID, on: req.db) != nil {
+                _ = try await req.authorizedVolume(resourceID, permission: "read")
+                return
+            }
         }
 
         // The resource is gone, so there is no node left to evaluate against.

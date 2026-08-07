@@ -27,6 +27,10 @@ import { VolumeStatusBadge } from "@/components/volumes";
 import { volumesApi } from "@/lib/api/volumes";
 import { useVolumes, useInvalidateVolumes } from "@/lib/hooks/use-volumes";
 import { toast } from "sonner";
+import {
+  acceptedMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
 import type { VM } from "@/types/api";
 
 const selectClassName =
@@ -45,10 +49,14 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
     () => volumes.filter((v) => v.vmId === vm.id),
     [volumes, vm.id]
   );
+  // Attachable means *not attached*, not "observed available" (backend
+  // STR-148): a volume still converging is a valid attach target, because the
+  // agent sequences the create and the attach itself.
   const availableVolumes = useMemo(
-    () => volumes.filter((v) => v.id && v.status === "available"),
+    () => volumes.filter((v) => v.id && !v.vmId),
     [volumes]
   );
+  const watch = useMutationsStore((state) => state.watch);
 
   const handleAttach = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -58,8 +66,15 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
     }
     setIsAttaching(true);
     try {
-      await volumesApi.attach(attachVolumeId, { vmId: vm.id });
-      toast.success("Volume attached");
+      const attaching = volumes.find((v) => v.id === attachVolumeId);
+      watch(
+        acceptedMutation(await volumesApi.attach(attachVolumeId, { vmId: vm.id }), {
+          kind: "attach",
+          resourceKind: "volume",
+          resourceId: attachVolumeId,
+          resourceName: attaching?.name ?? "volume",
+        })
+      );
       setAttachOpen(false);
       setAttachVolumeId("");
       invalidateVolumes();
@@ -75,8 +90,14 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
   const handleDetach = async (volumeId: string, name: string) => {
     setBusyVolumeId(volumeId);
     try {
-      await volumesApi.detach(volumeId);
-      toast.success(`Detached ${name}`);
+      watch(
+        acceptedMutation(await volumesApi.detach(volumeId), {
+          kind: "detach",
+          resourceKind: "volume",
+          resourceId: volumeId,
+          resourceName: name,
+        })
+      );
       invalidateVolumes();
     } catch (error) {
       toast.error(
@@ -156,7 +177,7 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
                     {volume.sizeFormatted}
                   </TableCell>
                   <TableCell>
-                    <VolumeStatusBadge status={volume.status} />
+                    <VolumeStatusBadge status={volume.status} volumeId={volume.id} />
                   </TableCell>
                   <TableCell className="text-right">
                     <Button

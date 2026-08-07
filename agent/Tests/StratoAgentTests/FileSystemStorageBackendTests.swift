@@ -28,10 +28,24 @@ private actor SubprocessRecorder {
         let result =
             results[arguments.first ?? ""]
             ?? ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
-        // Mirror qemu-img convert's side effect: a successful run produces the
-        // output file (its last argument), which the backend then publishes.
-        if arguments.first == "convert", result.terminationStatus == 0, let output = arguments.last {
-            FileManager.default.createFile(atPath: output, contents: Data("converted-bytes".utf8))
+        // Mirror qemu-img's side effect: a successful `convert` or `create`
+        // produces the output file (its last positional argument for convert,
+        // the path before the size for create), which the backend then
+        // publishes with an atomic rename.
+        if result.terminationStatus == 0 {
+            switch arguments.first {
+            case "convert":
+                if let output = arguments.last {
+                    FileManager.default.createFile(atPath: output, contents: Data("converted-bytes".utf8))
+                }
+            case "create":
+                if arguments.count >= 2 {
+                    let output = arguments[arguments.count - 2]
+                    FileManager.default.createFile(atPath: output, contents: Data("created-bytes".utf8))
+                }
+            default:
+                break
+            }
         }
         return result
     }
@@ -96,7 +110,12 @@ struct FileSystemStorageBackendTests {
         let invocations = await recorder.invocations
         #expect(invocations.count == 1)
         #expect(invocations[0].executable == "/fake/qemu-img")
-        #expect(invocations[0].arguments == ["create", "-f", "qcow2", "\(root)/vol-1/volume.qcow2", "42"])
+        // Written to a staging path and published with a rename, so the
+        // canonical path only ever holds a finished volume (STR-148).
+        #expect(
+            invocations[0].arguments == ["create", "-f", "qcow2", "\(root)/vol-1/volume.qcow2.partial", "42"])
+        #expect(FileManager.default.fileExists(atPath: "\(root)/vol-1/volume.qcow2"))
+        #expect(FileManager.default.fileExists(atPath: "\(root)/vol-1/volume.qcow2.partial") == false)
         // The backend owns the layout: the volume directory must exist.
         #expect(FileManager.default.fileExists(atPath: "\(root)/vol-1"))
     }
@@ -329,10 +348,58 @@ struct FileSystemStorageBackendTests {
 
         #expect(attachment == DiskAttachment(path: "\(root)/vol-2/volume.qcow2", format: .qcow2))
         let convert = await recorder.invocations.first { $0.arguments.first == "convert" }
+        // Staged and renamed, like `createVolume`: a clone's target path is
+        // also a presence signal the reconciler reads (STR-148).
         #expect(
             convert?.arguments == [
-                "convert", "-f", "qcow2", "-O", "qcow2", sourcePath, "\(root)/vol-2/volume.qcow2",
+                "convert", "-f", "qcow2", "-O", "qcow2", sourcePath,
+                "\(root)/vol-2/volume.qcow2.partial",
             ])
+        #expect(FileManager.default.fileExists(atPath: "\(root)/vol-2/volume.qcow2"))
+    }
+
+    /// The invariant `listVolumes` rests on: presence means *complete*. A
+    /// directory a crashed create left behind is not a volume, so the next sync
+    /// re-drives it rather than reading a truncated disk as converged.
+    @Test func listVolumesReportsOnlyPublishedVolumes() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        let backend = makeBackend(root: root, recorder: recorder)
+
+        let published = UUID().uuidString
+        let halfWritten = UUID().uuidString
+        _ = try await backend.createVolume(volumeId: published, sizeBytes: 42, format: .qcow2)
+        try FileManager.default.createDirectory(
+            atPath: "\(root)/\(halfWritten)", withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: "\(root)/\(halfWritten)/volume.qcow2.partial", contents: Data("torn".utf8))
+        // A non-UUID directory cannot be named on the wire, so it can never be
+        // reconciled and is not reported.
+        try FileManager.default.createDirectory(
+            atPath: "\(root)/not-a-uuid", withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: "\(root)/not-a-uuid/volume.qcow2", contents: Data())
+
+        let listed = try await backend.listVolumes()
+        #expect(Set(listed.keys) == [published])
+        #expect(listed[published]?.format == .qcow2)
+        #expect(listed[published]?.path == "\(root)/\(published)/volume.qcow2")
+    }
+
+    /// Create is idempotent at the "already satisfied" level, which the
+    /// actuator contract requires: a level-triggered sync may re-drive a create
+    /// whose success report was lost.
+    @Test func createVolumeIsIdempotent() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        let backend = makeBackend(root: root, recorder: recorder)
+
+        _ = try await backend.createVolume(volumeId: "vol-1", sizeBytes: 42, format: .qcow2)
+        _ = try await backend.createVolume(volumeId: "vol-1", sizeBytes: 42, format: .qcow2)
+
+        let creates = await recorder.invocations.filter { $0.arguments.first == "create" }
+        #expect(creates.count == 1)
     }
 
     @Test func snapshotUsesDetectedBackingFormat() async throws {

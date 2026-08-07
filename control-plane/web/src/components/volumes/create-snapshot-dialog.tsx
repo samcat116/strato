@@ -43,9 +43,11 @@ export function CreateSnapshotDialog({
   const [description, setDescription] = useState("");
 
   // Detached volumes only: a snapshot of a volume a guest is still writing
-  // would not be point-in-time (issue #747), so the backend refuses it.
+  // would not be point-in-time (issue #747), so the backend refuses it. It
+  // additionally requires the volume settled (backend STR-148) — snapshotting
+  // one mid-create would copy a half-written file.
   const candidateVolumes = (volumes ?? []).filter(
-    (v) => v.id && v.status === "available"
+    (v) => v.id && !v.vmId && v.conditions.converged
   );
 
   const handleSubmit = async (e: React.FormEvent) => {

@@ -1,0 +1,379 @@
+import Testing
+import Foundation
+@testable import StratoAgentCore
+import StratoShared
+import Logging
+
+/// The invariants that make volumes safe as desired state (ADR 0001 stage 5,
+/// STR-148).
+///
+/// Three of these exist to pin arguments the PR text makes rather than
+/// behaviours anyone would think to write down: that a nil `volumes` field is
+/// not an empty desired list, that a create strategy is consulted exactly once
+/// in a volume's life, and that an attachment item holds two serial lanes.
+@Suite("Volume reconciliation")
+struct VolumeReconciliationTests {
+
+    // MARK: - Fixtures
+
+    private static func desired(
+        _ volumeId: UUID,
+        status: DesiredVolumeStatus = .present,
+        generation: Int64 = 1,
+        sizeBytes: Int64 = 10 << 30,
+        format: String = "qcow2",
+        source: DesiredVolumeSource? = nil,
+        attachment: DesiredVolumeAttachment? = nil
+    ) -> DesiredVolumeState {
+        DesiredVolumeState(
+            volumeId: volumeId,
+            desiredStatus: status,
+            generation: generation,
+            sizeBytes: sizeBytes,
+            format: format,
+            source: source,
+            attachment: attachment
+        )
+    }
+
+    private static func facts(
+        path: String = "/var/lib/strato/volumes/v/volume.qcow2",
+        format: DiskFormat = .qcow2,
+        sizeBytes: Int64? = 10 << 30,
+        attachedVMId: String? = nil,
+        deviceName: String? = nil
+    ) -> ObservedVolumeFacts {
+        ObservedVolumeFacts(
+            path: path, format: format, sizeBytes: sizeBytes,
+            attachedVMId: attachedVMId, deviceName: deviceName)
+    }
+
+    /// Actuator double that holds volumes and records the steps driven at them.
+    private actor MockVolumeActuator: ReconcileActuator {
+        var volumes: [String: VolumePresence]
+        private(set) var performed: [(step: ReconcileStep, id: String)] = []
+        private(set) var reportCount = 0
+
+        init(volumes: [String: VolumePresence] = [:]) {
+            self.volumes = volumes
+        }
+
+        func observedPresence() -> [String: VMPresence] { [:] }
+        func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
+        func observedVolumePresence() -> [String: VolumePresence] { volumes }
+
+        func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
+            performed.append((step, item.id))
+            guard let desired = item.desiredVolume else { return }
+            switch step {
+            case .create:
+                volumes[item.id] = .managed(
+                    ObservedVolumeFacts(
+                        path: "/var/lib/strato/volumes/\(item.id)/volume.\(desired.format)",
+                        format: DiskFormat(rawValue: desired.format) ?? .qcow2,
+                        sizeBytes: desired.sizeBytes))
+            case .resize:
+                guard case .managed(let current)? = volumes[item.id] else { return }
+                volumes[item.id] = .managed(
+                    ObservedVolumeFacts(
+                        path: current.path, format: current.format, sizeBytes: desired.sizeBytes,
+                        attachedVMId: current.attachedVMId, deviceName: current.deviceName))
+            case .attach:
+                guard case .managed(let current)? = volumes[item.id],
+                    let attachment = desired.attachment
+                else { return }
+                volumes[item.id] = .managed(
+                    ObservedVolumeFacts(
+                        path: current.path, format: current.format, sizeBytes: current.sizeBytes,
+                        attachedVMId: attachment.vmId.uuidString, deviceName: attachment.deviceName))
+            case .detach:
+                guard case .managed(let current)? = volumes[item.id] else { return }
+                volumes[item.id] = .managed(
+                    ObservedVolumeFacts(
+                        path: current.path, format: current.format, sizeBytes: current.sizeBytes))
+            case .delete:
+                volumes.removeValue(forKey: item.id)
+            case .adopt, .boot, .pause, .resume, .shutdown:
+                break
+            }
+        }
+
+        func convergenceDidChange() { reportCount += 1 }
+    }
+
+    private static func reconciler(_ actuator: MockVolumeActuator) -> Reconciler {
+        Reconciler(actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+    }
+
+    private static func sync(
+        volumes: [DesiredVolumeState]?, tombstones: [DesiredWorkloadTombstone] = []
+    ) -> DesiredStateMessage {
+        DesiredStateMessage(vms: [], tombstones: tombstones, volumes: volumes)
+    }
+
+    // MARK: - The diff
+
+    @Test("A volume the host does not hold is created")
+    func absentVolumeIsCreated() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id)], present: [:], lastApplied: [:])
+        #expect(plan.items.count == 1)
+        #expect(plan.items[0].kind == .volume)
+        #expect(plan.items[0].steps == [.create])
+    }
+
+    @Test("A volume that already matches plans nothing")
+    func matchingVolumePlansNothing() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id)],
+            present: [id.uuidString: .managed(Self.facts())],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.isEmpty)
+    }
+
+    @Test("A volume smaller than its desired size is grown")
+    func undersizedVolumeIsResized() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id, sizeBytes: 20 << 30)],
+            present: [id.uuidString: .managed(Self.facts(sizeBytes: 10 << 30))],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.resize])
+    }
+
+    /// A size the agent could not probe plans nothing, rather than a resize on
+    /// a guess: leaving an unreadable volume alone beats growing it repeatedly.
+    @Test("An unprobeable size plans no resize")
+    func unknownSizePlansNoResize() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id, sizeBytes: 20 << 30)],
+            present: [id.uuidString: .managed(Self.facts(sizeBytes: nil))],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.isEmpty)
+    }
+
+    @Test("A volume whose desired attachment is unrealized is attached")
+    func detachedVolumeIsAttached() {
+        let id = UUID()
+        let vmId = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [
+                Self.desired(
+                    id, attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: "disk1"))
+            ],
+            present: [id.uuidString: .managed(Self.facts())],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.attach])
+    }
+
+    /// Moving an attachment is two syncs, not one: the volume is unplugged
+    /// first, and the next level-triggered sync plans the attach against the
+    /// observation that follows.
+    @Test("A volume attached to the wrong VM is detached first")
+    func misattachedVolumeIsDetachedFirst() {
+        let id = UUID()
+        let wanted = UUID()
+        let actual = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [
+                Self.desired(
+                    id, attachment: DesiredVolumeAttachment(vmId: wanted, deviceName: "disk1"))
+            ],
+            present: [
+                id.uuidString: .managed(
+                    Self.facts(attachedVMId: actual.uuidString, deviceName: "disk1"))
+            ],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.detach])
+    }
+
+    @Test("An absent desired volume the host still holds is deleted")
+    func absentDesiredVolumeIsDeleted() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id, status: .absent, generation: 2)],
+            present: [id.uuidString: .managed(Self.facts())],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.delete])
+    }
+
+    /// The generation guard, inherited wholesale from the shared diff engine.
+    @Test("A stale volume entry is dropped")
+    func staleVolumeEntryIsDropped() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id, status: .absent, generation: 1)],
+            present: [id.uuidString: .managed(Self.facts())],
+            lastApplied: [id.uuidString: 5])
+        #expect(plan.items.isEmpty)
+    }
+
+    @Test("A volume the sync neither lists nor tombstones is held and reported")
+    func unlistedVolumeIsHeld() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [], present: [id.uuidString: .managed(Self.facts())], lastApplied: [:])
+        #expect(plan.items.isEmpty)
+        #expect(plan.unrecognized.count == 1)
+        #expect(plan.unrecognized[0].kind == .volume)
+        #expect(plan.unrecognized[0].workloadId == id)
+    }
+
+    @Test("A tombstoned volume is torn down")
+    func tombstonedVolumeIsDeleted() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [],
+            present: [id.uuidString: .managed(Self.facts())],
+            lastApplied: [:],
+            tombstones: [DesiredWorkloadTombstone(kind: .volume, workloadId: id, generation: 1)])
+        #expect(plan.items.first?.steps == [.delete])
+        #expect(plan.items.first?.isTombstone == true)
+        #expect(plan.unrecognized.isEmpty)
+    }
+
+    // MARK: - Create strategies
+
+    /// The `restoreFrom` invariant applied to clones: a create strategy is read
+    /// only when the volume is *absent*, so a replayed or re-driven sync can
+    /// never re-clone over live data.
+    @Test("A clone source is ignored once the volume exists")
+    func cloneSourceIsIgnoredForAnExistingVolume() async {
+        let id = UUID()
+        let sourceId = UUID()
+        let actuator = MockVolumeActuator(volumes: [id.uuidString: .managed(Self.facts())])
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync(volumes: [Self.desired(id, generation: 7, source: .clone(from: sourceId))]),
+            includeVolumes: true)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await actuator.performed.isEmpty)
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volume) == 7)
+    }
+
+    @Test("A clone source drives the create of a volume the host lacks")
+    func cloneSourceDrivesCreate() async {
+        let id = UUID()
+        let actuator = MockVolumeActuator()
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync(volumes: [Self.desired(id, source: .clone(from: UUID()))]),
+            includeVolumes: true)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await actuator.performed.map(\.step) == [.create])
+    }
+
+    // MARK: - Permanent vs transient failures
+
+    @Test("A shrink and an unknown format are permanent, a missing dependency is not")
+    func failureClassifications() {
+        #expect(VolumeConvergenceError.unsupported("shrink").failureClassification == .permanent)
+        #expect(
+            VolumeConvergenceError.sourceNotReady("vm not here").failureClassification
+                == .waitingOnDependency)
+    }
+
+    // MARK: - Lanes
+
+    /// An attachment item holds the volume's lane *and* the VM's, reproducing
+    /// what `MessageEnvelope.serializationKeys` gave the imperative
+    /// `volume_attach` frame. Without the VM lane, a hot-plug could race that
+    /// VM's own create or delete.
+    @Test("An attachment item holds both the volume and the VM lane")
+    func attachmentItemHoldsTwoLanes() {
+        let id = UUID()
+        let vmId = UUID()
+        let item = ReconcileWorkItem(
+            kind: .volume, id: id.uuidString, generation: 1, steps: [.attach],
+            target: .volume(
+                Self.desired(id, attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: "disk1"))))
+        #expect(item.laneKeys == ["volume/" + id.uuidString, vmId.uuidString])
+    }
+
+    @Test("A data-plane item holds only the volume lane")
+    func dataPlaneItemHoldsOneLane() {
+        let id = UUID()
+        let item = ReconcileWorkItem(
+            kind: .volume, id: id.uuidString, generation: 1, steps: [.create],
+            target: .volume(Self.desired(id)))
+        #expect(item.laneKeys == ["volume/" + id.uuidString])
+    }
+
+    // MARK: - The asymmetric-absence guard
+
+    /// The headline safety property of the whole conversion. A control plane
+    /// that says nothing about volumes — one below wire v30, or one mid-rollback
+    /// — must leave every volume on the host exactly where it is. Planning
+    /// against an empty desired list instead would report all of them as
+    /// unaccounted for and invite a future reading of that silence as teardown.
+    @Test("A sync with no volumes field touches nothing and reports nothing")
+    func nilVolumesFieldIsNotAnEmptyDesiredList() async {
+        let id = UUID()
+        let actuator = MockVolumeActuator(volumes: [id.uuidString: .managed(Self.facts())])
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(Self.sync(volumes: nil), includeVolumes: true)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await actuator.performed.isEmpty)
+        #expect(await actuator.volumes.count == 1)
+        #expect(await reconciler.unrecognizedWorkloads().isEmpty)
+    }
+
+    /// The version gate is belt to the field's braces: even a payload that
+    /// *does* carry volumes is ignored when the sender is too old to have meant
+    /// it, matching how the sandbox half is gated.
+    @Test("A pre-v30 sender's volumes are ignored even when present")
+    func versionGateSuppressesTheVolumeHalf() async {
+        let id = UUID()
+        let actuator = MockVolumeActuator(volumes: [id.uuidString: .managed(Self.facts())])
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync(volumes: [Self.desired(id, status: .absent, generation: 9)]),
+            includeVolumes: false)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        #expect(await actuator.performed.isEmpty)
+        #expect(await actuator.volumes.count == 1)
+    }
+
+    // MARK: - End to end through the actor
+
+    @Test("A create converges and advances the applied generation")
+    func createConverges() async {
+        let id = UUID()
+        let actuator = MockVolumeActuator()
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(Self.sync(volumes: [Self.desired(id)]), includeVolumes: true)
+        try? await Task.sleep(for: .milliseconds(100))
+
+        #expect(await actuator.performed.map(\.step) == [.create])
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volume) == 1)
+        #expect(await reconciler.lastError(for: id.uuidString, kind: .volume) == nil)
+    }
+
+    /// Generations are namespaced by kind, so a VM and a volume that happen to
+    /// share a UUID never share bookkeeping.
+    @Test("Volume generations are tracked separately from VM generations")
+    func generationsAreNamespacedByKind() async {
+        let id = UUID()
+        let actuator = MockVolumeActuator()
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(
+            Self.sync(volumes: [Self.desired(id, generation: 3)]), includeVolumes: true)
+        try? await Task.sleep(for: .milliseconds(100))
+
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volume) == 3)
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .vm) == 0)
+    }
+}

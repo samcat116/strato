@@ -142,6 +142,14 @@ actor Agent {
     private var managedSandboxes: [String: VMManifestEntry] = [:]
     private var orphanedSandboxes: [String: VMManifestEntry] = [:]
 
+    // Virtual size per volume, so the reconciler can tell a volume that needs
+    // growing from one that is already the size the sync asks for (STR-148).
+    // In memory only, and deliberately: it is a cache of something the storage
+    // backend can always re-derive, and paying one `qemu-img info` per volume
+    // once per agent lifetime is cheaper than persisting a second source of
+    // truth that could drift from the disk.
+    private var volumeSizes: [String: Int64] = [:]
+
     // Sandbox exec/attach bridging and workload log shipping (issue #423).
     // The runtime's callbacks yield into these streams *synchronously*, so
     // per-session event order and per-sandbox line order survive the hop out
@@ -2159,8 +2167,14 @@ extension Agent {
                 // control plane older than the sandbox protocol (v5) omits
                 // `sandboxes` (decoded as []), which must not be mistaken for
                 // an authoritative "this host should have no sandboxes".
+                // Volumes carry the same gate, plus a stricter one inside
+                // `apply`: a nil `volumes` field skips the half whatever the
+                // version says, because misreading silence there destroys the
+                // only copy of user data (STR-148).
                 await reconciler?.apply(
-                    message, includeSandboxes: WireProtocol.supportsSandboxSync(envelope.senderVersion))
+                    message,
+                    includeSandboxes: WireProtocol.supportsSandboxSync(envelope.senderVersion),
+                    includeVolumes: WireProtocol.supportsVolumeSync(envelope.senderVersion))
                 // Declarative agent self-update (issue #434), after the
                 // reconciler so freshly enqueued work items are visible to the
                 // precondition gate — the update only runs on a sync that
@@ -2201,31 +2215,15 @@ extension Agent {
             case .sandboxSnapshotExport:
                 let message = try envelope.decode(as: SandboxSnapshotExportMessage.self)
                 await handleSandboxSnapshotExport(message)
-            // Volume operations
-            case .volumeCreate:
-                let message = try envelope.decode(as: VolumeCreateMessage.self)
-                await handleVolumeCreate(message)
-            case .volumeDelete:
-                let message = try envelope.decode(as: VolumeDeleteMessage.self)
-                await handleVolumeDelete(message)
-            case .volumeAttach:
-                let message = try envelope.decode(as: VolumeAttachMessage.self)
-                await handleVolumeAttach(message)
-            case .volumeDetach:
-                let message = try envelope.decode(as: VolumeDetachMessage.self)
-                await handleVolumeDetach(message)
-            case .volumeResize:
-                let message = try envelope.decode(as: VolumeResizeMessage.self)
-                await handleVolumeResize(message)
+            // Volume operations. Create/delete/attach/detach/resize/clone are
+            // desired state since wire v30 (STR-148); what remains here is the
+            // artifact verbs (ADR stage 8) and the read (stage 7).
             case .volumeSnapshot:
                 let message = try envelope.decode(as: VolumeSnapshotMessage.self)
                 await handleVolumeSnapshot(message)
             case .volumeSnapshotDelete:
                 let message = try envelope.decode(as: VolumeSnapshotDeleteMessage.self)
                 await handleVolumeSnapshotDelete(message)
-            case .volumeClone:
-                let message = try envelope.decode(as: VolumeCloneMessage.self)
-                await handleVolumeClone(message)
             case .volumeInfo:
                 let message = try envelope.decode(as: VolumeInfoMessage.self)
                 await handleVolumeInfo(message)
@@ -3165,225 +3163,6 @@ extension Agent {
 
     // MARK: - Volume Message Handlers
 
-    private func handleVolumeCreate(_ message: VolumeCreateMessage) async {
-        logger.info(
-            "Creating volume",
-            metadata: [
-                "volumeId": .string(message.volumeId),
-                "size": .stringConvertible(message.size),
-                "format": .string(message.format),
-            ])
-
-        guard let storageBackend = storageBackend else {
-            await sendError(for: message.requestId, error: "Storage backend not available")
-            return
-        }
-
-        guard let format = DiskFormat(rawValue: message.format) else {
-            await sendError(for: message.requestId, error: "Unsupported volume format: \(message.format)")
-            return
-        }
-
-        do {
-            let attachment: DiskAttachment
-            if let imageInfo = message.sourceImageInfo {
-                // Create volume from image (format-conversion aware)
-                attachment = try await storageBackend.createVolumeFromImage(
-                    volumeId: message.volumeId, imageInfo: imageInfo, format: format)
-            } else {
-                // Create empty volume
-                attachment = try await storageBackend.createVolume(
-                    volumeId: message.volumeId, sizeBytes: message.size, format: format)
-            }
-            let volumePath = attachment.path
-
-            let response = VolumeStatusResponse(
-                volumeId: message.volumeId,
-                status: "available",
-                storagePath: volumePath
-            )
-            let data = try AnyCodableValue(response)
-            await sendSuccess(for: message.requestId, message: "Volume created successfully", data: data)
-            logger.info(
-                "Volume created successfully",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "path": .string(volumePath),
-                ])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to create volume: \(error.localizedDescription)")
-            logger.error(
-                "Failed to create volume",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
-    private func handleVolumeDelete(_ message: VolumeDeleteMessage) async {
-        logger.info(
-            "Deleting volume",
-            metadata: [
-                "volumeId": .string(message.volumeId)
-            ])
-
-        guard let storageBackend = storageBackend else {
-            await sendError(for: message.requestId, error: "Storage backend not available")
-            return
-        }
-
-        do {
-            try await storageBackend.deleteVolume(volumeId: message.volumeId)
-            await sendSuccess(for: message.requestId, message: "Volume deleted successfully")
-            logger.info("Volume deleted successfully", metadata: ["volumeId": .string(message.volumeId)])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to delete volume: \(error.localizedDescription)")
-            logger.error(
-                "Failed to delete volume",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
-    private func handleVolumeAttach(_ message: VolumeAttachMessage) async {
-        logger.info(
-            "Attaching volume to VM (hot-plug)",
-            metadata: [
-                "volumeId": .string(message.volumeId),
-                "vmId": .string(message.vmId),
-                "deviceName": .string(message.deviceName),
-                "volumePath": .string(message.volumePath),
-            ])
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            return
-        }
-
-        do {
-            try await service.attachDisk(
-                vmId: message.vmId,
-                volumeId: message.volumeId,
-                volumePath: message.volumePath,
-                deviceName: message.deviceName,
-                readonly: message.readonly
-            )
-
-            let response = VolumeStatusResponse(
-                volumeId: message.volumeId,
-                status: "attached",
-                storagePath: message.volumePath
-            )
-            let data = try AnyCodableValue(response)
-            await sendSuccess(for: message.requestId, message: "Volume attached successfully", data: data)
-            logger.info(
-                "Volume attached successfully (hot-plug)",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "vmId": .string(message.vmId),
-                    "deviceName": .string(message.deviceName),
-                ])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to attach volume: \(error.localizedDescription)")
-            logger.error(
-                "Failed to attach volume (hot-plug)",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "vmId": .string(message.vmId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
-    private func handleVolumeDetach(_ message: VolumeDetachMessage) async {
-        logger.info(
-            "Detaching volume from VM (hot-unplug)",
-            metadata: [
-                "volumeId": .string(message.volumeId),
-                "vmId": .string(message.vmId),
-                "deviceName": .string(message.deviceName),
-            ])
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            return
-        }
-
-        do {
-            try await service.detachDisk(
-                vmId: message.vmId,
-                volumeId: message.volumeId,
-                deviceName: message.deviceName
-            )
-
-            let response = VolumeStatusResponse(
-                volumeId: message.volumeId,
-                status: "available",
-                storagePath: nil
-            )
-            let data = try AnyCodableValue(response)
-            await sendSuccess(for: message.requestId, message: "Volume detached successfully", data: data)
-            logger.info(
-                "Volume detached successfully (hot-unplug)",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "vmId": .string(message.vmId),
-                ])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to detach volume: \(error.localizedDescription)")
-            logger.error(
-                "Failed to detach volume (hot-unplug)",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "vmId": .string(message.vmId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
-    private func handleVolumeResize(_ message: VolumeResizeMessage) async {
-        logger.info(
-            "Resizing volume",
-            metadata: [
-                "volumeId": .string(message.volumeId),
-                "newSize": .stringConvertible(message.newSize),
-            ])
-
-        guard let storageBackend = storageBackend else {
-            await sendError(for: message.requestId, error: "Storage backend not available")
-            return
-        }
-
-        do {
-            try await storageBackend.resizeVolume(volumePath: message.volumePath, newSizeBytes: message.newSize)
-
-            let response = VolumeStatusResponse(
-                volumeId: message.volumeId,
-                status: "available",
-                storagePath: message.volumePath
-            )
-            let data = try AnyCodableValue(response)
-            await sendSuccess(for: message.requestId, message: "Volume resized successfully", data: data)
-            logger.info(
-                "Volume resized successfully",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "newSize": .stringConvertible(message.newSize),
-                ])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to resize volume: \(error.localizedDescription)")
-            logger.error(
-                "Failed to resize volume",
-                metadata: [
-                    "volumeId": .string(message.volumeId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
     private func handleVolumeSnapshot(_ message: VolumeSnapshotMessage) async {
         logger.info(
             "Creating volume snapshot",
@@ -3490,52 +3269,6 @@ extension Agent {
                 metadata: [
                     "volumeId": .string(message.volumeId),
                     "snapshotId": .string(message.snapshotId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
-    private func handleVolumeClone(_ message: VolumeCloneMessage) async {
-        logger.info(
-            "Cloning volume",
-            metadata: [
-                "sourceVolumeId": .string(message.sourceVolumeId),
-                "targetVolumeId": .string(message.targetVolumeId),
-            ])
-
-        guard let storageBackend = storageBackend else {
-            await sendError(for: message.requestId, error: "Storage backend not available")
-            return
-        }
-
-        do {
-            let targetPath = try await storageBackend.cloneVolume(
-                sourceVolumeId: message.sourceVolumeId,
-                sourcePath: message.sourceVolumePath,
-                targetVolumeId: message.targetVolumeId
-            ).path
-
-            let response = VolumeStatusResponse(
-                volumeId: message.targetVolumeId,
-                status: "available",
-                storagePath: targetPath
-            )
-            let data = try AnyCodableValue(response)
-            await sendSuccess(for: message.requestId, message: "Volume cloned successfully", data: data)
-            logger.info(
-                "Volume cloned successfully",
-                metadata: [
-                    "sourceVolumeId": .string(message.sourceVolumeId),
-                    "targetVolumeId": .string(message.targetVolumeId),
-                    "targetPath": .string(targetPath),
-                ])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to clone volume: \(error.localizedDescription)")
-            logger.error(
-                "Failed to clone volume",
-                metadata: [
-                    "sourceVolumeId": .string(message.sourceVolumeId),
-                    "targetVolumeId": .string(message.targetVolumeId),
                     "error": .string(error.localizedDescription),
                 ])
         }
@@ -3731,7 +3464,93 @@ extension Agent: ReconcileActuator {
         return status
     }
 
+    /// Every volume whose data this host holds, with the attachment the agent
+    /// durably records for it (STR-148).
+    ///
+    /// Presence comes from the storage backend's own inventory — a volume is a
+    /// file, so there is nothing to adopt and every entry is `.managed`.
+    /// Attachment comes from the VM manifest entries, *not* from a live
+    /// hypervisor query: a powered-off guest has no device list, and reading
+    /// that silence as "detached" would plan an attach against a dead control
+    /// channel on every sync.
+    func observedVolumePresence() async -> [String: VolumePresence] {
+        guard let storageBackend else { return [:] }
+        let inventory: [String: DiskAttachment]
+        do {
+            inventory = try await storageBackend.listVolumes()
+        } catch {
+            // Reporting an empty inventory would make the sync plan a create
+            // for every volume the control plane wants here. Reporting nothing
+            // at all is the safe failure: the reconciler skips this round and
+            // the next level-triggered sync tries again.
+            logger.error(
+                "Failed to list volumes; skipping volume convergence this sync",
+                metadata: ["error": .string(error.localizedDescription)])
+            return [:]
+        }
+
+        let attachments = recordedVolumeAttachments()
+        var presence: [String: VolumePresence] = [:]
+        for (volumeId, disk) in inventory {
+            let attachment = attachments[volumeId]
+            presence[volumeId] = .managed(
+                ObservedVolumeFacts(
+                    path: disk.path,
+                    format: disk.format,
+                    sizeBytes: await volumeVirtualSize(volumeId: volumeId, path: disk.path),
+                    attachedVMId: attachment?.vmId,
+                    deviceName: attachment?.deviceName))
+        }
+        // Sizes for volumes that no longer exist would leak across a long
+        // uptime; the inventory is authoritative, so prune to it.
+        volumeSizes = volumeSizes.filter { inventory[$0.key] != nil }
+        return presence
+    }
+
+    /// Which VM each volume is plugged into, from the VM manifest entries'
+    /// `spec.volumes` — the durable attachment record. Orphans are included:
+    /// their disks are still presented to a process this agent has not
+    /// re-adopted yet, so reporting them detached would plan a duplicate
+    /// attach.
+    private func recordedVolumeAttachments() -> [String: (vmId: String, deviceName: String)] {
+        var attachments: [String: (vmId: String, deviceName: String)] = [:]
+        for (vmId, entry) in managedVMs.merging(orphanedVMs, uniquingKeysWith: { managed, _ in managed }) {
+            for volume in entry.spec.volumes {
+                guard let volumeId = volume.volumeId?.uuidString else { continue }
+                attachments[volumeId] = (vmId: vmId, deviceName: volume.deviceName)
+            }
+        }
+        return attachments
+    }
+
+    /// A volume's virtual size, cached in memory.
+    ///
+    /// Every write path records the size it produced, so the steady state runs
+    /// no subprocess at all; the probe below only fires for a volume this
+    /// process has not seen written — one created by a previous incarnation of
+    /// the agent — and then once per volume, not once per sync. A probe that
+    /// fails yields nil, which plans no resize: leaving an unreadable volume
+    /// alone beats growing it repeatedly on a guess.
+    private func volumeVirtualSize(volumeId: String, path: String) async -> Int64? {
+        if let cached = volumeSizes[volumeId] { return cached }
+        guard let storageBackend else { return nil }
+        do {
+            let info = try await storageBackend.volumeInfo(volumePath: path)
+            volumeSizes[volumeId] = info.virtualSize
+            return info.virtualSize
+        } catch {
+            logger.debug(
+                "Could not read volume size; leaving its size unconverged",
+                metadata: ["volumeId": .string(volumeId), "error": .string(error.localizedDescription)])
+            return nil
+        }
+    }
+
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        if item.kind == .volume {
+            try await performVolume(step, item: item)
+            return
+        }
         if item.kind == .sandbox {
             try await performSandbox(step, item: item)
             return
@@ -3755,11 +3574,237 @@ extension Agent: ReconcileActuator {
             try await reconcileService(for: item.vmId).shutdownVM(vmId: item.vmId)
         case .delete:
             try await reconcileDelete(item)
+        case .attach, .detach:
+            // Volume-only steps; `item.kind == .volume` was handled above and
+            // the planner never emits these for a VM or sandbox.
+            throw HypervisorServiceError.invalidConfiguration(
+                "step \(step) is not applicable to a \(item.kind.rawValue) workload")
         }
     }
 
     func convergenceDidChange() async {
         await sendObservedStateReport()
+    }
+
+    // MARK: - Volume convergence
+
+    private func performVolume(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
+        switch step {
+        case .create:
+            try await volumeReconcileCreate(item)
+        case .resize:
+            try await volumeReconcileResize(item)
+        case .delete:
+            try await volumeReconcileDelete(item)
+        case .attach:
+            try await volumeReconcileAttach(item)
+        case .detach:
+            try await volumeReconcileDetach(item)
+        case .adopt, .boot, .pause, .resume, .shutdown:
+            // A volume has no run state; the planner never emits these.
+            throw VolumeConvergenceError.unsupported("step \(step) is not applicable to a volume")
+        }
+    }
+
+    private func requireStorageBackend() throws -> any StorageBackend {
+        guard let storageBackend else {
+            // A host with no storage backend can never grow one by retrying,
+            // and the control plane only places volumes on QEMU-capable agents,
+            // so this is a misconfiguration to surface rather than retry.
+            throw VolumeConvergenceError.unsupported("storage backend not available on this agent")
+        }
+        return storageBackend
+    }
+
+    private func volumeReconcileCreate(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desiredVolume else {
+            throw VolumeConvergenceError.unsupported("volume create requires a desired entry")
+        }
+        guard let format = DiskFormat(rawValue: desired.format) else {
+            throw VolumeConvergenceError.unsupported("unsupported volume format '\(desired.format)'")
+        }
+        let backend = try requireStorageBackend()
+
+        // The create strategy is read only here, when the volume does not yet
+        // exist. A present volume never re-runs it, which is what makes a
+        // replayed sync unable to clone over live data.
+        let attachment: DiskAttachment
+        switch desired.source?.kind {
+        case DesiredVolumeSource.clone:
+            guard let sourceId = desired.source?.sourceVolumeId?.uuidString else {
+                throw VolumeConvergenceError.unsupported("clone source volume id missing")
+            }
+            // The control plane guarantees the source is on this agent, so the
+            // path comes from our own inventory rather than the wire.
+            guard let source = try await backend.listVolumes()[sourceId] else {
+                // Genuinely a dependency, not a failure: the source may still
+                // be converging earlier in this same sync.
+                throw VolumeConvergenceError.sourceNotReady(
+                    "source volume \(sourceId) is not present on this agent yet")
+            }
+            attachment = try await backend.cloneVolume(
+                sourceVolumeId: sourceId, sourcePath: source.path, targetVolumeId: item.id)
+        case DesiredVolumeSource.image:
+            guard let imageInfo = desired.source?.imageInfo else {
+                throw VolumeConvergenceError.unsupported("image create strategy carries no image info")
+            }
+            attachment = try await backend.createVolumeFromImage(
+                volumeId: item.id, imageInfo: imageInfo, format: format)
+        default:
+            attachment = try await backend.createVolume(
+                volumeId: item.id, sizeBytes: desired.sizeBytes, format: format)
+        }
+
+        // A cloned or image-backed volume inherits the source's size, which may
+        // be smaller than what was asked for; the next sync plans the grow.
+        volumeSizes[item.id] = try? await backend.volumeInfo(volumePath: attachment.path).virtualSize
+        logger.info(
+            "Volume converged into existence",
+            metadata: [
+                "volumeId": .string(item.id),
+                "path": .string(attachment.path),
+                "strategy": .string(desired.source?.kind ?? DesiredVolumeSource.blank),
+            ])
+    }
+
+    private func volumeReconcileResize(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desiredVolume else {
+            throw VolumeConvergenceError.unsupported("volume resize requires a desired entry")
+        }
+        let backend = try requireStorageBackend()
+        guard let disk = try await backend.listVolumes()[item.id] else {
+            throw VolumeConvergenceError.sourceNotReady("volume \(item.id) is not present on this agent")
+        }
+        let current = try await backend.volumeInfo(volumePath: disk.path).virtualSize
+        guard desired.sizeBytes >= current else {
+            // Shrinking a disk image truncates the guest's filesystem. There is
+            // no retry that makes this safe, so it is permanent: the control
+            // plane surfaces it as a degraded volume instead of a convergence
+            // that quietly never finishes.
+            throw VolumeConvergenceError.unsupported(
+                "refusing to shrink volume \(item.id) from \(current) to \(desired.sizeBytes) bytes")
+        }
+        if desired.sizeBytes > current {
+            try await backend.resizeVolume(volumePath: disk.path, newSizeBytes: desired.sizeBytes)
+        }
+        volumeSizes[item.id] = desired.sizeBytes
+    }
+
+    private func volumeReconcileDelete(_ item: ReconcileWorkItem) async throws {
+        let backend = try requireStorageBackend()
+        // Unplug before removing the bytes, or a running guest keeps an open
+        // handle on a file that no longer exists. Best effort: a VM that is
+        // already gone leaves nothing to unplug.
+        if let attachment = recordedVolumeAttachments()[item.id] {
+            try? await detachVolumeFromVM(
+                volumeId: item.id, vmId: attachment.vmId, deviceName: attachment.deviceName)
+        }
+        try await backend.deleteVolume(volumeId: item.id)
+        volumeSizes.removeValue(forKey: item.id)
+        logger.info("Volume removed from this host", metadata: ["volumeId": .string(item.id)])
+    }
+
+    private func volumeReconcileAttach(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desiredVolume, let attachment = desired.attachment else {
+            throw VolumeConvergenceError.unsupported("volume attach requires a desired attachment")
+        }
+        let backend = try requireStorageBackend()
+        guard let disk = try await backend.listVolumes()[item.id] else {
+            throw VolumeConvergenceError.sourceNotReady("volume \(item.id) is not present on this agent")
+        }
+        let vmId = attachment.vmId.uuidString
+        guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else {
+            // The VM has not been created on this host yet — only ever a race
+            // against its own convergence, since the control plane never sends
+            // an attachment for a VM placed elsewhere. Classified as a
+            // dependency so it burns no attempt and produces no error the
+            // control plane would show an operator.
+            throw VolumeConvergenceError.sourceNotReady(
+                "VM \(vmId) is not present on this agent yet")
+        }
+
+        // Record first, then hot-plug. A crash in between leaves a recorded
+        // attachment whose hot-plug the next sync re-drives (idempotently);
+        // the other order would leave a plugged device nothing remembers, and
+        // the guest would lose it at its next power cycle.
+        let spec = VolumeSpec(
+            volumeId: UUID(uuidString: item.id),
+            deviceName: attachment.deviceName,
+            storagePath: disk.path,
+            readonly: attachment.readonly,
+            bootOrder: attachment.bootOrder)
+        await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
+
+        // A VM with no live hypervisor session (shut down, or an orphan not yet
+        // re-adopted) needs no QMP at all: the record *is* the realization,
+        // because the spawn path rebuilds its disk set from the manifest.
+        guard let service = getHypervisorServiceForVM(vmId: vmId), await service.hasLiveSession(vmId: vmId) else {
+            logger.info(
+                "Recorded volume attachment for a VM with no live session; it lands at its next boot",
+                metadata: ["volumeId": .string(item.id), "vmId": .string(vmId)])
+            return
+        }
+        try await service.attachDisk(
+            vmId: vmId, volumeId: item.id, volumePath: disk.path,
+            deviceName: attachment.deviceName, readonly: attachment.readonly)
+    }
+
+    private func volumeReconcileDetach(_ item: ReconcileWorkItem) async throws {
+        guard let attachment = recordedVolumeAttachments()[item.id] else { return }
+        try await detachVolumeFromVM(
+            volumeId: item.id, vmId: attachment.vmId, deviceName: attachment.deviceName)
+    }
+
+    private func detachVolumeFromVM(volumeId: String, vmId: String, deviceName: String) async throws {
+        // Unplug first, then drop the record: the inverse order of attach, and
+        // for the inverse reason. A crash between the two leaves a record for a
+        // device that is already gone, which the next sync's detach clears
+        // idempotently; dropping the record first would strand a plugged device
+        // nothing describes.
+        if let service = getHypervisorServiceForVM(vmId: vmId), await service.hasLiveSession(vmId: vmId) {
+            try await service.detachDisk(vmId: vmId, volumeId: volumeId, deviceName: deviceName)
+        }
+        guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else { return }
+        let remaining = entry.spec.volumes.filter { $0.volumeId?.uuidString != volumeId }
+        let updated = VMManifestEntry(
+            hypervisorType: entry.hypervisorType, spec: entry.spec.withVolumes(remaining))
+        if managedVMs[vmId] != nil {
+            managedVMs[vmId] = updated
+        } else {
+            orphanedVMs[vmId] = updated
+        }
+        persistManifest()
+        if let service = getHypervisorServiceForVM(vmId: vmId) {
+            await service.updateRecordedVolumes(vmId: vmId, volumes: remaining)
+        }
+    }
+
+    /// Writes an attachment into the VM's manifest entry and into the driver's
+    /// stored spawn configuration, so it survives both a guest power cycle
+    /// (which respawns from that configuration) and an agent restart (which
+    /// reloads the manifest).
+    private func recordVolumeAttachment(_ spec: VolumeSpec, onVM vmId: String, entry: VMManifestEntry) async {
+        var volumes = entry.spec.volumes.filter { $0.volumeId != spec.volumeId }
+        volumes.append(spec)
+        volumes.sort { lhs, rhs in
+            switch (lhs.bootOrder, rhs.bootOrder) {
+            case (let a?, let b?): return a < b
+            case (nil, _?): return false
+            case (_?, nil): return true
+            case (nil, nil): return lhs.deviceName < rhs.deviceName
+            }
+        }
+        let updated = VMManifestEntry(
+            hypervisorType: entry.hypervisorType, spec: entry.spec.withVolumes(volumes))
+        if managedVMs[vmId] != nil {
+            managedVMs[vmId] = updated
+        } else {
+            orphanedVMs[vmId] = updated
+        }
+        persistManifest()
+        if let service = getHypervisorServiceForVM(vmId: vmId) {
+            await service.updateRecordedVolumes(vmId: vmId, volumes: volumes)
+        }
     }
 
     private func reconcileService(for vmId: String) throws -> any HypervisorService {
@@ -3940,7 +3985,7 @@ extension Agent: ReconcileActuator {
             try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
         case .delete:
             try await sandboxReconcileDelete(item)
-        case .pause, .resume, .resize:
+        case .pause, .resume, .resize, .attach, .detach:
             // Not in the sandbox step vocabulary (v1); the planner never
             // emits these for sandbox items.
             throw SandboxRuntimeError.unsupportedStep(String(describing: step))
@@ -4163,7 +4208,12 @@ extension Agent: ReconcileActuator {
             // They also appear above — the agent is genuinely running them —
             // and stay there until the control plane decides what they are.
             unrecognized: await reconciler.unrecognizedWorkloads(),
-            teardownRefusal: await reconciler.lastTeardownRefusal()
+            teardownRefusal: await reconciler.lastTeardownRefusal(),
+            // Always a list, never nil: this agent speaks volume sync, so an
+            // empty list is the honest "I hold no volumes" the control plane
+            // needs to confirm deletions. Nil is reserved for agents that
+            // cannot answer the question at all (STR-148).
+            volumes: await observedVolumeStates(reconciler: reconciler)
         )
         // A newer report started while this one was assembling — which is
         // exactly what happens when this one overran its budget and was
@@ -4263,6 +4313,67 @@ extension Agent: ReconcileActuator {
                     sandboxId: uuid,
                     status: .unknown,
                     observedGeneration: await reconciler.observedGeneration(for: sandboxId, kind: .sandbox),
+                    convergencePhase: nil,
+                    lastError: failure.error,
+                    failedGeneration: failure.generation
+                ))
+        }
+
+        return observed
+    }
+
+    /// Every volume this host holds, plus the ones still converging toward
+    /// first existence or failed with no bytes at all (STR-148).
+    ///
+    /// Full-list, like `vms`: the control plane confirms a deletion by this
+    /// list *omitting* the volume, so the in-flight and failed entries below
+    /// matter — they are what keeps a slow create from reading as "already
+    /// gone" and reaping a row whose data is about to appear.
+    private func observedVolumeStates(reconciler: Reconciler) async -> [ObservedVolumeState] {
+        var observed: [ObservedVolumeState] = []
+        var reported = Set<String>()
+
+        for (volumeId, presence) in await observedVolumePresence() {
+            guard let uuid = UUID(uuidString: volumeId), case .managed(let facts) = presence else { continue }
+            observed.append(
+                ObservedVolumeState(
+                    volumeId: uuid,
+                    present: true,
+                    storagePath: facts.path,
+                    format: facts.format.rawValue,
+                    attachedVMId: facts.attachedVMId.flatMap { UUID(uuidString: $0) },
+                    deviceName: facts.deviceName,
+                    observedGeneration: await reconciler.observedGeneration(for: volumeId, kind: .volume),
+                    convergencePhase: await reconciler.convergencePhase(for: volumeId, kind: .volume),
+                    lastError: await reconciler.lastError(for: volumeId, kind: .volume),
+                    failedGeneration: await reconciler.failedGeneration(for: volumeId, kind: .volume)
+                ))
+            reported.insert(volumeId)
+        }
+
+        for (volumeId, _) in await reconciler.inFlightWorkloads(kind: .volume) where !reported.contains(volumeId) {
+            guard let uuid = UUID(uuidString: volumeId) else { continue }
+            observed.append(
+                ObservedVolumeState(
+                    volumeId: uuid,
+                    present: false,
+                    observedGeneration: await reconciler.observedGeneration(for: volumeId, kind: .volume),
+                    convergencePhase: await reconciler.convergencePhase(for: volumeId, kind: .volume)
+                        ?? "converging",
+                    lastError: await reconciler.lastError(for: volumeId, kind: .volume),
+                    failedGeneration: await reconciler.failedGeneration(for: volumeId, kind: .volume)
+                ))
+            reported.insert(volumeId)
+        }
+
+        for (volumeId, failure) in await reconciler.failedConvergences(kind: .volume)
+        where !reported.contains(volumeId) {
+            guard let uuid = UUID(uuidString: volumeId) else { continue }
+            observed.append(
+                ObservedVolumeState(
+                    volumeId: uuid,
+                    present: false,
+                    observedGeneration: await reconciler.observedGeneration(for: volumeId, kind: .volume),
                     convergencePhase: nil,
                     lastError: failure.error,
                     failedGeneration: failure.generation

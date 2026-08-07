@@ -71,18 +71,25 @@ export const useMutationsStore = create<MutationsState>((set) => ({
  * 404 on the resource means deleted, never-existed and not-authorized alike.
  */
 export function acceptedMutation(
-  accepted: AcceptedMutation<{ id: string }>,
+  accepted: AcceptedMutation<{ id?: string }>,
   options: {
     kind: OperationKind;
     resourceKind: OperationResourceKind;
     resourceName: string;
+    /**
+     * The resource's id, for DTOs that type it as optional — `Volume` does,
+     * because the backend's model id is nullable until the row is inserted.
+     * Callers that have the id in hand should pass it; the fallback exists for
+     * the VM and sandbox DTOs, which type it as required.
+     */
+    resourceId?: string;
   }
 ): WatchedMutation {
   return {
     mutationId: accepted.mutationId,
     source: options.kind === "delete" ? "operation" : "conditions",
     resourceKind: options.resourceKind,
-    resourceId: accepted.resource.id,
+    resourceId: options.resourceId ?? accepted.resource.id!,
     targetGeneration: accepted.targetGeneration,
     kind: options.kind,
     resourceName: options.resourceName,

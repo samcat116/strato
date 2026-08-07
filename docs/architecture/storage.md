@@ -201,12 +201,72 @@ The volume root is the agent's `volume_storage_dir` config key (default
 `/var/lib/strato/volumes` on Linux), so a non-root agent can point it at a
 directory it can write.
 
-The control plane never derives paths; it stores whatever path the agent
-reports in `VolumeStatusResponse` and passes it back verbatim on later
-operations. Delete and snapshot-delete work from IDs alone, so cleanup
-succeeds even when a create's response was lost before the control plane
-recorded the path. (The wire messages still carry optional legacy path-hint
-fields for compatibility; new control planes leave them nil.)
+The control plane never derives paths. Since volumes became desired state
+(STR-148) the path travels in exactly one direction: the agent reports it on
+`ObservedVolumeState` and the control plane stores what it is told. No desired
+entry carries a path, and nothing on the wire lets the control plane suggest
+one — which is what makes a create whose report was lost recoverable, since
+every verb works from ids alone.
+
+Presence means *complete*. Every write path stages into `<name>.partial` and
+publishes with a rename inside the same directory, so `listVolumes` — the
+agent's presence set for reconciliation — can answer "does this volume exist?"
+with "the published file is there". Without that, a truncated disk from an
+interrupted `qemu-img create` would read as a converged volume; with it, the
+directory a crashed create left behind reports as absent and the next sync
+re-drives it.
+
+### Volumes are desired state
+
+A volume's lifecycle runs on the reconciliation loop, not on RPCs (ADR 0001
+stage 5). The control plane writes what it wants — the volume exists, at this
+size, in this format, attached here — bumps a per-volume generation, and
+returns `202 Accepted`; the agent converges and reports back, and the volume's
+`conditions` are what say a mutation finished. Six imperative messages
+(`volume_create/delete/attach/detach/resize/clone`) were deleted in wire v30;
+the snapshot verbs and `volume_info` have not converted yet.
+
+What the agent gains from the move is what the imperative handlers uniquely
+lacked: retry with a per-generation attempt cap, per-volume serial lanes, a
+`waitingOnDependency` classification for work blocked on something else in the
+same sync, and convergence that survives an agent restart because it is
+re-derived from the filesystem rather than remembered.
+
+Deletion is the same finalizer dance VMs use. A `DELETE` does not remove the
+row: it marks the volume absent, stamps `agent.absent`, and the row survives
+until the agent's full-list report *omits* the volume — which is the only thing
+that confirms the data is gone. A delete against an agent that cannot confirm
+(offline, or below wire v30) force-clears the token instead, because a dead
+agent must not make its volumes undeletable.
+
+### Attachment is desired state, realized at boot or by hot-plug
+
+An attachment is a fact the control plane records on the volume
+(`vm_id`/`device_name`/`boot_order`/`readonly`) and the agent realizes. Which
+way it realizes depends on the target VM:
+
+- **live hypervisor session** — the agent writes the attachment into the VM's
+  manifest entry first, then hot-plugs it over QMP, then updates the driver's
+  stored spawn configuration. Record-first is deliberate: a crash between the
+  two re-drives an idempotent hot-plug, whereas the other order would leave a
+  plugged device nothing remembers.
+- **present but powered off** — the record *is* the realization. The spawn path
+  rebuilds the guest's disk set from the recorded volumes, so the disk lands at
+  the next boot. Reporting "not attached" here would leave the volume
+  permanently unconverged and get it degraded for the crime of having a stopped
+  VM.
+- **not on this agent at all** — classified as waiting on a dependency, so it
+  burns no attempt and retries on the next sync. Only ever a race, since the
+  control plane emits an attachment only for a VM placed on this agent.
+
+The observed attachment is read from that durable record, not from a live QMP
+query, for the same reason: a powered-off guest has no device list.
+
+This is also what fixed a live bug. `respawn` rebuilds a QEMU process from the
+configuration captured at create time, and an image-backed VM's spawn path used
+to treat `VMSpec.volumes` as a *fallback* it never reached — so a hot-plugged
+disk silently disappeared at the guest's next power cycle while the control
+plane still called the volume attached.
 
 ### Snapshots
 
@@ -300,10 +360,22 @@ Two operational consequences worth knowing before running this at scale:
 
 ### Volume placement across agents
 
-Volumes are host-local. The control-plane `VolumeService` places volumes on
-online QEMU-capable agents (attachment goes through QEMU's block layer), and
-attachment requires the VM's agent to be able to reach the volume's data —
-for a local pool, the same agent that holds it.
+Volumes are host-local. `VolumeService.selectVolumeAgent` places a volume on an
+online, QEMU-capable agent (attachment goes through QEMU's block layer) that
+speaks wire v30 or later, and attachment requires the VM's agent to be able to
+reach the volume's data — for a local pool, the same agent that holds it.
+
+Placement is a committed database fact *before* any sync can carry the volume,
+because sync assembly finds a volume by its `hypervisor_id`. It therefore runs
+as the create mutation's dispatch rather than in-band, and a create with no
+eligible agent degrades the volume with that reason instead of failing the
+request.
+
+The wire-version filter is the one placement gate here that refuses rather than
+degrades: with the imperative volume frames gone, a volume on a pre-v30 agent
+could never be created. Both constraints — same agent, QEMU-capable — stay
+enforced synchronously at accept time, so a bad attach is a `400` now rather
+than a `202` that degrades a minute later.
 
 Attachment is also contained by project: a volume may only be attached to a VM
 in its own project, and a cross-project attempt is refused with `400` even when
@@ -327,8 +399,8 @@ backing, any QEMU-capable agent eligible — which reproduces the host-local
 behavior above exactly. While attached, `Volume.attachedAgentId` records the
 agent the attachment runs on. The legacy `hypervisor_id`/`storage_path`
 columns are dual-written alongside the replica row until nothing reads them.
-The agent-side `StorageBackend` protocol and the wire protocol are untouched
-by this model.
+The replica row is written from the *observed* report — it records placement an
+agent has confirmed — rather than from a dispatch that awaited a response.
 
 ## Future work
 

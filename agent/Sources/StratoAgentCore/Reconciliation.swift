@@ -37,6 +37,40 @@ public enum WorkloadPresence<Status: Equatable & Sendable>: Equatable, Sendable 
 
 public typealias VMPresence = WorkloadPresence<VMStatus>
 public typealias SandboxPresence = WorkloadPresence<SandboxStatus>
+public typealias VolumePresence = WorkloadPresence<ObservedVolumeFacts>
+
+/// What this agent can see about one volume it holds, and the `ObservedStatus`
+/// the generic diff engine converges (STR-148).
+///
+/// A struct rather than a status enum because a volume has no run state: the
+/// facts that can diverge from desire are where its bytes are, how big they
+/// are, and what it is plugged into. `sizeBytes` is the *virtual* size the
+/// backend last reported, nil when the agent has not probed it — a nil never
+/// plans a resize, so an unprobeable volume is left alone rather than
+/// repeatedly grown.
+public struct ObservedVolumeFacts: Equatable, Sendable {
+    public let path: String
+    public let format: DiskFormat
+    public let sizeBytes: Int64?
+    /// Canonical uppercase UUID string of the VM this volume is attached to,
+    /// from the agent's durable attachment record.
+    public let attachedVMId: String?
+    public let deviceName: String?
+
+    public init(
+        path: String,
+        format: DiskFormat,
+        sizeBytes: Int64? = nil,
+        attachedVMId: String? = nil,
+        deviceName: String? = nil
+    ) {
+        self.path = path
+        self.format = format
+        self.sizeBytes = sizeBytes
+        self.attachedVMId = attachedVMId
+        self.deviceName = deviceName
+    }
+}
 
 /// The sizing a VM on this host is actually running with, as opposed to the
 /// sizing its desired spec asks for. Only the dimensions that can move on a
@@ -82,11 +116,16 @@ public enum ReconcileStep: Equatable, Sendable {
     case pause
     case resume
     /// Converge a *running* VM's vCPU/memory sizing on the desired spec
-    /// (issue #568). VM-only: sandboxes are not resizable in place.
+    /// (issue #568), or grow a volume to its desired size (STR-148). Sandboxes
+    /// are not resizable in place.
     case resize
     case shutdown
     /// Gracefully stop (best effort) and remove the workload from this host.
     case delete
+    /// Present a volume to its desired VM (STR-148). Volume-only.
+    case attach
+    /// Remove a volume from the VM it is presented to (STR-148). Volume-only.
+    case detach
 }
 
 /// The control-plane instruction driving a work item, tagged by workload kind.
@@ -97,6 +136,7 @@ public enum ReconcileStep: Equatable, Sendable {
 public enum ReconcileTarget: Sendable {
     case vm(DesiredVMState)
     case sandbox(DesiredSandboxState)
+    case volume(DesiredVolumeState)
     /// Confirmed teardown of a workload the control plane has no row for.
     case tombstone(DesiredWorkloadTombstone)
 }
@@ -131,6 +171,12 @@ public struct ReconcileWorkItem: Sendable {
         return nil
     }
 
+    /// The volume desired entry, when this is a volume-kind item driven by one.
+    public var desiredVolume: DesiredVolumeState? {
+        if case .volume(let entry) = target { return entry }
+        return nil
+    }
+
     /// Whether this item is a confirmed teardown of a workload with no
     /// control-plane row. These are the only items the blast-radius guard
     /// counts, and the only ones exempt from the attempt cap.
@@ -139,16 +185,29 @@ public struct ReconcileWorkItem: Sendable {
         return false
     }
 
-    /// Serial-lane key for this item. VM items share their lane with the
-    /// imperative per-VM message handlers (the bare vmId), so the two modes
-    /// can never interleave operations on one VM; sandbox items get their own
-    /// namespace ("sandbox/" cannot collide with a UUID string).
-    public var laneKey: String {
+    /// Every serial lane this item must hold while it runs. VM items share
+    /// their lane with the imperative per-VM message handlers (the bare vmId),
+    /// so the two modes can never interleave operations on one VM; sandbox and
+    /// volume items get their own namespaces ("sandbox/" and "volume/" cannot
+    /// collide with a UUID string).
+    ///
+    /// A volume item that carries an attachment also holds the *VM's* lane,
+    /// because realizing it drives that VM's hypervisor session. This is the
+    /// same two-lane guarantee `MessageEnvelope.serializationKeys` gave the
+    /// imperative `volume_attach` frame, carried over rather than reinvented.
+    public var laneKeys: [String] {
         switch kind {
-        case .vm: return id
-        case .sandbox: return "sandbox/" + id
+        case .vm: return [id]
+        case .sandbox: return ["sandbox/" + id]
+        case .volume:
+            guard let vmId = desiredVolume?.attachment?.vmId.uuidString else { return ["volume/" + id] }
+            return ["volume/" + id, vmId]
         }
     }
+
+    /// The item's primary lane. Retained for call sites and tests that predate
+    /// multi-lane items; scheduling reads `laneKeys`.
+    public var laneKey: String { laneKeys[0] }
 
     public init(kind: WorkloadKind, id: String, generation: Int64, steps: [ReconcileStep], target: ReconcileTarget) {
         self.kind = kind
@@ -175,6 +234,23 @@ public struct ReconcilePlan: Sendable {
     public init(items: [ReconcileWorkItem] = [], unrecognized: [UnrecognizedWorkload] = []) {
         self.items = items
         self.unrecognized = unrecognized
+    }
+}
+
+extension Array {
+    /// Split into (elements satisfying `predicate`, the rest), preserving order
+    /// in both halves.
+    func partitioned(_ predicate: (Element) -> Bool) -> ([Element], [Element]) {
+        var matching: [Element] = []
+        var rest: [Element] = []
+        for element in self {
+            if predicate(element) {
+                matching.append(element)
+            } else {
+                rest.append(element)
+            }
+        }
+        return (matching, rest)
     }
 }
 
@@ -250,6 +326,11 @@ public protocol ReconcileActuator: Sendable {
     func observedSandboxPresence() async -> [String: SandboxPresence]
     /// Re-adopt an orphaned sandbox and return its observed status.
     func adoptSandbox(_ item: ReconcileWorkItem) async throws -> SandboxStatus
+    /// Snapshot of every volume whose data this host holds (STR-148). Always
+    /// `.managed`: a volume is a file, so there is no session to lose and
+    /// nothing to re-adopt — the storage backend's directory listing is the
+    /// whole truth.
+    func observedVolumePresence() async -> [String: VolumePresence]
     /// Execute one non-adopt step; `item.kind` selects the runtime.
     func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws
     /// Called after every work item finishes (success or failure) so the agent
@@ -261,6 +342,36 @@ public protocol ReconcileActuator: Sendable {
 /// support receives sandbox work. Should be unreachable: such agents never
 /// advertise the sandbox capability, so the control plane never places
 /// sandboxes on them — permanent, because retrying cannot grow a runtime.
+/// Why a volume could not be converged (STR-148). Both cases carry a
+/// classification rather than being plain errors, because the difference
+/// decides whether an operator ever sees them.
+public enum VolumeConvergenceError: ClassifiableError, LocalizedError, Sendable {
+    /// Something the agent cannot do however many times it is asked: a shrink,
+    /// an unknown format, a host with no storage backend. Permanent, so the
+    /// attempt cap short-circuits and the control plane degrades the volume
+    /// with the reason instead of waiting out a completion budget.
+    case unsupported(String)
+    /// Something this volume depends on has not converged yet — its clone
+    /// source, or the VM it attaches to, either of which may be mid-flight in
+    /// the very same sync. Classified as a dependency wait, so it burns no
+    /// attempt, records no error, and simply retries on the next
+    /// level-triggered sync.
+    case sourceNotReady(String)
+
+    public var failureClassification: FailureClassification {
+        switch self {
+        case .unsupported: return .permanent
+        case .sourceNotReady: return .waitingOnDependency
+        }
+    }
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupported(let reason), .sourceNotReady(let reason): return reason
+        }
+    }
+}
+
 public struct SandboxActuationUnsupportedError: ClassifiableError, LocalizedError {
     public var failureClassification: FailureClassification { .permanent }
     public var errorDescription: String? { "this actuator does not support sandbox workloads" }
@@ -273,6 +384,11 @@ public struct SandboxActuationUnsupportedError: ClassifiableError, LocalizedErro
 /// a sync plans sandbox work.
 extension ReconcileActuator {
     public func observedSandboxPresence() async -> [String: SandboxPresence] { [:] }
+
+    /// Actuators without a storage backend hold no volumes; the reconciler
+    /// then plans creates for anything the sync desires and the actuator's
+    /// `perform` decides what to do about it.
+    public func observedVolumePresence() async -> [String: VolumePresence] { [:] }
 
     /// Actuators that cannot report per-VM sizing simply never have a resize
     /// planned for them; the change still lands at the VM's next boot.
@@ -292,8 +408,11 @@ protocol ReconcilableDesired: Sendable {
     associatedtype ObservedStatus: Equatable & Sendable
     static var workloadKind: WorkloadKind { get }
     /// The observed status a completed `.create` step leaves the workload in,
-    /// from which the remaining convergence steps are planned.
-    static var statusAfterCreate: ObservedStatus { get }
+    /// from which the remaining convergence steps are planned. An instance
+    /// requirement, not a static one, because for some kinds it depends on the
+    /// entry: a created volume's facts are the size and format *this* entry
+    /// asked for.
+    var statusAfterCreate: ObservedStatus { get }
     var workloadId: UUID { get }
     var generation: Int64 { get }
     /// True when the entry asks for the workload to not exist on this host.
@@ -309,7 +428,7 @@ protocol ReconcilableDesired: Sendable {
 
 extension DesiredVMState: ReconcilableDesired {
     static var workloadKind: WorkloadKind { .vm }
-    static var statusAfterCreate: VMStatus { .created }
+    var statusAfterCreate: VMStatus { .created }
     var workloadId: UUID { vmId }
     var wantsAbsent: Bool { desiredStatus == .absent }
     func convergenceSteps(from observed: VMStatus) -> [ReconcileStep] {
@@ -321,7 +440,7 @@ extension DesiredVMState: ReconcilableDesired {
 
 extension DesiredSandboxState: ReconcilableDesired {
     static var workloadKind: WorkloadKind { .sandbox }
-    static var statusAfterCreate: SandboxStatus { .stopped }
+    var statusAfterCreate: SandboxStatus { .stopped }
     var workloadId: UUID { sandboxId }
     var wantsAbsent: Bool { desiredStatus == .absent }
     func convergenceSteps(from observed: SandboxStatus) -> [ReconcileStep] {
@@ -329,6 +448,28 @@ extension DesiredSandboxState: ReconcilableDesired {
     }
     var asTarget: ReconcileTarget { .sandbox(self) }
     static func describe(_ observed: SandboxStatus) -> String { observed.rawValue }
+}
+
+extension DesiredVolumeState: ReconcilableDesired {
+    static var workloadKind: WorkloadKind { .volume }
+    var workloadId: UUID { volumeId }
+    var wantsAbsent: Bool { desiredStatus == .absent }
+    var asTarget: ReconcileTarget { .volume(self) }
+
+    /// A freshly created volume has the size and format this entry asked for
+    /// and is attached to nothing, so the only step that can remain after a
+    /// `.create` is the attach.
+    var statusAfterCreate: ObservedVolumeFacts {
+        ObservedVolumeFacts(path: "", format: DiskFormat(rawValue: format) ?? .qcow2, sizeBytes: sizeBytes)
+    }
+
+    func convergenceSteps(from observed: ObservedVolumeFacts) -> [ReconcileStep] {
+        Reconciler.volumeSteps(desired: self, observed: observed)
+    }
+
+    static func describe(_ observed: ObservedVolumeFacts) -> String {
+        observed.attachedVMId.map { "attached to \($0)" } ?? "detached"
+    }
 }
 
 // MARK: - Reconciler
@@ -473,23 +614,54 @@ public actor Reconciler {
     /// host as unaccounted for, which is false: the sender simply doesn't speak
     /// that half of the protocol. The caller passes
     /// `WireProtocol.supportsSandboxSync(senderVersion)`.
-    public func apply(_ message: DesiredStateMessage, includeSandboxes: Bool = false) async {
+    ///
+    /// `includeVolumes` gates the volume half the same way, but the message's
+    /// own `volumes` field is the primary signal and the stricter one: nil
+    /// there means the sender said nothing about volumes, and the half is
+    /// skipped whatever the version claims (STR-148). Planning against an
+    /// empty desired list instead would report every volume on the host as
+    /// unaccounted for and invite a future reading of that silence as
+    /// teardown — of the only copy of a user's data.
+    public func apply(
+        _ message: DesiredStateMessage, includeSandboxes: Bool = false, includeVolumes: Bool = false
+    ) async {
         let tombstones = message.tombstones ?? []
         let presentVMs = await actuator.observedPresence()
-        var plan = Self.plan(
+        let vmPlan = Self.plan(
             desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm),
             presentSizing: await actuator.observedSizing(), tombstones: tombstones)
+        var plan = ReconcilePlan(items: [], unrecognized: vmPlan.unrecognized)
+
+        var volumePlan = ReconcilePlan()
+        var presentVolumeCount = 0
+        if includeVolumes, let desiredVolumes = message.volumes {
+            let presentVolumes = await actuator.observedVolumePresence()
+            presentVolumeCount = presentVolumes.count
+            volumePlan = Self.planVolumes(
+                desired: desiredVolumes, present: presentVolumes,
+                lastApplied: appliedGenerations(kind: .volume), tombstones: tombstones)
+            plan.unrecognized += volumePlan.unrecognized
+        }
 
         var presentSandboxCount = 0
+        var sandboxPlan = ReconcilePlan()
         if includeSandboxes {
             let presentSandboxes = await actuator.observedSandboxPresence()
             presentSandboxCount = presentSandboxes.count
-            let sandboxPlan = Self.planSandboxes(
+            sandboxPlan = Self.planSandboxes(
                 desired: message.sandboxes, present: presentSandboxes,
                 lastApplied: appliedGenerations(kind: .sandbox), tombstones: tombstones)
-            plan.items += sandboxPlan.items
             plan.unrecognized += sandboxPlan.unrecognized
         }
+
+        // Enqueue order matters even though multi-lane items already give
+        // mutual exclusion: holding two lanes guarantees isolation, not
+        // sequence. Volume data-plane work goes first so a volume exists before
+        // a VM that references it is built, and volume *attachment* work goes
+        // after the VM items so it queues behind that VM's create/boot on the
+        // VM's own lane instead of racing it and burning a dependency wait.
+        let (volumeData, volumeAttachment) = volumePlan.items.partitioned { $0.laneKeys.count == 1 }
+        plan.items = volumeData + vmPlan.items + volumeAttachment + sandboxPlan.items
 
         // Wholesale replacement, including the sandbox half's absence when the
         // control plane doesn't speak sandbox sync: the report must describe
@@ -498,7 +670,8 @@ public actor Reconciler {
         unrecognized = plan.unrecognized
         var items = plan.items
         let refusalChanged = applyTeardownGuard(
-            to: &items, syncId: message.syncId, present: presentVMs.count + presentSandboxCount)
+            to: &items, syncId: message.syncId,
+            present: presentVMs.count + presentSandboxCount + presentVolumeCount)
 
         logger.debug(
             "Applying desired-state sync",
@@ -508,6 +681,8 @@ public actor Reconciler {
                 "presentVMs": .stringConvertible(presentVMs.count),
                 "desiredSandboxes": .stringConvertible(includeSandboxes ? message.sandboxes.count : 0),
                 "presentSandboxes": .stringConvertible(presentSandboxCount),
+                "desiredVolumes": .stringConvertible(includeVolumes ? (message.volumes?.count ?? 0) : 0),
+                "presentVolumes": .stringConvertible(presentVolumeCount),
                 "unrecognized": .stringConvertible(plan.unrecognized.count),
                 "workItems": .stringConvertible(items.count),
             ])
@@ -539,7 +714,7 @@ public actor Reconciler {
 
             inFlight[ref] = item.generation
             currentPhase[ref] = "queued"
-            await queue.enqueue(key: item.laneKey) { [weak self] in
+            await queue.enqueue(keys: item.laneKeys) { [weak self] in
                 await self?.execute(item)
             }
         }
@@ -634,6 +809,10 @@ public actor Reconciler {
         case .sandbox(let desired):
             let observed = try await actuator.adoptSandbox(item)
             return Self.sandboxStatusSteps(desired: desired.desiredStatus, observed: observed)
+        case .volume:
+            // Volumes are files: there is no runtime session to lose, so the
+            // planner never marks one orphaned and never emits `.adopt`.
+            return []
         case .tombstone:
             // The planner never emits `.adopt` for a tombstone (its single
             // step is `.delete`).
@@ -796,6 +975,8 @@ public actor Reconciler {
         case .resize: return "resizing"
         case .shutdown: return "shutting down"
         case .delete: return "deleting"
+        case .attach: return "attaching"
+        case .detach: return "detaching"
         }
     }
 
@@ -855,6 +1036,17 @@ public actor Reconciler {
                         kind: .vm, id: id, generation: entry.generation, steps: [.resize], target: entry.asTarget))
             }
         }
+    }
+
+    /// Compute the volume convergence plan for one sync (STR-148). Same engine,
+    /// same semantics as the VM `plan`.
+    public static func planVolumes(
+        desired: [DesiredVolumeState],
+        present: [String: VolumePresence],
+        lastApplied: [String: Int64],
+        tombstones: [DesiredWorkloadTombstone] = []
+    ) -> ReconcilePlan {
+        planCore(desired: desired, tombstones: tombstones, present: present, lastApplied: lastApplied)
     }
 
     /// Compute the sandbox convergence plan for one sync. Same engine, same
@@ -925,7 +1117,7 @@ public actor Reconciler {
                 if entry.wantsAbsent {
                     steps = []  // already absent; just record the generation
                 } else {
-                    steps = [.create] + entry.convergenceSteps(from: Desired.statusAfterCreate)
+                    steps = [.create] + entry.convergenceSteps(from: entry.statusAfterCreate)
                 }
             }
 
@@ -1010,6 +1202,38 @@ public actor Reconciler {
     /// policy, so a finished one-shot workload is never relaunched. Named
     /// (not an overload of `statusSteps`) for the same ambiguity reason as
     /// `planSandboxes`.
+    /// The steps that take an existing volume from `observed` to `desired`
+    /// (STR-148). Empty when it already matches.
+    ///
+    /// At most one step is ever planned, and the order below is the reason:
+    /// a grow must land before the attachment moves (the resize path wants the
+    /// volume detached), and an attachment that is merely *wrong* has to be
+    /// unplugged before it can be re-plugged elsewhere. The next
+    /// level-triggered sync plans the following step, which is exactly how the
+    /// VM planner sequences a boot behind a create.
+    ///
+    /// A shrink and a format change are deliberately *not* steps. Neither is
+    /// something the agent can converge — one destroys data, the other is a
+    /// conversion the control plane never asks for — so they surface as
+    /// permanent failures from the actuator rather than as work that silently
+    /// never completes.
+    public static func volumeSteps(desired: DesiredVolumeState, observed: ObservedVolumeFacts) -> [ReconcileStep] {
+        if let size = observed.sizeBytes, desired.sizeBytes > size {
+            return [.resize]
+        }
+        let desiredVM = desired.attachment?.vmId.uuidString
+        let desiredDevice = desired.attachment?.deviceName
+        if observed.attachedVMId == desiredVM && observed.deviceName == desiredDevice {
+            return []
+        }
+        // Attached to the wrong VM or in the wrong slot: unplug first, and let
+        // the next sync plan the attach against the observation that follows.
+        if observed.attachedVMId != nil {
+            return [.detach]
+        }
+        return [.attach]
+    }
+
     public static func sandboxStatusSteps(desired: DesiredSandboxStatus, observed: SandboxStatus) -> [ReconcileStep] {
         if desired.isSatisfied(by: observed) {
             return []

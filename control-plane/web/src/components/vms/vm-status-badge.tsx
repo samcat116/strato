@@ -59,6 +59,8 @@ const pendingMutationLabels: Record<OperationKind, string> = {
   snapshot_delete: "Deleting snapshot",
   restore: "Restoring",
   snapshot_export: "Exporting snapshot",
+  attach: "Attaching",
+  detach: "Detaching",
 };
 
 export function VMStatusBadge({

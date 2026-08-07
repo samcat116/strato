@@ -17,4 +17,11 @@ import Foundation
 public enum WorkloadKind: String, Codable, Hashable, Sendable {
     case vm
     case sandbox
+    /// A managed volume (STR-148). Unlike the other two kinds, nothing is ever
+    /// written to `VMManifestStore` under this kind: a volume's durable record
+    /// on the agent is its directory in the storage backend, which is also what
+    /// the reconciler enumerates as its presence set. Attachment, the one piece
+    /// of volume state the filesystem cannot answer, rides the *VM's* manifest
+    /// entry (`VMSpec.volumes`), because that is what the spawn path reads.
+    case volume
 }

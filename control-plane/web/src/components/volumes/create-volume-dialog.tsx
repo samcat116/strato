@@ -17,6 +17,11 @@ import { volumesApi } from "@/lib/api/volumes";
 import { useImages } from "@/lib/hooks/use-images";
 import { useProjectContext } from "@/providers";
 import { toast } from "sonner";
+import {
+  acceptedMutation,
+  useMutationsStore,
+} from "@/lib/stores/mutations-store";
+
 import type { VolumeFormat, VolumeType } from "@/types/api";
 
 interface CreateVolumeDialogProps {
@@ -34,6 +39,7 @@ export function CreateVolumeDialog({
   onCreated,
 }: CreateVolumeDialogProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const watch = useMutationsStore((state) => state.watch);
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -81,7 +87,7 @@ export function CreateVolumeDialog({
 
     setIsLoading(true);
     try {
-      await volumesApi.create({
+      const accepted = await volumesApi.create({
         name,
         description: formData.description.trim() || undefined,
         projectId,
@@ -90,7 +96,16 @@ export function CreateVolumeDialog({
         volumeType: formData.volumeType,
         sourceImageId: formData.sourceImageId || undefined,
       });
-      toast.success(`Volume "${name}" is being created`);
+      // Accepted, not created: the agent still has to place and materialize
+      // it, and MutationWatcher toasts the outcome (backend STR-148).
+      watch(
+        acceptedMutation(accepted, {
+          kind: "create",
+          resourceKind: "volume",
+          resourceId: accepted.resource.id!,
+          resourceName: name,
+        })
+      );
       onOpenChange(false);
       onCreated?.();
       resetForm();

@@ -176,6 +176,11 @@ extension ResourceEvent {
             scope.projectID = sandbox.$project.id
             scope.resourceName = sandbox.name
             scope.generation = sandbox.generation
+        case .volume:
+            guard let volume = try await Volume.find(id, on: db) else { return scope }
+            scope.projectID = volume.$project.id
+            scope.resourceName = volume.name
+            scope.generation = volume.generation
         }
         guard let projectID = scope.projectID,
             let project = try await Project.find(projectID, on: db)
@@ -207,6 +212,11 @@ extension ResourceEvent {
                 .first()?.generation
         case .sandbox:
             return try await Sandbox.query(on: db)
+                .filter(\.$id == id)
+                .field(\.$generation)
+                .first()?.generation
+        case .volume:
+            return try await Volume.query(on: db)
                 .filter(\.$id == id)
                 .field(\.$generation)
                 .first()?.generation

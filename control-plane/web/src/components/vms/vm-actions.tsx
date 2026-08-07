@@ -74,6 +74,10 @@ const kindToAction: Record<OperationKind, VMAction | null> = {
   restore: null,
   // Sandbox-only, but the map stays total over OperationKind.
   snapshot_export: null,
+  // Volume-only kinds (backend STR-148); VMs never carry them, but the map
+  // stays total.
+  attach: null,
+  detach: null,
 };
 
 export function VMActions({ vm, onActionComplete }: VMActionsProps) {

@@ -218,6 +218,20 @@ actor QEMUService: HypervisorService {
                     logger.debug("Disk image already exists", metadata: ["diskPath": .string(diskPath)])
                 }
             }
+        } else {
+            // The boot disk came from an image, but the spec's volumes are not
+            // a *fallback* for it — they are the VM's other disks, and until
+            // STR-148 they were silently dropped here, which is why a data
+            // volume only ever reached an image-backed guest by hot-plug and
+            // vanished at its next power cycle. Everything the agent has
+            // recorded as attached to this VM is realized at spawn, deduped
+            // against the boot disk in case the boot volume is also listed.
+            let resolved = Set(disks.map(\.path))
+            for volume in spec.volumes {
+                guard let path = volume.storagePath, !resolved.contains(path) else { continue }
+                disks.append(
+                    ResolvedDisk(path: path, format: DiskFormat(volumePath: path), readonly: volume.readonly))
+            }
         }
 
         // A disk-boot VM with no disks can only produce an unbootable shell —
@@ -1492,6 +1506,44 @@ actor QEMUService: HypervisorService {
                 ])
             throw QEMUServiceError.hotPlugFailed("Failed to detach disk: \(error)")
         }
+    }
+
+    /// Whether a QEMU process is currently attached for this VM. False for a
+    /// VM that exists but is powered off, and for one whose handle was never
+    /// reconnected after an agent restart.
+    func hasLiveSession(vmId: String) async -> Bool {
+        activeVMs[vmId] != nil
+    }
+
+    /// Rewrites the disk list this VM will respawn with, keeping the boot disk
+    /// wherever it already is and replacing everything else with the agent's
+    /// recorded attachments (STR-148).
+    ///
+    /// Without this a hot-plugged disk is lost the moment the guest powers off:
+    /// `respawn` rebuilds the process from `vmConfigs[vmId]`, the configuration
+    /// captured at create time, which `attachDisk`'s pure-QMP path never
+    /// touched. The stored spec is updated alongside so an agent restart that
+    /// re-adopts this VM sees the same disk set.
+    func updateRecordedVolumes(vmId: String, volumes: [VolumeSpec]) async {
+        if let spec = vmSpecs[vmId] {
+            vmSpecs[vmId] = spec.withVolumes(volumes)
+        }
+        guard var config = vmConfigs[vmId] else { return }
+        // The boot disk is whatever the create resolved first — materialized
+        // from an image, and so not necessarily named by any volume spec.
+        let bootDisk = config.disks.first
+        var disks = bootDisk.map { [$0] } ?? []
+        for volume in volumes {
+            guard let path = volume.storagePath, path != bootDisk?.path else { continue }
+            disks.append(
+                QEMUDisk(
+                    path: path,
+                    format: DiskFormat(volumePath: path).rawValue,
+                    interface: "virtio",
+                    readonly: volume.readonly))
+        }
+        config.disks = disks
+        vmConfigs[vmId] = config
     }
 
     // MARK: - Private Configuration Methods

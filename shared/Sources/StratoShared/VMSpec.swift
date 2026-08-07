@@ -108,6 +108,33 @@ public struct VMSpec: Codable, Sendable {
     /// sending control plane predates the field.
     public var effectiveMachine: MachineProfile { machine ?? .default }
 
+    /// A copy of this spec with a different volume list.
+    ///
+    /// The agent uses this to keep a VM's manifest entry in step with the
+    /// attachments the volume reconciler has realized (STR-148): the entry's
+    /// `volumes` is the agent's durable record of what is plugged into the VM,
+    /// and it is what the spawn path rebuilds the guest's disk set from after
+    /// a power cycle or an agent restart.
+    public func withVolumes(_ volumes: [VolumeSpec]) -> VMSpec {
+        VMSpec(
+            cpus: cpus,
+            maxCpus: maxCpus,
+            memoryBytes: memoryBytes,
+            maxMemoryBytes: maxMemoryBytes,
+            balloonTargetBytes: balloonTargetBytes,
+            diskBytes: diskBytes,
+            sharedMemory: sharedMemory,
+            hugepages: hugepages,
+            boot: boot,
+            machine: machine,
+            volumes: volumes,
+            networks: networks,
+            console: console,
+            sshAuthorizedKeys: sshAuthorizedKeys,
+            userData: userData
+        )
+    }
+
     // Custom decode so `sshAuthorizedKeys`, `diskBytes`, `maxMemoryBytes`,
     // `balloonTargetBytes`, `machine`, and `userData` tolerate absence: a spec produced by an older
     // control plane (before these fields existed) decodes to []/nil rather

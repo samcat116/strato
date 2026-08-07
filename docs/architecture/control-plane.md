@@ -280,6 +280,25 @@ runs **lock-free on every replica**: the write is idempotent and convergent,
 and clearing the deadline is a conditional `UPDATE` that exactly one pass wins,
 so the completion webhook still fires once.
 
+**Volumes run on the same flow** (STR-148, ADR 0001 stage 5). `Volume` is a
+`ConvergingResource` and a `FinalizableResource` like `VM` and `Sandbox`, with
+the same generation pair, `conditions` block, `convergence_deadline` and
+finalizer list, so `ResourceMutation`, the stuck-convergence sweep and the
+operations façade work on one without a new branch. Create/delete/attach/
+detach/resize/clone all answer `202`; the six imperative agent messages behind
+them are gone, and with them `VolumeService`'s await-response dispatch, its
+per-verb RPC timeouts, and the status-and-timestamp sweep that used to guess
+which transitional status had been abandoned.
+
+Two volume-specific notes. `VolumeStatus` is now purely *observed* — the
+control plane never writes `attaching`/`detaching`/`resizing`/`cloning`, and
+`ObservedStateApplier` derives the status from what the agent reports about the
+bytes and the attachment. And `resolveForStuckOperation` reverts a failed
+*attachment* but deliberately not a failed *size*: an unachieved attach left in
+place replays destructively on every later sync, while the control plane does
+not know what size the agent actually realized, and a desired size larger than
+reality is harmless to re-attempt under the agent's own attempt cap.
+
 **Some verbs still keep operation records** — VM reboot, full-VM
 checkpoint/restore/snapshot-delete (issue #564), and sandbox
 snapshot/restore/export. They are imperative agent commands with no generation

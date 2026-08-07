@@ -78,6 +78,7 @@ ad-hoc checks scattered through the code:
 | `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
 | `supportsMetadataPort` | 27 | `metadataEnabled` on `DesiredNetworkState` **and** `NetworkSpec` — the OVN localport publishing the metadata addresses |
 | `supportsDesiredStatePull` | 29 | The control plane serves `GET /agent/desired-state`, so the agent may fetch its sync instead of waiting for a push |
+| `supportsVolumeSync` | 30 | Volumes in the desired-state sync — and a **placement** gate, not just a field gate: with the imperative volume frames gone there is no fallback path |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -217,6 +218,38 @@ upgrades backwards: a pre-v28 *control plane* driving a v28 agent would send
 timeout against silence. Upgrade the control plane first, as everywhere else
 here.
 
+Version 29 makes the sync *pullable*: the control plane serves it over a
+long-poll `GET /agent/desired-state`, and the agent may fetch it there instead
+of waiting for a push (ADR 0001 stage 10). Nothing about the payload changes,
+so this gates the transport rather than the schema, and both directions of skew
+simply keep pushing.
+
+Version 30 makes volumes desired state (ADR 0001 stage 5, STR-148).
+`DesiredStateMessage` gains `volumes` and `ObservedStateReport` gains its
+counterpart; the six imperative frames `volume_create`, `volume_delete`,
+`volume_attach`, `volume_detach`, `volume_resize` and `volume_clone` are
+removed. This bump carries two hazard shapes at once.
+
+The *removal* half is the v28 shape and breaks only across a skew that upgrades
+backwards. The *addition* half is the v3/v5/v26/v27 asymmetric-absence shape in
+its most expensive form: read wrong, silence deletes the only copy of a user's
+data. Both new fields are therefore `Optional` rather than `[]`-defaulted, so
+the payload describes itself and the reading does not depend on a version
+lookup being right. A sync whose `volumes` is nil makes the agent skip its
+volume half entirely — it does *not* plan against an empty desired list, which
+would put every volume on the host into the unrecognized set. A report whose
+`volumes` is nil makes the control plane skip its own volume half, rather than
+reading the absence as "every volume on this agent is gone" and reaping the
+rows.
+
+Unlike v26/v27 and like v18/v23, this gate **does** refuse placement: with no
+imperative fallback left, a volume placed on a pre-v30 agent could never be
+created. Volumes already sitting on such an agent when the control plane
+upgrades simply freeze — their rows are never reaped, because that agent's
+reports say nothing about volumes — until the agent is upgraded. Deleting one
+still works: the delete path force-clears the agent-absence finalizer for an
+agent that cannot confirm.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -234,7 +267,7 @@ dual-mode rollout.
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `vm_reboot` | Reboot — still imperative because a reboot is an action, not a state |
 | `vm_checkpoint`, `vm_restore`, `vm_snapshot_delete` | Full-VM checkpoints (v22+, issue #564): RAM + device state + disks as a qcow2 internal snapshot. Imperative for the same reason — a checkpoint is an action, not a state. Gated on the `vm_checkpoint` capability, since only a QEMU-capable agent can realize them |
-| `volume_*` (create/delete/attach/detach/resize/snapshot/snapshot_delete/clone/info) | Volume operations (QEMU-backed VMs only) |
+| `volume_snapshot`, `volume_snapshot_delete`, `volume_info` | What is left of the imperative volume verbs (QEMU-backed VMs only). Create, delete, attach, detach, resize and clone became desired state in v30 (STR-148); these two artifact verbs and the read convert in ADR 0001 stages 8 and 7 |
 | `sandbox_snapshot_create`, `sandbox_snapshot_delete`, `sandbox_restore` | Sandbox checkpoint/restore (v9+, issue #426) — imperative request/response pairs like the volume operations |
 | `sandbox_snapshot_export` | Export a checkpoint's artifacts off-node to control-plane object storage (v14+, issue #428) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
@@ -288,6 +321,43 @@ design; the short version:
   optional `floatingIPs` list — external→fixed address mappings plus
   `vmId`/`nicIndex` for the NIC's port, realized as `dnat_and_snat` rules,
   issue #344); `DesiredAgentUpdate` is the declarative agent-update target.
+
+### Desired volumes (wire v30)
+
+`DesiredVolumeState` carries a volume's id, desired status
+(`present`/`absent` — two cases, because a volume has no run state), a
+generation, its desired size and format, an optional **create strategy**, and
+an optional attachment.
+
+Two fields it deliberately does *not* carry. There is no pool: placement is
+expressed by *which agent's sync the entry appears in*, and a second encoding
+of the same fact is a thing that can drift. There is no storage path: the agent
+owns path layout, so the path travels the other way, on the observed report.
+
+`DesiredVolumeSource` is the create strategy — `blank`, `image`, or `clone` —
+and it is what used to be `volume_clone`. It follows the
+`DesiredSandboxState.restoreFrom` pattern (issue #427): the agent consults it
+*only* when it does not already hold the volume, which is what makes a replayed
+or re-driven sync unable to re-clone over live data. Its `kind` is a `String`
+rather than a Swift enum with associated values, so an unrecognized strategy
+fails that one volume — surfacing as its `lastError` — instead of the whole
+message.
+
+`DesiredVolumeAttachment` names the VM and the slot. Attachment is a *field*
+of the entry rather than a status: modelling attach as a status would make
+"present, but the attach failed" unrepresentable, and would collide with size,
+which moves independently of where the volume is plugged in. The same columns
+are projected twice — here, and into `VMSpec.volumes` — so the two projections
+of one fact cannot disagree; the volume lane is authoritative for realizing an
+attachment, and `VMSpec.volumes` is the boot-time convenience that rebuilds the
+same disk set.
+
+`ObservedVolumeState` reports presence, the agent-chosen path and format, the
+attachment, and the usual convergence quartet. It deliberately carries no size:
+reading a volume's virtual size means a `qemu-img info` subprocess per volume,
+and the report is assembled on every convergence action plus the heartbeat
+cadence. A resize is confirmed the way a VM resize is, by `observedGeneration`
+catching up.
 
 ### Generations
 

@@ -133,6 +133,7 @@ extension WorkloadKind {
         switch self {
         case .vm: return .virtualMachine
         case .sandbox: return .sandbox
+        case .volume: return .volume
         }
     }
 }
@@ -143,6 +144,7 @@ extension OperationResourceKind {
         switch self {
         case .virtualMachine: return .vm
         case .sandbox: return .sandbox
+        case .volume: return .volume
         }
     }
 }

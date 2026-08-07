@@ -114,6 +114,7 @@ struct ReconciliationTests {
                     sizing[item.vmId] = VMSizing(cpus: desired.spec.cpus, memoryBytes: desired.spec.memoryBytes)
                 }
             case .adopt: break
+            case .attach, .detach: break  // volume-only steps; never planned for a VM
             }
         }
 

@@ -103,6 +103,14 @@ public actor FileSystemStorageBackend: StorageBackend {
     public func createVolume(volumeId: String, sizeBytes: Int64, format: DiskFormat) async throws -> DiskAttachment {
         let path = volumePath(volumeId: volumeId, format: format)
 
+        // Idempotent, like `materializeDisk`: a level-triggered sync may
+        // re-drive a create whose success report was lost, and the canonical
+        // path only ever holds a finished volume (see `publishAtomically`).
+        if FileManager.default.fileExists(atPath: path) {
+            logger.debug("Volume already exists", metadata: ["volumeId": .string(volumeId)])
+            return DiskAttachment(path: path, format: format)
+        }
+
         logger.info(
             "Creating volume",
             metadata: [
@@ -117,16 +125,19 @@ public actor FileSystemStorageBackend: StorageBackend {
             attributes: nil
         )
 
-        let result = try await runQemuImg(["create", "-f", format.rawValue, path, "\(sizeBytes)"])
-        if result.terminationStatus != 0 {
-            let output = result.combinedOutput
-            logger.error(
-                "qemu-img create failed",
-                metadata: [
-                    "volumeId": .string(volumeId),
-                    "output": .string(output),
-                ])
-            throw qemuImgFailure(output: output, context: "qemu-img create", fallback: StorageBackendError.createFailed)
+        try await publishAtomically(to: path) { stagingPath in
+            let result = try await self.runQemuImg(["create", "-f", format.rawValue, stagingPath, "\(sizeBytes)"])
+            if result.terminationStatus != 0 {
+                let output = result.combinedOutput
+                self.logger.error(
+                    "qemu-img create failed",
+                    metadata: [
+                        "volumeId": .string(volumeId),
+                        "output": .string(output),
+                    ])
+                throw self.qemuImgFailure(
+                    output: output, context: "qemu-img create", fallback: StorageBackendError.createFailed)
+            }
         }
 
         logger.info(
@@ -395,6 +406,15 @@ public actor FileSystemStorageBackend: StorageBackend {
         }
         let targetPath = volumePath(volumeId: targetVolumeId, format: format)
 
+        // Idempotent for the same reason `createVolume` is: a clone is how a
+        // volume with a clone create-strategy comes into existence, and that
+        // strategy is re-driven by every level-triggered sync until the volume
+        // is observed present.
+        if FileManager.default.fileExists(atPath: targetPath) {
+            logger.debug("Clone target already exists", metadata: ["targetVolumeId": .string(targetVolumeId)])
+            return DiskAttachment(path: targetPath, format: format)
+        }
+
         logger.info(
             "Cloning volume",
             metadata: [
@@ -410,23 +430,25 @@ public actor FileSystemStorageBackend: StorageBackend {
             attributes: nil
         )
 
-        let result = try await runQemuImg([
-            "convert",
-            "-f", format.rawValue,
-            "-O", format.rawValue,
-            sourcePath,
-            targetPath,
-        ])
-        if result.terminationStatus != 0 {
-            let output = result.combinedOutput
-            logger.error(
-                "qemu-img clone failed",
-                metadata: [
-                    "sourceVolumeId": .string(sourceVolumeId),
-                    "output": .string(output),
-                ])
-            throw qemuImgFailure(
-                output: output, context: "qemu-img clone", fallback: StorageBackendError.cloneFailed)
+        try await publishAtomically(to: targetPath) { stagingPath in
+            let result = try await self.runQemuImg([
+                "convert",
+                "-f", format.rawValue,
+                "-O", format.rawValue,
+                sourcePath,
+                stagingPath,
+            ])
+            if result.terminationStatus != 0 {
+                let output = result.combinedOutput
+                self.logger.error(
+                    "qemu-img clone failed",
+                    metadata: [
+                        "sourceVolumeId": .string(sourceVolumeId),
+                        "output": .string(output),
+                    ])
+                throw self.qemuImgFailure(
+                    output: output, context: "qemu-img clone", fallback: StorageBackendError.cloneFailed)
+            }
         }
 
         logger.info(
@@ -459,6 +481,66 @@ public actor FileSystemStorageBackend: StorageBackend {
     /// Checks if a volume exists
     public func volumeExists(volumeId: String) -> Bool {
         FileManager.default.fileExists(atPath: volumeDirectory(volumeId: volumeId))
+    }
+
+    /// Every complete volume in the store, keyed by the canonical uppercase
+    /// form of its id (STR-148).
+    ///
+    /// "Complete" is doing real work here: the check is for the *published*
+    /// `volume.<ext>` file, and every write path stages elsewhere and renames,
+    /// so a directory left behind by a create that died mid-write reports as
+    /// absent and the next sync re-drives it. Deliberately no `qemu-img info`
+    /// — this runs on every sync, and one subprocess per volume per sync is
+    /// not affordable on a dense host.
+    public func listVolumes() async throws -> [String: DiskAttachment] {
+        let entries: [String]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(atPath: volumeStoragePath)
+        } catch {
+            // The store is created lazily on first write; before that there is
+            // simply nothing here, which is not an error worth failing a whole
+            // sync over.
+            logger.debug(
+                "Volume store not readable; reporting no volumes",
+                metadata: [
+                    "storagePath": .string(volumeStoragePath),
+                    "error": .string(error.localizedDescription),
+                ])
+            return [:]
+        }
+
+        var volumes: [String: DiskAttachment] = [:]
+        for entry in entries {
+            guard let volumeId = UUID(uuidString: entry)?.uuidString else { continue }
+            for format in DiskFormat.allCases {
+                let path = volumePath(volumeId: entry, format: format)
+                if FileManager.default.fileExists(atPath: path) {
+                    volumes[volumeId] = DiskAttachment(path: path, format: format)
+                    break
+                }
+            }
+        }
+        return volumes
+    }
+
+    /// Runs `write` against a staging path and publishes its output to `path`
+    /// with a rename inside the same directory, so the canonical path is
+    /// all-or-nothing.
+    ///
+    /// This is what makes `listVolumes`' "the file is there" a sound answer to
+    /// "does this volume exist?", which the reconciler's whole create/no-create
+    /// decision rests on. Without it a truncated disk from an interrupted
+    /// `qemu-img create` would read as a converged volume.
+    private func publishAtomically(to path: String, _ write: (String) async throws -> Void) async throws {
+        let stagingPath = path + ".partial"
+        try? FileManager.default.removeItem(atPath: stagingPath)
+        do {
+            try await write(stagingPath)
+            try FileManager.default.moveItem(atPath: stagingPath, toPath: path)
+        } catch {
+            try? FileManager.default.removeItem(atPath: stagingPath)
+            throw error
+        }
     }
 
     // MARK: - qemu-img Helpers

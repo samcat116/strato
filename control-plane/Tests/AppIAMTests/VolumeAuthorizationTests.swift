@@ -103,28 +103,31 @@ final class VolumeAuthorizationTests {
         }
     }
 
-    @Test("POST /api/volumes with a readable sourceImageId succeeds (200)")
+    /// Volume create returns `202 Accepted` since STR-148: the mutation is
+    /// accepted and converged, not performed in-band.
+    @Test("POST /api/volumes with a readable sourceImageId is accepted (202)")
     func createFromImageAllowedWithPermission() async throws {
         try await withVolumeTestApp { app, project, image, token in
             try await app.test(.POST, "/api/volumes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(self.createVolumeBody(project: project, image: image))
             } afterResponse: { res in
-                #expect(res.status == .ok)
-                let volume = try res.content.decode(VolumeResponse.self)
-                #expect(volume.sourceImageId == image.id)
+                #expect(res.status == .accepted)
+                let accepted = try res.content.decode(AcceptedMutation<VolumeResponse>.self)
+                #expect(accepted.resource.sourceImageId == image.id)
+                #expect(accepted.targetGeneration == 1)
             }
 
-            // createVolume provisions on a detached task that touches app.db;
-            // wait for it to settle (no agents connected → `.error`) so it
-            // can't race application shutdown during test teardown.
-            var provisioned: Volume?
+            // Placement runs on a detached task that touches app.db; wait for it
+            // to settle (no agents connected → degraded) so it can't race
+            // application shutdown during test teardown.
+            var placed: Volume?
             for _ in 0..<100 {
-                provisioned = try await Volume.query(on: app.db).first()
-                if provisioned?.status == .error { break }
+                placed = try await Volume.query(on: app.db).first()
+                if placed?.conditions.degraded != nil { break }
                 try await Task.sleep(for: .milliseconds(50))
             }
-            #expect(provisioned?.status == .error)
+            #expect(placed?.conditions.degraded != nil)
         }
     }
 }
