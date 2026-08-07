@@ -337,3 +337,80 @@ extension Volume: FinalizableResource {
         // cascade with the row above.
     }
 }
+
+// MARK: - Snapshot artifacts (ADR 0001 stage 8, STR-150)
+
+/// One reap for all three artifact families.
+///
+/// The three differ only in what has to happen *outside* the row — a sandbox
+/// snapshot's exported objects, a checkpoint's nothing — and in which storage
+/// pool the freed bytes belong to. Both are parameters, so the claim/record/
+/// delete sequence that has to be exactly right is written once.
+enum SnapshotArtifactReap {
+    static func reap<A: SnapshotArtifactResource>(
+        _ artifact: A,
+        on db: any Database,
+        app: Application,
+        externalCleanup: @Sendable (A, Application) async -> Void = { _, _ in },
+        releaseQuota: @escaping @Sendable (A, any Database) async throws -> Void = { _, _ in }
+    ) async throws -> Bool {
+        let artifactID = try artifact.requireID()
+
+        // External cleanup first, and outside the transaction, because it is
+        // object-store I/O: it can run twice — once per side of a reap race, or
+        // again after a crash — and deleting an already-deleted object is a
+        // no-op, which is what makes that safe (the `Sandbox.reap` precedent).
+        await externalCleanup(artifact, app)
+
+        return try await db.transaction { tx in
+            guard try await ResourceFinalizerService.reapClaim(A.self, id: artifactID, in: tx) else {
+                return false
+            }
+            // Bindings first, like every other reap.
+            try await RoleBindingService.revokeAll(
+                nodeType: A.iamNodeType, nodeID: artifactID, on: tx)
+            // Before the row goes: the terminal event reads the delete
+            // request's scope, and after the delete there is nothing to read.
+            try await ResourceFinalizerService.recordDeletionCompleted(artifact, in: tx)
+            try await artifact.delete(on: tx)
+            try await releaseQuota(artifact, tx)
+            return true
+        }
+    }
+}
+
+extension VolumeSnapshot: FinalizableResource {
+    static func reap(_ snapshot: VolumeSnapshot, on db: any Database, app: Application) async throws -> Bool {
+        // No quota release: volume snapshots draw on no pool today, exactly as
+        // the volumes they hang off do not.
+        try await SnapshotArtifactReap.reap(snapshot, on: db, app: app)
+    }
+}
+
+extension VMSnapshot: FinalizableResource {
+    static func reap(_ snapshot: VMSnapshot, on db: any Database, app: Application) async throws -> Bool {
+        try await SnapshotArtifactReap.reap(
+            snapshot, on: db, app: app,
+            releaseQuota: { snapshot, tx in
+                // The checkpoint's machine state was charged to the project's
+                // storage pool at admission; recount now that it is gone.
+                _ = try? await QuotaEnforcementService.storageOverCommit(
+                    projectID: snapshot.$project.id, environment: snapshot.environment, on: tx)
+            })
+    }
+}
+
+extension SandboxSnapshot: FinalizableResource {
+    static func reap(_ snapshot: SandboxSnapshot, on db: any Database, app: Application) async throws -> Bool {
+        try await SnapshotArtifactReap.reap(
+            snapshot, on: db, app: app,
+            externalCleanup: { snapshot, app in
+                // The exported copy goes with the snapshot (issue #428).
+                await snapshot.deleteExportedObjects(app: app)
+            },
+            releaseQuota: { snapshot, tx in
+                _ = try? await QuotaEnforcementService.storageOverCommit(
+                    projectID: snapshot.$project.id, environment: snapshot.environment, on: tx)
+            })
+    }
+}

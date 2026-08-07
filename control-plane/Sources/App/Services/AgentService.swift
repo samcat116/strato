@@ -965,6 +965,13 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
+                    // Delete snapshot artifacts past their retention deadline
+                    // (STR-150) — the `ttlSecondsAfterFinished` answer durable
+                    // artifact objects need and fire-and-forget RPCs did not.
+                    await SnapshotRetentionSweep.run(app: app)
+
+                    try self.checkTickPreconditions()
+
                     // Advance the agent auto-update rollout one agent at a
                     // time (issue #434).
                     await sweepAgentAutoUpdates()
@@ -1122,8 +1129,13 @@ actor AgentService {
             try await degradeOverdue(Sandbox.self, now: now, on: db)
             // Volumes joined the same backstop in STR-148, replacing the
             // status-and-timestamp sweep that used to guess which transitional
-            // status had been abandoned.
+            // status had been abandoned. Snapshot artifacts followed in
+            // STR-150, replacing the RPC timeouts that used to decide a
+            // capture's fate.
             try await degradeOverdue(Volume.self, now: now, on: db)
+            try await degradeOverdue(VolumeSnapshot.self, now: now, on: db)
+            try await degradeOverdue(VMSnapshot.self, now: now, on: db)
+            try await degradeOverdue(SandboxSnapshot.self, now: now, on: db)
         } catch {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
@@ -1379,9 +1391,37 @@ actor AgentService {
                 .all()
             await reapOrphanedTerminating(
                 volumes.filter { $0.finalizers.isEmpty }, kind: "volume", on: db)
+
+            // Snapshot artifacts (STR-150). Their `agent.absent` trigger is the
+            // same repeating observed-state report, but the retention sweep's
+            // deletions are unattended in exactly the way the sandbox expiry
+            // sweep's are, so they need the same backstop.
+            //
+            // No age cutoff here, unlike the three above, and it is not an
+            // oversight: `finalizers.isEmpty` on a terminating row already
+            // means nobody owes cleanup — either the token cleared, or none was
+            // stamped because the artifact never reached an agent. The cutoff
+            // exists to keep the workload scan cheap on a large table, and the
+            // terminating set here is normally empty.
+            try await reapOrphanedTerminatingSnapshots(
+                VolumeSnapshot.self, kind: "volume snapshot", on: db)
+            try await reapOrphanedTerminatingSnapshots(
+                VMSnapshot.self, kind: "checkpoint", on: db)
+            try await reapOrphanedTerminatingSnapshots(
+                SandboxSnapshot.self, kind: "sandbox snapshot", on: db)
         } catch {
             app.logger.error("Orphaned-terminating sweep failed: \(error)")
         }
+    }
+
+    /// The snapshot-artifact half of the orphan sweep. Separate from the
+    /// workload half only because `desired_status` is a different enum type per
+    /// family, which Fluent's field projection cannot be abstracted over.
+    private func reapOrphanedTerminatingSnapshots<A: SnapshotArtifactResource>(
+        _ type: A.Type, kind: String, on db: any Database
+    ) async throws {
+        let terminating = try await A.terminating(on: db).filter { $0.finalizers.isEmpty }
+        await reapOrphanedTerminating(terminating, kind: kind, on: db)
     }
 
     /// Drives one kind's orphans through the ordinary clear path — clearing an
@@ -1439,6 +1479,11 @@ actor AgentService {
             // `convergence_deadline` and `sweepStuckConvergence` replaced it
             // wholesale in STR-148.
             case .volume: ("Volume", "volumeId")
+            // Unreachable for the same reason as volumes: snapshot artifacts
+            // have only the convergence backstop (STR-150).
+            case .volumeSnapshot: ("Volume snapshot", "snapshotId")
+            case .vmCheckpoint: ("Checkpoint", "snapshotId")
+            case .sandboxSnapshot: ("Sandbox snapshot", "snapshotId")
             }
 
         for resource in resources {

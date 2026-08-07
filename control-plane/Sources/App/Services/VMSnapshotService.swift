@@ -2,27 +2,36 @@ import Foundation
 import StratoShared
 import Vapor
 
-/// Agent RPC client for full-VM checkpoint operations (issue #564), mirroring
-/// `SandboxSnapshotService`: checkpoint, restore, and delete are actions — not
-/// states — so they ride correlated WebSocket messages (with cross-replica
-/// forwarding handled inside `AgentService.sendMessageToAgentWithResponse`)
-/// instead of the level-triggered desired-state sync.
+/// What is left of the full-VM checkpoint agent path after ADR 0001 stage 8
+/// (STR-150).
+///
+/// Capturing a checkpoint and deleting one are desired state now: the control
+/// plane writes the intent onto the artifact's row, the assembler puts it on the
+/// agent's sync, and the agent's observed report closes the loop — carrying the
+/// footprint, QEMU version and architecture that used to ride a one-shot RPC
+/// reply. Neither goes through this type, and the pending-request apparatus
+/// behind them is one caller closer to deletion.
+///
+/// What remains is `vm_restore`. Loading a captured RAM image back into a live
+/// QEMU process is genuinely an edge rather than a state — "the VM should be at
+/// checkpoint C" is not something an agent can re-converge on, because the guest
+/// starts writing the moment it resumes — so it stays a correlated
+/// request/response until STR-151 turns it into a monotonic nonce on the
+/// desired entry.
 enum VMSnapshotService {
-    /// A checkpoint or restore moves the guest's whole RAM through a QEMU
-    /// background job. Just under the matching operation budget so the RPC
-    /// verdict, not the sweep, decides the operation whenever the dispatching
-    /// process survives.
-    static let checkpointTimeout: Duration = .seconds(1770)
-    static let deleteTimeout: Duration = .seconds(90)
+    /// A restore moves the guest's whole RAM through a QEMU background job.
+    /// Just under the matching operation budget so the RPC verdict, not the
+    /// sweep, decides the operation whenever the dispatching process survives.
+    static let restoreTimeout: Duration = .seconds(1770)
 
-    /// Preflight an agent for the checkpoint message set: it must be known,
-    /// online, speak wire protocol v22, and advertise the capability. The
-    /// message types postdate protocol version 21, so an older agent cannot
-    /// decode the envelope — the frame is dropped before any error response
-    /// can be sent and the request would burn its full timeout against
-    /// silence. The capability adds what the version cannot say: a v22 agent
-    /// on a host with no usable QEMU understands the frames but can only ever
-    /// answer `notSupported`.
+    /// Preflight an agent for `vm_restore`: it must be known, online, speak
+    /// wire protocol v22, and advertise a QEMU backend. The message type
+    /// postdates protocol version 21, so an older agent cannot decode the
+    /// envelope — the frame is dropped before any error response can be sent
+    /// and the request would burn its full timeout against silence. The
+    /// capability adds what the version cannot say: a v22 agent on a host with
+    /// no usable QEMU understands the frame but can only ever answer
+    /// `notSupported`.
     static func requireCapableAgent(_ agentId: String, app: Application) async throws {
         guard let agentInfo = await app.agentService.getAgentInfo(agentId) else {
             throw VMSnapshotServiceError.agentNotFound(agentId)
@@ -31,39 +40,14 @@ enum VMSnapshotService {
             throw VMSnapshotServiceError.agentOffline(agentId)
         }
         // Two signals, the `sandboxCapable` rule from issue #415: the wire
-        // version proves the frames decode at all, the capability proves a
-        // backend that can realize them is usable on that host. Either alone
+        // version proves the frame decodes at all, the capability proves a
+        // backend that can realize it is usable on that host. Either alone
         // admits a request that can only fail — a pre-v22 agent silently, by
         // dropping the frame.
         guard WireProtocol.supportsVMCheckpoint(agentInfo.wireProtocolVersion ?? 0),
-            agentInfo.capabilities.contains(MessageType.vmCheckpoint.rawValue)
+            agentInfo.capabilities.contains(SnapshotArtifactKind.vmCheckpoint.agentCapability)
         else {
             throw VMSnapshotServiceError.operationUnsupportedByAgent(agentId)
-        }
-    }
-
-    /// Ask the VM's agent to checkpoint it and await the report. The report is
-    /// mandatory: a success frame without a decodable payload is a protocol
-    /// error, not a completed checkpoint — marking the row ready without it
-    /// would lose both the quota figure and the restore-compat constraints.
-    static func requestCheckpoint(
-        vmId: UUID,
-        snapshotId: UUID,
-        agentId: String,
-        app: Application
-    ) async throws -> VMCheckpointStatusResponse {
-        let message = VMCheckpointMessage(
-            vmId: vmId.uuidString, snapshotId: snapshotId.uuidString)
-        let response = try await send(message, toAgent: agentId, timeout: Self.checkpointTimeout, app: app)
-        guard let payload = response else {
-            throw VMSnapshotServiceError.malformedAgentResponse(
-                "agent confirmed the checkpoint but sent no report")
-        }
-        do {
-            return try payload.decode(as: VMCheckpointStatusResponse.self)
-        } catch {
-            throw VMSnapshotServiceError.malformedAgentResponse(
-                "agent checkpoint report failed to decode: \(error.localizedDescription)")
         }
     }
 
@@ -76,46 +60,22 @@ enum VMSnapshotService {
         agentId: String,
         app: Application
     ) async throws {
-        let message = VMRestoreMessage(vmId: vmId.uuidString, snapshotId: snapshotId.uuidString)
-        _ = try await send(message, toAgent: agentId, timeout: Self.checkpointTimeout, app: app)
-    }
-
-    /// Ask the agent to drop a checkpoint from the VM's disks. Carries only
-    /// IDs (the agent re-derives the tag), and agent-side deletion is
-    /// idempotent.
-    static func requestDelete(
-        vmId: UUID,
-        snapshotId: UUID,
-        agentId: String,
-        app: Application
-    ) async throws {
-        let message = VMSnapshotDeleteMessage(vmId: vmId.uuidString, snapshotId: snapshotId.uuidString)
-        _ = try await send(message, toAgent: agentId, timeout: Self.deleteTimeout, app: app)
-    }
-
-    /// Send one message and await the correlated success/error response,
-    /// returning the success payload (if any) for the caller to decode.
-    private static func send<T: WebSocketMessage>(
-        _ message: T,
-        toAgent agentId: String,
-        timeout: Duration,
-        app: Application
-    ) async throws -> AnyCodableValue? {
         try await requireCapableAgent(agentId, app: app)
 
+        let message = VMRestoreMessage(vmId: vmId.uuidString, snapshotId: snapshotId.uuidString)
         app.logger.info(
-            "Sending VM checkpoint message to agent",
+            "Sending VM restore message to agent",
             metadata: [
                 "agentId": .string(agentId),
                 "messageType": .string(message.type.rawValue),
             ])
 
         let response = try await app.agentService.sendMessageToAgentWithResponse(
-            message, agentId: agentId, timeout: timeout)
+            message, agentId: agentId, timeout: Self.restoreTimeout)
 
         switch response {
-        case .success(let data):
-            return data
+        case .success:
+            return
         case .error(let error, let details):
             throw VMSnapshotServiceError.agentOperationFailed(error, details)
         }
@@ -127,7 +87,6 @@ enum VMSnapshotServiceError: Error, LocalizedError {
     case agentOffline(String)
     case operationUnsupportedByAgent(String)
     case agentOperationFailed(String, String?)
-    case malformedAgentResponse(String)
 
     var errorDescription: String? {
         switch self {
@@ -137,14 +96,12 @@ enum VMSnapshotServiceError: Error, LocalizedError {
             return "Agent '\(id)' is offline"
         case .operationUnsupportedByAgent(let id):
             return
-                "Agent '\(id)' does not support full-VM checkpoints (capability '\(MessageType.vmCheckpoint.rawValue)' not advertised). Upgrade the agent, or place the VM on a QEMU-capable host."
+                "Agent '\(id)' does not support full-VM checkpoints (capability '\(SnapshotArtifactKind.vmCheckpoint.agentCapability)' not advertised). Upgrade the agent, or place the VM on a QEMU-capable host."
         case .agentOperationFailed(let error, let details):
             if let details, !details.isEmpty {
                 return "\(error): \(details)"
             }
             return error
-        case .malformedAgentResponse(let reason):
-            return reason
         }
     }
 }

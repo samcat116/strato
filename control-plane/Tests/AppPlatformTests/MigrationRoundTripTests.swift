@@ -80,6 +80,12 @@ struct MigrationRoundTripTests {
             let expected =
                 (AddHotPathIndexes.indexes + AddFolderPathIndex.indexes)
                 .filter { !retired.contains($0.name) } + RekeyInterfacesToLogicalNetworkID.indexes
+                // The three snapshot tables' `agent_id` indexes (STR-150): sync
+                // assembly and observed-state application both scan by it, once
+                // per poll and once per report.
+                + AddConvergenceToSnapshots.agentIndexes.map {
+                    (name: $0.index, definition: "\($0.table) (agent_id)")
+                }
             for index in expected {
                 let exists = present.contains(index.name)
                 #expect(exists, "missing index \(index.name)")

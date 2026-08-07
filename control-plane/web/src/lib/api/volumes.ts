@@ -71,8 +71,11 @@ export const volumesApi = {
   snapshot(
     id: string,
     data: CreateVolumeSnapshotRequest
-  ): Promise<VolumeSnapshot> {
-    return api.post<VolumeSnapshot>(`/api/volumes/${id}/snapshot`, data);
+  ): Promise<AcceptedMutation<VolumeSnapshot>> {
+    return api.post<AcceptedMutation<VolumeSnapshot>>(
+      `/api/volumes/${id}/snapshot`,
+      data
+    );
   },
 
   clone(id: string, data: CloneVolumeRequest): Promise<AcceptedMutation<Volume>> {
@@ -87,7 +90,12 @@ export const volumesApi = {
       .then((page) => page.items);
   },
 
-  deleteSnapshot(volumeId: string, snapshotId: string): Promise<void> {
-    return api.delete(`/api/volumes/${volumeId}/snapshots/${snapshotId}`);
+  deleteSnapshot(
+    volumeId: string,
+    snapshotId: string
+  ): Promise<AcceptedMutation<VolumeSnapshot>> {
+    return api.delete<AcceptedMutation<VolumeSnapshot>>(
+      `/api/volumes/${volumeId}/snapshots/${snapshotId}`
+    );
   },
 };

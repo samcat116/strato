@@ -50,9 +50,10 @@ info:
 
     ## Asynchronous mutations
 
-    VM and sandbox lifecycle mutations (create/start/stop/restart/delete, VM
-    pause/resume, sandbox snapshot/restore) are **asynchronous**: they persist a
-    desired-state change and return `202 Accepted`.
+    VM, sandbox, volume and snapshot lifecycle mutations
+    (create/start/stop/restart/delete, VM pause/resume, snapshot capture and
+    delete, snapshot export) are **asynchronous**: they persist a desired-state
+    change and return `202 Accepted`.
 
     Most of them — everything with a generation to converge on — answer with
     `{resource, targetGeneration, mutationId}`. Refetch the resource and read
@@ -67,9 +68,11 @@ info:
     `targetGeneration` is the higher one.
 
     The exceptions are the verbs still dispatched as imperative agent commands
-    — VM restart, and every snapshot verb — which answer with a
+    — VM restart, and VM/sandbox *restore* — which answer with a
     `ResourceOperation` to poll to a terminal `status`, and which do reject a
-    second mutation on the same resource with `409`.
+    second mutation on the same resource with `409`. Restore is an edge rather
+    than a state: "this VM should be at checkpoint C" is not something an agent
+    can re-converge on, because the guest starts writing the moment it resumes.
 
     **Deletion** is the one case where the resource cannot answer for itself:
     once the row is removed, polling it returns a `404` indistinguishable from
@@ -77,7 +80,7 @@ info:
     `GET /api/operations/{operationID}` with the delete's `mutationId`
     instead; it reports `succeeded` from the record the deletion left behind.
 
-    Image and volume mutations are synchronous at the API layer: they return the
+    Image mutations are synchronous at the API layer: they return the
     resource immediately (often in a transitional `status` such as `pending` or
     `creating`) and converge in the background.
 
@@ -550,7 +553,8 @@ paths:
       description: >-
         Captures guest memory, device state, and disks at one instant. The VM
         must be running or paused, and keeps running. The request body is
-        optional. Asynchronous — poll the returned operation.
+        optional. Asynchronous — refetch the checkpoint until its `conditions`
+        converge.
       tags: [VM Snapshots]
       requestBody:
         required: false
@@ -559,7 +563,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateVMSnapshotRequest"
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMSnapshotMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -572,9 +576,15 @@ paths:
     delete:
       operationId: deleteVMSnapshot
       summary: Delete a virtual machine checkpoint
+      description: >-
+        Asynchronous. The record survives until the owning agent confirms the
+        checkpoint's bytes are gone, so poll
+        `GET /api/operations/{mutationId}` — a delete's success is the
+        checkpoint's absence, which a `404` on the checkpoint itself cannot
+        distinguish from never-existed.
       tags: [VM Snapshots]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMSnapshotMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -813,7 +823,9 @@ paths:
     post:
       operationId: createSandboxSnapshot
       summary: Create a sandbox snapshot
-      description: The request body is optional; an empty body snapshots without stopping.
+      description: >-
+        The request body is optional; an empty body snapshots without stopping.
+        Asynchronous — refetch the snapshot until its `conditions` converge.
       tags: [Sandbox Snapshots]
       requestBody:
         required: false
@@ -822,7 +834,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateSandboxSnapshotRequest"
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxSnapshotMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -835,9 +847,12 @@ paths:
     delete:
       operationId: deleteSandboxSnapshot
       summary: Delete a sandbox snapshot
+      description: >-
+        Asynchronous. The record survives until the owning agent confirms the
+        artifacts are gone, so poll `GET /api/operations/{mutationId}`.
       tags: [Sandbox Snapshots]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxSnapshotMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -866,12 +881,15 @@ paths:
       operationId: exportSandboxSnapshot
       summary: Export a sandbox snapshot to project storage
       description: >-
-        Copies the snapshot's artifacts into durable project storage so it can
-        be moved between agents (snapshot mobility). Asynchronous — poll the
-        returned operation.
+        Records that the snapshot's artifacts should also exist in durable
+        project storage, so it can be moved between agents (snapshot mobility).
+        A placement fact, not a command: the owning agent converges by streaming
+        each artifact through the control plane, and the snapshot's `conditions`
+        stay unconverged until every artifact has an integrity record the
+        control plane computed itself. Asynchronous — refetch the snapshot.
       tags: [Sandbox Snapshots]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxSnapshotMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1327,6 +1345,11 @@ paths:
     post:
       operationId: createVolumeSnapshot
       summary: Snapshot a volume
+      description: >-
+        Captures a point-in-time copy of the volume's data as a qcow2 overlay.
+        The volume must be detached — a snapshot of a volume a guest is writing
+        would not be point-in-time. Asynchronous — refetch the snapshot until
+        its `conditions` converge.
       tags: [Volumes]
       requestBody:
         required: true
@@ -1335,12 +1358,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateVolumeSnapshotRequest"
       responses:
-        "200":
-          description: The created snapshot.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/VolumeSnapshot"
+        "202": { $ref: "#/components/responses/AcceptedVolumeSnapshotMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -1394,13 +1412,17 @@ paths:
     delete:
       operationId: deleteVolumeSnapshot
       summary: Delete a volume snapshot
+      description: >-
+        Asynchronous. The record survives until the owning agent confirms the
+        overlay is gone, so poll `GET /api/operations/{mutationId}`.
       tags: [Volumes]
       responses:
-        "204": { $ref: "#/components/responses/NoContent" }
+        "202": { $ref: "#/components/responses/AcceptedVolumeSnapshotMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /api/networks:
     get:
@@ -8518,6 +8540,32 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/AcceptedVolumeMutation"
+    AcceptedVMSnapshotMutation:
+      description: >-
+        The mutation was accepted. Refetch the checkpoint until its `conditions`
+        report `observedGeneration >= targetGeneration` with `converged` true.
+        A delete's completion is the checkpoint's absence — poll
+        `GET /api/operations/{mutationId}` for that one.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AcceptedVMSnapshotMutation"
+    AcceptedSandboxSnapshotMutation:
+      description: >-
+        The mutation was accepted. Refetch the snapshot until its `conditions`
+        report `observedGeneration >= targetGeneration` with `converged` true.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AcceptedSandboxSnapshotMutation"
+    AcceptedVolumeSnapshotMutation:
+      description: >-
+        The mutation was accepted. Refetch the snapshot until its `conditions`
+        report `observedGeneration >= targetGeneration` with `converged` true.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/AcceptedVolumeSnapshotMutation"
     LogBackendUnavailable:
       description: The log backend (Loki) could not be queried.
       content:
@@ -8613,6 +8661,54 @@ components:
           type: string
           format: uuid
 
+    AcceptedVMSnapshotMutation:
+      type: object
+      description: >-
+        The body of a `202` from a checkpoint mutation. Checkpoints joined the
+        reconciliation loop in ADR 0001 stage 8: a capture and a delete are
+        desired state the owning agent converges on, not commands it is sent.
+      required: [resource, targetGeneration, mutationId]
+      properties:
+        resource:
+          $ref: "#/components/schemas/VMSnapshot"
+        targetGeneration:
+          type: integer
+          format: int64
+        mutationId:
+          type: string
+          format: uuid
+
+    AcceptedSandboxSnapshotMutation:
+      type: object
+      description: >-
+        The body of a `202` from a sandbox-snapshot mutation, including export —
+        which is a placement fact ("this snapshot should also exist in project
+        storage") rather than a verb.
+      required: [resource, targetGeneration, mutationId]
+      properties:
+        resource:
+          $ref: "#/components/schemas/SandboxSnapshot"
+        targetGeneration:
+          type: integer
+          format: int64
+        mutationId:
+          type: string
+          format: uuid
+
+    AcceptedVolumeSnapshotMutation:
+      type: object
+      description: The body of a `202` from a volume-snapshot mutation.
+      required: [resource, targetGeneration, mutationId]
+      properties:
+        resource:
+          $ref: "#/components/schemas/VolumeSnapshot"
+        targetGeneration:
+          type: integer
+          format: int64
+        mutationId:
+          type: string
+          format: uuid
+
     ResourceOperation:
       type: object
       description: >-
@@ -8621,7 +8717,7 @@ components:
 
 
         Served from two sources. The verbs still dispatched as imperative agent
-        commands — VM restart, and every snapshot verb — have real operation
+        commands — VM restart, and VM/sandbox restore — have real operation
         records. Everything else is synthesized on read from the mutation's
         audit record and the resource's `conditions`, so a client written
         against the older contract keeps working; those responses report no
@@ -9255,6 +9351,13 @@ components:
         stop:
           type: boolean
           description: When true, checkpoint and stop; defaults to false.
+        ttlSeconds:
+          type: integer
+          description: >-
+            How long to keep the snapshot. Omitted uses the fleet default
+            (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it
+            until someone deletes it, overriding that default. Resolved to an
+            absolute `expiresAt` at creation.
     SandboxSnapshot:
       type: object
       required: [name, status]
@@ -9287,11 +9390,24 @@ components:
           type: integer
         cpuTemplate:
           type: string
+        exportDesired:
+          type: boolean
+          description: >-
+            Whether an exported copy in project storage is wanted. Set by the
+            export endpoint; `exportedAt` is when one last completed.
         exportedAt:
           type: string
           format: date-time
         errorMessage:
           type: string
+        expiresAt:
+          type: string
+          format: date-time
+          description: >-
+            When retention will delete this snapshot; absent means it is kept
+            until someone deletes it.
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         createdById:
           type: string
           format: uuid
@@ -9313,6 +9429,13 @@ components:
           type: string
         description:
           type: string
+        ttlSeconds:
+          type: integer
+          description: >-
+            How long to keep the snapshot. Omitted uses the fleet default
+            (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it
+            until someone deletes it, overriding that default. Resolved to an
+            absolute `expiresAt` at creation.
     VMSnapshot:
       type: object
       required: [name, description, status]
@@ -9347,6 +9470,14 @@ components:
           type: string
         errorMessage:
           type: string
+        expiresAt:
+          type: string
+          format: date-time
+          description: >-
+            When retention will delete this snapshot; absent means it is kept
+            until someone deletes it.
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         createdById:
           type: string
           format: uuid
@@ -9652,6 +9783,13 @@ components:
           type: string
         description:
           type: string
+        ttlSeconds:
+          type: integer
+          description: >-
+            How long to keep the snapshot. Omitted uses the fleet default
+            (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it
+            until someone deletes it, overriding that default. Resolved to an
+            absolute `expiresAt` at creation.
     Volume:
       type: object
       required:
@@ -9750,6 +9888,17 @@ components:
           $ref: "#/components/schemas/VolumeSnapshotStatus"
         errorMessage:
           type: string
+        agentId:
+          type: string
+          description: The agent holding the snapshot's overlay.
+        expiresAt:
+          type: string
+          format: date-time
+          description: >-
+            When retention will delete this snapshot; absent means it is kept
+            until someone deletes it.
+        conditions:
+          $ref: "#/components/schemas/ResourceConditions"
         createdById:
           type: string
           format: uuid

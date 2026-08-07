@@ -90,8 +90,9 @@ export const vmsApi = {
   },
 
   // Full-VM checkpoints (issue #564): memory + device state + disks captured
-  // at one instant, distinct from the disk-only volume snapshots. All three
-  // mutations are 202 + operation, like the rest of the VM lifecycle.
+  // at one instant, distinct from the disk-only volume snapshots. Capture and
+  // delete are desired state on the checkpoint itself (STR-150); restore is
+  // still an imperative operation.
   listSnapshots(id: string): Promise<VMSnapshot[]> {
     return api
       .get<Page<VMSnapshot>>(`/api/vms/${id}/snapshots`, {
@@ -103,12 +104,20 @@ export const vmsApi = {
   createSnapshot(
     id: string,
     data?: CreateVMSnapshotRequest
-  ): Promise<Operation> {
-    return api.post<Operation>(`/api/vms/${id}/snapshots`, data ?? {});
+  ): Promise<AcceptedMutation<VMSnapshot>> {
+    return api.post<AcceptedMutation<VMSnapshot>>(
+      `/api/vms/${id}/snapshots`,
+      data ?? {}
+    );
   },
 
-  deleteSnapshot(id: string, snapshotId: string): Promise<Operation> {
-    return api.delete<Operation>(`/api/vms/${id}/snapshots/${snapshotId}`);
+  deleteSnapshot(
+    id: string,
+    snapshotId: string
+  ): Promise<AcceptedMutation<VMSnapshot>> {
+    return api.delete<AcceptedMutation<VMSnapshot>>(
+      `/api/vms/${id}/snapshots/${snapshotId}`
+    );
   },
 
   restoreSnapshot(id: string, snapshotId: string): Promise<Operation> {

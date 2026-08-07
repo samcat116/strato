@@ -299,17 +299,35 @@ place replays destructively on every later sync, while the control plane does
 not know what size the agent actually realized, and a desired size larger than
 reality is harmless to re-attempt under the agent's own attempt cap.
 
-**Some verbs still keep operation records** — VM reboot, full-VM
-checkpoint/restore/snapshot-delete (issue #564), and sandbox
-snapshot/restore/export. They are imperative agent commands with no generation
-to converge on, so they answer `202` with a `ResourceOperation` to poll, keep
-the `409` double-submit guard, and await a correlated agent response (each with
-an RPC timeout sized under its operation budget, so the verdict comes from the
+**Snapshot artifacts run on the same flow** (STR-150, ADR 0001 stage 8). All
+three families — `VolumeSnapshot`, `VMSnapshot`, `SandboxSnapshot` — are
+`ConvergingResource`s and `FinalizableResource`s with their own generation
+pair, `conditions` block, deadline and finalizer list. Capture, delete and
+export answer `202`; the seven imperative agent messages behind them are gone,
+and with them both `VMSnapshotService`'s and `SandboxSnapshotService`'s
+capture/delete dispatch and the background RPC-and-verdict halves in all three
+controllers — including the one that had to guess, after a lost response,
+whether a checkpoint it could not see existed.
+
+They stay three tables rather than one: three quota paths, three IAM node
+types, and completion budgets that differ by an order of magnitude (a qcow2
+overlay is seconds; a full-VM checkpoint is the guest's whole RAM at disk
+speed). What they share is a shape, carried by `SnapshotArtifactResource` so
+the assembler, the applier, the retention sweep and the finalizer reap are each
+written once. `SnapshotArtifactMutation` is the accept side, and
+`SnapshotRetentionSweep` the `ttlSecondsAfterFinished` answer durable artifact
+objects need — see [storage](./storage.md#retention).
+
+**Some verbs still keep operation records** — VM reboot, and VM/sandbox
+*restore*. They are imperative agent commands with no generation to converge
+on, so they answer `202` with a `ResourceOperation` to poll, keep the `409`
+double-submit guard, and await a correlated agent response (each with an RPC
+timeout sized under its operation budget, so the verdict comes from the
 response, not the sweep, whenever the dispatching replica survives). The
 residual cluster-singleton stuck-operation sweep is their backstop, failing
 them past their per-kind budget
 (`OperationResourceKind.completionBudgetSeconds` in
-`Models/ResourceOperation.swift`). They retire with STR-151 and ADR stage 8.
+`Models/ResourceOperation.swift`). They retire with STR-151 and ADR stage 11.
 
 **The operations API survives as a façade** (`Services/OperationFacade.swift`).
 `GET /api/operations/:id` resolves an operation row first, then falls back to

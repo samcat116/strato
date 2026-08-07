@@ -88,6 +88,29 @@ struct OperationController: RouteCollection {
                 _ = try await req.authorizedVolume(resourceID, permission: "read")
                 return
             }
+        // Snapshot artifacts (STR-150) authorize against their own Cedar node,
+        // exactly as their `GET`/`DELETE` handlers do.
+        case .volumeSnapshot:
+            if try await VolumeSnapshot.find(resourceID, on: req.db) != nil {
+                guard try await req.can("read", on: "volume_snapshot", id: resourceID.uuidString) else {
+                    throw Abort(.notFound)
+                }
+                return
+            }
+        case .vmCheckpoint:
+            if try await VMSnapshot.find(resourceID, on: req.db) != nil {
+                guard try await req.can("read", on: "vm_snapshot", id: resourceID.uuidString) else {
+                    throw Abort(.notFound)
+                }
+                return
+            }
+        case .sandboxSnapshot:
+            if try await SandboxSnapshot.find(resourceID, on: req.db) != nil {
+                guard try await req.can("read", on: "sandbox_snapshot", id: resourceID.uuidString) else {
+                    throw Abort(.notFound)
+                }
+                return
+            }
         }
 
         // The resource is gone, so there is no node left to evaluate against.

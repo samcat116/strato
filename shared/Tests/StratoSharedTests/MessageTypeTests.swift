@@ -14,11 +14,7 @@ struct MessageTypeTests {
         case .agentHeartbeat: return "agent_heartbeat"
         case .agentUnregister: return "agent_unregister"
         case .vmReboot: return "vm_reboot"
-        case .vmCheckpoint: return "vm_checkpoint"
         case .vmRestore: return "vm_restore"
-        case .vmSnapshotDelete: return "vm_snapshot_delete"
-        case .volumeSnapshot: return "volume_snapshot"
-        case .volumeSnapshotDelete: return "volume_snapshot_delete"
         case .consoleConnect: return "console_connect"
         case .consoleDisconnect: return "console_disconnect"
         case .consoleData: return "console_data"
@@ -38,24 +34,20 @@ struct MessageTypeTests {
         case .sandboxExecClose: return "sandbox_exec_close"
         case .sandboxExecClosed: return "sandbox_exec_closed"
         case .sandboxLog: return "sandbox_log"
-        case .sandboxSnapshotCreate: return "sandbox_snapshot_create"
-        case .sandboxSnapshotDelete: return "sandbox_snapshot_delete"
         case .sandboxRestore: return "sandbox_restore"
-        case .sandboxSnapshotExport: return "sandbox_snapshot_export"
         }
     }
 
     private static let allTypes: [MessageType] = [
         .agentRegister, .agentRegisterResponse, .agentHeartbeat, .agentUnregister,
-        .vmReboot, .vmCheckpoint, .vmRestore, .vmSnapshotDelete,
-        .volumeSnapshot, .volumeSnapshotDelete,
+        .vmReboot, .vmRestore,
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
         .desiredState, .observedState,
         .success, .error, .vmLog,
         .sandboxExecStart, .sandboxExecStarted, .sandboxExecInput, .sandboxExecOutput,
         .sandboxExecResize, .sandboxExecExit, .sandboxExecClose, .sandboxExecClosed,
         .sandboxLog,
-        .sandboxSnapshotCreate, .sandboxSnapshotDelete, .sandboxRestore, .sandboxSnapshotExport,
+        .sandboxRestore,
     ]
 
     @Test("every case keeps its wire string", arguments: allTypes)
@@ -112,6 +104,13 @@ struct MessageTypeTests {
         // A read can never be desired state (wire v32, ADR 0001 stage 7,
         // STR-149).
         "volume_info",
+        // An artifact's *existence* is a state even though capturing it is an
+        // action (wire v33, ADR 0001 stage 8, STR-150). `vm_restore` and
+        // `sandbox_restore` are deliberately absent: they are edges, still
+        // live, and convert in stage 9.
+        "volume_snapshot", "volume_snapshot_delete",
+        "vm_checkpoint", "vm_snapshot_delete",
+        "sandbox_snapshot_create", "sandbox_snapshot_delete", "sandbox_snapshot_export",
     ]
 
     @Test("retired wire strings stay retired", arguments: retiredWireStrings)
