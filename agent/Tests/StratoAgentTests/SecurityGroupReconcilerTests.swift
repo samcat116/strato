@@ -274,9 +274,16 @@ struct SecurityGroupReconcilerTests {
         let restrictive = DesiredSecurityGroup(
             id: groupId, generation: 1,
             rules: [rule(direction: "ingress", protocolName: "tcp", portRangeMin: 22, portRangeMax: 22)])
-        let (plans, _) = SecurityGroupReconciler.plan(securityGroups: [restrictive])
+        let (plans, unexpressed) = SecurityGroupReconciler.plan(securityGroups: [restrictive])
 
-        #expect(plans[1].acls.allSatisfy { $0.direction != "from-lport" })
+        // Pinned to the exact ACL, not `allSatisfy { $0.direction != ... }`:
+        // that predicate is vacuously true on an empty array, so a builder that
+        // stopped expressing this rule would drop it into `unexpressed` and the
+        // test would keep passing while no longer testing its own premise —
+        // that the group is restrictive *and* real.
+        #expect(unexpressed.isEmpty)
+        #expect(plans[1].acls.count == 1)
+        #expect(plans[1].acls[0].direction == "to-lport")
         #expect(plans[0].name == OVNNaming.dropPortGroupName)
         for metadata in SecurityGroupACLBuilder.metadataEgressACLs() {
             #expect(plans[0].acls.contains(metadata))

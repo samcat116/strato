@@ -564,6 +564,23 @@ cloud-init datasource retries — reads as a broken metadata service rather than
 as the policy outcome it is. AWS draws the same line: IMDS reachability there
 is not subject to security-group rules either.
 
+**The AWS parallel is deliberately partial.** AWS pairs that rule with a
+per-instance kill switch (`HttpEndpoint: disabled`, a hop limit, IMDSv2
+enforcement); the only lever here is `metadataEnabled`, which is per *network*.
+So an operator hardening one workload against SSRF cannot currently deny it the
+service short of moving the VM to its own network. That is academic while
+nothing listens, and becomes real the moment STR-56 lands a listener — tracked
+as issue #1013, and the reserved space above 1003 is where such a deny would
+go.
+
+One collision to keep in mind while that is open: the v4 address is link-local
+and can never overlap a tenant subnet, but `fd00:ec2::254` is a ULA drawn from
+the same space as generated IPv6 subnets. A network whose subnet overlapped it
+would turn this into a non-overridable allow to a *tenant* address on TCP/80.
+The localport (STR-49) already collides in that scenario, so it isn't new —
+only newly un-counterable by policy. Issue #1014 tracks rejecting such subnets
+at network-create time.
+
 The step above 1002 buys nothing *today* — a security-group rule can only
 allow, so nothing at rule priority could contradict this one. It is there
 because the rule vocabulary is control-plane data, and the switch-attached
@@ -583,14 +600,22 @@ Three scoping decisions, each narrowing what the carve-out opens:
   else, so a wider match would only widen what a guest may probe on its own
   chassis.
 - **On the site-wide drop group**, so it also lands on ports whose network has
-  `metadataEnabled` off. Harmless — that switch publishes no localport, so the
-  frame has no destination — and the alternative, a per-network port group, is
-  a whole new object lifetime bought for the ability to deny traffic that
-  already goes nowhere.
+  `metadataEnabled` off. Harmless: that switch publishes no localport, so a
+  guest treating the address as on-link ARPs or NDs for it and nothing
+  answers, while one that has no such route hands the packet to its default
+  gateway and the logical router drops it — same outcome either way, and the
+  alternative (a per-network port group) is a whole new object lifetime bought
+  for the ability to deny traffic that already goes nowhere.
 
-`dropGroupRevision` was bumped to **4** so deployments already carrying the
-revision-3 drop group rewrite it on agent upgrade instead of waiting for an
-unrelated rule edit.
+`dropGroupRevision` was bumped to **4** so the drop group is rewritten on
+upgrade instead of waiting for an unrelated rule edit. Note **whose** upgrade:
+port groups and their ACLs are authored only by the site's network-controller
+agent, so the carve-out appears when *that* agent reaches this build — in a
+mixed-version site with an older authority, guests on freshly upgraded agents
+keep getting IMDS dropped. The reverse is safe: `needsACLRewrite` returns false
+when the planned generation is *older* than the observed one, so an authority
+still on revision 3 leaves a revision-4 drop group alone rather than stripping
+the carve-out back off.
 
 ### Known limitations / follow-ups
 

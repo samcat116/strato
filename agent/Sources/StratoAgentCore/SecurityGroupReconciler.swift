@@ -113,6 +113,11 @@ public enum SecurityGroupACLBuilder {
     /// deployments replace it on upgrade (the generation mechanism reused).
     /// 2: MLD carve-outs (STR-34). 3: MLD split by direction so guests cannot
     /// originate Queries. 4: instance metadata egress (STR-54).
+    ///
+    /// "On upgrade" means the *authority's* upgrade: this group's ACLs are
+    /// authored only by the site's network-controller agent, so a mixed-version
+    /// site behind an older authority keeps the older ACL set no matter how
+    /// current its other agents are.
     public static let dropGroupRevision: Int64 = 4
 
     /// Bumped whenever this builder's ACL *construction* changes — a fixed
@@ -254,6 +259,13 @@ public enum SecurityGroupACLBuilder {
     /// later should find this rule and understand that it, not the group's
     /// permissiveness, is what keeps metadata reachable.
     ///
+    /// The AWS parallel stops short of AWS's per-instance kill switch
+    /// (`HttpEndpoint: disabled`): the only lever here is the per-*network*
+    /// `metadataEnabled`, so a single workload cannot yet be denied the
+    /// service. Academic while nothing listens; a real gap once STR-56 lands
+    /// (issue #1013), and the space above `metadataAllowPriority` is where such
+    /// a deny goes.
+    ///
     /// Egress only, and stateful (`allow-related`), so the service's replies
     /// come back on the connection's conntrack state rather than through a
     /// standing `to-lport` allow — which, unlike the DHCP carve-outs below,
@@ -265,11 +277,13 @@ public enum SecurityGroupACLBuilder {
     /// wider hole would only widen what a guest may probe on its own chassis.
     ///
     /// Applied on the site-singleton drop group, so it lands on every managed
-    /// port including those on networks with `metadataEnabled` off. Harmless —
-    /// such a switch has no localport publishing the addresses, so the frame
-    /// has no destination to reach — and the alternative (per-network port
-    /// groups) would be a whole new object lifetime for the ability to deny
-    /// traffic that already goes nowhere.
+    /// port including those on networks with `metadataEnabled` off. Harmless:
+    /// such a switch publishes no localport, so a guest treating the address as
+    /// on-link gets no answer to its ARP/ND, and one without that route hands
+    /// the packet to its default gateway for the logical router to drop. Same
+    /// outcome by either path — and the alternative (per-network port groups)
+    /// would be a whole new object lifetime for the ability to deny traffic
+    /// that already goes nowhere.
     public static func metadataEgressACLs() -> [ACLSpec] {
         let pg = OVNNaming.dropPortGroupName
         let ids = [managedKey: managedValue]
