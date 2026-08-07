@@ -3357,7 +3357,7 @@ extension Agent: ReconcileActuator {
         for (vmId, entry) in managedVMs.merging(orphanedVMs, uniquingKeysWith: { managed, _ in managed }) {
             for volume in entry.spec.volumes {
                 guard let volumeId = volume.volumeId?.uuidString else { continue }
-                attachments[volumeId] = (vmId: vmId, deviceName: volume.deviceName)
+                attachments[volumeId] = (vmId: vmId, deviceName: volume.deviceName.rawValue)
             }
         }
         return attachments
@@ -3886,7 +3886,7 @@ extension Agent: ReconcileActuator {
         }
         try await service.attachDisk(
             vmId: vmId, volumeId: item.id, volumePath: disk.path,
-            deviceName: attachment.deviceName, readonly: attachment.readonly)
+            deviceName: attachment.deviceName.rawValue, readonly: attachment.readonly)
     }
 
     private func volumeReconcileDetach(_ item: ReconcileWorkItem) async throws {

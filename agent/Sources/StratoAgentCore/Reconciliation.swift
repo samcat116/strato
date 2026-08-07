@@ -1671,7 +1671,7 @@ public actor Reconciler {
             return observed.attachedVMId == nil ? [] : [.detach]
         }
         if observed.attachedVMId == attachment.vmId.uuidString,
-            observed.deviceName == attachment.deviceName
+            observed.deviceName == attachment.deviceName.rawValue
         {
             return []
         }

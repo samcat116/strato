@@ -5691,7 +5691,9 @@ export interface components {
         AttachVolumeRequest: {
             /** Format: uuid */
             vmId: string;
+            /** @description Stable device identifier within the VM (e.g. disk1), unique per VM. Generated as the next free `disk<N>` when omitted. The charset is what a hypervisor accepts as an object id; anything else is refused with 400, and a name already taken on the VM with 409. */
             deviceName?: string;
+            /** @description Boot priority, lower first. Unique per VM: reusing one another attached volume already holds is refused with 409, since two disks at one priority make the order of both arbitrary. */
             bootOrder?: number;
             readonly?: boolean;
         };

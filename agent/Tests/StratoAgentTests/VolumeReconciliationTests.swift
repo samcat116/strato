@@ -97,7 +97,7 @@ struct VolumeReconciliationTests {
                 volumes[item.id] = .managed(
                     ObservedVolumeFacts(
                         path: current.path, format: current.format, sizeBytes: current.sizeBytes,
-                        attachedVMId: attachment.vmId.uuidString, deviceName: attachment.deviceName))
+                        attachedVMId: attachment.vmId.uuidString, deviceName: attachment.deviceName.rawValue))
             case .detach:
                 guard case .managed(let current)? = volumes[item.id] else { return }
                 volumes[item.id] = .managed(
@@ -174,7 +174,7 @@ struct VolumeReconciliationTests {
         let plan = Reconciler.planVolumes(
             desired: [
                 Self.desired(
-                    id, attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: "disk1"))
+                    id, attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: .disk(1)))
             ],
             present: [id.uuidString: .managed(Self.facts())],
             lastApplied: [id.uuidString: 1])
@@ -192,7 +192,7 @@ struct VolumeReconciliationTests {
         let plan = Reconciler.planVolumes(
             desired: [
                 Self.desired(
-                    id, attachment: DesiredVolumeAttachment(vmId: wanted, deviceName: "disk1"))
+                    id, attachment: DesiredVolumeAttachment(vmId: wanted, deviceName: .disk(1)))
             ],
             present: [
                 id.uuidString: .managed(
@@ -305,7 +305,7 @@ struct VolumeReconciliationTests {
         let item = ReconcileWorkItem(
             kind: .volume, id: id.uuidString, generation: 1, steps: [.attach],
             target: .volume(
-                Self.desired(id, attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: "disk1"))))
+                Self.desired(id, attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: .disk(1)))))
         #expect(item.laneKeys == ["volume/" + id.uuidString, vmId.uuidString])
     }
 

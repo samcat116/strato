@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 import Vapor
 
 /// Pure helpers for volume request parsing and device naming, extracted from
@@ -25,7 +26,14 @@ struct VolumeNaming {
     /// Computes the next `disk<N>` device name given the device names already in use.
     /// Names that don't match the `disk<number>` shape are ignored; numbering starts
     /// at `disk0`.
-    static func nextDeviceName(existingDeviceNames: [String?]) -> String {
+    ///
+    /// One past the highest `disk<N>` rather than the lowest free slot, so a name
+    /// a detach freed is not immediately handed to a different volume — a guest's
+    /// `/dev/disk/by-id` link and the operator's memory both outlive the
+    /// attachment. The result is free by construction, and
+    /// `VolumeAttachmentService.claim`'s uniqueness check is what covers a name
+    /// that is not of this shape.
+    static func nextDeviceName(existingDeviceNames: [String?]) -> VolumeDeviceName {
         var maxDiskNum = -1
         for name in existingDeviceNames {
             if let deviceName = name,
@@ -38,6 +46,6 @@ struct VolumeNaming {
                 maxDiskNum = max(maxDiskNum, num)
             }
         }
-        return "disk\(maxDiskNum + 1)"
+        return .disk(maxDiskNum + 1)
     }
 }

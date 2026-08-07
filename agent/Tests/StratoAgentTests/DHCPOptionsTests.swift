@@ -43,6 +43,34 @@ struct DHCPOptionsTests {
         #expect(options["dns_server"] == "{1.1.1.1, 8.8.8.8}")
     }
 
+    @Test("a metadata-publishing network advertises the IMDS route via option 121")
+    func classlessStaticRouteAdvertisesMetadata() {
+        let options = OVNDHCPOptionsBuilder.v4Options(
+            gateway: "10.0.0.1", dnsServers: [], domainName: nil, leaseTime: nil, subnet: "10.0.0.0/24",
+            metadataEnabled: true)
+
+        // On-link (next hop 0.0.0.0): OVN's ARP responder answers for the
+        // localport's own address, and no logical router has a path to it.
+        #expect(options["classless_static_route"] == "{169.254.169.254/32,0.0.0.0, 0.0.0.0/0,10.0.0.1}")
+        // The default route rides along because RFC 3442 makes a client that
+        // understands option 121 ignore option 3 outright — omitting it would
+        // trade the guest's IMDS route for its default gateway.
+        #expect(options["classless_static_route"]?.contains("0.0.0.0/0,10.0.0.1") == true)
+        // `router` stays for clients that don't implement 121.
+        #expect(options["router"] == "10.0.0.1")
+    }
+
+    @Test("a network with the metadata service off advertises no static routes")
+    func classlessStaticRouteOmittedWithoutMetadata() {
+        // Also the shape a control plane predating `metadataEnabled` produces:
+        // silence advertises nothing rather than a route to an address it never
+        // asked to publish.
+        let options = OVNDHCPOptionsBuilder.v4Options(
+            gateway: "10.0.0.1", dnsServers: [], domainName: nil, leaseTime: nil, subnet: "10.0.0.0/24")
+        #expect(options["classless_static_route"] == nil)
+        #expect(options["router"] == "10.0.0.1")
+    }
+
     @Test("v6 options: server_id is a MAC, DNS is the v6 entries, no router option")
     func v6Options() {
         let options = OVNDHCPOptionsBuilder.v6Options(
@@ -57,6 +85,9 @@ struct DHCPOptionsTests {
         // DHCPv6 cannot convey a default route — that's the RA's job.
         #expect(options["router"] == nil)
         #expect(options["server_mac"] == nil)
+        // Nor a metadata route: DHCPv6 has no option 121, which is why the v6
+        // IMDS route travels in the guest's `network-config` instead.
+        #expect(options["classless_static_route"] == nil)
     }
 
     @Test("v6 options omit DNS when the list has no v6 entries")

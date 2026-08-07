@@ -212,14 +212,16 @@ public struct DesiredVolumeAttachment: Codable, Sendable, Equatable {
     public let vmId: UUID
     /// The control-plane-assigned slot ("disk1", ...). Stable across power
     /// cycles so a re-realized attachment lands where the guest's fstab
-    /// expects it.
-    public let deviceName: String
+    /// expects it, unique within its VM, and validated by its type — the slot
+    /// becomes a hypervisor object id, so a sync cannot carry one a hypervisor
+    /// would refuse (STR-129).
+    public let deviceName: VolumeDeviceName
     public let readonly: Bool
     /// Explicit boot priority; informational to the agent, which receives
     /// `VMSpec.volumes` pre-sorted.
     public let bootOrder: Int?
 
-    public init(vmId: UUID, deviceName: String, readonly: Bool = false, bootOrder: Int? = nil) {
+    public init(vmId: UUID, deviceName: VolumeDeviceName, readonly: Bool = false, bootOrder: Int? = nil) {
         self.vmId = vmId
         self.deviceName = deviceName
         self.readonly = readonly

@@ -489,6 +489,39 @@ attributed to the volume's project while the workload consuming it lived in
 another. This is the same containment VM create applies to networks and
 security groups.
 
+### The attachment itself
+
+The desired attachment is stored across five columns on `volumes` — `vm_id`,
+`device_name`, `boot_order`, `readonly`, `attached_agent_id` — which the
+sync projects into `DesiredVolumeAttachment`. `VolumeAttachmentService` owns
+every transition so they cannot disagree (STR-129):
+
+- **Claiming** happens inside the mutation's own transaction, under a per-VM
+  Postgres advisory lock — the same idiom `IPAMService` uses for address
+  allocation — so the read-allocate-write behind an auto-generated `disk<N>`
+  serializes across replicas. A unique index on `(vm_id, device_name)`,
+  matching the NIC tables, is the backstop; `(vm_id, boot_order)` has one too,
+  so no two disks on a VM sit at one priority.
+- **Every transition bumps the generation and none writes `status`.** The
+  agent drops a desired entry no newer than the one it applied, so a cleared
+  attachment without a bump would leave the disk plugged in forever; `status`
+  moves only when the agent reports what it observed.
+- **Device names are validated at the boundary** (`VolumeDeviceName` in
+  `StratoShared`): they become hypervisor object ids, so a name outside
+  `[A-Za-z0-9][A-Za-z0-9._-]{0,31}` is refused with `400` rather than
+  surfacing later as an opaque hot-plug rejection. `VolumeSpec` carries the
+  validated type, so a spec cannot express an illegal one.
+- **Detach resolves the disk by volume id, never by device name.** The agent
+  registers a hot-plugged disk under `vol-<volume-id>` (`QEMUDiskIdentity`);
+  a device name is a per-VM label, and resolving by one is what made a
+  duplicate able to unplug the wrong disk from a running guest.
+- **Deleting a VM releases its volumes** inside the delete transaction: the
+  volume outlives the VM and its data is intact on the agent. `volumes.vm_id`
+  is `ON DELETE RESTRICT`, so a delete path that forgets fails loudly instead
+  of leaving the row naming a device on a VM that no longer exists. The
+  stuck-operation sweep releases any such row it still finds, which is what
+  covers a replica still running an older build mid-rollout.
+
 ### Pools and replicas (data model)
 
 Placement is expressed through the phase-1 data model from
