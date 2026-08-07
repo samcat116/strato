@@ -53,11 +53,11 @@ struct SnapshotReconciliationTests {
         }
     }
 
-    /// A sync from a pre-v32 control plane says nothing about snapshots. It
+    /// A sync from a pre-v33 control plane says nothing about snapshots. It
     /// must decode to nil, not `[]`: the agent skips its whole snapshot half on
     /// nil, and would plan against an empty desired list otherwise — reporting
     /// every artifact on the host as unaccounted for.
-    @Test("A pre-v32 sync decodes snapshots to nil, not an empty list")
+    @Test("A pre-v33 sync decodes snapshots to nil, not an empty list")
     func desiredSnapshotsAbsenceIsNotEmptiness() throws {
         let legacy = #"{"requestId":"r","timestamp":0,"syncId":"s","vms":[]}"#
         let decoded = try decodeJSON(DesiredStateMessage.self, from: legacy)
@@ -71,7 +71,7 @@ struct SnapshotReconciliationTests {
 
     /// The other direction, with sharper stakes: an empty list the control
     /// plane believed would reap every checkpoint row it holds for the agent.
-    @Test("A pre-v32 report decodes snapshots to nil, not an empty list")
+    @Test("A pre-v33 report decodes snapshots to nil, not an empty list")
     func observedSnapshotsAbsenceIsNotEmptiness() throws {
         let legacy = """
             {"requestId":"r","timestamp":0,"agentId":"a","vms":[],

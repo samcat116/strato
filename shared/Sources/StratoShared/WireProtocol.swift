@@ -498,7 +498,7 @@ public enum WireProtocol {
     /// imperative frames `volume_create`, `volume_delete`, `volume_attach`,
     /// `volume_detach`, `volume_resize` and `volume_clone` are removed.
     /// `volume_snapshot`, `volume_snapshot_delete` and `volume_info` survive —
-    /// they convert in stages 8 and 7.
+    /// they convert in stages 8 and 7 (`volume_info` did, in v32).
     ///
     /// This bump carries two of the hazard shapes in this changelog at once.
     ///
@@ -529,7 +529,35 @@ public enum WireProtocol {
     /// works: the delete path force-clears the agent-absence finalizer for an
     /// agent that cannot confirm.
     ///
-    /// Version 32: snapshots and checkpoints become desired artifacts (ADR 0001
+    /// Version 32 removes `volume_info` (ADR 0001 stage 7, STR-149). It is the
+    /// v28 shape in its cheapest form: like `agent_update` before it, the
+    /// message had *no sender* — no control-plane code path ever built one —
+    /// so removing the case changes no behavior in either direction of skew,
+    /// and the one-directional break v28 describes (an older control plane
+    /// sending a frame a newer agent can no longer decode) cannot occur
+    /// because no older control plane sends it either.
+    ///
+    /// Nothing is added to the observed report to compensate, and that is the
+    /// substance of the stage rather than a shortcut. A read is not desired
+    /// state, so the question is only ever "which side already knows this?" —
+    /// and for every field the message carried, one side already did. The
+    /// volume's format, storage path and attachment are on
+    /// `ObservedVolumeState` as of v31; its requested size is a control-plane
+    /// column, and whether the agent has reached that size is answered by
+    /// `observedGeneration`, not by a number. What is left is the thin-
+    /// provisioning triple — allocated bytes, the qcow2 dirty flag, and the
+    /// encryption flag — which no caller has ever read and which cannot be
+    /// cached (allocation moves with every guest write), so putting them in a
+    /// report assembled on every convergence action would buy a `qemu-img
+    /// info` subprocess per volume per sync for no reader. They belong in a
+    /// deliberate usage/telemetry surface, not in a convergence report; see
+    /// the note on `ObservedVolumeState`.
+    ///
+    /// `StorageBackend.volumeInfo` stays. It is the agent's own probe, used to
+    /// seed the virtual-size cache the resize planner reads, and it never had
+    /// anything to do with the wire.
+    ///
+    /// Version 33: snapshots and checkpoints become desired artifacts (ADR 0001
     /// stage 8, STR-150). `DesiredStateMessage` gains
     /// `snapshots: [DesiredSnapshotState]?` and `ObservedStateReport` gains
     /// `snapshots: [ObservedSnapshotState]?`; the six imperative frames
@@ -552,17 +580,17 @@ public enum WireProtocol {
     /// one onto an agent that could not converge it. An artifact's placement is
     /// its parent's, and the parent is already there — so `supportsSnapshotSync`
     /// gates **capture admission** instead: `POST .../snapshots` against a
-    /// pre-v32 agent is refused with "upgrade the agent", which is exactly what
+    /// pre-v33 agent is refused with "upgrade the agent", which is exactly what
     /// the pre-v22/v9 capability preflights already did, one floor higher.
     /// Artifacts already sitting on such an agent freeze until it is upgraded,
     /// and deleting one still works because the delete path force-clears the
     /// agent-absence finalizer for an agent that cannot confirm.
     ///
-    /// The *removal* half is the v28/v31 shape and breaks in one direction
-    /// only: a pre-v32 control plane driving a v32 agent would send
+    /// The *removal* half is the v28/v31/v32 shape and breaks in one direction
+    /// only: a pre-v33 control plane driving a v33 agent would send
     /// `vm_checkpoint` into an envelope the agent can no longer decode and burn
     /// the request's timeout against silence. Upgrade the control plane first.
-    public static let currentVersion = 32
+    public static let currentVersion = 33
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -660,7 +688,7 @@ public enum WireProtocol {
     /// Whether an agent registered with `version` can be sent a
     /// `sandbox_restore`. A pre-v9 agent cannot decode the envelope (unknown
     /// `MessageType` case) and never replies, so the control plane must refuse
-    /// the request up front rather than time out against silence. Since v32
+    /// the request up front rather than time out against silence. Since v33
     /// this covers restore alone: capture, delete and export are desired state
     /// and gate on `supportsSnapshotSync`.
     public static func supportsSandboxSnapshots(_ version: Int) -> Bool {
@@ -787,7 +815,7 @@ public enum WireProtocol {
     /// capability, since a v22 build on a QEMU-less host understands the frame
     /// but cannot realize it.
     ///
-    /// Since v32 this covers restore alone: capture and delete are desired
+    /// Since v33 this covers restore alone: capture and delete are desired
     /// state and gate on `supportsSnapshotSync` instead.
     public static func supportsVMCheckpoint(_ version: Int) -> Bool {
         version >= vmCheckpointMinimumVersion
@@ -903,8 +931,8 @@ public enum WireProtocol {
 
     /// The lowest protocol version that carries snapshot artifacts on the
     /// reconciliation loop rather than through imperative RPCs (see
-    /// `currentVersion` version 32 notes).
-    public static let snapshotSyncMinimumVersion = 32
+    /// `currentVersion` version 33 notes).
+    public static let snapshotSyncMinimumVersion = 33
 
     /// Whether a peer at `version` speaks declarative snapshot artifacts.
     ///
@@ -918,7 +946,7 @@ public enum WireProtocol {
     /// artifact inherits its parent's host, so there is no placement decision
     /// to gate. This one sits at **capture admission** instead: with the
     /// imperative frames gone there is no fallback, so a checkpoint requested
-    /// against a pre-v32 agent is refused with `409` rather than accepted into
+    /// against a pre-v33 agent is refused with `409` rather than accepted into
     /// a state nothing can converge.
     public static func supportsSnapshotSync(_ version: Int) -> Bool {
         version >= snapshotSyncMinimumVersion

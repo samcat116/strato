@@ -450,7 +450,7 @@ time, plus recorded compatibility constraints:
 
 ### Checkpoint and restore in place
 
-**Checkpoint** (a desired artifact since wire v32): drain host-side vsock connections
+**Checkpoint** (a desired artifact since wire v33): drain host-side vsock connections
 (exec sessions end terminally, the log follow suspends keeping its seq
 checkpoint — Firecracker refuses to snapshot a vsock device with live
 connections) → pause → `PUT /snapshot/create` → copy rootfs + config drive →
@@ -482,7 +482,7 @@ size, agent placement, and the compat constraints (Firecracker version,
 architecture, guest control-protocol version, fork layout, CPU template).
 
 A snapshot is a **desired artifact** since ADR 0001 stage 8 (STR-150, wire
-v32): capture, delete and export are desired state the owning agent converges
+v33): capture, delete and export are desired state the owning agent converges
 on, and the row is a `ConvergingResource` with its own generation and
 finalizer. `POST /api/sandboxes/:id/snapshots` and `DELETE` answer `202
 {resource, targetGeneration, mutationId}`; the client polls the snapshot's
@@ -665,7 +665,7 @@ The target retains the opaque lineage UUID for audit/display.
 
 Export makes a checkpoint durable and portable (#428):
 `POST /api/sandboxes/:id/snapshots/:snapshotId/export` (202, wire protocol
-**version 14** for the transfer client and **v32** for the entry) records that
+**version 14** for the transfer client and **v33** for the entry) records that
 the snapshot's artifacts should *also* exist in project storage. A **placement
 fact**, not a verb, since STR-150: the desired entry carries one upload slot
 per artifact, the agent converges by streaming to them, and the snapshot's

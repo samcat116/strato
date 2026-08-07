@@ -234,8 +234,9 @@ size, in this format, attached here — bumps a per-volume generation, and
 returns `202 Accepted`; the agent converges and reports back, and the volume's
 `conditions` are what say a mutation finished. Six imperative messages
 (`volume_create/delete/attach/detach/resize/clone`) were deleted in wire v31,
-and the two snapshot verbs at v32 (see below); only `volume_info` has not
-converted yet.
+and the `volume_info` read followed in v32 (STR-149) with no replacement: the
+control plane answers from the observed report and its own columns. The two
+snapshot verbs went at v33 (see below), so no volume frame is left at all.
 
 What the agent gains from the move is what the imperative handlers uniquely
 lacked: retry with a per-generation attempt cap, per-volume serial lanes, a
@@ -285,7 +286,7 @@ Snapshots are external qcow2 overlays created with the volume as backing
 file. The backing format is detected per volume rather than assumed, so raw
 volumes snapshot correctly.
 
-They are **desired artifacts** since ADR 0001 stage 8 (wire v32): a snapshot is
+They are **desired artifacts** since ADR 0001 stage 8 (wire v33): a snapshot is
 its own converging, finalizable resource with a generation, an agent, and a
 finalizer that keeps its row alive until that agent's report omits it. See
 [Snapshots and checkpoints as desired artifacts](#snapshots-and-checkpoints-as-desired-artifacts)
@@ -389,7 +390,7 @@ capture rather than a half-hour API lockout.
 
 All three artifact families — volume snapshots, full-VM checkpoints, and
 sandbox snapshots — run on the reconciliation loop since ADR 0001 stage 8
-(STR-150, wire v32). The header this replaced claimed a checkpoint "is an
+(STR-150, wire v33). The header this replaced claimed a checkpoint "is an
 action rather than a state"; that is true of the verb and false of the result.
 **"Checkpoint C exists for VM V" is a durable artifact** with an identity, a
 footprint and a host, which an agent can enumerate, diff and converge on.
@@ -403,7 +404,7 @@ What changes, uniformly:
 - **The row outlives the delete.** It goes only once the owning agent's
   full-list report omits the artifact, which is the only thing that confirms
   the bytes are gone. A delete against an agent that cannot confirm (offline,
-  or below v32) force-clears the token, because a dead agent must not make its
+  or below v33) force-clears the token, because a dead agent must not make its
   checkpoints undeletable.
 - **The captured metadata comes back on the observed report** — footprint,
   QEMU/Firecracker version, device nodes, fork layout, CPU template. As an RPC

@@ -140,39 +140,14 @@ struct MessageOrderingTests {
         #expect(a != b)
     }
 
-    /// The one volume verb that is still imperative (ADR 0001 stage 7) takes
-    /// the *reconciler's* volume lane, not a bare-id one — so the read can
-    /// never run concurrently with the reconciler resizing or deleting the
-    /// same volume (STR-148, STR-150).
-    @Test("The surviving volume frame shares the reconciler's volume lane")
-    func volumeFramesUseReconcilerLane() {
-        let volumeId = UUID().uuidString
-        let expected = ["volume/" + volumeId]
-
-        let infoKeys = MessageEnvelope.serializationKeys(
-            type: .volumeInfo, payload: payload(["volumeId": volumeId, "volumePath": "/a"])
-        )
-
-        #expect(infoKeys == expected)
-    }
-
-    /// The lane string is built from the *canonical* uuid, because the
-    /// reconciler's `laneKeys` are and a prefix defeats the normalization that
-    /// happens after the switch.
-    @Test("Volume lanes normalize uuid casing before prefixing")
-    func volumeLaneNormalizesCasing() {
-        let volumeId = UUID()
-        let lower = MessageEnvelope.serializationKeys(
-            type: .volumeInfo,
-            payload: payload(["volumeId": volumeId.uuidString.lowercased(), "volumePath": "/a"])
-        )
-        let upper = MessageEnvelope.serializationKeys(
-            type: .volumeInfo,
-            payload: payload(["volumeId": volumeId.uuidString, "volumePath": "/a"])
-        )
-        #expect(lower == upper)
-        #expect(lower == ["volume/" + volumeId.uuidString])
-    }
+    // The volume-frame lanes are gone with the last volume frame (wire v33).
+    // Create/delete/attach/detach/resize/clone became desired state at v31
+    // (STR-148), `volume_info` was deleted at v32 (STR-149), and both snapshot
+    // verbs became desired artifacts at v33 (STR-150) — so no inbound message
+    // names a volume, and there is no routing to pin. The reconciler's own
+    // `volume/<id>` lanes are still there and are covered by
+    // `VolumeReconciliationTests` / `SnapshotReconciliationTests`, which test
+    // `ReconcileWorkItem.laneKeys` directly rather than through the wire.
 
     // The network-frame lanes are gone with the imperative network path itself
     // (issue #765): topology is level-triggered from the desired-state sync,

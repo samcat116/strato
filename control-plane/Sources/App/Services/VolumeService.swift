@@ -13,8 +13,12 @@ import StratoShared
 ///
 /// What remains is placement — choosing which agent hosts a new volume, a
 /// decision that must be a committed fact before any sync can carry the volume.
-/// The `volume_info` read (ADR stage 7) is still imperative but is dispatched
-/// from nowhere in this file.
+///
+/// Nothing else is left. The `volume_info` read left the protocol in stage 7
+/// (STR-149) and this type never dispatched it; the two snapshot verbs became
+/// desired artifacts in stage 8 (STR-150). So this is an `enum` of statics
+/// now rather than an actor holding an `Application` — there is no request
+/// state to own.
 enum VolumeService {
 
     // MARK: - Placement

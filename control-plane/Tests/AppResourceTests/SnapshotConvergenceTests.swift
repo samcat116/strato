@@ -152,10 +152,10 @@ final class SnapshotConvergenceTests {
         }
     }
 
-    /// The asymmetric-absence hazard, assembly side. A pre-v32 agent gets nil
+    /// The asymmetric-absence hazard, assembly side. A pre-v33 agent gets nil
     /// rather than `[]`, because `[]` from a control plane that speaks the field
     /// would be an authoritative "you should hold no artifacts".
-    @Test("A pre-v32 agent's sync carries no snapshots field at all")
+    @Test("A pre-v33 agent's sync carries no snapshots field at all")
     func preV32AgentGetsNilSnapshots() async throws {
         try await withSnapshotApp { app, builder, user, project in
             let agentId = try await registerAgent(
@@ -335,7 +335,7 @@ final class SnapshotConvergenceTests {
         }
     }
 
-    /// The most expensive thing to get wrong in this change. A pre-v32 agent
+    /// The most expensive thing to get wrong in this change. A pre-v33 agent
     /// says nothing about snapshots; reading that silence as an empty inventory
     /// would reap every terminating checkpoint row and error every live one.
     @Test("A report with no snapshots field confirms nothing")

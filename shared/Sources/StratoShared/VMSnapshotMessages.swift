@@ -12,7 +12,7 @@ import Foundation
 //
 // This file used to open by asserting that a checkpoint "is an *action* rather
 // than a state, so it cannot ride the level-triggered desired-state sync". That
-// was true of the verb and false of the result, and wire v32 acts on the
+// was true of the verb and false of the result, and wire v33 acts on the
 // difference (ADR 0001 stage 8, STR-150): **"checkpoint C exists for VM V" is a
 // durable artifact**, so `vm_checkpoint` and `vm_snapshot_delete` are gone and
 // the checkpoint rides `DesiredStateMessage.snapshots` — captured footprint,

@@ -95,7 +95,9 @@ struct NetworkCommand: AsyncParsableCommand {
             help: "Resolver advertised to guests over DHCP. Repeat for several.")
         var dnsServers: [String] = []
 
-        @Option(name: .long, help: "Search domain advertised over DHCP (the domain_name option).")
+        @Option(
+            name: .long,
+            help: "Search domain advertised over DHCP (the domain_name option), e.g. corp.example.com.")
         var domainName: String?
 
         @Flag(
@@ -138,7 +140,7 @@ struct NetworkCommand: AsyncParsableCommand {
             help: "Replace the advertised resolvers. Repeat for several.")
         var dnsServers: [String] = []
 
-        @Option(name: .long, help: "Search domain advertised over DHCP.")
+        @Option(name: .long, help: "Search domain advertised over DHCP. Pass an empty string to clear it.")
         var domainName: String?
 
         @Option(

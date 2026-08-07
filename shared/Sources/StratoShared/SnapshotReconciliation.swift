@@ -65,7 +65,7 @@ public enum SnapshotArtifactKind: String, Codable, CaseIterable, Sendable {
     /// capture this family is actually usable on its host.
     ///
     /// A separate signal from the wire version, the `sandboxCapable` rule
-    /// (v5): a v32 build on a host with no QEMU understands a checkpoint entry
+    /// (v5): a v33 build on a host with no QEMU understands a checkpoint entry
     /// perfectly and can never realize one. The control plane reads this at
     /// capture admission rather than accepting a request into a desired state
     /// that could only fail permanently.

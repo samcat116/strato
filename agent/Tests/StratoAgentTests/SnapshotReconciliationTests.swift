@@ -242,7 +242,7 @@ struct SnapshotReconciliationTests {
 
     // MARK: - Silence
 
-    /// A sync from a pre-v32 control plane says nothing about snapshots.
+    /// A sync from a pre-v33 control plane says nothing about snapshots.
     /// Planning against an empty desired list would report every artifact on
     /// the host as unaccounted for and invite a future reading of that silence
     /// as teardown.

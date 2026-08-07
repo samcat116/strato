@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Sandbox snapshot / checkpoint messages (protocol version >= 9, issue #426)
 //
 // Creating, deleting and exporting a checkpoint were imperative RPCs until wire
-// v32 (ADR 0001 stage 8, STR-150). They are desired state now: a checkpoint's
+// v33 (ADR 0001 stage 8, STR-150). They are desired state now: a checkpoint's
 // *existence* rides `DesiredStateMessage.snapshots`, and so does *where* it
 // exists — an export is the placement fact "this snapshot also lives in the
 // control plane's object store", with the byte transfer beneath left as a
@@ -138,7 +138,7 @@ public struct SandboxRestoreMessage: WebSocketMessage {
 }
 
 // `SandboxSnapshotStatusResponse` went with `sandbox_snapshot_create` at wire
-// v32. Everything it carried now travels on `ObservedSnapshotFacts`, which is
+// v33. Everything it carried now travels on `ObservedSnapshotFacts`, which is
 // re-sent on every heartbeat rather than delivered once: the old shape forced
 // the control plane to treat a lost reply as a protocol error and mark a
 // checkpoint that in fact existed `.error`.

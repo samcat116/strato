@@ -138,7 +138,7 @@ enum SnapshotArtifactMutation {
     }
 
     /// Whether `agentId` names an agent that can converge snapshot artifacts:
-    /// known, online, and speaking wire v32.
+    /// known, online, and speaking wire v33.
     ///
     /// Read on both the admission and the delete path, for opposite purposes —
     /// admission refuses so nothing is accepted that can never converge, and

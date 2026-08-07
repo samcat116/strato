@@ -63,7 +63,7 @@ ad-hoc checks scattered through the code:
 | `supportsSandboxSync` | 5 | Sandboxes in the desired-state sync |
 | `supportsDesiredAgentUpdate` | 7 | Agent self-update carried by the sync (the only update path since v28) |
 | `supportsSandboxExec` | 8 | Interactive sandbox exec streams |
-| `supportsSandboxSnapshots` | 9 | `sandbox_restore` (capture/delete/export became desired state at v32) |
+| `supportsSandboxSnapshots` | 9 | `sandbox_restore` (capture/delete/export became desired state at v33) |
 | `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
 | `supportsFloatingIPs` | 12 | Floating IPs in the network desired state |
 | `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
@@ -72,14 +72,14 @@ ad-hoc checks scattered through the code:
 | `supportsBalloonTarget` | 19 | `VMSpec.balloonTargetBytes` — operator balloon targets on a running guest |
 | `supportsSecurityGroups` | 20 | Security groups: OVN port groups/ACLs from the sync, membership per NIC |
 | `supportsProjectNetworkIsolation` | 21 | Id-keyed OVN naming, so two same-named networks can coexist |
-| `supportsVMCheckpoint` | 22 | `vm_restore` (capture/delete became desired state at v32) |
+| `supportsVMCheckpoint` | 22 | `vm_restore` (capture/delete became desired state at v33) |
 | `supportsGraphicsConsole` | 23 | `ConsoleSpec.graphics` + `ConsoleConnectMessage.stream` — the VNC console |
 | `supportsWorkloadTombstones` | 25 | Omission is hold-and-report, not teardown (a legibility gate, not a send gate — see STR-98 below) |
 | `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
 | `supportsMetadataPort` | 27 | `metadataEnabled` on `DesiredNetworkState` **and** `NetworkSpec` — the OVN localport publishing the metadata addresses |
 | `supportsDesiredStatePull` | 29 | The control plane serves `GET /agent/desired-state`, so the agent may fetch its sync instead of waiting for a push |
 | `supportsVolumeSync` | 31 | Volumes in the desired-state sync — and a **placement** gate, not just a field gate: with the imperative volume frames gone there is no fallback path |
-| `supportsSnapshotSync` | 32 | Snapshot artifacts in the desired-state sync — and a **capture-admission** gate: an artifact has no placement decision to gate, so a capture requested against a pre-v32 agent is refused instead |
+| `supportsSnapshotSync` | 33 | Snapshot artifacts in the desired-state sync — and a **capture-admission** gate: an artifact has no placement decision to gate, so a capture requested against a pre-v33 agent is refused instead |
 
 Version 13 has no gate: it switched image downloads from signed URLs to
 relative paths fetched over SVID mTLS (issue #493), which older agents cannot
@@ -88,7 +88,7 @@ degrade around — they must upgrade.
 Versions 15 and 16 have no gates either: both add optional, nil-tolerant
 fields — `ObservedVMState.guestInfo` and the volume snapshot's attached-VM hint
 at v15 (the QEMU guest agent, issue #563; the hint lives on
-`DesiredSnapshotCapture` since v32), `ObservedVMState.memoryStats` at
+`DesiredSnapshotCapture` since v33), `ObservedVMState.memoryStats` at
 v16 (virtio-balloon statistics, issue #567). A nil from an older peer reads
 identically to "not known" and can never mean a destructive action, so no
 send-side gate is needed. One meaning did tighten without its shape changing:
@@ -257,7 +257,20 @@ reports say nothing about volumes — until the agent is upgraded. Deleting one
 still works: the delete path force-clears the agent-absence finalizer for an
 agent that cannot confirm.
 
-Version 32 makes snapshots and checkpoints desired artifacts (ADR 0001 stage
+Version 32 removes `volume_info` (ADR 0001 stage 7, STR-149) — the v28 shape
+without even v28's skew hazard, because the message had no sender on either
+side of any version. Nothing was added to the observed report to replace it: a
+read is not desired state, and for every field the message carried, one side
+already knew the answer. Format, storage path and attachment have been on
+`ObservedVolumeState` since v31; the requested size is a control-plane column
+whose realization `observedGeneration` confirms. The remainder — allocated
+bytes, the qcow2 dirty flag, the encryption flag — has no reader, and
+allocation moves with every guest write, so it cannot be cached the way virtual
+size is and would cost a `qemu-img info` per volume on a report assembled on
+every convergence action. `StorageBackend.volumeInfo` survives as the agent's
+own probe behind the resize planner's size cache.
+
+Version 33 makes snapshots and checkpoints desired artifacts (ADR 0001 stage
 8, STR-150). `DesiredStateMessage` gains `snapshots` and `ObservedStateReport`
 gains its counterpart; seven imperative frames go — `volume_snapshot`,
 `volume_snapshot_delete`, `vm_checkpoint`, `vm_snapshot_delete`,
@@ -274,7 +287,7 @@ Where the gate sits is what differs from v31. A volume is *placed* by the
 control plane, so v31 could simply refuse to schedule one onto an agent that
 could not converge it; an artifact inherits its parent's host, so there is no
 placement decision to gate. `supportsSnapshotSync` gates **capture admission**
-instead — `POST .../snapshots` against a pre-v32 agent is refused with `409`,
+instead — `POST .../snapshots` against a pre-v33 agent is refused with `409`,
 which is exactly what the pre-v22/v9 capability preflights already did, one
 floor higher. Artifacts already on such an agent freeze until it is upgraded;
 deleting one still works, by force-clearing the agent-absence finalizer.
@@ -297,7 +310,6 @@ dual-mode rollout.
 | `vm_reboot` | Reboot — still imperative because a reboot is an action, not a state |
 | `vm_restore` | Load a full-VM checkpoint back into a live QEMU process and resume (v22+, issue #564). Still imperative because a restore is an *edge*: "this VM should be at checkpoint C" is not something an agent can re-converge on, since the guest starts writing the moment it resumes. Gated on the `snapshot:VMCheckpoint` capability, since only a QEMU-capable agent can realize it |
 | `sandbox_restore` | The sandbox counterpart (v9+, issue #426), with optional artifact descriptors for a cross-agent restore (v14+, issue #428) |
-| `volume_info` | The last imperative volume verb (QEMU-backed VMs only). Create, delete, attach, detach, resize and clone became desired state in v31 (STR-148) and both snapshot verbs in v32 (STR-150); the read converts in ADR 0001 stage 7 |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
 | `sandbox_exec_start`, `sandbox_exec_input`, `sandbox_exec_resize`, `sandbox_exec_close` | Interactive exec into a sandbox (v8+) |
 
@@ -392,7 +404,7 @@ and the report is assembled on every convergence action plus the heartbeat
 cadence. A resize is confirmed the way a VM resize is, by `observedGeneration`
 catching up.
 
-### Desired snapshot artifacts (wire v32)
+### Desired snapshot artifacts (wire v33)
 
 `DesiredSnapshotState` carries one artifact's id, its **kind** — a volume
 snapshot, a VM checkpoint, or a sandbox snapshot — the parent it was captured
@@ -439,7 +451,7 @@ the agent could not measure must not silently become a free one in quota
 accounting.
 
 A nil `snapshots` on the report has v31's two causes and the same response:
-an agent below v32 does not speak the field, and a v32 agent that cannot read
+an agent below v33 does not speak the field, and a v33 agent that cannot read
 its snapshot record file says so this way rather than claiming an empty
 inventory.
 

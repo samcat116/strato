@@ -367,7 +367,7 @@ final class VMSnapshotTests {
     }
 
     /// Deleting an artifact whose agent can never confirm — unplaced, offline,
-    /// or below wire v32 — force-clears the finalizer, so upgrading the control
+    /// or below wire v33 — force-clears the finalizer, so upgrading the control
     /// plane before the fleet cannot make checkpoints permanently undeletable.
     @Test("Deleting a checkpoint with no reachable agent removes the row directly")
     func deleteWithoutAgentRemovesRow() async throws {

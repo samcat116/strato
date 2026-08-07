@@ -24,11 +24,21 @@ export const emptyDhcpForm: DhcpFormState = {
   leaseTime: "",
 };
 
-/** Normalizes the string-backed form into request fields. */
+/**
+ * Normalizes the string-backed form into request fields.
+ *
+ * An emptied search domain goes out as `""`, not `undefined`: the update
+ * endpoint reads an absent field as "leave alone", so sending `undefined` would
+ * make clearing the field impossible — and would leave a network holding a
+ * domain that predates validation permanently unsaveable, since every later
+ * edit resubmits the whole form and fails on a value the user did try to
+ * remove. The empty string is the documented clearing gesture, and the create
+ * path reads it as absent.
+ */
 export function parseDhcpForm(form: DhcpFormState): {
   dhcpEnabled: boolean;
   dnsServers: string[];
-  domainName?: string;
+  domainName: string;
   leaseTime?: number;
 } {
   const dnsServers = form.dnsServers
@@ -41,7 +51,7 @@ export function parseDhcpForm(form: DhcpFormState): {
   return {
     dhcpEnabled: form.dhcpEnabled,
     dnsServers,
-    domainName: form.domainName.trim() || undefined,
+    domainName: form.domainName.trim(),
     leaseTime: Number.isFinite(leaseTime) ? leaseTime : undefined,
   };
 }
@@ -122,7 +132,8 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
         />
         <p id="domainNameHelp" className="text-xs text-muted-foreground">
           Appended to unqualified hostname lookups — a DHCP option when DHCP is
-          on, the cloud-init search list otherwise.
+          on, the cloud-init search list otherwise. Must be fully qualified: at
+          least two labels, like a DNS zone name.
         </p>
       </div>
 

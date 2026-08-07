@@ -119,7 +119,7 @@ level-triggered sync and remain correlated request/response:
   writing the moment it resumes.
 
 Volume operations left this list in STR-148 (wire v31) and every snapshot
-artifact's capture, delete and export in STR-150 (v32) — including
+artifact's capture, delete and export in STR-150 (v33) — including
 `sandbox_snapshot_export`, which is a placement fact now rather than a verb.
 
 When the serving replica doesn't hold the agent's socket, the exchange is

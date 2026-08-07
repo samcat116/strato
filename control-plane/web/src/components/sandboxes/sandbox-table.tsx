@@ -12,7 +12,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { SandboxStatusBadge } from "./sandbox-status-badge";
 import { SandboxActions } from "./sandbox-actions";
-import { formatMemory } from "./format";
+import { formatMemory } from "@/lib/format-memory";
 import type { Sandbox } from "@/types/api";
 
 interface SandboxTableProps {

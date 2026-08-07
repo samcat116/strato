@@ -869,9 +869,16 @@ public struct ObservedSandboxState: Codable, Sendable {
 /// a `qemu-img info` subprocess per volume, and this report is assembled on
 /// every convergence action plus the heartbeat cadence; on a dense host that is
 /// not affordable. A resize is confirmed the same way a VM resize is, by
-/// `observedGeneration` catching up. When `volume_info` folds into this report
-/// (ADR stage 7) the size/dirty/encrypted fields land here and will need an
-/// agent-side cache to stay affordable.
+/// `observedGeneration` catching up.
+///
+/// ADR stage 7 (STR-149) settled the same question for the rest of what
+/// `volume_info` used to return, and settled it the same way: nothing was
+/// added. Format, path and attachment were already here; allocated bytes, the
+/// dirty flag and the encryption flag have no reader, and allocation in
+/// particular moves with every guest write, so it cannot be cached the way
+/// virtual size can and would cost a subprocess per volume per report. A
+/// per-volume usage surface — sampled on its own cadence, off the convergence
+/// path — is the right home for those if a reader ever appears.
 public struct ObservedVolumeState: Codable, Sendable {
     public let volumeId: UUID
     /// Whether the volume's data exists on this host. A `false` entry is a
@@ -1131,8 +1138,8 @@ public struct ObservedStateReport: WebSocketMessage {
     /// really gone.
     ///
     /// `Optional` for `volumes`' reason. Nil has the same two causes and the
-    /// same response — do nothing: an agent older than v32 does not speak the
-    /// field at all, and a v32 agent that cannot enumerate one of its artifact
+    /// same response — do nothing: an agent older than v33 does not speak the
+    /// field at all, and a v33 agent that cannot enumerate one of its artifact
     /// stores says so this way rather than claiming an empty inventory. The
     /// control plane must never read the absence as "every checkpoint on this
     /// agent is gone".

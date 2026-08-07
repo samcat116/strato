@@ -5790,6 +5790,7 @@ export interface components {
             projectId?: string;
             dhcpEnabled?: boolean;
             dnsServers?: string[];
+            /** @description DHCP search domain for the network's guests. A sequence of RFC 1123 labels — `corp.example.com` or a bare `internal` — stored lowercased and without a trailing dot. An empty string clears it. */
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;
@@ -5807,6 +5808,7 @@ export interface components {
             ipv6Enabled?: boolean;
             dhcpEnabled?: boolean;
             dnsServers?: string[];
+            /** @description DHCP search domain for the network's guests. A sequence of RFC 1123 labels — `corp.example.com` or a bare `internal` — stored lowercased and without a trailing dot. An empty string clears it. */
             domainName?: string;
             leaseTime?: number;
             externalAccess?: boolean;

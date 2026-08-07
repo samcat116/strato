@@ -110,7 +110,7 @@ observed state. Concretely:
 | `sandbox_snapshot_export` | A placement fact ("snapshot S exists on agent B"); the byte transfer beneath remains a transport concern (**landed**, STR-150) |
 | `agent_update` (imperative form) | Deleted; `DesiredAgentUpdate` (issue #434) already exists and is the proof this migration works |
 | `vm_reboot`, `vm_restore`, `sandbox_restore` | Edge-as-nonce: a monotonic `rebootGeneration` (and restore analog) on the desired entry; the agent persists last-applied in its manifest and acts when desired > applied |
-| `volume_info` | Deleted; the fields join the observed report |
+| `volume_info` | Deleted; its fields were already on the observed report or in the control plane's own database (see the stage 7 amendment) |
 | `console_*`, `sandbox_exec_*`, `vm_log`, `sandbox_log` | **Stay imperative, permanently.** Live byte pipes with a human on the end; the uniformity that matters is Cedar authorization and addressing, not transport |
 
 The nonce counters must be durable on the agent (`VMManifestStore`);
@@ -365,6 +365,23 @@ agent is involved.
    attachment record and merges it into the spawn configuration.
 6. **Drop imperative `agent_update`** (one caller; declarative path exists).
 7. **`volume_info` → observed report.**
+
+   *Amended in implementation (STR-149):* this stage shipped as a **pure
+   deletion** at wire v32, with nothing added to the observed report. The
+   message had no sender — no control-plane path ever built one — so the
+   removal is the v28 shape without even v28's one-directional skew hazard.
+   The fold it was named for had already happened by accident: `format`,
+   `storagePath` and the attachment landed on `ObservedVolumeState` in stage
+   5, and the requested size is a control-plane column whose realization is
+   confirmed by `observedGeneration`, not by a reported number. What was left
+   over — allocated bytes, the qcow2 dirty flag, the encryption flag — has no
+   reader anywhere in the product, and allocation changes with every guest
+   write, so it cannot ride the virtual-size cache the resize planner uses.
+   Adding it would buy a `qemu-img info` subprocess per volume on a report
+   assembled on every convergence action, for nobody. If a usage surface ever
+   wants those numbers, it should sample them on its own cadence rather than
+   ride the convergence path. `StorageBackend.volumeInfo` is untouched — it is
+   the agent's own probe and was never a wire concern.
 8. **Snapshots and checkpoints as desired artifacts** (retention design
    included).
 
@@ -377,12 +394,12 @@ agent is involved.
    not see existed. `volume_snapshot`, `volume_snapshot_delete`,
    `vm_checkpoint`, `vm_snapshot_delete`, `sandbox_snapshot_create`,
    `sandbox_snapshot_delete` and `sandbox_snapshot_export` are deleted outright
-   at wire v32.
+   at wire v33.
 
    Where the gate sits differs from stage 5, because an artifact has no
    placement decision to gate: it inherits its parent's host. `supportsSnapshotSync`
    therefore gates **capture admission** — `POST .../snapshots` against a
-   pre-v32 agent is refused with `409`, exactly as the pre-v22/v9 capability
+   pre-v33 agent is refused with `409`, exactly as the pre-v22/v9 capability
    preflights already did, one floor higher. Artifacts already sitting on such
    an agent freeze until it is upgraded; deleting one still works, because the
    delete path force-clears the agent-absence finalizer for an agent that cannot

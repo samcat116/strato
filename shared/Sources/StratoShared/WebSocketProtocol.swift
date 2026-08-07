@@ -21,7 +21,7 @@ public enum MessageType: String, Codable, Sendable {
     // RAM image back into a live QEMU process is an edge, not a state, and
     // converts to a nonce on the desired entry in STR-151.
     //
-    // `vm_checkpoint` and `vm_snapshot_delete` were removed in wire v32: a
+    // `vm_checkpoint` and `vm_snapshot_delete` were removed in wire v33: a
     // checkpoint's *result* is a durable artifact, so it rides
     // `DesiredStateMessage.snapshots` and is confirmed through
     // `ObservedStateReport.snapshots` (ADR 0001 stage 8, STR-150).
@@ -39,10 +39,11 @@ public enum MessageType: String, Codable, Sendable {
     // `volume_resize` and `volume_clone` were removed in wire v31: volumes are
     // desired state now (ADR 0001 stage 5, STR-148), realized from
     // `DesiredStateMessage.volumes` and confirmed through
-    // `ObservedStateReport.volumes`. `volume_snapshot` and
-    // `volume_snapshot_delete` followed them at v32 (stage 8, STR-150), onto
-    // `DesiredStateMessage.snapshots`. What remains here is the read (stage 7).
-    case volumeInfo = "volume_info"
+    // `ObservedStateReport.volumes`. `volume_info` followed in v32 (stage 7,
+    // STR-149) — a read is not an action, and the control plane answers it
+    // from the observed report it already stores. `volume_snapshot` and
+    // `volume_snapshot_delete` went at v33 (stage 8, STR-150), onto
+    // `DesiredStateMessage.snapshots`. Nothing volume-shaped is left here.
 
     // Console operations
     case consoleConnect = "console_connect"
@@ -80,7 +81,7 @@ public enum MessageType: String, Codable, Sendable {
     // converts to a nonce on the desired entry in STR-151.
     //
     // `sandbox_snapshot_create`, `sandbox_snapshot_delete` and
-    // `sandbox_snapshot_export` were removed in wire v32 (STR-150): the first
+    // `sandbox_snapshot_export` were removed in wire v33 (STR-150): the first
     // two are the artifact's existence, and the third is *where* it exists —
     // both states, both on `DesiredStateMessage.snapshots`.
     case sandboxRestore = "sandbox_restore"
@@ -752,54 +753,17 @@ public struct ConsoleDisconnectedMessage: WebSocketMessage {
 
 // MARK: - Volume Operation Messages (QEMU only)
 
-/// Message to get volume information
-public struct VolumeInfoMessage: WebSocketMessage {
-    public var type: MessageType { .volumeInfo }
-    public let requestId: String
-    public let timestamp: Date
-    public let volumeId: String
-    public let volumePath: String
+// The volume message section is empty by design. `volume_create`,
+// `volume_delete`, `volume_attach`, `volume_detach`, `volume_resize` and
+// `volume_clone` became desired state at wire v31 (STR-148); `volume_info` was
+// deleted at v32 as a read that was never an action (STR-149); and
+// `volume_snapshot`/`volume_snapshot_delete` became desired *artifacts* at v33
+// (STR-150). What each carried now lives on `DesiredVolumeState`,
+// `ObservedVolumeState`, `DesiredSnapshotState` or `ObservedSnapshotState` —
+// or, for the thin-provisioning triple `volume_info` reported, nowhere, having
+// had no reader.
 
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        volumeId: String,
-        volumePath: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.volumeId = volumeId
-        self.volumePath = volumePath
-    }
-}
-
-/// Response with volume information from agent
-public struct VolumeInfoResponse: Codable, Sendable {
-    public let volumeId: String
-    public let actualSize: Int64  // Actual disk usage
-    public let virtualSize: Int64  // Provisioned size
-    public let format: String
-    public let dirty: Bool  // Has uncommitted changes
-    public let encrypted: Bool
-
-    public init(
-        volumeId: String,
-        actualSize: Int64,
-        virtualSize: Int64,
-        format: String,
-        dirty: Bool = false,
-        encrypted: Bool = false
-    ) {
-        self.volumeId = volumeId
-        self.actualSize = actualSize
-        self.virtualSize = virtualSize
-        self.format = format
-        self.dirty = dirty
-        self.encrypted = encrypted
-    }
-}
-
-// `VolumeStatusResponse` went with `volume_snapshot` at wire v32 (STR-150).
+// `VolumeStatusResponse` went with `volume_snapshot` at wire v33 (STR-150).
 // It was the last imperative volume reply, and what it carried — status and
 // storage path — is `ObservedVolumeState` / `ObservedSnapshotFacts` now.
 
