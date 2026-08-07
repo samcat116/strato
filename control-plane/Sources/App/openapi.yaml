@@ -10708,8 +10708,9 @@ components:
           description: >-
             Action patterns — an exact action (`vm:read`), a service wildcard
             (`vm:*`, which covers actions shipped after the credential was
-            minted), or `*` for every action. An empty list is rejected; write
-            `["*"]` for an unrestricted credential.
+            minted), `read` (every action whose name says it reads, resolved on
+            every check so it stays current), or `*` for every action. An empty
+            list is rejected; write `["*"]` for an unrestricted credential.
           items:
             type: string
         nodeType:
@@ -14096,7 +14097,7 @@ components:
           $ref: "#/components/schemas/IAMPolicyEffect"
     IAMActionCatalogEntry:
       type: object
-      required: [action, service, resourceTypes, roles, membershipDerived, readOnly]
+      required: [action, service, resourceTypes, roles, membershipDerived]
       properties:
         action:
           type: string
@@ -14123,12 +14124,6 @@ components:
             Granted by bare organization membership, with no binding behind it.
             Including such an action in a custom role is legal but buys nothing
             inside the org.
-        readOnly:
-          type: boolean
-          description: >-
-            Whether the action reads. This is the set a read-only credential is
-            limited to, published here rather than duplicated client-side so a
-            "read only" preset cannot drift from what the evaluator enforces.
     IAMActionCatalogService:
       type: object
       required: [service, actions]

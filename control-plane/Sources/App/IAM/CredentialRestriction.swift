@@ -25,13 +25,27 @@ import Vapor
 /// disagree.
 struct CredentialRestriction: Equatable, Sendable {
     /// Action patterns, in the guardrail vocabulary: exact actions
-    /// (`vm:read`), service wildcards (`vm:*`), or the universal `*`.
+    /// (`vm:read`), service wildcards (`vm:*`), or the universal `*` — plus one
+    /// pattern of this vocabulary's own, `read`.
     ///
     /// `["*"]` permits every action; **`[]` permits none**. That asymmetry with
     /// `GuardrailActions.canonicalize` — where an empty pattern list means the
     /// broadest *ceiling*, i.e. everything — is the whole reason `validated`
     /// below rejects empty input before canonicalizing rather than after.
     let actions: [String]
+
+    /// "Every action whose name says it reads", resolved against
+    /// `IAMRoleRegistry.readActions` at *check* time.
+    ///
+    /// Symbolic on purpose. `readActions` is derived from action names so that
+    /// an action shipped later lands on the right side by default, and a
+    /// credential that stored today's expansion would quietly lose that: the
+    /// next release's `dnsrecord:read` would 403 under a
+    /// `credential-restriction` forbid nobody wrote, while a legacy
+    /// `read`-scoped key picked it up for free. One pattern, resolved on every
+    /// check, keeps the two spellings of "read only" the same statement
+    /// forever.
+    static let readPattern = "read"
 
     /// The subtree the credential may act in, or nil for "anywhere the
     /// principal can". A resource is in scope when the node appears in its
@@ -50,22 +64,33 @@ struct CredentialRestriction: Equatable, Sendable {
     /// resurrect it with full power.
     static let denyAll = CredentialRestriction(actions: [], node: nil)
 
+    /// Every action whose name says it reads, anywhere. What the legacy `read`
+    /// scope resolves to, and what the API mints for a read-only credential —
+    /// one value, so the two paths cannot drift.
+    static let readOnly = CredentialRestriction(actions: [readPattern], node: nil)
+
     var isUnrestricted: Bool { self == .unrestricted }
 
     /// Whether this restriction covers `action` on a resource whose ancestor
     /// chain is `chain` (leaf first, the checked node at index 0 — the shape
     /// `CedarEntitySlice.chain` carries).
     ///
-    /// Identity-plane actions are exempt from the *node* half. A user record is
+    /// Identity-plane *reads* are exempt from the node half. A user record is
     /// parentless by design (`IAMNodeType.user`), so its chain is one element
     /// long and could never contain a project — without this exemption a
     /// project-scoped credential could not read its own user record, and
     /// `strato whoami` and the frontend's identity bootstrap would break for
-    /// every scoped token. The action half still applies.
+    /// every scoped token.
+    ///
+    /// The exemption stops at reads. `user:update` and `user:delete` are
+    /// parentless for the same structural reason, but exempting them would let
+    /// a credential scoped to one project mutate or delete any user in the
+    /// deployment — the identity plane would be the one global surface a scoped
+    /// token could still reach. The action half applies throughout.
     func permits(action: String, chain: [IAMNode]) -> Bool {
         guard permits(action: action) else { return false }
         guard let node else { return true }
-        if IAMRoleRegistry.identityActions.contains(action) { return true }
+        if IAMRoleRegistry.identityReadActions.contains(action) { return true }
         return chain.contains(node)
     }
 
@@ -73,7 +98,8 @@ struct CredentialRestriction: Equatable, Sendable {
     /// (`Request.allowsScopelessPlatformRow`) where there is no resource to
     /// scope against.
     func permits(action: String) -> Bool {
-        GuardrailRendering.patternsCover(actions, action: action)
+        if actions.contains(Self.readPattern), IAMRoleRegistry.readActions.contains(action) { return true }
+        return GuardrailRendering.patternsCover(actions, action: action)
     }
 
     /// The restriction a pre-STR-115 credential resolves to, from its legacy
@@ -81,16 +107,16 @@ struct CredentialRestriction: Equatable, Sendable {
     ///
     /// `write` and `admin` both mean unrestricted, which is the honest reading
     /// of what they did: `APIKeyScope.required(for:)` never asked for `admin`,
-    /// so `read`+`write` was already full account power. `read` maps to
-    /// `IAMRoleRegistry.readActions` — the closest expressible statement of
-    /// "safe methods only", now checked against the act rather than the HTTP
-    /// verb.
+    /// so `read`+`write` was already full account power. `read` maps to the
+    /// `read` pattern — the closest expressible statement of "safe methods
+    /// only", now checked against the act rather than the HTTP verb, and the
+    /// *same* value a credential minted read-only through the API carries.
     init(legacyScopes: [String]) {
         let granted = Set(legacyScopes.compactMap(APIKeyScope.init(rawValue:)))
         if granted.contains(.write) || granted.contains(.admin) {
             self = .unrestricted
         } else if granted.contains(.read) {
-            self = CredentialRestriction(actions: IAMRoleRegistry.readActions.sorted(), node: nil)
+            self = .readOnly
         } else {
             self = .denyAll
         }
@@ -127,7 +153,18 @@ struct CredentialRestriction: Equatable, Sendable {
                     "A credential restriction must name at least one action; use \"*\" for an unrestricted credential"
             )
         }
-        let canonical = try GuardrailActions.canonicalize(trimmed)
+        // `read` is this vocabulary's, not the guardrail vocabulary's, so it is
+        // held back from `canonicalize` — which would reject it as an unknown
+        // action — and merged after. Canonicalizing an empty remainder would
+        // hand back `["*"]` (the broadest *ceiling*), so a `read`-only list
+        // skips the call entirely.
+        let concrete = trimmed.filter { $0 != readPattern }
+        let symbolic = trimmed.contains(readPattern) ? [readPattern] : []
+        let canonicalConcrete = concrete.isEmpty ? [] : try GuardrailActions.canonicalize(concrete)
+        let canonical =
+            canonicalConcrete.contains(GuardrailActions.wildcard)
+            ? [GuardrailActions.wildcard]
+            : (canonicalConcrete + symbolic).sorted()
 
         var node: IAMNode?
         switch (nodeType, nodeID) {
@@ -162,12 +199,13 @@ struct CredentialRestriction: Equatable, Sendable {
     }
 
     /// Whether this restriction's patterns cover everything `pattern` names.
-    /// A `service:*` pattern is covered only by `*` or the same service
-    /// wildcard: enumerating today's `vm:` actions would silently stop covering
-    /// the next one shipped.
+    /// An open-ended pattern (`service:*`, `read`) is covered only by `*` or by
+    /// itself: enumerating today's members would silently stop covering the
+    /// ones shipped next.
     private func coversPattern(_ pattern: String) -> Bool {
         if actions.contains(GuardrailActions.wildcard) { return true }
         if pattern == GuardrailActions.wildcard { return false }
+        if pattern == Self.readPattern { return actions.contains(Self.readPattern) }
         if pattern.hasSuffix(":*") { return actions.contains(pattern) }
         return permits(action: pattern)
     }

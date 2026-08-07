@@ -154,11 +154,52 @@ final class CredentialScopeCompatibilityTests {
         }
     }
 
-    @Test("The three tightened actions are deliberately outside the read action set")
+    @Test("The tightened actions are deliberately outside the read action set")
     func tighteningsArePinned() {
         let read = CredentialRestriction(legacyScopes: ["read"])
-        for action in ["sandbox:exec", "vm:viewConsole", "vm:exec", "vm:runCommand"] {
+        for action in ["sandbox:exec", "vm:viewConsole", "vm:exec", "vm:runCommand", "agent:manage"] {
             #expect(!read.permits(action: action), "\(action) is reachable by a read credential")
+        }
+    }
+
+    /// The fourth tightening, and the only one that does not surface as a 403.
+    /// `GET /api/agent-enrollments` gates its *read* on `agent:manage` — the
+    /// one list in the app that does — so a read-restricted credential matches
+    /// no row and gets an empty page, which reads exactly like "there are no
+    /// enrollments". Pinned here because the shape is the surprise, and because
+    /// giving the listing a read-shaped action later should break this test on
+    /// purpose.
+    @Test("A read-scoped key sees an empty enrollment list, not a 403")
+    func enrollmentListIsEmptyForReadCredentials() async throws {
+        try await withApp { app in
+            let f = try await fixture(app, admin: true)
+            let enrollment = AgentEnrollment(
+                agentName: "compat-agent",
+                spiffeID: "spiffe://example.org/agent/compat-agent",
+                organizationScope: .organization(try f.org.requireID()))
+            try await enrollment.save(on: app.db)
+
+            struct Page: Content { let total: Int }
+
+            // The row is visible to the same user through an unrestricted
+            // credential, so the empty page below is the credential's doing and
+            // not an empty table.
+            try await app.test(.GET, "/api/agent-enrollments") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: f.writeKey)
+            } afterResponse: { res async throws in
+                #expect(res.status == .ok)
+                #expect(try res.content.decode(Page.self).total == 1)
+            }
+
+            try await app.test(.GET, "/api/agent-enrollments") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: f.readKey)
+            } afterResponse: { res async throws in
+                // 200 with nothing in it — indistinguishable from "there are no
+                // enrollments", which is why this one is called out in the docs
+                // rather than left to be discovered.
+                #expect(res.status == .ok)
+                #expect(try res.content.decode(Page.self).total == 0)
+            }
         }
     }
 

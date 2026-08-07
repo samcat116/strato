@@ -6253,7 +6253,7 @@ export interface components {
              * @description Request only. Sugar for the role's action list, expanded at write time so a later edit to the role cannot widen an issued credential. Mutually exclusive with `actions`.
              */
             role?: string;
-            /** @description Action patterns — an exact action (`vm:read`), a service wildcard (`vm:*`, which covers actions shipped after the credential was minted), or `*` for every action. An empty list is rejected; write `["*"]` for an unrestricted credential. */
+            /** @description Action patterns — an exact action (`vm:read`), a service wildcard (`vm:*`, which covers actions shipped after the credential was minted), `read` (every action whose name says it reads, resolved on every check so it stays current), or `*` for every action. An empty list is rejected; write `["*"]` for an unrestricted credential. */
             actions?: string[];
             /** @description The subtree the credential may act in. Both `nodeType` and `nodeId` or neither. Identity-plane actions (`user:read` and friends) are exempt, since a user record is parentless and would otherwise be unreachable from any scoped credential. */
             nodeType?: string;
@@ -7947,8 +7947,6 @@ export interface components {
             roles: string[];
             /** @description Granted by bare organization membership, with no binding behind it. Including such an action in a custom role is legal but buys nothing inside the org. */
             membershipDerived: boolean;
-            /** @description Whether the action reads. This is the set a read-only credential is limited to, published here rather than duplicated client-side so a "read only" preset cannot drift from what the evaluator enforces. */
-            readOnly: boolean;
         };
         IAMActionCatalogService: {
             service: string;

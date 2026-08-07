@@ -263,6 +263,17 @@ enum IAMRoleRegistry {
     /// plumbing.
     static let identityActions: Set<String> = ["user:read", "user:update", "user:delete"]
 
+    /// The read half of `identityActions`.
+    ///
+    /// A user record is parentless, so it sits in no subtree and a node-scoped
+    /// credential could never reach one — which would break `strato whoami` and
+    /// the frontend's identity bootstrap for every scoped token. That argument
+    /// is entirely about *reading* a record, so only the read half is exempt
+    /// from a restriction's node scope (STR-115): a token issued for one
+    /// project must not be able to delete users anywhere, which is exactly the
+    /// reach `requireSystemAdmin` refuses it on every other platform surface.
+    static let identityReadActions: Set<String> = identityActions.intersection(readActions)
+
     /// In-guest command execution on a VM (the guest-agent stack, issue #804):
     /// `vm:exec` is an interactive session, `vm:runCommand` a non-interactive
     /// run with its output captured.

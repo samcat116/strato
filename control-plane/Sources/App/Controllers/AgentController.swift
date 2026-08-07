@@ -420,6 +420,15 @@ struct AgentController: RouteCollection {
         // asks through the translator — and the request memo is keyed on the
         // translated action, so a listed row and the item route it links to are
         // decided once, not twice.
+        //
+        // This is the one list in the app whose *read* is gated on a write-shaped
+        // action, which STR-115 gave a consequence: `agent:manage` is not a read,
+        // so a read-restricted credential now matches no row and gets an empty
+        // page rather than a 403 — indistinguishable from "no enrollments". It is
+        // called out in `docs/architecture/iam.md` alongside the other
+        // tightenings. Gating the listing on a read-shaped action instead would
+        // fix the shape but widen who may see enrollments, which is a binding
+        // question and not this issue's to answer.
         let manageable = try await req.canFilter(
             "agent:manage", on: enrollments.compactMap { $0.organizationScope?.checkNode })
         let visible = enrollments.filter { enrollment in

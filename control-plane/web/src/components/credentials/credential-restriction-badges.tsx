@@ -57,9 +57,13 @@ export function CredentialRestrictionBadges({
             <Badge
               key={action}
               variant="secondary"
-              className="bg-muted text-foreground font-mono text-xs"
+              className={
+                action === "read"
+                  ? "bg-muted text-foreground"
+                  : "bg-muted text-foreground font-mono text-xs"
+              }
             >
-              {action}
+              {action === "read" ? "Read only" : action}
             </Badge>
           ))}
           {actions.length > MAX_VISIBLE_ACTIONS && (

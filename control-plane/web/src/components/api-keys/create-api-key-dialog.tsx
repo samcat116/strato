@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useActionCatalog, useCreateAPIKey } from "@/lib/hooks";
+import { useCreateAPIKey } from "@/lib/hooks";
 import { toast } from "sonner";
 import type { CreateAPIKeyResponse, CredentialRestriction } from "@/types/api";
 
@@ -38,12 +38,13 @@ const ACCESS_MODES: { value: AccessMode; label: string; description: string }[] 
   {
     value: "readOnly",
     label: "Read only",
-    description: "Every action whose name says it reads — no starts, no writes, no console.",
+    description:
+      "Every action whose name says it reads — no starts, no writes, no console. Stays current as actions are added.",
   },
   {
     value: "custom",
     label: "Specific actions",
-    description: "A comma-separated list, e.g. vm:read, vm:start, volume:*",
+    description: "A comma-separated list, e.g. vm:read, vm:start, volume:*, read",
   },
 ];
 
@@ -52,14 +53,6 @@ export function CreateAPIKeyDialog({
   onOpenChange,
 }: CreateAPIKeyDialogProps) {
   const createKey = useCreateAPIKey();
-  // The read-only action set comes from the server's action catalog, so the
-  // preset is exactly what the evaluator enforces for a read-limited
-  // credential rather than a second list to keep in step.
-  const catalog = useActionCatalog();
-  const readOnlyActions = (catalog.data ?? [])
-    .flatMap((service) => service.actions)
-    .filter((entry) => entry.readOnly)
-    .map((entry) => entry.action);
   const [name, setName] = useState("");
   const [accessMode, setAccessMode] = useState<AccessMode>("full");
   const [customActions, setCustomActions] = useState("");
@@ -79,22 +72,22 @@ export function CreateAPIKeyDialog({
       return;
     }
 
+    // `read` is a pattern the server resolves on every check, not a list
+    // expanded here: a key minted read-only today must pick up an action added
+    // next release exactly as a legacy `read`-scoped key does, rather than
+    // freezing today's set into its row.
     const actions =
       accessMode === "full"
         ? ["*"]
         : accessMode === "readOnly"
-          ? readOnlyActions
+          ? ["read"]
           : customActions
               .split(",")
               .map((action) => action.trim())
               .filter(Boolean);
 
     if (actions.length === 0) {
-      toast.error(
-        accessMode === "readOnly"
-          ? "The action catalog has not loaded yet — try again in a moment"
-          : "List at least one action, or choose a preset"
-      );
+      toast.error("List at least one action, or choose a preset");
       return;
     }
 

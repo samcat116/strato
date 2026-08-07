@@ -179,12 +179,6 @@ struct RoleController: RouteCollection {
         /// (`IAMRoleRegistry.membershipDerivedActions`). Including such an
         /// action in a custom role is legal but buys nothing inside the org.
         let membershipDerived: Bool
-        /// Whether this action reads (`IAMRoleRegistry.readActions`) — what the
-        /// legacy `read` credential scope resolves to, and what the API-key
-        /// dialog's "read only" preset is built from. Published rather than
-        /// duplicated client-side, so the preset cannot drift from the set the
-        /// evaluator actually enforces (STR-115).
-        let readOnly: Bool
     }
 
     /// The actions of one service, the grouping the editor renders.
@@ -415,8 +409,7 @@ struct RoleController: RouteCollection {
                 .map(\.rawValue)
                 .sorted(),
             roles: IAMRoleRegistry.roles(granting: action).map(\.rawValue).sorted(),
-            membershipDerived: IAMRoleRegistry.membershipDerivedActions.contains(action),
-            readOnly: IAMRoleRegistry.readActions.contains(action)
+            membershipDerived: IAMRoleRegistry.membershipDerivedActions.contains(action)
         )
     }
 

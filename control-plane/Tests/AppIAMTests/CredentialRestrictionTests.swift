@@ -102,17 +102,32 @@ struct CredentialRestrictionTests {
     /// A user record is parentless, so its chain can never contain a project.
     /// Without the exemption a project-scoped token could not read its own
     /// user record and `strato whoami` would break.
-    @Test("Identity-plane actions are exempt from the node scope")
-    func identityActionsExempt() throws {
+    @Test("Identity-plane reads are exempt from the node scope")
+    func identityReadsExempt() throws {
         let user = IAMNode(type: .user, id: UUID())
         let r = try restriction(["*"], node: project)
-        for action in IAMRoleRegistry.identityActions {
+        for action in IAMRoleRegistry.identityReadActions {
             #expect(r.permits(action: action, chain: [user]))
         }
         // Exempt from the node half only — not from the action half.
         let readOnly = try restriction(["user:read"], node: project)
         #expect(readOnly.permits(action: "user:read", chain: [user]))
         #expect(!readOnly.permits(action: "user:delete", chain: [user]))
+    }
+
+    /// The escalation the exemption must not open: a user record is parentless
+    /// for `user:delete` exactly as it is for `user:read`, so an exemption that
+    /// covered both would let a token issued for one project delete any user in
+    /// the deployment — the one global surface a scoped credential could still
+    /// reach.
+    @Test("Identity-plane mutations still obey the node scope")
+    func identityMutationsBoundByNodeScope() throws {
+        let user = IAMNode(type: .user, id: UUID())
+        let r = try restriction(["*"], node: project)
+        #expect(r.permits(action: "user:read", chain: [user]))
+        #expect(!r.permits(action: "user:update", chain: [user]))
+        #expect(!r.permits(action: "user:delete", chain: [user]))
+        #expect(IAMRoleRegistry.identityReadActions == ["user:read"])
     }
 
     @Test("A node scope needs both a type and an id, and a known type")
@@ -141,6 +156,9 @@ struct CredentialRestrictionTests {
     func readResolvesToReadActions() {
         let r = CredentialRestriction(legacyScopes: ["read"])
         #expect(!r.isUnrestricted)
+        // The legacy shim and a key minted read-only through the API are the
+        // same value, so the two spellings cannot diverge.
+        #expect(r == .readOnly)
         #expect(r.permits(action: "vm:read"))
         #expect(r.permits(action: "vm:list"))
         #expect(r.permits(action: "user:read"))
@@ -149,11 +167,47 @@ struct CredentialRestrictionTests {
         #expect(!r.permits(action: "vm:start"))
         #expect(!r.permits(action: "vm:delete"))
         #expect(!r.permits(action: "iam:setPolicy"))
-        // The three tightenings STR-115 accepts: all reachable on a safe method
-        // before, none of them a read.
+        // The tightenings STR-115 accepts: all reachable on a safe method
+        // before, none of them a read. `agent:manage` is the fourth — it gates
+        // the *read* of the enrollment list, so a read credential now sees an
+        // empty page there.
         #expect(!r.permits(action: "sandbox:exec"))
         #expect(!r.permits(action: "vm:viewConsole"))
         #expect(!r.permits(action: "vm:exec"))
+        #expect(!r.permits(action: "agent:manage"))
+    }
+
+    /// The `read` pattern is resolved on every check, never expanded into the
+    /// stored row — otherwise a key minted read-only today would 403 on an
+    /// action added next release while a legacy `read`-scoped key picked it up.
+    @Test("The read pattern stays symbolic and resolves against the live action set")
+    func readPatternIsSymbolic() throws {
+        let r = try restriction(["read"])
+        #expect(r.actions == ["read"])
+        for action in IAMRoleRegistry.readActions {
+            #expect(r.permits(action: action), "read did not cover \(action)")
+        }
+        #expect(!r.permits(action: "vm:start"))
+        // Nothing is literally named `read`, so the pattern cannot collide with
+        // an action.
+        #expect(!IAMRoleRegistry.allActions.contains("read"))
+    }
+
+    @Test("The read pattern composes with concrete actions and with a node scope")
+    func readPatternComposes() throws {
+        let mixed = try restriction(["read", "vm:start"])
+        #expect(mixed.actions == ["read", "vm:start"])
+        #expect(mixed.permits(action: "volume:read"))
+        #expect(mixed.permits(action: "vm:start"))
+        #expect(!mixed.permits(action: "vm:delete"))
+
+        // `*` absorbs everything, including the symbolic pattern.
+        #expect(try restriction(["read", "*"]) == .unrestricted)
+
+        let scoped = try restriction(["read"], node: project)
+        let vm = IAMNode(type: .virtualMachine, id: UUID())
+        #expect(scoped.permits(action: "vm:read", chain: [vm, project]))
+        #expect(!scoped.permits(action: "vm:read", chain: [vm, otherProject]))
     }
 
     /// A credential whose scopes hold nothing recognizable is dead today —
@@ -168,7 +222,7 @@ struct CredentialRestrictionTests {
         }
     }
 
-    @Test("readActions covers every read/list action the registry knows")
+    @Test("Registry read actions cover every read/list action the registry knows")
     func readActionsIsDerivedNotCurated() {
         for action in IAMRoleRegistry.allActions where action.hasSuffix(":read") || action.hasSuffix(":list") {
             #expect(IAMRoleRegistry.readActions.contains(action), "\(action) missing from readActions")
@@ -193,10 +247,14 @@ struct CredentialRestrictionTests {
         #expect(issuer.covers(try restriction(["vm:read"])))
         #expect(!issuer.covers(try restriction(["vm:delete"])))
         #expect(!issuer.covers(.unrestricted))
-        // A service wildcard is only covered by `*` or the same wildcard —
-        // enumerating today's `vm:` actions would stop covering tomorrow's.
+        // An open-ended pattern is only covered by `*` or by itself —
+        // enumerating today's members would stop covering tomorrow's.
         #expect(!issuer.covers(try restriction(["vm:*"])))
         #expect(try restriction(["vm:*"]).covers(try restriction(["vm:*"])))
+        #expect(!issuer.covers(.readOnly))
+        #expect(CredentialRestriction.readOnly.covers(.readOnly))
+        #expect(CredentialRestriction.readOnly.covers(try restriction(["vm:read"])))
+        #expect(!CredentialRestriction.readOnly.covers(try restriction(["vm:start"])))
     }
 
     @Test("A node-scoped credential may not mint one scoped elsewhere or nowhere")

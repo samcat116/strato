@@ -486,8 +486,6 @@ export interface IAMActionCatalogEntry {
   resourceTypes: IAMNodeType[];
   roles: string[];
   membershipDerived: boolean;
-  /** Whether the action reads — the set a read-only credential is limited to. */
-  readOnly: boolean;
 }
 
 export interface IAMActionCatalogService {
@@ -756,7 +754,11 @@ export interface UpdateSiteRequest {
 export interface CredentialRestriction {
   /** Request only: sugar for a role's action list, expanded at write time. */
   role?: string;
-  /** Exact actions (`vm:read`), service wildcards (`vm:*`), or `*`. */
+  /**
+   * Exact actions (`vm:read`), service wildcards (`vm:*`), `read` (every
+   * action whose name says it reads, resolved server-side on every check), or
+   * `*`.
+   */
   actions?: string[];
   /** The subtree the credential may act in; both fields or neither. */
   nodeType?: string;

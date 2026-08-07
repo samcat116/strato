@@ -370,6 +370,39 @@ final class CredentialRestrictionEnforcementTests {
         }
     }
 
+    /// `iamAuthState` is created on first use, and only middleware *ordering*
+    /// guarantees that first use comes after authentication. Nothing enforces
+    /// that ordering, and a snapshot taken too early would be fail-*open*: the
+    /// state would hold `.unrestricted` for the rest of the request and every
+    /// restricted credential on it would wield full principal power. The
+    /// credential half is therefore re-derived on every access.
+    @Test("A state built before authentication does not freeze a credential as unrestricted")
+    func authStateIsNotAStaleSnapshot() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "early-user", email: "early-user@example.com")
+
+            let request = Request(
+                application: app, method: .POST, url: "/api/vms", on: app.eventLoopGroup.next())
+            // Stand in for a middleware registered above the authenticators
+            // that touches the state — `AuditMiddleware.adminBypassUsed` is the
+            // realistic one.
+            #expect(request.iamAuthState.restriction.isUnrestricted)
+
+            request.auth.login(user)
+            let key = APIKey(
+                id: UUID(), userID: try user.requireID(), name: "k", keyHash: "h", keyPrefix: "p")
+            key.store(restriction: try restriction(["vm:read"]))
+            request.apiKey = key
+
+            #expect(!request.iamAuthState.restriction.isUnrestricted)
+            #expect(request.iamAuthState.restriction.permits(action: "vm:read"))
+            #expect(!request.iamAuthState.restriction.permits(action: "vm:delete"))
+            #expect(request.iamAuthState.credential?.kind == .apiKey)
+        }
+    }
+
     @Test("A refusal outside the evaluator is still attributable in the decision log")
     func nonEvaluatorRefusalIsRecorded() async throws {
         try await withApp { app in

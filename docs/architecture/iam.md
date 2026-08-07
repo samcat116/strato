@@ -623,10 +623,21 @@ A restriction has two halves:
   about what a pattern names. An **empty** action list permits nothing, and the
   write path rejects it — note the deliberate asymmetry with
   `GuardrailActions.canonicalize`, where empty means the broadest *ceiling*.
+
+  One pattern is this vocabulary's own: **`read`**, resolved against
+  `IAMRoleRegistry.readActions` at check time. It has to be symbolic rather than
+  an expansion stored on the row, because `readActions` is derived from action
+  *names* precisely so an action shipped later lands on the right side by
+  default — a credential holding today's expansion would 403 on next release's
+  `dnsrecord:read` under a forbid nobody wrote, while a legacy `read`-scoped key
+  picked it up for free. The legacy shim and a key minted read-only through the
+  API therefore carry the *same* value.
 - **a node scope** (optional) — the credential may only act at or below one
-  tree node. Identity-plane actions are exempt from this half: a user record is
+  tree node. Identity-plane *reads* are exempt from this half: a user record is
   parentless, so a project-scoped credential could otherwise not read its own
-  user record.
+  user record. The exemption stops at reads — extending it to `user:update` and
+  `user:delete` would make the identity plane the one global surface a
+  project-scoped token could still mutate.
 
 The API also accepts a **role id** as sugar for that role's action list. It is
 expanded at write time, not stored as a reference: a credential must not widen
@@ -664,9 +675,9 @@ doing" is a query rather than an inference.
 **The legacy scopes are a compatibility shim.** A row with no restriction
 columns resolves through `CredentialRestriction(legacyScopes:)`:
 `write`/`admin` → unrestricted (which is what they always meant — nothing ever
-*required* `admin`, so `read`+`write` was full account power); `read` →
-`IAMRoleRegistry.readActions`, every action whose name says it reads; and no
-recognized scope at all → **nothing**, because such a key is already dead
+*required* `admin`, so `read`+`write` was full account power); `read` → the
+`read` pattern, every action whose name says it reads; and no recognized scope
+at all → **nothing**, because such a key is already dead
 (`grants(_:)` answered false for every scope) and a shim that read it as "read"
 would resurrect it.
 
@@ -676,6 +687,17 @@ collateral: the sandbox exec-attach WebSocket (`sandbox:exec`, a GET), the VM
 console upgrade (`vm:viewConsole`, an editor action — and CLI sessions, which
 the hand-written scope carve-out never checked, are now covered by the same
 path), and `vm:exec`/`vm:runCommand` when their routes land.
+
+A fourth follows from the same rule but surfaces differently, and operators
+driving enrollment tooling with a read-scoped credential need to widen it before
+upgrading. `GET /api/agent-enrollments` is the one list in the app whose read is
+gated on a write-shaped action (`agent:manage`, matching the item routes), so a
+read-restricted credential now matches no row — and a filtered list answers with
+an **empty page, not a 403**, which is indistinguishable from "there are no
+enrollments". Giving the listing a read-shaped action of its own would fix the
+shape, but it would also widen which principals may see enrollments; that is a
+binding question, and it belongs with the `require*`-helper audit rather than
+with the credential model.
 
 **One backstop remains outside the evaluator**, and it is deliberate.
 `loginOnly` and public routes authorize by row scoping rather than by deciding,

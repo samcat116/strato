@@ -55,13 +55,33 @@ final class IAMRequestAuthState: Sendable {
     /// It belongs to the credential, not the principal, so it survives an
     /// impersonation: a user acting as a service account through a restricted
     /// key stays restricted.
-    let restriction: CredentialRestriction
+    ///
+    /// Held in a box rather than a `let` for the same fail-open reason. This
+    /// object is created on first use, and "first use" is only guaranteed to be
+    /// after authentication by middleware *ordering*, which nothing enforces —
+    /// a future middleware registered above the authenticators that so much as
+    /// reads `adminBypassUsed` would otherwise freeze `.unrestricted` here and
+    /// hand every restricted credential on that request full principal power.
+    /// `Request.iamAuthState` refreshes both fields on every access instead, so
+    /// the answer is derived from the request rather than snapshotted from it.
+    private let restrictionBox: NIOLockedValueBox<CredentialRestriction>
+    private let credentialBox: NIOLockedValueBox<CredentialReference?>
+
+    var restriction: CredentialRestriction { restrictionBox.withLockedValue { $0 } }
     /// Which credential that was, for decision-log attribution.
-    let credential: CredentialReference?
+    var credential: CredentialReference? { credentialBox.withLockedValue { $0 } }
 
     init(restriction: CredentialRestriction = .unrestricted, credential: CredentialReference? = nil) {
-        self.restriction = restriction
-        self.credential = credential
+        self.restrictionBox = NIOLockedValueBox(restriction)
+        self.credentialBox = NIOLockedValueBox(credential)
+    }
+
+    /// Re-derive the credential half from the request that owns this state.
+    fileprivate func refreshCredential(
+        restriction: CredentialRestriction, credential: CredentialReference?
+    ) {
+        restrictionBox.withLockedValue { $0 = restriction }
+        credentialBox.withLockedValue { $0 = credential }
     }
 
     /// The state for a check that is not serving a request: `WhoCanService`'s
@@ -77,8 +97,16 @@ extension Request {
     }
 
     /// This request's authorization state, created on first use.
+    ///
+    /// The audit flags accumulate across the request, so the object persists;
+    /// the credential half is re-derived on every access, so a state that
+    /// happened to be created before the authenticators ran cannot leave a
+    /// restricted credential looking unrestricted (see `restrictionBox`).
     var iamAuthState: IAMRequestAuthState {
-        if let existing = storage[IAMRequestAuthStateKey.self] { return existing }
+        if let existing = storage[IAMRequestAuthStateKey.self] {
+            existing.refreshCredential(restriction: credentialRestriction, credential: credential)
+            return existing
+        }
         let created = IAMRequestAuthState(restriction: credentialRestriction, credential: credential)
         storage[IAMRequestAuthStateKey.self] = created
         return created
@@ -605,7 +633,11 @@ extension Request {
         // An action the registry does not know matches no restriction pattern,
         // so a typo here would quietly hide every scopeless row from every
         // restricted credential — a filtering bug that looks like policy.
-        assert(
+        // `precondition`, not `assert`: `assert` compiles out under `-O`, which
+        // is exactly the build the failure would ship in. Every call site
+        // passes a literal, so this can only fire on a wrong binary — never on
+        // input — and it fires on the first such request in any environment.
+        precondition(
             IAMRoleRegistry.allActions.contains(action),
             "allowsScopelessPlatformRow called with '\(action)', which is not a registry action")
         iamAuthState.decisionEvaluated.withLockedValue { $0 = true }
