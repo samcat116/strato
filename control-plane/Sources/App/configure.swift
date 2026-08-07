@@ -761,6 +761,11 @@ public func configure(_ app: Application) async throws {
     // it and any explicit artifact the operator pinned to it.
     app.migrations.add(AddManualAgentUpdateAssignment())
 
+    // STR-138: whether an agent can still read its own record of what it runs.
+    // An agent that can't stops advertising capacity and stops converging, and
+    // this is where an operator sees why.
+    app.migrations.add(AddManifestStatusToAgent())
+
     // One-time sweep of the bindings the VM, sandbox and image delete paths
     // leaked before they learned to revoke (STR-112). Runs last: it reads every
     // resource table it checks against, so it wants them in their final shape.
@@ -890,6 +895,12 @@ public func configure(_ app: Application) async throws {
     // once, for deployments that must be driven without a browser (CI, e2e).
     // Registered unconditionally; the command itself refuses if any user exists.
     app.asyncCommands.use(BootstrapCommand(), as: "bootstrap")
+
+    // `App grant-platform-admin`: the break-glass path back in when a
+    // deployment has no reachable administrator (STR-178). Seeding the first
+    // admin cannot be an authorization decision, so it lives here rather than
+    // behind an API — named and documented instead of a hand-written UPDATE.
+    app.asyncCommands.use(GrantPlatformAdminCommand(), as: "grant-platform-admin")
 
     // Open the readiness gate: every migration, schema load, and boot-time
     // backfill above has finished. Vapor binds the port only after `configure`

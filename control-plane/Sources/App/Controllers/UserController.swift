@@ -420,16 +420,24 @@ struct UserController: RouteCollection {
             throw Abort(.forbidden, reason: "Passkey enrollment is not authorized for this account")
         }
 
-        // Admin-created accounts must enroll their passkey through the claim
-        // invite flow (/auth/claim/*), which is gated by a one-time token.
+        // Admin-created accounts must enroll their *first* passkey through the
+        // claim invite flow (/auth/claim/*), which is gated by a one-time token.
         // Refuse to attach a credential to such an account through the open
         // self-registration endpoint — otherwise anyone knowing the username
         // could hijack a not-yet-activated invited account.
-        let hasClaimToken =
+        //
+        // Only an *unclaimed* token means "not yet activated". `claimFinish`
+        // stamps `claimedAt` rather than deleting the row, so counting every
+        // token would bar an invited user from ever adding a second passkey —
+        // permanently, since this is the only enrollment endpoint. Once the
+        // invite is spent the account has a credential, and the owner-session
+        // gate below is what protects it.
+        let hasUnclaimedInvite =
             try await AccountClaimToken.query(on: req.db)
             .filter(\.$user.$id == user.requireID())
+            .filter(\.$claimedAt == nil)
             .count() > 0
-        if hasClaimToken {
+        if hasUnclaimedInvite {
             throw Abort(.forbidden, reason: "This account must be activated using its invitation link")
         }
 
@@ -1059,7 +1067,11 @@ extension UserController {
     /// Characters allowed in a username. Kept conservative (and free of `@`,
     /// spaces, and path/URL punctuation) because the username is a login
     /// identifier that travels through URLs and the WebAuthn user entity.
-    private static let usernameAllowedCharacters = CharacterSet(
+    ///
+    /// Not `private`: `BootstrapCommand` derives a username from an email
+    /// address and must decide against the same set. A second copy there could
+    /// silently strip characters this one had started accepting.
+    static let usernameAllowedCharacters = CharacterSet(
         charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
 
     /// Trims and validates a username, returning the value to store.

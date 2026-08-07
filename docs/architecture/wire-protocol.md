@@ -46,7 +46,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 29), stamped on
+`WireProtocol.swift` holds the protocol version (currently 30), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -349,6 +349,27 @@ ETag anywhere can then cost only latency, never convergence.
 
 `ObservedStateReport` is the mirror image: the full observed VM/sandbox sets
 plus current resources, sent level-triggered from the agent.
+
+### When a report is not an inventory (STR-138, wire v30)
+
+`ObservedStateReport.manifestStatus` is the one thing that suspends those
+full-list semantics. An agent's durable manifest is its only memory of what it
+is running, so an agent that cannot read it sends empty lists because the
+host's contents are *unknown*, not because it is idle — and absence means
+deletion here (`agent.absent` finalizer) or loss (`.error`). A report carrying
+`inventoryComplete: false` says so explicitly: the control plane records the
+condition and the resource snapshot and applies none of the workload half.
+
+Non-nil with `inventoryComplete: true` is the milder partial case — some
+entries in the manifest cannot be routed by the build running on the host (an
+unrecognized `hypervisorType` after an agent rollback). Those workloads are
+still reported as present, so the lists remain an inventory. See
+`docs/architecture/agent.md`.
+
+Not gated, and it needs no gate: like v25, the field only ever *withholds*
+action, and the agent half of the fix — zero advertised capacity, no
+convergence against a host it can't see — works against any control plane
+because refusing needs no permission.
 
 ### Omission is not teardown (STR-98, wire v25)
 

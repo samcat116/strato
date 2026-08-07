@@ -12588,6 +12588,27 @@ components:
           type: string
           format: date-time
           nullable: true
+        manifestStatusReason:
+          type: string
+          nullable: true
+          description: >-
+            What the agent last reported about its durable workload manifest —
+            its only memory of what it is running. Non-null means either that
+            the manifest is unreadable (see manifestInventoryComplete) or that
+            some entries in it cannot be routed by the agent build running on
+            the host. Null in the steady state.
+        manifestStatusAt:
+          type: string
+          format: date-time
+          nullable: true
+        manifestInventoryComplete:
+          type: boolean
+          nullable: true
+          description: >-
+            False while the agent cannot enumerate its own workloads. Such a
+            host advertises no capacity, converges nothing, and its
+            observed-state reports carry no inventory. Null from agents that
+            predate the field.
         heldWorkloads:
           type: array
           nullable: true

@@ -772,6 +772,47 @@ public struct ObservedTeardownRefusal: Codable, Sendable, Equatable {
     }
 }
 
+/// Agent → control plane: what the agent's durable workload manifest — its
+/// only memory of what it is running — was able to tell it at startup
+/// (STR-138).
+///
+/// Sent only when there is something wrong to say; nil is the steady state.
+public struct ObservedManifestStatus: Codable, Sendable, Equatable {
+    /// Whether the `vms`/`sandboxes` lists on this report are a complete
+    /// inventory of the host.
+    ///
+    /// **False changes the meaning of the whole report.** The manifest could
+    /// not be read at all, so the agent cannot enumerate its own workloads:
+    /// the lists are empty because it doesn't know, not because the host is
+    /// empty. Absence confirms nothing — not a deletion, not a loss — and the
+    /// control plane must apply none of the report's workload half.
+    public let inventoryComplete: Bool
+    /// Entries that decoded far enough to prove a workload exists under that
+    /// id, but not far enough to route operations to it (an unrecognized
+    /// hypervisor type, a spec this build cannot read). They keep reserving
+    /// capacity and are reported as present, but nothing can be done to them
+    /// until an agent that understands them runs here.
+    public let quarantinedEntries: Int
+    /// Operator-facing explanation, surfaced on the agent's API resource.
+    public let reason: String
+    /// Where the unreadable manifest was copied for post-mortem, when the copy
+    /// succeeded. The original is left in place — the agent refuses to write
+    /// over a manifest it could not read.
+    public let preservedCopyPath: String?
+
+    public init(
+        inventoryComplete: Bool,
+        quarantinedEntries: Int,
+        reason: String,
+        preservedCopyPath: String? = nil
+    ) {
+        self.inventoryComplete = inventoryComplete
+        self.quarantinedEntries = quarantinedEntries
+        self.reason = reason
+        self.preservedCopyPath = preservedCopyPath
+    }
+}
+
 /// Agent → control plane: everything the agent actually has, with resources.
 ///
 /// Full-list semantics mirror `DesiredStateMessage`: a VM missing from `vms`
@@ -779,6 +820,10 @@ public struct ObservedTeardownRefusal: Codable, Sendable, Equatable {
 /// immediately after any convergence action and piggybacked on the heartbeat
 /// cadence, so state converges quickly after changes but is also periodically
 /// re-asserted.
+///
+/// `manifestStatus` is the one thing that suspends those semantics: an agent
+/// that cannot read its manifest sends the report to carry the condition and
+/// its resource snapshot, and the lists mean nothing (STR-138).
 public struct ObservedStateReport: WebSocketMessage {
     public var type: MessageType { .observedState }
     public let requestId: String
@@ -807,6 +852,11 @@ public struct ObservedStateReport: WebSocketMessage {
     /// Set when the blast-radius guard refused a sync's teardowns. Nil in the
     /// steady state and from agents older than the field.
     public let teardownRefusal: ObservedTeardownRefusal?
+    /// Set when the agent's durable workload manifest could not be read in
+    /// full (STR-138). Nil in the steady state and from agents older than the
+    /// field. `inventoryComplete == false` suspends this report's full-list
+    /// semantics — see `ObservedManifestStatus`.
+    public let manifestStatus: ObservedManifestStatus?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -817,7 +867,8 @@ public struct ObservedStateReport: WebSocketMessage {
         resources: AgentResources,
         agentUpdateStatus: ObservedAgentUpdateStatus? = nil,
         unrecognized: [UnrecognizedWorkload] = [],
-        teardownRefusal: ObservedTeardownRefusal? = nil
+        teardownRefusal: ObservedTeardownRefusal? = nil,
+        manifestStatus: ObservedManifestStatus? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -828,6 +879,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.agentUpdateStatus = agentUpdateStatus
         self.unrecognized = unrecognized
         self.teardownRefusal = teardownRefusal
+        self.manifestStatus = manifestStatus
     }
 
     // Custom decode so `sandboxes` and `unrecognized` tolerate absence: a
@@ -845,5 +897,6 @@ public struct ObservedStateReport: WebSocketMessage {
         agentUpdateStatus = try c.decodeIfPresent(ObservedAgentUpdateStatus.self, forKey: .agentUpdateStatus)
         unrecognized = try c.decodeIfPresent([UnrecognizedWorkload].self, forKey: .unrecognized) ?? []
         teardownRefusal = try c.decodeIfPresent(ObservedTeardownRefusal.self, forKey: .teardownRefusal)
+        manifestStatus = try c.decodeIfPresent(ObservedManifestStatus.self, forKey: .manifestStatus)
     }
 }
