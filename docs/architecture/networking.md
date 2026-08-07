@@ -459,10 +459,10 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
   attaches the default group when the caller picks none, and detach refuses to
   empty a NIC's set. Tightening the default group's egress does **not** cut
   instance metadata off — that has its own implicit allow, on purpose (see
-  §The implicit metadata allow). `SeedDefaultSecurityGroups` backfilled pre-existing
-  projects, adding a **deletable allow-all-ingress rule** to projects that
-  already had workloads so agent upgrades could never cut live inbound
-  traffic — deleting that rule is how an operator opts a project into real
+  §The implicit metadata allow). `SeedDefaultSecurityGroups` backfilled
+  pre-existing projects, adding a **deletable allow-all-ingress rule** to
+  projects that already had workloads so agent upgrades could never cut live
+  inbound traffic — deleting that rule is how an operator opts a project into real
   ingress filtering.
 - Groups referenced by another group's rules, attached groups, and the default
   group refuse deletion (409, schema-backstopped) — attachment counts span
@@ -550,9 +550,9 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
 ### The implicit metadata allow
 
 The drop group also carries two `allow-related` ACLs for egress to the instance
-metadata service — `169.254.169.254:80` and `[fd00:ec2::254]:80`, one per
-family because an OVN ACL match is — at priority **1003**, above every
-rule-derived allow. Since every managed port is a drop-group member, **this
+metadata service, at priority **1003** — above every rule-derived allow. Two,
+not one, because an OVN ACL match is per-family: `169.254.169.254:80` and
+`[fd00:ec2::254]:80`. Since every managed port is a drop-group member, **this
 applies regardless of which security groups the NIC belongs to, and no rule can
 override it** (STR-54).
 
