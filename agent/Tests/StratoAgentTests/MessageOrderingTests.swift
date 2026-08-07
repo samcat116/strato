@@ -140,10 +140,10 @@ struct MessageOrderingTests {
         #expect(a != b)
     }
 
-    /// The volume verbs that are still imperative (ADR 0001 stages 7 and 8)
-    /// take the *reconciler's* volume lane, not a bare-id one — so a snapshot
-    /// can never run concurrently with the reconciler resizing or deleting the
-    /// same volume (STR-148).
+    /// The volume verbs that are still imperative (ADR 0001 stage 8) take the
+    /// *reconciler's* volume lane, not a bare-id one — so a snapshot can never
+    /// run concurrently with the reconciler resizing or deleting the same
+    /// volume (STR-148).
     @Test("Surviving volume frames share the reconciler's volume lane")
     func volumeFramesUseReconcilerLane() {
         let volumeId = UUID().uuidString
@@ -157,13 +157,9 @@ struct MessageOrderingTests {
             type: .volumeSnapshotDelete,
             payload: payload(["volumeId": volumeId, "snapshotId": UUID().uuidString])
         )
-        let infoKeys = MessageEnvelope.serializationKeys(
-            type: .volumeInfo, payload: payload(["volumeId": volumeId, "volumePath": "/a"])
-        )
 
         #expect(snapshotKeys == expected)
         #expect(snapshotDeleteKeys == expected)
-        #expect(infoKeys == expected)
     }
 
     /// The lane string is built from the *canonical* uuid, because the
@@ -173,12 +169,14 @@ struct MessageOrderingTests {
     func volumeLaneNormalizesCasing() {
         let volumeId = UUID()
         let lower = MessageEnvelope.serializationKeys(
-            type: .volumeInfo,
-            payload: payload(["volumeId": volumeId.uuidString.lowercased(), "volumePath": "/a"])
+            type: .volumeSnapshot,
+            payload: payload([
+                "volumeId": volumeId.uuidString.lowercased(), "snapshotId": UUID().uuidString, "volumePath": "/a",
+            ])
         )
         let upper = MessageEnvelope.serializationKeys(
-            type: .volumeInfo,
-            payload: payload(["volumeId": volumeId.uuidString, "volumePath": "/a"])
+            type: .volumeSnapshot,
+            payload: payload(["volumeId": volumeId.uuidString, "snapshotId": UUID().uuidString, "volumePath": "/a"])
         )
         #expect(lower == upper)
         #expect(lower == ["volume/" + volumeId.uuidString])

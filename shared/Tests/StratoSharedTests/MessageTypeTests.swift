@@ -19,7 +19,6 @@ struct MessageTypeTests {
         case .vmSnapshotDelete: return "vm_snapshot_delete"
         case .volumeSnapshot: return "volume_snapshot"
         case .volumeSnapshotDelete: return "volume_snapshot_delete"
-        case .volumeInfo: return "volume_info"
         case .consoleConnect: return "console_connect"
         case .consoleDisconnect: return "console_disconnect"
         case .consoleData: return "console_data"
@@ -49,7 +48,7 @@ struct MessageTypeTests {
     private static let allTypes: [MessageType] = [
         .agentRegister, .agentRegisterResponse, .agentHeartbeat, .agentUnregister,
         .vmReboot, .vmCheckpoint, .vmRestore, .vmSnapshotDelete,
-        .volumeSnapshot, .volumeSnapshotDelete, .volumeInfo,
+        .volumeSnapshot, .volumeSnapshotDelete,
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
         .desiredState, .observedState,
         .success, .error, .vmLog,

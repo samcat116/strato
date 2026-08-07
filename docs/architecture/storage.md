@@ -233,8 +233,10 @@ stage 5). The control plane writes what it wants — the volume exists, at this
 size, in this format, attached here — bumps a per-volume generation, and
 returns `202 Accepted`; the agent converges and reports back, and the volume's
 `conditions` are what say a mutation finished. Six imperative messages
-(`volume_create/delete/attach/detach/resize/clone`) were deleted in wire v31;
-the snapshot verbs and `volume_info` have not converted yet.
+(`volume_create/delete/attach/detach/resize/clone`) were deleted in wire v31,
+and the `volume_info` read followed in v32 (STR-149) with no replacement: the
+control plane answers from the observed report and its own columns. Only the
+snapshot verbs have not converted yet.
 
 What the agent gains from the move is what the imperative handlers uniquely
 lacked: retry with a per-generation attempt cap, per-volume serial lanes, a

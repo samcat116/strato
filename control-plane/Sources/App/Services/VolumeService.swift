@@ -13,8 +13,10 @@ import StratoShared
 /// What remains is placement — choosing which agent hosts a new volume, a
 /// decision that must be a committed fact before any sync can carry the volume
 /// — and the await-response dispatch for the two verbs that have not converted
-/// yet: `volume_snapshot` and `volume_snapshot_delete` (ADR stage 8), plus the
-/// `volume_info` read (stage 7).
+/// yet: `volume_snapshot` and `volume_snapshot_delete` (ADR stage 8). The
+/// `volume_info` read left the protocol entirely in stage 7 (STR-149); this
+/// type never dispatched it, and everything it reported is now either on the
+/// observed report or in this database.
 actor VolumeService {
     private let app: Application
     private let logger: Logger
