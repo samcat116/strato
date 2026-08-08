@@ -7,11 +7,15 @@ public enum UEFIVarstoreError: Error, LocalizedError, ClassifiableError, Sendabl
     case toolUnavailable(String)
     /// qemu-img ran and refused, with its own output attached.
     case conversionFailed(String)
+    /// A varstore is already at the path, in a format the document does not
+    /// declare. Reusing it would define cleanly and fail the *start*.
+    case formatMismatch(String)
 
     public var description: String {
         switch self {
         case .toolUnavailable(let detail): return detail
         case .conversionFailed(let detail): return detail
+        case .formatMismatch(let detail): return detail
         }
     }
 
@@ -50,7 +54,7 @@ public enum UEFIVarstoreError: Error, LocalizedError, ClassifiableError, Sendabl
 /// Secure Boot VM, its enrolled keys. A create replayed by a level-triggered
 /// sync that re-seeded this file would silently roll the guest's firmware
 /// variables back to the distro's defaults, so an existing file is always left
-/// alone.
+/// alone — its *format* is checked (see `verifyIsQcow2`), never its contents.
 public struct UEFIVarstore: Sendable {
     /// What `materialize` did, so a replayed create can be told from a first one
     /// in the log (and in tests) without inspecting the filesystem again.
@@ -78,6 +82,7 @@ public struct UEFIVarstore: Sendable {
     @discardableResult
     public func materialize(at path: String, from template: String) async throws -> Outcome {
         if FileManager.default.fileExists(atPath: path) {
+            try await verifyIsQcow2(at: path)
             logger.debug("UEFI varstore already present", metadata: ["path": .string(path)])
             return .reused
         }
@@ -123,6 +128,46 @@ public struct UEFIVarstore: Sendable {
             "UEFI varstore materialized",
             metadata: ["path": .string(path), "template": .string(template)])
         return .created
+    }
+
+    /// Checks that a varstore already on disk is the format the document
+    /// declares over it.
+    ///
+    /// The reuse path is not only replayed creates. A host carried over from
+    /// the pre-STR-136 QEMU process driver has a **raw** `nvram.fd` at exactly
+    /// this path — `VMDirectoryLayout.nvram` says so — and re-creating that VM
+    /// under libvirt would reuse it beneath an `<nvram format='qcow2'>`. That
+    /// defines cleanly and fails the *start*, with an error naming a format
+    /// rather than a VM, which is the same shape of confusion STR-188 was.
+    ///
+    /// Failing the create instead is strictly better: the start was going to
+    /// fail anyway, and this says which file and what to do about it. It is
+    /// deliberately not a conversion — rewriting a varstore a guest already
+    /// owns is a cutover decision, not something to do silently inside a create.
+    private func verifyIsQcow2(at path: String) async throws {
+        // `-U` for the reason `FileSystemStorageBackend.queryImageInfo` gives:
+        // inspection is read-only, and a lock held elsewhere must not turn a
+        // read into a failure (STR-193).
+        let result = try await run(["info", "-U", "--output=json", path])
+        guard result.terminationStatus == 0 else {
+            throw UEFIVarstoreError.formatMismatch(
+                "a UEFI variable store is already at \(path) but could not be inspected, so the domain "
+                    + "cannot be told it is qcow2. qemu-img output: \(result.combinedOutput)")
+        }
+        let format = (try? JSONDecoder().decode(QemuImgFormat.self, from: result.standardOutput))?.format
+        guard format == "qcow2" else {
+            throw UEFIVarstoreError.formatMismatch(
+                "the UEFI variable store at \(path) is \(format ?? "of an unreadable format"), but the domain "
+                    + "declares qcow2 — a mismatch libvirt accepts at define time and refuses at start. This is "
+                    + "the varstore a pre-libvirt agent left behind; convert it "
+                    + "(`qemu-img convert -O qcow2 \(path) \(path).qcow2 && mv \(path).qcow2 \(path)`) to keep "
+                    + "the guest's UEFI variables, or delete it to have a fresh one seeded from the firmware.")
+        }
+    }
+
+    /// The one field of `qemu-img info --output=json` this needs.
+    private struct QemuImgFormat: Decodable {
+        let format: String
     }
 
     private func run(_ arguments: [String]) async throws -> ProcessResult {

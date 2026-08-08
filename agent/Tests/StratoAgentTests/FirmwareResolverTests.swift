@@ -233,4 +233,46 @@ struct FirmwareResolverTests {
             fileExists: existing("/per-vm/OVMF.fd"))
         #expect(firmware == .explicit(.monolithic(path: "/per-vm/OVMF.fd")))
     }
+
+    /// The trap the old `hasExplicitPaths` gate happened to keep the domain
+    /// document away from, and which resolving on every create would have
+    /// walked straight into.
+    ///
+    /// `defaultFirmwarePathX86_64` leads with `/usr/share/OVMF/OVMF_CODE.fd` —
+    /// the **CODE half** of the very pair one line above just rejected for a
+    /// missing VARS. Taking it would attach half a split build as `-bios`. A
+    /// half-installed EDK2 has to reach autoselect instead, where libvirt's own
+    /// descriptors get a say.
+    /// Every CODE image this platform knows is present and not one varstore is,
+    /// so no pair resolves and the monolithic list is the next thing reached.
+    /// `defaultMonolithicPath` reads the real filesystem rather than the
+    /// injected `fileExists`, so what it finds varies by host — which is
+    /// exactly why the assertion is that autoselect wins *regardless*.
+    @Test("A half-installed split build never becomes a -bios firmware")
+    func halfInstalledPairDoesNotBecomeMonolithic() {
+        let codeHalves = FirmwareResolver.defaultPairs(secureBoot: false, architecture: .x86_64)
+            .map(\.code)
+        let present = Set(codeHalves)
+        let firmware = FirmwareResolver.domainFirmware(
+            secureBoot: false, architecture: .x86_64, fileExists: { present.contains($0) })
+
+        #expect(firmware == .autoselect(.init(secureBoot: false, architecture: .x86_64)))
+    }
+
+    /// The monolithic form is not gone from the domain path — an operator who
+    /// names one still gets it, because that is a decision about a host rather
+    /// than a guess made on its behalf. `monolithicIsNamedNotAutoselected`
+    /// covers the per-VM spelling; this is the configured one, alongside the
+    /// same half-installed pair that must not produce one by itself.
+    @Test("A configured monolithic still wins where a guessed one would not")
+    func configuredMonolithicStillWins() {
+        let codeHalves = FirmwareResolver.defaultPairs(secureBoot: false, architecture: .x86_64)
+            .map(\.code)
+        let present = Set(codeHalves + ["/opt/firmware/OVMF.fd"])
+        let firmware = FirmwareResolver.domainFirmware(
+            secureBoot: false, overrides: FirmwareOverrides(monolithicPath: "/opt/firmware/OVMF.fd"),
+            architecture: .x86_64, fileExists: { present.contains($0) })
+
+        #expect(firmware == .explicit(.monolithic(path: "/opt/firmware/OVMF.fd")))
+    }
 }

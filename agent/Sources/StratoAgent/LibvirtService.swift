@@ -1851,7 +1851,7 @@ actor LibvirtService: HypervisorService {
         let varstore = self.varstore
         do {
             _ = try await StageBudget.run(
-                seconds: StageBudget.hypervisorControlSeconds, stage: "UEFI varstore materialization"
+                seconds: StageBudget.varstoreMaterializationSeconds, stage: "UEFI varstore materialization"
             ) {
                 try await varstore.materialize(at: path, from: varsTemplate)
             }

@@ -120,7 +120,7 @@ public enum FirmwareResolver {
         guard
             let set = resolved(
                 secureBoot: secureBoot, perVMPath: perVMPath, overrides: overrides,
-                architecture: architecture, fileExists: fileExists)
+                architecture: architecture, allowingPlatformMonolithic: true, fileExists: fileExists)
         else {
             throw UnresolvedError(secureBoot: secureBoot, architecture: architecture)
         }
@@ -152,6 +152,17 @@ public enum FirmwareResolver {
     /// failing the create outright would take away a VM that boots today. The
     /// error it carries is what the caller logs, because on a raw-descriptor
     /// host the define that follows will fail and this is the reason.
+    ///
+    /// **The platform's monolithic default is not offered here**, which is the
+    /// one candidate this differs from `resolve` on. Its list leads with
+    /// `/usr/share/OVMF/OVMF_CODE.fd` — the *CODE half of a split pair* — so it
+    /// fires exactly when a split build is half-installed and its VARS is
+    /// missing, and it would hand that half to `-bios` as though it were a
+    /// whole firmware. Even a genuine single blob is the wrong trade on this
+    /// path: `-bios` has no writable varstore at all, so the guest's UEFI boot
+    /// entries stop persisting, where autoselect may still find libvirt a
+    /// proper pflash pair. A monolithic the *operator* named still wins — that
+    /// is a deliberate choice about a host, not a guess made on its behalf.
     public static func domainFirmware(
         secureBoot: Bool,
         perVMPath: String? = nil,
@@ -162,7 +173,7 @@ public enum FirmwareResolver {
         guard
             let set = resolved(
                 secureBoot: secureBoot, perVMPath: perVMPath, overrides: overrides,
-                architecture: architecture, fileExists: fileExists)
+                architecture: architecture, allowingPlatformMonolithic: false, fileExists: fileExists)
         else {
             return .autoselect(UnresolvedError(secureBoot: secureBoot, architecture: architecture))
         }
@@ -170,12 +181,15 @@ public enum FirmwareResolver {
     }
 
     /// The candidate walk both entry points share. Nil means nothing on this
-    /// host matched — the two callers differ only in what they do about it.
+    /// host matched — the two callers differ in what they do about it, and in
+    /// whether the platform's monolithic default counts as a match at all (see
+    /// `domainFirmware`).
     private static func resolved(
         secureBoot: Bool,
         perVMPath: String?,
         overrides: FirmwareOverrides,
         architecture: CPUArchitecture,
+        allowingPlatformMonolithic: Bool,
         fileExists: (String) -> Bool
     ) -> FirmwareSet? {
         // An explicitly configured pair wins outright, including over a per-VM
@@ -202,7 +216,9 @@ public enum FirmwareResolver {
                 return .monolithic(path: path)
             }
         }
-        if let path = defaultMonolithicPath(architecture: architecture), fileExists(path) {
+        if allowingPlatformMonolithic, let path = defaultMonolithicPath(architecture: architecture),
+            fileExists(path)
+        {
             return .monolithic(path: path)
         }
 

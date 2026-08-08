@@ -29,6 +29,12 @@ public enum StageBudget {
     // The bound matters because these share the hypervisor actor with every
     // other operation, so an unbounded one wedges the whole backend (issue #516).
     public static let hypervisorControlSeconds = 30
+    // Seeding a VM's UEFI variable store: one `qemu-img info` and one
+    // `qemu-img convert` of a file in the hundreds of kilobytes (STR-188). Its
+    // own constant rather than borrowing `hypervisorControlSeconds`, whose
+    // budget is sized for a control-channel round trip and says as much —
+    // this is local disk work that shares nothing with the hypervisor actor.
+    public static let varstoreMaterializationSeconds = 30
     // Re-adopting an orphan: connect to its control socket and read status.
     // The reported hang was here — a connect that succeeded against a socket
     // whose peer never spoke, with nothing to time it out.

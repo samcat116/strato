@@ -15,18 +15,28 @@ import Testing
 @Suite("UEFI varstore materialization")
 struct UEFIVarstoreTests {
 
-    /// Records qemu-img invocations and mimics its one side effect: a
-    /// successful `convert` produces the file named last.
+    /// Records qemu-img invocations and mimics the two behaviours this type
+    /// depends on: `info` reports a format, and a successful `convert` produces
+    /// the file named last.
     private actor Recorder {
         private(set) var invocations: [[String]] = []
         private var exitStatus: Int32 = 0
         private var standardError = ""
+        /// What `info` claims an existing file is. qcow2 by default, which is
+        /// what every varstore this code wrote would report.
+        private var reportedFormat = "qcow2"
         /// When set, the runner throws instead of running — a missing binary.
         private var launchFails = false
+
+        var converts: [[String]] { invocations.filter { $0.first == "convert" } }
 
         func fail(status: Int32, message: String) {
             exitStatus = status
             standardError = message
+        }
+
+        func reportFormat(_ format: String) {
+            reportedFormat = format
         }
 
         func failToLaunch() {
@@ -36,6 +46,12 @@ struct UEFIVarstoreTests {
         func run(_ arguments: [String]) throws -> ProcessResult {
             invocations.append(arguments)
             if launchFails { throw CocoaError(.fileNoSuchFile) }
+            if arguments.first == "info" {
+                return ProcessResult(
+                    terminationStatus: exitStatus,
+                    standardOutput: Data("{\"format\":\"\(reportedFormat)\"}".utf8),
+                    standardError: Data(standardError.utf8))
+            }
             if exitStatus == 0, let output = arguments.last {
                 FileManager.default.createFile(atPath: output, contents: Data("varstore".utf8))
             }
@@ -114,8 +130,57 @@ struct UEFIVarstoreTests {
             let outcome = try await varstore.materialize(at: path, from: "/vars.fd")
 
             #expect(outcome == .reused)
-            #expect(await recorder.invocations.isEmpty)
+            // Its format is read; nothing is written. `convert` is the only
+            // invocation that could touch the bytes.
+            #expect(await recorder.converts.isEmpty)
             #expect(FileManager.default.contents(atPath: path) == guestVariables)
+        }
+    }
+
+    /// The reuse path is not only replayed creates: a host carried over from
+    /// the pre-STR-136 QEMU process driver has a **raw** `nvram.fd` at exactly
+    /// this path. Reusing it under an `<nvram format='qcow2'>` defines cleanly
+    /// and fails the start with an error naming a format rather than a VM —
+    /// the same shape of confusion STR-188 itself was. Failing the create says
+    /// which file and what to do with it.
+    @Test("A varstore in the wrong format fails the create rather than the start")
+    func varstoreInTheWrongFormatIsRefused() async throws {
+        try await withTemporaryDirectory { directory in
+            let recorder = Recorder()
+            await recorder.reportFormat("raw")
+            let varstore = UEFIVarstore(logger: logger, runSubprocess: recorder.runner)
+            let path = VMDirectoryLayout.nvram(vmDirectory: directory)
+            FileManager.default.createFile(atPath: path, contents: Data("a raw varstore".utf8))
+
+            let error = await #expect(throws: UEFIVarstoreError.self) {
+                try await varstore.materialize(at: path, from: "/vars.fd")
+            }
+
+            let description = try #require(error?.description)
+            #expect(description.contains(path))
+            #expect(description.contains("raw"))
+            // Refused, not rewritten: converting a varstore the guest already
+            // owns is a cutover decision, not a side effect of a create.
+            #expect(await recorder.converts.isEmpty)
+            #expect(FileManager.default.contents(atPath: path) == Data("a raw varstore".utf8))
+        }
+    }
+
+    /// The probe is read-only, and a varstore can be open elsewhere; `-U` is
+    /// what stops a lock held by a running QEMU turning a read into a failed
+    /// create (the STR-193 rule, applied to the one call that inspects).
+    @Test("The format probe forces sharing rather than failing on a held lock")
+    func formatProbeForcesSharing() async throws {
+        try await withTemporaryDirectory { directory in
+            let recorder = Recorder()
+            let varstore = UEFIVarstore(logger: logger, runSubprocess: recorder.runner)
+            let path = VMDirectoryLayout.nvram(vmDirectory: directory)
+            FileManager.default.createFile(atPath: path, contents: Data("varstore".utf8))
+
+            try await varstore.materialize(at: path, from: "/vars.fd")
+
+            let info = try #require(await recorder.invocations.first { $0.first == "info" })
+            #expect(info.contains("-U"))
         }
     }
 
@@ -204,5 +269,6 @@ struct UEFIVarstoreTests {
     func failuresAreClassifiedPermanent() {
         #expect(UEFIVarstoreError.toolUnavailable("").failureClassification == .permanent)
         #expect(UEFIVarstoreError.conversionFailed("").failureClassification == .permanent)
+        #expect(UEFIVarstoreError.formatMismatch("").failureClassification == .permanent)
     }
 }
