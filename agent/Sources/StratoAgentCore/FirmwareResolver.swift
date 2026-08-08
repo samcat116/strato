@@ -40,6 +40,23 @@ public struct FirmwareOverrides: Equatable, Sendable {
         self.secureBootVarsTemplatePath = secureBootVarsTemplatePath
         self.monolithicPath = monolithicPath
     }
+
+    /// Whether the operator named any firmware path at all.
+    ///
+    /// The libvirt driver needs this because `resolve` is not a pure reading of
+    /// these fields: with none of them set it still falls back to its own
+    /// platform candidate list. That is right for the QEMU path, which must
+    /// name files on a command line, and wrong for a domain document, where
+    /// leaving the firmware unnamed is what lets libvirt rank its installed
+    /// descriptors and pick a matching CODE/VARS pair itself. So "the operator
+    /// said nothing" has to be distinguishable from "resolve found something".
+    ///
+    /// Empty strings count as unset, matching `resolve`'s own `nonEmpty` guard
+    /// — a config key present but blank is not a path.
+    public var hasExplicitPaths: Bool {
+        [codePath, varsTemplatePath, secureBootCodePath, secureBootVarsTemplatePath, monolithicPath]
+            .contains { $0?.isEmpty == false }
+    }
 }
 
 /// Resolves which EDK2 firmware files a VM boots with.

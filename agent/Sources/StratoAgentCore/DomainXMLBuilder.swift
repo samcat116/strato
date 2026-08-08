@@ -144,10 +144,13 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 ///   is a no-op on files the agent already owns *and* libvirt still prepares
 ///   its own runtime artifacts. Suppressing it instead breaks swtpm. Do not add
 ///   a `<seclabel>` element here.
-/// - **The paused-at-create behaviour.** `-S` has no document form: the create
-///   contract's "exists, not running" (issue #260) becomes
-///   `VIR_DOMAIN_START_PAUSED` on the driver's start call. If that is dropped,
-///   every fresh VM boots once and the next periodic sync shuts it down again.
+/// - **The paused-at-create behaviour.** `-S` has no document form and needs
+///   none: `LibvirtService` creates with `domainDefineXML`, which leaves the
+///   domain `SHUTOFF` and satisfies the create contract's "exists, not running"
+///   (issue #260) directly. A driver that reached for `domainCreateXML` instead
+///   would define *and start* a transient domain — every fresh VM booting once,
+///   with the next periodic sync shutting it down again, and nothing left for an
+///   agent restart to adopt.
 /// - **The three QMP monitors.** libvirt owns the monitor; re-adoption and the
 ///   balloon-stats probe become libvirt API calls, not sockets.
 /// - **`<memoryBacking>`.** `spec.sharedMemory` and `spec.hugepages` are read

@@ -480,6 +480,23 @@ Most settings have platform defaults; see
 for the full list (QEMU paths, storage directories, network mode,
 SPIFFE/mTLS). Command-line flags override the config file.
 
+### Choosing the QEMU driver
+
+`qemu_driver` selects how a node realizes a QEMU placement: `"process"` (the
+default — the agent spawns `qemu-system-*` itself and drives it over QMP) or
+`"libvirt"` (domains defined and driven through libvirtd at `qemu:///system`).
+It is Linux-only and ignored on macOS.
+
+This is a **per-node** setting, and deliberately so: nothing about it reaches
+the control plane, so a fleet is rolled over one node at a time and a node can
+be moved back by editing one line. Selecting `libvirt` makes the host's libvirt
+checks gating — the node needs libvirt ≥ 11.5 reachable at `qemu:///system`,
+which `install.sh` provisions — and while they fail the node stops advertising
+QEMU rather than accepting VMs it cannot serve.
+
+The libvirt driver does not yet support disk hot-plug, online resize or VM
+checkpoints. Attach volumes to a VM before booting it on such a node.
+
 Two host packages change what a node can be asked to run rather than how it
 runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
 backs guest TPM 2.0 devices — libvirt starts and supervises it per domain, so
