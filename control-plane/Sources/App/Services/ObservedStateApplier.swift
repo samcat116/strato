@@ -1106,7 +1106,7 @@ struct ObservedStateApplier {
         // reason the path is, and with the same asymmetry as the applied I/O
         // ceilings below: it is a fact about the volume rather than a verdict on
         // the mutation, so it lands before the converging early-return, and an
-        // agent that reported *nothing* (pre-v37, or a probe that could not read
+        // agent that reported *nothing* (pre-v38, or a probe that could not read
         // the image) leaves the column alone instead of clearing it. Writing nil
         // through would turn a silent agent into "this volume has no size",
         // which is the same wrong answer in the other direction.

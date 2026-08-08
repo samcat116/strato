@@ -5489,7 +5489,7 @@ export interface components {
             image?: string;
             /**
              * Format: uuid
-             * @description Snapshot id to fork from; mutually exclusive with image/cpus/memory.
+             * @description Snapshot id to fork from; mutually exclusive with image/cpus/memory. A fork inherits the checkpoint's NIC shape: it takes the source sandbox's network unless `networkId`/`networkName` names one, and is refused if it names a network the checkpoint has no device for.
              */
             restoreFrom?: string;
             /** Format: uuid */
@@ -5510,7 +5510,7 @@ export interface components {
             ttlSeconds?: number;
             /**
              * Format: uuid
-             * @description Logical network for the sandbox's NIC, within its own project. Mutually exclusive with `networkName`; omitting both attaches no NIC. A NIC is an address reservation only until sandbox guest networking is enabled.
+             * @description Logical network for the sandbox's NIC, within its own project. Mutually exclusive with `networkName`; omitting both attaches no NIC — except on a fork, which then inherits the source sandbox's network. The sandbox only places on a host that advertises sandbox networking.
              */
             networkId?: string;
             networkName?: string;
@@ -5959,6 +5959,7 @@ export interface components {
             /** Format: uuid */
             projectId?: string;
             dhcpEnabled?: boolean;
+            /** @description The network's resolvers. With `resolverEnabled` (the default) these are the upstream forwarders the network's built-in resolver sends misses to; with it off they are advertised to guests over DHCP verbatim. */
             dnsServers?: string[];
             /** @description DHCP search domain for the network's guests. A sequence of RFC 1123 labels — `corp.example.com` or a bare `internal` — stored lowercased and without a trailing dot. An empty string clears it. */
             domainName?: string;
@@ -5966,6 +5967,10 @@ export interface components {
             externalAccess?: boolean;
             /** @description Whether the network publishes the link-local instance metadata service to its guests. Defaults true; this is an opt-out. */
             metadataEnabled?: boolean;
+            /** @description Whether the network gives its guests a DNS resolver at its own link-local address, serving the zones attached to the network in full — including the CNAME, TXT and SRV records the datapath cannot express — and forwarding everything else to `dnsServers` through the hypervisor's own egress. Defaults true. Enabling it allocates the network a resolver address pair, which is kept if it is later disabled. */
+            resolverEnabled?: boolean;
+            /** @description The addresses this network's guests resolve through, IPv4 first. Distinct per network, and absent until the resolver is first enabled. */
+            resolverAddresses?: string[];
             /** Format: uuid */
             siteId?: string;
         };
@@ -5977,6 +5982,7 @@ export interface components {
             gateway6?: string;
             ipv6Enabled?: boolean;
             dhcpEnabled?: boolean;
+            /** @description The network's resolvers. With `resolverEnabled` (the default) these are the upstream forwarders the network's built-in resolver sends misses to; with it off they are advertised to guests over DHCP verbatim. */
             dnsServers?: string[];
             /** @description DHCP search domain for the network's guests. A sequence of RFC 1123 labels — `corp.example.com` or a bare `internal` — stored lowercased and without a trailing dot. An empty string clears it. */
             domainName?: string;
@@ -5984,6 +5990,8 @@ export interface components {
             externalAccess?: boolean;
             /** @description Whether the network publishes the link-local instance metadata service to its guests. Defaults true; this is an opt-out. */
             metadataEnabled?: boolean;
+            /** @description Whether the network gives its guests a DNS resolver at its own link-local address, serving the zones attached to the network in full — including the CNAME, TXT and SRV records the datapath cannot express — and forwarding everything else to `dnsServers` through the hypervisor's own egress. Defaults true. Enabling it allocates the network a resolver address pair, which is kept if it is later disabled. */
+            resolverEnabled?: boolean;
             /**
              * Format: uuid
              * @description The DNS zone this network's VMs auto-register into. Must already be attached to the network.
@@ -6006,12 +6014,15 @@ export interface components {
             /** @description VM and sandbox interfaces attached to this network. */
             attachedInterfaceCount: number;
             dhcpEnabled: boolean;
+            /** @description The network's resolvers. With `resolverEnabled` (the default) these are the upstream forwarders the network's built-in resolver sends misses to; with it off they are advertised to guests over DHCP verbatim. */
             dnsServers: string[];
             domainName?: string;
             leaseTime?: number;
             externalAccess: boolean;
             /** @description Whether the network publishes the link-local instance metadata service to its guests. Defaults true; this is an opt-out. */
             metadataEnabled: boolean;
+            /** @description Whether the network gives its guests a DNS resolver at its own link-local address, serving the zones attached to the network in full — including the CNAME, TXT and SRV records the datapath cannot express — and forwarding everything else to `dnsServers` through the hypervisor's own egress. Defaults true. Enabling it allocates the network a resolver address pair, which is kept if it is later disabled. */
+            resolverEnabled: boolean;
             /** Format: uuid */
             siteId?: string;
             /**

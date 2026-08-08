@@ -697,8 +697,9 @@ public func configure(_ app: Application) async throws {
     // DNS phase 1 (issue #770): project-owned zones, their many-to-many
     // attachment to networks, authored records, and the two columns derived
     // records are placed by (`vms.hostname`, `logical_networks
-    // .primary_dns_zone_id`). Nothing realizes any of it yet — phase 3 writes
-    // the OVN `DNS` table.
+    // .primary_dns_zone_id`). Realization came later: phase 3 (STR-39) writes
+    // the A/AAAA/PTR subset into the OVN `DNS` table, and phase 4 (STR-40)
+    // renders the full record vocabulary into a per-network CoreDNS.
     app.migrations.add(CreateDNSZone())
     app.migrations.add(EnforceDNSRecordEnums())
 
@@ -837,6 +838,13 @@ public func configure(_ app: Application) async throws {
     // every name and description column the API now bounds. Runs late so every
     // table it constrains already exists in its final shape.
     app.migrations.add(BoundResourceTextColumns())
+
+    // Per-network DNS resolver (STR-40, roadmap #769 phase 4): the network's
+    // opt-out, and the per-agent signal that the site can actually answer on
+    // the resolver address.
+    app.migrations.add(AddResolverEnabledToLogicalNetwork())
+    app.migrations.add(AddResolverCapableToAgent())
+    app.migrations.add(AddResolverIndexToLogicalNetwork())
 
     // STR-199: the size a volume actually has, next to the size it was asked
     // for, so a grow the agent has refused stops reading as one that landed.

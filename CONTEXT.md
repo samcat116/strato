@@ -304,3 +304,39 @@ use in code, tests, docs, and review. Architecture-level maps live in
   back to the platform domain is **degraded**, not equivalent — it cross-signs
   tenants under one root. A guest's domain is chosen once, when its registration
   is written, and the URI never moves.
+
+## Networking
+
+- **Chassis service foot** — the per-network pair of things every hypervisor
+  builds for a link-local service its guests use: one OVN `localport` on the
+  network's logical switch (authored by the site's topology authority) and one
+  local termination of it (built by every agent running a NIC on that network).
+  Two services have one each. **Instance metadata** terminates in a network
+  namespace, `strato-md-<network-uuid>`, because source-IP attribution is its
+  security model. The **resolver** terminates in the **host** namespace, because
+  it has to forward and that namespace has no egress.
+
+- **Resolver** — the DNS server a network's guests are pointed at, answering on
+  a link-local pair of the network's own derived from its `resolver_index`. One
+  CoreDNS process per *hypervisor*, with a server block per network. It serves
+  the zones attached to each network in full — including the CNAME/TXT/SRV
+  records the OVN `DNS` table cannot express — and **forwards** everything else
+  through the hypervisor's own egress, which is what lets a guest on a network
+  with no external access resolve a public name. Enabling it is a **site-wide**
+  decision, not a per-host one: guests are pointed at the address by one DHCP row
+  while the process answering runs per host, so one host that cannot serve one
+  withholds the feature from every network in its site.
+
+- **Resolver index** — the single fleet-wide integer a network is allocated, from
+  which both of its resolver addresses and its host routing-table id are derived.
+  Fleet-wide rather than per host because a network's index cannot depend on
+  where its VMs are placed; sequential rather than hashed because ~65k addresses
+  collide under hashing at a few hundred networks. Never moved once assigned —
+  moving one would strand every DHCP lease that carries it.
+
+- **Upstream forwarder** — where a network's resolver sends the names it does
+  not serve itself. This is what `LogicalNetwork.dnsServers` means on a network
+  with the resolver enabled; with it disabled the same list is what guests are
+  told directly. One field, two readings, and which applies is
+  `resolverEnabled`. An empty list is not a fallback to anything: internal names
+  resolve and everything else is refused.

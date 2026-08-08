@@ -27,16 +27,16 @@ public struct MetadataServerProcessSpawner: MetadataServerSpawning {
     }
 
     public func namespaceExists(networkId: UUID) -> Bool {
-        // The same probe `ObservedMetadataPort.namespacePresent` uses, and for
+        // The same probe `ObservedChassisServicePort.namespacePresent` uses, and for
         // the same reason: `/var/run/netns` is tmpfs, so the namespace and the
         // OVS row it belongs to have different lifetimes.
-        FileManager.default.fileExists(atPath: MetadataChassisPlan.netnsPath(networkId: networkId))
+        FileManager.default.fileExists(atPath: ChassisServicePlan.netnsPath(networkId: networkId))
     }
 
     public func existingNamespaces() -> [UUID] {
         let names =
-            (try? FileManager.default.contentsOfDirectory(atPath: MetadataChassisPlan.netnsDirectory)) ?? []
-        return names.compactMap(MetadataChassisPlan.networkId(fromNetnsName:))
+            (try? FileManager.default.contentsOfDirectory(atPath: ChassisServicePlan.netnsDirectory)) ?? []
+        return names.compactMap(ChassisServicePlan.networkId(fromNetnsName:))
             .sorted { $0.uuidString < $1.uuidString }
     }
 
@@ -44,7 +44,7 @@ public struct MetadataServerProcessSpawner: MetadataServerSpawning {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ipBinaryPath)
         process.arguments = [
-            "netns", "exec", MetadataChassisPlan.netnsName(networkId: networkId),
+            "netns", "exec", ChassisServicePlan.netnsName(networkId: networkId),
             agentBinaryPath, "metadata-server",
             "--network-id", networkId.uuidString,
             "--hop-limit", String(hopLimit),

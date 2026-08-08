@@ -48,11 +48,43 @@ public enum OVNNaming {
         "lsp-ext-\(routerKey)-router"
     }
     public static func localnetPortName(routerKey: String) -> String { "ln-ext-\(routerKey)" }
-    /// The `type=localport` switch port publishing the instance metadata
-    /// addresses on a network's switch (STR-49). Named in the
+    /// The `type=localport` switch port publishing a network's *resolver*
+    /// addresses (STR-40).
+    ///
+    /// A second localport rather than more addresses on the metadata one,
+    /// because the two are terminated in different places and an OVS interface
+    /// can claim exactly one `iface-id`. Metadata stays in the network's own
+    /// namespace, where the source address identifies the caller; the resolver
+    /// moves to the host namespace, where forwarding upstream is the
+    /// hypervisor's own. See ADR 0008.
+    public static func resolverPortName(networkId: UUID) -> String {
+        "lsp-\(networkId.uuidString.lowercased())-resolver"
+    }
+
+    /// A stable, locally-administered unicast MAC for a network's resolver
+    /// localport. `02:03:` keeps it disjoint from the router-port (`02:00:`),
+    /// floating-IP (`02:01:`) and metadata (`02:02:`) namespaces.
+    ///
+    /// Derived from the network id rather than the address for
+    /// `serviceLocalPortMAC`'s reason — a churning MAC would rewrite the port on
+    /// every agent restart and invalidate guest neighbor caches — even though
+    /// the resolver's address *is* unique per network and could have seeded it.
+    /// Keeping both derivations the same shape is worth more than saving the
+    /// four bytes.
+    public static func resolverPortMAC(networkId: UUID) -> String {
+        let bytes = networkId.uuid
+        return String(format: "02:03:%02x:%02x:%02x:%02x", bytes.0, bytes.1, bytes.2, bytes.3)
+    }
+
+    /// The `type=localport` switch port publishing a network's instance
+    /// metadata addresses on its switch (STR-49). Named in the
     /// `lsp-<uuid>-<role>` family alongside `switchRouterPortName` rather than
     /// after the switch, so every port on a tenant switch reads the same way.
-    public static func metadataPortName(networkId: UUID) -> String {
+    ///
+    /// Carries only the metadata addresses. The resolver briefly shared this
+    /// port and now has `resolverPortName`, because the two terminate in
+    /// different namespaces and one OVS interface claims one `iface-id`.
+    public static func serviceLocalPortName(networkId: UUID) -> String {
         "lsp-\(networkId.uuidString.lowercased())-metadata"
     }
     /// The `Gateway_Chassis` row pinning a router's external port to a chassis,
@@ -117,13 +149,14 @@ public enum OVNNaming {
             (ip.raw >> 24) & 0xff, (ip.raw >> 16) & 0xff, (ip.raw >> 8) & 0xff, ip.raw & 0xff)
     }
 
-    /// A stable, locally-administered unicast MAC for a network's metadata
+    /// A stable, locally-administered unicast MAC for a network's service
     /// localport.
     ///
     /// Unlike `routerPortMAC` and `floatingIPMAC` this cannot derive from the
-    /// address: every network's metadata port answers at the same
-    /// `InstanceMetadataEndpoint` addresses, so an address-derived MAC would be
-    /// identical everywhere. It derives from the network id instead. The
+    /// address: every network's service port answers at the same
+    /// `InstanceMetadataEndpoint` and `NetworkResolverEndpoint` addresses, so an
+    /// address-derived MAC would be identical everywhere. It derives from the
+    /// network id instead. The
     /// `02:02:` prefix keeps it disjoint from the router-port (`02:00:`) and
     /// floating-IP (`02:01:`) namespaces, so a metadata port can never mint
     /// either of theirs.
@@ -134,7 +167,7 @@ public enum OVNNaming {
     /// networks are harmless — each port lives on its own logical switch, i.e.
     /// its own L2 domain, and each is realized in its own namespace on a
     /// chassis, so the two never share a neighbor table either.
-    public static func metadataPortMAC(networkId: UUID) -> String {
+    public static func serviceLocalPortMAC(networkId: UUID) -> String {
         let bytes = networkId.uuid
         return String(format: "02:02:%02x:%02x:%02x:%02x", bytes.0, bytes.1, bytes.2, bytes.3)
     }
@@ -142,8 +175,9 @@ public enum OVNNaming {
 
 // MARK: - Desired topology plan
 
-/// The OVN `localport` that publishes the instance metadata addresses on one
-/// tenant switch (STR-49).
+/// An OVN `localport` publishing one of a tenant switch's link-local service
+/// address sets: instance metadata (STR-49) or the network's DNS resolver
+/// (STR-40).
 ///
 /// A `localport` is the primitive designed for exactly this: `ovn-controller`
 /// instantiates it on every chassis and never forwards it across geneve
@@ -151,13 +185,25 @@ public enum OVNNaming {
 /// each guest still reaches its own host. OVN answers guest ARP and Neighbor
 /// Solicitation from this row's `addresses`, which is why the addresses need
 /// not belong to the switch's subnets.
-public struct DesiredMetadataPort: Equatable, Sendable {
+///
+/// **One port per service, not one port for both.** The two services terminate
+/// in different places — metadata in the network's chassis namespace, the
+/// resolver in the host's (ADR 0008) — and an OVS internal interface claims
+/// exactly one `iface-id`, so a shared row could not be terminated twice. This
+/// type describes either of them; which one it is follows from the name it was
+/// built with (`OVNNaming.serviceLocalPortName` or `.resolverPortName`).
+public struct DesiredServiceLocalPort: Equatable, Sendable {
     public let name: String
     public let switchName: String
     public let mac: String
     /// The addresses this port answers for, v4 first. Both families ride one
     /// port: OVN's `addresses` column is a set and its responder is driven
-    /// per-family off the entry, so a second port would buy nothing.
+    /// per-family off the entry, so splitting them would buy nothing.
+    ///
+    /// The order is load-bearing rather than cosmetic. `addresses` is one
+    /// joined string, so the actuator's drift check compares
+    /// `"<mac> a b c"` against `"<mac> a c b"` as different — a rebuild of the
+    /// same desired state in another order would rewrite the row on every sync.
     public let ips: [String]
 
     public init(name: String, switchName: String, mac: String, ips: [String]) {
@@ -184,19 +230,29 @@ public struct DesiredSwitch: Equatable, Sendable {
     /// in the same sync shares the name, which makes the hint ambiguous
     /// (issue #765).
     public let legacyName: String
-    /// The metadata localport this network wants, if any. It hangs off the
-    /// *switch* rather than the router deliberately: a gateway-less
-    /// (switch-only) network yields no router at all, and its guests need the
-    /// metadata service exactly as much as a routed network's do.
-    public let metadataPort: DesiredMetadataPort?
+    /// The service localport this network wants, if any — metadata addresses,
+    /// resolver addresses, or both. It hangs off the *switch* rather than the
+    /// router deliberately: a gateway-less (switch-only) network yields no
+    /// router at all, and its guests need these services exactly as much as a
+    /// routed network's do. The resolver in particular matters *more* there,
+    /// since such a network has no path to an external one.
+    public let serviceLocalPort: DesiredServiceLocalPort?
+    /// The resolver localport this network wants, if any. A second port rather
+    /// than more addresses on the one above, because the resolver terminates in
+    /// the *host* namespace while metadata stays in the network's own — and one
+    /// OVS interface claims one `iface-id`. See ADR 0008.
+    public let resolverPort: DesiredServiceLocalPort?
 
     public init(
-        name: String, subnet: String, legacyName: String, metadataPort: DesiredMetadataPort? = nil
+        name: String, subnet: String, legacyName: String,
+        serviceLocalPort: DesiredServiceLocalPort? = nil,
+        resolverPort: DesiredServiceLocalPort? = nil
     ) {
         self.name = name
         self.subnet = subnet
         self.legacyName = legacyName
-        self.metadataPort = metadataPort
+        self.serviceLocalPort = serviceLocalPort
+        self.resolverPort = resolverPort
     }
 }
 
@@ -332,7 +388,12 @@ public struct NetworkTopologyPlan: Equatable, Sendable {
             externalSwitchNames: externalSwitchNames,
             snatRules: snatRules,
             dnatRules: dnatRules,
-            metadataPortNames: Set(switches.compactMap { $0.metadataPort?.name }))
+            // Both localport kinds share one set. They are indistinguishable to
+            // the sweep — same `type=localport`, same ownership marker — and
+            // both are ours, so one difference covers both.
+            serviceLocalPortNames: Set(
+                switches.compactMap { $0.serviceLocalPort?.name }
+                    + switches.compactMap { $0.resolverPort?.name }))
     }
 }
 
@@ -379,7 +440,7 @@ public struct ObservedNetworkTopology: Equatable, Sendable {
     /// `switchRouterPortNames` because the actuator filters that one on
     /// `portType == "router"` — which is also why an agent old enough not to
     /// know this field leaves localports alone instead of sweeping them.
-    public var metadataPortNames: Set<String>
+    public var serviceLocalPortNames: Set<String>
 
     public init(
         routerNames: Set<String> = [],
@@ -388,7 +449,7 @@ public struct ObservedNetworkTopology: Equatable, Sendable {
         externalSwitchNames: Set<String> = [],
         snatRules: Set<SNATRuleKey> = [],
         dnatRules: Set<DNATRuleKey> = [],
-        metadataPortNames: Set<String> = []
+        serviceLocalPortNames: Set<String> = []
     ) {
         self.routerNames = routerNames
         self.routerPortNames = routerPortNames
@@ -396,7 +457,7 @@ public struct ObservedNetworkTopology: Equatable, Sendable {
         self.externalSwitchNames = externalSwitchNames
         self.snatRules = snatRules
         self.dnatRules = dnatRules
-        self.metadataPortNames = metadataPortNames
+        self.serviceLocalPortNames = serviceLocalPortNames
     }
 }
 
@@ -408,7 +469,7 @@ public enum NetworkTeardownAction: Equatable, Sendable {
     case snat(router: String, logicalIP: String)
     /// Nothing references a metadata localport, so its position in the order is
     /// free; it sits with the other switch-port removals.
-    case metadataPort(name: String)
+    case serviceLocalPort(name: String)
     case switchRouterPort(name: String)
     case routerPort(name: String)
     case externalSwitch(name: String)
@@ -430,7 +491,7 @@ public struct ProtectedTopology: Equatable, Sendable {
     public var externalSwitchNames: Set<String>
     public var snatRules: Set<SNATRuleKey>
     public var dnatRules: Set<DNATRuleKey>
-    public var metadataPortNames: Set<String>
+    public var serviceLocalPortNames: Set<String>
 
     public init(
         routerNames: Set<String> = [],
@@ -439,7 +500,7 @@ public struct ProtectedTopology: Equatable, Sendable {
         externalSwitchNames: Set<String> = [],
         snatRules: Set<SNATRuleKey> = [],
         dnatRules: Set<DNATRuleKey> = [],
-        metadataPortNames: Set<String> = []
+        serviceLocalPortNames: Set<String> = []
     ) {
         self.routerNames = routerNames
         self.routerPortNames = routerPortNames
@@ -447,13 +508,13 @@ public struct ProtectedTopology: Equatable, Sendable {
         self.externalSwitchNames = externalSwitchNames
         self.snatRules = snatRules
         self.dnatRules = dnatRules
-        self.metadataPortNames = metadataPortNames
+        self.serviceLocalPortNames = serviceLocalPortNames
     }
 
     public var isEmpty: Bool {
         routerNames.isEmpty && routerPortNames.isEmpty && switchRouterPortNames.isEmpty
             && externalSwitchNames.isEmpty && snatRules.isEmpty && dnatRules.isEmpty
-            && metadataPortNames.isEmpty
+            && serviceLocalPortNames.isEmpty
     }
 
     /// Merge another protection set in. Protection is a union by construction —
@@ -467,7 +528,7 @@ public struct ProtectedTopology: Equatable, Sendable {
         externalSwitchNames.formUnion(other.externalSwitchNames)
         snatRules.formUnion(other.snatRules)
         dnatRules.formUnion(other.dnatRules)
-        metadataPortNames.formUnion(other.metadataPortNames)
+        serviceLocalPortNames.formUnion(other.serviceLocalPortNames)
     }
 }
 
@@ -505,19 +566,36 @@ public enum NetworkReconciler {
             let switchName = OVNNaming.switchName(networkId: network.networkId)
             // `== true`, not `?? false`: nil and false plan the same thing here
             // (no port). They differ only in whether an *existing* port is torn
-            // down, which `metadataProtection(for:)` decides — see its comment.
-            let metadataPort =
+            // down, which `serviceLocalPortProtection(for:)` decides — see its
+            // comment.
+            let serviceLocalPort =
                 network.metadataEnabled == true
-                ? DesiredMetadataPort(
-                    name: OVNNaming.metadataPortName(networkId: network.networkId),
+                ? DesiredServiceLocalPort(
+                    name: OVNNaming.serviceLocalPortName(networkId: network.networkId),
                     switchName: switchName,
-                    mac: OVNNaming.metadataPortMAC(networkId: network.networkId),
+                    mac: OVNNaming.serviceLocalPortMAC(networkId: network.networkId),
                     ips: InstanceMetadataEndpoint.addresses)
                 : nil
+            // The resolver's own localport, carrying this network's distinct
+            // address pair. Separate from the metadata port because the two
+            // terminate in different namespaces (ADR 0008), and present only
+            // when the control plane has actually allocated the pair — an
+            // address it has not committed to is one no agent should publish.
+            var resolverPort: DesiredServiceLocalPort?
+            if network.resolverEnabled == true, let addresses = network.resolverAddresses,
+                !addresses.isEmpty
+            {
+                resolverPort = DesiredServiceLocalPort(
+                    name: OVNNaming.resolverPortName(networkId: network.networkId),
+                    switchName: switchName,
+                    mac: OVNNaming.resolverPortMAC(networkId: network.networkId),
+                    ips: addresses)
+            }
             return DesiredSwitch(
                 name: switchName, subnet: network.subnet,
                 legacyName: nameCounts[network.name] == 1 ? network.name : "",
-                metadataPort: metadataPort)
+                serviceLocalPort: serviceLocalPort,
+                resolverPort: resolverPort)
         }
 
         // Group by router key, preserving deterministic order.
@@ -641,17 +719,22 @@ public enum NetworkReconciler {
             for fip in network.floatingIPs ?? [] {
                 protected.dnatRules.insert(DNATRuleKey(router: routerName, externalIP: fip.externalIP))
             }
-            // A stale network keeps its metadata port, unconditionally rather
-            // than only when `metadataEnabled` is set: over-protection defers a
-            // teardown by one sync, under-protection drops a live service.
-            protected.metadataPortNames.insert(OVNNaming.metadataPortName(networkId: network.networkId))
+            // A stale network keeps *both* its localports, unconditionally
+            // rather than only when the matching flag is set: over-protection
+            // defers a teardown by one sync, under-protection drops a live
+            // service. Both are named here rather than one, because they are
+            // separate rows since ADR 0008 — and the resolver is the costlier
+            // of the two to drop, since a guest whose resolver address stops
+            // answering ARP loses external name resolution as well as internal.
+            protected.serviceLocalPortNames.insert(OVNNaming.serviceLocalPortName(networkId: network.networkId))
+            protected.serviceLocalPortNames.insert(OVNNaming.resolverPortName(networkId: network.networkId))
         }
         return protected
     }
 
-    /// The metadata ports of networks the sync expresses no *opinion* about
-    /// (`metadataEnabled == nil`, i.e. a control plane older than the field),
-    /// protected from teardown.
+    /// The localports of networks the sync expresses no *opinion* about —
+    /// `metadataEnabled == nil` or `resolverEnabled == nil`, i.e. a control
+    /// plane older than the field that authors them — protected from teardown.
     ///
     /// Deliberately the one thing protected from a *current* network, against
     /// the rule `protectedTopology(forStale:)` documents. It has to be: teardown
@@ -662,10 +745,24 @@ public enum NetworkReconciler {
     /// off actually remove the port.
     ///
     /// Pass the networks the sync applied (the same list handed to `plan`).
-    public static func metadataProtection(for networks: [DesiredNetworkState]) -> ProtectedTopology {
+    public static func serviceLocalPortProtection(for networks: [DesiredNetworkState]) -> ProtectedTopology {
         var protected = ProtectedTopology()
+        // Each port is protected by *its own* service's silence, because since
+        // ADR 0008 they are separate rows with separate lifetimes. Reading one
+        // field for both would be a real regression in either direction: a
+        // control plane rolled back below v37 sends no `resolverEnabled` while
+        // still sending `metadataEnabled`, so keying both off the resolver's
+        // silence would protect every metadata port on the host — turning
+        // metadata off would silently stop working against exactly the older
+        // control plane this guard exists for — while keying both off
+        // metadata's would delete every live resolver port on that rollback.
         for network in networks where network.metadataEnabled == nil {
-            protected.metadataPortNames.insert(OVNNaming.metadataPortName(networkId: network.networkId))
+            protected.serviceLocalPortNames.insert(
+                OVNNaming.serviceLocalPortName(networkId: network.networkId))
+        }
+        for network in networks where network.resolverEnabled == nil {
+            protected.serviceLocalPortNames.insert(
+                OVNNaming.resolverPortName(networkId: network.networkId))
         }
         return protected
     }
@@ -691,9 +788,9 @@ public enum NetworkReconciler {
         where !protected.snatRules.contains(rule) {
             actions.append(.snat(router: rule.router, logicalIP: rule.logicalIP))
         }
-        for name in observed.metadataPortNames.subtracting(want.metadataPortNames).sorted()
-        where !protected.metadataPortNames.contains(name) {
-            actions.append(.metadataPort(name: name))
+        for name in observed.serviceLocalPortNames.subtracting(want.serviceLocalPortNames).sorted()
+        where !protected.serviceLocalPortNames.contains(name) {
+            actions.append(.serviceLocalPort(name: name))
         }
         for name in observed.switchRouterPortNames.subtracting(want.switchRouterPortNames).sorted()
         where !protected.switchRouterPortNames.contains(name) {
@@ -757,8 +854,8 @@ public protocol NetworkActuator: Sendable {
     /// Ensure a network's metadata `localport` exists with the right type and
     /// addresses, rewriting a drifted row in place — the name is derived from
     /// the network, so the row is stable across edits.
-    func ensureMetadataPort(_ port: DesiredMetadataPort) async throws
-    func removeMetadataPort(name: String) async throws
+    func ensureServiceLocalPort(_ port: DesiredServiceLocalPort) async throws
+    func removeServiceLocalPort(name: String) async throws
     func ensureRouter(_ router: DesiredRouter) async throws
     /// Create the tenant router port and its peering `type=router` switch port.
     func ensureRouterPort(_ port: DesiredRouterPort, onRouter routerName: String) async throws
@@ -820,9 +917,16 @@ extension NetworkReconciler {
             // The port hangs off the switch, so a switch we failed to ensure
             // has nothing to hang it on; the next level-triggered sync retries
             // both.
-            guard ensured, let metadata = desired.metadataPort else { continue }
-            await attempt(logger, "ensure metadata port \(metadata.name)") {
-                try await actuator.ensureMetadataPort(metadata)
+            guard ensured else { continue }
+            if let metadata = desired.serviceLocalPort {
+                await attempt(logger, "ensure metadata port \(metadata.name)") {
+                    try await actuator.ensureServiceLocalPort(metadata)
+                }
+            }
+            if let resolver = desired.resolverPort {
+                await attempt(logger, "ensure resolver port \(resolver.name)") {
+                    try await actuator.ensureServiceLocalPort(resolver)
+                }
             }
         }
 
@@ -885,8 +989,8 @@ extension NetworkReconciler {
                     try await actuator.removeDNAT(router: router, externalIP: externalIP)
                 case .snat(let router, let logicalIP):
                     try await actuator.removeSNAT(router: router, logicalIP: logicalIP)
-                case .metadataPort(let name):
-                    try await actuator.removeMetadataPort(name: name)
+                case .serviceLocalPort(let name):
+                    try await actuator.removeServiceLocalPort(name: name)
                 case .switchRouterPort(let name):
                     try await actuator.removeSwitchRouterPort(name: name)
                 case .routerPort(let name):

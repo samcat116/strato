@@ -205,6 +205,39 @@ struct DomainMemoryInventoryTests {
         #expect(layout.requestedBytes(forTotal: 4 * Self.gib) == nil)
     }
 
+    /// The regression the clamp above hides, and why the shortfall is a separate
+    /// question (STR-187): a target *past* the ceiling and a target *at* it both
+    /// come back as "plug the whole device", so a resize to 100 GiB on this
+    /// domain would plug 6, report success and leave the VM at 8 — converged, as
+    /// far as anything downstream could tell.
+    @Test("a target past the ceiling reports how far past it is")
+    func shortfallPastTheCeiling() throws {
+        let layout = try DomainMemoryInventory.memoryLayout(
+            inDomainXML: Self.domain(Self.virtioMemDevice))
+        let gib = Self.gib
+
+        // 2 GiB boot + a 6 GiB region: everything up to the total fits.
+        #expect(layout.shortfall(forTotal: 8 * gib) == nil)
+        #expect(layout.shortfall(forTotal: 5 * gib) == nil)
+        #expect(layout.shortfall(forTotal: gib) == nil)
+        // Past it, the answer is the distance rather than a bare "no".
+        #expect(layout.shortfall(forTotal: 8 * gib + 1) == 1)
+        #expect(layout.shortfall(forTotal: 100 * gib) == 92 * gib)
+        // The clamp at the same targets, for contrast: indistinguishable.
+        #expect(layout.requestedBytes(forTotal: 8 * gib) == layout.requestedBytes(forTotal: 100 * gib))
+    }
+
+    /// A domain with no device has its whole size as the ceiling, so growing it
+    /// is never a shortfall — it is `setDefinedMemory`'s business, and lands at
+    /// the next boot.
+    @Test("a domain with no memory device measures against its own size")
+    func shortfallWithoutDevice() throws {
+        let layout = try DomainMemoryInventory.memoryLayout(
+            inDomainXML: Self.domain("", memoryKiB: 2_097_152))
+        #expect(layout.shortfall(forTotal: 2 * Self.gib) == nil)
+        #expect(layout.shortfall(forTotal: 4 * Self.gib) == 2 * Self.gib)
+    }
+
     /// The fragment libvirt matches an update against. It has to reproduce the
     /// device's identity — model, node, size and block — or it describes a
     /// different device and the update finds nothing.

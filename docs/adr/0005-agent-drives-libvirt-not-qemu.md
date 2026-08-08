@@ -90,13 +90,15 @@ system dependency, which is what lets the driver's pure layer — the domain XML
 builder, state mapping, error translation, memory-stat parsing — live in the
 agent's testable core target rather than beside a linked SDK.
 
-### 2. The domain document is the interface, and it is written once
+### 2. The domain document is the interface, and a boot reads it
 
-`createVM` calls `domainDefineXML` and nothing redefines it. That single fact
-propagates: every in-place mutation is sent with `AFFECT_LIVE|AFFECT_CONFIG` so
-it lands on the running guest *and* in the definition the next boot reads, and a
-resize the guest cannot take online is written to `CONFIG` alone rather than
-deferred to a boot that would not pick it up.
+`createVM` calls `domainDefineXML`, and the next boot starts that definition
+rather than re-reading the spec. That single fact propagates: every in-place
+mutation is sent with `AFFECT_LIVE|AFFECT_CONFIG` so it lands on the running
+guest *and* in the definition the next boot reads, and a resize the guest cannot
+take online is written to `CONFIG` alone rather than deferred to a boot that
+would not pick it up. The one other writer is `redefineVM` (STR-187), which
+widens a stopped domain's ceilings before it starts and touches nothing else.
 
 `DomainXMLBuilder` is therefore an owned artifact, tested against eight golden
 documents that are validated three ways: against the RELAX-NG schema of libvirt
@@ -204,13 +206,17 @@ misleading message underneath its real failure.
   three-way validation are the mitigation, and they are ongoing work: every new
   device or attribute needs re-validating against both ends of the supported
   libvirt range.
-- **Some behaviour is fixed at create time.** The document is written once, so a
-  VM's hot-plug slots (four spare `pcie-root-port`s, at indexes past the ports
+- **Some behaviour is decided at create time, and a restart is what changes it.**
+  A VM's hot-plug slots (four spare `pcie-root-port`s, at indexes past the ports
   the domain's own devices occupy — un-indexed ones reserve nothing, STR-192)
-  and its memory headroom are decided when it is created. Exceeding either fails
-  with libvirt's error rather than growing the domain.
-  ([issue #1026](https://github.com/samcat116/strato/issues/1026) tracks lifting
-  this.)
+  its memory headroom and its `<vcpu>` maximum are written into the document when
+  it is created, and exceeding any of them while the VM runs fails rather than
+  growing the domain.
+  STR-187 made a boot rewrite them: the agent widens a *stopped* domain's
+  definition to what its current spec asks for before starting it, so the remedy
+  is a restart rather than recreating the VM. That redefine is deliberately the
+  only other write to the document, and it edits rather than rebuilds — see
+  `docs/architecture/agent.md`.
 - **libvirtd caches host capabilities.** Installing swtpm under a running daemon
   does not make a node TPM-capable until libvirtd restarts. This is a genuinely
   surprising operational edge; the preflight's remediation names the restart.

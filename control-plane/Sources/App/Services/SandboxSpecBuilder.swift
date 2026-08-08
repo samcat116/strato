@@ -46,11 +46,13 @@ enum SandboxSpecBuilder {
         network: LogicalNetwork?,
         securityGroupIds: [UUID]? = nil,
         sendsMetadataPort: Bool = true,
+        siteResolverCapable: Bool? = true,
         agentRealizesSandboxNICs: Bool
     ) -> NetworkSpec? {
         guard agentRealizesSandboxNICs, let interface, let network else { return nil }
         return NetworkSpec.build(
             interface: interface, network: network, securityGroupIds: securityGroupIds,
-            sendsMetadataPort: sendsMetadataPort)
+            sendsMetadataPort: sendsMetadataPort,
+            siteResolverCapable: siteResolverCapable)
     }
 }

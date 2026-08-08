@@ -59,7 +59,12 @@ struct NetworkCommand: AsyncParsableCommand {
                     table.addRow(["ipv6 subnet", network.subnet6 ?? ""])
                     table.addRow(["dhcp", network.dhcpEnabled ? "enabled" : "disabled"])
                     table.addRow(["metadata service", network.metadataEnabled ? "enabled" : "disabled"])
-                    table.addRow(["dns servers", network.dnsServers.joined(separator: ", ")])
+                    table.addRow(["dns resolver", network.resolverEnabled ? "enabled" : "disabled"])
+                    table.addRow(
+                        [
+                            network.resolverEnabled ? "upstream forwarders" : "dns servers",
+                            network.dnsServers.joined(separator: ", "),
+                        ])
                     table.addRow(["domain name", network.domainName ?? ""])
                     table.addRow(["primary dns zone", network.primaryDnsZoneId ?? ""])
                     table.addRow(["attached NICs", String(network.attachedInterfaceCount)])
@@ -92,7 +97,10 @@ struct NetworkCommand: AsyncParsableCommand {
 
         @Option(
             name: .customLong("dns-server"), parsing: .singleValue,
-            help: "Resolver advertised to guests over DHCP. Repeat for several.")
+            help: """
+                With --resolver (the default), an upstream the built-in resolver forwards to; \
+                without it, a resolver advertised to guests over DHCP. Repeat for several.
+                """)
         var dnsServers: [String] = []
 
         @Option(
@@ -105,6 +113,17 @@ struct NetworkCommand: AsyncParsableCommand {
             help: "Publish the link-local instance metadata service to guests. Enabled by default.")
         var metadata: Bool?
 
+        @Flag(
+            name: .long, inversion: .prefixedNo,
+            help: """
+                Give guests a built-in DNS resolver at a link-local address of the network's \
+                own, serving this network's zones in full — including the CNAME, TXT and SRV \
+                records the datapath cannot express — and forwarding the rest through the \
+                hypervisor's own egress. Enabled by default; --no-resolver hands guests the \
+                --dns-server list directly instead.
+                """)
+        var resolver: Bool?
+
         func run() async throws {
             try await runHandlingCLIErrors {
                 let env = try CLIEnvironment.resolve(global)
@@ -114,7 +133,7 @@ struct NetworkCommand: AsyncParsableCommand {
                             name: name, subnet: subnet, gateway: gateway,
                             projectId: project ?? env.context.project, dhcpEnabled: dhcp,
                             dnsServers: dnsServers.isEmpty ? nil : dnsServers, domainName: domainName,
-                            metadataEnabled: metadata))
+                            metadataEnabled: metadata, resolverEnabled: resolver))
                 ).ok.body.json
                 switch global.output {
                 case .table:
@@ -128,7 +147,7 @@ struct NetworkCommand: AsyncParsableCommand {
 
     struct Update: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
-            abstract: "Update a network's DNS settings, primary DNS zone, or metadata service.")
+            abstract: "Update a network's DNS settings, primary DNS zone, resolver, or metadata service.")
 
         @OptionGroup var global: GlobalOptions
 
@@ -137,7 +156,10 @@ struct NetworkCommand: AsyncParsableCommand {
 
         @Option(
             name: .customLong("dns-server"), parsing: .singleValue,
-            help: "Replace the advertised resolvers. Repeat for several.")
+            help: """
+                Replace the network's resolvers — upstream forwarders when --resolver is on. \
+                Repeat for several.
+                """)
         var dnsServers: [String] = []
 
         @Option(name: .long, help: "Search domain advertised over DHCP. Pass an empty string to clear it.")
@@ -156,6 +178,11 @@ struct NetworkCommand: AsyncParsableCommand {
             help: "Publish the link-local instance metadata service to guests.")
         var metadata: Bool?
 
+        @Flag(
+            name: .long, inversion: .prefixedNo,
+            help: "Give guests a built-in DNS resolver at a link-local address of the network's own.")
+        var resolver: Bool?
+
         func run() async throws {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
@@ -166,6 +193,7 @@ struct NetworkCommand: AsyncParsableCommand {
                             dnsServers: dnsServers.isEmpty ? nil : dnsServers,
                             domainName: domainName,
                             metadataEnabled: metadata,
+                            resolverEnabled: resolver,
                             primaryDnsZoneId: primaryDnsZone,
                             clearPrimaryDnsZone: clearPrimaryDnsZone ? true : nil))
                 ).ok.body.json

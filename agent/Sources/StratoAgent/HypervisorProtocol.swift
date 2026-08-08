@@ -89,6 +89,30 @@ public protocol HypervisorService: Actor, Sendable {
         metadata: InstanceMetadata?
     ) async throws
 
+    /// Makes whatever stored configuration this backend holds for a *stopped*
+    /// VM able to satisfy `spec`, before the boot that will read it (STR-187).
+    ///
+    /// A backend that rebuilds a VM from its spec on every spawn needs nothing
+    /// here — that is what its spawn already does, and the default is a no-op
+    /// for exactly the backends whose `updateRecordedVolumes` is one. It exists
+    /// for `LibvirtService`, where the domain document is written at create and
+    /// the next boot reads *that* rather than the spec: a VM's hot-plug slots,
+    /// its memory headroom and its vCPU maximum would otherwise be fixed for its
+    /// whole life, and outgrowing any of them would leave "recreate the VM" as
+    /// the only remedy.
+    ///
+    /// Called before `bootVM` and **never for a VM being created**, whose
+    /// configuration was built from this spec moments earlier. Best-effort by
+    /// contract: the caller boots the VM whether or not this succeeded, since a
+    /// VM that comes up at the ceiling it already had is strictly better than
+    /// one that does not come up. What the widening could not deliver surfaces
+    /// where it is actionable — on the attach or the resize that wanted it.
+    ///
+    /// - Parameters:
+    ///   - vmId: The VM identifier
+    ///   - spec: The desired spec this boot is converging on
+    func redefineVM(vmId: String, spec: VMSpec) async throws
+
     /// Boots (starts) a VM
     /// - Parameter vmId: The VM identifier
     func bootVM(vmId: String) async throws
@@ -338,6 +362,10 @@ public extension HypervisorService {
     /// from a stored configuration) need nothing here: the manifest they are
     /// handed at create time already carries the recorded volumes.
     func updateRecordedVolumes(vmId: String, volumes: [VolumeSpec]) async {}
+
+    /// And for the same reason they need nothing before a boot: a spawn that
+    /// reads the spec has no stored ceiling to widen.
+    func redefineVM(vmId: String, spec: VMSpec) async throws {}
     /// Backends must opt in to full-VM checkpoints (issue #564). Without an
     /// explicit implementation the control plane's capability gate keeps the
     /// request away in the first place; this default is the belt-and-braces

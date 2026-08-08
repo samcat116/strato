@@ -50,7 +50,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 36), stamped on
+`WireProtocol.swift` holds the protocol version (currently 38), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -83,7 +83,8 @@ ad-hoc checks scattered through the code:
 | `supportsVolumeSync` | 31 | Volumes in the desired-state sync — and a **placement** gate, not just a field gate: with the imperative volume frames gone there is no fallback path |
 | `supportsSnapshotSync` | 33 | Snapshot artifacts in the desired-state sync — and a **capture-admission** gate: an artifact has no placement decision to gate, so a capture requested against a pre-v33 agent is refused instead |
 | `supportsEdgeNonces` | 34 | Reboot and restore as monotonic nonces on the desired entry — and an **admission** gate: with the imperative frames gone, a pre-v34 agent would ignore the field and report the bumped generation as converged, so the API would claim a restart that never happened |
-| `supportsDNSZones` | 36 | `DesiredStateMessage.dnsZones` — the zones the topology authority realizes into the OVN `DNS` table. A *field* gate only: a pre-v36 agent leaves names unresolved, which is visible and self-healing, so there is nothing to refuse at the API |
+| `supportsDNSZones` | 36 | `DesiredStateMessage.dnsZones` — the zones an agent realizes, into the OVN `DNS` table (topology authority) and into its networks' resolvers (any agent with a local NIC). A *field* gate only: a pre-v36 agent leaves names unresolved, which is visible and self-healing, so there is nothing to refuse at the API |
+| `supportsNetworkResolver` | 37 | `DesiredNetworkState.resolverEnabled`/`.resolverAddresses`, the same pair on `NetworkSpec`, and `DesiredDNSRecord.ttl` — the per-network link-local resolver. A *field* gate; whether the host can actually serve one is the separate `AgentRegisterMessage.resolverCapable`, folded site-wide before the field is sent |
 
 The v9 `supportsSandboxSnapshots` and v22 `supportsVMCheckpoint` gates were
 removed with the last frames they guarded (v33 and v34): every question either
@@ -211,7 +212,7 @@ Absence is asymmetric in the v3/v5 sense on both fields, and on
 `DesiredNetworkState` the asymmetry is enforced in code rather than by
 convention. Network teardown is `observed − desired`, so a nil that merely
 planned no port would read as "remove it":
-`NetworkReconciler.metadataProtection(for:)` explicitly protects the ports of
+`NetworkReconciler.serviceLocalPortProtection(for:)` explicitly protects the ports of
 networks whose `metadataEnabled` is nil, which is what keeps a rollback to v26
 from deleting every live metadata port on the next sync. `false` remains an
 opinion and is honored — that is what makes turning the feature off work.
@@ -275,7 +276,7 @@ read is not desired state, and for every field the message carried, one side
 already knew the answer. Format, storage path and attachment have been on
 `ObservedVolumeState` since v31; the requested size is a control-plane column
 whose realization `observedGeneration` confirms. (The *virtual* size did come
-back in v37, on the narrower ground below: a refused grow made the desired size
+back in v38, on the narrower ground below: a refused grow made the desired size
 a misleading answer, and the planner's cache had made the subprocess free.) The
 remainder — allocated
 bytes, the qcow2 dirty flag, the encryption flag — has no reader, and
@@ -372,7 +373,56 @@ assembly skip the fleet-wide record queries for an agent that would discard
 them); unlike v33 and v34 there is no admission gate, because nothing reports a
 zone as converged, so there is no false success to refuse.
 
-Version 37 lets a volume report the size it actually has (STR-199):
+Version 37 gives every network a resolver (STR-40, roadmap #769 phase 4).
+`DesiredNetworkState` and `NetworkSpec` gain `resolverEnabled`, and
+`DesiredDNSRecord` gains `ttl`.
+
+The two `resolverEnabled` fields are the v27 metadata-port pair repeated
+exactly, and for the same reason: the network carrier authors the OVN
+`localport` and the DHCP row, while the per-NIC copy reaches the *chassis* half
+on agents that receive an empty `networks` list because they may not author
+topology.
+
+Each carrier also gains `resolverAddresses`, non-nil exactly when the flag is
+true: **one distinct v4/v6 pair per network**, allocated from `169.254.0.0/16`
+and `fd00:ec2:1::/48`. That distinctness is the whole feature. A resolver in the
+network's own chassis namespace has only link-local addresses and no egress the
+OVN router will SNAT, so it answers for its zones and forwards nothing — the bug
+the phase was filed to fix. A pair per network puts every resolver in the *host*
+namespace, where forwarding is the hypervisor's own, while the destination
+address still identifies the network and a per-address routing rule returns the
+reply to the right switch. See ADR 0008.
+
+`ttl` is the field v36 deliberately left off — an OVN `DNS` row has nowhere to
+put one, so it would have been dead weight on every sync. A zone file writes one
+TTL per RRset, so the CoreDNS driver cannot render without it. It is folded into
+`recordsHash`, which moves every stamp once on upgrade and heals with one
+rewrite per zone.
+
+Two consequences reach past the new fields. **`dnsZones` widens past the
+topology authority**: OVN `DNS` rows are switch-scoped and still written only by
+the site's controller, but a resolver runs wherever the guests are, so a zone
+now goes to any agent that authors an attached network *or* runs a local NIC on
+one — and the agent picks which half to realize from `networksAuthoritative`,
+which it already has. And **`dnsServers` is redefined rather than replaced**: on
+a resolver-enabled network the DHCP `dns_server` option becomes the resolver's
+link-local address and the configured list becomes its upstream forwarders. The
+field, its validation and its wire shape are unchanged; only the consumer moves.
+
+`supportsNetworkResolver` gates only the fields, and deliberately not admission
+— the asymmetry with v34 is the point. A pre-v37 agent that ignores
+`resolverEnabled` keeps handing guests the configured `dnsServers` verbatim,
+which is exactly what it did before the field existed, so the failure mode is
+"this network has not got its resolver yet" rather than a mutation reported as
+converged when nothing happened. What *is* refused is enabling the feature at
+all where it cannot work: `AgentRegisterMessage.resolverCapable` reports whether
+a host has a usable CoreDNS, and the control plane withholds `resolverEnabled`
+unless **every** agent in the site says yes — because the DHCP option is
+authored once per network by the topology authority while the listener is per
+chassis, so one incapable host would give that network DNS that works until a VM
+lands somewhere else.
+
+Version 38 lets a volume report the size it actually has (STR-199):
 `ObservedVolumeState` gains `sizeBytes`. Agent→control-plane only, no frame
 changes, and no gate — like v35 there is nothing to gate, since the control
 plane does not change what it *sends* based on the answer and a desired size has
@@ -381,7 +431,7 @@ subprocess: with only the desired `size` to report, a volume whose grow the
 agent had refused answered with the size it had *failed* to reach. The
 subprocess objection expired on its own — the resize planner needs the same
 number and already caches one per volume. Absence is v35's echo shape: nil is
-"this agent said nothing", never zero, so a pre-v37 agent's silence leaves
+"this agent said nothing", never zero, so a pre-v38 agent's silence leaves
 `observed_size_bytes` as the last report that spoke left it.
 
 **A capability is sometimes the whole answer, with no bump at all.** STR-103
@@ -478,11 +528,13 @@ design; the short version:
   issue #344); `DesiredAgentUpdate` is the declarative agent-update target.
 - `DesiredDNSZone` (v36+) is the DNS half of the network carrier: a zone's id,
   name, attached network ids, its effective records as
-  `DesiredDNSRecord(name, type, values)`, and a `recordsHash` the agent stamps
-  on the realized row so an unchanged zone costs no OVSDB transaction. Sent
-  only to the topology authority, and its records are assembled fleet-wide —
-  a zone's names span every agent's VMs, which is the one list in the sync
-  that is not scoped to the receiving agent's own workloads.
+  `DesiredDNSRecord(name, type, values, ttl)` — `ttl` since v37 — and a
+  `recordsHash` the agent stamps on the realized row so an unchanged zone costs
+  no OVSDB transaction. Its records are assembled fleet-wide, which is the one
+  list in the sync that is not scoped to the receiving agent's own workloads: a
+  zone's names span every agent's VMs. Sent to the topology authority (which
+  writes the OVN `DNS` rows) and, since v37, to any agent running a local NIC on
+  an attached network (which renders the zone into that network's resolver).
 
 ### Desired volumes (wire v31)
 
@@ -515,7 +567,7 @@ attachment, and `VMSpec.volumes` is the boot-time convenience that rebuilds the
 same disk set.
 
 `ObservedVolumeState` reports presence, the agent-chosen path and format, the
-attachment, the volume's actual `sizeBytes` (v37+), and the usual convergence
+attachment, the volume's actual `sizeBytes` (v38+), and the usual convergence
 quartet. A nil `volumes` on the *report* has two causes and the control plane
 treats them identically, because the right response to both is to do nothing:
 an agent below v31 does not speak the field, and a v31 agent that cannot

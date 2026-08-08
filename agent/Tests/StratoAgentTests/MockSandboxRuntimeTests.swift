@@ -184,20 +184,47 @@ struct MockSandboxRuntimeTests {
         }
     }
 
-    @Test("Restoring a networked sandbox is still refused, mirroring the real runtime")
-    func networkedRestoreIsRefused() async throws {
-        // A snapshot's captured device set has no network interface, and
-        // Firecracker cannot add one on load — that remap is STR-104. The mock
-        // must refuse it too, or simulation validates a config real hardware
-        // rejects.
+    @Test("A networked fork is accepted and keeps its own attachment (STR-104)")
+    func networkedForkKeepsItsAttachment() async throws {
+        // Before STR-104 this was refused outright: a checkpoint's device set
+        // could not be remapped, so the fork's NIC would silently not exist.
+        // The real runtime now points the restored device at the fork's own
+        // TAP on load, so the mock accepts it — and records the attachment,
+        // which is what a simulated observed-state report reads back.
         let runtime = makeRuntime()
         let spec = SandboxSpec(
             image: "ghcr.io/acme/worker:v1", cpus: 1, memoryBytes: 256 * 1024 * 1024,
             network: NetworkSpec(network: "default", networkId: UUID()),
             restoreFrom: SandboxSnapshotRef(snapshotId: UUID(), sourceSandboxId: UUID()))
+        let tap = ResolvedNetworkAttachment(
+            network: "default", attachment: .tap(interface: "tapfork01"),
+            macAddress: "02:00:00:00:00:09", ipAddress: "10.0.0.9", netmask: "255.255.255.0",
+            gateway: "10.0.0.1")
+
+        try await runtime.createSandbox(
+            sandboxId: "sb-net-fork", spec: spec, registryCredential: nil, networkAttachments: [tap])
+
+        let recorded = await runtime.networkAttachments(sandboxId: "sb-net-fork")
+        #expect(recorded.count == 1)
+        #expect(recorded.first?.ipAddress == "10.0.0.9")
+    }
+
+    @Test("A fork whose NIC degraded to user-mode is still refused")
+    func networkedForkWithUserModeNICIsRefused() async throws {
+        // Firecracker opens a TAP by name and nothing else, on the fork path
+        // exactly as on the cold one.
+        let runtime = makeRuntime()
+        let spec = SandboxSpec(
+            image: "ghcr.io/acme/worker:v1", cpus: 1, memoryBytes: 256 * 1024 * 1024,
+            network: NetworkSpec(network: "default", networkId: UUID()),
+            restoreFrom: SandboxSnapshotRef(snapshotId: UUID(), sourceSandboxId: UUID()))
+        let userMode = ResolvedNetworkAttachment(
+            network: "default", attachment: .userMode, macAddress: "02:00:00:00:00:09")
+
         await #expect(throws: SandboxRuntimeError.self) {
             try await runtime.createSandbox(
-                sandboxId: "sb-net-restore", spec: spec, registryCredential: nil, networkAttachments: [])
+                sandboxId: "sb-net-fork-usermode", spec: spec, registryCredential: nil,
+                networkAttachments: [userMode])
         }
     }
 

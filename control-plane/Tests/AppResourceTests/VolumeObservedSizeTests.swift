@@ -187,7 +187,7 @@ final class VolumeObservedSizeTests {
     }
 
     /// The echo rule the applied I/O ceilings already follow: nil is "the agent
-    /// said nothing", never "zero bytes". A pre-v37 agent reports no size at
+    /// said nothing", never "zero bytes". A pre-v38 agent reports no size at
     /// all, and writing that through would replace a real measurement with a
     /// blank on every heartbeat.
     @Test("An agent that reports no size does not clear the recorded one")

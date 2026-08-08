@@ -129,6 +129,20 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "tpm_capable")
     var tpmCapable: Bool
 
+    /// Whether the agent advertised a usable CoreDNS at its last registration
+    /// (STR-40), which is what lets it answer on a network's resolver address.
+    ///
+    /// Unlike `sandboxCapable` and `tpmCapable` this does not gate *placement*
+    /// — a host without CoreDNS still runs VMs perfectly well. It gates whether
+    /// a network's resolver may be enabled at all, and it does so **site-wide**:
+    /// the DHCP option that points guests at the resolver is authored once per
+    /// network by the topology authority, while the listener is per chassis, so
+    /// one incapable host in a site would give that network DNS that works
+    /// until a VM lands somewhere else. Defaults false, so a fleet stays on the
+    /// old behavior until every agent has re-registered and proved otherwise.
+    @Field(key: "resolver_capable")
+    var resolverCapable: Bool
+
     /// Owning organization (exactly one of organization / organizational unit;
     /// see `organizationScope`). Agents are dedicated capacity: the scheduler
     /// only places a VM on an agent whose root organization matches the VM's.
@@ -256,6 +270,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         sandboxCapable: Bool = false,
         sandboxNetworkingCapable: Bool = false,
         tpmCapable: Bool = false,
+        resolverCapable: Bool = false,
         lastHeartbeat: Date? = nil
     ) {
         self.id = id
@@ -277,6 +292,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.sandboxCapable = sandboxCapable
         self.sandboxNetworkingCapable = sandboxNetworkingCapable
         self.tpmCapable = tpmCapable
+        self.resolverCapable = resolverCapable
         self.autoUpdate = false
         self.lastHeartbeat = lastHeartbeat
     }
@@ -406,6 +422,7 @@ extension Agent {
             sandboxCapable: registration.sandboxCapable ?? false,
             sandboxNetworkingCapable: registration.sandboxNetworkingCapable ?? false,
             tpmCapable: registration.tpmCapable ?? false,
+            resolverCapable: registration.resolverCapable ?? false,
             lastHeartbeat: Date()
         )
         agent.operatingSystem = registration.operatingSystem?.rawValue

@@ -99,7 +99,7 @@ final class Volume: Model, @unchecked Sendable {
     /// (STR-199), as opposed to the `size` someone asked for.
     ///
     /// NULL means **no agent has said** — a volume whose bytes are not on a
-    /// host yet, one owned by a pre-v37 agent, or one whose size probe failed.
+    /// host yet, one owned by a pre-v38 agent, or one whose size probe failed.
     /// It never means zero, and `ObservedStateApplier` never writes an agent's
     /// silence through as a clear.
     @OptionalField(key: "observed_size_bytes")
@@ -550,7 +550,7 @@ struct VolumeResponse: Content {
     /// The size the owning agent reports the image **actually has** (STR-199).
     ///
     /// Null means no agent has said — the bytes are not on a host yet, or the
-    /// agent predates wire v37. Where it disagrees with `size`, a grow is still
+    /// agent predates wire v38. Where it disagrees with `size`, a grow is still
     /// outstanding, and `conditions` says whether it is in flight or degraded:
     /// a grow refused because the volume's guest is running holds this at the
     /// old size for as long as the guest keeps running. Reporting only `size`

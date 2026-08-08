@@ -243,29 +243,31 @@ libvirtd is a durable store rather than a process the agent has to remember:
   powers itself off is *reported* in about a second, but nothing here rings the
   desired-state doorbell, so the reconciler still restarts it on its own cadence.
 
-#### The domain document is written once
+#### The domain document is the configuration, and a boot reads it
 
-`createVM` defines a domain and nothing redefines it. That single fact shapes
-every in-place mutation (STR-134), and the rule it produces is worth stating on
-its own: **hot-plug and resize are sent with `AFFECT_LIVE|AFFECT_CONFIG`**, so
-they land on the running guest *and* in the persistent definition. A process
-driver can leave the definition alone because it respawns from a stored
-configuration the agent keeps in step and re-reads the spec at every boot; here
-the next boot reads libvirt's definition, so a live-only change silently
+`createVM` defines a domain, and the next boot starts *that definition* rather
+than re-reading the spec. That single fact shapes every in-place mutation
+(STR-134), and the rule it produces is worth stating on its own: **hot-plug and
+resize are sent with `AFFECT_LIVE|AFFECT_CONFIG`**, so they land on the running
+guest *and* in the persistent definition. A process driver can leave the
+definition alone because it respawns from a stored configuration the agent keeps
+in step and re-reads the spec at every boot; here a live-only change silently
 un-happens at the guest's next power cycle. The same correction applies to a
 resize that would otherwise be "deferred to the next reboot" — a vCPU shrink, or
 a memory change on a VM with no virtio-mem device — which is written to `CONFIG`
 alone rather than left for a boot that would not pick it up.
 
-Two consequences follow:
+Three consequences follow:
 
-- **A VM's hot-plug slots and memory headroom are fixed when it is created.**
+- **Three ceilings are set when a VM is created, and a boot is what moves them.**
   The document reserves `DomainXMLBuilder.spareHotplugPorts` empty
   `pcie-root-port`s (libvirt adds one port per PCI device present at define
-  time, so a domain that reserves none has nowhere to plug a disk) and whatever
-  virtio-mem region the spec asked for. Growing past either is libvirt's error
-  to report, not bookkeeping the agent keeps — which is why a process driver's
-  spawn-sizing table has no counterpart here.
+  time, so a domain that reserves none has nowhere to plug a disk), whatever
+  virtio-mem region the spec asked for, and the `<vcpu>` maximum. All three bind
+  a *running* VM: a fifth volume fails with "No more available PCI slots", a
+  memory target above the region cannot be reached (virtio-mem's `<requested>`
+  clamps to what the device has), and `virDomainSetVcpusFlags` refuses a count
+  above the declared maximum.
 
   The spares carry **explicit indexes**, derived from the count of PCI devices
   the document declares, and that is the whole mechanism rather than a detail
@@ -277,16 +279,86 @@ Two consequences follow:
   below the highest one declared, so the top index is the port count and the
   spares are what is left over the top.
 
-  The ceiling binds **live** attaches only. An attach to a stopped VM goes to
-  the persistent definition with `AFFECT_CONFIG` alone, and libvirt grows the
-  bus there itself — so a VM out of spare ports can still be given volumes by
-  stopping it, which is what `attachDisk`'s error says when it runs out.
+  None of them is permanent. An attach to a *stopped* VM was never bound by the
+  first — it goes to the persistent definition with `AFFECT_CONFIG` alone and
+  libvirt grows the bus itself — and since STR-187 a **boot widens all three**:
+  see "Redefining a stopped domain" below. So the remedy those errors name is
+  "stop and start the VM", not "recreate it". It also makes two things the
+  control plane already did honest under this driver rather than only under the
+  process one: its `422` ("restart it to grow beyond that"), and its raising of
+  a stopped VM's recorded `maxCpu`/`maxMemory` on the assumption that the next
+  boot re-reads them.
 - **A volume names itself in the document.** Each volume-backed `<disk>` carries
   `<serial>vol-<uuid></serial>`, minted by `QEMUDiskIdentity`, so a detach
   resolves exactly that disk on a domain the agent keeps no model of (STR-129).
   `hasLiveSession` returns true for *any* domain here for a related reason: its
   false branch means "recording the attachment realizes it", which is true of a
   respawn-from-configuration path and false of this one.
+- **A redefine is the only second write, and it is deliberately narrow.** See
+  below.
+
+#### Redefining a stopped domain
+
+`LibvirtService.redefineVM` runs before every boot the reconciler plans for a VM
+it did not just create, and it is the only thing besides `createVM` that ever
+writes a domain document (STR-187). It reads the domain's **persistent**
+definition (`VIR_DOMAIN_XML_INACTIVE`), hands it to `DomainRedefinition`, and
+defines the result only if it differs — so an ordinary boot costs one `dumpxml`
+and nothing else.
+
+What it changes is only the three ceilings above: it tops the spare
+`pcie-root-port`s back up to `spareHotplugPorts` *free* ones, raises
+`<maxMemory>`, `<memory>`, `<currentMemory>`, the NUMA cell and the virtio-mem
+region to what the current spec asks for, and raises `<vcpu>` with the cell's
+`cpus` range. Never downward — a lowered ceiling is the resize path's business.
+A domain created with no headroom at all grows the `<maxMemory>`, the NUMA cell
+and the memory device that libvirt requires together; a spec that asks for **no**
+region takes `<maxMemory>` away with the device, because that element is what
+enables memory hot-plug and leaving it behind alone gives QEMU a `maxmem` equal
+to the initial size next to a slot count, which it refuses to start.
+
+The boot *size* moves with the ceiling — `<currentMemory>` and `<vcpu
+current=…>` are both written from the spec — because `addResizes` plans nothing
+for a stopped VM, so a size left behind is converged a whole reconcile later,
+and arrives as a *hot-add*: memory the guest may take, vCPUs most guests will
+not online without a udev rule. An operator told to "stop and start the VM"
+would otherwise restart and still see the old size. This is not a resize path
+for all that: a domain whose ceilings already fit its spec is left completely
+alone.
+
+Two steps in the same work item skip the widening. A `.create` built the
+configuration from that spec moments earlier. A `.restore` runs *after* the boot
+and converges through `virDomainRevertToSnapshot`, which replaces the definition
+with the one recorded in the checkpoint — so the widening would be defined,
+immediately overwritten, and paid for again on every boot forever. A VM being
+restored keeps the ceilings its checkpoint was captured with, and widens on its
+next boot instead.
+
+**It edits the existing document rather than rebuilding one**, and that is the
+design decision worth knowing. Rebuilding from the spec looks obvious and is
+wrong: the spec is not a complete description of an existing domain — a VM
+created from an image boots off a `disk.qcow2` no `VolumeSpec` names, its MAC may
+be one libvirt generated, its `<os>` names the firmware resolved on the day it
+was created — so each of those would have to be recovered from the domain
+anyway, and a recovery this got wrong would silently change a VM's hardware at
+its next power cycle. Editing inverts the failure mode: everything not named
+above is carried through exactly as libvirt wrote it, and an edit the pass cannot
+make (two memory devices, two NUMA cells, a lone cell that is not node 0, a
+declared CPU topology, a domain already at the root-port index ceiling) becomes
+a **refusal** the driver logs rather than a rewrite, so the VM keeps the ceiling
+it had. A widening that fails
+outright is logged and the boot proceeds: a VM that comes up with its old ceiling
+is the status quo, while a VM that does not come up is a regression.
+
+Reading a document back is `DomainXMLNode.parse`, the inverse of the renderer and
+nothing more general — it is for documents libvirt produced. Attribute order is
+not preserved (there is none to preserve in `XMLParser`'s dictionary) and
+comments are dropped, while **mixed content and CDATA are refused rather than
+dropped**, because a document that cannot be re-emitted faithfully is one that
+must not reach `virDomainDefineXML`. `DomainXMLNode`'s text/children exclusivity
+is only an `assert`, which is compiled out of the build hypervisor nodes run, so
+the widening independently refuses a document whose `<devices>` or `<cpu>` is a
+leaf rather than trusting it.
 
 Checkpoints are libvirt **system checkpoints** — `domainSnapshotCreateXML` /
 `domainRevertToSnapshot` / `domainSnapshotDelete`, with libvirt choosing the
@@ -432,7 +504,9 @@ The socket path is deterministic (`QEMUGraphicsDevice.socketPath`), so a VM
 re-adopted after an agent restart resolves its console from
 `vmStoragePath + vmId` alone; the listener belongs to libvirt's QEMU process,
 not to the agent. Conversely, a VM created headless can never gain a display
-without being recreated — the domain document is written once.
+without being recreated: the redefine that runs before each boot adds spare
+capacity and deliberately touches no device (STR-187), so nothing ever gives a
+domain a framebuffer it was not created with.
 
 `ConsoleSocketManager` relays whichever socket a session asked for as opaque
 bytes, so nothing agent-side understands RFB. Reads are handed to the control
@@ -613,9 +687,10 @@ The step reaches `LibvirtService.resizeVM`:
 Hot-*remove* of vCPUs is deliberately not attempted — guest support for CPU
 unplug is unreliable — and memory never shrinks below the boot size; both
 smaller figures are written to `CONFIG` alone and apply at the next reboot.
-Growing past the ceilings the domain was defined with is a permanent failure on
-the agent and a `422` at the API: the document is written once, so `<vcpu>`'s
-maximum and `<maxMemory>` are fixed for the life of the VM. Hot-plugged
+Growing past the ceilings the domain was defined with fails on the agent and is
+a `422` at the API, both naming a restart as the remedy — and since STR-187 that
+remedy works, because the boot rewrites `<vcpu>`'s maximum and `<maxMemory>` to
+what the current spec asks for. Hot-plugged
 resources arrive offline, so the cloud-init provisioning installs udev rules
 that online them (modern distros already ship equivalents).
 
@@ -924,24 +999,121 @@ site-topology authority, per-network generation guards) and
 network reconciliation (`reconcileNetworks`) defaults to a no-op on
 non-SDN platforms. See [networking](./networking.md).
 
-### Instance metadata chassis (IMDS)
+### Chassis service foot (IMDS and the DNS resolver)
 
-The chassis-local half of the metadata dataplane (wire v27, STR-49) is
-planned by `StratoAgentCore/MetadataChassisPlan.swift`: the OVS internal
-port and per-network namespace (`strato-md-<network-uuid>`) that terminate
-the metadata addresses on this host, kept a pure plan (like
-`SandboxNetnsAttachmentPlan`) so the command sequence stays unit-testable,
-and executed by `NetworkServiceLinux`. Its input is the agent's own workload
-specs (`NetworkSpec.metadataEnabled`), not the `networks` list — it must
-exist on every chassis running a NIC on the network, including sited
-non-controller agents, which receive an empty `networks` list by design. The
-`NetworkReconciler` converges the OVN `localport` itself from
-`DesiredNetworkState.metadataEnabled` on authoritative agents, and
-`metadataProtection(for:)` shields existing ports from teardown when the
-field is nil (a pre-v27 control plane's silence must not delete live ports).
-What serves HTTP inside those namespaces is the metadata server below. See
-[ADR 0003](../adr/0003-imds-chassis-namespace.md) and
+The chassis-local half of a network's link-local services is planned by
+`StratoAgentCore/ChassisServicePlan.swift`: the OVS internal port and
+per-network namespace (`strato-md-<network-uuid>`) that terminate them on this
+host, kept a pure plan (like `SandboxNetnsAttachmentPlan`) so the command
+sequence stays unit-testable, and executed by `NetworkServiceLinux`.
+
+Two services share it — instance metadata (wire v27, STR-49) and the network's
+DNS resolver (wire v37, STR-40) — and its input is the agent's own workload
+specs (`NetworkSpec.metadataEnabled` / `.resolverEnabled`), not the `networks`
+list: it must exist on every chassis running a NIC on the network, including
+sited non-controller agents, which receive an empty `networks` list by design.
+An `ip`-invoked `tc` ingress policer caps the packet rate guests may push at the
+interface, because what it protects is the hypervisor rather than the service.
+
+The resolver has the same two halves, but its second one lands in the **host**
+namespace on a port of its own (§Per-network resolver) — a resolver has to
+forward and a chassis namespace has no egress, which is
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md). Metadata stays here
+because source-IP attribution is its security model and it needs no egress at
+all.
+
+The `NetworkReconciler` converges both OVN `localport`s from
+`DesiredNetworkState`'s two flags on authoritative agents, and
+`serviceLocalPortProtection(for:)` shields each existing port from teardown when
+the sync has no opinion about *its* service (a pre-v27 control plane's silence
+must not delete live metadata ports; a pre-v37 one's silence about the resolver
+must not stop `metadataEnabled: false` from working, nor reap a resolver port it
+has never heard of).
+
+The metadata listener is a helper process the agent forks per namespace
+(STR-56), because `setns(2)` is per-thread and does not compose with Swift
+concurrency — the cost ADR 0003 deferred. The resolver needed no such helper once
+it left the namespace: one CoreDNS serves every network on the host. See
+[ADR 0003](../adr/0003-imds-chassis-namespace.md),
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md) and
 [networking](./networking.md).
+
+### Per-network resolver
+
+`StratoAgent/ResolverSupervisor.swift` runs **one** CoreDNS for the whole host,
+in the host network namespace, with one server block per resolver-enabled network
+this host has a NIC on, bound to that network's own address pair (STR-40). One
+process rather than one per network because the addresses are distinct — which is
+what moving out of the chassis namespace forced, and what
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md) records. That a single
+CoreDNS will serve the same zone name from different bind addresses with
+different contents was verified empirically before the design relied on it.
+
+`StratoAgentCore/ResolverHostPortPlan.swift` is the foot: pure `NetnsCommand`
+plans that attach the OVS internal port, assign the addresses, and install the
+per-network policy routing (`ip rule from <resolver-address> lookup 20000+index`)
+that gets replies back out the right port — the one job the namespace used to do
+for free. Rules are deleted before being added so a re-reconcile cannot stack
+duplicates, and torn down before the OVS detach so one never outlives its port.
+Forwarding is disabled on the interface for both families, `rp_filter` is loose,
+`arp_ignore`/`arp_announce` keep the host from answering ARP there for addresses
+on its other interfaces, `accept_ra` is off, and the same `tc` ingress policer
+the metadata foot carries caps what guests may push at it. All of them are
+asserted in tests rather than left to review. The loose `rp_filter` is only
+effective when `net.ipv4.conf.all.rp_filter` is not `1` — the kernel takes the
+max of the global and per-device values — so the preflight reports that rather
+than the agent weakening a host-wide setting.
+
+The supervisor takes its host effects through an injected `ResolverHosting`, the
+shape `MetadataServerSupervisor` uses for the same reason: adoption, the
+stop/reconcile race, and whether the failure counter actually escalates are
+lifecycle questions that cannot be asked of an actor that forks processes
+directly. `StratoAgent/ResolverProcessHost.swift` is the real one. It supervises
+a single process, so a Corefile a new network makes CoreDNS refuse takes every
+network's resolver with it — bounded by OVN still answering A/AAAA/PTR first, and
+by the renderer refusing to emit a record it cannot render safely.
+
+The decisions live in two pure types the tests can reach:
+`StratoAgentCore/CoreDNSZoneRenderer.swift` produces the `Corefile` and zone
+files (golden-tested, like `CloudInitProvisioner.networkConfigYAML`), and
+`ResolverSupervisionPolicy.swift` decides what to write, when to start, and how
+long to back off.
+
+Two skips keep a steady-state sync cheap, and they are independent.
+`ResolverRenderKey` — the control plane's per-zone `recordsHash` plus the
+upstreams, search domain and bind addresses — decides whether to *build* the
+files at all, which matters because a zone's records span every VM on every
+attached network fleet-wide, so the render's cost grows with the cluster rather
+than with this host. `DesiredResolver.configurationDigest` then decides whether
+to *write* them, so a hash that moved without changing what this backend emits
+reaches neither the disk nor CoreDNS's file watch. Both keys cover every network
+at once, because there is one configuration.
+
+**The failure counter is cleared by a run, not by a spawn.** Every failure the
+backoff exists for — a Corefile CoreDNS refuses to parse, `:53` already held by
+an orphan — forks cleanly and exits a moment later, so resetting on a successful
+spawn would pin the delay at its first step and the crash-loop threshold would
+never be reached. Exits are noticed on the next reconcile rather than from a
+callback, which keeps the accounting deterministic, so the handle carries the
+*moment* it exited: measuring to when it was noticed would make a child that died
+instantly look like one that ran for a five-minute sync interval. Zone files live
+under `<config_dir>/zones/<network-uuid>/` — namespaced by network because two
+networks may hold a zone of the same name with different contents — derived from
+the network id per the `VMDirectoryLayout` convention, which is what lets a
+restarted agent rederive them all and reap directories for networks it no longer
+serves.
+
+A record edit costs no restart: files are written atomically, the `file` plugin
+watches them, and the Corefile carries `reload`. Adding or removing a *network*
+does not either, for the same reason — the server blocks live in the watched
+Corefile. A restarted agent **adopts** a CoreDNS its predecessor started rather
+than replacing it, verified by pid liveness plus a `/proc/<pid>/cmdline` check,
+because killing it would cost every network on the host its resolver for a
+process start for nothing.
+
+The host reports whether it can run one at all as
+`AgentRegisterMessage.resolverCapable`, and the control plane folds that across
+the whole site before enabling any network's resolver. See [dns](./dns.md).
 
 ### Instance metadata store (IMDS payload)
 

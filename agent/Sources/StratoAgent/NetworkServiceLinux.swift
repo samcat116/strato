@@ -34,6 +34,21 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// instead of failing halfway through wiring one up.
     private let ipBinaryPath: String?
     private let tcBinaryPath: String?
+    /// Aggregate ingress packet-rate cap on each of a network's link-local
+    /// service interfaces (STR-40); 0 disables the policer. Applied to *both*
+    /// feet — the metadata one in the network's chassis namespace and the
+    /// resolver one in the host's — because since ADR 0008 they are separate
+    /// devices and each carries its own traffic. Operator-configurable
+    /// (`[resolver] rate_limit_pps`) because the right ceiling depends on how
+    /// many guests share a hypervisor.
+    private let linkLocalServiceRatePPS: Int
+    /// Runs the host's CoreDNS, which serves every resolver-enabled network this
+    /// host has a NIC on (STR-40). Nil when the host has no usable CoreDNS
+    /// binary, in which case the agent also registers `resolverCapable: false`
+    /// and the control plane withholds the resolver from every network in the
+    /// site — so this being nil while networks still want a resolver is a
+    /// mixed-version window, not a steady state.
+    private let resolverSupervisor: ResolverSupervisor?
 
     /// Whether this agent may author NB topology (switches, routers, NAT,
     /// teardown), per the control plane's last sync. False on agents sharing a
@@ -68,6 +83,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         dynamicRouting: OVNDynamicRoutingConfig? = nil,
         ipBinaryPath: String? = nil,
         tcBinaryPath: String? = nil,
+        linkLocalServiceRatePPS: Int = NetworkResolverDefaults.rateLimitPPS,
+        resolverSupervisor: ResolverSupervisor? = nil,
         logger: Logger
     ) {
         self.ovnNBConnection = nbConnection ?? "unix:/var/run/ovn/ovnnb_db.sock"
@@ -78,6 +95,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         self.dynamicRoutingConfig = dynamicRouting
         self.ipBinaryPath = ipBinaryPath
         self.tcBinaryPath = tcBinaryPath
+        self.linkLocalServiceRatePPS = linkLocalServiceRatePPS
+        self.resolverSupervisor = resolverSupervisor
         self.logger = logger
 
         #if os(Linux)
@@ -104,7 +123,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// on every chassis by `ovn-controller` and never forwarded across geneve
     /// tunnels, which is what lets one address be published on every switch in a
     /// site and still reach the guest's own host.
-    static let metadataPortType = "localport"
+    static let localPortType = "localport"
 
     /// Whether an OVN object's external-ids mark it as created by this reconciler.
     static func isManaged(_ externalIDs: [String: String]?) -> Bool {
@@ -1169,7 +1188,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 networkId: config.networkId, networkName: config.networkName, subnet: subnet,
                 gateway: gateway,
                 dnsServers: config.dnsServers, domainName: config.domainName, leaseTime: config.leaseTime,
-                metadataEnabled: config.metadataEnabled)
+                metadataEnabled: config.metadataEnabled, resolverAddresses: config.resolverAddresses)
         } else {
             logger.warning(
                 "DHCP enabled but subnet/gateway unknown; using static guest config",
@@ -1181,7 +1200,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         if let subnet6 = config.subnet6 {
             v6 = try await ensureDHCPOptions6(
                 networkId: config.networkId, networkName: config.networkName, subnet6: subnet6,
-                dnsServers: config.dnsServers, domainName: config.domainName)
+                dnsServers: config.dnsServers, domainName: config.domainName,
+                resolverAddresses: config.resolverAddresses)
         } else {
             v6 = nil
         }
@@ -1246,20 +1266,22 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// network's existing row for the same CIDR is updated in place (so
     /// DNS/lease edits converge) rather than duplicated.
     ///
-    /// `metadataEnabled` must be derived from the same `LogicalNetwork` column
-    /// on both callers — the NIC path reads `NetworkSpec.metadataEnabled`, the
-    /// network path `DesiredNetworkState.metadataEnabled` — or the two would
-    /// author different option maps for one row and rewrite it on every pass.
+    /// `metadataEnabled` and `resolverEnabled` must be derived from the same
+    /// `LogicalNetwork` columns on both callers — the NIC path reads
+    /// `NetworkSpec.metadataEnabled`/`.resolverEnabled`, the network path
+    /// `DesiredNetworkState`'s — or the two would author different option maps
+    /// for one row and rewrite it on every pass.
     private func ensureDHCPOptions(
         networkId: UUID, networkName: String, subnet: String, gateway: String,
-        dnsServers: [String], domainName: String?, leaseTime: Int?, metadataEnabled: Bool
+        dnsServers: [String], domainName: String?, leaseTime: Int?, metadataEnabled: Bool,
+        resolverAddresses: [String]
     ) async throws -> String? {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         let options = OVNDHCPOptionsBuilder.v4Options(
             gateway: gateway, dnsServers: dnsServers, domainName: domainName, leaseTime: leaseTime,
-            subnet: subnet, metadataEnabled: metadataEnabled)
+            subnet: subnet, metadataEnabled: metadataEnabled, resolverAddresses: resolverAddresses)
         let externalIDs = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: networkName)
         let dhcp = OVNDHCPOptions(cidr: subnet, options: options, external_ids: externalIDs)
 
@@ -1284,13 +1306,15 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// row — so the mechanics are identical; only the option grammar differs
     /// (see `OVNDHCPOptionsBuilder.v6Options`).
     private func ensureDHCPOptions6(
-        networkId: UUID, networkName: String, subnet6: String, dnsServers: [String], domainName: String?
+        networkId: UUID, networkName: String, subnet6: String, dnsServers: [String],
+        domainName: String?, resolverAddresses: [String]
     ) async throws -> String? {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         let options = OVNDHCPOptionsBuilder.v6Options(
-            dnsServers: dnsServers, domainName: domainName, subnet6: subnet6)
+            dnsServers: dnsServers, domainName: domainName, subnet6: subnet6,
+            resolverAddresses: resolverAddresses)
         let externalIDs = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: networkName)
         let dhcp = OVNDHCPOptions(cidr: subnet6, options: options, external_ids: externalIDs)
 
@@ -1324,7 +1348,8 @@ extension NetworkServiceLinux {
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
         securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
-        metadataNetworks: [UUID]?, dnsZones: [DesiredDNSZone]?
+        metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
+        dnsZones: [DesiredDNSZone]?
     ) async {
         topologyAuthority = authoritative
 
@@ -1335,13 +1360,22 @@ extension NetworkServiceLinux {
         }
         #endif
 
-        // The chassis half of the metadata dataplane (STR-49), converged before
-        // the authority guard because it is per-host state this agent owns even
-        // when it may not author topology — the `portMemberships` pattern. A
-        // sited non-controller agent gets an empty `networks` list by design,
-        // yet its guests need the metadata address materialized locally just the
-        // same, so the input is its own workloads' NIC specs.
-        await reconcileMetadataChassisPorts(metadataNetworks)
+        // The chassis half of the link-local services — instance metadata
+        // (STR-49) and the network's resolver (STR-40) — converged before the
+        // authority guard because it is per-host state this agent owns even when
+        // it may not author topology, the `portMemberships` pattern. A sited
+        // non-controller agent gets an empty `networks` list by design, yet its
+        // guests need those addresses materialized locally just the same, so the
+        // input is its own workloads' NIC specs.
+        await reconcileChassisServicePorts(metadataNetworks)
+
+        // The resolver's own host-namespace feet and the CoreDNS that binds
+        // them, converged here for the chassis ports' reason and immediately
+        // after them. Also before the authority guard — a resolver serves the
+        // guests on *this* host, so it runs wherever they do. It does not
+        // depend on the chassis namespace above: since ADR 0008 the two
+        // services have separate ports and separate namespaces.
+        await reconcileResolvers(resolverNetworks, dnsZones: dnsZones)
 
         guard authoritative else {
             logger.debug("Not the site's network topology authority; skipping network reconciliation")
@@ -1381,8 +1415,8 @@ extension NetworkServiceLinux {
         // A control plane that predates `metadataEnabled` says nothing about
         // metadata ports, and teardown is a set difference — so without this a
         // rollback would delete every live port on the next sync. See
-        // `metadataProtection(for:)`.
-        protected.formUnion(NetworkReconciler.metadataProtection(for: current))
+        // `serviceLocalPortProtection(for:)`.
+        protected.formUnion(NetworkReconciler.serviceLocalPortProtection(for: current))
 
         do {
             try await NetworkReconciler.reconcile(
@@ -1460,30 +1494,197 @@ extension NetworkServiceLinux {
     /// Observation keys off external-ids rather than the `mdp` name prefix, so
     /// an operator's own internal ports on `br-int` are never candidates for
     /// removal.
-    private func reconcileMetadataChassisPorts(_ desired: [UUID]?) async {
+    private func reconcileResolvers(
+        _ resolverNetworks: [ResolverNetworkConfig]?, dnsZones: [DesiredDNSZone]?
+    ) async {
+        #if os(Linux)
+        guard let resolverNetworks else { return }
+        guard let resolverSupervisor else {
+            if !resolverNetworks.isEmpty {
+                logger.debug(
+                    "Networks want a resolver but this host has no usable CoreDNS; skipping",
+                    metadata: ["networks": .stringConvertible(resolverNetworks.count)])
+            }
+            return
+        }
+
+        // The host-namespace foot for each network, converged before the
+        // process: CoreDNS binds these addresses, and `bind` naming one that
+        // does not exist makes it refuse to start — for every network at once,
+        // now that one process serves them all.
+        await reconcileResolverHostPorts(resolverNetworks)
+
+        let zones = dnsZones ?? []
+        let ipv6 = ResolverSupervisionPolicy.supportsIPv6()
+        let networks = resolverNetworks.map { network in
+            CoreDNSZoneRenderer.Network(
+                networkId: network.networkId,
+                bindAddresses: ResolverSupervisionPolicy.bindable(
+                    network.addresses, ipv6Available: ipv6),
+                zones: zones.filter { $0.networkIds.contains(network.networkId) },
+                upstreams: network.upstreams,
+                searchDomain: network.searchDomain)
+        }
+        await resolverSupervisor.reconcile(ResolverRenderRequest(networks: networks))
+        #endif
+    }
+
+    /// Converge the host-namespace interface that terminates each network's
+    /// resolver localport, plus its policy routing.
+    private func reconcileResolverHostPorts(_ desired: [ResolverNetworkConfig]) async {
+        #if os(Linux)
+        guard let ovsManager, let ipBinaryPath else { return }
+        let observed: [ObservedResolverHostPort]
+        do {
+            observed = try await observedResolverHostPorts(ovsManager)
+        } catch {
+            logger.error(
+                "Could not read resolver host ports; skipping this pass",
+                metadata: ["error": .string(error.localizedDescription)])
+            return
+        }
+        let wanted = Dictionary(
+            desired.map { ($0.networkId, $0) }, uniquingKeysWith: { first, _ in first })
+
+        for action in ResolverHostPortReconciler.actions(
+            desired: wanted.mapValues(\.addresses), observed: observed)
+        {
+            switch action {
+            case .realize(let networkId, let addresses):
+                await attemptResolverHostPortSetup(
+                    networkId: networkId, addresses: addresses, ipBinaryPath: ipBinaryPath)
+            case .remove(let networkId, let interfaceName, let addresses):
+                await removeResolverHostPort(
+                    networkId: networkId, interfaceName: interfaceName, addresses: addresses,
+                    ipBinaryPath: ipBinaryPath)
+            }
+        }
+        #endif
+    }
+
+    #if os(Linux)
+    private func observedResolverHostPorts(_ ovsManager: OVSManager) async throws
+        -> [ObservedResolverHostPort]
+    {
+        var found: [ObservedResolverHostPort] = []
+        for interface in try await ovsManager.getInterfaces() {
+            guard let ids = interface.external_ids,
+                ids[ChassisServicePlan.managedKey] == ChassisServicePlan.managedValue,
+                ids[ChassisServicePlan.roleKey] == ResolverHostPortPlan.roleValue,
+                let raw = ids[ChassisServicePlan.networkIDKey],
+                let networkId = UUID(uuidString: raw)
+            else { continue }
+            found.append(
+                ObservedResolverHostPort(
+                    networkId: networkId,
+                    interfaceName: interface.name,
+                    addresses: ResolverHostPortPlan.parseAddresses(
+                        ids[ResolverHostPortPlan.addressesKey])))
+        }
+        return found
+    }
+
+    private func attemptResolverHostPortSetup(
+        networkId: UUID, addresses: [String], ipBinaryPath: String
+    ) async {
+        // A missing `tc` costs the policer, not the resolver: an unlimited but
+        // working resolver beats no resolver, and the host preflight already
+        // reports the tool as absent.
+        let plan = ResolverHostPortPlan.plan(
+            networkId: networkId, addresses: addresses, ipBinaryPath: ipBinaryPath,
+            tcBinaryPath: tcBinaryPath ?? "tc",
+            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds,
+            ratePPS: tcBinaryPath == nil ? 0 : linkLocalServiceRatePPS)
+        do {
+            try run("ovs-vsctl", plan.ovsAttach)
+            _ = try await verifyOVSBinding(
+                verify: plan.ovsVerify, device: plan.interfaceName, portName: plan.logicalPortName,
+                stage: "attach")
+            for command in plan.setup {
+                try await runNetnsCommand(command)
+            }
+            logger.info(
+                "Realized resolver host port",
+                metadata: [
+                    "networkId": .string(networkId.uuidString),
+                    "interface": .string(plan.interfaceName),
+                    "addresses": .string(addresses.joined(separator: ",")),
+                ])
+        } catch {
+            logger.error(
+                "Failed to realize resolver host port",
+                metadata: [
+                    "networkId": .string(networkId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+            // Roll back so the next pass observes an honest "not built". A
+            // half-built foot is worse here than elsewhere: CoreDNS binds these
+            // addresses, so one that exists without its routing answers queries
+            // whose replies go nowhere.
+            await removeResolverHostPort(
+                networkId: networkId, interfaceName: plan.interfaceName, addresses: addresses,
+                ipBinaryPath: ipBinaryPath, quiet: true)
+        }
+    }
+
+    private func removeResolverHostPort(
+        networkId: UUID, interfaceName: String, addresses: [String], ipBinaryPath: String,
+        quiet: Bool = false
+    ) async {
+        let removal = ResolverHostPortPlan.teardownPlan(
+            networkId: networkId, interfaceName: interfaceName, addresses: addresses,
+            ipBinaryPath: ipBinaryPath, bridge: Self.ovnIntegrationBridge,
+            ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
+        // Rules first: they outlive the interface, which the OVS detach
+        // destroys. Removing the device first would strand every rule that named
+        // its address, and those accumulate in the host's policy table.
+        for command in removal.commands {
+            try? await runNetnsCommand(command)
+        }
+        do {
+            try run("ovs-vsctl", removal.ovsDetach)
+        } catch {
+            if !quiet {
+                logger.warning(
+                    "Failed to remove resolver host port",
+                    metadata: [
+                        "networkId": .string(networkId.uuidString),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+            return
+        }
+        if !quiet {
+            logger.info(
+                "Removed resolver host port", metadata: ["networkId": .string(networkId.uuidString)])
+        }
+    }
+    #endif
+
+    private func reconcileChassisServicePorts(_ desired: [UUID]?) async {
         #if os(Linux)
         guard let desired else { return }
         guard let ovsManager else { return }
 
-        let observed: [ObservedMetadataPort]
+        let observed: [ObservedChassisServicePort]
         do {
-            observed = try await observedMetadataChassisPorts(ovsManager)
+            observed = try await observedChassisServicePorts(ovsManager)
         } catch {
             // Without a trustworthy snapshot, removals can't be computed safely.
             // Creates are idempotent, so skip the whole pass and let the next
             // periodic sync retry rather than guess.
             logger.error(
-                "Could not read metadata chassis ports; skipping this pass",
+                "Could not read chassis service ports; skipping this pass",
                 metadata: ["error": .string(error.localizedDescription)])
             return
         }
 
-        for action in MetadataChassisReconciler.actions(desired: desired, observed: observed) {
+        for action in ChassisServiceReconciler.actions(desired: desired, observed: observed) {
             switch action {
             case .realize(let networkId):
-                await attemptMetadataChassisSetup(networkId: networkId)
+                await attemptChassisServiceSetup(networkId: networkId)
             case .remove(let networkId, let interfaceName):
-                await removeMetadataChassisPort(networkId: networkId, interfaceName: interfaceName)
+                await removeChassisServicePort(networkId: networkId, interfaceName: interfaceName)
             }
         }
         #endif
@@ -1495,25 +1696,25 @@ extension NetworkServiceLinux {
     /// internal port on `br-int` is never a removal candidate.
     ///
     /// The namespace is probed alongside the row because the two have different
-    /// lifetimes (see `ObservedMetadataPort.namespacePresent`). A `stat` per
+    /// lifetimes (see `ObservedChassisServicePort.namespacePresent`). A `stat` per
     /// network, no subprocess.
-    private func observedMetadataChassisPorts(_ ovsManager: OVSManager) async throws
-        -> [ObservedMetadataPort]
+    private func observedChassisServicePorts(_ ovsManager: OVSManager) async throws
+        -> [ObservedChassisServicePort]
     {
-        var found: [ObservedMetadataPort] = []
+        var found: [ObservedChassisServicePort] = []
         for interface in try await ovsManager.getInterfaces() {
             guard let ids = interface.external_ids,
-                ids[MetadataChassisPlan.managedKey] == MetadataChassisPlan.managedValue,
-                ids[MetadataChassisPlan.roleKey] == MetadataChassisPlan.roleValue,
-                let raw = ids[MetadataChassisPlan.networkIDKey],
+                ids[ChassisServicePlan.managedKey] == ChassisServicePlan.managedValue,
+                ids[ChassisServicePlan.roleKey] == ChassisServicePlan.roleValue,
+                let raw = ids[ChassisServicePlan.networkIDKey],
                 let networkId = UUID(uuidString: raw)
             else { continue }
             found.append(
-                ObservedMetadataPort(
+                ObservedChassisServicePort(
                     networkId: networkId,
                     interfaceName: interface.name,
                     namespacePresent: FileManager.default.fileExists(
-                        atPath: MetadataChassisPlan.netnsPath(networkId: networkId))))
+                        atPath: ChassisServicePlan.netnsPath(networkId: networkId))))
         }
         return found
     }
@@ -1526,11 +1727,11 @@ extension NetworkServiceLinux {
     /// syncs are independent. That needs no retry logic — `ovn-controller`
     /// simply leaves the port unbound until the row appears, and the next
     /// periodic sync re-verifies.
-    private func attemptMetadataChassisSetup(networkId: UUID) async {
+    private func attemptChassisServiceSetup(networkId: UUID) async {
         guard let ipBinaryPath else {
             let message =
-                "Metadata service needs the iproute2 `ip` tool, which was not found on this host; "
-                + "guests on this network will not reach the metadata address"
+                "Link-local services need the iproute2 `ip` tool, which was not found on this host; "
+                + "guests on this network will not reach the metadata or resolver addresses"
             logger.warning(
                 "\(message)",
                 metadata: [
@@ -1539,9 +1740,15 @@ extension NetworkServiceLinux {
                 ])
             return
         }
-        let plan = MetadataChassisPlan.plan(
-            networkId: networkId, ipBinaryPath: ipBinaryPath,
-            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
+        // A missing `tc` costs the policer, not the service: an unlimited but
+        // working resolver beats no resolver, and the host preflight already
+        // reports the tool as absent.
+        let ratePPS = tcBinaryPath == nil ? 0 : linkLocalServiceRatePPS
+        let plan = ChassisServicePlan.plan(
+            networkId: networkId,
+            ipBinaryPath: ipBinaryPath, tcBinaryPath: tcBinaryPath ?? "tc",
+            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds,
+            ratePPS: ratePPS)
         do {
             // Ordering is forced from both sides: the device cannot be moved
             // into a namespace that does not exist, and it cannot be moved
@@ -1565,7 +1772,7 @@ extension NetworkServiceLinux {
                 verify: plan.ovsVerify, device: plan.interfaceName, portName: plan.logicalPortName,
                 stage: "namespace-setup")
             logger.info(
-                "Realized metadata namespace",
+                "Realized chassis service namespace",
                 metadata: [
                     "networkId": .string(networkId.uuidString),
                     "netns": .string(plan.netnsName),
@@ -1575,7 +1782,7 @@ extension NetworkServiceLinux {
                 ])
         } catch {
             logger.error(
-                "Failed to realize metadata namespace",
+                "Failed to realize chassis service namespace",
                 metadata: [
                     "networkId": .string(networkId.uuidString),
                     "error": .string(error.localizedDescription),
@@ -1586,7 +1793,7 @@ extension NetworkServiceLinux {
             // that looks realized to every future observation while carrying no
             // addresses — the same silent half-built state the reboot case
             // produces, just reached a different way.
-            await removeMetadataChassisPort(
+            await removeChassisServicePort(
                 networkId: networkId, interfaceName: plan.interfaceName, quiet: true)
         }
     }
@@ -1600,13 +1807,13 @@ extension NetworkServiceLinux {
     /// `quiet` marks the rollback path, where a failure is the *expected* shape
     /// (there may be nothing to remove yet) and the real error has already been
     /// logged by the caller.
-    private func removeMetadataChassisPort(
+    private func removeChassisServicePort(
         networkId: UUID, interfaceName: String, quiet: Bool = false
     ) async {
         // Like sandbox teardown, cleanup falls back to the PATH-resolved name:
         // it must attempt something on a host whose iproute2 was never resolved,
         // rather than refuse and leak a namespace forever.
-        let removal = MetadataChassisPlan.teardownPlan(
+        let removal = ChassisServicePlan.teardownPlan(
             networkId: networkId, interfaceName: interfaceName, ipBinaryPath: ipBinaryPath ?? "ip",
             bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
         var failures = 0
@@ -1616,7 +1823,7 @@ extension NetworkServiceLinux {
             failures += 1
             if !quiet {
                 logger.warning(
-                    "Failed to remove metadata OVS port",
+                    "Failed to remove chassis service OVS port",
                     metadata: [
                         "networkId": .string(networkId.uuidString),
                         "interface": .string(interfaceName),
@@ -1644,7 +1851,7 @@ extension NetworkServiceLinux {
         // behind, and logging success over it is how a leak stays invisible.
         guard failures == 0, !quiet else { return }
         logger.info(
-            "Removed metadata namespace",
+            "Removed chassis service namespace",
             metadata: [
                 "networkId": .string(networkId.uuidString), "interface": .string(interfaceName),
             ])
@@ -1670,16 +1877,22 @@ extension NetworkServiceLinux {
                     gateway: gateway,
                     dnsServers: network.dnsServers ?? [], domainName: network.domainName,
                     leaseTime: network.leaseTime,
-                    // `== true`, matching how the topology plan reads this
-                    // field: a control plane with no opinion advertises no
-                    // metadata route rather than one to an address it never
-                    // asked to have published.
-                    metadataEnabled: network.metadataEnabled == true)
+                    // `== true`, matching how the topology plan reads these
+                    // fields: a control plane with no opinion advertises no
+                    // route rather than one to an address it never asked to
+                    // have published — and, for the resolver, leaves the guest
+                    // pointed at the configured servers rather than at an
+                    // address that may terminate nothing.
+                    metadataEnabled: network.metadataEnabled == true,
+                    resolverAddresses: network.resolverEnabled == true
+                        ? (network.resolverAddresses ?? []) : [])
             }
             if let subnet6 = network.subnet6 {
                 _ = try await ensureDHCPOptions6(
                     networkId: network.networkId, networkName: network.name, subnet6: subnet6,
-                    dnsServers: network.dnsServers ?? [], domainName: network.domainName)
+                    dnsServers: network.dnsServers ?? [], domainName: network.domainName,
+                    resolverAddresses: network.resolverEnabled == true
+                        ? (network.resolverAddresses ?? []) : [])
             }
         } catch {
             logger.error(
@@ -1740,8 +1953,8 @@ extension NetworkServiceLinux: NetworkActuator {
             // filter is also why an agent predating this field never swept a
             // localport it didn't understand — the ports were simply invisible
             // to its teardown diff.
-            metadataPortNames: Set(
-                switchPorts.filter { $0.portType == Self.metadataPortType && Self.isManaged($0.external_ids) }
+            serviceLocalPortNames: Set(
+                switchPorts.filter { $0.portType == Self.localPortType && Self.isManaged($0.external_ids) }
                     .map(\.name)))
         #else
         return ObservedNetworkTopology()
@@ -1752,14 +1965,14 @@ extension NetworkServiceLinux: NetworkActuator {
     ///
     /// Deliberately without `port_security`, matching the localnet port: port
     /// security on a localport filters the agent's own replies to the guest.
-    func ensureMetadataPort(_ port: DesiredMetadataPort) async throws {
+    func ensureServiceLocalPort(_ port: DesiredServiceLocalPort) async throws {
         #if os(Linux)
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         let desired = OVNLogicalSwitchPort(
             name: port.name,
-            portType: Self.metadataPortType,
+            portType: Self.localPortType,
             addresses: port.addresses,
             external_ids: [
                 Self.managedKey: Self.managedValue,
@@ -1777,7 +1990,7 @@ extension NetworkServiceLinux: NetworkActuator {
             // and re-homing it would mean a delete and recreate, not an update,
             // which is a heavier repair than an unreachable case earns.
             let drifted =
-                existing.portType != Self.metadataPortType
+                existing.portType != Self.localPortType
                 || Set(existing.addresses ?? []) != Set(port.addresses)
             if drifted, let uuid = existing.uuid {
                 try await ovnManager.updateLogicalSwitchPort(uuid: uuid, desired)
@@ -1799,7 +2012,7 @@ extension NetworkServiceLinux: NetworkActuator {
         #endif
     }
 
-    func removeMetadataPort(name: String) async throws {
+    func removeServiceLocalPort(name: String) async throws {
         #if os(Linux)
         try? await ovnManager?.deleteLogicalSwitchPort(named: name)
         #endif

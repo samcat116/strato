@@ -10,9 +10,12 @@ extension Request {
     /// scoping, say — had to land in ten places. This is that lookup only:
     /// permission checks stay with the caller, since they differ per route.
     ///
-    /// Distinct from `resolveProjectForCreate(...)`, which resolves the *target*
-    /// project for a create (default-project fallback, org scoping, permission,
-    /// environment) rather than reading one out of the path.
+    /// Distinct from the two create-side resolvers, which work out a create's
+    /// *target* project (default-project fallback, permission, and for VMs and
+    /// sandboxes an environment) rather than reading one out of the path:
+    /// `resolveProjectForCreate(...)` for VM and sandbox creation,
+    /// `authorizedProjectForCreate(...)` for the project-scoped infrastructure
+    /// creates.
     func requireProject(paramName: String = "projectID") async throws -> Project {
         guard let projectID = parameters.get(paramName, as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid project ID")

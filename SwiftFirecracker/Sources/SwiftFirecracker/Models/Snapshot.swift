@@ -70,6 +70,36 @@ public struct SnapshotLoadConfig: Codable, Sendable {
         }
     }
 
+    /// Repoints one restored network interface at a different host TAP.
+    ///
+    /// A snapshot's vmstate records each `net` device's backing device *by
+    /// name*, and Firecracker will not add, drop, or rename devices on load —
+    /// so a checkpoint restored anywhere its original TAP does not exist (a
+    /// fork into a new sandbox, a warm template restored into a real one)
+    /// needs the mapping supplied here. `ifaceId` is the id the device was
+    /// configured with (`PUT /network-interfaces/{id}`), not the guest's
+    /// interface name.
+    ///
+    /// Requires Firecracker **1.12.0 or newer**; older builds reject the
+    /// unknown field, which is why the array is omitted entirely when there is
+    /// nothing to remap.
+    public struct NetworkOverride: Codable, Sendable, Equatable {
+        /// The configured id of the interface to repoint.
+        public let ifaceId: String
+        /// The host TAP the restored device should open instead.
+        public let hostDevName: String
+
+        enum CodingKeys: String, CodingKey {
+            case ifaceId = "iface_id"
+            case hostDevName = "host_dev_name"
+        }
+
+        public init(ifaceId: String, hostDevName: String) {
+            self.ifaceId = ifaceId
+            self.hostDevName = hostDevName
+        }
+    }
+
     /// The vmstate file written by snapshot create.
     public let snapshotPath: String
 
@@ -83,32 +113,45 @@ public struct SnapshotLoadConfig: Codable, Sendable {
     /// paused.
     public let resumeVM: Bool?
 
+    /// Per-interface host TAP remappings, or nil to open every device under
+    /// the name the snapshot recorded. Nil and `[]` are deliberately different
+    /// on the wire: only nil omits the key, which is what keeps loads that
+    /// remap nothing byte-identical for a pre-1.12 Firecracker.
+    public let networkOverrides: [NetworkOverride]?
+
     enum CodingKeys: String, CodingKey {
         case snapshotPath = "snapshot_path"
         case memBackend = "mem_backend"
         case enableDiffSnapshots = "enable_diff_snapshots"
         case resumeVM = "resume_vm"
+        case networkOverrides = "network_overrides"
     }
 
     public init(
         snapshotPath: String,
         memBackend: MemoryBackend,
         enableDiffSnapshots: Bool? = nil,
-        resumeVM: Bool? = nil
+        resumeVM: Bool? = nil,
+        networkOverrides: [NetworkOverride]? = nil
     ) {
         self.snapshotPath = snapshotPath
         self.memBackend = memBackend
         self.enableDiffSnapshots = enableDiffSnapshots
         self.resumeVM = resumeVM
+        self.networkOverrides = networkOverrides
     }
 
     /// The common file-backed load: memory from `memFilePath`, optionally
     /// resuming immediately.
-    public init(snapshotPath: String, memFilePath: String, resumeVM: Bool? = nil) {
+    public init(
+        snapshotPath: String, memFilePath: String, resumeVM: Bool? = nil,
+        networkOverrides: [NetworkOverride]? = nil
+    ) {
         self.init(
             snapshotPath: snapshotPath,
             memBackend: MemoryBackend(backendType: .file, backendPath: memFilePath),
-            resumeVM: resumeVM)
+            resumeVM: resumeVM,
+            networkOverrides: networkOverrides)
     }
 }
 

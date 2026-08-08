@@ -1,4 +1,5 @@
 import Fluent
+import StratoShared
 import Vapor
 
 /// A logical network VMs attach to, and the unit of IPAM ownership: the control
@@ -91,6 +92,45 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @Field(key: "metadata_enabled")
     var metadataEnabled: Bool
 
+    /// When true, agents give this network's guests a DNS resolver at
+    /// `NetworkResolverEndpoint` — the host-wide CoreDNS each agent runs in its
+    /// *host* namespace (ADR 0008), serving the network's zones in full
+    /// (including the CNAME/TXT/SRV the OVN `DNS` table cannot express) and
+    /// forwarding everything else to `dnsServers` (STR-40).
+    ///
+    /// **This changes what `dnsServers` means for the network.** With the
+    /// resolver on, guests are told the resolver's link-local address over DHCP
+    /// and `dnsServers` becomes the resolver's upstream forwarders; with it off,
+    /// `dnsServers` is handed to guests verbatim, which is what it always was.
+    ///
+    /// An opt-*out*, defaulting true, like `metadataEnabled` — see
+    /// `AddResolverEnabledToLogicalNetwork` for why that is safe. The short
+    /// version: the resolver forwards through the *hypervisor's* egress, so a
+    /// network whose `dnsServers` already worked keeps working and one with no
+    /// external access at all starts being able to resolve public names, which
+    /// is the bug this phase was filed for. And the control plane withholds the
+    /// flag entirely unless every agent in the site reports `resolverCapable`,
+    /// so a site that cannot run CoreDNS is unaffected by the default until it
+    /// can.
+    ///
+    /// Editing it deliberately does **not** bump `generation` — the port and the
+    /// DHCP row converge level-triggered on every network reconcile.
+    @Field(key: "resolver_enabled")
+    var resolverEnabled: Bool
+
+    /// The index this network's two link-local resolver addresses derive from
+    /// (`NetworkResolverEndpoint`), allocated fleet-wide by
+    /// `ResolverAddressAllocator`.
+    ///
+    /// Nil until the resolver is first enabled, and **kept** if it is later
+    /// disabled: the addresses live in the host namespace where every network's
+    /// resolver shares one namespace, so reusing an index while some agent still
+    /// has the old interface configured would put two networks on one address.
+    /// Holding it costs one number out of 65k and makes re-enabling free of any
+    /// guest-visible change.
+    @OptionalField(key: "resolver_index")
+    var resolverIndex: Int?
+
     /// Monotonic counter bumped whenever a change alters how agents realize the
     /// network's L3 (subnet, gateway, or external access). Sent to agents as the
     /// `DesiredNetworkState.generation` so replayed/reordered syncs can't roll
@@ -148,6 +188,8 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         leaseTime: Int? = nil,
         externalAccess: Bool = true,
         metadataEnabled: Bool = true,
+        resolverEnabled: Bool = true,
+        resolverIndex: Int? = nil,
         generation: Int = 1,
         siteID: UUID? = nil
     ) {
@@ -166,7 +208,24 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
+        self.resolverIndex = resolverIndex
         self.generation = generation
+    }
+
+    /// The addresses to put on the wire for this network's resolver, or nil when
+    /// it is off, has never been allocated one, or the receiver has no opinion.
+    ///
+    /// Nil and "enabled but unallocated" are deliberately the same answer: an
+    /// address the control plane has not committed to is one no agent should
+    /// realize, and the allocation happens on the write that turns the flag on,
+    /// so the pair is missing only for a row that predates this feature.
+    func resolverAddressesIfEnabled(siteCapable: Bool?) -> [String]? {
+        guard siteCapable == true, resolverEnabled, let index = resolverIndex else { return nil }
+        return [
+            NetworkResolverEndpoint.address(forIndex: index),
+            NetworkResolverEndpoint.addressV6(forIndex: index),
+        ]
     }
 
     /// The identity of the logical router this network attaches to on agents.
@@ -236,7 +295,9 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
     let projectId: UUID?
     /// Whether agents program OVN DHCP for this network. Defaults true.
     let dhcpEnabled: Bool?
-    /// DNS resolvers advertised over DHCP.
+    /// With `resolverEnabled` (the default) these are the network resolver's
+    /// upstream forwarders; without it they are advertised to guests over DHCP
+    /// verbatim.
     let dnsServers: [String]?
     /// DNS search domain advertised over DHCP. Held to the same grammar as a
     /// DNS zone name — it reaches guests as structured config, not as text.
@@ -248,6 +309,10 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
     /// Whether the network publishes the instance metadata service to its
     /// guests. Defaults true — an opt-out, not an opt-in.
     let metadataEnabled: Bool?
+    /// Whether the network gives its guests a built-in DNS resolver, serving the
+    /// zones attached to it in full and forwarding the rest through the
+    /// hypervisor's egress. Defaults true — an opt-out, like `metadataEnabled`.
+    let resolverEnabled: Bool?
     /// Site to pin the network to; its VMs then only place on that site's
     /// agents, where the shared OVN deployment spans it across nodes.
     let siteId: UUID?
@@ -259,7 +324,7 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
         gateway6: String? = nil, ipv6Enabled: Bool? = nil, projectId: UUID? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
         leaseTime: Int? = nil, externalAccess: Bool? = nil, metadataEnabled: Bool? = nil,
-        siteId: UUID? = nil
+        resolverEnabled: Bool? = nil, siteId: UUID? = nil
     ) {
         self.name = name
         self.subnet = subnet
@@ -274,6 +339,7 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
         self.siteId = siteId
     }
 
@@ -313,6 +379,11 @@ struct UpdateNetworkRequest: Content, ValidatedRequestBody {
     /// Toggle the instance metadata service. Re-synced to agents, which create
     /// or delete the network's metadata port and namespaces.
     let metadataEnabled: Bool?
+    /// Toggle the network's built-in DNS resolver. Re-synced to agents, which
+    /// add or remove the resolver's addresses from the network's localport and
+    /// start or stop its CoreDNS. Guests pick the change up at their next DHCP
+    /// lease, not immediately.
+    let resolverEnabled: Bool?
     /// The zone this network's VMs auto-register into. Must already be
     /// attached to the network. Send `clearPrimaryDnsZone: true` to unset it —
     /// a JSON `null` is indistinguishable from an omitted field here.
@@ -324,6 +395,7 @@ struct UpdateNetworkRequest: Content, ValidatedRequestBody {
         subnet6: String? = nil, gateway6: String? = nil, ipv6Enabled: Bool? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
         leaseTime: Int? = nil, externalAccess: Bool? = nil, metadataEnabled: Bool? = nil,
+        resolverEnabled: Bool? = nil,
         primaryDnsZoneId: UUID? = nil, clearPrimaryDnsZone: Bool? = nil
     ) {
         self.name = name
@@ -338,6 +410,7 @@ struct UpdateNetworkRequest: Content, ValidatedRequestBody {
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
         self.primaryDnsZoneId = primaryDnsZoneId
         self.clearPrimaryDnsZone = clearPrimaryDnsZone
     }
@@ -363,6 +436,12 @@ struct NetworkResponse: Content {
     let leaseTime: Int?
     let externalAccess: Bool
     let metadataEnabled: Bool
+    let resolverEnabled: Bool
+    /// The addresses this network's guests resolve through, v4 first. Nil when
+    /// the resolver has never been enabled. Exposed rather than the index behind
+    /// them because these are what an operator compares against a guest's
+    /// `resolv.conf`.
+    let resolverAddresses: [String]?
     let siteId: UUID?
     /// The zone this network's VMs auto-register into, if any (issue #770).
     let primaryDnsZoneId: UUID?
@@ -384,6 +463,13 @@ struct NetworkResponse: Content {
         self.leaseTime = network.leaseTime
         self.externalAccess = network.externalAccess
         self.metadataEnabled = network.metadataEnabled
+        self.resolverEnabled = network.resolverEnabled
+        self.resolverAddresses = network.resolverIndex.map {
+            [
+                NetworkResolverEndpoint.address(forIndex: $0),
+                NetworkResolverEndpoint.addressV6(forIndex: $0),
+            ]
+        }
         self.siteId = network.$site.id
         self.primaryDnsZoneId = network.$primaryDNSZone.id
         self.createdAt = network.createdAt

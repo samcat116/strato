@@ -329,7 +329,7 @@ A volume attached to a stopped VM does grow, which the old detach-only rule
 refused outright.
 
 **A volume reports the size it has, not just the size it was asked for**
-(STR-199, wire v37). `Volume.size` is desired state — a resize answers `202` and
+(STR-199, wire v38). `Volume.size` is desired state — a resize answers `202` and
 converges, so it moves when the mutation is accepted — and until `sizeBytes`
 joined `ObservedVolumeState` it was also the only size the API could report. A
 volume whose grow the agent had refused therefore answered with the size it had
@@ -342,7 +342,7 @@ The original argument against the field — a `qemu-img info` subprocess per
 volume per report — expired on its own: the planner needs the same number to
 decide whether a grow is outstanding, so the agent already computes and caches
 one per volume, and reporting it adds no work. Absence is read the way the
-applied I/O ceilings are: nil is "this agent said nothing" (a pre-v37 agent, or
+applied I/O ceilings are: nil is "this agent said nothing" (a pre-v38 agent, or
 a probe that could not read the image), never zero, and never a licence to
 clear what a previous report recorded.
 

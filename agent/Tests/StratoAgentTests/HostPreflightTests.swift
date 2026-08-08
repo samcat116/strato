@@ -602,4 +602,27 @@ struct HostPreflightTests {
         #expect(!check.passed)
         #expect(check.severity == .advisory)
     }
+
+    @Test("A globally strict rp_filter is reported, because it overrides the per-device one")
+    func globalStrictReversePathFilterIsReported() {
+        // The kernel validates against `max(conf.all, conf.<dev>)`, so the
+        // loose value `ResolverHostPortPlan` sets on the resolver's foot does
+        // nothing on a host whose `all` is 1 — every guest query is dropped and
+        // nothing on the host says why. Advisory rather than fixed: lowering
+        // `all` would weaken source validation on the hypervisor's own NICs.
+        let strict = HostPreflight.checkGlobalReversePathFilter(1)
+        #expect(!strict.passed)
+        #expect(strict.severity == .advisory)
+        #expect(strict.detail?.contains("net.ipv4.conf.all.rp_filter") == true)
+    }
+
+    @Test("Loose, disabled, and unreadable rp_filter all pass")
+    func acceptableReversePathFilterValues() {
+        // 2 is loose and 0 disables validation entirely (Ubuntu's default);
+        // nil is a kernel or platform that does not expose the knob, which is
+        // not a misconfiguration.
+        #expect(HostPreflight.checkGlobalReversePathFilter(2).passed)
+        #expect(HostPreflight.checkGlobalReversePathFilter(0).passed)
+        #expect(HostPreflight.checkGlobalReversePathFilter(nil).passed)
+    }
 }

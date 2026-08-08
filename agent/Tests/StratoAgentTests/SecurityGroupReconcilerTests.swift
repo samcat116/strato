@@ -538,3 +538,74 @@ private actor RecordingSecurityGroupActuator: SecurityGroupActuator {
         removed.append(Membership(port: portName, group: group))
     }
 }
+
+/// The implicit egress allow to the network's resolver (STR-40). Its absence is
+/// the kind of thing that ships broken: a default-deny egress policy would
+/// silently blackhole DNS for every VM in the site, and the symptom reads as a
+/// broken network rather than as the policy outcome it is.
+@Suite("Resolver egress carve-out")
+struct ResolverEgressACLTests {
+
+    private var acls: [ACLSpec] { SecurityGroupACLBuilder.resolverEgressACLs() }
+
+    @Test("Four ACLs: both families, both transports")
+    func bothFamiliesAndTransports() {
+        // An OVN match is per family *and* per protocol. A resolver that answers
+        // only UDP breaks every response large enough to set TC, which the guest
+        // then retries over TCP and never gets.
+        #expect(acls.count == 4)
+        for family in ["ip4", "ip6"] {
+            for proto in ["udp", "tcp"] {
+                #expect(
+                    acls.contains {
+                        $0.match.contains("&& \(family) &&") && $0.match.contains("&& \(proto) &&")
+                    },
+                    "missing \(family)/\(proto)")
+            }
+        }
+    }
+
+    @Test("Scoped to port 53 on the link-local resolver space")
+    func scopedToTheService() {
+        // The namespace terminates nothing else on those addresses, so a wider
+        // hole would only widen what a guest may probe on its own chassis.
+        #expect(acls.allSatisfy { $0.match.contains(".dst == 53") })
+        // Matched on the whole link-local space, not one address: every network
+        // has its own now, and a per-network match would mean a per-network port
+        // group for a rule that lands on every managed port anyway.
+        #expect(acls.filter { $0.match.contains("ip4.dst == 169.254.0.0/16") }.count == 2)
+        #expect(acls.filter { $0.match.contains("ip6.dst == fd00:ec2::/32") }.count == 2)
+    }
+
+    @Test("Egress only, stateful, and above every rule-derived allow")
+    func nonOverridableStatefulEgress() {
+        // Egress-only and `allow-related` so replies return on conntrack state:
+        // a standing `to-lport` allow would admit unsolicited inbound traffic
+        // claiming to be from the resolver address to every managed port.
+        #expect(acls.allSatisfy { $0.direction == "from-lport" })
+        #expect(acls.allSatisfy { $0.action == "allow-related" })
+        #expect(acls.allSatisfy { $0.priority == SecurityGroupACLBuilder.metadataAllowPriority })
+        #expect(SecurityGroupACLBuilder.metadataAllowPriority > SecurityGroupACLBuilder.allowPriority)
+    }
+
+    @Test("They ride the site-singleton drop group, so no security group can escape them")
+    func appliedOnTheDropGroup() {
+        #expect(acls.allSatisfy { $0.match.contains("inport == @\(OVNNaming.dropPortGroupName)") })
+        let drop = SecurityGroupACLBuilder.dropGroupACLs()
+        for acl in acls { #expect(drop.contains(acl)) }
+    }
+
+    @Test("The drop-group revision was bumped so upgrades rewrite the group")
+    func revisionBumped() {
+        // Without the bump the carve-out would sit unapplied until some
+        // unrelated rule edit happened to bump the group — which on a network
+        // with a restrictive policy means DNS stays broken indefinitely.
+        #expect(SecurityGroupACLBuilder.dropGroupRevision == 6)
+    }
+
+    @Test("The metadata carve-out is still there beside it")
+    func metadataCarveOutSurvives() {
+        let drop = SecurityGroupACLBuilder.dropGroupACLs()
+        for acl in SecurityGroupACLBuilder.metadataEgressACLs() { #expect(drop.contains(acl)) }
+    }
+}

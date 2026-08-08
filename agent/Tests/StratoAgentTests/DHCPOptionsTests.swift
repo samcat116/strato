@@ -225,3 +225,101 @@ struct DHCPRowIdentityTests {
         #expect(!DHCPRowIdentity.isLegacyOwned(stamped, networkName: "default"))
     }
 }
+
+@Suite("DHCP Options — per-network resolver")
+struct DHCPOptionsResolverTests {
+
+    // MARK: - The per-network resolver (STR-40)
+
+    @Test("With the resolver on, the guest is told the resolver rather than the upstreams")
+    func resolverReplacesDNSServer() {
+        // The substitution happens agent-side so one field carries one meaning
+        // on the wire, and so a NIC degraded to user-mode can fall back to the
+        // raw list.
+        let options = OVNDHCPOptionsBuilder.v4Options(
+            gateway: "10.0.0.1", dnsServers: ["1.1.1.1", "8.8.8.8"], domainName: nil, leaseTime: nil,
+            subnet: "10.0.0.0/24", resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
+        #expect(options["dns_server"] == "{169.254.1.0}")
+    }
+
+    @Test("With the resolver off, the configured servers reach the guest unchanged")
+    func resolverOffKeepsLegacyBehaviour() {
+        let options = OVNDHCPOptionsBuilder.v4Options(
+            gateway: "10.0.0.1", dnsServers: ["1.1.1.1", "8.8.8.8"], domainName: nil, leaseTime: nil,
+            subnet: "10.0.0.0/24", resolverAddresses: [])
+        #expect(options["dns_server"] == "{1.1.1.1, 8.8.8.8}")
+    }
+
+    @Test("The DHCPv6 dns_server flips the same way")
+    func resolverReplacesDNSServerV6() {
+        let on = OVNDHCPOptionsBuilder.v6Options(
+            dnsServers: ["2606:4700:4700::1111"], domainName: nil, subnet6: "fd00::/64",
+            resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
+        #expect(on["dns_server"] == "{fd00:ec2:1::100}")
+
+        let off = OVNDHCPOptionsBuilder.v6Options(
+            dnsServers: ["2606:4700:4700::1111"], domainName: nil, subnet6: "fd00::/64",
+            resolverAddresses: [])
+        #expect(off["dns_server"] == "{2606:4700:4700::1111}")
+    }
+
+    @Test("Option 121 carries whichever link-local services the network publishes")
+    func classlessStaticRouteCoversBothServices() {
+        // Most Linux images carry a 169.254.0.0/16 route that covers both by
+        // accident, but that is not universal — and a missing resolver route
+        // costs the guest all name resolution, not just IMDS.
+        #expect(
+            OVNDHCPOptionsBuilder.classlessStaticRoute(gateway: "10.0.0.1", metadata: true, resolver: nil)
+                == "{169.254.169.254/32,0.0.0.0, 0.0.0.0/0,10.0.0.1}")
+        #expect(
+            OVNDHCPOptionsBuilder.classlessStaticRoute(
+                gateway: "10.0.0.1", metadata: false, resolver: "169.254.1.0")
+                == "{169.254.1.0/32,0.0.0.0, 0.0.0.0/0,10.0.0.1}")
+        #expect(
+            OVNDHCPOptionsBuilder.classlessStaticRoute(
+                gateway: "10.0.0.1", metadata: true, resolver: "169.254.1.0")
+                == "{169.254.169.254/32,0.0.0.0, 169.254.1.0/32,0.0.0.0, 0.0.0.0/0,10.0.0.1}")
+    }
+
+    @Test("The default route is repeated in option 121 whichever services are on")
+    func defaultRouteAlwaysRepeated() {
+        // RFC 3442 requires a client that understands option 121 to ignore
+        // option 3 entirely, so omitting it would trade the guest's default
+        // gateway for a link-local route.
+        for (metadata, resolver) in [(true, nil), (false, "169.254.1.0"), (true, "169.254.1.0")]
+            as [(Bool, String?)]
+        {
+            let route = OVNDHCPOptionsBuilder.classlessStaticRoute(
+                gateway: "10.0.0.1", metadata: metadata, resolver: resolver)
+            #expect(route.contains("0.0.0.0/0,10.0.0.1"))
+        }
+    }
+
+    @Test("A resolver-only network still gets option 121")
+    func resolverAloneEmitsOption121() {
+        let options = OVNDHCPOptionsBuilder.v4Options(
+            gateway: "10.0.0.1", dnsServers: [], domainName: nil, leaseTime: nil,
+            subnet: "10.0.0.0/24", metadataEnabled: false, resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
+        #expect(options["classless_static_route"]?.contains("169.254.1.0/32") == true)
+        #expect(options["classless_static_route"]?.contains("169.254.169.254/32") == false)
+    }
+
+    @Test("A network with neither service emits no option 121 at all")
+    func neitherServiceOmitsOption121() {
+        let options = OVNDHCPOptionsBuilder.v4Options(
+            gateway: "10.0.0.1", dnsServers: [], domainName: nil, leaseTime: nil,
+            subnet: "10.0.0.0/24", metadataEnabled: false, resolverAddresses: [])
+        #expect(options["classless_static_route"] == nil)
+    }
+
+    @Test("The resolver address reaches the guest even when no upstreams are configured")
+    func resolverWithNoUpstreams() {
+        // An empty forwarder list means the resolver answers its zones and
+        // refuses everything else — which is still strictly better than telling
+        // the guest it has no resolver at all.
+        let options = OVNDHCPOptionsBuilder.v4Options(
+            gateway: "10.0.0.1", dnsServers: [], domainName: nil, leaseTime: nil,
+            subnet: "10.0.0.0/24", resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
+        #expect(options["dns_server"] == "{169.254.1.0}")
+    }
+}
