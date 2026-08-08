@@ -11,14 +11,8 @@ public enum HypervisorServiceError: Error, LocalizedError, Sendable {
     /// The specified VM was not found
     case vmNotFound(String)
 
-    /// The VM is already running
-    case vmAlreadyRunning(String)
-
     /// The VM is not running
     case vmNotRunning(String)
-
-    /// The VM is in an invalid state for the operation
-    case invalidState(vmId: String, current: VMStatus, expected: [VMStatus])
 
     /// Invalid configuration provided
     case invalidConfiguration(String)
@@ -47,13 +41,8 @@ public enum HypervisorServiceError: Error, LocalizedError, Sendable {
         switch self {
         case .vmNotFound(let vmId):
             return "VM not found: \(vmId)"
-        case .vmAlreadyRunning(let vmId):
-            return "VM is already running: \(vmId)"
         case .vmNotRunning(let vmId):
             return "VM is not running: \(vmId)"
-        case .invalidState(let vmId, let current, let expected):
-            return
-                "VM \(vmId) is in state \(current), expected one of: \(expected.map(\.rawValue).joined(separator: ", "))"
         case .invalidConfiguration(let message):
             return "Invalid configuration: \(message)"
         case .diskError(let message):

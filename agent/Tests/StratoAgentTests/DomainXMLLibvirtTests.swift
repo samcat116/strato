@@ -445,7 +445,7 @@ struct DomainXMLLibvirtTests {
             vmId: name, vmDirectory: directory.path,
             spec: VMSpec(
                 cpus: 1, memoryBytes: 1024 * 1024 * 1024, boot: .disk(firmware: nil),
-                console: ConsoleSpec(console: .socket, serial: .socket)),
+                console: ConsoleSpec()),
             disks: [ResolvedDisk(path: disk.path, format: .raw)],
             networks: [], architecture: architecture,
             accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
@@ -519,7 +519,7 @@ struct DomainXMLLibvirtTests {
             vmId: "strato-hotplug-test", vmDirectory: directory.path,
             spec: VMSpec(
                 cpus: 1, memoryBytes: 1024 * 1024 * 1024, boot: .disk(firmware: nil),
-                console: ConsoleSpec(console: .socket, serial: .socket)),
+                console: ConsoleSpec()),
             disks: [ResolvedDisk(path: disk.path, format: .raw)],
             networks: [], architecture: architecture,
             accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
@@ -722,7 +722,7 @@ struct DomainXMLLibvirtTests {
             vmId: name, vmDirectory: directory.path,
             spec: VMSpec(
                 cpus: 1, memoryBytes: gib, maxMemoryBytes: 2 * gib, boot: .disk(firmware: nil),
-                console: ConsoleSpec(console: .socket, serial: .socket)),
+                console: ConsoleSpec()),
             disks: [ResolvedDisk(path: disk.path, format: .raw)],
             networks: [], architecture: architecture,
             accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
@@ -736,7 +736,7 @@ struct DomainXMLLibvirtTests {
             // not as *boot* memory.
             let resized = VMSpec(
                 cpus: 1, memoryBytes: 2 * gib, maxMemoryBytes: 2 * gib, boot: .disk(firmware: nil),
-                console: ConsoleSpec(console: .socket, serial: .socket))
+                console: ConsoleSpec())
             let widening = try DomainRedefinition.widening(
                 forInactiveDomainXML: try Self.run(["dumpxml", "--inactive", name]).output,
                 spec: resized, architecture: architecture)

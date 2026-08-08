@@ -26,12 +26,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { sandboxesApi } from "@/lib/api/sandboxes";
-import { friendlyErrorMessage } from "@/lib/errors";
-import {
-  acceptedMutation,
-  usePendingMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
+import { usePendingMutation } from "@/lib/stores/mutations-store";
 import { toast } from "sonner";
 import type { Sandbox, OperationKind } from "@/types/api";
 
@@ -83,10 +79,12 @@ export function SandboxActions({
   sandbox,
   onActionComplete,
 }: SandboxActionsProps) {
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submittingAction, setSubmittingAction] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const watch = useMutationsStore((state) => state.watch);
+  const {
+    isLoading: isSubmitting,
+    busyKey: submittingAction,
+    run,
+  } = useAcceptedMutation();
   const pendingMutation = usePendingMutation(sandbox.id);
 
   // Busy while the request is in flight OR while an accepted mutation is still
@@ -96,44 +94,37 @@ export function SandboxActions({
     submittingAction ??
     (pendingMutation ? kindToAction[pendingMutation.kind] : null);
 
-  const handleAction = async (action: SandboxAction) => {
-    setIsSubmitting(true);
-    setSubmittingAction(action);
-
-    try {
-      // Each call returns 202; the MutationWatcher follows it to a terminal
-      // state and toasts the outcome.
-      watch(
-        acceptedMutation(await sandboxesApi[action](sandbox.id), {
-          kind: actionToKind[action],
-          resourceKind: "sandbox",
-          resourceName: sandbox.name,
-        })
-      );
-
-      switch (action) {
-        case "start":
-          toast.success(`Starting ${sandbox.name}`);
-          break;
-        case "stop":
-          toast.success(`Stopping ${sandbox.name}`);
-          break;
-        case "restart":
-          toast.success(`Restarting ${sandbox.name}`);
-          break;
-        case "delete":
-          setShowDeleteConfirm(false);
-          toast.success(`Deleting ${sandbox.name}`);
-          break;
-      }
-      onActionComplete?.();
-    } catch (error) {
-      toast.error(friendlyErrorMessage(error, `Failed to ${action} sandbox`));
-    } finally {
-      setIsSubmitting(false);
-      setSubmittingAction(null);
-    }
-  };
+  const handleAction = (action: SandboxAction) =>
+    // Each call returns 202; the MutationWatcher follows it to a terminal
+    // state and toasts the outcome.
+    run({
+      busyKey: action,
+      request: () => sandboxesApi[action](sandbox.id),
+      watch: {
+        kind: actionToKind[action],
+        resourceKind: "sandbox",
+        resourceName: sandbox.name,
+      },
+      errorMessage: `Failed to ${action} sandbox`,
+      onSuccess: () => {
+        switch (action) {
+          case "start":
+            toast.success(`Starting ${sandbox.name}`);
+            break;
+          case "stop":
+            toast.success(`Stopping ${sandbox.name}`);
+            break;
+          case "restart":
+            toast.success(`Restarting ${sandbox.name}`);
+            break;
+          case "delete":
+            setShowDeleteConfirm(false);
+            toast.success(`Deleting ${sandbox.name}`);
+            break;
+        }
+        onActionComplete?.();
+      },
+    });
 
   // Mirrors the backend's Sandbox.canStart: `Exited` (re-run a one-shot
   // workload) and `Error` (recover an unconfirmed sandbox) are both startable.

@@ -431,8 +431,9 @@ offline, which re-issuing the update does not.
 Caveats the UI confirms before assigning:
 
 - The agent disconnects briefly and re-registers on restart.
-- Running VMs keep running and are re-adopted via their deterministic control
-  sockets (QMP for QEMU, the Firecracker API socket for Firecracker).
+- Running VMs keep running and are re-adopted: libvirtd owns QEMU domains and
+  survives the agent, so re-adoption is a domain lookup; Firecracker VMs are
+  re-adopted via their deterministic API sockets.
 - Running **sandboxes are not yet re-adopted** — they keep running as orphans
   that can only be deleted afterwards. The endpoint refuses in this case
   unless `{"force": true}` is passed. That is the only refusal `force` waives:

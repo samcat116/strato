@@ -7,15 +7,6 @@
 // message because controllers wrap them (e.g. "Failed to start VM: ...").
 const KNOWN_ERRORS: Array<{ pattern: RegExp; message: string }> = [
   {
-    pattern: /VM not mapped to any agent/i,
-    message:
-      "This VM isn't assigned to a hypervisor host yet. It may still be scheduling — try again in a moment.",
-  },
-  {
-    pattern: /No available agent/i,
-    message: "No hypervisor host is currently available to run this VM.",
-  },
-  {
     pattern: /VM placement failed/i,
     message:
       "The VM couldn't be placed on a hypervisor host. Check that an agent is online with enough free resources.",
@@ -23,15 +14,6 @@ const KNOWN_ERRORS: Array<{ pattern: RegExp; message: string }> = [
   {
     pattern: /Agent not found/i,
     message: "The hypervisor host for this VM is no longer registered.",
-  },
-  {
-    pattern: /Request to agent timed out/i,
-    message: "The hypervisor host didn't respond in time. Please try again.",
-  },
-  {
-    pattern: /Connection to agent was lost/i,
-    message:
-      "The connection to the hypervisor host was lost. Please try again.",
   },
   {
     pattern: /Invalid response from agent/i,

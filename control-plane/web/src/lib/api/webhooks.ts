@@ -24,10 +24,6 @@ export const webhooksApi = {
     return api.post<WebhookWithSecret>(base(orgId), data);
   },
 
-  get(orgId: string, webhookId: string): Promise<WebhookSubscription> {
-    return api.get<WebhookSubscription>(`${base(orgId)}/${webhookId}`);
-  },
-
   update(
     orgId: string,
     webhookId: string,

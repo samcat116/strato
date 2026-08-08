@@ -63,21 +63,8 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot has no owning agent; its artifacts are unreachable")
         }
-        // Two floors, and both are load-bearing. The snapshot-sync floor is
-        // what makes the desired entry mean anything at all; the mobility floor
-        // is older and narrower — a pre-v14 agent has no artifact-transfer
-        // client, so it would converge the entry by uploading nothing.
         try await SnapshotArtifactMutation.requireCaptureCapableAgent(
             agentId, kind: .sandboxSnapshot, app: req.application)
-        guard let agent = await req.application.agentService.getAgentInfo(agentId),
-            WireProtocol.supportsSandboxSnapshotMobility(agent.wireProtocolVersion ?? 0)
-        else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "The snapshot's agent is too old for snapshot export (need wire protocol >= \(WireProtocol.sandboxSnapshotMobilityMinimumVersion)). Upgrade the agent."
-            )
-        }
 
         let userID = try user.requireID()
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in

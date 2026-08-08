@@ -613,9 +613,7 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
 - Both fields are additive and nil-tolerant. Nil `securityGroups` is "no
   opinion", never "tear down all port groups"; a nil per-NIC list marks the
   port unmanaged (it joins no groups, drop group included), which is what
-  keeps legacy traffic flowing during a mixed-version rollout. The control
-  plane refuses attach/detach for VMs placed on pre-v20 agents and omits both
-  fields from their syncs (`WireProtocol.supportsSecurityGroups`).
+  keeps legacy traffic flowing for ports created before the feature.
 - **The API says when filtering is inert.** `VMDetail.securityGroupsEnforced`
   is false when a realizing agent — the host, or its site's network
   controller — registered pre-v20, *or* when nothing would author the site's

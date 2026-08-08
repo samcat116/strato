@@ -628,7 +628,6 @@ package struct TestDataBuilder {
 /// Mock ImageFetchService that does nothing (prevents real HTTP requests in tests)
 package actor MockImageFetchService: ImageFetchServiceProtocol {
     package var startedFetches: [UUID] = []
-    package var cancelledFetches: [UUID] = []
     package var startedArtifactFetches: [UUID] = []
 
     package init() {}
@@ -636,14 +635,6 @@ package actor MockImageFetchService: ImageFetchServiceProtocol {
     package func startFetch(imageId: UUID) async throws {
         startedFetches.append(imageId)
         // No-op: don't actually fetch anything
-    }
-
-    package func cancelFetch(imageId: UUID) async {
-        cancelledFetches.append(imageId)
-    }
-
-    package func isFetchActive(imageId: UUID) async -> Bool {
-        return false
     }
 
     package func startArtifactFetch(artifactId: UUID) async throws {

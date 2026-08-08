@@ -22,10 +22,6 @@ export const securityGroupsApi = {
       .then((page) => page.items);
   },
 
-  get(id: string): Promise<SecurityGroup> {
-    return api.get<SecurityGroup>(`/api/security-groups/${id}`);
-  },
-
   create(data: CreateSecurityGroupRequest): Promise<SecurityGroup> {
     return api.post<SecurityGroup>("/api/security-groups", data);
   },

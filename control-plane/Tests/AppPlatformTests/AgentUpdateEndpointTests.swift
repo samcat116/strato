@@ -57,7 +57,7 @@ final class AgentUpdateEndpointTests {
         org: Organization,
         online: Bool = true,
         version: String = "1.0.0",
-        wireProtocolVersion: Int = WireProtocol.desiredAgentUpdateMinimumVersion,
+        wireProtocolVersion: Int = WireProtocol.currentVersion,
         operatingSystem: String? = "linux"
     ) async throws -> Agent {
         let agent = Agent(
@@ -97,25 +97,6 @@ final class AgentUpdateEndpointTests {
                 #expect(res.status == .conflict)
                 #expect(res.body.string.contains("offline"))
             }
-        }
-    }
-
-    @Test("agents on a pre-v7 wire protocol are refused with the real reason")
-    func oldWireProtocolRefused() async throws {
-        try await withUpdateTestApp { app, _, org, token in
-            // A pre-v7 agent decodes the sync but ignores `desiredAgentUpdate`:
-            // assigning it would report an update that converges on nothing.
-            let agent = try await self.makeAgent(
-                app: app, org: org,
-                wireProtocolVersion: WireProtocol.desiredAgentUpdateMinimumVersion - 1)
-
-            try await app.test(.POST, "/api/agents/\(agent.id!)/actions/update") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-                #expect(res.body.string.contains("wire protocol"))
-            }
-            #expect(try await self.reload(agent, on: app).updateDesiredVersion == nil)
         }
     }
 

@@ -1,11 +1,8 @@
-// IAM endpoints: roles, authored policies, the action catalog, and the
-// bindable-roles listing used by grant flows.
+// IAM endpoints: roles, authored policies, and the action catalog.
 
 import { api } from "./client";
 import type {
   IAMActionCatalogResponse,
-  IAMBindableRolesResponse,
-  IAMNodeType,
   IAMPolicy,
   IAMPolicyCreateRequest,
   IAMPolicyListResponse,
@@ -33,10 +30,6 @@ export const iamApi = {
     });
   },
 
-  getRole(roleId: string): Promise<IAMRole> {
-    return api.get<IAMRole>(`/api/iam/roles/${roleId}`);
-  },
-
   createRole(data: IAMRoleCreateRequest): Promise<IAMRole> {
     return api.post<IAMRole>("/api/iam/roles", data);
   },
@@ -55,16 +48,6 @@ export const iamApi = {
     return api.post<IAMRoleValidateResponse>("/api/iam/roles/validate", data);
   },
 
-  listBindableRoles(
-    nodeType: IAMNodeType,
-    nodeId: string
-  ): Promise<IAMBindableRolesResponse> {
-    return api.get<IAMBindableRolesResponse>("/api/iam/roles/bindable", {
-      nodeType,
-      nodeId,
-    });
-  },
-
   // Action catalog
   listActions(): Promise<IAMActionCatalogResponse> {
     return api.get<IAMActionCatalogResponse>("/api/iam/actions");
@@ -79,10 +62,6 @@ export const iamApi = {
       ownerType,
       ownerId,
     });
-  },
-
-  getPolicy(policyId: string): Promise<IAMPolicy> {
-    return api.get<IAMPolicy>(`/api/iam/policies/${policyId}`);
   },
 
   createPolicy(data: IAMPolicyCreateRequest): Promise<IAMPolicy> {

@@ -5,7 +5,6 @@ import { buildLogQueryString } from "./logs";
 import type {
   VM,
   CreateVMRequest,
-  UpdateVMRequest,
   AcceptedMutation,
   Page,
   VMLogEntry,
@@ -38,10 +37,6 @@ export const vmsApi = {
 
   create(data: CreateVMRequest): Promise<AcceptedMutation<VM>> {
     return api.post<AcceptedMutation<VM>>("/api/vms", data);
-  },
-
-  update(id: string, data: UpdateVMRequest): Promise<VM> {
-    return api.put<VM>(`/api/vms/${id}`, data);
   },
 
   // Mint a single-use graphics console session. Throws ApiError with the
@@ -79,14 +74,10 @@ export const vmsApi = {
     return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/resume`);
   },
 
-  getStatus(id: string): Promise<{ status: string }> {
-    return api.get(`/api/vms/${id}/status`);
-  },
-
   // Full-VM checkpoints (issue #564): memory + device state + disks captured
   // at one instant, distinct from the disk-only volume snapshots. Capture and
-  // delete are desired state on the checkpoint itself (STR-150); restore is
-  // still an imperative operation.
+  // delete are desired state on the checkpoint itself (STR-150); restore is an
+  // edge-nonce on the VM's desired entry (STR-151) — see restoreSnapshot below.
   listSnapshots(id: string): Promise<VMSnapshot[]> {
     return api
       .get<Page<VMSnapshot>>(`/api/vms/${id}/snapshots`, {

@@ -74,7 +74,7 @@ final class AgentAutoUpdateTests {
         version: String = "1.0.0",
         autoUpdate: Bool = true,
         online: Bool = true,
-        wireProtocolVersion: Int = WireProtocol.desiredAgentUpdateMinimumVersion,
+        wireProtocolVersion: Int = WireProtocol.currentVersion,
         operatingSystem: String? = "linux"
     ) async throws -> Agent {
         let agent = Agent(
@@ -232,20 +232,17 @@ final class AgentAutoUpdateTests {
         }
     }
 
-    @Test("offline, pre-v7, unenrolled, and already-converged agents are never assigned")
+    @Test("offline, unenrolled, and already-converged agents are never assigned")
     func ineligibleAgentsAreSkipped() async throws {
         try await withAutoUpdateApp { app, _, org, _ in
             let offline = try await self.makeAgent(app: app, org: org, name: "aa-offline", online: false)
-            let oldWire = try await self.makeAgent(
-                app: app, org: org, name: "bb-oldwire",
-                wireProtocolVersion: WireProtocol.desiredAgentUpdateMinimumVersion - 1)
             let unenrolled = try await self.makeAgent(app: app, org: org, name: "cc-unenrolled", autoUpdate: false)
             // v-prefixed tag vs bare target: canonical comparison, no update.
             let converged = try await self.makeAgent(app: app, org: org, name: "dd-converged", version: "v1.4.0")
 
             await self.sweep(app)
 
-            for agent in [offline, oldWire, unenrolled, converged] {
+            for agent in [offline, unenrolled, converged] {
                 let row = try await self.reload(agent, on: app)
                 #expect(row.updateDesiredVersion == nil, "\(row.name) must not be assigned")
             }
@@ -471,7 +468,7 @@ final class AgentAutoUpdateTests {
         }
     }
 
-    @Test("the sync omits the update for unassigned, converged, and pre-v7 agents")
+    @Test("the sync omits the update for unassigned and converged agents")
     func syncOmitsUpdateWhenNotActionable() async throws {
         try await withAutoUpdateApp { app, _, org, _ in
             let unassigned = try await self.makeAgent(app: app, org: org, name: "aa-unassigned")
@@ -480,13 +477,7 @@ final class AgentAutoUpdateTests {
             converged.updateDesiredVersion = Self.target
             try await converged.save(on: app.db)
 
-            let oldWire = try await self.makeAgent(
-                app: app, org: org, name: "cc-oldwire",
-                wireProtocolVersion: WireProtocol.desiredAgentUpdateMinimumVersion - 1)
-            oldWire.updateDesiredVersion = Self.target
-            try await oldWire.save(on: app.db)
-
-            for agent in [unassigned, converged, oldWire] {
+            for agent in [unassigned, converged] {
                 let sync = try await app.desiredStateAssembler.assemble(
                     agentId: agent.requireID().uuidString)
                 #expect(sync.desiredAgentUpdate == nil, "\(agent.name) must not be sent an update")

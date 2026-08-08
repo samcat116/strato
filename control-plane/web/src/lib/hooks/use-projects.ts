@@ -6,13 +6,6 @@ import {
   type TransferProjectData,
 } from "@/lib/api/projects";
 
-export function useProjects() {
-  return useQuery({
-    queryKey: ["projects"],
-    queryFn: () => projectsApi.list(),
-  });
-}
-
 export function useProjectsForOrganization(organizationId: string | undefined) {
   return useQuery({
     queryKey: ["projects", "organization", organizationId],

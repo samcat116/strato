@@ -29,9 +29,8 @@ import type {
 
 export interface WatchedMutation {
   /**
-   * What identifies this mutation to the server: a `resource_events` id for a
-   * lifecycle mutation, an operation row's id for an imperative one. Both are
-   * what `GET /api/operations/{id}` answers for.
+   * What identifies this mutation to the server: the `resource_events` id the
+   * 202 answered with, which is what `GET /api/operations/{id}` answers for.
    */
   mutationId: string;
   /** Where the terminal answer comes from. */

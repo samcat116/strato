@@ -75,8 +75,8 @@ catches. Check the parts it can't:
 - **Conventions a linter can't see**: does the new code look like its
   neighbors? Same error-handling idiom, same layering, same naming. A
   correct change written in a foreign style is still a maintenance cost.
-- **Vocabulary**: use the terms defined in `CONTEXT.md` (operation, verdict,
-  desired state, generation, socket route…). Reviewers should push back on
+- **Vocabulary**: use the terms defined in `CONTEXT.md` (resource mutation,
+  accept, verdict, desired state, generation, doorbell…). Reviewers should push back on
   synonyms — drifting vocabulary is how two subsystems end up with two names
   for one concept.
 
@@ -122,7 +122,8 @@ catches. Check the parts it can't:
   invalid, `503` for a dependency down. Don't leak internals into the message.
 - **Failure leaves consistent state.** If a multi-step mutation fails halfway,
   what's left in Postgres? Is it inside a transaction? For resource
-  operations, is a verdict recorded so the row can't hang pending forever?
+  mutations, does the failure path reach `ResourceConvergence.recordFailure`,
+  so the resource degrades instead of hanging unconverged forever?
 - **Log levels mean something.** `error` = a human should look; `warning` =
   degraded but handled; `info` = lifecycle events; `debug` = per-request
   detail. An `error` log on an expected condition trains people to ignore
@@ -282,18 +283,25 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
   the mirror direction: an agent omitting a VM from its report must not delete
   the row.
 
-**Resource operations**
-- `begin` inserts the `pending` row and applies the desired-state change in
-  **one** transaction. Splitting them reintroduces the double-submit race that
-  409 exists to prevent.
-- Operation rows intentionally have **no FK** to the resource, so delete
-  operations survive row removal. Don't "fix" this by adding one.
-- Every path must reach a verdict. `recordVerdict` marks terminal only if
-  still pending, so the agent-response path and the stuck-operation sweep
-  can't overwrite each other — go through the coordinator, don't re-spell the
-  sequence in a handler.
-- New mutation endpoints return **202 Accepted** with the operation, not 200
-  with the resource.
+**Resource mutations**
+- `ResourceMutation.accept` locks the resource row, applies the desired-state
+  change, stamps the convergence deadline, and appends the `resource_events`
+  row in **one** transaction. Don't re-spell parts of that sequence in a
+  handler — a handler's pre-request snapshot must never regress
+  reconciliation-owned columns.
+- There is deliberately **no** double-submit `409`: desired state is
+  level-triggered, so overlapping writes are safe and the row lock serializes
+  them.
+- `resource_events` rows intentionally have **no FK** to the resource, so a
+  delete's attribution survives row removal. Don't "fix" this by adding one.
+- Every failure path must reach `ResourceConvergence.recordFailure`, which
+  escalates the resource and reverts unachieved desired state
+  (`revertDesiredToObserved`) — an intent left in place replays destructively.
+- New mutation endpoints return **202 Accepted** with
+  `{resource, targetGeneration, mutationId}`; clients read the resource's
+  `conditions`, and only a delete is followed through the operations façade.
+- Stamp the convergence deadline as `max(existing, now + budget)` — a short
+  mutation must never shorten a long one's runway.
 
 **Deletion and finalizers**
 - A delete path must not remove a row. It marks desired `.absent`, stamps
@@ -316,10 +324,10 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
 **Multi-replica**
 - Valkey **fails open**. Any new use must degrade to correct-but-slower, never
   to incorrect. Agents converge via the periodic sync even with Valkey down.
-- A mutation on the replica that doesn't hold the agent's socket needs a nudge
-  (or RPC forward for imperative actions like reboot). Forgetting it works
-  locally and fails in production, where it silently waits for the periodic
-  timer.
+- A mutation must ring the fleet-wide doorbell so whichever replica holds the
+  agent's parked poll (or socket) acts on it. Forgetting it works locally and
+  fails in production, where it silently waits for the agent's periodic
+  re-fetch.
 - Singleton work (sweeps) needs a `lock:sweep:*` lock, or every replica runs it.
 
 **Authorization**
@@ -436,8 +444,10 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
 **Frontend**
 - Bun, not npm.
 - Regenerate `src/types/openapi.ts` whenever the spec changes, or CI fails.
-- Operations are polled to terminal state — a new async endpoint needs the
-  frontend to poll, not to assume immediate success.
+- Mutations are followed to a verdict: the frontend refetches the resource
+  until its `conditions` answer for the target generation (deletes poll the
+  operations façade instead). A new async endpoint needs the same treatment,
+  not an assumption of immediate success.
 
 ---
 
