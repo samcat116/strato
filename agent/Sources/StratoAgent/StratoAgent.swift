@@ -128,6 +128,9 @@ private func launchAgent(options: AgentOptions) async throws {
     let finalVMStoragePath = options.vmStorageDir ?? config.vmStoragePath ?? AgentConfig.defaultVMStoragePath
     let finalVolumeStoragePath = config.volumeStoragePath ?? FileSystemStorageBackend.defaultStoragePath
     let finalQemuBinaryPath = options.qemuBinaryPath ?? config.qemuBinaryPath ?? AgentConfig.defaultQemuBinaryPath
+    // Which QEMU driver this node runs (issue #902). Defaults to the process
+    // driver, so a node moves onto libvirt only when its config says so.
+    let finalQemuDriver = config.qemuDriver ?? .process
 
     // Resolve firmware configuration. The monolithic `firmware_path_*` keys
     // stay architecture-specific (they name one host's image); the split
@@ -211,6 +214,7 @@ private func launchAgent(options: AgentOptions) async throws {
             "sandboxImageCacheMaxSize": .string(
                 config.sandboxImageCacheMaxSizeGB.map { "\($0)GB" } ?? "unbounded"),
             "qemuBinaryPath": .string(finalQemuBinaryPath),
+            "qemuDriver": .string(finalQemuDriver.rawValue),
             "firmwarePath": .string(finalMonolithicFirmwarePath ?? "(platform default)"),
             "firmwareCodePath": .string(config.firmwareCodePath ?? "(platform default)"),
             "swtpmBinaryPath": .string(finalSwtpmBinaryPath ?? "(not installed)"),
@@ -269,6 +273,7 @@ private func launchAgent(options: AgentOptions) async throws {
         vmStoragePath: finalVMStoragePath,
         volumeStoragePath: finalVolumeStoragePath,
         qemuBinaryPath: finalQemuBinaryPath,
+        qemuDriver: finalQemuDriver,
         firmware: finalFirmware,
         swtpmBinaryPath: finalSwtpmBinaryPath,
         firecrackerBinaryPath: finalFirecrackerBinaryPath,

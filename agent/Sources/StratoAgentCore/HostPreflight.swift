@@ -106,9 +106,13 @@ public enum HostPreflight {
         public var libvirt: LibvirtProbe.Status?
         /// The oldest libvirt this agent will drive.
         public var minimumLibvirtVersion: LibvirtProbe.Version
-        /// Whether this agent actually manages VMs through libvirt, which is
-        /// what makes the libvirt checks gating rather than advisory. See
-        /// `LibvirtProbe.driverBuilt`.
+        /// Whether this *node* manages VMs through libvirt, which is what makes
+        /// the libvirt checks gating rather than advisory.
+        ///
+        /// Per node, not per build: both QEMU drivers ship, and a node still on
+        /// `qemu_driver = "process"` runs perfectly well with no libvirt at all.
+        /// The agent passes its resolved driver; the default is the harmless
+        /// one, so a caller that forgets can only under-report.
         public var libvirtRequired: Bool
         /// Whether the agent runs with OVN networking (enables the OVN/OVS
         /// socket and tool checks).
@@ -139,7 +143,7 @@ public enum HostPreflight {
             qemuFirmwareDescriptorPath: String? = nil,
             libvirt: LibvirtProbe.Status? = nil,
             minimumLibvirtVersion: LibvirtProbe.Version = LibvirtProbe.minimumVersion,
-            libvirtRequired: Bool = LibvirtProbe.driverBuilt,
+            libvirtRequired: Bool = false,
             ovnMode: Bool = false,
             ovnNBConnection: String = "unix:/var/run/ovn/ovnnb_db.sock",
             ovnNBTLSFilePaths: [String] = [],
@@ -172,6 +176,15 @@ public enum HostPreflight {
 
     public struct Report: Sendable {
         public let checks: [Check]
+        /// Whether this node drives VMs through libvirt, carried through from
+        /// `Inputs` so `gate(_:)` can tell a libvirt failure that takes the
+        /// host out of service from one that is merely a note.
+        public let libvirtRequired: Bool
+
+        public init(checks: [Check], libvirtRequired: Bool = false) {
+            self.checks = checks
+            self.libvirtRequired = libvirtRequired
+        }
 
         public var failures: [Check] {
             checks.filter { !$0.passed }
@@ -248,6 +261,16 @@ public enum HostPreflight {
                 var reason: String?
                 if !storageReady {
                     reason = "host storage not ready: \(storageFailureDetail ?? "unknown storage failure")"
+                } else if hypervisor.type == .qemu, libvirtRequired, !libvirtReady {
+                    // This node realizes QEMU placements through libvirtd
+                    // (`qemu_driver = "libvirt"`), so a daemon it cannot reach —
+                    // or one too old to serve the operations it will be asked
+                    // for — makes it ineligible for them. Gated only where the
+                    // driver is actually in use: a node on the process driver
+                    // needs no libvirt at all, and demoting it over an
+                    // informational check would take a healthy host out of
+                    // service.
+                    reason = "libvirt not usable: \(libvirtFailureDetail ?? "unknown libvirt failure")"
                 } else if hypervisor.type == .firecracker, let check = check(.firecrackerSocketDirectory),
                     !check.passed
                 {
@@ -354,7 +377,7 @@ public enum HostPreflight {
 
         checks.append(checkFreeSpace(inputs.vmStoragePath, minimum: inputs.minimumFreeDiskBytes))
 
-        return Report(checks: checks)
+        return Report(checks: checks, libvirtRequired: inputs.libvirtRequired)
     }
 
     // MARK: - Individual checks
@@ -452,15 +475,14 @@ public enum HostPreflight {
 
     /// libvirtd reachability and its version floor.
     ///
-    /// `severity` follows `LibvirtProbe.driverBuilt`: gating once the agent
+    /// `severity` follows the node's `qemu_driver`: gating where the agent
     /// really manages VMs through libvirt — a host that cannot reach
     /// `qemu:///system`, or runs a libvirt too old to snapshot UEFI guests,
     /// cannot then serve the VM operations it is asked for — and merely
-    /// informational until then, so hosts running today's direct-QEMU driver
-    /// hear about the coming requirement without being declared broken.
-    /// `gate(_:)` starts consuming `libvirtReady` with the driver (issue #902).
+    /// informational on a node still driving QEMU directly, which runs fine
+    /// without libvirt and must not be told it is broken.
     ///
-    /// The wording follows the same split: while the dependency is unused, each
+    /// The wording follows the same split: where the dependency is unused, each
     /// message says so rather than reading as a live fault.
     static func checkLibvirt(
         _ status: LibvirtProbe.Status, minimumVersion: LibvirtProbe.Version, severity: Severity
@@ -469,7 +491,9 @@ public enum HostPreflight {
         // identical either way, only its urgency changes.
         let lede =
             severity == .gating
-            ? "" : "libvirt will be required for VM management (issue #902), and is not usable here yet: "
+            ? ""
+            : "libvirt is required by `qemu_driver = \"libvirt\"` (issue #902), which this node does not use, "
+                + "and is not usable here: "
 
         switch status {
         case .clientMissing:

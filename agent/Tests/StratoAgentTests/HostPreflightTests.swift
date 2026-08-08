@@ -443,7 +443,7 @@ struct HostPreflightTests {
         }
     }
 
-    @Test("libvirt failures are informational until the agent actually drives libvirt")
+    @Test("libvirt failures are informational on a node that does not drive libvirt")
     func libvirtSeverityFollowsDriver() throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
@@ -452,13 +452,12 @@ struct HostPreflightTests {
         inputs.libvirt = .clientMissing
         inputs.libvirtRequired = false
         let notYet = HostPreflight.run(inputs)
-        // Informational, not advisory: every node in every fleet lacks libvirt
-        // today, and warning about a dependency this build does not use would
-        // have each one reporting a non-problem on every reconnect.
+        // Informational, not advisory: a node on `qemu_driver = "process"` runs
+        // perfectly well with no libvirt, and warning about a dependency it does
+        // not use would have it reporting a non-problem on every reconnect.
         #expect(notYet.check(.libvirtConnection)?.severity == .informational)
-        #expect(notYet.check(.libvirtConnection)?.detail?.contains("will be required") == true)
-        // Nothing about libvirt may gate placement while the QEMU driver still
-        // manages VMs directly.
+        #expect(notYet.check(.libvirtConnection)?.detail?.contains("this node does not use") == true)
+        // Nothing about libvirt may gate placement on such a node.
         let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
         #expect(notYet.gate([qemu]) == [qemu])
 
@@ -466,7 +465,34 @@ struct HostPreflightTests {
         let required = HostPreflight.run(inputs)
         #expect(required.check(.libvirtConnection)?.severity == .gating)
         // Once it is a real requirement the message drops the hedge.
-        #expect(required.check(.libvirtConnection)?.detail?.contains("will be required") == false)
+        #expect(required.check(.libvirtConnection)?.detail?.contains("this node does not use") == false)
+    }
+
+    /// A node whose QEMU placements are realized through libvirtd cannot serve
+    /// them with the daemon unreachable, so it must stop attracting them —
+    /// rather than accepting a VM and failing every operation on it.
+    @Test("An unusable libvirt takes a libvirt-driver node out of service for QEMU")
+    func unusableLibvirtGatesQEMUOnLibvirtNodes() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+        let firecracker = HypervisorSupport(
+            type: .firecracker, available: true, accelerated: true, capabilities: .firecracker)
+
+        var inputs = passingInputs(root: root)
+        inputs.libvirtRequired = true
+        inputs.libvirt = .reachable(LibvirtProbe.Version(major: 10, minor: 0, patch: 0))
+        let gated = HostPreflight.run(inputs).gate([qemu, firecracker])
+
+        #expect(gated[0].available == false)
+        #expect(gated[0].unavailabilityReason?.contains("libvirt not usable") == true)
+        // Only the QEMU driver goes through libvirtd; Firecracker is untouched.
+        #expect(gated[1] == firecracker)
+
+        // And a libvirt that is fine leaves both alone.
+        inputs.libvirt = .reachable(LibvirtProbe.Version(major: 12, minor: 0, patch: 0))
+        #expect(HostPreflight.run(inputs).gate([qemu, firecracker]) == [qemu, firecracker])
     }
 
     @Test("A daemon that answered unparseably is not told to start itself")

@@ -139,6 +139,8 @@ host cleanly rejects placements it can't serve.
   Materializes boot disks through the storage backend, wires serial/console
   sockets, and re-adopts orphaned VMs over a deterministic QMP socket path.
   Optionally gives the guest a **graphics console** (see below).
+- **`LibvirtService`** (`.qemu`, Linux only): the same backend driven through
+  **libvirtd** instead (see below).
 - **`FirecrackerService`** (`.firecracker`, Linux only): translates the
   neutral spec into Firecracker API calls; requires direct-kernel boot and
   `.tap` network attachments. Shares one `FirecrackerClient` with the
@@ -148,13 +150,71 @@ host cleanly rejects placements it can't serve.
   and in simulation mode (one mock per hypervisor type). It tracks specs
   and status so reservations and reconciliation behave realistically.
 
-A migration of the QEMU driver onto **libvirt** is in flight but has not cut
-over: `StratoAgentCore` already holds the domain-document layer —
-`DomainXMLBuilder`/`DomainXMLNode` (spec → domain XML), `ResolvedDisk`, and
-`VMDirectoryLayout` (STR-131) — and `deploy/agent/install.sh` provisions and
-preflights libvirtd (STR-132), including the `qemu.conf` ownership settings
-the agent's own-every-path invariant needs. Today `QEMUService` still drives
-VMs through SwiftQEMU; nothing below reflects libvirt yet.
+### The libvirt QEMU driver
+
+Both QEMU drivers ship, and each node picks one with the agent-local
+`qemu_driver` key (`"process"`, the default, or `"libvirt"`). **Nothing about
+that choice reaches the control plane**: `.qemu` on the wire keeps meaning
+"QEMU node", capability gating, the scheduler and the wire protocol are
+untouched, and the agent alone decides how a QEMU placement is realized — which
+is what lets a fleet roll over one node at a time. The key is ignored on macOS,
+which has no libvirt.
+
+`LibvirtService` (STR-133) drives domains over `qemu:///system` through
+swift-libvirt, which speaks libvirt's RPC wire protocol over NIO rather than
+linking libvirt's C library. It builds on the pieces that landed ahead of it:
+`DomainXMLBuilder`/`DomainXMLNode` (spec → domain XML), `ResolvedDisk` and
+`VMDirectoryLayout` (STR-131), and the libvirtd provisioning and preflight in
+`deploy/agent/install.sh` (STR-132) — including the `qemu.conf` ownership
+settings the agent's own-every-path invariant needs. On a node that selects the
+driver those preflight checks become **gating**: an unreachable libvirtd, or one
+below the 11.5 floor, demotes `.qemu` to unavailable so the node stops
+attracting placements it cannot serve.
+
+It is much smaller than `QEMUService`, and the reason is that libvirtd is a
+durable store rather than a process the agent has to remember:
+
+- **Create is `domainDefineXML`**, which leaves the domain `SHUTOFF` — the
+  `ReconcileStep.create` contract ("exists, not running") with none of the `-S`
+  plus `prelaunch`-versus-`paused` disambiguation `awaitingFirstStart` exists
+  for. Idempotency comes free: define is keyed by name and UUID, so a replayed
+  create updates rather than spawning a second machine.
+- **Re-adoption is a query**, not a mechanism: `connectListAllDomains` plus a
+  state read. The deterministic second QMP socket and `AdoptedQEMUVM` exist only
+  because `QEMUManager` cannot attach to a process it did not spawn.
+- **A guest that powers itself off** leaves the domain `SHUTOFF` and restarts
+  with `domainCreate`; there is no respawn-from-stored-configuration path.
+- **libvirt owns swtpm and the UEFI varstore**, so `SwtpmSupervisor` and the
+  copy-if-absent NVRAM templating have no counterpart. The undefine on delete
+  carries the `TPM` flag, because swtpm's per-domain state lives under
+  `/var/lib/libvirt/swtpm/` rather than in the VM's own directory.
+- **Consoles are unchanged.** The domain document binds the serial,
+  virtio-console, guest-agent and VNC sockets at the same paths under the VM's
+  directory, so `ConsoleSocketManager` and the noVNC relay need no libvirt
+  knowledge. So does guest observation: the guest-agent channel is a QEMU device
+  either way, which is why `guestInfo`/`memoryStats` are `HypervisorService`
+  requirements rather than one driver's methods.
+
+Not yet implemented, and refused rather than silently skipped: disk hot-plug,
+online resize and VM checkpoints (STR-134), and lifecycle events in place of
+status polling (STR-135). Two of those refusals are load-bearing:
+
+- **A volume can only reach a VM at create time.** The domain document is
+  written once by `createVM`, so an attach against an existing VM is refused
+  whichever state it is in. `hasLiveSession` returns true for *any* domain here
+  for that reason: the false branch means "recording the attachment realizes
+  it", which is true of the QEMU driver's respawn-from-configuration path and
+  false of this one, and taking it would converge a volume the guest never sees.
+- **`snapshot:vm_checkpoint` is not advertised** by a libvirt node, so the
+  control plane never admits a capture. Since STR-150 an artifact inherits its
+  parent VM's host and cannot be re-placed, so admitting one would degrade it
+  permanently. Volume snapshots are unaffected — `qemu-img` in the storage
+  backend realizes those, not the hypervisor driver.
+
+A libvirt node is therefore not yet a full-capability QEMU node even though it
+advertises `qemu`: that is the cost of keeping the driver choice invisible to
+the control plane, which is otherwise what makes rolling a fleet over one node
+at a time possible.
 
 ### Diagnosing a failed QEMU spawn
 

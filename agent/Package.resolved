@@ -1,5 +1,5 @@
 {
-  "originHash" : "53ff6a445a1f9757223e8062b3e2c4fba4e84ecd7f3f3003f3d520684096cc1a",
+  "originHash" : "92dfbd9df661f061f839fb72b24dbf4f1cca673ce1fb5f38fc3d01cd54d189e3",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -134,6 +134,15 @@
       "state" : {
         "revision" : "45eb0224913ea070ec4fba17291b9e7ecf4749ca",
         "version" : "1.5.1"
+      }
+    },
+    {
+      "identity" : "swift-libvirt",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/samcat116/swift-libvirt.git",
+      "state" : {
+        "revision" : "0e2f31fc429d01eb5b0c62326d024b293796bc34",
+        "version" : "0.1.0"
       }
     },
     {

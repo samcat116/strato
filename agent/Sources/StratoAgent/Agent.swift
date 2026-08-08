@@ -78,6 +78,12 @@ actor Agent {
     // means one new registration here (plus the enum case and its data tables
     // in HypervisorTypes.swift), not new switch sites.
     private var hypervisorServices: [HypervisorType: any HypervisorService] = [:]
+    // Whether the `.qemu` driver actually registered can realize a VM
+    // checkpoint, which decides whether this host advertises
+    // `snapshot:vm_checkpoint` (issue #902). Read from what was registered
+    // rather than from `qemuDriver`, so simulation mode — which registers mocks
+    // whatever the config says — is described by what it is running.
+    private var qemuDriverCheckpoints = true
     private var networkService: (any NetworkServiceProtocol)?
     private var imageCacheService: ImageCacheService?
     private var storageBackend: (any StorageBackend)?
@@ -275,6 +281,12 @@ actor Agent {
     // the host preflight's writability probe.
     private let volumeStoragePath: String
     private let qemuBinaryPath: String
+    // How this node realizes a QEMU placement (issue #902): by spawning QEMU
+    // itself, or through libvirtd. Not a `HypervisorType` — `.qemu` on the wire
+    // means "QEMU node" either way — so the choice is the agent's alone and a
+    // fleet rolls over one node at a time. Ignored on macOS, which has no
+    // libvirt.
+    private let qemuDriver: QEMUDriver
     // Operator-configured EDK2 firmware paths (issue #565): the split
     // CODE/VARS pairs and the legacy monolithic image.
     private let firmware: FirmwareOverrides
@@ -372,6 +384,7 @@ actor Agent {
         vmStoragePath: String,
         volumeStoragePath: String = FileSystemStorageBackend.defaultStoragePath,
         qemuBinaryPath: String,
+        qemuDriver: QEMUDriver = .process,
         firmware: FirmwareOverrides = FirmwareOverrides(),
         swtpmBinaryPath: String? = nil,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
@@ -408,6 +421,7 @@ actor Agent {
         self.vmStoragePath = vmStoragePath
         self.volumeStoragePath = volumeStoragePath
         self.qemuBinaryPath = qemuBinaryPath
+        self.qemuDriver = qemuDriver
         self.firmware = firmware
         self.swtpmBinaryPath = swtpmBinaryPath
         self.firecrackerBinaryPath = firecrackerBinaryPath
@@ -601,16 +615,42 @@ actor Agent {
                 logInterval: simulation?.resolvedSandboxLogInterval
             )
         } else {
-            logger.info("Initializing QEMU service")
-            #if canImport(SwiftQEMU)
-            hypervisorServices[.qemu] = QEMUService(
-                logger: logger, storage: storageBackend,
-                vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmware: firmware,
-                swtpmBinaryPath: swtpmBinaryPath,
-                hardwareAccelerationEnabled: hardwareAccelerationEnabled)
+            // Both drivers answer to `.qemu`; which one is registered is this
+            // node's own decision (issue #902) and is invisible to the control
+            // plane. The key is Linux-only because libvirt is: on macOS the
+            // existing registration stands.
+            #if os(Linux)
+            let useLibvirt = qemuDriver == .libvirt
             #else
-            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+            let useLibvirt = false
             #endif
+
+            if useLibvirt {
+                // No `checkpointVM` until STR-134, and the control plane must
+                // not admit a capture this host can only ever fail.
+                qemuDriverCheckpoints = false
+                logger.info(
+                    "Initializing libvirt hypervisor service", metadata: ["uri": .string(LibvirtProbe.systemURI)])
+                hypervisorServices[.qemu] = LibvirtService(
+                    logger: logger, storage: storageBackend,
+                    vmStoragePath: vmStoragePath, firmware: firmware,
+                    // libvirt starts and supervises swtpm itself; the agent only
+                    // needs to know whether this host has it at all, which is
+                    // the same fact that gates the TPM capability.
+                    hasSwtpm: swtpmBinaryPath != nil,
+                    hardwareAccelerationEnabled: hardwareAccelerationEnabled)
+            } else {
+                logger.info("Initializing QEMU service")
+                #if canImport(SwiftQEMU)
+                hypervisorServices[.qemu] = QEMUService(
+                    logger: logger, storage: storageBackend,
+                    vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmware: firmware,
+                    swtpmBinaryPath: swtpmBinaryPath,
+                    hardwareAccelerationEnabled: hardwareAccelerationEnabled)
+                #else
+                hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
+                #endif
+            }
 
             #if os(Linux)
             logger.info("Initializing Firecracker service (Linux only)")
@@ -1489,8 +1529,20 @@ actor Agent {
         // the sandbox runtime probe, which is not resolved until after this
         // returns — it is advertised beside `sandboxCapable` in
         // `registerWithControlPlane` instead.
+        //
+        // "Has QEMU" stopped implying "can checkpoint" when the libvirt driver
+        // arrived (issue #902): it answers to `.qemu` and is perfectly usable,
+        // but `checkpointVM` is STR-134 and takes the protocol's `notSupported`
+        // default until then. Since STR-150 an artifact inherits its parent
+        // VM's host and there is no re-placement and no imperative fallback, so
+        // a capture admitted here degrades permanently on a host it cannot be
+        // moved off — exactly what this gate exists to prevent. The volume
+        // family is unaffected: `qemu-img` in the storage backend realizes it,
+        // not the hypervisor driver.
         if hypervisors.contains(where: { $0.type == .qemu && $0.available }) {
-            capabilities.append(SnapshotArtifactKind.vmCheckpoint.agentCapability)
+            if qemuDriverCheckpoints {
+                capabilities.append(SnapshotArtifactKind.vmCheckpoint.agentCapability)
+            }
             capabilities.append(SnapshotArtifactKind.volumeSnapshot.agentCapability)
         }
 
@@ -1629,6 +1681,11 @@ actor Agent {
                 swtpmBinaryPath: swtpmBinaryPath,
                 qemuFirmwareDescriptorPath: qemuFirmwareDescriptorPath,
                 libvirt: libvirt,
+                // Gating only where the node actually drives VMs through
+                // libvirtd. A node still on the process driver runs perfectly
+                // well without libvirt, and telling it otherwise on every
+                // reconnect would be a fleet-wide non-problem.
+                libvirtRequired: qemuDriver == .libvirt,
                 ovnMode: effectiveNetworkMode == .ovn,
                 ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
                 ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? []
@@ -1905,11 +1962,17 @@ actor Agent {
     }
 
     /// Refreshes the guest-info and balloon memory-stats caches for running
-    /// QEMU VMs, but only once the slow-poll interval has elapsed. Probes run
-    /// concurrently (each bounded inside `QEMUService`), and the whole pass is
+    /// VMs, but only once the slow-poll interval has elapsed. Probes run
+    /// concurrently (each bounded inside its driver), and the whole pass is
     /// bounded here so a fleet of unresponsive guests can't stall the
     /// heartbeat. The caches are replaced wholesale, so VMs that stopped
     /// running or were deleted drop out.
+    ///
+    /// Routed through the driver registry rather than a downcast to a concrete
+    /// service: the guest-agent channel belongs to the guest, not to whoever
+    /// launched it, so which backend a VM runs under is not this loop's
+    /// business — only whether it has a guest channel at all, which
+    /// `observesGuests` answers without a round trip.
     private func refreshGuestInfoCacheIfDue() async {
         let now = ContinuousClock.now
         if let last = lastGuestInfoRefresh, now - last < Self.guestInfoRefreshInterval {
@@ -1917,19 +1980,32 @@ actor Agent {
         }
         lastGuestInfoRefresh = now
 
-        guard let qemu = hypervisorServices[.qemu] as? QEMUService else { return }
-        let qemuVMIds = managedVMs.compactMap { $0.value.hypervisorType == .qemu ? $0.key : nil }
-        guard !qemuVMIds.isEmpty else {
+        var byService: [HypervisorType: [String]] = [:]
+        for (vmId, entry) in managedVMs
+        where hypervisorServices[entry.hypervisorType]?.observesGuests == true {
+            byService[entry.hypervisorType, default: []].append(vmId)
+        }
+        guard !byService.isEmpty else {
             guestInfoCache = [:]
             memoryStatsCache = [:]
             return
+        }
+        let work = byService.compactMap { type, vmIds in
+            hypervisorServices[type].map { (service: $0, vmIds: vmIds) }
         }
 
         do {
             let observations = try await StageBudget.run(
                 seconds: 15, stage: "guest-info-refresh", onTimeout: .abandon
             ) {
-                await Self.probeGuestObservations(vmIds: qemuVMIds, using: qemu)
+                var guestInfo: [String: GuestInfo] = [:]
+                var memoryStats: [String: VMMemoryStats] = [:]
+                for (service, vmIds) in work {
+                    let observed = await Self.probeGuestObservations(vmIds: vmIds, using: service)
+                    guestInfo.merge(observed.guestInfo) { _, new in new }
+                    memoryStats.merge(observed.memoryStats) { _, new in new }
+                }
+                return (guestInfo: guestInfo, memoryStats: memoryStats)
             }
             guestInfoCache = observations.guestInfo
             memoryStatsCache = observations.memoryStats
@@ -1941,18 +2017,18 @@ actor Agent {
     }
 
     /// Concurrently probes each VM's guest agent and balloon device (each
-    /// probe bounded inside `QEMUService`), returning only the VMs that
-    /// answered. A VM must be observed running before we probe — qga on a
-    /// stopped VM just times out, and a stopped VM has no stats socket.
+    /// probe bounded inside its driver), returning only the VMs that
+    /// answered. A VM must be observed running before we probe — a guest agent
+    /// on a stopped VM just times out, and a stopped VM has no balloon.
     private static func probeGuestObservations(
-        vmIds: [String], using qemu: QEMUService
+        vmIds: [String], using service: any HypervisorService
     ) async -> (guestInfo: [String: GuestInfo], memoryStats: [String: VMMemoryStats]) {
         await withTaskGroup(of: (String, GuestInfo?, VMMemoryStats?).self) { group in
             for vmId in vmIds {
                 group.addTask {
-                    let status = (try? await qemu.getVMStatus(vmId: vmId)) ?? .unknown
+                    let status = (try? await service.getVMStatus(vmId: vmId)) ?? .unknown
                     guard status == .running else { return (vmId, nil, nil) }
-                    return (vmId, await qemu.guestInfo(vmId: vmId), await qemu.memoryStats(vmId: vmId))
+                    return (vmId, await service.guestInfo(vmId: vmId), await service.memoryStats(vmId: vmId))
                 }
             }
             var guestInfo: [String: GuestInfo] = [:]
