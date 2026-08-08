@@ -492,16 +492,23 @@ per domain. Delete them at your convenience.
 
 Every QEMU placement is a libvirt domain. Disk hot-plug, online resize,
 checkpoints, guest IP reporting and balloon statistics all work. Two behaviours
-are worth knowing, both following from libvirt's domain document being written
-once when the VM is created and never rewritten:
+are worth knowing, both following from the domain's definition — rather than the
+VM's spec — being what libvirt starts when the VM boots:
 
-- **A VM's hot-plug slots and memory headroom are fixed at create time.** Each
-  domain reserves four empty PCIe root ports for later disk hot-plug, and
-  whatever virtio-mem headroom the VM's size range asked for. Attaching a fifth
-  volume, or growing a VM past the maximum memory it was created with, fails
-  with libvirt's own error; recreating the VM is the remedy, and
-  [issue #1026](https://github.com/samcat116/strato/issues/1026) tracks removing
-  the limit rather than documenting it.
+- **A VM's hot-plug slots and size ceilings are set at create time, and a
+  restart is what widens them.** Each domain reserves four empty PCIe root ports
+  for later disk hot-plug, plus whatever virtio-mem headroom and vCPU maximum the
+  VM's size range asked for. Attaching a fifth volume to a *running* VM fails
+  with libvirt's "No more available PCI slots", and growing one past the maximum
+  memory or vCPU count it was created with cannot take effect while it runs.
+  **Stop and start the VM**: the agent rewrites the domain definition on the way
+  up, giving it four fresh spare ports and the headroom its current size range
+  asks for. Attaching a volume while the VM is stopped works too, and always
+  did.
+
+  One case a restart cannot fix: a VM with so many disks and NICs of its own
+  that the root complex is full at create time gets fewer than four spares —
+  possibly none — for good. The agent logs that when it creates such a VM.
 - **A resize the guest cannot take online lands at its next boot.** vCPU
   removal is never attempted on a live guest, and a VM with no memory headroom
   cannot be resized in place; both are written into the domain definition

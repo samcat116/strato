@@ -172,16 +172,17 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// libvirt adds a `pcie-root-port` per PCI device the document declares, so a
 /// domain built from only the devices a VM needs has **no free slot** and
 /// `virDomainAttachDeviceFlags` fails a disk hot-plug with "No more available
-/// PCI slots". A domain document is written once by `createVM` and never
-/// rewritten, so a VM that was defined without spares can never gain them — the
-/// ports have to be there from the start or hot-plug is impossible for that VM's
-/// whole life. `spareHotplugPorts` is therefore a hard ceiling on how many
-/// volumes a VM can be given **while it is running** (STR-134); issue #1026
-/// tracks removing that ceiling rather than only documenting it. An attach to a
-/// *stopped* VM is not bounded by it and never was: that one carries
-/// `AFFECT_CONFIG` alone, and libvirt grows the bus in the persistent definition
-/// itself, adding a port for the disk (measured on 12.0.0, on a domain whose
-/// every port was occupied).
+/// PCI slots". The ports have to be in the document before the domain is
+/// defined, so `spareHotplugPorts` is a ceiling on how many volumes a VM can be
+/// given **while it is running** (STR-134).
+///
+/// It is no longer a ceiling for the VM's whole life. `DomainRedefinition` tops
+/// the spares back up on a stopped domain, and `LibvirtService.redefineVM` runs
+/// it before every boot, so a VM that has used all four gets four more by being
+/// stopped and started (STR-187). An attach to a *stopped* VM was never bounded
+/// by this at all: that one carries `AFFECT_CONFIG` alone, and libvirt grows the
+/// bus in the persistent definition itself, adding a port for the disk (measured
+/// on 12.0.0, on a domain whose every port was occupied).
 ///
 /// **Declaring the ports is not enough; they have to be numbered.** An
 /// un-indexed `pcie-root-port` is numbered by libvirt out of the very range it
@@ -892,7 +893,10 @@ public enum DomainXMLBuilder {
     /// Bytes as whole KiB, rounding up. libvirt's memory elements take KiB by
     /// default; the unit is stated anyway so the document does not depend on
     /// that default.
-    private static func kib(_ bytes: Int64) -> String {
+    ///
+    /// Shared with `DomainRedefinition`, which rewrites the same elements in a
+    /// domain that already exists and has to spell their values identically.
+    static func kib(_ bytes: Int64) -> String {
         "\((bytes + 1023) / 1024)"
     }
 }

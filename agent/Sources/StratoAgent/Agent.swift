@@ -3793,7 +3793,7 @@ extension Agent: ReconcileActuator {
         case .create:
             try await reconcileCreate(item)
         case .boot:
-            try await reconcileService(for: item.vmId).bootVM(vmId: item.vmId)
+            try await reconcileBoot(item)
         case .pause:
             try await reconcileService(for: item.vmId).pauseVM(vmId: item.vmId)
         case .resume:
@@ -3817,6 +3817,43 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.invalidConfiguration(
                 "step \(step) is not applicable to a \(item.kind.rawValue) workload")
         }
+    }
+
+    /// Starts a VM, first giving its backend the chance to widen whatever stored
+    /// configuration the boot is about to read (STR-187).
+    ///
+    /// This is where "a VM's hot-plug slots and memory headroom are fixed at
+    /// create time" stops being true of the libvirt driver. A boot is the one
+    /// moment a stopped VM's configuration can be rewritten safely — nothing is
+    /// holding a port, a memory region or a vCPU — and it is also the moment the
+    /// remedy those ceilings name ("stop and start the VM") has to actually take
+    /// effect for the advice to be worth giving.
+    ///
+    /// Two things keep this from being a risk to a boot that would otherwise
+    /// have worked. A VM created in this same item is skipped outright: its
+    /// configuration was built from the very spec below, moments ago, so the
+    /// widening could only find nothing while still costing a round trip on
+    /// every create. And a widening that *fails* is logged rather than thrown —
+    /// the backend contract says best effort, because a VM that comes up with
+    /// the ceiling it already had is the status quo, while a VM that does not
+    /// come up is a regression.
+    private func reconcileBoot(_ item: ReconcileWorkItem) async throws {
+        let service = try reconcileService(for: item.vmId)
+        if !item.steps.contains(.create), let spec = item.desired?.spec {
+            do {
+                try await service.redefineVM(vmId: item.vmId, spec: spec)
+            } catch {
+                logger.warning(
+                    """
+                    Could not widen this VM's stored configuration before booting it; it starts with the \
+                    hot-plug slots and size ceilings it already had
+                    """,
+                    metadata: [
+                        "vmId": .string(item.vmId), "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+        try await service.bootVM(vmId: item.vmId)
     }
 
     /// Load a checkpoint back into an existing VM (STR-151).
