@@ -19,6 +19,12 @@ extension Request {
     /// 3. Resolve the environment (`requestedEnvironment ?? project.defaultEnvironment`)
     ///    and validate it exists on the project.
     ///
+    /// Distinct from `authorizedProjectForCreate(...)`, which is the spine
+    /// behind the project-scoped infrastructure creates (volume, network,
+    /// security group, floating IP, DNS zone): those have no environment, each
+    /// carries its own create action, and their default-project fallback is the
+    /// organization's first project rather than the one named "Default Project".
+    ///
     /// - Parameter resourceKind: Plural noun for the resource being created
     ///   (e.g. `"VMs"`, `"sandboxes"`), used only in the forbidden-permission message.
     func resolveProjectForCreate(
@@ -85,5 +91,104 @@ extension Request {
         }
 
         return (project, environment)
+    }
+
+    /// The project a project-scoped create lands in — resolved, authorized, and
+    /// confirmed to exist (issue #1049).
+    ///
+    /// Five endpoints ask the same question: take the request's `projectId`,
+    /// else the first project in the caller's current organization, else refuse.
+    /// Four of them — volume, network, security-group and floating-IP create —
+    /// carried the same seventeen lines inline while DNS zone create had already
+    /// extracted a private copy of them, and what the copies had drifted over is
+    /// whether the resolved project must exist: DNS zone, security group and
+    /// floating IP confirmed it, network only when the request also pinned a
+    /// site, and `createVolume` never — it went from the permission check
+    /// straight to the insert and left a bad id to the foreign key. Route new
+    /// project-scoped creates through here rather than writing a sixth copy.
+    ///
+    /// **It asserts the project exists**, which is the per-controller question
+    /// this settles: no create is left handing an unbacked `project_id` to an
+    /// insert for the foreign key to reject. The three steps run in this order,
+    /// and the order is the load-bearing part:
+    ///
+    /// 1. Resolve the id — no lookup, no decision.
+    /// 2. Authorize `action` on it.
+    /// 3. *Then* confirm the row exists.
+    ///
+    /// Confirming existence first would make the endpoint an oracle: "Project
+    /// {id} does not exist" told apart from a `403` reveals that an opaque UUID
+    /// names a real project in an organization the caller cannot see. Behind the
+    /// permission check that message only ever reaches a caller the evaluator
+    /// already allowed to create here — the same ordering rule
+    /// `ProjectContainment` documents for containment refusals.
+    ///
+    /// Being behind the permission check is also why the assertion is a
+    /// backstop and not the refusal a caller meets. An id with no row resolves
+    /// to a chain that never reaches an organization, and a truncated chain is
+    /// denied outright, before evaluation, by the rule
+    /// `docs/architecture/iam.md` states — system admins included, since their
+    /// reach is the tier-1 policy rather than a bypass, and a role binding
+    /// pinned directly at the missing id does not rescue it either.
+    /// `ProjectResolutionTests` pins both, at all five endpoints: what a caller
+    /// inventing a UUID actually gets is `403`. The `400` is kept for the case
+    /// the evaluator stops covering it, because the failure it stands in front
+    /// of is a constraint violation surfacing as a `500` mid-create.
+    ///
+    /// **The fallback is still unordered.** `.first()` with no sort takes
+    /// whatever row Postgres hands back, so across an organization with more
+    /// than one project "the default project" is not a stable choice and can
+    /// differ between two calls by the same user. Settling that — an explicit
+    /// default-project field, oldest-created, or refusing when ambiguous — is
+    /// deliberately left open; what changed is that it is now one query to
+    /// settle instead of five.
+    ///
+    /// - Parameters:
+    ///   - requestedProjectId: The project named by the request body, if any.
+    ///   - action: The create permission to check on the resolved project
+    ///     (e.g. `"create_volume"`).
+    ///   - resourceKind: Plural noun for the resource being created
+    ///     (e.g. `"volumes"`), used only in the forbidden-permission message.
+    ///   - verb: The verb that message reads with, for the endpoints that don't
+    ///     call it creating (floating IPs are *allocated*).
+    func authorizedProjectForCreate(
+        requested requestedProjectId: UUID?,
+        user: User,
+        action: String,
+        resourceKind: String,
+        verb: String = "create"
+    ) async throws -> Project {
+        // Resolved by fallback, so it exists by construction and needs no
+        // second lookup below.
+        var fallbackProject: Project?
+
+        let projectId: UUID
+        if let requestedProjectId {
+            projectId = requestedProjectId
+        } else if let currentOrgId = user.currentOrganizationId {
+            guard
+                let defaultProject = try await Project.query(on: db)
+                    .filter(\.$organization.$id == currentOrgId)
+                    .first()
+            else {
+                throw Abort(.badRequest, reason: "No project specified and no default project found")
+            }
+            fallbackProject = defaultProject
+            projectId = try defaultProject.requireID()
+        } else {
+            throw Abort(.badRequest, reason: "No project specified and user has no current organization")
+        }
+
+        let allowed = try await can(action, on: "project", id: projectId.uuidString)
+        guard allowed else {
+            throw Abort(
+                .forbidden, reason: "You don't have permission to \(verb) \(resourceKind) in this project")
+        }
+
+        if let fallbackProject { return fallbackProject }
+        guard let project = try await Project.find(projectId, on: db) else {
+            throw Abort(.badRequest, reason: "Project \(projectId) does not exist")
+        }
+        return project
     }
 }

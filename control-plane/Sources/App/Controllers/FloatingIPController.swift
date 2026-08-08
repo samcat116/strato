@@ -345,28 +345,10 @@ struct FloatingIPController: RouteCollection {
         let user = try req.auth.require(User.self)
         let request = try req.content.decode(CreateFloatingIPRequest.self)
 
-        // Same project resolution as networks/volumes.
-        let projectId: UUID
-        if let requestProjectId = request.projectId {
-            projectId = requestProjectId
-        } else if let currentOrgId = user.currentOrganizationId {
-            guard
-                let defaultProject = try await Project.query(on: req.db)
-                    .filter(\.$organization.$id == currentOrgId)
-                    .first()
-            else {
-                throw Abort(.badRequest, reason: "No project specified and no default project found")
-            }
-            projectId = defaultProject.id!
-        } else {
-            throw Abort(.badRequest, reason: "No project specified and user has no current organization")
-        }
-
-        let hasPermission = try await req.can("create_floating_ip", on: "project", id: projectId.uuidString)
-        guard hasPermission else {
-            throw Abort(
-                .forbidden, reason: "You don't have permission to allocate floating IPs in this project")
-        }
+        let project = try await req.authorizedProjectForCreate(
+            requested: request.projectId, user: user,
+            action: "create_floating_ip", resourceKind: "floating IPs", verb: "allocate")
+        let projectId = try project.requireID()
 
         guard let pool = try await FloatingIPPool.find(request.poolId, on: req.db) else {
             throw Abort(.badRequest, reason: "Floating IP pool \(request.poolId) does not exist")
@@ -374,9 +356,6 @@ struct FloatingIPController: RouteCollection {
         // The pool serves its owning scope only, exactly as a site serves its
         // scope's projects: a sibling OU's project must not drain addresses
         // delegated elsewhere.
-        guard let project = try await Project.find(projectId, on: req.db) else {
-            throw Abort(.badRequest, reason: "Project \(projectId) does not exist")
-        }
         guard let poolScope = pool.organizationScope,
             try await Self.scopeContains(poolScope, project: project, on: req.db)
         else {
