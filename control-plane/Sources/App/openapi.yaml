@@ -449,9 +449,14 @@ paths:
     post:
       operationId: restartVM
       summary: Restart a virtual machine
+      description: >-
+        Restarts the guest in place. A reboot starts and ends `running`, so it
+        rides the desired-state sync as a monotonic nonce the agent applies once
+        rather than as a command — a dropped connection costs latency, not the
+        restart. Asynchronous — refetch the VM.
       tags: [Virtual Machines]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -600,10 +605,11 @@ paths:
       description: >-
         Loads the captured memory and device state back into the VM and resumes
         it. The checkpoint lives inside the VM's disks, so this only works on
-        the agent that took it. Asynchronous — poll the returned operation.
+        the agent that took it. Asynchronous — refetch the VM and read its
+        `conditions`.
       tags: [VM Snapshots]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -865,9 +871,12 @@ paths:
     post:
       operationId: restoreSandboxSnapshot
       summary: Restore a sandbox from a snapshot
+      description: >-
+        Rewinds the sandbox in place to the snapshot — same id, same addresses.
+        Asynchronous — refetch the sandbox and read its `conditions`.
       tags: [Sandbox Snapshots]
       responses:
-        "202": { $ref: "#/components/responses/AcceptedOperation" }
+        "202": { $ref: "#/components/responses/AcceptedSandboxMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -8517,12 +8526,10 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
-    AcceptedOperation:
-      description: The mutation was accepted; poll the returned operation to completion.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ResourceOperation"
+    # `AcceptedOperation` went with the last mutation that answered in it: VM
+    # restart and the two restores became generation-backed at ADR 0001 stage 9
+    # (STR-151). Every accepted mutation now returns its resource plus the
+    # generation to wait for; `GET /api/operations/{id}` survives as a façade.
     AcceptedVMMutation:
       description: >-
         The mutation was accepted. Refetch the VM until its `conditions` report

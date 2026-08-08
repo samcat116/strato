@@ -811,6 +811,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddConvergenceToSnapshots())
     app.migrations.add(AddSnapshotOperationKinds())
 
+    // ADR 0001 stage 9 (STR-151): reboot and restore become edge-nonces on the
+    // desired entry, retiring the last three durable-resource agent RPCs.
+    app.migrations.add(AddEdgeNoncesToWorkloads())
+
     // Per-VM instance identity (STR-55): every VM is a first-class IAM
     // principal, named by a `workload_registrations` row filed under
     // `spiffe://<trust-domain>/vm/<vm-id>`, linked by `vm_id` and

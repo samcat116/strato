@@ -117,14 +117,18 @@ struct MessageOrderingTests {
 
     // MARK: - serializationKey routing
 
+    // `vmLog` stands in for the default arm now that no control-plane → agent
+    // frame names a VM: reboot and restore became nonces on the desired entry
+    // at wire v34 (STR-151). The routing rule it exercises is unchanged, and it
+    // still guards every future frame that carries a `vmId`.
     @Test("VM id lane is case-insensitive to UUID formatting")
     func vmIdNormalizedAcrossCasing() {
         let vmId = UUID()
         let upper = MessageEnvelope.serializationKeys(
-            type: .vmReboot, payload: payload(["vmId": vmId.uuidString])
+            type: .vmLog, payload: payload(["vmId": vmId.uuidString])
         )
         let lower = MessageEnvelope.serializationKeys(
-            type: .vmReboot, payload: payload(["vmId": vmId.uuidString.lowercased()])
+            type: .vmLog, payload: payload(["vmId": vmId.uuidString.lowercased()])
         )
         #expect(upper == lower)
     }
@@ -132,10 +136,10 @@ struct MessageOrderingTests {
     @Test("Different VMs get different lanes")
     func differentVMsGetDifferentLanes() {
         let a = MessageEnvelope.serializationKeys(
-            type: .vmReboot, payload: payload(["vmId": UUID().uuidString])
+            type: .vmLog, payload: payload(["vmId": UUID().uuidString])
         )
         let b = MessageEnvelope.serializationKeys(
-            type: .vmReboot, payload: payload(["vmId": UUID().uuidString])
+            type: .vmLog, payload: payload(["vmId": UUID().uuidString])
         )
         #expect(a != b)
     }
@@ -207,8 +211,9 @@ struct MessageOrderingTests {
     @Test("Public serializationKeys works end-to-end on a real encoded envelope")
     func publicKeyOnEncodedEnvelope() throws {
         let vmId = UUID().uuidString
-        let envelope = try MessageEnvelope(message: VMOperationMessage(type: .vmReboot, vmId: vmId))
-        #expect(envelope.serializationKeys == [vmId])
+        let envelope = try MessageEnvelope(
+            message: ConsoleConnectMessage(vmId: vmId, sessionId: "sess-1"))
+        #expect(envelope.serializationKeys == ["console:\(vmId)"])
     }
 
     @Test("A multi-lane item serializes against work on each of its lanes")

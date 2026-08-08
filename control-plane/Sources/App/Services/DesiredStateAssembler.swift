@@ -134,6 +134,13 @@ struct DesiredStateAssembler {
             ? try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
             : [:]
 
+        // Edge nonces (ADR 0001 stage 9, STR-151). Omitted for pre-v34 agents
+        // following the v20 `securityGroups` pattern — they decode and discard
+        // them — which costs nothing here, because the admission gate has
+        // already refused the mutation that would set one.
+        let sendEdgeNonces =
+            agent.map { WireProtocol.supportsEdgeNonces($0.wireProtocolVersion ?? 0) } ?? true
+
         var entries: [DesiredVMState] = []
         for vm in vms {
             guard let vmId = vm.id else { continue }
@@ -192,6 +199,20 @@ struct DesiredStateAssembler {
                     instanceSPIFFEID: spiffeIDsByVM[vmId])
                 : nil
 
+            // A zero nonce is "never asked for", and sending it would be a
+            // slightly different claim than sending nothing — so both are
+            // omitted until the first request, which also keeps them out of the
+            // sync's digest for every VM that has never been restarted or
+            // restored (STR-151).
+            let rebootGeneration = sendEdgeNonces && vm.rebootGeneration > 0 ? vm.rebootGeneration : nil
+            var restore: DesiredRestore?
+            if sendEdgeNonces, vm.restoreGeneration > 0, let snapshotID = vm.restoreSnapshotID {
+                // A VM checkpoint lives inside the VM's own disks, so it never
+                // moves between hosts and there is nothing to stage: no
+                // artifacts, ever.
+                restore = DesiredRestore(generation: vm.restoreGeneration, snapshotId: snapshotID)
+            }
+
             entries.append(
                 DesiredVMState(
                     vmId: vmId,
@@ -200,7 +221,9 @@ struct DesiredStateAssembler {
                     desiredStatus: vm.desiredStatus,
                     generation: vm.generation,
                     imageInfo: imageInfo,
-                    metadata: metadata
+                    metadata: metadata,
+                    rebootGeneration: rebootGeneration,
+                    restore: restore
                 ))
         }
 
@@ -267,7 +290,14 @@ struct DesiredStateAssembler {
         }
 
         var sandboxEntries: [DesiredSandboxState] = []
-        let restoreSnapshotIDs = Set(sandboxes.compactMap(\.restoredFromSnapshotId))
+        // Both snapshot references a sandbox entry can carry, fetched together:
+        // the create-strategy `restoredFromSnapshotId` (a fork's lineage) and the
+        // edge-nonce `restoreSnapshotID` (a rewind of a sandbox that already
+        // exists, STR-151). Different fields with different meanings, but the
+        // same row and the same reason to read it — the exported artifacts'
+        // descriptors, resolved fresh here so nothing in the sync can go stale.
+        let restoreSnapshotIDs = Set(
+            sandboxes.compactMap(\.restoredFromSnapshotId) + sandboxes.compactMap(\.restoreSnapshotID))
         let restoreSnapshots: [UUID: SandboxSnapshot]
         if restoreSnapshotIDs.isEmpty {
             restoreSnapshots = [:]
@@ -330,6 +360,30 @@ struct DesiredStateAssembler {
                 from: interface,
                 network: interface.flatMap { networksByID[$0.logicalNetworkID] },
                 sendsMetadataPort: sendMetadataPort)
+            // The restore *edge* (STR-151), as distinct from the fork create
+            // strategy above. Its artifacts follow the same rule for the same
+            // reason: a sandbox that has moved off the agent that captured the
+            // snapshot restores from the exported copy, and the descriptors are
+            // minted here rather than stored, so a nonce that sits in the
+            // desired state for a week still carries usable locators.
+            var restore: DesiredRestore?
+            if sendEdgeNonces, sandbox.restoreGeneration > 0, let snapshotID = sandbox.restoreSnapshotID {
+                var artifacts: [SandboxSnapshotArtifactDescriptor]?
+                if let snapshot = restoreSnapshots[snapshotID], snapshot.agentId != agentId {
+                    artifacts = try? snapshot.exportedArtifactDescriptors()
+                    if artifacts == nil {
+                        app.logger.warning(
+                            "Sandbox restore targets a snapshot on another agent whose exported copy is unavailable",
+                            metadata: [
+                                "sandboxId": .string(sandboxId.uuidString),
+                                "snapshotId": .string(snapshotID.uuidString),
+                            ])
+                    }
+                }
+                restore = DesiredRestore(
+                    generation: sandbox.restoreGeneration, snapshotId: snapshotID, artifacts: artifacts)
+            }
+
             sandboxEntries.append(
                 DesiredSandboxState(
                     sandboxId: sandboxId,
@@ -337,7 +391,8 @@ struct DesiredStateAssembler {
                     desiredStatus: sandbox.desiredStatus,
                     generation: sandbox.generation,
                     registryCredential: registryCredential,
-                    restoreFrom: restoreFrom
+                    restoreFrom: restoreFrom,
+                    restore: restore
                 ))
         }
 

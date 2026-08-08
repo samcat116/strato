@@ -737,6 +737,53 @@ and the caller has to decide:
   tombstone, since there is no backend to ask. It is re-persisted **verbatim**,
   so rolling forward again restores the routing field intact.
 
+### vsock context IDs (STR-72)
+
+A vsock CID is not a per-VM number. QEMU's `vhost-vsock-pci` programs it into
+the host kernel's `vhost_vsock` driver, which keeps **one flat 32-bit namespace
+per machine** (0–2 reserved), so a CID derived from a VM id is a collision
+waiting to happen — at best a failed VM start, at worst a host process reaching
+the wrong guest's control agent. `VsockCIDAllocator` (`StratoAgentCore`) hands
+them out instead, and every assignment is written to the VM manifest as
+`VMManifestEntry.vsockCID` so a restarted agent cannot re-issue a live VM's CID.
+The manifest read reserves every recorded CID, **including the quarantined
+entries'** — that workload may still be running on it. Allocation is idempotent
+per VM (the re-create-an-orphan path runs the same code twice), released when
+the VM's manifest entry goes, and rolled back when a create fails — via a
+`VsockCIDLease`, so the "don't free a CID this create didn't take" rule lives in
+the allocator rather than at each call site. Exhaustion **throws**, classified
+`.permanent` so the reconciler reports it instead of burning a retry budget on a
+create that only another VM's deletion can unblock.
+
+Allocation walks forward from a cursor rather than reusing the lowest free CID,
+so a host-side connection that outlives its guest cannot land on the next VM.
+Reserving advances that cursor too, which is what carries the property across a
+restart: the connections being guarded against belong to other host processes
+and outlive the agent, so resuming at the bottom of the range would hand the
+next VM exactly the CID most likely to still be targeted.
+
+Two boundaries worth knowing:
+
+- **The manifest is written after the driver succeeds**, so a crash in that
+  window leaves a guest whose CID nothing on disk records. That window is
+  pre-existing (the same crash loses the whole entry), and claiming the workload
+  before it exists would have the manifest reserve capacity and block re-creates
+  for a VM that may never have been created. It fails safe rather than silently:
+  the kernel refuses a duplicate CID (`EADDRINUSE`), so a later VM handed the
+  orphaned CID fails to start rather than joining the surviving guest's channel.
+- **The allocator is authoritative only over VMs this agent created.** A CID
+  held by a non-Strato process, or by a VM started outside the agent, is
+  invisible to it. Same fail-safe, and the consumer should surface it as "CID
+  already in use on this host".
+
+Only backends that occupy that namespace draw from it —
+`HypervisorType.usesHostVsockNamespace`, currently QEMU alone. Firecracker
+emulates virtio-vsock inside its own process and exposes a Unix-domain socket to
+the host (`VsockConfig.udsPath`), so a Firecracker guest's CID never reaches the
+host kernel. That is why every sandbox can use CID 3 and why sandboxes are
+deliberately *not* routed through this allocator: it would spend a host-global
+resource on devices that occupy none of it.
+
 ## Networking
 
 `NetworkOrchestrator` (executable target) resolves a VM's `[NetworkSpec]`
@@ -772,6 +819,65 @@ Nothing serves HTTP inside the namespace yet — the guest-facing IMDS
 listener is future work. See
 [ADR 0003](../adr/0003-imds-chassis-namespace.md) and
 [networking](./networking.md).
+
+### Instance metadata store (IMDS payload)
+
+`StratoAgentCore/MetadataStore.swift` holds what that service will serve:
+one `InstanceMetadata` per VM (wire v26, STR-52), written by the reconciler
+from each sync's `DesiredVMState.metadata` before it plans anything.
+Reads are answered entirely from here, with no control-plane round trip —
+the same fail-static posture as the rest of the reconciler, and deliberate,
+because a guest that cannot read its metadata may fail to boot.
+
+**That guarantee holds across a control-plane outage, for the life of the
+agent process — not across an agent restart.** The store is in memory while
+the VM manifest is durable, so a restarted agent re-adopts running VMs it can
+serve nothing for until the first sync lands, and indefinitely if the control
+plane is unreachable then. Harmless only because nothing serves reads yet:
+the listener (STR-56) has to close it, either by persisting the store beside
+the manifest or by refusing to answer until the first sync has been applied.
+Serving a guest a confidently empty document is worse than making it wait.
+
+Three rules keep it honest, and each is a place the obvious implementation
+would be wrong:
+
+- **The store's own generation guard**, not `lastApplied`. A strictly older
+  sync is refused so a replay cannot roll metadata backward; an *equal*
+  generation still applies, because editing only what metadata carries (a
+  hostname, an SSH key) changes no realization and so bumps no VM generation
+  — a strict `>` would freeze out exactly the edits the IMDS exists to
+  deliver. `lastApplied` cannot serve as that guard: it tracks convergence,
+  so a VM whose create keeps failing holds it still while generations
+  advance.
+- **Metadata is recorded outside the presence guard** that stops all
+  convergence on a host whose manifest is unreadable (STR-138). The store
+  projects what the control plane said, not what the host holds, so a blind
+  agent's guests keep getting current metadata.
+- **Withdrawal follows the VM off the host, and never further.** A desired
+  entry that wants the VM `.absent` drops the payload whatever the sender's
+  wire version, since an address outlives the VM it was allocated to and the
+  IMDS identifies its caller by source address; a tombstoned teardown drops
+  it only once the delete has actually converged, so a teardown the
+  blast-radius guard refused keeps serving. The two therefore sit on opposite
+  sides of the delete, and deliberately: the `.absent` withdrawal *leads* the
+  VM off the host because it must also cover the VM that was already gone
+  when the sync arrived — which plans no work item to hook — so a VM whose
+  delete keeps failing is still running with its metadata already withdrawn.
+  That is the safe end of the trade; the other end serves a released VM's SSH
+  keys and user data to whoever next holds its address. The teardown
+  withdrawal is also *not* generation guarded, because a teardown is
+  authorized from the observed generation the agent reported, which lags the
+  sync generations the store records whenever convergence is failing. Both
+  withdrawals seal their generation, so only a strictly newer sync can serve
+  the VM again, and withdrawn records are kept rather than deleted for
+  exactly that guard. A VM the sync merely *omits* keeps its metadata
+  (STR-98: omission is not an instruction).
+
+The payload half is gated on `supportsInstanceMetadata(senderVersion)` for
+the `networks`/`sandboxes` reason: from a v26+ control plane a nil `metadata`
+is authoritative and withdraws what we serve, while from an older one it is
+silence, and reading it as an instruction would empty every VM's metadata the
+moment a control plane is rolled back.
 
 ## Self-update
 

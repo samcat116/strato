@@ -104,6 +104,15 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// Guest context ID for the single vsock device. CIDs 0–2 are reserved, so
     /// 3 is the first usable guest CID.
+    ///
+    /// The same constant for every sandbox, and deliberately not drawn from
+    /// `VsockCIDAllocator` (STR-72): Firecracker emulates virtio-vsock inside
+    /// its own process and gives the host a Unix-domain socket rather than an
+    /// AF_VSOCK endpoint, so this number is scoped to one microVM and never
+    /// enters the host kernel's namespace. Two sandboxes on CID 3 collide over
+    /// nothing. Allocating host CIDs here would spend a genuinely host-global
+    /// resource on devices that occupy none of it, and would suggest a shared
+    /// namespace where there is not one.
     private static let guestCID: UInt32 = 3
 
     /// Everything the runtime tracks for one managed sandbox.
@@ -335,7 +344,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let nonce = UUID().uuidString
         let configDrive = SandboxConfigDrive(
             sandboxId: sandboxId, identityNonce: nonce,
-            guestConfig: materialized.guestConfig, spec: spec)
+            guestConfig: materialized.guestConfig, spec: spec,
+            network: try guestNetwork(attachments: networkAttachments))
         let configData = try configDrive.blockImage(
             minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
 
@@ -413,6 +423,21 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             maybeStartWarmTemplateBuild(
                 key: warmKey, materialized: materialized, guestImage: guestImage, spec: spec)
         }
+    }
+
+    /// The config-drive network block for a sandbox's realized NIC, or nil
+    /// when it has none (STR-101).
+    ///
+    /// The guest configures its interface statically from this — it runs no
+    /// DHCP client — so a networked sandbox whose block is missing or
+    /// incomplete boots with a dead interface. Everything that could make it
+    /// incomplete throws instead.
+    private func guestNetwork(
+        attachments: [ResolvedNetworkAttachment]
+    ) throws -> SandboxConfigDrive.NetworkConfig? {
+        // A spec is capped at one NIC, so the first attachment is the whole set.
+        guard let nic = attachments.first else { return nil }
+        return try SandboxConfigDrive.network(for: nic)
     }
 
     /// Provision a cold microVM and register it as this sandbox. Shared by
@@ -746,7 +771,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let sourceConfig = try SandboxConfigDrive.decode(
             fromBlockImage: Data(contentsOf: URL(fileURLWithPath: archiveConfig)))
         guard sourceConfig.sandboxId == sourceSandboxId else {
-            throw SandboxControlError.identityMismatch(
+            throw GuestControlError.identityMismatch(
                 expected: sourceSandboxId, got: sourceConfig.sandboxId)
         }
 
@@ -794,7 +819,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     sandboxId: sourceConfig.sandboxId,
                     expectedNonce: sourceConfig.identityNonce)
             else {
-                throw SandboxControlError.identityMismatch(
+                throw GuestControlError.identityMismatch(
                     expected: "\(sourceConfig.sandboxId)/\(sourceConfig.identityNonce)",
                     got: "\(sourceResponse)")
             }
@@ -802,18 +827,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 SandboxGuestControlProtocol.supportsReidentify(
                     sourceResponse.controlProtocolVersion)
             else {
-                throw SandboxControlError.malformedResponse(
+                throw GuestControlError.malformedResponse(
                     "checkpointed guest does not advertise re-identification support")
             }
 
             let nonce = UUID().uuidString
             let entropy = Self.freshEntropy()
-            let hostname =
-                "strato-"
-                + String(sandboxId.replacingOccurrences(of: "-", with: "").prefix(12))
+            let hostname = SandboxConfigDrive.guestHostname(sandboxId: sandboxId)
             let response = try await sendControl(
                 .reidentify(
-                    SandboxControlProtocol.ReidentifyRequest(
+                    GuestControlProtocol.ReidentifyRequest(
                         expectedSandboxId: sourceConfig.sandboxId,
                         expectedNonce: sourceConfig.identityNonce,
                         sandboxId: sandboxId,
@@ -824,13 +847,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 udsPath: plan.vsockUDSHostPath,
                 timeout: 20)
             guard case .reidentified = response else {
-                throw SandboxControlError.malformedResponse(
+                throw GuestControlError.malformedResponse(
                     "expected reidentified, got \(response)")
             }
             let health = try await sendControl(
                 .ping, udsPath: plan.vsockUDSHostPath, timeout: 20)
             guard identityMatches(health, sandboxId: sandboxId, expectedNonce: nonce) else {
-                throw SandboxControlError.identityMismatch(
+                throw GuestControlError.identityMismatch(
                     expected: "\(sandboxId)/\(nonce)", got: "\(health)")
             }
 
@@ -842,7 +865,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 sandboxId: sandboxId,
                 identityNonce: nonce,
                 imageConfig: sourceConfig.imageConfig,
-                overrides: sourceConfig.overrides)
+                overrides: sourceConfig.overrides,
+                // The same name `reidentify` just gave the live guest, so the
+                // persisted drive and the running sandbox agree.
+                hostname: hostname)
             let originalConfigBytes = max(Int(fileSize(archiveConfig)), 512)
             try targetConfig.blockImage(minimumBytes: originalConfigBytes)
                 .write(to: URL(fileURLWithPath: configHost), options: .atomic)
@@ -928,11 +954,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // regardless of which identity it echoes (see below).
         let response = try await sendControl(.getStatus, udsPath: managed.vsockUdsPath, timeout: 20)
         guard case .status(let echoedId, let echoedNonce, let guestState, _) = response else {
-            throw SandboxControlError.malformedResponse("expected status, got \(response)")
+            throw GuestControlError.malformedResponse("expected status, got \(response)")
         }
         let identityOK = identityMatches(
             response, sandboxId: sandboxId, expectedNonce: managed.identityNonce)
-        let mismatch = SandboxControlError.identityMismatch(
+        let mismatch = GuestControlError.identityMismatch(
             expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(echoedId)/\(echoedNonce)")
 
         var needsWarmLaunch = false
@@ -956,7 +982,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             // template id shape is the remaining gate.
             if let expected = managed.warmHeldIdentity {
                 guard echoedId == expected.templateId, echoedNonce == expected.templateNonce else {
-                    throw SandboxControlError.identityMismatch(
+                    throw GuestControlError.identityMismatch(
                         expected: "\(expected.templateId)/\(expected.templateNonce)",
                         got: "\(echoedId)/\(echoedNonce)")
                 }
@@ -1003,7 +1029,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             identityMatches(
                 capability, sandboxId: sandboxId, expectedNonce: managed.identityNonce)
         else {
-            throw SandboxControlError.identityMismatch(
+            throw GuestControlError.identityMismatch(
                 expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(capability)")
         }
         sandboxes[sandboxId]?.guestControlProtocolVersion =
@@ -1047,18 +1073,22 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // share the snapshot's frozen RNG pool. Warm launch keeps this
         // best-effort; user-checkpoint fork re-identification requires it.
         let entropy = Self.freshEntropy()
-        let launch = SandboxControlProtocol.LaunchRequest(
+        let launch = GuestControlProtocol.LaunchRequest(
             sandboxId: sandboxId, identityNonce: drive.identityNonce,
-            imageConfig: drive.imageConfig, overrides: drive.overrides, entropy: entropy)
+            imageConfig: drive.imageConfig, overrides: drive.overrides, entropy: entropy,
+            // The template guest booted under the template's identity, so the
+            // hostname travels with the launch — otherwise a warm-provisioned
+            // sandbox would differ from a cold one by warm-cache state alone.
+            hostname: drive.hostname)
         let response = try await sendControl(
             .launch(launch), udsPath: managed.vsockUdsPath, timeout: 20)
         guard case .launched = response else {
-            throw SandboxControlError.malformedResponse("expected launched, got \(response)")
+            throw GuestControlError.malformedResponse("expected launched, got \(response)")
         }
 
         let verify = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 10)
         guard identityMatches(verify, sandboxId: sandboxId, expectedNonce: drive.identityNonce) else {
-            throw SandboxControlError.identityMismatch(
+            throw GuestControlError.identityMismatch(
                 expected: "\(sandboxId)/\(drive.identityNonce)", got: "\(verify)")
         }
     }
@@ -1091,7 +1121,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let nonce = UUID().uuidString
         let configDrive = SandboxConfigDrive(
             sandboxId: sandboxId, identityNonce: nonce,
-            guestConfig: materialized.guestConfig, spec: managed.spec)
+            guestConfig: materialized.guestConfig, spec: managed.spec,
+            network: try guestNetwork(attachments: managed.networkAttachments))
         let configData = try configDrive.blockImage(
             minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
 
@@ -1577,7 +1608,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // identity (the checkpointed memory carries the original nonce).
         let response = try await sendControl(.ping, udsPath: managed.vsockUdsPath, timeout: 20)
         guard identityMatches(response, sandboxId: sandboxId, expectedNonce: managed.identityNonce) else {
-            throw SandboxControlError.identityMismatch(
+            throw GuestControlError.identityMismatch(
                 expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(response)")
         }
         sandboxes[sandboxId]?.guestControlProtocolVersion = response.controlProtocolVersion
@@ -2217,10 +2248,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw SandboxRuntimeError.execSessionNotFound(sessionId)
         }
         if let data, !data.isEmpty {
-            try await session.connection.write(SandboxControlProtocol.Request.stdin(data).encodedLine())
+            try await session.connection.write(GuestControlProtocol.Request.stdin(data).encodedLine())
         }
         if eof {
-            try await session.connection.write(SandboxControlProtocol.Request.stdinEof.encodedLine())
+            try await session.connection.write(GuestControlProtocol.Request.stdinEof.encodedLine())
         }
     }
 
@@ -2229,7 +2260,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             throw SandboxRuntimeError.execSessionNotFound(sessionId)
         }
         try await session.connection.write(
-            SandboxControlProtocol.Request.resize(rows: rows, cols: cols).encodedLine())
+            GuestControlProtocol.Request.resize(rows: rows, cols: cols).encodedLine())
     }
 
     func closeExec(sessionId: String) async {
@@ -2277,20 +2308,20 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// Write the `exec` line and read until the guest confirms `exec_started`.
     /// A guest `error` line (spawn failure) throws.
     private static func awaitExecStarted(
-        _ request: SandboxControlProtocol.Request, on connection: VsockConnection,
+        _ request: GuestControlProtocol.Request, on connection: VsockConnection,
         timeout: TimeInterval
     ) async throws {
         try await connection.write(request.encodedLine())
 
         guard let line = try await nextControlLine(on: connection, timeout: timeout) else {
-            throw SandboxControlError.malformedResponse("guest closed before confirming exec start")
+            throw GuestControlError.malformedResponse("guest closed before confirming exec start")
         }
-        let response = try SandboxControlProtocol.Response.decode(line: line)
+        let response = try GuestControlProtocol.Response.decode(line: line)
         if case .error(let message) = response {
-            throw SandboxControlError.guestError(message)
+            throw GuestControlError.guestError(message)
         }
         guard case .execStarted = response else {
-            throw SandboxControlError.malformedResponse("expected exec_started, got \(response)")
+            throw GuestControlError.malformedResponse("expected exec_started, got \(response)")
         }
     }
 
@@ -2325,9 +2356,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 return
             }
 
-            let response: SandboxControlProtocol.Response
+            let response: GuestControlProtocol.Response
             do {
-                response = try SandboxControlProtocol.Response.decode(line: line)
+                response = try GuestControlProtocol.Response.decode(line: line)
             } catch {
                 await finish(.closed(reason: "malformed exec record from guest"))
                 return
@@ -2444,6 +2475,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// The follow loop's per-connect checkpoint: the seq to resume from, or
     /// nil once this loop generation has been superseded or retired.
+    ///
+    /// `lastSeq` is guest-supplied, so this `+ 1` is only trap-free because the
+    /// decoder caps a record's seq well below `UInt64.max`
+    /// (`GuestControlProtocol.Limits.maxLogSeq`).
     private func logFollowSinceSeq(sandboxId: String, generation: UInt64) -> UInt64? {
         guard let follow = logFollows[sandboxId], follow.generation == generation else { return nil }
         return follow.lastSeq + 1
@@ -2535,7 +2570,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 var streamComplete = false
                 do {
                     try await connection.write(
-                        SandboxControlProtocol.Request.streamLogs(sinceSeq: sinceSeq).encodedLine())
+                        GuestControlProtocol.Request.streamLogs(sinceSeq: sinceSeq).encodedLine())
                     streamComplete = try await Self.followLogStream(
                         sandboxId: sandboxId, generation: generation, connection: connection,
                         runtime: runtime, backoff: &backoff)
@@ -2589,7 +2624,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             guard let line = try await connection.nextLine() else {
                 return false  // guest closed; the loop reconnects
             }
-            switch try SandboxControlProtocol.Response.decode(line: line) {
+            switch try GuestControlProtocol.Response.decode(line: line) {
             case .log(let seq, let stream, let data):
                 await runtime.recordLog(
                     sandboxId: sandboxId, generation: generation, seq: seq, stream: stream, data: data)
@@ -2598,7 +2633,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 await runtime.finishLogFollow(sandboxId: sandboxId, generation: generation)
                 return true
             default:
-                throw SandboxControlError.malformedResponse(line)
+                // `.malformed` rather than the case directly: `line` is guest
+                // bytes, and this error's text reaches the log.
+                throw GuestControlError.malformed(line)
             }
         }
     }
@@ -2677,8 +2714,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// require racing a task group and closing the socket out from under a
     /// blocking `read(2)`.
     private func sendControl(
-        _ request: SandboxControlProtocol.Request, udsPath: String, timeout: TimeInterval
-    ) async throws -> SandboxControlProtocol.Response {
+        _ request: GuestControlProtocol.Request, udsPath: String, timeout: TimeInterval
+    ) async throws -> GuestControlProtocol.Response {
         let connection = try await VsockConnection.connect(
             udsPath: udsPath, port: SandboxConfigDrive.defaultVsockPort, timeout: timeout, logger: logger)
 
@@ -2693,7 +2730,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     }
 
     /// Read one line, translating the transport's timeout into this runtime's
-    /// own `SandboxControlError.timeout` so callers keep a stable, sandbox-
+    /// own `GuestControlError.timeout` so callers keep a stable, sandbox-
     /// specific error vocabulary regardless of how the read is bounded.
     private static func nextControlLine(
         on connection: VsockConnection, timeout: TimeInterval
@@ -2701,7 +2738,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         do {
             return try await connection.nextLine(timeout: timeout)
         } catch let error as FirecrackerError {
-            if case .timeout = error { throw SandboxControlError.timeout }
+            if case .timeout = error { throw GuestControlError.timeout }
             throw error
         }
     }
@@ -2709,17 +2746,17 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// Write one request and read the single newline-delimited response,
     /// bounded by `timeout`.
     private static func exchange(
-        _ request: SandboxControlProtocol.Request, on connection: VsockConnection,
+        _ request: GuestControlProtocol.Request, on connection: VsockConnection,
         timeout: TimeInterval
-    ) async throws -> SandboxControlProtocol.Response {
+    ) async throws -> GuestControlProtocol.Response {
         try await connection.write(request.encodedLine())
 
         guard let line = try await nextControlLine(on: connection, timeout: timeout) else {
-            throw SandboxControlError.malformedResponse("guest closed before sending a full response line")
+            throw GuestControlError.malformedResponse("guest closed before sending a full response line")
         }
-        let response = try SandboxControlProtocol.Response.decode(line: line)
+        let response = try GuestControlProtocol.Response.decode(line: line)
         if case .error(let message) = response {
-            throw SandboxControlError.guestError(message)
+            throw GuestControlError.guestError(message)
         }
         return response
     }
@@ -2732,7 +2769,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// checked when known; an empty expected nonce (not yet recovered) falls
     /// back to the id alone.
     private func identityMatches(
-        _ response: SandboxControlProtocol.Response, sandboxId: String, expectedNonce: String
+        _ response: GuestControlProtocol.Response, sandboxId: String, expectedNonce: String
     ) -> Bool {
         let echoedId: String
         let echoedNonce: String

@@ -62,7 +62,8 @@ final class VMSnapshotTests {
         app: Application,
         vm: VM,
         capabilities: [String] = ["qemu", SnapshotArtifactKind.vmCheckpoint.agentCapability],
-        status: VMStatus = .running
+        status: VMStatus = .running,
+        wireProtocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: "checkpoint-agent",
@@ -74,7 +75,7 @@ final class VMSnapshotTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: WireProtocol.currentVersion
+            protocolVersion: wireProtocolVersion
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let agentUUID = try await app.agentService.registerAgent(
@@ -108,21 +109,6 @@ final class VMSnapshotTests {
         snapshot.size = 1 << 30
         try await snapshot.save(on: app.db)
         return snapshot
-    }
-
-    private func pollOperationCompleted(
-        _ operationId: UUID, on db: any Database
-    ) async throws -> ResourceOperation? {
-        for _ in 0..<100 {
-            if let operation = try await ResourceOperation.find(operationId, on: db),
-                operation.status != .pending
-            {
-                return operation
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        Issue.record("Operation \(operationId) never completed")
-        return nil
     }
 
     // MARK: - Create guards
@@ -439,7 +425,7 @@ final class VMSnapshotTests {
 
     // MARK: - Restore
 
-    @Test("Restore returns 202, flips desired state to running, and reverts it when the RPC fails")
+    @Test("Restore returns 202 and writes the restore nonce onto the VM")
     func restoreAcceptsAndSetsDesiredRunning() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
             try await placeOnCapableAgent(app: app, vm: vm, status: .paused)
@@ -448,37 +434,89 @@ final class VMSnapshotTests {
             vm.generation = 1
             try await vm.save(on: app.db)
 
-            var operation: OperationResponse?
+            var accepted: AcceptedMutation<VMDetailResponse>?
             try await app.test(
                 .POST, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
             ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
             }
-            let accepted = try #require(operation)
-            #expect(accepted.kind == .restore)
+            // Answers with the VM and the generation to wait for, like every
+            // other mutation since STR-147 — there is no operation row to poll.
+            let body = try #require(accepted)
+            #expect(body.targetGeneration == 2)
 
-            // The accept transaction flips desired state to running (a
-            // restored guest resumes, and the next sync would pause it right
-            // back otherwise), bumping the generation 1 → 2. With no live
-            // agent socket the background RPC fails fast and the verdict
-            // reverts desired state to observed (`.paused`, generation 3), so
-            // reading right after the 202 races that revert. Wait out the
-            // operation and assert the settled state instead: generation 3 is
-            // only reachable through flip-then-revert, so it pins the accept
-            // -transaction flip without the race.
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .failed)
-            var settled: VM?
-            for _ in 0..<100 {
-                settled = try await VM.find(vm.id, on: app.db)
-                if settled?.generation == 3 { break }
-                try await Task.sleep(for: .milliseconds(50))
+            // The restore is an edge-nonce (STR-151): a monotonic counter and
+            // the checkpoint it names, applied once by the agent against its own
+            // durable record. Desired state flips to running alongside, because
+            // a restored guest resumes and the next sync would otherwise pause
+            // it right back.
+            let stored = try await VM.find(vm.id, on: app.db)
+            #expect(stored?.restoreGeneration == 1)
+            #expect(stored?.restoreSnapshotID == snapshot.id)
+            #expect(stored?.desiredStatus == .running)
+            #expect(stored?.generation == 2)
+            #expect(stored?.rebootGeneration == 0)
+
+            // Nothing was dispatched and nothing awaited a reply: the sync is
+            // the whole delivery mechanism now.
+            let events = try await ResourceEvent.query(on: app.db)
+                .filter(\.$resourceID == vm.id!)
+                .filter(\.$mutation == .restore)
+                .all()
+            #expect(events.count == 1)
+            #expect(events.first?.targetGeneration == 2)
+        }
+    }
+
+    /// With `vm_restore` gone there is no fallback frame, and a pre-v34 agent
+    /// fails *silently*: it decodes the sync, ignores the nonce, and reports the
+    /// bumped generation as converged — so the API would claim a rewind that
+    /// never happened. Refused at admission instead.
+    @Test("Restore is refused when the VM's agent predates edge nonces")
+    func restoreRefusesPreV34Agent() async throws {
+        try await withCheckpointTestApp { app, user, _, vm, token in
+            try await placeOnCapableAgent(
+                app: app, vm: vm, wireProtocolVersion: WireProtocol.edgeNonceMinimumVersion - 1)
+            let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
+
+            try await app.test(
+                .POST, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("too old"))
             }
-            #expect(settled?.generation == 3)
-            #expect(settled?.desiredStatus == .paused)
+
+            let stored = try await VM.find(vm.id, on: app.db)
+            #expect(stored?.restoreGeneration == 0)
+        }
+    }
+
+    /// The second of the two signals issue #415 established. A v34 agent on a
+    /// host with no usable QEMU reads the nonce and can do nothing with it, so
+    /// admitting the restore would surface as a `degraded` condition half an
+    /// hour later instead of a `409` naming the remedy. The capture path checks
+    /// the same pair, so admission stays symmetric.
+    @Test("Restore is refused when the agent advertises no checkpoint backend")
+    func restoreRefusesAgentWithoutCheckpointCapability() async throws {
+        try await withCheckpointTestApp { app, user, _, vm, token in
+            try await placeOnCapableAgent(app: app, vm: vm, capabilities: ["qemu"])
+            let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
+
+            try await app.test(
+                .POST, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("capability"))
+            }
+
+            #expect(try await VM.find(vm.id, on: app.db)?.restoreGeneration == 0)
         }
     }
 

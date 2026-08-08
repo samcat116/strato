@@ -1,13 +1,15 @@
 //! Linux PID-1 orchestration for the sandbox guest init (issues #419, #423).
 //!
 //! Sequence: bring up pseudo-filesystems → read the config drive → resolve the
-//! process to run → mount and switch onto the container rootfs → start the
-//! vsock agent → launch the workload (stdio captured via pipes) → reap every
-//! child forever, routing exec exit codes and serving status over vsock.
+//! process to run → configure networking → mount and switch onto the container
+//! rootfs → start the vsock agent → launch the workload (stdio captured via
+//! pipes) → reap every child forever, routing exec exit codes and serving
+//! status over vsock.
 
 mod exec;
 mod logs;
 mod mounts;
+mod net;
 mod reaper;
 mod vsock;
 
@@ -67,7 +69,42 @@ fn bringup() -> Result<(), Box<dyn std::error::Error>> {
         cfg.resolve_process()?
     };
 
+    // Loopback comes up for every sandbox, networked or not: a workload that
+    // binds 127.0.0.1 needs it and nothing else provides it. Best effort —
+    // this must not be what fails a network-free sandbox's boot.
+    if let Err(e) = net::bring_up_loopback() {
+        eprintln!("[sandbox-init] could not bring up loopback: {e}");
+    }
+    // Likewise the hostname, which belongs to the sandbox rather than to its
+    // NIC: gating it on networking would leave two sandboxes of one image
+    // differing in name purely by NIC presence, and the fork path's
+    // `reidentify` already renames every restored guest either way. Best
+    // effort for the same reason as loopback.
+    if let Some(hostname) = cfg.hostname.as_deref() {
+        if let Err(e) = net::set_hostname(hostname) {
+            eprintln!("[sandbox-init] could not set hostname '{hostname}': {e}");
+        }
+    }
+    // The NIC, when the sandbox has one (STR-101). Fatal on failure: the host
+    // cannot tell a half-configured interface from a healthy one, so a
+    // sandbox that reports `running` must actually be on the network its
+    // desired state says it is.
+    if let Some(network) = &cfg.network {
+        let name = net::configure_interface(network)
+            .map_err(|e| format!("configure guest network: {e}"))?;
+        eprintln!("[sandbox-init] configured {name}");
+    }
+
     mounts::mount_container_rootfs(&cfg.rootfs)?;
+    // Resolver files go into the rootfs while it is still at `NEW_ROOT`, so a
+    // scratch or distroless image without an `/etc` gets one created rather
+    // than assumed. Unconditional: `/etc/hosts` is what makes `localhost`
+    // resolve, which a network-free sandbox needs just as much.
+    net::write_resolver_files(
+        std::path::Path::new(mounts::NEW_ROOT),
+        cfg.hostname.as_deref(),
+        cfg.network.as_ref(),
+    );
     mounts::switch_into_rootfs()?;
     mounts::mount_container_api()?;
 

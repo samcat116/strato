@@ -13,7 +13,6 @@ actor FakeAgentDispatch: AgentDispatch {
     var online: Bool
     var response: AgentServiceResponse
     private(set) var syncedAgentIds: [String] = []
-    private(set) var awaitedResourceIds: [String] = []
 
     init(online: Bool = true, response: AgentServiceResponse = .success(nil)) {
         self.online = online
@@ -23,24 +22,21 @@ actor FakeAgentDispatch: AgentDispatch {
     func agentIsOnline(agentId: String) async -> Bool { online }
 
     func syncDesiredState(agentId: String) async { syncedAgentIds.append(agentId) }
-
-    func performOperationAwaitingResponse(
-        _ message: MessageType, resourceID: String, timeout: Duration
-    ) async throws -> AgentServiceResponse {
-        awaitedResourceIds.append(resourceID)
-        return response
-    }
 }
 
-/// Exercises `ResourceOperationCoordinator` directly: begin → dispatch →
-/// verdict, with a fake agent seam and a template-clone database.
+/// Exercises what is left of `ResourceOperationCoordinator`: the verdict choke
+/// point, against a template-clone database.
 ///
-/// Its remit shrank with STR-147 — the state-sync, placement and
-/// direct-resolution strategies moved to `ResourceMutation` along with the
-/// lifecycle mutations, and are covered by `ResourceMutationTests`. What is
-/// left is what still has no generation to converge on: the imperative
-/// `awaitingResponse` dispatch (VM reboot), the verdict choke point the
-/// snapshot verbs share, and the double-submit guard that still protects them.
+/// Its remit shrank to nothing over three stages. STR-147 moved the state-sync,
+/// placement and direct-resolution strategies to `ResourceMutation` (covered by
+/// `ResourceMutationTests`), STR-150 took the snapshot verbs, and STR-151 took
+/// the last one — VM reboot, whose `awaitingResponse` dispatch was the only
+/// imperative strategy left. Nothing constructs a `ResourceOperation` now.
+///
+/// These tests survive for the reason `recordVerdict` does: rows written by the
+/// *previous* build can still be `pending` after an upgrade, and the sweep has
+/// to take them terminal rather than leave a client polling forever. They go
+/// with the table in ADR stage 11 (STR-152).
 @Suite("Resource Operation Coordinator", .serialized)
 final class ResourceOperationCoordinatorTests {
     /// Boots a configured test app with an org, project, and one VM. The
@@ -85,75 +81,6 @@ final class ResourceOperationCoordinatorTests {
             throw error
         }
         try await app.shutdownForTesting()
-    }
-
-    @Test("a second operation for the same resource is rejected with 409")
-    func doubleSubmitConflicts() async throws {
-        try await withVM { app, vm, userID in
-            let fake = FakeAgentDispatch(online: true)
-            let coordinator = ResourceOperationCoordinator(agentDispatch: fake, logger: app.logger)
-            let vmID = try vm.requireID()
-
-            _ = try await coordinator.perform(
-                .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
-
-            var conflict: (any AbortError)?
-            do {
-                _ = try await coordinator.perform(
-                    .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                    dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
-            } catch let error as any AbortError {
-                conflict = error
-            }
-            #expect(conflict?.status == .conflict)
-
-            await app.backgroundTasks.drain(timeout: .seconds(10))
-        }
-    }
-
-    @Test("perform(.awaitingResponse) records success from the agent response")
-    func awaitingResponseSuccess() async throws {
-        try await withVM { app, vm, userID in
-            let fake = FakeAgentDispatch(online: true, response: .success(nil))
-            let coordinator = ResourceOperationCoordinator(agentDispatch: fake, logger: app.logger)
-            let vmID = try vm.requireID()
-
-            let operation = try await coordinator.perform(
-                .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
-
-            await app.backgroundTasks.drain(timeout: .seconds(10))
-
-            let opID = try operation.requireID()
-            let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
-            let status = reloadedOp?.status
-            #expect(status == .succeeded)
-            let awaited = await fake.awaitedResourceIds
-            #expect(awaited == [vmID.uuidString])
-        }
-    }
-
-    @Test("perform(.awaitingResponse) records failure from an agent error")
-    func awaitingResponseError() async throws {
-        try await withVM { app, vm, userID in
-            let fake = FakeAgentDispatch(online: true, response: .error("reboot exploded", nil))
-            let coordinator = ResourceOperationCoordinator(agentDispatch: fake, logger: app.logger)
-            let vmID = try vm.requireID()
-
-            let operation = try await coordinator.perform(
-                .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-                dispatch: .awaitingResponse(.vmReboot), on: app.db, app: app)
-
-            await app.backgroundTasks.drain(timeout: .seconds(10))
-
-            let opID = try operation.requireID()
-            let reloadedOp = try await ResourceOperation.find(opID, on: app.db)
-            let status = reloadedOp?.status
-            #expect(status == .failed)
-            let error = reloadedOp?.error ?? ""
-            #expect(error.contains("reboot exploded"))
-        }
     }
 
     @Test("recordVerdict(.failed) on a create escalates a never-settled VM to .error")

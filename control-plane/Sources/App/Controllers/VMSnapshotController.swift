@@ -19,9 +19,12 @@ import Vapor
 /// had to guess, after a lost response, whether a checkpoint it could not see
 /// existed.
 ///
-/// Restore is still imperative: loading a captured RAM image back into a live
-/// QEMU process is an edge rather than a state, and converts to a nonce in
-/// STR-151.
+/// Restore followed in stage 9 (STR-151), by the other route out of the same
+/// dichotomy: loading a captured RAM image back into a live QEMU process really
+/// is an edge, so it did not become a state by being re-described — it became
+/// one by being *counted*. `VM.requestRestore` bumps a monotonic nonce naming
+/// the checkpoint, and the agent applies it once against its own durable record.
+/// Nothing in this file awaits an agent response any more.
 extension VMController {
 
     // MARK: - Create
@@ -220,27 +223,27 @@ extension VMController {
                 .conflict,
                 reason: "VM cannot be restored in state '\(vm.status.rawValue)'")
         }
-        try await Self.requireRestoreCapableAgent(agentId, app: req.application)
+        // Both signals: the wire version proves the agent applies the nonce,
+        // the capability proves a QEMU backend that can load a checkpoint is
+        // usable on that host (issue #415). The capture path checks the same
+        // pair, so admission is symmetric.
+        try await Self.requireEdgeNonceCapableAgent(
+            agentId, requiring: SnapshotArtifactKind.vmCheckpoint.agentCapability,
+            app: req.application)
 
         let userID = try user.requireID()
-        let operation = try await ResourceOperation.begin(
-            .restore,
-            resourceKind: .virtualMachine,
-            resourceID: vmID,
-            userID: userID,
-            on: req.db
-        ) { db in
+        let accepted = try await req.resourceMutation.accept(
+            .restore, on: vm, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable db in
+            // Re-checked inside the mutation's transaction, under the VM's row
+            // lock: the preflight above ran before it, and a checkpoint can be
+            // deleted in between.
             guard let current = try await VMSnapshot.find(snapshotID, on: db), current.canRestore else {
                 throw Abort(.conflict, reason: "Checkpoint is no longer restorable")
             }
-            // The restored guest resumes running; desired state must agree or
-            // the next sync would stop it right back.
-            vm.setDesiredStatus(.running)
-            try await vm.save(on: db)
+            vm.requestRestore(snapshotID: snapshotID)
         }
-
-        Self.runCheckpointRestore(
-            operation, snapshotID: snapshotID, agentId: agentId, app: req.application)
 
         req.logger.info(
             "VM restore accepted",
@@ -248,53 +251,10 @@ extension VMController {
                 "vm_id": .string(vmID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
-        return try operation.acceptedResponse()
-    }
-
-    /// Background half of `restoreSnapshot`.
-    private static func runCheckpointRestore(
-        _ operation: ResourceOperation,
-        snapshotID: UUID,
-        agentId: String,
-        app: Application
-    ) {
-        guard let operationId = operation.id else { return }
-        let vmID = operation.resourceID
-
-        app.backgroundTasks.spawn {
-            do {
-                try await VMSnapshotService.requestRestore(
-                    vmId: vmID, snapshotId: snapshotID, agentId: agentId, app: app)
-                // The agent resumed the guest itself; the periodic observed
-                // report re-confirms. Stamp `.running` only if we won the
-                // verdict race — a lost race means the sweep already resolved
-                // the VM and must not be contradicted.
-                let won = await app.resourceOperationCoordinator.recordVerdict(
-                    operationID: operationId, as: .succeeded, error: nil, on: app)
-                guard won, !Task.isCancelled, let db = app.liveDB else { return }
-                if let vm = try? await VM.find(vmID, on: db) {
-                    vm.setStatus(.running)
-                    try? await vm.save(on: db)
-                }
-            } catch {
-                await app.resourceOperationCoordinator.recordVerdict(
-                    operationID: operationId, as: .failed, error: error.localizedDescription, on: app)
-            }
-        }
+        return try await Self.acceptedResponse(for: vm, accepted, on: req)
     }
 
     // MARK: - Shared
-
-    /// Preflight the agent for a restore, translating the service's own errors
-    /// into the `409` the API contract uses for "this cannot be done right
-    /// now".
-    private static func requireRestoreCapableAgent(_ agentId: String, app: Application) async throws {
-        do {
-            try await VMSnapshotService.requireCapableAgent(agentId, app: app)
-        } catch let error as VMSnapshotServiceError {
-            throw Abort(.conflict, reason: error.localizedDescription)
-        }
-    }
 
     /// Fetch the :vmID VM and enforce a permission on it. Mirrors
     /// `VMController.fetchVMWithPermission`, which is private to that file.

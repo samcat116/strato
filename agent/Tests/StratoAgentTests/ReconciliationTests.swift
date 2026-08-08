@@ -70,6 +70,13 @@ struct ReconciliationTests {
         private(set) var reportCount = 0
         /// Status an adopted orphan turns out to have.
         var adoptedStatus: VMStatus = .running
+        /// The durable applied-nonce record this host keeps (STR-151). A
+        /// workload missing from the map has *no record*, which is what makes
+        /// its edges adopted rather than replayed.
+        var edgeNonces: [String: AppliedEdgeNonces] = [:]
+        /// Every `recordAppliedEdges` write, in order, so a test can tell "the
+        /// nonce was consumed without acting" from "nothing happened".
+        private(set) var recordedEdges: [(id: String, nonces: AppliedEdgeNonces)] = []
         /// When set, every action throws this error.
         var failWith: (any Error)?
 
@@ -83,6 +90,19 @@ struct ReconciliationTests {
 
         func setAdoptedStatus(_ status: VMStatus) {
             adoptedStatus = status
+        }
+
+        func setEdgeNonces(_ nonces: [String: AppliedEdgeNonces]) {
+            edgeNonces = nonces
+        }
+
+        func observedEdgeNonces() -> [String: AppliedEdgeNonces] {
+            edgeNonces
+        }
+
+        func recordAppliedEdges(_ item: ReconcileWorkItem, _ applied: AppliedEdgeNonces) {
+            edgeNonces[item.id] = applied
+            recordedEdges.append((item.id, applied))
         }
 
         func presenceIsComplete() -> Bool {
@@ -125,6 +145,8 @@ struct ReconciliationTests {
                 if let desired = item.desired {
                     sizing[item.vmId] = VMSizing(cpus: desired.spec.cpus, memoryBytes: desired.spec.memoryBytes)
                 }
+            case .reboot: presence[item.vmId] = .managed(.running)
+            case .restore: presence[item.vmId] = .managed(.running)
             case .adopt, .export: break
             case .attach, .detach: break  // volume-only steps; never planned for a VM
             }
@@ -147,7 +169,9 @@ struct ReconciliationTests {
     }
 
     private func makeReconciler(_ actuator: MockActuator) -> Reconciler {
-        Reconciler(actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+        Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
     }
 
     // MARK: - Pure diff engine
@@ -262,7 +286,12 @@ struct ReconciliationTests {
         let plan = Reconciler.plan(
             desired: [Self.desired(vmId, status: .running, generation: 3)],
             present: [vmId.uuidString: .managed(.running)],
-            lastApplied: [vmId.uuidString: 3]
+            lastApplied: [vmId.uuidString: 3],
+            // Already recorded, so this is purely the converged case. Without
+            // it the planner emits a work-free item to adopt the edge nonces —
+            // covered by `EdgeNonceReconciliationTests`, and beside the point
+            // here.
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()]
         )
         #expect(plan.items.isEmpty)
     }
@@ -718,7 +747,7 @@ struct ReconciliationTests {
             presence: Dictionary(uniqueKeysWithValues: ids.map { ($0.uuidString, .managed(.running)) }))
         let reconciler = Reconciler(
             actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
-            teardownGuard: TeardownGuard(allowBulkTeardown: true))
+            teardownGuard: TeardownGuard(allowBulkTeardown: true), metadataStore: MetadataStore())
 
         await reconciler.apply(
             Self.sync(
@@ -784,7 +813,8 @@ struct ReconciliationTests {
             desired: [Self.desiredSized(vmId, generation: 2, cpus: 2)],
             present: [vmId.uuidString: .managed(.running)],
             lastApplied: [vmId.uuidString: 2],
-            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)]
+            presentSizing: [vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30)],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()]
         )
         #expect(plan.items.isEmpty)
     }
@@ -828,7 +858,8 @@ struct ReconciliationTests {
             lastApplied: [vmId.uuidString: 2],
             presentSizing: [
                 vmId.uuidString: VMSizing(cpus: 2, memoryBytes: 1 << 30, balloonTargetBytes: 512 << 20)
-            ]
+            ],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()]
         )
         #expect(plan.items.isEmpty)
     }

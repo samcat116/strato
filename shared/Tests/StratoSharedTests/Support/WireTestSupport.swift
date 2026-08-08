@@ -48,6 +48,14 @@ enum Fixtures {
     static let uuidB = UUID(uuidString: "BBBBBBBB-5555-6666-7777-888888888888")!
     static let requestId = "req-0001"
 
+    /// A minimal message for envelope-level tests that only care about the
+    /// wrapper. Console frames are the natural choice now that every
+    /// durable-resource verb rides the sync instead (STR-151).
+    static func consoleConnect(vmId: String) -> ConsoleConnectMessage {
+        ConsoleConnectMessage(
+            requestId: requestId, timestamp: timestamp, vmId: vmId, sessionId: "sess-1")
+    }
+
     static let imageInfo = ImageInfo(
         imageId: uuidA,
         projectId: uuidB,

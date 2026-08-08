@@ -295,6 +295,62 @@ final class DesiredStateAssemblerTests {
         }
     }
 
+    // MARK: - Edge nonces (ADR 0001 stage 9, STR-151)
+
+    @Test("Edge nonces reach the sync only once they have been asked for")
+    func edgeNoncesRideTheSync() async throws {
+        try await withAssemblerApp { app, _, project in
+            let agentId = try await self.registerAgent(app: app, named: "nonce-agent")
+            let vm = try await self.placeVM(
+                app: app, project: project, named: "nonce-vm", onAgent: agentId)
+
+            // A VM nobody has restarted or restored puts nothing on the wire:
+            // sending a zero would be a subtly different claim from sending
+            // nothing, and it would put both keys in every sync's digest.
+            var sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            var entry = try #require(sync.vms.first { $0.vmId == vm.id })
+            #expect(entry.rebootGeneration == nil)
+            #expect(entry.restore == nil)
+
+            let snapshotID = UUID()
+            vm.requestReboot()
+            vm.requestRestore(snapshotID: snapshotID)
+            try await vm.save(on: app.db)
+
+            sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            entry = try #require(sync.vms.first { $0.vmId == vm.id })
+            #expect(entry.rebootGeneration == 1)
+            #expect(entry.restore?.generation == 1)
+            #expect(entry.restore?.snapshotId == snapshotID)
+            // A VM checkpoint lives inside the VM's own disks, so it never moves
+            // between hosts and there is nothing to stage.
+            #expect(entry.restore?.artifacts == nil)
+        }
+    }
+
+    @Test("Edge nonces are omitted entirely for pre-v34 agents")
+    func edgeNoncesOmittedForOldAgents() async throws {
+        try await withAssemblerApp { app, _, project in
+            // Such an agent decodes and discards them, so sending them would
+            // only misstate what the sync achieved — the same posture as the
+            // v26 metadata gate. The admission gate has already refused the
+            // mutation that could set one, so this is belt to those braces.
+            let agentId = try await self.registerAgent(
+                app: app, named: "pre-v34-agent",
+                protocolVersion: WireProtocol.edgeNonceMinimumVersion - 1)
+            let vm = try await self.placeVM(
+                app: app, project: project, named: "pre-v34-vm", onAgent: agentId)
+            vm.requestReboot()
+            try await vm.save(on: app.db)
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let entry = try #require(sync.vms.first { $0.vmId == vm.id })
+            #expect(entry.rebootGeneration == nil)
+            // The VM itself still syncs — only the nonce is withheld.
+            #expect(entry.spec.cpus == vm.cpu)
+        }
+    }
+
     // MARK: - The shared NIC resolution
 
     /// The spec's NIC list and the metadata's come from one

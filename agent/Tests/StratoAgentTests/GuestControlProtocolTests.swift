@@ -7,12 +7,17 @@ import Testing
 /// (issues #421/#423): every request encodes to the exact snake_case shape the
 /// guest's serde contract expects, and every guest response line decodes to
 /// the matching case. Pure JSON — no vsock required.
-@Suite("Sandbox Control Protocol Tests")
-struct SandboxControlProtocolTests {
+///
+/// These assertions predate the `SandboxControlProtocol` → ``GuestControlProtocol``
+/// rename and are unchanged by it: the wire format did not move, so they are the
+/// regression net proving it. Hardening coverage lives in
+/// `GuestControlProtocolHardeningTests`.
+@Suite("Guest Control Protocol Tests")
+struct GuestControlProtocolTests {
 
     /// Parse one encoded request line back into a JSON object (asserting the
     /// newline-terminated single-line framing on the way).
-    private func decodedObject(_ request: SandboxControlProtocol.Request) throws -> [String: Any] {
+    private func decodedObject(_ request: GuestControlProtocol.Request) throws -> [String: Any] {
         let line = request.encodedLine()
         #expect(line.last == 0x0A)
         let body = line.dropLast()
@@ -27,9 +32,9 @@ struct SandboxControlProtocolTests {
     func v1RequestsEncode() throws {
         // Byte-exact: the pre-v2 hand-rolled encoding is the guest's serde
         // contract, and the JSONEncoder-based path must keep producing it.
-        let pingLine = SandboxControlProtocol.Request.ping.encodedLine()
+        let pingLine = GuestControlProtocol.Request.ping.encodedLine()
         #expect(pingLine == Data("{\"type\":\"ping\"}\n".utf8))
-        let statusLine = SandboxControlProtocol.Request.getStatus.encodedLine()
+        let statusLine = GuestControlProtocol.Request.getStatus.encodedLine()
         #expect(statusLine == Data("{\"type\":\"get_status\"}\n".utf8))
     }
 
@@ -37,7 +42,7 @@ struct SandboxControlProtocolTests {
 
     @Test("exec encodes every field under its snake_case key")
     func execEncodesAllFields() throws {
-        let request = SandboxControlProtocol.ExecRequest(
+        let request = GuestControlProtocol.ExecRequest(
             argv: ["/bin/sh", "-c", "echo hi"],
             env: ["FOO": "bar"],
             cwd: "/app",
@@ -57,7 +62,7 @@ struct SandboxControlProtocolTests {
 
     @Test("exec omits optional fields instead of encoding null")
     func execOmitsAbsentOptionals() throws {
-        let request = SandboxControlProtocol.ExecRequest(argv: ["/bin/true"])
+        let request = GuestControlProtocol.ExecRequest(argv: ["/bin/true"])
         let object = try decodedObject(.exec(request))
         #expect(object["type"] as? String == "exec")
         #expect(object["argv"] as? [String] == ["/bin/true"])
@@ -110,7 +115,7 @@ struct SandboxControlProtocolTests {
 
     @Test("clock_synced decodes")
     func clockSyncedDecodes() throws {
-        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"clock_synced"}"#)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"clock_synced"}"#)
         #expect(response == .clockSynced)
     }
 
@@ -119,7 +124,7 @@ struct SandboxControlProtocolTests {
     @Test("launch encodes identity, config-drive shapes, and base64 entropy")
     func launchEncodes() throws {
         let entropy = Data([0x01, 0x02, 0xFE])
-        let request = SandboxControlProtocol.LaunchRequest(
+        let request = GuestControlProtocol.LaunchRequest(
             sandboxId: "sb-2",
             identityNonce: "n-2",
             imageConfig: SandboxConfigDrive.ImageConfig(
@@ -153,7 +158,7 @@ struct SandboxControlProtocolTests {
 
     @Test("launch omits entropy when absent")
     func launchOmitsAbsentEntropy() throws {
-        let request = SandboxControlProtocol.LaunchRequest(
+        let request = GuestControlProtocol.LaunchRequest(
             sandboxId: "sb-3", identityNonce: "n-3",
             imageConfig: SandboxConfigDrive.ImageConfig(
                 env: [], entrypoint: [], cmd: ["/bin/true"], workingDir: "", user: ""),
@@ -166,14 +171,14 @@ struct SandboxControlProtocolTests {
 
     @Test("launched decodes")
     func launchedDecodes() throws {
-        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"launched"}"#)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"launched"}"#)
         #expect(response == .launched)
     }
 
     @Test("reidentify encodes source guard, target identity, clock, and entropy")
     func reidentifyEncodes() throws {
         let entropy = Data(repeating: 0xA5, count: 32)
-        let request = SandboxControlProtocol.ReidentifyRequest(
+        let request = GuestControlProtocol.ReidentifyRequest(
             expectedSandboxId: "source",
             expectedNonce: "old-nonce",
             sandboxId: "fork",
@@ -195,15 +200,15 @@ struct SandboxControlProtocolTests {
 
     @Test("reidentified decodes")
     func reidentifiedDecodes() throws {
-        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"reidentified"}"#)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"reidentified"}"#)
         #expect(response == .reidentified)
     }
 
     @Test("held workload state decodes in a status response")
     func heldStateDecodes() throws {
-        let response = try SandboxControlProtocol.Response.decode(
+        let response = try GuestControlProtocol.Response.decode(
             line: #"{"type":"status","sandbox_id":"tpl","nonce":"n","state":"held"}"#)
-        let expected = SandboxControlProtocol.Response.status(
+        let expected = GuestControlProtocol.Response.status(
             sandboxId: "tpl", nonce: "n", state: .held, exitCode: nil)
         #expect(response == expected)
     }
@@ -225,14 +230,14 @@ struct SandboxControlProtocolTests {
 
     @Test("pong and status still decode")
     func v1ResponsesDecode() throws {
-        let pong = try SandboxControlProtocol.Response.decode(
+        let pong = try GuestControlProtocol.Response.decode(
             line: #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1"}"#)
         #expect(
             pong
                 == .pong(
                     sandboxId: "sb-1", nonce: "n-1", controlProtocolVersion: nil))
 
-        let versionedPong = try SandboxControlProtocol.Response.decode(
+        let versionedPong = try GuestControlProtocol.Response.decode(
             line:
                 #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1","control_protocol_version":3}"#
         )
@@ -241,19 +246,19 @@ struct SandboxControlProtocolTests {
                 == .pong(
                     sandboxId: "sb-1", nonce: "n-1", controlProtocolVersion: 3))
 
-        let running = try SandboxControlProtocol.Response.decode(
+        let running = try GuestControlProtocol.Response.decode(
             line: #"{"type":"status","sandbox_id":"sb-1","nonce":"n-1","state":"running"}"#)
-        let expectedRunning = SandboxControlProtocol.Response.status(
+        let expectedRunning = GuestControlProtocol.Response.status(
             sandboxId: "sb-1", nonce: "n-1", state: .running, exitCode: nil)
         #expect(running == expectedRunning)
 
-        let exited = try SandboxControlProtocol.Response.decode(
+        let exited = try GuestControlProtocol.Response.decode(
             line: #"{"type":"status","sandbox_id":"sb-1","nonce":"n-1","state":"exited","exit_code":3}"#)
-        let expectedExited = SandboxControlProtocol.Response.status(
+        let expectedExited = GuestControlProtocol.Response.status(
             sandboxId: "sb-1", nonce: "n-1", state: .exited, exitCode: 3)
         #expect(exited == expectedExited)
 
-        let error = try SandboxControlProtocol.Response.decode(line: #"{"type":"error","message":"boom"}"#)
+        let error = try GuestControlProtocol.Response.decode(line: #"{"type":"error","message":"boom"}"#)
         #expect(error == .error(message: "boom"))
     }
 
@@ -261,7 +266,7 @@ struct SandboxControlProtocolTests {
 
     @Test("exec_started decodes")
     func execStartedDecodes() throws {
-        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"exec_started"}"#)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"exec_started"}"#)
         #expect(response == .execStarted)
     }
 
@@ -269,31 +274,31 @@ struct SandboxControlProtocolTests {
     func outputDecodes() throws {
         let payload = Data("hello\n".utf8)
         let line = #"{"type":"output","stream":"stderr","data":"\#(payload.base64EncodedString())"}"#
-        let response = try SandboxControlProtocol.Response.decode(line: line)
+        let response = try GuestControlProtocol.Response.decode(line: line)
         #expect(response == .output(stream: "stderr", data: payload))
     }
 
     @Test("output with missing or invalid base64 data is malformed")
     func outputRejectsBadData() {
-        #expect(throws: SandboxControlError.self) {
-            try SandboxControlProtocol.Response.decode(line: #"{"type":"output","stream":"stdout"}"#)
+        #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(line: #"{"type":"output","stream":"stdout"}"#)
         }
-        #expect(throws: SandboxControlError.self) {
-            try SandboxControlProtocol.Response.decode(
+        #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(
                 line: #"{"type":"output","stream":"stdout","data":"%%%not-base64%%%"}"#)
         }
-        #expect(throws: SandboxControlError.self) {
-            try SandboxControlProtocol.Response.decode(line: #"{"type":"output","data":"aGk="}"#)
+        #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(line: #"{"type":"output","data":"aGk="}"#)
         }
     }
 
     @Test("exec_exit decodes its exit code and requires one")
     func execExitDecodes() throws {
-        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"exec_exit","exit_code":137}"#)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"exec_exit","exit_code":137}"#)
         #expect(response == .execExit(exitCode: 137))
 
-        #expect(throws: SandboxControlError.self) {
-            try SandboxControlProtocol.Response.decode(line: #"{"type":"exec_exit"}"#)
+        #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(line: #"{"type":"exec_exit"}"#)
         }
     }
 
@@ -301,36 +306,36 @@ struct SandboxControlProtocolTests {
     func logDecodes() throws {
         let payload = Data("a line".utf8)
         let line = #"{"type":"log","seq":18,"stream":"stdout","data":"\#(payload.base64EncodedString())"}"#
-        let response = try SandboxControlProtocol.Response.decode(line: line)
+        let response = try GuestControlProtocol.Response.decode(line: line)
         #expect(response == .log(seq: 18, stream: "stdout", data: payload))
 
-        #expect(throws: SandboxControlError.self) {
-            try SandboxControlProtocol.Response.decode(line: #"{"type":"log","stream":"stdout","data":"aGk="}"#)
+        #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(line: #"{"type":"log","stream":"stdout","data":"aGk="}"#)
         }
-        #expect(throws: SandboxControlError.self) {
-            try SandboxControlProtocol.Response.decode(line: #"{"type":"log","seq":1,"data":"aGk="}"#)
+        #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(line: #"{"type":"log","seq":1,"data":"aGk="}"#)
         }
-        #expect(throws: SandboxControlError.self) {
-            try SandboxControlProtocol.Response.decode(line: #"{"type":"log","seq":1,"stream":"stdout"}"#)
+        #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(line: #"{"type":"log","seq":1,"stream":"stdout"}"#)
         }
     }
 
     @Test("log_eof decodes as the log stream's terminal marker")
     func logEofDecodes() throws {
-        let response = try SandboxControlProtocol.Response.decode(line: #"{"type":"log_eof"}"#)
+        let response = try GuestControlProtocol.Response.decode(line: #"{"type":"log_eof"}"#)
         #expect(response == .logEof)
     }
 
     @Test("a trailing newline on a response line is tolerated")
     func trailingNewlineTolerated() throws {
-        let response = try SandboxControlProtocol.Response.decode(line: "{\"type\":\"exec_started\"}\n")
+        let response = try GuestControlProtocol.Response.decode(line: "{\"type\":\"exec_started\"}\n")
         #expect(response == .execStarted)
     }
 
     @Test("unknown response types are malformed")
     func unknownTypeRejected() {
-        #expect(throws: SandboxControlError.self) {
-            try SandboxControlProtocol.Response.decode(line: #"{"type":"mystery"}"#)
+        #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(line: #"{"type":"mystery"}"#)
         }
     }
 }

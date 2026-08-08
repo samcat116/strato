@@ -284,6 +284,13 @@ extension VM: ConvergingResource {
         convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
         finalizers = committed.finalizers
+        // The edge nonces (STR-151) are refreshed for `generation`'s reason,
+        // and losing one is worse: a stale snapshot written back over a racing
+        // reboot would not merely drop a generation bump, it would drop the
+        // *edge*, and no later sync re-derives it.
+        rebootGeneration = committed.rebootGeneration
+        restoreGeneration = committed.restoreGeneration
+        restoreSnapshotID = committed.restoreSnapshotID
     }
 }
 
@@ -307,6 +314,8 @@ extension Sandbox: ConvergingResource {
         convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
         finalizers = committed.finalizers
+        restoreGeneration = committed.restoreGeneration
+        restoreSnapshotID = committed.restoreSnapshotID
     }
 }
 

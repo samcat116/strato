@@ -3,25 +3,13 @@ import Testing
 
 @testable import StratoShared
 
-/// What is left of the full-VM checkpoint message set after ADR 0001 stage 8
-/// (STR-150): the restore edge, and the tag derivation both sides depend on.
-/// Capture and delete are desired state now and are pinned by
-/// `SnapshotReconciliationTests`.
-@Suite("VM checkpoint messages (issue #564)")
+/// What is left of the full-VM checkpoint message set: no messages at all.
+/// Capture and delete became desired state at wire v33 (ADR 0001 stage 8,
+/// STR-150) and restore became an edge-nonce at v34 (stage 9, STR-151); both are
+/// pinned by `SnapshotReconciliationTests` and `EdgeNonceReconciliationTests`.
+/// The tag derivation both sides depend on is what remains.
+@Suite("VM checkpoint snapshot tags (issue #564)")
 struct VMSnapshotMessageTests {
-    @Test("restore request survives the envelope")
-    func restoreRoundTrips() throws {
-        let message = VMRestoreMessage(
-            requestId: Fixtures.requestId,
-            timestamp: Fixtures.timestamp,
-            vmId: Fixtures.uuidA.uuidString,
-            snapshotId: Fixtures.uuidB.uuidString)
-
-        let decoded = try throughEnvelope(message)
-        #expect(decoded.type == .vmRestore)
-        #expect(decoded.snapshotId == Fixtures.uuidB.uuidString)
-    }
-
     @Test("snapshot tags are valid QEMU identifiers derived from the id")
     func tagDerivation() {
         let tag = VMSnapshotTag.tag(for: "AAAAAAAA-1111-2222-3333-444444444444")

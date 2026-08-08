@@ -66,7 +66,8 @@ struct SnapshotReconciliationTests {
                         exported: true))
             case .delete:
                 artifacts.removeValue(forKey: item.id)
-            case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach:
+            case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach,
+                .reboot, .restore:
                 break
             }
         }
@@ -75,7 +76,9 @@ struct SnapshotReconciliationTests {
     }
 
     private static func reconciler(_ actuator: MockSnapshotActuator) -> Reconciler {
-        Reconciler(actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+        Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
     }
 
     private static func sync(

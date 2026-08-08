@@ -176,10 +176,12 @@ is the per-VM metadata document itself: the control plane builds it (the
 factory extension in `InstanceMetadataFactory.swift`) and
 `DesiredStateAssembler` attaches it to each VM's
 `DesiredVMState.metadata` (wire v26, STR-48/51;
-`shared/Sources/StratoShared/InstanceMetadata.swift`), so agents already hold,
-per VM, exactly what a metadata listener should serve. With both halves in
-place, the only piece missing for guest-visible IMDS is the HTTP listener
-inside the namespace (STR-56).
+`shared/Sources/StratoShared/InstanceMetadata.swift`). The agent keeps it in
+`MetadataStore` (STR-52), written by the reconciler as syncs arrive and read
+with no control-plane round trip, so it holds per VM exactly what a metadata
+listener should serve — see [agent](./agent.md) §Instance metadata store. With
+both halves in place, the only piece missing for guest-visible IMDS is the HTTP
+listener inside the namespace (STR-56).
 
 The localport realization itself has **two halves with two different owners**,
 and that shape is load-bearing rather than incidental:
@@ -411,6 +413,17 @@ first VM on a lowered-MTU network pulls `br-int`'s own MTU down host-wide. The
 latter is inert in a standard OVN deployment — nothing routes via the `br-int`
 internal port — but it is a host-scoped effect of a per-VM setting.
 
+**The guest side is static, not DHCP.** A sandbox's NIC is configured from the
+config drive's `network` block (schema v2, STR-101): the init matches the
+interface by MAC, sets the address/prefix/gateway per family, applies the same
+`NetworkSpec.mtu` the host devices got, and writes `/etc/resolv.conf` and
+`/etc/hosts` into the container rootfs. The port's OVN DHCP options are still
+programmed, so an image running its own client still gets a lease — the guest
+simply does not need one, which keeps a DHCP round trip off the cold-start path.
+This differs from the VM path, where cloud-init honours `dhcpEnabled` and omits
+static addressing; a sandbox has no cloud-init, and its address is known before
+it boots. Details in [sandboxes.md](./sandboxes.md#guest-networking-the-holding-pattern).
+
 **Host requirements.** iproute2's `ip` *and* `tc`, plus the kernel's `sch_clsact`,
 `cls_matchall`, and `act_mirred` modules. Both binaries are invoked by absolute
 path resolved from a fixed candidate list, not via `PATH` — a service manager's
@@ -431,7 +444,7 @@ that the control plane still records as having one.
 
 **Not yet wired end to end.** `SandboxSpecBuilder.guestNetworkingSupported` is
 still `false`, so no sandbox `NetworkSpec` reaches an agent. The full holding
-pattern — what blocks the flag (STR-101, STR-103) and the security-group and
+pattern — what blocks the flag (STR-103) and the security-group and
 snapshot arms queued behind it (STR-102, STR-104) — is tracked in
 [sandboxes.md](./sandboxes.md#guest-networking-the-holding-pattern).
 

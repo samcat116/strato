@@ -19,39 +19,16 @@ import Foundation
 // QEMU version and device nodes coming back on the observed report instead of
 // in a one-shot RPC reply that a dropped socket could lose.
 //
-// `vm_restore` stays imperative for now. Loading a captured RAM image back into
-// a live QEMU process really is an edge rather than a state — "the VM should be
-// at checkpoint C" is not something an agent can re-converge on, because the
-// guest starts writing the moment it resumes. STR-151 converts it to a
-// monotonic nonce on the desired entry, which is the shape edges take.
-
-/// Ask an agent to restore a VM in place from one of its checkpoints: load the
-/// captured RAM and device state back into the VM's QEMU process and resume.
-/// Same VM, same identity — it keeps its ID, disks, NICs, and addresses.
-///
-/// The VM must exist on the agent (created, running, or stopped); a VM whose
-/// QEMU process is gone is re-created by the desired-state sync first, which
-/// is what makes "restore after an agent restart" work without any extra
-/// message.
-public struct VMRestoreMessage: WebSocketMessage {
-    public var type: MessageType { .vmRestore }
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-    public let snapshotId: String
-
-    public init(
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        vmId: String,
-        snapshotId: String
-    ) {
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-        self.snapshotId = snapshotId
-    }
-}
+// `vm_restore` followed at wire v34 (stage 9, STR-151), by the other route out
+// of the same false dichotomy. Loading a captured RAM image back into a live
+// QEMU process really *is* an edge rather than a state — "the VM should be at
+// checkpoint C" is not something an agent can re-converge on, because the guest
+// starts writing the moment it resumes — so it did not become a state by being
+// re-described. It became one by being **counted**: `DesiredVMState.restore`
+// carries a monotonic nonce and the checkpoint it names, the agent acts only
+// when the nonce outranks the one it durably recorded, and a sync that is
+// dropped, replayed or re-driven converges instead of rewinding a live guest
+// twice. Nothing in this file is a message any more.
 
 // MARK: - Snapshot tags
 

@@ -123,7 +123,8 @@ struct HypervisorHangResilienceTests {
 
         let actuator = HangingActuator(hangFor: stuckVM.uuidString)
         let reconciler = Reconciler(
-            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
 
         await reconciler.apply(
             DesiredStateMessage(vms: [

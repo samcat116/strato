@@ -105,7 +105,7 @@ struct VolumeReconciliationTests {
                         path: current.path, format: current.format, sizeBytes: current.sizeBytes))
             case .delete:
                 volumes.removeValue(forKey: item.id)
-            case .adopt, .boot, .pause, .resume, .shutdown, .export:
+            case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore:
                 break
             }
         }
@@ -114,7 +114,9 @@ struct VolumeReconciliationTests {
     }
 
     private static func reconciler(_ actuator: MockVolumeActuator) -> Reconciler {
-        Reconciler(actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+        Reconciler(
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
     }
 
     private static func sync(
@@ -425,7 +427,8 @@ struct VolumeReconciliationTests {
             volumes: Dictionary(
                 uniqueKeysWithValues: volumeIds.map { ($0.uuidString, VolumePresence.managed(Self.facts())) }))
         let reconciler = Reconciler(
-            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
 
         let sync = DesiredStateMessage(
             vms: [],
@@ -455,7 +458,8 @@ struct VolumeReconciliationTests {
             volumes: Dictionary(
                 uniqueKeysWithValues: volumeIds.map { ($0.uuidString, VolumePresence.managed(Self.facts())) }))
         let reconciler = Reconciler(
-            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"))
+            actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
+            metadataStore: MetadataStore())
 
         let sync = DesiredStateMessage(
             vms: [],

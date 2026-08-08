@@ -307,9 +307,11 @@ Why this shape:
   `supportsReidentify(_:)` is the established precedent for version-gating a new
   capability. Adding a v4 identity port plus the forwarder is a contained change.
 - **VMs: one device short.** `QEMUService` attaches `virtio-serial-pci` (console
-  and QGA) but no vsock. Adding `vhost-vsock-pci` with per-VM CID allocation is
-  the single blocker for parity, and it drags in CID collision handling across
-  re-adoption and checkpoint/restore — its own issue, and the largest one.
+  and QGA) but no vsock. Attaching `vhost-vsock-pci` is the single blocker for
+  parity. The CID half is done (STR-72): `VsockCIDAllocator` allocates from the
+  host-global namespace and the VM manifest persists each assignment, so
+  collisions across re-adoption and restart are handled — see
+  [agent](./agent.md#vsock-context-ids-str-72).
 - **The guest daemon for VMs** is installed once by cloud-init
   (`CloudInitProvisioner.makeNoCloudISO`, `write_files`/`runcmd`). Cloud-init is
   a legitimate **bootstrap** channel: it installs the daemon and **never carries
@@ -654,7 +656,7 @@ Filed under [#496](https://github.com/samcat116/strato/issues/496):
    and deduping re-sends across reconnects.
 6. Agent: minimal Workload API server, one identity per connection.
 7. Sandbox guest control protocol v4 identity channel + in-guest forwarder.
-8. QEMU `vhost-vsock-pci` with per-VM CID allocation.
+8. QEMU `vhost-vsock-pci` (host-global CID allocation landed in STR-72).
 9. `strato-guest-identity` daemon for VMs, installed by cloud-init.
 10. Fork/clone identity safety.
 11. Audit events and metrics for guest identity issuance and refusal.

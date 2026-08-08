@@ -51,15 +51,23 @@ applied. Non-integer values are rejected with `400`.
 
 ### Asynchronous mutations
 
-VM and sandbox lifecycle mutations (create/start/stop/restart/delete, VM
-pause/resume, VM and sandbox snapshot/restore) are **asynchronous**. They persist a
-desired-state change plus a `ResourceOperation` in one transaction and return
-`202 Accepted` with that operation. Poll `GET /api/operations/{operationID}`
-until `status` is terminal (`succeeded` or `failed`). A second mutation on a
-resource that already has a pending operation is rejected with `409`.
+VM, sandbox, volume and snapshot mutations (create/start/stop/restart/delete,
+VM pause/resume/resize, volume attach/detach/resize, snapshot capture/delete/
+export, and restore) are **asynchronous**. Each persists its desired-state
+change plus an append-only audit record in one transaction and returns
+`202 Accepted` with `{resource, targetGeneration, mutationId}`. Refetch the
+resource and read its `conditions` (below); a **delete** is the one mutation the
+resource cannot answer for — its success is the row's absence — so poll
+`GET /api/operations/{mutationId}` for that one.
 
-VM and sandbox responses also carry a **`conditions`** block, which answers the
-same question from the resource itself:
+There is deliberately **no** "an operation is already pending" `409`: desired
+state is level-triggered, so overlapping mutations are safe and the last one
+written is the one the agent converges on. Restart and restore are counted
+rather than commanded (a monotonic nonce on the resource's desired entry), so
+they overlap safely too; both are refused with `409` only when the owning agent
+is too old to apply them.
+
+Responses carry a **`conditions`** block, which is how a mutation is followed:
 
 ```json
 "conditions": {
@@ -72,18 +80,21 @@ same question from the resource itself:
 ```
 
 `converged` is true once the owning agent has confirmed converging to
-`targetGeneration` *and* what it observes satisfies the desired state — the
-same test that succeeds a pending operation, so refetching the resource until
-`converged` is equivalent to polling the operation, and additionally reports
-*what* the agent is doing (`phase`) and *why* it last failed (`degraded`).
-`degraded` can name an older generation than `targetGeneration` while a retry
-is in flight. Nothing stores this block: it is derived on read from the
+`targetGeneration` *and* what it observes satisfies the desired state. A
+mutation is done when `observedGeneration` reaches the `targetGeneration` its
+`202` returned and `converged` is true; it failed when `degraded.sinceGeneration`
+equals that generation. The block also reports *what* the agent is doing
+(`phase`), and `degraded` can name an older generation than `targetGeneration`
+while a retry is in flight. Nothing stores it: it is derived on read from the
 resource's generation counters and the convergence progress its agent reports
 ([ADR 0001](/adr/0001-declarative-agent-protocol)).
 
-Image and volume mutations are synchronous at the API layer: they return the
-resource immediately (often in a transitional status such as `pending` or
-`creating`) and converge in the background.
+`GET /api/operations/{id}` survives as a compatibility façade, synthesizing the
+old operation shape from the audit record and these same conditions.
+
+Image mutations are synchronous at the API layer: they return the resource
+immediately (often in a transitional status such as `pending` or `creating`)
+and converge in the background.
 
 ### Errors
 

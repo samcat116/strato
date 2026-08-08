@@ -87,6 +87,101 @@ final class VMOperationTests {
         return nil
     }
 
+    // MARK: - Reboot as an edge-nonce (ADR 0001 stage 9, STR-151)
+
+    /// Registers an agent and places `vm` on it, converged and running.
+    @discardableResult
+    private func placeOnAgent(
+        app: Application, vm: VM, wireProtocolVersion: Int = WireProtocol.currentVersion
+    ) async throws -> String {
+        let message = AgentRegisterMessage(
+            agentId: "reboot-agent",
+            hostname: "test-host",
+            version: "1.0.0",
+            capabilities: ["qemu"],
+            resources: AgentResources(
+                totalCPU: 16, availableCPU: 16,
+                totalMemory: 1 << 34, availableMemory: 1 << 34,
+                totalDisk: 1 << 40, availableDisk: 1 << 40),
+            protocolVersion: wireProtocolVersion)
+        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let agentUUID = try await app.agentService.registerAgent(
+            message, agentName: "reboot-agent", organizationScope: orgID.map { .organization($0) })
+
+        vm.hypervisorId = agentUUID.uuidString
+        vm.setStatus(.running)
+        vm.desiredStatus = .running
+        vm.generation = 1
+        vm.observedGeneration = 1
+        try await vm.save(on: app.db)
+        return agentUUID.uuidString
+    }
+
+    /// A reboot starts and ends `.running`, so `desiredStatus` cannot express
+    /// it — which is why it was the last VM verb still dispatched as an
+    /// imperative RPC. It rides the sync as a count now.
+    @Test("POST /api/vms/:id/restart bumps the reboot nonce and answers like every other mutation")
+    func restartBumpsTheRebootNonce() async throws {
+        try await withVMTestApp { app, _, vm, token in
+            try await placeOnAgent(app: app, vm: vm)
+
+            var accepted: AcceptedMutation<VMDetailResponse>?
+            try await app.test(.POST, "/api/vms/\(vm.id!)/restart") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                accepted = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+            }
+            let body = try #require(accepted)
+            #expect(body.targetGeneration == 2)
+
+            let stored = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(stored.rebootGeneration == 1)
+            // Untouched: a reboot is not a power-state change, and saying it was
+            // would have the next sync stop or start the guest.
+            #expect(stored.desiredStatus == .running)
+            #expect(stored.generation == 2)
+            #expect(stored.restoreGeneration == 0)
+
+            // A second request outranks the first rather than colliding with it:
+            // there is no "operation already pending" 409 on a level-triggered
+            // counter.
+            try await app.test(.POST, "/api/vms/\(vm.id!)/restart") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+            #expect(try await VM.find(vm.id, on: app.db)?.rebootGeneration == 2)
+
+            // Attributed and auditable like every other mutation.
+            let events = try await ResourceEvent.query(on: app.db)
+                .filter(\.$resourceID == vm.id!)
+                .filter(\.$mutation == .reboot)
+                .all()
+            #expect(events.count == 2)
+        }
+    }
+
+    /// With `vm_reboot` gone there is no fallback frame, and a pre-v34 agent
+    /// fails *silently*: it decodes the sync, ignores the nonce, plans no work,
+    /// and reports the bumped generation as converged. The API would tell the
+    /// user their VM restarted when it never did.
+    @Test("Restart is refused when the VM's agent predates edge nonces")
+    func restartRefusesPreV34Agent() async throws {
+        try await withVMTestApp { app, _, vm, token in
+            try await placeOnAgent(
+                app: app, vm: vm, wireProtocolVersion: WireProtocol.edgeNonceMinimumVersion - 1)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/restart") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("too old"))
+            }
+            #expect(try await VM.find(vm.id, on: app.db)?.rebootGeneration == 0)
+        }
+    }
+
     // MARK: - 202 + async failure recording
 
     @Test("POST /api/vms/:id/start returns 202 with the VM and its target generation")
