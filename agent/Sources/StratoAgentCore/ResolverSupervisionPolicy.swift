@@ -68,6 +68,76 @@ public struct DesiredResolver: Equatable, Sendable {
     }
 }
 
+/// A cheap digest of everything one network's rendering depends on, so an
+/// unchanged network can skip the render entirely.
+///
+/// The render is O(records) string building, and a zone's records span every VM
+/// on every attached network *fleet-wide* — so its cost grows with the cluster
+/// rather than with this host, while the overwhelmingly common outcome is a
+/// digest that matches and a result thrown away. This is the same hash-skip the
+/// OVN driver already does one layer up with `external_ids`, and it reuses the
+/// control plane's own `recordsHash` rather than computing a new one.
+public struct ResolverRenderKey: Equatable, Sendable {
+    private let value: String
+
+    public init(
+        zoneHashes: [String], upstreams: [String], searchDomain: String?, bindAddresses: [String]
+    ) {
+        // Length-prefixed for `DNSZoneAssembler.recordsHash`'s reason: every
+        // component is operator-supplied text, so any separator is one an
+        // operator can author, and two different inputs colliding is the single
+        // failure a change detector must not have.
+        func field(_ text: String) -> String { "\(text.utf8.count):\(text)" }
+        self.value =
+            (zoneHashes.sorted() + ["|"] + upstreams + ["|"] + [searchDomain ?? ""] + ["|"]
+            + bindAddresses)
+            .map(field).joined()
+    }
+}
+
+/// One network's resolver, as its inputs rather than as rendered files.
+///
+/// The supervisor renders from this only when `renderKey` has moved, which is
+/// what keeps an unchanged network from rebuilding every zone file on every
+/// sync.
+public struct ResolverRenderRequest: Sendable {
+    public let networkId: UUID
+    /// The zones attached to *this* network — the caller filters
+    /// `DesiredDNSZone.networkIds`, because a sync carries every zone this agent
+    /// has anything to do with and a namespace must never answer for a zone that
+    /// is not on its network.
+    public let zones: [DesiredDNSZone]
+    public let upstreams: [String]
+    public let searchDomain: String?
+    public let bindAddresses: [String]
+
+    public init(
+        networkId: UUID, zones: [DesiredDNSZone], upstreams: [String], searchDomain: String?,
+        bindAddresses: [String]
+    ) {
+        self.networkId = networkId
+        self.zones = zones
+        self.upstreams = upstreams
+        self.searchDomain = searchDomain
+        self.bindAddresses = bindAddresses
+    }
+
+    public var renderKey: ResolverRenderKey {
+        ResolverRenderKey(
+            zoneHashes: zones.map(\.recordsHash), upstreams: upstreams,
+            searchDomain: searchDomain, bindAddresses: bindAddresses)
+    }
+
+    /// The rendered configuration for this request.
+    public func render() -> DesiredResolver {
+        let rendering = CoreDNSZoneRenderer.render(
+            zones: zones, upstreams: upstreams, searchDomain: searchDomain,
+            bindAddresses: bindAddresses)
+        return DesiredResolver(
+            networkId: networkId, files: rendering.files, diagnostics: rendering.diagnostics)
+    }
+}
+
 /// What the supervisor knows about one network's resolver right now.
 public struct ObservedResolver: Equatable, Sendable {
     public let networkId: UUID
@@ -132,6 +202,28 @@ public enum ResolverSupervisionPolicy {
         // exactly what this exists to prevent.
         let exponent = min(max(consecutiveFailures - 1, 0), 6)
         return .seconds(min(1 << exponent, 60))
+    }
+
+    /// The shortest run that counts as the resolver having actually worked.
+    ///
+    /// The counter `restartDelay` and `isCrashLooping` read has to be cleared by
+    /// a *run*, not by a successful `fork`. Every failure the backoff exists for
+    /// — a Corefile CoreDNS refuses to parse, `:53` already held by an orphan —
+    /// spawns cleanly and exits a moment later, so clearing on spawn would pin
+    /// the delay at its first step forever and `crashLoopThreshold` would never
+    /// be reached. The operator would see "will restart" indefinitely and never
+    /// the error saying it is not coming back.
+    ///
+    /// 30s is comfortably longer than any of those failures take to surface
+    /// (CoreDNS parses its Corefile and binds before it serves anything) and
+    /// comfortably shorter than any legitimate lifetime, so it separates the two
+    /// without needing to know which failure occurred.
+    public static let healthyRuntimeSeconds: TimeInterval = 30
+
+    /// Whether a child that ran for `ranForSeconds` before exiting should clear
+    /// the consecutive-failure count.
+    public static func runProvedHealthy(ranForSeconds: TimeInterval) -> Bool {
+        ranForSeconds >= healthyRuntimeSeconds
     }
 
     /// The number of consecutive failures past which the supervisor should log

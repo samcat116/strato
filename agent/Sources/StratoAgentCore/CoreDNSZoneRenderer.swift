@@ -114,7 +114,7 @@ public enum CoreDNSZoneRenderer {
             // served authoritatively. Without the entry the catch-all would
             // forward its names upstream, which is the wrong answer: an empty
             // internal zone should NXDOMAIN, not leak the query.
-            recordsByOrigin[origin, default: []] += []
+            if recordsByOrigin[origin] == nil { recordsByOrigin[origin] = [] }
             labelForOrigin[origin] = zone.zoneName
 
             for record in zone.records {
@@ -153,8 +153,7 @@ public enum CoreDNSZoneRenderer {
             diagnostics.append(contentsOf: zoneDiagnostics)
             files.append(
                 RenderedFile(
-                    relativePath: "zones/\(zoneFileName(forOrigin: origin))",
-                    contents: body(serialSeed(records))))
+                    relativePath: "zones/\(zoneFileName(forOrigin: origin))", contents: body))
         }
 
         files.insert(
@@ -226,15 +225,14 @@ public enum CoreDNSZoneRenderer {
 
     // MARK: - Zone files
 
-    /// The body of one zone file, as a function of the serial seed.
+    /// The body of one zone file.
     ///
-    /// Returns a closure rather than a string so the caller supplies the seed —
-    /// the control plane's `recordsHash` for a forward zone, a locally derived
-    /// digest for a synthesized reverse one — without this function needing to
-    /// know which kind it is building.
+    /// The serial is derived from `records` here rather than supplied by the
+    /// caller: every zone this renders is seeded the same way, forward and
+    /// synthesized-reverse alike, so there was nothing for a caller to choose.
     private static func zoneBody(
         origin: String, records: [DesiredDNSRecord], in zoneLabel: String
-    ) -> (body: (String) -> String, diagnostics: [String]) {
+    ) -> (body: String, diagnostics: [String]) {
         var diagnostics: [String] = []
 
         // A CNAME may not coexist with other data at the same owner name (RFC
@@ -277,16 +275,15 @@ public enum CoreDNSZoneRenderer {
             }
         }
 
-        let body: (String) -> String = { seed in
+        let body =
             """
             $ORIGIN \(origin).
             $TTL \(defaultTTL)
             @\t\(defaultTTL)\tIN\tSOA\t\(nameserverName) \(hostmasterName) (\
-            \(serial(from: seed)) 7200 3600 1209600 \(defaultTTL) )
+            \(serial(from: serialSeed(records))) 7200 3600 1209600 \(defaultTTL) )
             @\t\(defaultTTL)\tIN\tNS\t\(nameserverName)
             \(lines.joined(separator: "\n"))
             """ + "\n"
-        }
         return (body, diagnostics)
     }
 

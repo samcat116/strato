@@ -93,6 +93,10 @@ struct ChassisServicePlanTests {
                 "/sbin/ip -n \(ns) link set dev lo up",
                 "/sbin/ip -n \(ns) addr add 169.254.169.254/32 dev \(device)",
                 "/sbin/ip -n \(ns) addr add fd00:ec2::254/128 dev \(device) nodad",
+                // The resolver is off here, so its addresses are removed rather
+                // than left configured on an interface that no longer serves it.
+                "/sbin/ip -n \(ns) addr del 169.254.169.253/32 dev \(device)",
+                "/sbin/ip -n \(ns) addr del fd00:ec2::253/128 dev \(device)",
                 "/sbin/ip -n \(ns) route add default dev \(device) src 169.254.169.254",
                 "/sbin/ip -n \(ns) -6 route add default dev \(device) src fd00:ec2::254",
             ])
@@ -108,13 +112,51 @@ struct ChassisServicePlanTests {
 
     @Test("A metadata-only network gets no resolver addresses, and vice versa")
     func servicesAreIndependent() {
-        let metadataOnly = argv(plan(metadata: true, resolver: false).interfaceSetup)
+        // `addr add` specifically: the disabled service's addresses do appear in
+        // the plan, as deletes — see `disabledServiceAddressesAreRemoved`.
+        func added(_ lines: [String]) -> [String] { lines.filter { $0.contains("addr add") } }
+
+        let metadataOnly = added(argv(plan(metadata: true, resolver: false).interfaceSetup))
         #expect(!metadataOnly.contains { $0.contains("169.254.169.253") })
         #expect(!metadataOnly.contains { $0.contains("fd00:ec2::253") })
 
-        let resolverOnly = argv(plan(metadata: false, resolver: true).interfaceSetup)
+        let resolverOnly = added(argv(plan(metadata: false, resolver: true).interfaceSetup))
         #expect(!resolverOnly.contains { $0.contains("169.254.169.254") })
         #expect(!resolverOnly.contains { $0.contains("fd00:ec2::254") })
+    }
+
+    @Test("A service turned off has its addresses removed, not just unadvertised")
+    func disabledServiceAddressesAreRemoved() {
+        // Realization re-runs when the service stamp changes, so without the
+        // deletes the namespace keeps addresses for a service it no longer
+        // serves and then reports converged — the drift the separate namespace
+        // probe exists to catch one layer up.
+        let resolverOnly = argv(plan(metadata: false, resolver: true).interfaceSetup)
+        #expect(resolverOnly.contains { $0.contains("addr del 169.254.169.254/32") })
+        #expect(resolverOnly.contains { $0.contains("addr del fd00:ec2::254/128") })
+
+        let metadataOnly = argv(plan(metadata: true, resolver: false).interfaceSetup)
+        #expect(metadataOnly.contains { $0.contains("addr del 169.254.169.253/32") })
+        #expect(metadataOnly.contains { $0.contains("addr del fd00:ec2::253/128") })
+    }
+
+    @Test("A service that is on is never deleted in the same pass that adds it")
+    func enabledServiceIsNotDeleted() {
+        let both = argv(plan(metadata: true, resolver: true).interfaceSetup)
+        #expect(!both.contains { $0.contains("addr del") })
+    }
+
+    @Test("The address deletes tolerate a namespace that never had them")
+    func addressDeletesAreTolerant() {
+        // The common path by far: a namespace built for one service has never
+        // held the other's addresses, and `ip addr del` fails on an address that
+        // is not there. Untolerated, that would roll the whole namespace back.
+        let deletes = plan(metadata: true, resolver: false).interfaceSetup
+            .filter { $0.arguments.contains("del") }
+        #expect(!deletes.isEmpty)
+        for command in deletes {
+            #expect(command.tolerates("RTNETLINK answers: Cannot assign requested address"))
+        }
     }
 
     @Test("The default route's preferred source is an address that actually exists")

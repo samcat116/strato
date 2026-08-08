@@ -593,4 +593,26 @@ final class DesiredStateDNSZoneTests {
             #expect(after.records.first { $0.type == "CNAME" }?.ttl == 120)
         }
     }
+
+    @Test("An agent this assembly cannot load is told nothing about resolvers")
+    func unknownAgentGetsSilence() async throws {
+        // `false` here would be an opinion, and an opinion is a teardown: it
+        // strips the resolver's addresses from the localport, reverts the DHCP
+        // row, and stops CoreDNS — on the one path that knows nothing about the
+        // host it is describing. Silence is the only honest answer.
+        try await withDNSSyncApp { app, _, project in
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "ghost-net", project: project, subnet: "10.77.0.0/24", gateway: "10.77.0.1")
+            network.resolverEnabled = true
+            try await network.save(on: app.db)
+
+            // An agent id no row matches — the synthetic and backstop syncs.
+            let sync = try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)
+            #expect(sync.networks.allSatisfy { $0.resolverEnabled == nil })
+            #expect(
+                sync.vms.allSatisfy { vm in
+                    vm.spec.networks.allSatisfy { $0.resolverEnabled == nil }
+                })
+        }
+    }
 }

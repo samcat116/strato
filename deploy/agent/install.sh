@@ -435,8 +435,13 @@ install_coredns() {
   if [ "$NETWORK_MODE" != "ovn" ]; then
     return 0
   fi
-  if command -v coredns >/dev/null 2>&1 \
-    && coredns -version 2>&1 | grep -q "CoreDNS-${COREDNS_VERSION}"; then
+  # Probed at the path the *agent* looks in, not through PATH. The agent
+  # resolves CoreDNS from an absolute candidate list, so a binary on PATH but
+  # outside that list (say /usr/sbin/coredns) would make this skip the install
+  # and then leave the agent registering `resolverCapable: false` — which, per
+  # the site-wide fold, withholds the resolver from every network in the site.
+  if [ -x "${BIN_DIR}/coredns" ] \
+    && "${BIN_DIR}/coredns" -version 2>&1 | grep -q "CoreDNS-${COREDNS_VERSION}"; then
     log "coredns ${COREDNS_VERSION} already installed; skipping download"
     return 0
   fi
@@ -448,6 +453,17 @@ install_coredns() {
   trap "rm -rf '$tmp'" RETURN
   log "Downloading CoreDNS ${COREDNS_VERSION} (${GOARCH})"
   fetch "${base}/${tarball}" "${tmp}/${tarball}" "coredns"
+  # Verified like every other artifact here. CoreDNS publishes a per-asset
+  # sha256 beside the tarball, so unlike spiffe-helper there is nothing to opt
+  # out of — and what lands is a root-owned binary the agent execs inside every
+  # tenant network namespace to parse packets a guest chose, which makes it the
+  # last thing on this host that should arrive unverified.
+  if fetch "${base}/${tarball}.sha256" "${tmp}/${tarball}.sha256" "coredns checksum" 2>/dev/null; then
+    (cd "$tmp" && sha256sum -c "${tarball}.sha256" >/dev/null) \
+      || die "checksum verification failed for ${tarball}"
+  else
+    warn "no published checksum for ${tarball}; installing unverified"
+  fi
   tar -xzf "${tmp}/${tarball}" -C "$tmp" coredns \
     || die "coredns tarball did not contain a 'coredns' binary"
   install -m 0755 "${tmp}/coredns" "${BIN_DIR}/coredns"
@@ -815,7 +831,7 @@ preflight() {
     # the control plane withholds a network's resolver unless every agent in the
     # site can serve one, so this host missing CoreDNS holds the whole site back.
     check_present "coredns (per-network DNS resolver)" \
-      "rerun this installer, or install CoreDNS to ${BIN_DIR}/coredns" command -v coredns
+      "rerun this installer, or install CoreDNS to ${BIN_DIR}/coredns" test -x "${BIN_DIR}/coredns"
   fi
   if [ "$PREFLIGHT_OK" -eq 0 ]; then
     warn "some host dependencies are missing (see [MISS] above); the agent will run but may report reduced capacity"

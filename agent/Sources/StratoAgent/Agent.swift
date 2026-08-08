@@ -549,12 +549,15 @@ actor Agent {
                     ? NetworkResolverDefaults.resolveBinaryPath(
                         configured: resolverConfig?.corednsBinaryPath, isExecutable: isExecutable)
                     : nil
-                let resolverSupervisor = resolverBinaryPath.map { binaryPath in
-                    ResolverSupervisor(
+                let resolverSupervisor = resolverBinaryPath.flatMap { binaryPath -> ResolverSupervisor? in
+                    // Both binaries are required: the resolver is forked *into*
+                    // a namespace, so no `ip` means no way in.
+                    guard let ipBinaryPath else { return nil }
+                    return ResolverSupervisor(
                         root: resolverConfig?.effectiveConfigDirectory
                             ?? NetworkResolverDefaults.configDirectory,
-                        binaryPath: binaryPath,
-                        ipBinaryPath: ipBinaryPath,
+                        host: ResolverProcessHost(
+                            binaryPath: binaryPath, ipBinaryPath: ipBinaryPath, logger: logger),
                         logger: logger)
                 }
                 self.resolverSupervisor = resolverSupervisor
@@ -2501,21 +2504,45 @@ extension Agent {
                     // agent. Two NICs on one network describe the same resolver,
                     // so the first wins — they are two copies of one row's
                     // columns, not two opinions.
+                    //
+                    // **The version gate is not sufficient here, and that is the
+                    // difference from `metadataNetworks` above.** A v37 sender
+                    // always emits `metadataEnabled`, so its per-NIC nil never
+                    // arises; `resolverEnabled` genuinely can be nil on every
+                    // spec of a v37 sync — the control plane withholds it for a
+                    // host it cannot describe, precisely so as not to disable a
+                    // live service. Deriving the list from the version alone
+                    // would turn that silence into a non-nil *empty* list, which
+                    // `ResolverSupervisionPolicy` reads as an instruction and
+                    // obeys: every CoreDNS stopped and every resolver address
+                    // dropped, restored on the next sync. A DNS outage per
+                    // occurrence, on the one path built to stay quiet.
+                    //
+                    // So field presence decides, not the version — with one
+                    // exception that has to stay an opinion. A host running *no
+                    // workloads* has no specs to carry the field, and that is a
+                    // statement rather than a silence: it serves nothing, so it
+                    // should serve no resolvers either. Without that arm the
+                    // last VM leaving a host would leak its resolvers forever.
                     let resolverNetworks: [ResolverNetworkConfig]?
                     if WireProtocol.supportsNetworkResolver(envelope.senderVersion) {
-                        var byNetwork: [UUID: ResolverNetworkConfig] = [:]
                         let specs =
                             message.vms.flatMap { $0.spec.networks }
                             + message.sandboxes.compactMap { $0.spec.network }
-                        for spec in specs where spec.resolverEnabled == true {
-                            guard byNetwork[spec.networkId] == nil else { continue }
-                            byNetwork[spec.networkId] = ResolverNetworkConfig(
-                                networkId: spec.networkId,
-                                upstreams: spec.dnsServers,
-                                searchDomain: spec.domainName)
-                        }
-                        resolverNetworks = byNetwork.values.sorted {
-                            $0.networkId.uuidString < $1.networkId.uuidString
+                        if !specs.isEmpty, specs.allSatisfy({ $0.resolverEnabled == nil }) {
+                            resolverNetworks = nil
+                        } else {
+                            var byNetwork: [UUID: ResolverNetworkConfig] = [:]
+                            for spec in specs where spec.resolverEnabled == true {
+                                guard byNetwork[spec.networkId] == nil else { continue }
+                                byNetwork[spec.networkId] = ResolverNetworkConfig(
+                                    networkId: spec.networkId,
+                                    upstreams: spec.dnsServers,
+                                    searchDomain: spec.domainName)
+                            }
+                            resolverNetworks = byNetwork.values.sorted {
+                                $0.networkId.uuidString < $1.networkId.uuidString
+                            }
                         }
                     } else {
                         resolverNetworks = nil

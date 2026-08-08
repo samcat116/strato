@@ -1,0 +1,393 @@
+import Foundation
+import Logging
+
+/// A running resolver, from the agent's side.
+public protocol ResolverHandle: Sendable {
+    /// False once the child has exited, however it exited.
+    var isRunning: Bool { get }
+    var processIdentifier: Int32 { get }
+    /// When the child exited, or nil while it is still running.
+    ///
+    /// The *moment* matters, not just the fact: the failure counter is cleared
+    /// by a run that lasted, and exits are noticed on the next reconcile — which
+    /// can be `desired_state_full_refetch_seconds` later. Measuring to the
+    /// moment it was noticed would make a child that died instantly look like
+    /// one that ran for five minutes, which is the same bug as resetting the
+    /// counter on a successful spawn, reached a different way.
+    var exitedAt: Date? { get }
+    /// SIGTERM, then SIGKILL after a grace period.
+    func terminate() async
+}
+
+/// One resolver a previous incarnation of this agent left running.
+public struct AdoptableResolver: Sendable, Equatable {
+    public let networkId: UUID
+    public let pid: Int32
+
+    public init(networkId: UUID, pid: Int32) {
+        self.networkId = networkId
+        self.pid = pid
+    }
+}
+
+/// Everything the supervisor does that touches the host.
+///
+/// Injected for `MetadataServerSpawning`'s reason, and it is the same reason
+/// twice over: the half of a supervisor worth asserting is the half that
+/// *stops* things, and none of it can be reached from a test while the actor
+/// forks processes and writes files directly. Adoption after a restart, the
+/// stop/reconcile race, and whether the failure counter actually counts
+/// failures are all lifecycle questions, not process questions.
+public protocol ResolverHosting: Sendable {
+    /// Write one network's rendered Corefile and zone files, and sweep any zone
+    /// file the rendering no longer contains. Throws so a failed write can
+    /// block the start that would otherwise run against a half-written Corefile.
+    func writeConfiguration(_ resolver: DesiredResolver, root: String) throws
+    /// Remove one network's directory entirely.
+    func removeConfiguration(networkId: UUID, root: String)
+    /// Start CoreDNS inside the network's chassis namespace.
+    func spawn(networkId: UUID, root: String) throws -> any ResolverHandle
+    /// Resolvers a previous agent process left running, recovered from the pid
+    /// files under `root`. Only entries whose pid is alive *and* is this
+    /// agent's CoreDNS are returned; everything else is swept.
+    func adoptable(root: String) -> [AdoptableResolver]
+    func isAlive(pid: Int32) -> Bool
+    /// Signal a process this agent did not fork, and so holds no handle for.
+    func terminate(pid: Int32) async
+}
+
+/// Runs one CoreDNS per network that publishes a resolver (STR-40).
+///
+/// The lifecycle half of the resolver. What to render lives in
+/// `CoreDNSZoneRenderer` and what to do lives in `ResolverSupervisionPolicy`;
+/// this owns the state machine between them, and delegates every host effect to
+/// `ResolverHosting` so the state machine is testable.
+///
+/// ## Why a process per network
+///
+/// The resolver terminates in the network's chassis namespace
+/// (`ChassisServicePlan`), which is where reply routing to an overlapping tenant
+/// address works. `setns(2)` is per-thread and does not compose with Swift's
+/// concurrency runtime, which schedules continuations across a shared pool, so a
+/// listener inside the agent would have to pin a thread per namespace and never
+/// let a continuation move. ADR 0003 anticipated this; STR-56's metadata
+/// listener and this one answered it the same way, independently.
+///
+/// ## Why this is not part of the network reconcile's authority half
+///
+/// A resolver serves the guests on *this* host, so it runs wherever they do,
+/// including on agents that may not author topology. Its input is the same
+/// per-NIC opt-out the chassis namespace uses, and it converges alongside it —
+/// before the authority guard.
+public actor ResolverSupervisor {
+    private let root: String
+    private let host: any ResolverHosting
+    private let now: @Sendable () -> Date
+    private let logger: Logger
+
+    private var state: [UUID: ResolverState] = [:]
+    private var adopted = false
+
+    private struct ResolverState {
+        var handle: (any ResolverHandle)?
+        /// A process this agent did not fork — one a previous incarnation
+        /// started and this one adopted. There is no handle for it, so liveness
+        /// is probed by pid instead.
+        var adoptedPID: Int32?
+        var configurationDigest: String?
+        /// The inputs the cached rendering was built from, so an unchanged
+        /// network skips the render entirely — see `ResolverRenderKey`.
+        var renderKey: ResolverRenderKey?
+        /// The last rendering, reused whenever `renderKey` still matches.
+        var rendering: DesiredResolver?
+        var consecutiveFailures = 0
+        /// When the current child was started, so an exit can be judged against
+        /// how long it survived rather than against the fact that `fork`
+        /// succeeded. See `recordExit`.
+        var startedAt: Date?
+        /// When a restart may next be attempted. Nil means immediately.
+        var nextStartAllowedAt: Date?
+
+        /// Whether something is serving this network right now.
+        ///
+        /// The adopted arm is load-bearing: without it an adopted CoreDNS reads
+        /// as "not running" on the first reconcile after an agent restart, and
+        /// the supervisor starts a **second** one into the same namespace —
+        /// which then fails to bind :53 and crash-loops beside a healthy one.
+        func isRunning(isAlive: (Int32) -> Bool) -> Bool {
+            if let handle { return handle.isRunning }
+            if let adoptedPID { return isAlive(adoptedPID) }
+            return false
+        }
+    }
+
+    public init(
+        root: String,
+        host: any ResolverHosting,
+        now: @escaping @Sendable () -> Date = Date.init,
+        logger: Logger
+    ) {
+        self.root = root
+        self.host = host
+        self.now = now
+        self.logger = logger
+    }
+
+    /// Converge this host's resolvers toward `desired`.
+    ///
+    /// Nil ≙ a sync with no opinion, which stops nothing — the contract every
+    /// other level-triggered list in the agent carries, and the one that matters
+    /// most here: a control plane rolled back below v37, or one that cannot
+    /// describe this host, must not take DNS away from every network on it.
+    public func reconcile(_ requests: [ResolverRenderRequest]?) async {
+        guard let requests else { return }
+        if !adopted {
+            adoptFromDisk()
+            adopted = true
+        }
+
+        // A child that died on its own is not running, whatever the map says.
+        // Recording the exit here rather than from a termination callback is
+        // what makes the failure accounting deterministic — and it is the shape
+        // `MetadataServerSupervisor` already uses for the same job. Syncs are
+        // the retry timer either way, so nothing is lost by noticing on the next
+        // one instead of the instant it happened.
+        for (networkId, current) in state where current.handle?.isRunning == false {
+            recordExit(networkId: networkId)
+        }
+
+        // Render only what moved. The key is the control plane's own per-zone
+        // `recordsHash` plus the three other inputs, so a steady-state sync —
+        // which is nearly all of them — costs a few string comparisons instead
+        // of rebuilding every zone file for every network on this host.
+        var desired: [DesiredResolver] = []
+        for request in requests {
+            var current = state[request.networkId] ?? ResolverState()
+            let key = request.renderKey
+            if current.renderKey != key || current.rendering == nil {
+                current.rendering = request.render()
+                current.renderKey = key
+                state[request.networkId] = current
+            }
+            if let rendering = current.rendering { desired.append(rendering) }
+        }
+
+        let observed = state.map { networkId, current in
+            ObservedResolver(
+                networkId: networkId,
+                pid: current.handle?.processIdentifier ?? current.adoptedPID,
+                running: current.isRunning(isAlive: host.isAlive),
+                configurationDigest: current.configurationDigest,
+                consecutiveFailures: current.consecutiveFailures)
+        }
+        let byNetwork = Dictionary(
+            desired.map { ($0.networkId, $0) }, uniquingKeysWith: { first, _ in first })
+
+        for action in ResolverSupervisionPolicy.actions(desired: desired, observed: observed) {
+            switch action {
+            case .writeConfiguration(let networkId):
+                guard let resolver = byNetwork[networkId] else { continue }
+                write(resolver)
+            case .start(let networkId):
+                guard let resolver = byNetwork[networkId] else { continue }
+                start(resolver)
+            case .stop(let networkId):
+                await stop(networkId: networkId)
+            }
+        }
+    }
+
+    /// Stops every resolver, for agent shutdown. A draining host must not keep
+    /// answering for networks it no longer converges.
+    public func shutdown() async {
+        for networkId in state.keys { await stop(networkId: networkId) }
+    }
+
+    /// Networks this supervisor believes it is serving. For tests and for the
+    /// agent's own diagnostics.
+    public func servedNetworks() -> Set<UUID> { Set(state.keys) }
+
+    /// Consecutive failures recorded for one network. Exposed so the escalation
+    /// this counter drives is assertable — it was not, and a bug that made the
+    /// whole backoff unreachable survived because of it.
+    public func failures(for networkId: UUID) -> Int {
+        state[networkId]?.consecutiveFailures ?? 0
+    }
+
+    // MARK: - Effects
+
+    private func write(_ resolver: DesiredResolver) {
+        do {
+            try host.writeConfiguration(resolver, root: root)
+            state[resolver.networkId, default: ResolverState()].configurationDigest =
+                resolver.configurationDigest
+            for diagnostic in resolver.diagnostics {
+                logger.warning(
+                    "Resolver zone rendering skipped a record",
+                    metadata: [
+                        "networkId": .string(resolver.networkId.uuidString),
+                        "detail": .string(diagnostic),
+                    ])
+            }
+        } catch {
+            logger.error(
+                "Failed to write resolver configuration",
+                metadata: [
+                    "networkId": .string(resolver.networkId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+            // Leave the digest unset so the next pass rewrites and retries
+            // rather than believing the files on disk match what was rendered.
+            state[resolver.networkId, default: ResolverState()].configurationDigest = nil
+        }
+    }
+
+    private func start(_ resolver: DesiredResolver) {
+        let networkId = resolver.networkId
+        var current = state[networkId] ?? ResolverState()
+        if let allowed = current.nextStartAllowedAt, allowed > now() {
+            // Still inside the backoff window. Returning silently is deliberate:
+            // this runs on every sync, and a log line per suppressed retry would
+            // drown the one that explains the failure.
+            state[networkId] = current
+            return
+        }
+        // Nothing was written for this network yet — the write failed, and
+        // starting CoreDNS against a missing or half-written Corefile is how a
+        // crash loop starts.
+        guard current.configurationDigest != nil else {
+            state[networkId] = current
+            return
+        }
+
+        do {
+            let handle = try host.spawn(networkId: networkId, root: root)
+            current.handle = handle
+            current.adoptedPID = nil
+            current.startedAt = now()
+            current.nextStartAllowedAt = nil
+            state[networkId] = current
+            logger.info(
+                "Started per-network resolver",
+                metadata: [
+                    "networkId": .string(networkId.uuidString),
+                    "pid": .stringConvertible(handle.processIdentifier),
+                ])
+        } catch {
+            current.consecutiveFailures += 1
+            current.nextStartAllowedAt = now().addingTimeInterval(
+                delaySeconds(current.consecutiveFailures))
+            state[networkId] = current
+            log(failure: error.localizedDescription, networkId: networkId, state: current)
+        }
+    }
+
+    /// Records a child's exit, so the next sync restarts it.
+    ///
+    /// **The failure counter is cleared by a run, never by a spawn.** The
+    /// failures this backoff exists for — a Corefile CoreDNS refuses to parse,
+    /// `:53` already held — `fork` perfectly well and exit a moment later, so
+    /// resetting on a successful spawn would pin the delay at its first step and
+    /// `crashLoopThreshold` would never be reached: the operator would see
+    /// "will restart" forever and never the error that says it is not coming
+    /// back. Judging the exit by how long the child survived is what makes the
+    /// escalation reachable, and it still forgives the ordinary case — a
+    /// resolver that ran for days and was restarted by a config change starts
+    /// again from zero.
+    ///
+    /// The restart itself is driven by the reconcile pass rather than from here:
+    /// a sync arrives at least every `desired_state_full_refetch_seconds`, so a
+    /// dead resolver is picked up without this actor owning a timer.
+    private func recordExit(networkId: UUID) {
+        guard var current = state[networkId], current.handle?.isRunning == false else { return }
+        let exitedAt = current.handle?.exitedAt ?? now()
+        let ranFor = current.startedAt.map { exitedAt.timeIntervalSince($0) } ?? 0
+        current.handle = nil
+        current.startedAt = nil
+        if ResolverSupervisionPolicy.runProvedHealthy(ranForSeconds: ranFor) {
+            current.consecutiveFailures = 0
+        }
+        current.consecutiveFailures += 1
+        current.nextStartAllowedAt = now().addingTimeInterval(delaySeconds(current.consecutiveFailures))
+        state[networkId] = current
+        log(failure: "exited after \(Int(ranFor))s", networkId: networkId, state: current)
+    }
+
+    private func stop(networkId: UUID) async {
+        // The pid this call is stopping, captured before the suspensions below.
+        // `terminate` sleeps through its SIGTERM→SIGKILL grace, and a reconcile
+        // can interleave in that window: if it re-desires the network it will
+        // see the entry as not running and start a fresh CoreDNS, whose handle
+        // this call would then discard along with its config directory — leaving
+        // an unsupervised process holding :53 that nothing can ever find again.
+        let stopping = state[networkId]?.handle?.processIdentifier ?? state[networkId]?.adoptedPID
+        if let handle = state[networkId]?.handle {
+            await handle.terminate()
+        } else if let pid = state[networkId]?.adoptedPID, host.isAlive(pid: pid) {
+            await host.terminate(pid: pid)
+        }
+        // Re-read after the suspension: if the entry now names a different
+        // process, a reconcile started one while this call was sleeping and it
+        // is not ours to reap.
+        let current = state[networkId]?.handle?.processIdentifier ?? state[networkId]?.adoptedPID
+        guard current == stopping else { return }
+        state[networkId] = nil
+        host.removeConfiguration(networkId: networkId, root: root)
+        logger.info(
+            "Stopped per-network resolver", metadata: ["networkId": .string(networkId.uuidString)])
+    }
+
+    // MARK: - Restart adoption
+
+    /// Rebuilds state from disk on the first pass after an agent restart.
+    ///
+    /// A CoreDNS started by a previous agent process is still serving its
+    /// network, and killing it to start an identical one would cost that network
+    /// its resolver for the length of a process start — for nothing. So a
+    /// recorded pid that is still alive is *adopted*: left running, and its
+    /// configuration rewritten in place if the desired state has moved.
+    ///
+    /// Adoption is deliberately weak. The agent cannot re-parent a process it
+    /// did not fork, so it holds no handle for an adopted child and cannot
+    /// observe its exit; what it records instead is "something is serving this
+    /// network", which the next reconcile re-checks.
+    private func adoptFromDisk() {
+        for candidate in host.adoptable(root: root) {
+            // No digest recorded: the adopted process's configuration is
+            // whatever the previous agent wrote, and the first reconcile should
+            // rewrite it rather than assume it still matches desired state. The
+            // rewrite costs no restart — the Corefile's `reload` and the `file`
+            // plugin's watch are what the adopted process picks it up with.
+            state[candidate.networkId] = ResolverState(
+                handle: nil, adoptedPID: candidate.pid, configurationDigest: nil)
+            logger.info(
+                "Adopted a running per-network resolver",
+                metadata: [
+                    "networkId": .string(candidate.networkId.uuidString),
+                    "pid": .stringConvertible(candidate.pid),
+                ])
+        }
+    }
+
+    // MARK: - Helpers
+
+    private nonisolated func delaySeconds(_ failures: Int) -> TimeInterval {
+        let delay = ResolverSupervisionPolicy.restartDelay(consecutiveFailures: failures)
+        return TimeInterval(delay.components.seconds)
+    }
+
+    private func log(failure: String, networkId: UUID, state current: ResolverState) {
+        let metadata: Logger.Metadata = [
+            "networkId": .string(networkId.uuidString),
+            "failures": .stringConvertible(current.consecutiveFailures),
+            "detail": .string(failure),
+        ]
+        // Below the threshold this is what a restart during a zone edit looks
+        // like; above it, something is wrong that a retry will not fix.
+        if ResolverSupervisionPolicy.isCrashLooping(consecutiveFailures: current.consecutiveFailures) {
+            logger.error("Per-network resolver is crash-looping", metadata: metadata)
+        } else {
+            logger.warning("Per-network resolver exited; will restart", metadata: metadata)
+        }
+    }
+}

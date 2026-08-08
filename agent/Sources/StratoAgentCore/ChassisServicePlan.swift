@@ -202,6 +202,31 @@ public struct ChassisServicePlan: Sendable, Equatable {
                     ], ["File exists"]))
         }
 
+        // A service turned *off* has its addresses removed, not merely left
+        // unadvertised. Realization re-runs when the `strato-services` stamp
+        // changes, so without this the namespace keeps addresses for a service
+        // it no longer serves and then reports converged — exactly the drift
+        // `ObservedChassisServicePort`'s separate namespace probe exists to
+        // catch one layer up. Guests cannot reach them (the NB port stops
+        // advertising them, so nothing answers their ARP), but "harmless" and
+        // "honest" are different properties, and an operator reading `ip addr`
+        // in the namespace should see what it actually serves.
+        //
+        // Tolerated because the common path is a namespace that never had them.
+        let absent = ["Cannot assign requested address", "Cannot find device", "No such"]
+        if !metadata {
+            setup.append(
+                ip(["-n", namespace, "addr", "del", InstanceMetadataEndpoint.cidr, "dev", device], absent))
+            setup.append(
+                ip(["-n", namespace, "addr", "del", InstanceMetadataEndpoint.cidrV6, "dev", device], absent))
+        }
+        if !resolver {
+            setup.append(
+                ip(["-n", namespace, "addr", "del", NetworkResolverEndpoint.cidr, "dev", device], absent))
+            setup.append(
+                ip(["-n", namespace, "addr", "del", NetworkResolverEndpoint.cidrV6, "dev", device], absent))
+        }
+
         // Replies go to the guest's tenant address, for which the namespace has
         // no route otherwise. A default route is unambiguous here because the
         // namespace has exactly one non-loopback interface, and it covers any

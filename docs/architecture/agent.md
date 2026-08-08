@@ -918,11 +918,35 @@ listener inside the agent, because `setns(2)` is per-thread and does not compose
 with Swift's concurrency runtime — the cost ADR 0003 named and left to its first
 consumer.
 
+The supervisor takes its host effects through an injected `ResolverHosting`, the
+shape `MetadataServerSupervisor` uses for the same reason: adoption, the
+stop/reconcile race, and whether the failure counter actually escalates are
+lifecycle questions that cannot be asked of an actor that forks processes
+directly. `StratoAgent/ResolverProcessHost.swift` is the real one.
+
 The decisions live in two pure types the tests can reach:
 `StratoAgentCore/CoreDNSZoneRenderer.swift` produces the `Corefile` and zone
 files (golden-tested, like `CloudInitProvisioner.networkConfigYAML`), and
 `ResolverSupervisionPolicy.swift` decides what to write, when to start, and how
-long to back off. Every path under `<config_dir>/<network-uuid>/` is derived
+long to back off.
+
+Two skips keep a steady-state sync cheap, and they are independent.
+`ResolverRenderKey` — the control plane's per-zone `recordsHash` plus the
+upstreams, search domain and bind addresses — decides whether to *build* the
+files at all, which matters because a zone's records span every VM on every
+attached network fleet-wide, so the render's cost grows with the cluster rather
+than with this host. `DesiredResolver.configurationDigest` then decides whether
+to *write* them, so a hash that moved without changing what this backend emits
+reaches neither the disk nor CoreDNS's file watch.
+
+**The failure counter is cleared by a run, not by a spawn.** Every failure the
+backoff exists for — a Corefile CoreDNS refuses to parse, `:53` already held by
+an orphan — forks cleanly and exits a moment later, so resetting on a successful
+spawn would pin the delay at its first step and the crash-loop threshold would
+never be reached. Exits are noticed on the next reconcile rather than from a
+callback, which keeps the accounting deterministic, so the handle carries the
+*moment* it exited: measuring to when it was noticed would make a child that died
+instantly look like one that ran for a five-minute sync interval. Every path under `<config_dir>/<network-uuid>/` is derived
 from the network id, the `VMDirectoryLayout` convention, which is what lets a
 restarted agent rederive them all — and reap directories for networks it no
 longer serves.

@@ -636,21 +636,38 @@ struct DesiredStateAssembler {
         guard let site, let siteID = site.id else {
             return agent.resolverCapable
         }
-        let siteAgents = try await Agent.query(on: db)
+        // Counted in the database rather than materialized: this runs once per
+        // sync per agent, and the question is an all-satisfy over rows this
+        // assembly has no other use for.
+        let incapable = try await Agent.query(on: db)
             .filter(\.$site.$id == siteID)
-            .all()
-        guard !siteAgents.isEmpty else { return false }
-        guard siteAgents.allSatisfy(\.resolverCapable) else {
+            .filter(\.$resolverCapable == false)
+            .count()
+        guard incapable == 0 else {
+            // The names cost a second query, but only on the path that is
+            // already withholding a service — and without them the operator is
+            // told a site is holding the feature back with no way to find which
+            // host. The remedy is in the message because it is not obvious: a
+            // decommissioned agent whose row was never deleted counts here
+            // forever, and looks identical to one that is merely un-upgraded.
+            let names = try await Agent.query(on: db)
+                .filter(\.$site.$id == siteID)
+                .filter(\.$resolverCapable == false)
+                .all()
+                .map(\.name).sorted()
             app.logger.notice(
                 "Withholding the per-network DNS resolver: not every agent in the site can run it",
                 metadata: [
                     "siteId": .string(siteID.uuidString),
-                    "incapableAgents": .string(
-                        siteAgents.filter { !$0.resolverCapable }.map(\.name).sorted()
-                            .joined(separator: ",")),
+                    "incapableAgents": .string(names.joined(separator: ",")),
+                    "remedy": .string(
+                        "install CoreDNS on these hosts and restart their agents, "
+                            + "or delete the rows of any that are decommissioned"),
                 ])
             return false
         }
+        // No empty-site guard: this is only ever called for an agent, and that
+        // agent is in the site, so the set is never empty.
         return true
     }
 

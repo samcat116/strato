@@ -1541,17 +1541,18 @@ extension NetworkServiceLinux {
         }
         let zones = dnsZones ?? []
         let bindAddresses = ResolverSupervisionPolicy.bindAddresses()
-        let desired = resolverNetworks.map { network -> DesiredResolver in
-            let rendering = CoreDNSZoneRenderer.render(
+        // Inputs, not output: the supervisor renders only the networks whose
+        // inputs moved, which matters because a zone's records span every VM on
+        // every attached network fleet-wide and this runs on every sync.
+        let requests = resolverNetworks.map { network in
+            ResolverRenderRequest(
+                networkId: network.networkId,
                 zones: zones.filter { $0.networkIds.contains(network.networkId) },
                 upstreams: network.upstreams,
                 searchDomain: network.searchDomain,
                 bindAddresses: bindAddresses)
-            return DesiredResolver(
-                networkId: network.networkId, files: rendering.files,
-                diagnostics: rendering.diagnostics)
         }
-        await resolverSupervisor.reconcile(desired)
+        await resolverSupervisor.reconcile(requests)
         #endif
     }
 
