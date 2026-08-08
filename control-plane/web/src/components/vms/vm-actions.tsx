@@ -30,7 +30,6 @@ import { vmsApi } from "@/lib/api/vms";
 import { friendlyErrorMessage } from "@/lib/errors";
 import {
   acceptedMutation,
-  acceptedOperation,
   usePendingMutation,
   useMutationsStore,
 } from "@/lib/stores/mutations-store";
@@ -46,13 +45,14 @@ type VMAction = "start" | "stop" | "restart" | "pause" | "resume" | "delete";
 
 // Maps an in-flight mutation (which may have been started elsewhere, e.g. on
 // the detail page) back to the action button that should show the spinner.
-// The other direction: a lifecycle mutation answers with the VM rather than an
-// operation, so the verb the toast reports has to come from the button that
-// was pressed. `restart` is absent — it takes the operation path, which names
-// its own kind.
-const actionToKind: Record<Exclude<VMAction, "restart">, OperationKind> = {
+// The other direction: a mutation answers with the VM rather than an operation,
+// so the verb the toast reports has to come from the button that was pressed.
+// Every VM verb is generation-backed now — restart included, since backend
+// STR-151 made a reboot a nonce on the VM's desired entry.
+const actionToKind: Record<VMAction, OperationKind> = {
   start: "boot",
   stop: "shutdown",
+  restart: "reboot",
   pause: "pause",
   resume: "resume",
   delete: "delete",
@@ -101,20 +101,14 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
 
     try {
       // Each call returns 202; the MutationWatcher follows it to a terminal
-      // state and toasts the outcome. Restart is the odd one out — it is still
-      // an imperative agent command, so it answers with an operation record
-      // rather than the VM (backend STR-151 converts it).
-      if (action === "restart") {
-        watch(acceptedOperation(await vmsApi.restart(vm.id), vm.name));
-      } else {
-        watch(
-          acceptedMutation(await vmsApi[action](vm.id), {
-            kind: actionToKind[action],
-            resourceKind: "virtual_machine",
-            resourceName: vm.name,
-          })
-        );
-      }
+      // state and toasts the outcome.
+      watch(
+        acceptedMutation(await vmsApi[action](vm.id), {
+          kind: actionToKind[action],
+          resourceKind: "virtual_machine",
+          resourceName: vm.name,
+        })
+      );
 
       switch (action) {
         case "start":

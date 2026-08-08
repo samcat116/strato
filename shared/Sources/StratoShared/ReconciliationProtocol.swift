@@ -38,6 +38,51 @@ public enum DesiredVMStatus: String, Codable, CaseIterable, Sendable {
     }
 }
 
+// MARK: - Edge nonces
+
+/// The restore the control plane wants a workload to have performed, carried on
+/// its desired entry as a monotonic nonce (ADR 0001 stage 9, STR-151).
+///
+/// A restore is an *edge*, not a state: "the VM should be at checkpoint C" is
+/// not something an agent can re-converge on, because the guest starts writing
+/// the moment it resumes. The `kubectl rollout restart` answer to that shape is
+/// to put **how many times it was asked** in the desired state — the edge
+/// becomes a state the moment it is counted. The agent keeps a durable record of
+/// the last nonce it applied per workload and acts only when this one outranks
+/// it, so a replayed or re-driven sync cannot rewind a live guest a second time.
+///
+/// Absent means "no restore has ever been asked for", never "undo one".
+public struct DesiredRestore: Codable, Sendable, Equatable {
+    /// Monotonic per-workload counter, bumped once per accepted restore request.
+    /// The agent acts when this exceeds the nonce it last applied and recorded.
+    public let generation: Int64
+    /// The artifact to load. Travels with the nonce rather than beside it so a
+    /// nonce can never be attributed to the wrong point in time: two restores of
+    /// different checkpoints are two different values of one field.
+    public let snapshotId: UUID
+    /// Download descriptors for an exported snapshot, present only when the
+    /// workload does not live on the agent that captured it (issue #428).
+    /// Resolved fresh at sync assembly, like `ImageInfo`, so a long-desired
+    /// restore never carries a stale locator.
+    ///
+    /// Sandbox-only: a VM checkpoint lives *inside* the VM's own disks, so it
+    /// cannot move between hosts and a VM restore never carries one. The field
+    /// is shared rather than forked for `DesiredSnapshotState`'s reason — the
+    /// nonce, the guard and the durable record are the same three times over,
+    /// and only the payload differs.
+    public let artifacts: [SandboxSnapshotArtifactDescriptor]?
+
+    public init(
+        generation: Int64,
+        snapshotId: UUID,
+        artifacts: [SandboxSnapshotArtifactDescriptor]? = nil
+    ) {
+        self.generation = generation
+        self.snapshotId = snapshotId
+        self.artifacts = artifacts
+    }
+}
+
 /// One VM's authoritative desired state, as assembled by the control plane.
 public struct DesiredVMState: Codable, Sendable {
     public let vmId: UUID
@@ -69,6 +114,23 @@ public struct DesiredVMState: Codable, Sendable {
     /// older one it means only "no opinion", and the agent leaves whatever it
     /// serves alone rather than reading silence as an instruction.
     public let metadata: InstanceMetadata?
+    /// How many times this VM has been asked to reboot (ADR 0001 stage 9,
+    /// STR-151) — the `kubectl rollout restart` nonce, applied to the one VM
+    /// verb that is an edge rather than a state.
+    ///
+    /// A reboot starts and ends `.running`, so `desiredStatus` cannot express
+    /// it and the old `vm_reboot` RPC was fire-and-forget: a socket dropped
+    /// mid-flight lost the reboot silently. Counting it makes it level-triggered
+    /// like everything else — the agent acts when this outranks the nonce it
+    /// durably recorded, and a lost sync costs latency rather than the reboot.
+    ///
+    /// Nil from control planes older than v34, and — being a count of requests —
+    /// never an instruction to undo one, so an agent reads absence as "no
+    /// opinion" and leaves its record alone.
+    public let rebootGeneration: Int64?
+    /// The checkpoint this VM should have been restored to, as a nonce
+    /// (STR-151). Nil means no restore has ever been requested.
+    public let restore: DesiredRestore?
 
     public init(
         vmId: UUID,
@@ -77,7 +139,9 @@ public struct DesiredVMState: Codable, Sendable {
         desiredStatus: DesiredVMStatus,
         generation: Int64,
         imageInfo: ImageInfo? = nil,
-        metadata: InstanceMetadata? = nil
+        metadata: InstanceMetadata? = nil,
+        rebootGeneration: Int64? = nil,
+        restore: DesiredRestore? = nil
     ) {
         self.vmId = vmId
         self.hypervisorType = hypervisorType
@@ -86,6 +150,8 @@ public struct DesiredVMState: Codable, Sendable {
         self.generation = generation
         self.imageInfo = imageInfo
         self.metadata = metadata
+        self.rebootGeneration = rebootGeneration
+        self.restore = restore
     }
 }
 
@@ -111,6 +177,16 @@ public struct DesiredSandboxState: Codable, Sendable {
     /// discriminator (issue #427). `spec.restoreFrom` carries the same value so
     /// runtimes that operate only on the spec still have the artifact locator.
     public let restoreFrom: SandboxSnapshotRef?
+    /// The snapshot this sandbox should have been restored **into itself** from,
+    /// as a nonce (ADR 0001 stage 9, STR-151).
+    ///
+    /// Not to be confused with `restoreFrom` above, which they are easy to read
+    /// as one thing and are not: `restoreFrom` is a *create strategy* for a
+    /// sandbox that does not exist yet (a fork gets a new identity from someone
+    /// else's checkpoint), and is consulted only while the sandbox is absent.
+    /// This is an edge applied to a sandbox that already exists — same id, same
+    /// addresses, rewound — and is consulted only while it is present.
+    public let restore: DesiredRestore?
 
     public init(
         sandboxId: UUID,
@@ -118,7 +194,8 @@ public struct DesiredSandboxState: Codable, Sendable {
         desiredStatus: DesiredSandboxStatus,
         generation: Int64,
         registryCredential: RegistryCredential? = nil,
-        restoreFrom: SandboxSnapshotRef? = nil
+        restoreFrom: SandboxSnapshotRef? = nil,
+        restore: DesiredRestore? = nil
     ) {
         self.sandboxId = sandboxId
         self.spec = spec
@@ -126,6 +203,7 @@ public struct DesiredSandboxState: Codable, Sendable {
         self.generation = generation
         self.registryCredential = registryCredential
         self.restoreFrom = restoreFrom
+        self.restore = restore
     }
 }
 

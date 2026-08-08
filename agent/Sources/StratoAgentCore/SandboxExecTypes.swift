@@ -32,8 +32,8 @@ public struct SandboxExecRequest: Equatable, Sendable {
     }
 
     /// The guest control protocol request carrying this exec description.
-    public var guestRequest: SandboxControlProtocol.ExecRequest {
-        SandboxControlProtocol.ExecRequest(
+    public var guestRequest: GuestControlProtocol.ExecRequest {
+        GuestControlProtocol.ExecRequest(
             argv: command, env: env, cwd: workingDir, tty: tty, rows: rows, cols: cols)
     }
 }

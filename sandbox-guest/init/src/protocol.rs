@@ -142,6 +142,16 @@ pub enum Request {
         /// the same reseed operation to succeed.
         #[serde(default)]
         entropy: Option<String>,
+        /// Hostname the restored-into sandbox boots under (STR-101).
+        ///
+        /// A template guest set the *template's* hostname (or none) at its own
+        /// boot, so without this a warm-launched sandbox would keep it while a
+        /// cold-booted one got its own — the same "differ by provisioning
+        /// path" asymmetry that keeps the hostname out of the config drive's
+        /// network block. Optional and best-effort: absent from older hosts,
+        /// and a rename failing must not fail the launch.
+        #[serde(default)]
+        hostname: Option<String>,
     },
     /// Rotate all guest identity material after restoring a user checkpoint as
     /// a new sandbox (v5, issue #427). The source fields prevent a host from
@@ -302,7 +312,7 @@ mod tests {
 
     #[test]
     fn launch_round_trips() {
-        let line = r#"{"type":"launch","sandbox_id":"sb-2","identity_nonce":"n-2","image_config":{"Env":["PATH=/bin"],"Cmd":["/bin/sh"]},"overrides":{"env":{"DEBUG":"1"}},"entropy":"c2VlZA=="}"#;
+        let line = r#"{"type":"launch","sandbox_id":"sb-2","identity_nonce":"n-2","image_config":{"Env":["PATH=/bin"],"Cmd":["/bin/sh"]},"overrides":{"env":{"DEBUG":"1"}},"entropy":"c2VlZA==","hostname":"strato-sb2"}"#;
         let req = decode_request(line).expect("decode");
         match &req {
             Request::Launch {
@@ -311,12 +321,14 @@ mod tests {
                 image_config,
                 overrides,
                 entropy,
+                hostname,
             } => {
                 assert_eq!(sandbox_id, "sb-2");
                 assert_eq!(identity_nonce, "n-2");
                 assert_eq!(image_config.cmd, vec!["/bin/sh"]);
                 assert_eq!(overrides.env.get("DEBUG").map(String::as_str), Some("1"));
                 assert_eq!(entropy.as_deref(), Some("c2VlZA=="));
+                assert_eq!(hostname.as_deref(), Some("strato-sb2"));
             }
             other => panic!("decoded wrong variant: {other:?}"),
         }
@@ -324,8 +336,10 @@ mod tests {
         assert_eq!(decoded, req);
     }
 
+    /// A host that predates the hostname field (or has no name to give) sends
+    /// no key, and the guest keeps whatever it booted with.
     #[test]
-    fn launch_minimal_defaults_config_and_entropy() {
+    fn launch_minimal_defaults_config_entropy_and_hostname() {
         let req = decode_request(r#"{"type":"launch","sandbox_id":"sb-3","identity_nonce":"n-3"}"#)
             .expect("decode minimal");
         assert_eq!(
@@ -336,6 +350,7 @@ mod tests {
                 image_config: Box::default(),
                 overrides: Box::default(),
                 entropy: None,
+                hostname: None,
             }
         );
     }

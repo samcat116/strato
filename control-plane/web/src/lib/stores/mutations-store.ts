@@ -3,15 +3,14 @@
 // globally mounted MutationWatcher follows each entry to a terminal state and
 // removes it. Everything held here is in flight by construction.
 //
-// Two things end up here, because the backend answers two ways (STR-147):
+// Every mutation answers the same way now (STR-147, and STR-151 for the last
+// three verbs): 202 with `{resource, targetGeneration, mutationId}`, followed by
+// refetching the resource and reading its `conditions`. What still differs is
+// where the *terminal answer* comes from:
 //
-// * **Generation-backed lifecycle mutations** — 202 with `{resource,
-//   targetGeneration, mutationId}`. Followed by refetching the resource and
-//   reading its `conditions`. No operation object exists.
-// * **Imperative verbs** — VM and sandbox restore, and VM restart, which still
-//   answer with an `Operation` record, plus **deletes**, whose success is the
-//   resource ceasing to exist and so cannot be read off it. Followed by
-//   polling the operations endpoint.
+// * most mutations — the resource's own `conditions`;
+// * **deletes** — the operations endpoint, because success is the resource
+//   ceasing to exist and so cannot be read off it.
 //
 // Snapshot artifacts became generation-backed resources in ADR 0001 stage 8,
 // but they are watched through the operations endpoint anyway: there is no
@@ -24,7 +23,6 @@
 import { create } from "zustand";
 import type {
   AcceptedMutation,
-  Operation,
   OperationKind,
   OperationResourceKind,
 } from "@/types/api";
@@ -128,21 +126,10 @@ export function acceptedSnapshotMutation(
   };
 }
 
-/** A watchable entry from a verb that still answers with an operation record. */
-export function acceptedOperation(
-  operation: Operation,
-  resourceName: string
-): WatchedMutation {
-  return {
-    mutationId: operation.id,
-    source: "operation",
-    resourceKind: operation.resourceKind,
-    resourceId: operation.resourceId,
-    targetGeneration: 0,
-    kind: operation.kind,
-    resourceName,
-  };
-}
+// `acceptedOperation` — the adapter for a verb that answered with an operation
+// record rather than its resource — went with the last such verb: VM restart and
+// the two restores became generation-backed in backend STR-151. Every mutation
+// now answers with `{resource, targetGeneration, mutationId}`.
 
 /** The watched in-flight mutation targeting a resource (VM or sandbox), if any. */
 export function usePendingMutation(

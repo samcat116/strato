@@ -13,19 +13,15 @@ public enum MessageType: String, Codable, Sendable {
     // (v7+). The operator's "update now" assigns that field rather than
     // dispatching a command (ADR 0001 stage 6).
 
-    // Reboot is an action, not a state, so it cannot ride the level-triggered
-    // desired-state sync.
-    case vmReboot = "vm_reboot"
-
-    // Full-VM restore (protocol version >= 22, issue #564): loading a captured
-    // RAM image back into a live QEMU process is an edge, not a state, and
-    // converts to a nonce on the desired entry in STR-151.
-    //
-    // `vm_checkpoint` and `vm_snapshot_delete` were removed in wire v33: a
+    // No VM frames remain. `vm_reboot` and `vm_restore` were removed in wire
+    // v34 (ADR 0001 stage 9, STR-151): both are *edges* rather than states, and
+    // an edge becomes a state once "how many times it was asked" is part of the
+    // state — so they ride `DesiredVMState.rebootGeneration` and
+    // `DesiredVMState.restore` as monotonic nonces the agent applies once and
+    // records durably. `vm_checkpoint` and `vm_snapshot_delete` went at v33: a
     // checkpoint's *result* is a durable artifact, so it rides
     // `DesiredStateMessage.snapshots` and is confirmed through
-    // `ObservedStateReport.snapshots` (ADR 0001 stage 8, STR-150).
-    case vmRestore = "vm_restore"
+    // `ObservedStateReport.snapshots` (STR-150).
 
     // Network topology has no imperative messages: it is level-triggered from
     // `DesiredStateMessage.networks` alone. The removed `network_*` frames
@@ -76,15 +72,17 @@ public enum MessageType: String, Codable, Sendable {
     case sandboxExecClosed = "sandbox_exec_closed"
     case sandboxLog = "sandbox_log"
 
-    // Sandbox restore (protocol version >= 9, issue #426). Loading a
-    // checkpoint back over a live microVM is an edge like `vm_restore`, and
-    // converts to a nonce on the desired entry in STR-151.
+    // No sandbox lifecycle frames remain either. `sandbox_restore` went with
+    // `vm_restore` at v34 and for the same reason (STR-151), onto
+    // `DesiredSandboxState.restore`; `sandbox_snapshot_create`,
+    // `sandbox_snapshot_delete` and `sandbox_snapshot_export` went at v33
+    // (STR-150) — the first two are the artifact's existence, the third is
+    // *where* it exists, and all three are states on
+    // `DesiredStateMessage.snapshots`.
     //
-    // `sandbox_snapshot_create`, `sandbox_snapshot_delete` and
-    // `sandbox_snapshot_export` were removed in wire v33 (STR-150): the first
-    // two are the artifact's existence, and the third is *where* it exists —
-    // both states, both on `DesiredStateMessage.snapshots`.
-    case sandboxRestore = "sandbox_restore"
+    // What is left in this enum, beyond registration and the two reconciliation
+    // frames, is exactly the category ADR 0001 always meant to keep imperative:
+    // live byte pipes with a human on the end.
 }
 
 // MARK: - Base Message Protocol
@@ -439,24 +437,9 @@ public struct ImageInfo: Codable, Sendable {
     }
 }
 
-public struct VMOperationMessage: WebSocketMessage {
-    public let type: MessageType
-    public let requestId: String
-    public let timestamp: Date
-    public let vmId: String
-
-    public init(
-        type: MessageType,
-        requestId: String = UUID().uuidString,
-        timestamp: Date = Date(),
-        vmId: String
-    ) {
-        self.type = type
-        self.requestId = requestId
-        self.timestamp = timestamp
-        self.vmId = vmId
-    }
-}
+// `VMOperationMessage` — the generic "do this verb to this VM" envelope — went
+// with `vm_reboot` at wire v34 (STR-151). It outlived the imperative lifecycle
+// frames of v10 by carrying exactly one verb, and that verb is a nonce now.
 
 // MARK: - Response Messages
 

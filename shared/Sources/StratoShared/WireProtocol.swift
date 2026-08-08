@@ -591,7 +591,47 @@ public enum WireProtocol {
     /// `vm_checkpoint` into an envelope the agent can no longer decode and burn
     /// the request's timeout against silence. Upgrade the control plane first.
     ///
-    /// Version 34: online volume grow and per-volume I/O ceilings (STR-19).
+    /// Version 34: reboot and restore become edge-nonces on the desired entry
+    /// (ADR 0001 stage 9, STR-151). `DesiredVMState` gains `rebootGeneration`
+    /// and `restore`, `DesiredSandboxState` gains `restore`, and the last three
+    /// durable-resource RPCs — `vm_reboot`, `vm_restore`, `sandbox_restore` —
+    /// are removed. Nothing imperative is left on the wire but live byte
+    /// streams.
+    ///
+    /// These three resisted every earlier stage for one reason: they are edges,
+    /// not states. "Reboot this VM" starts and ends `.running`, and "the VM
+    /// should be at checkpoint C" is not re-convergeable, because the guest
+    /// begins writing the moment it resumes. The Kubernetes answer — encode the
+    /// edge as a nonce in the spec, as `kubectl rollout restart` does with a
+    /// `restartedAt` annotation — makes an edge a state by counting it: **how
+    /// many times it was asked** is durable, level-triggered, and diffable.
+    ///
+    /// This is strictly better than what it replaces, which is unusual for these
+    /// bumps. A fire-and-forget RPC whose socket dropped mid-flight lost the
+    /// reboot silently; a nonce survives the drop and converges on the next
+    /// sync. The correctness invariant moves to the *agent*, where it is a
+    /// durability question rather than a delivery one: the applied nonce is
+    /// persisted in `VMManifestStore`, so a manifest-less re-registration reads
+    /// "no record" and adopts the desired nonces without acting, rather than
+    /// replaying every reboot and restore in the VM's history.
+    ///
+    /// The *addition* half is the plainest in this changelog: all three fields
+    /// are `Optional`, and every reading of absence is inert. A nil
+    /// `rebootGeneration` is "no opinion", never "un-reboot"; a nil `restore` is
+    /// "none was ever asked for", never "roll forward". Unlike v31/v33 there is
+    /// no destructive misreading of silence to defend against, so the gate does
+    /// not protect the payload — it protects the *user's request*. With the
+    /// imperative frames gone, a reboot or restore aimed at a pre-v34 agent
+    /// would be accepted into a field the agent ignores and reported as
+    /// converged having done nothing, so `supportsEdgeNonces` refuses the
+    /// mutation with `409` at admission, exactly where `supportsSnapshotSync`
+    /// refuses a capture.
+    ///
+    /// The *removal* half is the v28/v31/v32/v33 shape and breaks in one
+    /// direction only: a pre-v34 control plane driving a v34 agent would send
+    /// `vm_reboot` into an envelope the agent can no longer decode and burn the
+    /// request's timeout against silence. Upgrade the control plane first.
+    /// Version 35: online volume grow and per-volume I/O ceilings (STR-19).
     /// `DesiredVolumeState`, `VolumeSpec` and `ObservedVolumeState` each gain
     /// `ioLimits: VolumeIOLimits?`. No frame is added or removed.
     ///
@@ -632,11 +672,11 @@ public enum WireProtocol {
     /// clear, so a fleet mid-upgrade shows caps *requested* and not yet
     /// *applied* instead of showing them as done.
     ///
-    /// Skew in the other direction is inert: a pre-v34 control plane simply
-    /// never sends `ioLimits`, and a v34 agent reads its absence as "no caps",
+    /// Skew in the other direction is inert: a pre-v35 control plane simply
+    /// never sends `ioLimits`, and a v35 agent reads its absence as "no caps",
     /// which is what every volume created before this meant. Nothing has to be
     /// upgraded first.
-    public static let currentVersion = 34
+    public static let currentVersion = 35
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -727,19 +767,13 @@ public enum WireProtocol {
         version >= sandboxExecMinimumVersion
     }
 
-    /// The lowest protocol version that speaks sandbox snapshot operations
-    /// (see `currentVersion` version 9 notes).
-    public static let sandboxSnapshotMinimumVersion = 9
-
-    /// Whether an agent registered with `version` can be sent a
-    /// `sandbox_restore`. A pre-v9 agent cannot decode the envelope (unknown
-    /// `MessageType` case) and never replies, so the control plane must refuse
-    /// the request up front rather than time out against silence. Since v33
-    /// this covers restore alone: capture, delete and export are desired state
-    /// and gate on `supportsSnapshotSync`.
-    public static func supportsSandboxSnapshots(_ version: Int) -> Bool {
-        version >= sandboxSnapshotMinimumVersion
-    }
+    // The v9 `supportsSandboxSnapshots` and v22 `supportsVMCheckpoint` gates
+    // went with the frames they guarded. Both existed to keep a request from
+    // being sent into an envelope an older agent could not decode; capture and
+    // delete stopped being frames at v33 and restore stopped at v34, so every
+    // question either one answered is now answered — at a higher floor — by
+    // `supportsSnapshotSync` and `supportsEdgeNonces`. A version gate whose
+    // frame no longer exists can only mislead the next person to read it.
 
     /// The lowest protocol version that speaks sandbox snapshot mobility —
     /// export to object storage, artifact transfer descriptors on restore and
@@ -846,25 +880,6 @@ public enum WireProtocol {
     /// site any of whose agents is pre-v21.
     public static func supportsProjectNetworkIsolation(_ version: Int) -> Bool {
         version >= projectNetworkIsolationMinimumVersion
-    }
-
-    /// The lowest protocol version that speaks the full-VM checkpoint message
-    /// trio (see `currentVersion` version 22 notes).
-    public static let vmCheckpointMinimumVersion = 22
-
-    /// Whether an agent registered with `version` can decode a `vm_restore`
-    /// request. Below this the envelope's `MessageType` does not decode, so the
-    /// frame is dropped silently and the control plane would wait out the
-    /// operation budget for a response that can never come — it refuses the
-    /// request up front instead. Necessary but not sufficient: eligibility
-    /// additionally requires the agent to advertise the `vm_restore`
-    /// capability, since a v22 build on a QEMU-less host understands the frame
-    /// but cannot realize it.
-    ///
-    /// Since v33 this covers restore alone: capture and delete are desired
-    /// state and gate on `supportsSnapshotSync` instead.
-    public static func supportsVMCheckpoint(_ version: Int) -> Bool {
-        version >= vmCheckpointMinimumVersion
     }
 
     /// The lowest protocol version that realizes a graphics console
@@ -996,6 +1011,31 @@ public enum WireProtocol {
     /// a state nothing can converge.
     public static func supportsSnapshotSync(_ version: Int) -> Bool {
         version >= snapshotSyncMinimumVersion
+    }
+
+    /// The lowest protocol version that applies reboot and restore as monotonic
+    /// nonces on the desired entry rather than as imperative RPCs (see
+    /// `currentVersion` version 34 notes).
+    public static let edgeNonceMinimumVersion = 34
+
+    /// Whether a peer at `version` speaks edge nonces.
+    ///
+    /// Read in two places rather than `supportsVolumeSync`'s three, because
+    /// there is no destructive reading of absence for an agent to defend
+    /// against: the fields are counts of requests, and a missing count can only
+    /// ever mean "nothing was asked for". Sync assembly reads it to omit fields
+    /// a pre-v34 agent would discard, and **admission** reads it as a refusal.
+    ///
+    /// The refusal is where the whole gate earns its keep. With `vm_reboot`,
+    /// `vm_restore` and `sandbox_restore` gone there is no fallback, and the
+    /// failure mode of sending anyway is the silent one this changelog keeps
+    /// returning to: a pre-v34 agent decodes the sync, ignores the field, plans
+    /// no work, and reports the bumped generation as converged — so the API
+    /// would tell a user their VM restarted when it never did. `POST
+    /// .../restart` and both `.../restore` endpoints answer `409` instead, the
+    /// `supportsSnapshotSync` posture applied to a verb rather than an artifact.
+    public static func supportsEdgeNonces(_ version: Int) -> Bool {
+        version >= edgeNonceMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

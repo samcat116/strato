@@ -811,6 +811,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddConvergenceToSnapshots())
     app.migrations.add(AddSnapshotOperationKinds())
 
+    // ADR 0001 stage 9 (STR-151): reboot and restore become edge-nonces on the
+    // desired entry, retiring the last three durable-resource agent RPCs.
+    app.migrations.add(AddEdgeNoncesToWorkloads())
+
     // STR-19: absolute per-volume I/O ceilings — the requested pair and the
     // agent's applied echo — plus the widened CHECK constraints for the
     // `throttle` mutation the new endpoint records.

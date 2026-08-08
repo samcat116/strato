@@ -13,8 +13,9 @@ entrypoint/cmd/env/workdir.
 > vsock control, `FirecrackerSandboxRuntime`, jailer hardening), exec/attach
 > + workload logs, and snapshots (checkpoint/restore, warm start, fork,
 > cross-agent mobility) are all landed. The main open front is **guest
-> networking**: the NIC/address model and IPAM allocation exist, and agents
-> can wire a NIC into the jail, but the NIC stays off the wire — see
+> networking**: the NIC/address model and IPAM allocation exist, agents can
+> wire a NIC into the jail, and the guest configures it — but the NIC stays
+> off the wire — see
 > [Guest networking](#guest-networking-the-holding-pattern).
 > [History](#history) maps the build-out; issue numbers throughout mark which
 > change delivered each piece.
@@ -38,8 +39,9 @@ A sandbox is described by `SandboxSpec`
   merged over the image config by the guest agent.
 - **Networking**: at most one NIC on a `LogicalNetwork`, reusing the VM
   `NetworkSpec` so agents realize it through the same OVN/user-mode paths
-  (#416). The NIC is modeled and IPAM-allocated but not yet realized on the
-  wire — see [Guest networking](#guest-networking-the-holding-pattern).
+  (#416). The NIC is modeled, IPAM-allocated, attachable into the jail, and
+  configurable by the guest — but not yet on the wire spec — see
+  [Guest networking](#guest-networking-the-holding-pattern).
 - **No** volumes, firmware, boot source, or hypervisor choice — sandboxes are
   Firecracker-only, with no attachable storage.
 
@@ -52,12 +54,13 @@ A sandbox is described by `SandboxSpec`
   [Quotas, TTL, and expiry](#quotas-ttl-and-expiry)), and the reported exit
   code (#413).
 - `/api/sandboxes` (`SandboxController`): list/create/show/update/delete +
-  start/stop/restart + status + operations. Mutations insert a
-  `resource_operations` row (`resource_kind = sandbox`) and bump desired state
-  in one transaction, returning **202 Accepted** — the machinery generalized
-  in #412. Restart is expressed as a fresh desired-`running` generation (there
-  is no imperative sandbox reboot message); the runtime (#421) interprets it
-  agent-side.
+  start/stop/restart + status + operations. Mutations write the desired-state
+  change plus an append-only `resource_events` row in one transaction and
+  return **202 Accepted** with `{resource, targetGeneration, mutationId}`; the
+  client refetches the sandbox and reads its `conditions` (ADR 0001 stage 4,
+  STR-147). Restart is expressed as a fresh desired-`running` generation (there
+  is no sandbox reboot nonce — unlike a VM's, whose reboot became one in
+  STR-151); the runtime (#421) interprets it agent-side.
 - `sandbox` is an IAM node type of its own: the same action families as
   `virtual_machine` minus console/pause/promote, plus `exec`.
   `AuthorizationMiddleware` guards `/api/sandboxes` through the same
@@ -229,11 +232,16 @@ deliberately health + exit only, the workload's launch configuration is handed
 to the guest out-of-band on a tiny **read-only config block device** (default
 `/dev/vdb`, named on the kernel cmdline as `strato.config=<dev>`). It carries a
 single versioned JSON document (`GuestConfig`) with the rootfs mount spec, the
-sandbox identity + vsock port, and the OCI **image config plus the sandbox
+sandbox identity + vsock port, the OCI **image config plus the sandbox
 overrides** — the guest performs the OCI merge (entrypoint/cmd/env/workdir/user,
-Docker-compatible rules), so those runtime semantics live in exactly one place.
-This keeps the container image pristine and lets the workload launch without
-waiting on the host to connect vsock.
+Docker-compatible rules), so those runtime semantics live in exactly one place —
+and, at schema v2, the NIC's static L3 configuration (STR-101, see
+[Guest networking](#guest-networking-the-holding-pattern)). This keeps the
+container image pristine and lets the workload launch without waiting on the
+host to connect vsock. The host stamps the **minimum schema version the
+document needs** and the guest refuses anything past what it understands, so a
+guest image older than its agent keeps booting the drives it fully understands
+and fails loudly only on one carrying something it would otherwise ignore.
 
 **vsock control surface.** The init serves newline-delimited JSON on a guest
 vsock port (default 1024). The v1 surface is health + exit only: `ping` →
@@ -378,6 +386,31 @@ determines a connection's role:
   line (output that ended without a trailing newline) instead of holding it
   until teardown. Workload stdin is `/dev/null`.
 
+**What the host will accept.** Guest→host lines are hostile input by
+definition — a trap in the host parser aborts the agent and takes every VM on
+the node with it, not just one tenant's session — so `GuestControlProtocol`
+(agent-side) is a total function over them: every response either lands inside
+these bounds or throws, closing the connection. The walls, all far outside
+what the in-repo guest produces (it reads workload and exec output in 8 KiB
+chunks), live in `GuestControlProtocol.Limits`:
+
+| Bound | Value | Applies to |
+| --- | --- | --- |
+| Line length | 1 MiB | every response line; matches the transport's line framer, which fails the channel rather than accumulating an unterminated line |
+| Decoded stdio payload | 64 KiB | `output`/`log` `data` (checked on the base64 text first, so an oversized chunk is never materialized) |
+| Identity fields | 256 B | `sandbox_id`, `nonce` |
+| `error` message | 4 KiB | **truncated with a marker**, not rejected — it is purely diagnostic, and throwing would discard the guest's actual complaint |
+| `seq` | 2^53 | `log` records; keeps the host's `lastSeq + 1` resume arithmetic clear of overflow |
+| `stream` | `stdout` \| `stderr` only | `output`/`log`; the host buffers a partial line per stream *name*, so arbitrary labels would grow host memory without bound |
+| `exit_code` | `i32` range | `exec_exit`, `status` |
+| `control_protocol_version` | `u32` range | `pong` |
+
+A future guest that wants to stream larger records has to move these
+deliberately, on both sides. Note that a *valid* `seq` near its ceiling still
+pins that sandbox's follow resume point permanently (the guest only replays
+`seq >= since_seq`); it is self-inflicted and silent, and a plausibility check
+on per-record seq advance is the outstanding fix.
+
 PID 1's reaper is restructured to run forever with a child registry (exec
 waiters + a bounded unclaimed-exit map), so exec exit codes are routed to
 their sessions while the workload's exit still lands in the shared status the
@@ -463,7 +496,7 @@ jailed VMM writes them) and the runtime moves them out to the host-owned
 archive at `<sandbox storage>/<id>/snapshots/<snapshotId>/` — agent-owned
 paths beside the sandbox (the volume-snapshot precedent), removed with it.
 
-**Restore in place** (`sandbox_restore`, same agent, same identity): drain →
+**Restore in place** (`DesiredSandboxState.restore`, same identity): drain →
 destroy the current Firecracker process → re-stage the layout from the
 archive (for a jailed sandbox the whole chroot is rebuilt; kernel/initramfs
 are deliberately absent — a snapshot load never reads the boot source) →
@@ -500,10 +533,15 @@ would last exactly until the next level-triggered pass. And the source host's
 about the *agent*, which the agent's own report has no reason to carry, and an
 un-templated snapshot needs it to be mobile at all.
 
-`restore` is still an imperative operation (kind `restore`, capability-gated
-on `snapshot:SandboxSnapshot`, wire v9): loading a checkpoint back over a live
-microVM is an edge rather than a state, and converts to a nonce in ADR stage 9.
-Restore pins to the snapshot's agent — until the snapshot is exported (see
+`restore` is an **edge-nonce** on the sandbox's desired entry (wire v34, ADR
+stage 9, STR-151). Loading a checkpoint back over a live microVM is genuinely an
+edge rather than a state, so it became one by being counted:
+`DesiredSandboxState.restore` carries a monotonic generation and the snapshot to
+load, and the agent applies it once against the record it keeps in its own
+durable manifest — a dropped or replayed sync converges rather than rewinding
+the guest twice. It is refused with `409` when the sandbox's agent predates v34,
+since such an agent would ignore the field and report the bumped generation as
+converged. Restore pins to the snapshot's agent — until the snapshot is exported (see
 [Snapshot mobility](#snapshot-mobility)) — and flips desired state to
 `running` in the same transaction (IPAM allocations stay held while
 checkpointed, so the sandbox keeps its addresses). Snapshot storage draws
@@ -541,8 +579,8 @@ prefix is what makes that safe without manifest bookkeeping).
 guest boots fully — mounts the rootfs, switch_roots onto it, starts the
 vsock listener — but parks in the `held` state instead of resolving and
 spawning a workload. That point is deliberately **before any per-sandbox
-identity is consumed**: no workload argv/env, no network identity (none
-exists yet — see
+identity is consumed**: no workload argv/env, no network identity (a template
+is shared across sandboxes, so it carries no NIC at all — see
 [Guest networking](#guest-networking-the-holding-pattern)), nothing but the
 template's own throwaway nonce in memory. This is the "snapshot before
 identity" sidestep the issue calls out: it keeps most of the fork-identity
@@ -702,8 +740,9 @@ An exported snapshot unlocks:
 - **Cross-agent fork** — fork placement widens from the pinned agent to
   every compatible agent, and survives losing the snapshot's home agent
   entirely. Sync assembly injects checksummed download descriptors into
-  `restoreFrom` (relative paths the agent fetches over SVID mTLS); the
-  restore RPC carries the same descriptors. The target agent stages the
+  `restoreFrom` (relative paths the agent fetches over SVID mTLS); the restore
+  nonce carries the same descriptors, minted at assembly rather than stored so a
+  nonce that waits in the desired state never goes stale. The target agent stages the
   archive into an LRU-swept import cache
   (`<sandbox storage>/snapshot-imports/`, sharing the warm-cache byte
   budget), verifying each artifact's size and SHA-256 before the atomic
@@ -732,13 +771,46 @@ than moved in (the measured STR-99 failure), teardown, MTU, and host
 requirements — are owned by [Sandbox NICs](./networking.md#sandbox-nics) in
 the networking doc; this section owns the sandbox-side status.
 
-**The NIC does not go on the wire yet.**
-`SandboxSpecBuilder.guestNetworkingSupported` is `false` (#524), so no
-sandbox `NetworkSpec` reaches an agent, for two remaining reasons:
+**The guest configures its own NIC** (STR-101). The config drive grew a
+`network` block at schema v2 — MAC, per-family address/prefix/gateway, MTU,
+resolvers, search domain, hostname — and the init applies it: `lo` up (for
+every sandbox, networked or not), the NIC matched **by MAC**, addressed,
+routed, and `/etc/resolv.conf` + `/etc/hosts` written into the rootfs before
+the switch. Three decisions worth keeping:
 
-- **The guest can't use it** (STR-101): the guest image has no in-guest
-  networking — the init doesn't bring up `eth0` and the kernel has no IP
-  autoconfiguration.
+- **Static, not DHCP.** The control plane's IPAM knows the address before the
+  microVM boots, so a DHCP exchange would spend a cold-start round trip — and
+  a client binary in a size-optimized initramfs — rediscovering it. OVN's
+  responder stays programmed for the port, so an image that runs its own
+  client keeps working; the guest just must not depend on one.
+- **Fatal on failure.** A half-configured interface is indistinguishable from
+  a healthy one host-side, so the init powers the microVM off rather than let
+  a sandbox report `running` with a dead NIC. The resolver files are the
+  exception (best effort — a read-only rootfs is legitimate), and `/etc` is
+  created rather than assumed for scratch/distroless images.
+- **The schema version stamps what the document needs, not what the host
+  knows.** A network-free drive is stamped v1 even by an agent that can write
+  v2, and the guest accepts `1...SCHEMA_VERSION` — so a node whose
+  separately-distributed guest image lags the agent keeps booting sandboxes
+  whose drives carry nothing new. A drive with a `network` block is stamped
+  v2 and an older guest refuses it, loudly, rather than booting a sandbox
+  whose NIC it would ignore in silence. The strictness bites exactly where it
+  buys something.
+
+**Not on the config drive: metadata routes.** A VM's static guest gets
+explicit routes to the instance-metadata addresses from its cloud-init seed,
+and a DHCP guest gets the v4 half via option 121 (STR-53). A sandbox guest is
+static *and* runs no DHCP client, so it gets neither — `metadataEnabled` is
+carried on the NIC's spec but ignored when the guest's network block is built.
+Instance metadata for sandboxes is unimplemented rather than deliberately
+excluded; delivering it means a `routes` field on the block, and it belongs
+with whichever arm picks up sandbox metadata rather than with the interface
+bring-up.
+
+**The NIC still does not go on the wire.**
+`SandboxSpecBuilder.guestNetworkingSupported` is `false` (#524), so no
+sandbox `NetworkSpec` reaches an agent, for one remaining reason:
+
 - **The flag is fleet-wide while the capability is per-agent** (STR-103): an
   unjailed, non-Linux, or older agent cannot realize a sandbox NIC and would
   fail every placement. STR-103 replaces the flag with a per-agent gate and
@@ -815,10 +887,10 @@ Sandboxes were designed and built as a phased roadmap under umbrella issue
 
 Guest networking was deliberately scoped out — #524 kept the NIC off the wire
 spec — and re-planned as STR-99..104: the measured move-a-TAP failure
-(STR-99) and the netns attach path (STR-100) are landed; the in-guest network
-config (STR-101), security-group membership assembly (STR-102), the
-per-agent gate that flips the wire flag (STR-103), and networked-snapshot
-remapping (STR-104) remain — see
+(STR-99), the netns attach path (STR-100), and the in-guest network config
+(STR-101, config-drive schema v2) are landed; security-group membership
+assembly (STR-102), the per-agent gate that flips the wire flag (STR-103),
+and networked-snapshot remapping (STR-104) remain — see
 [Guest networking](#guest-networking-the-holding-pattern).
 
 ### Open threads
@@ -835,7 +907,7 @@ remapping (STR-104) remain — see
   that proposal — vsock and an in-house PID 1 are already here — and the
   fork case composes with the clone-safety policy, because identity arrives
   over a live channel rather than baked into the config drive.
-- Guest networking, STR-101..104 — see
+- Guest networking, STR-102..104 — see
   [Guest networking](#guest-networking-the-holding-pattern).
 
 ## Non-goals

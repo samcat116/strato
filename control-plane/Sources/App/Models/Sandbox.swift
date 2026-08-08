@@ -113,6 +113,26 @@ final class Sandbox: Model, @unchecked Sendable {
     @Field(key: "observed_generation")
     var observedGeneration: Int64
 
+    // Restore as an edge-nonce (ADR 0001 stage 9, STR-151). "Be at snapshot S"
+    // is not something an agent can re-converge on — the guest starts writing
+    // the moment it resumes — so what rides the sync is a *count* of how many
+    // times a restore was asked for, applied once against the agent's durable
+    // record. There is no reboot counterpart: `POST .../restart` is expressed as
+    // a fresh desired-running generation rather than an edge.
+    //
+    // Distinct from `restoredFromSnapshotId` above, which they are easy to
+    // confuse and must not be: that records the checkpoint this sandbox was
+    // *forked from* at create time — a lineage fact, and the clone-safety
+    // guard's whole input — while this drives a rewind of a sandbox that
+    // already exists.
+    @Field(key: "restore_generation")
+    var restoreGeneration: Int64
+
+    /// The snapshot `restoreGeneration` names. Not a foreign key, for
+    /// `VM.restoreSnapshotID`'s reason.
+    @OptionalField(key: "restore_snapshot_id")
+    var restoreSnapshotID: UUID?
+
     // Convergence progress mirrored from the agent's observed-state report,
     // with the same contract as the VM's (STR-142): `convergencePhase` is
     // non-nil only while the agent is actively converging toward a newer
@@ -185,6 +205,7 @@ final class Sandbox: Model, @unchecked Sendable {
         self.desiredStatus = .stopped
         self.generation = 0
         self.observedGeneration = 0
+        self.restoreGeneration = 0
         self.finalizers = []
     }
 }
@@ -238,6 +259,16 @@ extension Sandbox {
     func setDesiredStatus(_ newDesired: DesiredSandboxStatus) {
         desiredStatus = newDesired
         generation += 1
+    }
+
+    /// Asks the owning agent to load `snapshotID` back into this sandbox once
+    /// (STR-151), and sets the desired status to `.running` alongside — the
+    /// restored guest resumes, so desired state has to agree or the next sync
+    /// would stop it right back. Does not persist.
+    func requestRestore(snapshotID: UUID) {
+        restoreGeneration += 1
+        restoreSnapshotID = snapshotID
+        setDesiredStatus(.running)
     }
 
     /// True once the owning agent has confirmed converging to the current

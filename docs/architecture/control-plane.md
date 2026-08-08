@@ -304,10 +304,11 @@ three families — `VolumeSnapshot`, `VMSnapshot`, `SandboxSnapshot` — are
 `ConvergingResource`s and `FinalizableResource`s with their own generation
 pair, `conditions` block, deadline and finalizer list. Capture, delete and
 export answer `202`; the seven imperative agent messages behind them are gone,
-and with them both `VMSnapshotService`'s and `SandboxSnapshotService`'s
-capture/delete dispatch and the background RPC-and-verdict halves in all three
-controllers — including the one that had to guess, after a lost response,
-whether a checkpoint it could not see existed.
+and with them the background RPC-and-verdict halves in all three controllers —
+including the one that had to guess, after a lost response, whether a checkpoint
+it could not see existed. `VMSnapshotService` and `SandboxSnapshotService`
+survived that stage carrying restore alone, and were deleted outright in stage 9
+when restore became a nonce (STR-151); nothing dispatches a snapshot verb now.
 
 They stay three tables rather than one: three quota paths, three IAM node
 types, and completion budgets that differ by an order of magnitude (a qcow2
@@ -318,16 +319,30 @@ written once. `SnapshotArtifactMutation` is the accept side, and
 `SnapshotRetentionSweep` the `ttlSecondsAfterFinished` answer durable artifact
 objects need — see [storage](./storage.md#retention).
 
-**Some verbs still keep operation records** — VM reboot, and VM/sandbox
-*restore*. They are imperative agent commands with no generation to converge
-on, so they answer `202` with a `ResourceOperation` to poll, keep the `409`
-double-submit guard, and await a correlated agent response (each with an RPC
-timeout sized under its operation budget, so the verdict comes from the
-response, not the sweep, whenever the dispatching replica survives). The
-residual cluster-singleton stuck-operation sweep is their backstop, failing
-them past their per-kind budget
-(`OperationResourceKind.completionBudgetSeconds` in
-`Models/ResourceOperation.swift`). They retire with STR-151 and ADR stage 11.
+**No verb keeps an operation record any more.** The last three — VM reboot,
+and VM/sandbox *restore* — converted in ADR stage 9 (STR-151). They held out
+because they are genuinely *edges*: a reboot starts and ends `running`, and
+"be at checkpoint C" stops being true the moment the guest resumes, so neither
+has a desired status to express it. What converted them is the `kubectl rollout
+restart` shape — an edge becomes a state once **how many times it was asked
+for** is part of the state. `VM.requestReboot` and `requestRestore` bump a
+monotonic nonce beside the ordinary generation; the agent applies it once
+against a record it keeps in its own durable manifest, and the generation bump
+carries the mutation through conditions, the stuck-convergence sweep and the
+webhook with no branch of its own.
+
+The gate moved with them. `WireProtocol.supportsEdgeNonces` refuses these three
+endpoints with `409` when the owning agent predates wire v34 — not to protect
+the payload (a count of requests cannot be misread when absent) but to protect
+the request: with no imperative frame left, a pre-v34 agent would ignore the
+field and report the bumped generation as converged, so the API would claim a
+restart that never happened.
+
+The cluster-singleton stuck-operation sweep and
+`ResourceOperationCoordinator.recordVerdict` survive for exactly one job: taking
+rows written by the *previous* build terminal across an upgrade. Nothing
+constructs a `ResourceOperation` now; the table, the sweep and the
+pending-request apparatus go in ADR stage 11 (STR-152).
 
 **The operations API survives as a façade** (`Services/OperationFacade.swift`).
 `GET /api/operations/:id` resolves an operation row first, then falls back to

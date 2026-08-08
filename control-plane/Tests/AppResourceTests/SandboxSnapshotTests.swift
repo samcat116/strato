@@ -62,7 +62,8 @@ final class SandboxSnapshotTests {
         app: Application,
         sandbox: Sandbox,
         capabilities: [String] = ["firecracker", SnapshotArtifactKind.sandboxSnapshot.agentCapability],
-        status: SandboxStatus = .running
+        status: SandboxStatus = .running,
+        wireProtocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: "snapshot-agent",
@@ -74,7 +75,7 @@ final class SandboxSnapshotTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: WireProtocol.currentVersion,
+            protocolVersion: wireProtocolVersion,
             sandboxCapable: true
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
@@ -91,21 +92,6 @@ final class SandboxSnapshotTests {
         }
         try await sandbox.save(on: app.db)
         return agentUUID.uuidString
-    }
-
-    private func pollOperationCompleted(
-        _ operationId: UUID, on db: any Database
-    ) async throws -> ResourceOperation? {
-        for _ in 0..<100 {
-            if let operation = try await ResourceOperation.find(operationId, on: db),
-                operation.status != .pending
-            {
-                return operation
-            }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        Issue.record("Operation \(operationId) never completed")
-        return nil
     }
 
     // MARK: - Create guards
@@ -505,8 +491,8 @@ final class SandboxSnapshotTests {
         }
     }
 
-    @Test("Restore returns 202, sets desired running, and reverts on RPC failure")
-    func restoreAcceptsAndRevertsOnFailure() async throws {
+    @Test("Restore returns 202 and writes the restore nonce onto the sandbox")
+    func restoreAcceptsAndWritesTheNonce() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, token in
             let agentId = try await placeOnCapableAgent(app: app, sandbox: sandbox, status: .stopped)
             let snapshot = SandboxSnapshot(
@@ -519,7 +505,7 @@ final class SandboxSnapshotTests {
             snapshot.status = .ready
             try await snapshot.save(on: app.db)
 
-            var operation: OperationResponse?
+            var accepted: AcceptedMutation<SandboxDetailResponse>?
             try await app.test(
                 .POST,
                 "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
@@ -527,29 +513,89 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
+                accepted = try res.content.decode(AcceptedMutation<SandboxDetailResponse>.self)
+            }
+            let body = try #require(accepted)
+            #expect(body.targetGeneration == 2)
+
+            // A restore is an edge-nonce (STR-151): a count of how many times it
+            // was asked for plus the snapshot it names, applied once by the
+            // agent against its own durable record. Desired state flips to
+            // running alongside — a restored guest resumes.
+            let stored = try await Sandbox.find(sandbox.id, on: app.db)
+            #expect(stored?.restoreGeneration == 1)
+            #expect(stored?.restoreSnapshotID == snapshot.id)
+            #expect(stored?.desiredStatus == .running)
+            #expect(stored?.generation == 2)
+            // Distinct from the fork lineage field, which a rewind never touches.
+            #expect(stored?.restoredFromSnapshotId == nil)
+        }
+    }
+
+    /// With `sandbox_restore` gone there is no fallback frame, and a pre-v34
+    /// agent fails *silently* — it ignores the nonce and reports the bumped
+    /// generation as converged, so the API would claim a rewind that never
+    /// happened. Refused at admission instead.
+    @Test("Restore is refused when the sandbox's agent predates edge nonces")
+    func restoreRefusesPreV34Agent() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            let agentId = try await placeOnCapableAgent(
+                app: app, sandbox: sandbox, status: .stopped,
+                wireProtocolVersion: WireProtocol.edgeNonceMinimumVersion - 1)
+            let snapshot = SandboxSnapshot(
+                name: "checkpoint",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("too old"))
             }
 
-            let accepted = try #require(operation)
-            #expect(accepted.kind == .restore)
+            #expect(try await Sandbox.find(sandbox.id, on: app.db)?.restoreGeneration == 0)
+        }
+    }
 
-            // The RPC fails fast (no socket): the operation records it and
-            // the unachieved desired state reverts to observed reality. The
-            // operation row and the sandbox revert are separate writes, so
-            // poll the row the assertion is about.
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .failed)
-            var reverted = try #require(await Sandbox.find(sandbox.id, on: app.db))
-            for _ in 0..<100 where reverted.desiredStatus != .stopped {
-                try await Task.sleep(for: .milliseconds(50))
-                reverted = try #require(await Sandbox.find(sandbox.id, on: app.db))
+    /// Version and capability are two different questions (issue #415): a v34
+    /// agent with no sandbox-snapshot backend reads the nonce and can do nothing
+    /// with it, which would surface as a `degraded` condition an hour later
+    /// rather than a `409` naming the remedy.
+    @Test("Restore is refused when the agent advertises no snapshot backend")
+    func restoreRefusesAgentWithoutSnapshotCapability() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            let agentId = try await placeOnCapableAgent(
+                app: app, sandbox: sandbox, capabilities: ["firecracker"], status: .stopped)
+            let snapshot = SandboxSnapshot(
+                name: "checkpoint",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("capability"))
             }
-            #expect(reverted.desiredStatus == .stopped)
-            // Two generation bumps prove the accept transaction flipped
-            // desired to running (gen 1 → 2) and the failure reverted it
-            // (gen 2 → 3) — the transient running value itself can be gone
-            // before any read lands.
-            #expect(reverted.generation == 3)
+
+            #expect(try await Sandbox.find(sandbox.id, on: app.db)?.restoreGeneration == 0)
         }
     }
 
@@ -884,12 +930,12 @@ final class SandboxSnapshotTests {
                 #expect(res.body.string.contains("CPU template"))
             }
 
-            // Same Firecracker + identical CPU model: accepted (202); the RPC
-            // then fails fast without a live socket, which is fine — the gate
-            // under test is the accept.
+            // Same Firecracker + identical CPU model: accepted (202). The gate
+            // under test is the accept; the nonce it writes is what the target
+            // agent converges on, and the exported artifacts' descriptors are
+            // resolved at sync assembly rather than stored here.
             let compatible = try await seedExportedSnapshot(
                 app: app, user: user, sandbox: sandbox, agentId: "some-other-agent")
-            var operation: OperationResponse?
             try await app.test(
                 .POST,
                 "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(compatible.id!.uuidString)/restore"
@@ -897,11 +943,10 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .accepted)
-                operation = try res.content.decode(OperationResponse.self)
             }
-            let accepted = try #require(operation)
-            let completed = try await self.pollOperationCompleted(accepted.id!, on: app.db)
-            #expect(completed?.status == .failed)
+            let stored = try await Sandbox.find(sandbox.id, on: app.db)
+            #expect(stored?.restoreGeneration == 1)
+            #expect(stored?.restoreSnapshotID == compatible.id)
         }
     }
 

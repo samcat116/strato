@@ -496,7 +496,7 @@ unlimited — QEMU spells unlimited as zero, so accepting it would make a typo
 indistinguishable from a deliberate removal, on the one setting where that
 difference is "this tenant is capped" versus "this tenant is not".
 
-The ceilings travel on `DesiredVolumeState.ioLimits` (wire v34) and come back on
+The ceilings travel on `DesiredVolumeState.ioLimits` (wire v35) and come back on
 `ObservedVolumeState.ioLimits` as an **echo of what the agent actually applied**,
 recorded separately from what was requested. The echo exists because STR-19
 ships no capability gate: an agent that has never heard of ceilings drops the
