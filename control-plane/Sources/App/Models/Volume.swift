@@ -330,9 +330,16 @@ extension Volume {
     /// bytes and `.error` for absent bytes with an error, so a torn or
     /// half-written volume can never reach a resting status — the status clause
     /// alone already says everything a reader needs.
+    ///
+    /// **This is the predicate a future relaxation may move; `desiredSatisfied`
+    /// is not.** They are the same question today, and stating that by
+    /// delegation rather than by repeating the clauses is the point: a
+    /// live-snapshot path (issue #747) relaxing what the *reading verbs* accept
+    /// has to break this delegation to do it, which is a visible edit here
+    /// rather than a silent loosening of what every volume in the fleet reports
+    /// as converged.
     var bytesAtRest: Bool {
-        desiredStatus == .present && observedGeneration >= generation
-            && (status == .available || status == .attached)
+        observedGeneration >= generation && desiredSatisfied
     }
 
     /// Whether this volume is on its way out — a `DELETE` has been accepted and

@@ -166,11 +166,13 @@ extension Volume: ConvergenceObservable {}
 /// Both used to be written out per family — four `isConverged` bodies and six
 /// `conditions` properties — with doc comments asserting the pair could not
 /// disagree. They could, and did (STR-191). The failure clause was in neither,
-/// and the `desiredSatisfied` term had already drifted: a volume's `conditions`
-/// omitted the `desiredStatus == .present` its `isConverged` required, and the
-/// three snapshot families' omitted both that and `exportSatisfied`. Each
-/// family now supplies only the term that genuinely differs, and everything
-/// derived from it is written once.
+/// and the `desiredSatisfied` term had already drifted: the volume's and all
+/// three snapshot families' `conditions` omitted the `desiredStatus == .present`
+/// their `isConverged` required, and `SandboxSnapshot`'s omitted
+/// `exportSatisfied` as well — the one family where that omission was live,
+/// since the other two report `wantsExport == false` and inherit a constant
+/// `true`. Each family now supplies only the term that genuinely differs, and
+/// everything derived from it is written once.
 protocol ConvergenceDerived: ConvergenceObservable {
     var generation: Int64 { get }
     var observedGeneration: Int64 { get }
@@ -472,8 +474,14 @@ extension Sandbox {
 extension Volume {
     /// A volume has no `DesiredVolumeStatus.isSatisfied(by:)` because `.absent`
     /// is confirmed by omission from the observed report and `.present` is
-    /// confirmed by a resting status. The generation clause on its own would
-    /// call a volume converged whose file had been deleted out of band, since
-    /// nothing would have bumped the generation to notice.
-    var desiredSatisfied: Bool { bytesAtRest }
+    /// confirmed by a resting status. The generation clause the derivation
+    /// supplies would, on its own, call a volume converged whose file had been
+    /// deleted out of band, since nothing would have bumped the generation to
+    /// notice.
+    ///
+    /// Spelled out rather than delegating to `bytesAtRest` — which asks the same
+    /// question today and is the one free to diverge. See the note there.
+    var desiredSatisfied: Bool {
+        desiredStatus == .present && (status == .available || status == .attached)
+    }
 }

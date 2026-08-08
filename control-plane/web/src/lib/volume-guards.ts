@@ -13,6 +13,18 @@ import type { Volume } from "@/types/api";
  * backend derives `creating`/`error` for a volume whose bytes are absent, so a
  * half-written one can never reach a resting status — and a copy of the
  * pre-resize volume is a perfectly good point-in-time copy.
+ *
+ * Two of the backend's three clauses, not all three: it also requires
+ * `desiredStatus == .present`, and `Volume` does not carry desired status. No
+ * reachable case is known — a delete bumps the generation, and the agent
+ * advances its applied generation only once the delete work item succeeds, at
+ * which point the volume is omitted from its report rather than reported
+ * present — so `observedGeneration >= targetGeneration` on a terminating volume
+ * that still reads `available` is not a state the loop produces. It is called
+ * out because the guard this replaced (`conditions.converged`) would have
+ * inherited the clause for free. Closing it properly means putting
+ * `canSnapshot`/`canClone` on `VolumeResponse` and deleting this mirror
+ * entirely, which is the better fix and a separate change.
  */
 export function volumeBytesAtRest(volume: Volume): boolean {
   return (
