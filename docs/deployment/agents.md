@@ -494,20 +494,25 @@ checks gating — the node needs libvirt ≥ 11.5 reachable at `qemu:///system`,
 which `install.sh` provisions — and while they fail the node stops advertising
 QEMU rather than accepting VMs it cannot serve.
 
-The libvirt driver does not yet support disk hot-plug, online resize or VM
-checkpoints. Two consequences are worth knowing before moving a node:
+A libvirt node is a full-capability QEMU node: disk hot-plug, online resize,
+checkpoints, guest IP reporting and balloon statistics all work, and the control
+plane cannot tell which driver a node picked. Two behaviours are worth knowing
+before moving a node, both following from libvirt's domain document being
+written once when the VM is created and never rewritten:
 
-- **A volume can only reach a VM at create time.** Attaching one to an existing
-  VM is refused whether it is running or stopped — the domain document is
-  written once — so the attach degrades rather than silently never arriving.
-- **VM checkpoints are refused earlier**, by capability: a libvirt node stops
-  advertising `snapshot:vm_checkpoint`, so the control plane never admits a
-  capture it could not converge. Volume snapshots are unaffected; the storage
-  backend realizes those with `qemu-img`.
-
-So a libvirt node is not yet a full-capability QEMU node, even though it
-advertises `qemu` — that is the trade for keeping the driver choice invisible to
-the control plane.
+- **A VM's hot-plug slots and memory headroom are fixed at create time.** Each
+  domain reserves four empty PCIe root ports for later disk hot-plug, and
+  whatever virtio-mem headroom the VM's size range asked for. Attaching a fifth
+  volume, or growing a VM past the maximum memory it was created with, fails
+  with libvirt's own error; recreating the VM is the remedy, and
+  [issue #1026](https://github.com/samcat116/strato/issues/1026) tracks removing
+  the limit rather than documenting it. VMs created before a node moved to the
+  libvirt driver are unaffected — they are redefined when this node next creates
+  them.
+- **A resize the guest cannot take online lands at its next boot.** vCPU
+  removal is never attempted on a live guest, and a VM with no memory headroom
+  cannot be resized in place; both are written into the domain definition
+  instead, so the VM comes up at its new size when it is next started.
 
 Two host packages change what a node can be asked to run rather than how it
 runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which

@@ -246,6 +246,69 @@ public enum LibvirtDomain {
     /// deleted to the control plane.
     public static let listAllDomains: UInt32 = 0
 
+    /// `virDomainDeviceModifyFlags.VIR_DOMAIN_AFFECT_LIVE | _CONFIG` — apply to
+    /// the running guest *and* to the persistent definition.
+    ///
+    /// Both bits, always, and the `CONFIG` half is the load-bearing one. The
+    /// QEMU driver can get away with a live-only hot-plug because it respawns a
+    /// VM from a stored configuration the agent keeps in step
+    /// (`updateRecordedVolumes`); nothing here ever rewrites a domain document
+    /// after `createVM`, so a device attached live and not written to the
+    /// definition is silently gone at the guest's next power cycle — with the
+    /// control plane still showing the volume attached.
+    ///
+    /// The same reasoning covers a resize: what the QEMU path defers "to the
+    /// next boot" only happens at all if the next boot reads it, and here the
+    /// next boot reads the definition.
+    public static let affectLiveAndConfig: UInt32 =
+        (1 << 0)  // VIR_DOMAIN_AFFECT_LIVE
+        | (1 << 1)  // VIR_DOMAIN_AFFECT_CONFIG
+
+    /// `VIR_DOMAIN_AFFECT_CONFIG` alone — for an inactive domain, which has no
+    /// live state to affect and answers `VIR_ERR_OPERATION_INVALID` to a
+    /// request that says otherwise; and for the dimensions of a resize that are
+    /// deliberately not applied to a running guest.
+    public static let affectConfig: UInt32 = 1 << 1
+
+    /// `VIR_DOMAIN_VCPU_MAXIMUM` / `VIR_DOMAIN_MEM_MAXIMUM`. Both enums put the
+    /// bit in the same place; it selects the domain's *ceiling* rather than its
+    /// current value, and is only legal alongside `CONFIG`.
+    public static let affectMaximum: UInt32 = 1 << 2
+
+    /// `virDomainSnapshotRevertFlags.VIR_DOMAIN_SNAPSHOT_REVERT_RUNNING` — leave
+    /// the domain running after the revert.
+    ///
+    /// Stated rather than left to default, and the default is the reason: a
+    /// system checkpoint records the state the domain was in when it was taken,
+    /// so reverting without this flag would leave the guest paused or shut off
+    /// depending on a fact from the past. A restore's post-condition is that
+    /// the VM is running — the reconciler only asks for one on a workload that
+    /// is wanted running (STR-151).
+    public static let snapshotRevertRunning: UInt32 = 1 << 0
+
+    /// `virDomainGetJobStatsFlags.VIR_DOMAIN_JOB_STATS_COMPLETED` — report the
+    /// job that just finished rather than one in flight. Without it, a query
+    /// after the snapshot job has completed answers "no job" and the
+    /// checkpoint's size is lost.
+    public static let jobStatsCompleted: UInt32 = 1 << 0
+
+    /// `virDomainGuestInfoTypes.VIR_DOMAIN_GUEST_INFO_HOSTNAME`. Only the
+    /// hostname is asked for: the guest's interfaces come from
+    /// `virDomainInterfaceAddresses`, which returns them already structured
+    /// instead of as flattened `if.0.addr.1.addr` typed parameters.
+    public static let guestInfoHostname: UInt32 = 1 << 3
+
+    /// `virDomainInterfaceAddressesSource.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_AGENT`
+    /// — ask the guest agent.
+    ///
+    /// Not `_SRC_LEASE` (libvirt's own DHCP leases, which Strato does not run —
+    /// the control plane does IPAM and hands static addresses to the guest) and
+    /// not `_SRC_ARP` (the host's ARP cache, which sees only addresses that
+    /// have talked and never IPv6). The agent is the same source the QEMU
+    /// driver reads over `qga.sock`, so what the control plane is told does not
+    /// change with the driver.
+    public static let interfaceAddressesFromAgent: UInt32 = 1
+
     /// The `maxStats` a memory-stats call makes room for. Comfortably above
     /// `VIR_DOMAIN_MEMORY_STAT_NR` on purpose: libvirt truncates its reply to
     /// this count, and a buffer sized to the tags actually read would silently
@@ -284,6 +347,34 @@ public enum LibvirtFailure {
     /// delete, and "re-create it from the manifest" for an adoption.
     public static func isDomainMissing(_ error: any Error) -> Bool {
         (error as? LibvirtError)?.code == .noDomain
+    }
+
+    /// libvirt's answer when a domain has no snapshot by that name
+    /// (`VIR_ERR_NO_DOMAIN_SNAPSHOT`).
+    ///
+    /// Read as **success** by a checkpoint delete, whose post-condition is
+    /// exactly this — the same idempotency `QEMUService.deleteVMCheckpoint`
+    /// reaches by finding no block node carrying the tag. Read as a failure by
+    /// a restore, which has nothing to load.
+    public static func isSnapshotMissing(_ error: any Error) -> Bool {
+        (error as? LibvirtError)?.code == .noDomainSnapshot
+    }
+
+    /// Whether libvirt could not reach the guest agent
+    /// (`VIR_ERR_AGENT_UNRESPONSIVE`, or the command timing out inside it).
+    ///
+    /// The normal answer for a guest that has no agent installed, is still
+    /// booting, or has one wedged — which is why guest observation reports nil
+    /// rather than an error. Distinguished from a real failure so a genuinely
+    /// broken daemon is not laundered into "this guest is quiet".
+    public static func isGuestAgentUnavailable(_ error: any Error) -> Bool {
+        guard let code = (error as? LibvirtError)?.code else { return false }
+        switch code {
+        case .agentUnresponsive, .agentCommandTimeout, .agentCommandFailed, .agentUnsynced:
+            return true
+        default:
+            return false
+        }
     }
 
     /// `VIR_ERR_OPERATION_INVALID` — libvirt refusing a command because of the

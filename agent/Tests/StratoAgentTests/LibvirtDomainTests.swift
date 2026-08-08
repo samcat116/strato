@@ -132,6 +132,71 @@ struct LibvirtDomainTests {
         #expect(flags & 64 == 0, "VIR_DOMAIN_UNDEFINE_KEEP_TPM must not be set")
     }
 
+    /// The domain document is written once and never rewritten, so a device
+    /// change that does not carry `CONFIG` silently un-happens at the guest's
+    /// next power cycle — with the control plane still showing it applied.
+    @Test("Device changes always reach the persistent definition")
+    func deviceFlagsAlwaysWriteConfig() {
+        // VIR_DOMAIN_AFFECT_LIVE (1) | VIR_DOMAIN_AFFECT_CONFIG (2).
+        #expect(LibvirtDomain.affectLiveAndConfig == 1 | 2)
+        #expect(LibvirtDomain.affectConfig == 2)
+        #expect(
+            LibvirtDomain.affectLiveAndConfig & 2 != 0,
+            "a live-only hot-plug is lost at the guest's next power cycle")
+        #expect(
+            LibvirtDomain.affectConfig & 1 == 0,
+            "VIR_DOMAIN_AFFECT_LIVE against an inactive domain is VIR_ERR_OPERATION_INVALID")
+        // VIR_DOMAIN_VCPU_MAXIMUM / VIR_DOMAIN_MEM_MAXIMUM, which share a bit
+        // and are only legal alongside CONFIG.
+        #expect(LibvirtDomain.affectMaximum == 4)
+    }
+
+    @Test("Checkpoint flags select a running revert and the completed job")
+    func checkpointFlags() {
+        // VIR_DOMAIN_SNAPSHOT_REVERT_RUNNING. Without it the revert leaves the
+        // guest in whatever state the checkpoint recorded, while a restore's
+        // post-condition is that the VM is running.
+        #expect(LibvirtDomain.snapshotRevertRunning == 1)
+        // VIR_DOMAIN_SNAPSHOT_REVERT_PAUSED (2) would do the opposite.
+        #expect(LibvirtDomain.snapshotRevertRunning & 2 == 0)
+        // VIR_DOMAIN_JOB_STATS_COMPLETED: without it a query after the job has
+        // finished answers "no job" and the checkpoint's size is lost.
+        #expect(LibvirtDomain.jobStatsCompleted == 1)
+    }
+
+    @Test("Guest observation asks the agent, not libvirt's own leases")
+    func guestObservationFlags() {
+        // VIR_DOMAIN_GUEST_INFO_HOSTNAME.
+        #expect(LibvirtDomain.guestInfoHostname == 8)
+        // VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_AGENT. `_SRC_LEASE` (0) reads
+        // libvirt's own DHCP leases, which Strato does not run — the control
+        // plane does IPAM — and `_SRC_ARP` (2) never sees IPv6.
+        #expect(LibvirtDomain.interfaceAddressesFromAgent == 1)
+    }
+
+    @Test("A missing snapshot is distinguishable, because a delete reads it as success")
+    func classifiesMissingSnapshot() {
+        #expect(LibvirtFailure.isSnapshotMissing(daemonError(.noDomainSnapshot)))
+        #expect(!LibvirtFailure.isSnapshotMissing(daemonError(.noDomain)))
+        #expect(!LibvirtFailure.isSnapshotMissing(daemonError(.invalidDomainSnapshot)))
+        #expect(!LibvirtFailure.isSnapshotMissing(LibvirtClientError(.connectionClosed)))
+    }
+
+    /// A guest with no agent installed is the normal case, not a fault — and
+    /// laundering a genuinely broken daemon into "this guest is quiet" would
+    /// hide it, so only the agent codes count.
+    @Test("An unreachable guest agent is distinguishable from a broken daemon")
+    func classifiesGuestAgentUnavailable() {
+        for code in [
+            LibvirtErrorCode.agentUnresponsive, .agentCommandTimeout, .agentCommandFailed, .agentUnsynced,
+        ] {
+            #expect(LibvirtFailure.isGuestAgentUnavailable(daemonError(code)), "code \(code)")
+        }
+        #expect(!LibvirtFailure.isGuestAgentUnavailable(daemonError(.internalError)))
+        #expect(!LibvirtFailure.isGuestAgentUnavailable(daemonError(.noDomain)))
+        #expect(!LibvirtFailure.isGuestAgentUnavailable(LibvirtClientError(.connectionClosed)))
+    }
+
     // MARK: - Lifecycle events
 
     @Test("Every virDomainEventType has a label")
