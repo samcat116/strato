@@ -56,10 +56,12 @@ protocol NetworkServiceProtocol: Sendable {
     ///
     /// `resolverNetworks` is `metadataNetworks`' twin (STR-40): the networks
     /// this host runs a resolver-enabled NIC on, whose link-local resolver
-    /// address it must materialize — on the *same* localport and in the *same*
-    /// namespace — and answer on with a CoreDNS. Nil ≙ no opinion, on the same
-    /// terms. The two lists are folded into one per-network service set, so a
-    /// network on both gets one namespace carrying four addresses.
+    /// address pair it must materialize — on that network's *own* localport,
+    /// terminated in the **host** namespace rather than the chassis one (ADR
+    /// 0008) — and answer on from the host's single CoreDNS. Nil ≙ no opinion,
+    /// on the same terms. It carries each network's forwarders and search
+    /// domain alongside the id, because a non-authority agent's `networks` list
+    /// is empty and the NIC specs are the only input it has.
     ///
     /// `dnsZones` is the DNS desired state (STR-39, widened by STR-40): every
     /// zone attached to a network this agent either authors topology for or

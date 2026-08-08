@@ -332,7 +332,17 @@ public enum ProcessRunner {
             process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
         }
         if let logPath {
-            if !FileManager.default.fileExists(atPath: logPath) {
+            // Truncated when it has grown past the cap, rather than rotated.
+            // A supervised child is respawned often enough that this is checked
+            // regularly, and the alternative — an append-only file with no
+            // ceiling — is a resolver that fills `/var/lib` on a host whose
+            // upstreams are down and whose `errors` plugin is logging every
+            // SERVFAIL. Losing the older half of a log nobody has read is the
+            // cheaper failure; the recent lines are the ones that explain a
+            // crash loop.
+            if let size = fileSize(atPath: logPath), size > maximumSpawnLogBytes {
+                try? Data().write(to: URL(fileURLWithPath: logPath))
+            } else if !FileManager.default.fileExists(atPath: logPath) {
                 FileManager.default.createFile(atPath: logPath, contents: nil)
             }
             if let handle = FileHandle(forWritingAtPath: logPath) {
@@ -344,6 +354,11 @@ public enum ProcessRunner {
         try process.run()
         return SpawnedProcess(process: process)
     }
+
+    /// Size past which `spawn` truncates a child's log rather than appending to
+    /// it. Big enough to hold a crash loop's worth of context, small enough
+    /// that a hundred of them do not matter on a hypervisor.
+    static let maximumSpawnLogBytes: Int64 = 16 << 20  // 16 MiB
 
     /// Whether a process id is alive, for adopting a child this agent started
     /// before it restarted. `kill(pid, 0)` is the portable liveness probe: it

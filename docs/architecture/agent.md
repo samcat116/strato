@@ -963,8 +963,14 @@ per-network policy routing (`ip rule from <resolver-address> lookup 20000+index`
 that gets replies back out the right port — the one job the namespace used to do
 for free. Rules are deleted before being added so a re-reconcile cannot stack
 duplicates, and torn down before the OVS detach so one never outlives its port.
-Forwarding is disabled on the interface for both families and `rp_filter` is
-loose; all three are asserted in tests rather than left to review.
+Forwarding is disabled on the interface for both families, `rp_filter` is loose,
+`arp_ignore`/`arp_announce` keep the host from answering ARP there for addresses
+on its other interfaces, `accept_ra` is off, and the same `tc` ingress policer
+the metadata foot carries caps what guests may push at it. All of them are
+asserted in tests rather than left to review. The loose `rp_filter` is only
+effective when `net.ipv4.conf.all.rp_filter` is not `1` — the kernel takes the
+max of the global and per-device values — so the preflight reports that rather
+than the agent weakening a host-wide setting.
 
 The supervisor takes its host effects through an injected `ResolverHosting`, the
 shape `MetadataServerSupervisor` uses for the same reason: adoption, the

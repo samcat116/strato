@@ -1,4 +1,5 @@
 import Fluent
+import Foundation
 import SQLKit
 import StratoShared
 import Testing

@@ -391,10 +391,21 @@ before it is added so a re-reconcile does not stack duplicates, and torn down
 is off on the interface for both families, so the host cannot become a router
 between a tenant network and anything else it can reach; `rp_filter` is loose,
 because strict reverse-path filtering would drop the guest queries the
-policy-routed table has no return route for; and the `ip rule` matches only the
-resolver's own source address. All three are asserted in
+policy-routed table has no return route for; `arp_ignore=1` / `arp_announce=2`
+stop the host answering ARP here for addresses on its *other* interfaces, which
+the kernel default would otherwise do and which `forwarding=0` does not prevent
+(traffic to a local address is delivered, not forwarded); `accept_ra=0` keeps a
+guest's Router Advertisements out of the host's routing table; and the `ip rule`
+matches only the resolver's own source address. All of them are asserted in
 `ResolverHostPortPlanTests` rather than left to a reviewer's memory. The ingress
 `tc` policer that caps guest packet rate applies here too.
+
+One of those is only half ours: the kernel validates a source against
+`max(conf.all.rp_filter, conf.<dev>.rp_filter)`, so a host whose
+`net.ipv4.conf.all.rp_filter` is `1` stays strict here regardless and drops
+every guest query. `HostPreflight` reports that as an advisory check —
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md) explains why the agent
+does not simply lower it.
 
 ### What the agent renders
 
@@ -522,10 +533,13 @@ Two things could silently break DNS for every guest and are handled explicitly:
   DHCPv6 counterpart to option 121). Same mechanisms, same one-NIC-per-family
   rule, as the metadata routes.
 
-Guests may push at most `[resolver] rate_limit_pps` packets per second at a
-network's chassis interface — 1024 by default, AWS's ceiling — policed on
-ingress with `tc`, aggregate across DNS and metadata together, because what it
-protects is the hypervisor rather than either service.
+Guests may push at most `[resolver] rate_limit_pps` packets per second at each of
+a network's link-local service interfaces — 1024 by default, AWS's ceiling —
+policed on ingress with `tc`. The cap is per interface rather than per service,
+so metadata and DNS get one each: they are separate devices in separate
+namespaces since ADR 0008. What it protects is the hypervisor rather than either
+service, which is why the resolver's foot needs it most — one CoreDNS in the
+host's own namespace answers for every network on the host.
 
 ## Open questions
 

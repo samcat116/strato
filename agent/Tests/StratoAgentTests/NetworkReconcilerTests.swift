@@ -17,6 +17,8 @@ struct NetworkReconcilerTests {
         routerKey: String,
         externalAccess: Bool = true,
         metadataEnabled: Bool? = nil,
+        resolverEnabled: Bool? = nil,
+        resolverAddresses: [String]? = nil,
         generation: Int64 = 1,
         id: UUID = UUID(),
         floatingIPs: [DesiredFloatingIP]? = nil
@@ -31,6 +33,8 @@ struct NetworkReconcilerTests {
             routerKey: routerKey,
             externalAccess: externalAccess,
             metadataEnabled: metadataEnabled,
+            resolverEnabled: resolverEnabled,
+            resolverAddresses: resolverAddresses,
             generation: generation,
             floatingIPs: floatingIPs)
     }
@@ -565,6 +569,44 @@ struct NetworkReconcilerTests {
             observed: ObservedNetworkTopology(serviceLocalPortNames: [portName]),
             protected: protected)
         #expect(actions.isEmpty)
+    }
+
+    @Test("A stale network's resolver port survives teardown alongside its metadata port")
+    func resolverPortProtectedWhenStale() {
+        // The regression this guards: the resolver became a second localport
+        // with its own name, and the stale-protection set only knew the
+        // metadata one — so a network skipped for a stale generation kept its
+        // metadata port and lost its resolver port. Dropping that port stops
+        // OVN answering ARP for the resolver address, which costs the guests
+        // external name resolution as well as internal.
+        let stale = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            metadataEnabled: true, resolverEnabled: true,
+            resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
+        let metadataPort = OVNNaming.serviceLocalPortName(networkId: stale.networkId)
+        let resolverPort = OVNNaming.resolverPortName(networkId: stale.networkId)
+        let protected = NetworkReconciler.protectedTopology(forStale: [stale])
+
+        #expect(protected.serviceLocalPortNames.contains(resolverPort))
+
+        let actions = NetworkReconciler.teardownActions(
+            desired: NetworkTopologyPlan(switches: [], routers: []),
+            observed: ObservedNetworkTopology(serviceLocalPortNames: [metadataPort, resolverPort]),
+            protected: protected)
+        #expect(actions.isEmpty)
+    }
+
+    @Test("A stale network with the resolver off still keeps the port it may still have")
+    func resolverPortProtectedWhenStaleEvenIfDisabled() {
+        // Over-protection is deliberate on the stale path: the sync was skipped,
+        // so its opinion is not one to act on. Under-protection drops a live
+        // service; over-protection defers a teardown by one sync.
+        let stale = network(
+            name: "web", subnet: "192.168.1.0/24", gateway: "192.168.1.1", routerKey: "p",
+            metadataEnabled: false, resolverEnabled: false)
+        let protected = NetworkReconciler.protectedTopology(forStale: [stale])
+
+        #expect(protected.serviceLocalPortNames.contains(OVNNaming.resolverPortName(networkId: stale.networkId)))
     }
 
     @Test("Networks sharing a subnet get distinct metadata port names and MACs")

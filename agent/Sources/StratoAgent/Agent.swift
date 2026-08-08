@@ -273,9 +273,10 @@ actor Agent {
     // binary, the feature disabled here, or user-mode networking — which is
     // exactly what `AgentRegisterMessage.resolverCapable` reports.
     private var resolverBinaryPath: String?
-    // Owns one CoreDNS per resolver-enabled network with a local NIC. Held here
-    // as well as inside the network service so shutdown can stop them: a
-    // draining host must not keep answering for networks it no longer serves.
+    // Owns the host's single CoreDNS, which serves every resolver-enabled
+    // network this host has a local NIC on. Held here as well as inside the
+    // network service so shutdown can stop it: a draining host must not keep
+    // answering for networks it no longer serves.
     private var resolverSupervisor: ResolverSupervisor?
     private let ovnNorthbound: String?
     // TLS material for an ssl: ovn_northbound endpoint (nil = tcp/unix).
@@ -540,8 +541,8 @@ actor Agent {
                 let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
                 let ipBinaryPath = SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable)
                 // The resolver is OVN-only by construction: it terminates on a
-                // `localport` in a chassis namespace, neither of which exists
-                // under user-mode networking. Resolved here rather than at
+                // per-network OVN `localport`, which does not exist under
+                // user-mode networking. Resolved here rather than at
                 // startup so `resolverBinaryPath` is nil on every path that
                 // cannot run it, and `resolverCapable` follows from one check.
                 resolverBinaryPath =
@@ -566,7 +567,7 @@ actor Agent {
                     uplink: ovnUplink, dynamicRouting: ovnDynamicRouting,
                     ipBinaryPath: ipBinaryPath,
                     tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable),
-                    chassisServiceRatePPS: resolverConfig?.effectiveRateLimitPPS
+                    linkLocalServiceRatePPS: resolverConfig?.effectiveRateLimitPPS
                         ?? NetworkResolverDefaults.rateLimitPPS,
                     resolverSupervisor: resolverSupervisor,
                     logger: logger)

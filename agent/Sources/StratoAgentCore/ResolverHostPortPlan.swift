@@ -67,9 +67,13 @@ public struct ResolverHostPortPlan: Sendable, Equatable {
     }
 
     /// Builds the setup-and-teardown plan for one network's resolver foot.
+    ///
+    /// `ratePPS` caps the packet rate guests may push at this network's
+    /// resolver; 0 disables the policer. `tcBinaryPath` is only consulted when
+    /// it is non-zero.
     public static func plan(
-        networkId: UUID, addresses: [String], ipBinaryPath: String, bridge: String,
-        ovsTimeoutSeconds: Int
+        networkId: UUID, addresses: [String], ipBinaryPath: String, tcBinaryPath: String,
+        bridge: String, ovsTimeoutSeconds: Int, ratePPS: Int
     ) -> ResolverHostPortPlan {
         let device = resolverHostInterfaceName(networkId: networkId.uuidString)
         let logicalPort = OVNNaming.resolverPortName(networkId: networkId)
@@ -102,7 +106,31 @@ public struct ResolverHostPortPlan: Sendable, Equatable {
             // with a tenant source address this interface has no route for in
             // the *main* table, so strict mode would drop every query. Loose
             // still rejects a source no interface could reach.
+            //
+            // **Only half the setting, and the other half is not ours.** The
+            // kernel validates against `max(conf.all.rp_filter,
+            // conf.<dev>.rp_filter)`, so a host whose `all` is 1 — the default
+            // on RHEL-family and on most hardening baselines — stays strict
+            // here and drops every guest query. Lowering `all` would weaken
+            // source validation on the hypervisor's own NICs, which is not a
+            // trade this feature gets to make on an operator's behalf, so
+            // `HostPreflight` reports it instead.
             "net.ipv4.conf.\(device).rp_filter=2",
+            // **The host must not answer for addresses that are not on this
+            // interface.** With the default `arp_ignore=0` the host replies to
+            // any ARP arriving here for any local address — including its
+            // management address — which would put the hypervisor's own
+            // services one ARP reply away from a tenant L2 domain. `1` answers
+            // only for the resolver pair actually configured on the device, and
+            // `arp_announce=2` keeps the host from sourcing ARP requests here
+            // with an address from another interface.
+            "net.ipv4.conf.\(device).arp_ignore=1",
+            "net.ipv4.conf.\(device).arp_announce=2",
+            // The v6 counterpart of `arp_ignore`, and one more: a tenant guest
+            // can emit Router Advertisements, and a host that accepted them
+            // from inside a tenant network would take routes and a default
+            // gateway from it.
+            "net.ipv6.conf.\(device).accept_ra=0",
         ] {
             setup.append(ip(["sysctl", "-w", sysctl], ["cannot stat", "No such file"]))
         }
@@ -152,6 +180,51 @@ public struct ResolverHostPortPlan: Sendable, Equatable {
                         ["No such file or directory"]))
                 setup.append(ip(["-6", "rule", "add", "from", v6, "table", String(table)], []))
             }
+        }
+
+        // **The ingress policer belongs here, not on the metadata foot.** Before
+        // ADR 0008 the resolver shared the chassis namespace and `tc` on that
+        // interface capped both services; the move to the host namespace left
+        // the cap behind on an interface DNS no longer traverses. It matters
+        // more on this side than it ever did on that one: one CoreDNS answers
+        // every network on the host, from the host's *own* namespace, so an
+        // unbounded query rate from a single guest is a lever on every other
+        // guest here and on the hypervisor itself.
+        //
+        // Policed on ingress so a flood is paid for before the resolver wakes
+        // up, and in packets rather than bytes because a DNS query is small to
+        // send and not small to answer.
+        if ratePPS > 0 {
+            // Every policer command tolerates its own unavailability, for
+            // `ChassisServicePlan`'s reason: `setup` is executed fail-fast and a
+            // throw rolls the whole foot back, so an untolerated `tc` failure
+            // would not merely skip the limiter — it would destroy the port and
+            // the next sync would rebuild and destroy it again, costing this
+            // network its resolver entirely. `police pkts_rate` needs iproute2
+            // >= 5.10 and a 5.11 kernel, so an older LTS host rejects these as
+            // unknown arguments. An unlimited resolver beats no resolver.
+            let unsupported = [
+                "Unknown", "unknown", "Illegal", "illegal", "invalid", "Invalid", "Usage:",
+                "not supported", "No such file or directory",
+            ]
+            let tc = { (args: [String], tolerated: [String]) in
+                NetnsCommand(tcBinaryPath, args, tolerated: tolerated)
+            }
+            setup.append(
+                tc(["qdisc", "add", "dev", device, "handle", "ffff:", "ingress"], ["File exists"] + unsupported))
+            setup.append(
+                tc(
+                    [
+                        "filter", "replace", "dev", device, "parent", "ffff:",
+                        "handle", "0x1", "prio", "1", "protocol", "all", "matchall",
+                        "action", "police",
+                        "pkts_rate", String(ratePPS),
+                        // A quarter-second of headroom, floored so a very low
+                        // configured rate still admits a burst of one query and
+                        // its retry rather than dropping every other packet.
+                        "pkts_burst", String(max(ratePPS / 4, 32)),
+                        "conform-exceed", "drop",
+                    ], unsupported))
         }
 
         let timeout = "--timeout=\(ovsTimeoutSeconds)"

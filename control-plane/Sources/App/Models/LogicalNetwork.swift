@@ -93,8 +93,8 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     var metadataEnabled: Bool
 
     /// When true, agents give this network's guests a DNS resolver at
-    /// `NetworkResolverEndpoint` — a CoreDNS in the same per-network chassis
-    /// namespace the metadata service uses, serving the network's zones in full
+    /// `NetworkResolverEndpoint` — the host-wide CoreDNS each agent runs in its
+    /// *host* namespace (ADR 0008), serving the network's zones in full
     /// (including the CNAME/TXT/SRV the OVN `DNS` table cannot express) and
     /// forwarding everything else to `dnsServers` (STR-40).
     ///
@@ -103,11 +103,15 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     /// and `dnsServers` becomes the resolver's upstream forwarders; with it off,
     /// `dnsServers` is handed to guests verbatim, which is what it always was.
     ///
-    /// An opt-*in*, defaulting false, unlike `metadataEnabled` — see
-    /// `AddResolverEnabledToLogicalNetwork` for why. The resolver serves this
-    /// network's zones in full but cannot yet forward to upstream servers, so
-    /// turning it on trades external resolution for the full internal record
-    /// vocabulary, and that trade has to be the operator's.
+    /// An opt-*out*, defaulting true, like `metadataEnabled` — see
+    /// `AddResolverEnabledToLogicalNetwork` for why that is safe. The short
+    /// version: the resolver forwards through the *hypervisor's* egress, so a
+    /// network whose `dnsServers` already worked keeps working and one with no
+    /// external access at all starts being able to resolve public names, which
+    /// is the bug this phase was filed for. And the control plane withholds the
+    /// flag entirely unless every agent in the site reports `resolverCapable`,
+    /// so a site that cannot run CoreDNS is unaffected by the default until it
+    /// can.
     ///
     /// Editing it deliberately does **not** bump `generation` — the port and the
     /// DHCP row converge level-triggered on every network reconcile.

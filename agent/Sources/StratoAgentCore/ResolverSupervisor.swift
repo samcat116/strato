@@ -54,22 +54,26 @@ public protocol ResolverHosting: Sendable {
     func terminate(pid: Int32) async
 }
 
-/// Runs one CoreDNS per network that publishes a resolver (STR-40).
+/// Runs the single CoreDNS that serves every resolver-enabled network on this
+/// host (STR-40).
 ///
 /// The lifecycle half of the resolver. What to render lives in
 /// `CoreDNSZoneRenderer` and what to do lives in `ResolverSupervisionPolicy`;
 /// this owns the state machine between them, and delegates every host effect to
 /// `ResolverHosting` so the state machine is testable.
 ///
-/// ## Why a process per network
+/// ## Why one process for the whole host
 ///
-/// The resolver terminates in the network's chassis namespace
-/// (`ChassisServicePlan`), which is where reply routing to an overlapping tenant
-/// address works. `setns(2)` is per-thread and does not compose with Swift's
-/// concurrency runtime, which schedules continuations across a shared pool, so a
-/// listener inside the agent would have to pin a thread per namespace and never
-/// let a continuation move. ADR 0003 anticipated this; STR-56's metadata
-/// listener and this one answered it the same way, independently.
+/// The resolver terminates in the **host** namespace (`ResolverHostPortPlan`),
+/// which is what gives it egress to forward with — see ADR 0008. One namespace
+/// means one process can bind every network's addresses, and CoreDNS keys a
+/// server block on its zone *and* its `bind` addresses, so two networks can
+/// serve the same zone name with different contents from it. The addresses
+/// being distinct per network is what makes that work.
+///
+/// It also concentrates the blast radius, which is why nothing routine here
+/// restarts the process: a restart is a resolution gap for *every* network on
+/// the host, so a config change is written and left to the Corefile's `reload`.
 ///
 /// ## Why this is not part of the network reconcile's authority half
 ///

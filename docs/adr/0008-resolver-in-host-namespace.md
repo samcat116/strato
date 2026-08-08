@@ -112,18 +112,37 @@ one process, not N.
 
 ### Isolation is explicit, because a host-namespace foot deserves it
 
-The resolver's interface is in the host namespace, on a tenant switch. Three
+The resolver's interface is in the host namespace, on a tenant switch. Five
 things are set on it and none is incidental:
 
 - `net.ipv4.conf.<dev>.forwarding=0` and the v6 equivalent, so the host does not
   become a router between a tenant network and anything else it can reach.
 - `rp_filter=2` (loose), because strict reverse-path filtering would drop guest
   queries whose source the policy-routed table does not have a route back to.
+- `arp_ignore=1` and `arp_announce=2`. The kernel default answers ARP arriving
+  on *any* interface for *any* local address, which would put the hypervisor's
+  own management address one ARP reply away from a tenant L2 domain — and
+  `forwarding=0` does not help, because traffic to a local address is delivered
+  locally rather than forwarded. `1` answers only for the resolver pair actually
+  configured here.
+- `net.ipv6.conf.<dev>.accept_ra=0`, because a guest can emit Router
+  Advertisements and a host that accepted them from inside a tenant network
+  would take routes, and a default gateway, from it.
 - The `ip rule` matches **only** the resolver's own source address, so nothing
   else on the host is steered into a tenant network's table.
 
 The ingress `tc` policer ADR 0003's amendment describes still applies, now to
-this port as well.
+this port as well — and it matters more here, since one CoreDNS in the host's
+own namespace answers for every network on the hypervisor.
+
+**`rp_filter` is only half in our hands, and that is a deployment
+requirement rather than a setting.** The kernel validates a source against
+`max(conf.all.rp_filter, conf.<dev>.rp_filter)`, so a host whose `all` is `1`
+stays strict on this interface whatever the per-device value says, and every
+guest query is dropped silently. Lowering `all` would weaken source validation
+on the hypervisor's own NICs, which is not a trade this feature makes on an
+operator's behalf — so `HostPreflight` reports it as an advisory check with the
+remedy instead.
 
 ## Why metadata stays
 

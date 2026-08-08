@@ -175,8 +175,8 @@ public enum OVNNaming {
 
 // MARK: - Desired topology plan
 
-/// The OVN `localport` that publishes one tenant switch's chassis-local service
-/// addresses: instance metadata (STR-49) and the network's DNS resolver
+/// An OVN `localport` publishing one of a tenant switch's link-local service
+/// address sets: instance metadata (STR-49) or the network's DNS resolver
 /// (STR-40).
 ///
 /// A `localport` is the primitive designed for exactly this: `ovn-controller`
@@ -186,18 +186,19 @@ public enum OVNNaming {
 /// Solicitation from this row's `addresses`, which is why the addresses need
 /// not belong to the switch's subnets.
 ///
-/// **One port, both services.** Not a tidiness choice: the `addresses` column
-/// is a set carrying one `"<mac> <ip>…"` entry, OVN's responder is driven per
-/// address off it, and each service still terminates in the same per-network
-/// namespace on the chassis. A second port would mean a second OVS internal
-/// interface, a second MAC, and a second observation lifetime, for nothing.
+/// **One port per service, not one port for both.** The two services terminate
+/// in different places — metadata in the network's chassis namespace, the
+/// resolver in the host's (ADR 0008) — and an OVS internal interface claims
+/// exactly one `iface-id`, so a shared row could not be terminated twice. This
+/// type describes either of them; which one it is follows from the name it was
+/// built with (`OVNNaming.serviceLocalPortName` or `.resolverPortName`).
 public struct DesiredServiceLocalPort: Equatable, Sendable {
     public let name: String
     public let switchName: String
     public let mac: String
-    /// The addresses this port answers for, in a fixed order: metadata v4 and
-    /// v6 first, then resolver v4 and v6, each present only when its service is
-    /// enabled.
+    /// The addresses this port answers for, v4 first. Both families ride one
+    /// port: OVN's `addresses` column is a set and its responder is driven
+    /// per-family off the entry, so splitting them would buy nothing.
     ///
     /// The order is load-bearing rather than cosmetic. `addresses` is one
     /// joined string, so the actuator's drift check compares
@@ -718,17 +719,22 @@ public enum NetworkReconciler {
             for fip in network.floatingIPs ?? [] {
                 protected.dnatRules.insert(DNATRuleKey(router: routerName, externalIP: fip.externalIP))
             }
-            // A stale network keeps its metadata port, unconditionally rather
-            // than only when `metadataEnabled` is set: over-protection defers a
-            // teardown by one sync, under-protection drops a live service.
+            // A stale network keeps *both* its localports, unconditionally
+            // rather than only when the matching flag is set: over-protection
+            // defers a teardown by one sync, under-protection drops a live
+            // service. Both are named here rather than one, because they are
+            // separate rows since ADR 0008 — and the resolver is the costlier
+            // of the two to drop, since a guest whose resolver address stops
+            // answering ARP loses external name resolution as well as internal.
             protected.serviceLocalPortNames.insert(OVNNaming.serviceLocalPortName(networkId: network.networkId))
+            protected.serviceLocalPortNames.insert(OVNNaming.resolverPortName(networkId: network.networkId))
         }
         return protected
     }
 
-    /// The metadata ports of networks the sync expresses no *opinion* about
-    /// (`metadataEnabled == nil`, i.e. a control plane older than the field),
-    /// protected from teardown.
+    /// The localports of networks the sync expresses no *opinion* about —
+    /// `metadataEnabled == nil` or `resolverEnabled == nil`, i.e. a control
+    /// plane older than the field that authors them — protected from teardown.
     ///
     /// Deliberately the one thing protected from a *current* network, against
     /// the rule `protectedTopology(forStale:)` documents. It has to be: teardown
@@ -741,26 +747,15 @@ public enum NetworkReconciler {
     /// Pass the networks the sync applied (the same list handed to `plan`).
     public static func serviceLocalPortProtection(for networks: [DesiredNetworkState]) -> ProtectedTopology {
         var protected = ProtectedTopology()
-        // The port is protected only when the sync has no opinion about it *at
-        // all* — neither service. `&&`, not `||`, and the difference is a real
-        // regression: a control plane rolled back below v37 sends no
-        // `resolverEnabled` while still sending `metadataEnabled`, and `||`
-        // would then protect every port on the host, so turning metadata off
-        // would silently stop working against exactly the older control plane
-        // this guard exists for.
-        //
-        // A rollback below v37 does strip the resolver's addresses from a port
-        // that keeps its metadata ones, which is deliberate rather than an
-        // omission. The DHCP row reverts in the same sync, so guests are told
-        // to use the real resolvers again at their next lease; leaving the
-        // addresses published would keep a localport answering ARP for an
-        // address nothing points at and nothing listens on.
-        // Each port is protected by *its own* service's silence, because they
-        // are now separate rows with separate lifetimes. A control plane rolled
-        // back below v37 says nothing about the resolver, and teardown is a set
-        // difference, so without this it would delete every live resolver port
-        // on the host; the metadata port is unaffected by that rollback and
-        // keeps answering to its own field.
+        // Each port is protected by *its own* service's silence, because since
+        // ADR 0008 they are separate rows with separate lifetimes. Reading one
+        // field for both would be a real regression in either direction: a
+        // control plane rolled back below v37 sends no `resolverEnabled` while
+        // still sending `metadataEnabled`, so keying both off the resolver's
+        // silence would protect every metadata port on the host — turning
+        // metadata off would silently stop working against exactly the older
+        // control plane this guard exists for — while keying both off
+        // metadata's would delete every live resolver port on that rollback.
         for network in networks where network.metadataEnabled == nil {
             protected.serviceLocalPortNames.insert(
                 OVNNaming.serviceLocalPortName(networkId: network.networkId))

@@ -864,16 +864,17 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// *is* honored — that is what makes turning the feature off work. See
     /// `NetworkReconciler.serviceLocalPortProtection(for:)`.
     public let metadataEnabled: Bool?
-    /// Whether this network's guests get a resolver at `NetworkResolverEndpoint`
-    /// (STR-40, wire v37): a CoreDNS in the network's chassis namespace that
-    /// serves the network's zones in full — including the CNAME/TXT/SRV the OVN
-    /// `DNS` table cannot express — and forwards everything else to
-    /// `dnsServers`.
+    /// Whether this network's guests get a resolver at the addresses in
+    /// `resolverAddresses` (STR-40, wire v37): the host-wide CoreDNS each agent
+    /// runs in its *host* namespace, which serves the network's zones in full —
+    /// including the CNAME/TXT/SRV the OVN `DNS` table cannot express — and
+    /// forwards everything else to `dnsServers`.
     ///
-    /// Realized on the **same** `localport` as `metadataEnabled`, which is why
-    /// this is a second flag on one carrier rather than a second port: the two
-    /// services share a per-network chassis foot, and a network with both on
-    /// publishes four addresses from one row.
+    /// Realized on a **second** `localport` of its own, not the one
+    /// `metadataEnabled` authors, because the two services terminate in
+    /// different namespaces and one OVS interface claims one `iface-id` (ADR
+    /// 0008). It is still a second flag on one carrier rather than a second
+    /// carrier, because both are properties of the same network row.
     ///
     /// Everything said about `metadataEnabled`'s absence applies here word for
     /// word — nil neither creates nor deletes, `false` is an opinion and is
@@ -1016,8 +1017,9 @@ public struct DesiredDNSRecord: Codable, Sendable, Equatable {
 /// carries the networks that agent authors.
 ///
 /// The **per-network resolver** (v37, STR-40) is not topology: a CoreDNS runs
-/// in the chassis namespace of every host with a local NIC on the network, and
-/// each serves the zones attached to that network. So from v37 a zone is sent
+/// in the host namespace of every host with a local NIC on the network, serving
+/// the zones attached to that network from a server block bound to its own
+/// address pair (ADR 0008). So from v37 a zone is sent
 /// to any agent that either authors an attached network *or* runs a workload
 /// on one, and `networkIds` is the union of both. An agent realizes the OVN
 /// half only for the networks it actually authors, which it already knows from

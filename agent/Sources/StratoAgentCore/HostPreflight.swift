@@ -42,6 +42,7 @@ public enum HostPreflight {
         case ovsVsctlTool = "ovs-vsctl"
         case ovnAppctlTool = "ovn-appctl"
         case corednsBinary = "coredns"
+        case globalReversePathFilter = "rp_filter_all"
         case storageFreeSpace = "storage_free_space"
     }
 
@@ -115,6 +116,10 @@ public enum HostPreflight {
         public var ovsSocketPath: String
         /// `PATH` used to locate CLI tools (`ip`, `ovs-vsctl`).
         public var searchPath: String
+        /// `net.ipv4.conf.all.rp_filter`, read by the caller so the check stays
+        /// pure. Nil when the sysctl could not be read at all, which is not a
+        /// failure — see `checkGlobalReversePathFilter`.
+        public var globalReversePathFilter: Int?
         /// Free-space floor for the advisory disk-space check.
         public var minimumFreeDiskBytes: Int64
 
@@ -135,6 +140,7 @@ public enum HostPreflight {
             ovsSocketPath: String = "/var/run/openvswitch/db.sock",
             searchPath: String = ProcessInfo.processInfo.environment["PATH"]
                 ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            globalReversePathFilter: Int? = HostPreflight.readGlobalReversePathFilter(),
             minimumFreeDiskBytes: Int64 = 1 << 30  // 1 GiB
         ) {
             self.vmStoragePath = vmStoragePath
@@ -152,8 +158,23 @@ public enum HostPreflight {
             self.ovnNBTLSFilePaths = ovnNBTLSFilePaths
             self.ovsSocketPath = ovsSocketPath
             self.searchPath = searchPath
+            self.globalReversePathFilter = globalReversePathFilter
             self.minimumFreeDiskBytes = minimumFreeDiskBytes
         }
+    }
+
+    /// Reads `net.ipv4.conf.all.rp_filter` from procfs.
+    ///
+    /// Read rather than shelled out to: `sysctl` is one more binary a stripped
+    /// service-manager `PATH` could hide, and the value is one integer in a
+    /// file the agent can already reach. Nil on any failure, including the file
+    /// simply not existing off Linux.
+    public static func readGlobalReversePathFilter() -> Int? {
+        guard
+            let raw = try? String(
+                contentsOfFile: "/proc/sys/net/ipv4/conf/all/rp_filter", encoding: .utf8)
+        else { return nil }
+        return Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     // MARK: - Report
@@ -374,6 +395,7 @@ public enum HostPreflight {
                         + "It must be at one of "
                         + NetworkResolverDefaults.corednsBinaryCandidates.joined(separator: ", ")
                         + ", or named by [resolver] coredns_binary_path"))
+            checks.append(checkGlobalReversePathFilter(inputs.globalReversePathFilter))
         }
 
         checks.append(checkFreeSpace(inputs.vmStoragePath, minimum: inputs.minimumFreeDiskBytes))
@@ -382,6 +404,37 @@ public enum HostPreflight {
     }
 
     // MARK: - Individual checks
+
+    /// Whether `net.ipv4.conf.all.rp_filter` leaves the resolver's foot able to
+    /// receive guest queries (STR-40).
+    ///
+    /// `ResolverHostPortPlan` sets `rp_filter=2` (loose) on its own interface,
+    /// but the kernel validates a source against
+    /// `max(conf.all.rp_filter, conf.<dev>.rp_filter)` — so a host whose `all`
+    /// is `1` stays *strict* on that interface no matter what the per-device
+    /// value says. A guest query arrives sourced from a tenant address the main
+    /// table has no route for, strict mode drops it, and the symptom is a
+    /// resolver that answers nothing while every log on the host stays quiet.
+    ///
+    /// Advisory rather than a fix, deliberately: lowering `all` would weaken
+    /// source validation on the hypervisor's own NICs, and that is an
+    /// operator's call rather than this feature's. `0` and `2` both pass — `0`
+    /// disables validation entirely, which is Ubuntu's default.
+    static func checkGlobalReversePathFilter(_ value: Int?) -> Check {
+        guard let value else {
+            // Unreadable is not failed: the sysctl is absent on non-Linux and
+            // on a kernel built without it, and neither is a misconfiguration.
+            return .pass(.globalReversePathFilter, severity: .advisory)
+        }
+        guard value == 1 else { return .pass(.globalReversePathFilter, severity: .advisory) }
+        return .fail(
+            .globalReversePathFilter, severity: .advisory,
+            "net.ipv4.conf.all.rp_filter is 1 (strict), which overrides the loose setting the agent "
+                + "puts on each network's resolver interface — the kernel uses the max of the two. "
+                + "Guest DNS queries to the resolver address will be dropped. Set "
+                + "net.ipv4.conf.all.rp_filter=2 (loose) or 0, keeping per-interface strictness where "
+                + "you need it")
+    }
 
     /// Creates the directory (with intermediate directories) if needed, then
     /// proves writability by creating and removing a probe file — a

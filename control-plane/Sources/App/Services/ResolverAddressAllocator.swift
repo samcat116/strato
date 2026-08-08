@@ -47,11 +47,27 @@ enum ResolverAddressAllocator {
         // The used-set is small (one small integer per resolver-enabled network)
         // and read under the lock, so it is fetched whole rather than probed
         // index by index.
-        let used = Set(
-            try await LogicalNetwork.query(on: db)
-                .filter(\.$resolverIndex != nil)
+        //
+        // One column, not the model: with the flag defaulting on this runs for
+        // every network create, and hydrating every `LogicalNetwork` in the
+        // fleet to read one `Int` off each is the kind of cost that is invisible
+        // until the fleet is large. Fluent has no projection, so this drops to
+        // SQLKit where one is available.
+        let used: Set<Int>
+        if let sql = db as? any SQLDatabase {
+            let rows = try await sql.select()
+                .column("resolver_index")
+                .from("logical_networks")
+                .where("resolver_index", .isNot, SQLLiteral.null)
                 .all()
-                .compactMap(\.resolverIndex))
+            used = Set(rows.compactMap { try? $0.decode(column: "resolver_index", as: Int.self) })
+        } else {
+            used = Set(
+                try await LogicalNetwork.query(on: db)
+                    .filter(\.$resolverIndex != nil)
+                    .all()
+                    .compactMap(\.resolverIndex))
+        }
 
         guard let index = firstFree(after: used) else {
             throw Abort(

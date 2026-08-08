@@ -251,9 +251,14 @@ packets per second at either interface — 1024 by default, AWS's ceiling for it
 link-local services — policed on ingress with `tc`, because what it protects is
 the hypervisor rather than either service.
 
-Because that foot is in the host namespace, forwarding is disabled on the
-interface for both families and `rp_filter` is set loose (strict would drop the
-guest queries the policy-routed table has no return route for). See
+Because that foot is in the host namespace it is fenced explicitly: forwarding
+disabled for both families, `rp_filter` set loose (strict would drop the guest
+queries the policy-routed table has no return route for), `arp_ignore=1` /
+`arp_announce=2` so the host does not answer ARP there for addresses on its
+other interfaces, and `accept_ra=0` so a guest's Router Advertisements never
+reach the host's routing table. The loose `rp_filter` needs
+`net.ipv4.conf.all.rp_filter` to not be `1` — the kernel takes the max of the
+two — which the agent's preflight reports rather than changing. See
 [ADR 0008](../adr/0008-resolver-in-host-namespace.md).
 
 **One namespace per network per chassis** (`strato-md-<network-uuid>`, mirroring
@@ -731,9 +736,13 @@ the carve-out back off.
   are ACL meters/stats — `log` is wired, `meter` is not, so a chatty logged
   rule has no rate limit.
 - The per-network resolver puts one interface and one `ip rule` per network in
-  the **host** namespace. Forwarding off, loose `rp_filter` and a source-keyed
+  the **host** namespace. Forwarding off, loose `rp_filter`, ARP scoped to the
+  interface's own addresses, RAs ignored, an ingress policer and a source-keyed
   rule fence it (see [ADR 0008](../adr/0008-resolver-in-host-namespace.md)), but
   it is a larger host-side surface than the chassis-namespace design it replaced.
+  It also inherits a host setting it does not own: a host with
+  `net.ipv4.conf.all.rp_filter=1` drops every guest query, which the agent's
+  preflight reports rather than fixes.
 - Resolver indexes are allocated fleet-wide from ~65k addresses and are never
   reused while a network holds one; exhaustion is a `409` on network create.
 - A mixed-version site whose network-controller agent predates

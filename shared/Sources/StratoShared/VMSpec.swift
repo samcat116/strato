@@ -348,12 +348,13 @@ public struct NetworkSpec: Codable, Sendable {
     /// Whether this NIC's network publishes the per-network DNS resolver
     /// (STR-40, wire v37).
     ///
-    /// Here for exactly `metadataEnabled`'s reason, and realized on the same
-    /// per-network chassis foot: `DesiredNetworkState.resolverEnabled` authors
-    /// the OVN `localport` and the DHCP row, and this per-NIC copy is what
-    /// reaches a sited non-authority agent, whose `networks` list is empty
-    /// because it may not author topology but which still has to materialize
-    /// the resolver address — and run a CoreDNS — for its own guests.
+    /// Here for exactly `metadataEnabled`'s reason:
+    /// `DesiredNetworkState.resolverEnabled` authors the OVN `localport` and the
+    /// DHCP row, and this per-NIC copy is what reaches a sited non-authority
+    /// agent, whose `networks` list is empty because it may not author topology
+    /// but which still has to materialize the resolver address — in its *host*
+    /// namespace, on that port's own OVS interface — and serve it from the
+    /// host's CoreDNS, for its own guests.
     ///
     /// The forwarders and search domain that CoreDNS needs are already on this
     /// spec as `dnsServers` and `domainName`, so this flag is the only addition.

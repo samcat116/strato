@@ -18,10 +18,10 @@ struct ResolverHostPortPlanTests {
     private let networkId = UUID(uuidString: "3F2504E0-4F89-11D3-9A0C-0305E82C3301")!
     private let addresses = ["169.254.1.0", "fd00:ec2:1::100"]
 
-    private func plan(_ addresses: [String]? = nil) -> ResolverHostPortPlan {
+    private func plan(_ addresses: [String]? = nil, ratePPS: Int = 0) -> ResolverHostPortPlan {
         ResolverHostPortPlan.plan(
             networkId: networkId, addresses: addresses ?? self.addresses, ipBinaryPath: "/sbin/ip",
-            bridge: "br-int", ovsTimeoutSeconds: 10)
+            tcBinaryPath: "/sbin/tc", bridge: "br-int", ovsTimeoutSeconds: 10, ratePPS: ratePPS)
     }
 
     private func argv(_ commands: [NetnsCommand]) -> [String] {
@@ -85,6 +85,27 @@ struct ResolverHostPortPlanTests {
         // rejects a source no interface could reach.
         let device = plan().interfaceName
         #expect(argv(plan().setup).contains("/sbin/ip sysctl -w net.ipv4.conf.\(device).rp_filter=2"))
+    }
+
+    @Test("The host does not answer ARP here for addresses on its other interfaces")
+    func arpIsScopedToThisInterface() {
+        // The default `arp_ignore=0` answers any ARP arriving on any interface
+        // for any local address — so without this, one ARP from a guest would
+        // put the hypervisor's own management address inside a tenant L2
+        // domain, and traffic to it would be delivered locally regardless of
+        // `forwarding=0`. `arp_announce=2` is the outbound half.
+        let lines = argv(plan().setup)
+        let device = plan().interfaceName
+        #expect(lines.contains("/sbin/ip sysctl -w net.ipv4.conf.\(device).arp_ignore=1"))
+        #expect(lines.contains("/sbin/ip sysctl -w net.ipv4.conf.\(device).arp_announce=2"))
+    }
+
+    @Test("Router Advertisements from a tenant network are ignored")
+    func routerAdvertisementsAreIgnored() {
+        // A guest can emit RAs. A host that accepted them from inside a tenant
+        // network would take routes — and a default gateway — from it.
+        let device = plan().interfaceName
+        #expect(argv(plan().setup).contains("/sbin/ip sysctl -w net.ipv6.conf.\(device).accept_ra=0"))
     }
 
     @Test("The sysctls tolerate a kernel that does not expose them")
@@ -227,6 +248,55 @@ struct ResolverHostPortPlanTests {
         #expect(ResolverHostPortPlan.parseAddresses("169.254.1.0,fd00:ec2:1::100") == addresses)
         #expect(ResolverHostPortPlan.parseAddresses(nil).isEmpty)
         #expect(ResolverHostPortPlan.parseAddresses("").isEmpty)
+    }
+
+    // MARK: - Rate limiting
+
+    @Test("The ingress policer lands on the resolver's own interface")
+    func policerIsOnTheResolverInterface() {
+        // The regression this guards: before ADR 0008 the resolver shared the
+        // metadata chassis namespace and `tc` there capped both services. The
+        // move to the host namespace left the policer behind on an interface
+        // DNS no longer traverses, so the one listener that serves every
+        // network on the host — from the host's own namespace — had no cap at
+        // all while the knob was still called `[resolver] rate_limit_pps`.
+        let plan = plan(ratePPS: 1024)
+        let lines = argv(plan.setup)
+        let device = plan.interfaceName
+
+        #expect(lines.contains("/sbin/tc qdisc add dev \(device) handle ffff: ingress"))
+        #expect(
+            lines.contains(
+                "/sbin/tc filter replace dev \(device) parent ffff: handle 0x1 prio 1 protocol all "
+                    + "matchall action police pkts_rate 1024 pkts_burst 256 conform-exceed drop"))
+    }
+
+    @Test("A zero rate plans no policer at all")
+    func policerOmittedWhenDisabled() {
+        // 0 is how a host without `tc` — and an operator who wants no cap —
+        // both arrive here.
+        #expect(!argv(plan(ratePPS: 0).setup).contains { $0.contains("tc") })
+    }
+
+    @Test("The burst floor keeps a very low rate from dropping every other packet")
+    func policerBurstHasAFloor() {
+        // A quarter-second of headroom, floored at 32: a query and its retry
+        // should not be the thing that trips the limiter.
+        #expect(argv(plan(ratePPS: 4).setup).contains { $0.contains("pkts_burst 32") })
+    }
+
+    @Test("Every policer command tolerates an iproute2 too old to know it")
+    func policerCommandsAreTolerant() {
+        // `setup` is executed fail-fast and a throw rolls the whole foot back,
+        // so an untolerated `tc` failure would not skip the limiter — it would
+        // destroy the port, and the next sync would rebuild and destroy it
+        // again. `police pkts_rate` needs iproute2 >= 5.10 and a 5.11 kernel.
+        let tcCommands = plan(ratePPS: 1024).setup.filter { $0.executable.hasSuffix("tc") }
+        #expect(!tcCommands.isEmpty)
+        for command in tcCommands {
+            #expect(command.tolerated.contains("Unknown"))
+            #expect(command.tolerated.contains("not supported"))
+        }
     }
 }
 

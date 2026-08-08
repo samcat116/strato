@@ -34,17 +34,20 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// instead of failing halfway through wiring one up.
     private let ipBinaryPath: String?
     private let tcBinaryPath: String?
-    /// Aggregate ingress packet-rate cap on a network's chassis service
-    /// interface (STR-40); 0 disables the policer. Operator-configurable
+    /// Aggregate ingress packet-rate cap on each of a network's link-local
+    /// service interfaces (STR-40); 0 disables the policer. Applied to *both*
+    /// feet — the metadata one in the network's chassis namespace and the
+    /// resolver one in the host's — because since ADR 0008 they are separate
+    /// devices and each carries its own traffic. Operator-configurable
     /// (`[resolver] rate_limit_pps`) because the right ceiling depends on how
     /// many guests share a hypervisor.
-    private let chassisServiceRatePPS: Int
-    /// Runs one CoreDNS per resolver-enabled network this host has a NIC on
-    /// (STR-40). Nil when the host has no usable CoreDNS binary, in which case
-    /// the agent also registers `resolverCapable: false` and the control plane
-    /// withholds the resolver from every network in the site — so this being nil
-    /// while networks still want a resolver is a mixed-version window, not a
-    /// steady state.
+    private let linkLocalServiceRatePPS: Int
+    /// Runs the host's CoreDNS, which serves every resolver-enabled network this
+    /// host has a NIC on (STR-40). Nil when the host has no usable CoreDNS
+    /// binary, in which case the agent also registers `resolverCapable: false`
+    /// and the control plane withholds the resolver from every network in the
+    /// site — so this being nil while networks still want a resolver is a
+    /// mixed-version window, not a steady state.
     private let resolverSupervisor: ResolverSupervisor?
 
     /// Whether this agent may author NB topology (switches, routers, NAT,
@@ -80,7 +83,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         dynamicRouting: OVNDynamicRoutingConfig? = nil,
         ipBinaryPath: String? = nil,
         tcBinaryPath: String? = nil,
-        chassisServiceRatePPS: Int = NetworkResolverDefaults.rateLimitPPS,
+        linkLocalServiceRatePPS: Int = NetworkResolverDefaults.rateLimitPPS,
         resolverSupervisor: ResolverSupervisor? = nil,
         logger: Logger
     ) {
@@ -92,7 +95,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         self.dynamicRoutingConfig = dynamicRouting
         self.ipBinaryPath = ipBinaryPath
         self.tcBinaryPath = tcBinaryPath
-        self.chassisServiceRatePPS = chassisServiceRatePPS
+        self.linkLocalServiceRatePPS = linkLocalServiceRatePPS
         self.resolverSupervisor = resolverSupervisor
         self.logger = logger
 
@@ -1366,11 +1369,12 @@ extension NetworkServiceLinux {
         // input is its own workloads' NIC specs.
         await reconcileChassisServicePorts(metadataNetworks)
 
-        // The resolver processes themselves, converged here for the chassis
-        // ports' reason and immediately after them: the namespace has to exist
-        // before a CoreDNS can be launched into it. Also before the authority
-        // guard — a resolver serves the guests on *this* host, so it runs
-        // wherever they do.
+        // The resolver's own host-namespace feet and the CoreDNS that binds
+        // them, converged here for the chassis ports' reason and immediately
+        // after them. Also before the authority guard — a resolver serves the
+        // guests on *this* host, so it runs wherever they do. It does not
+        // depend on the chassis namespace above: since ADR 0008 the two
+        // services have separate ports and separate namespaces.
         await reconcileResolvers(resolverNetworks, dnsZones: dnsZones)
 
         guard authoritative else {
@@ -1583,9 +1587,14 @@ extension NetworkServiceLinux {
     private func attemptResolverHostPortSetup(
         networkId: UUID, addresses: [String], ipBinaryPath: String
     ) async {
+        // A missing `tc` costs the policer, not the resolver: an unlimited but
+        // working resolver beats no resolver, and the host preflight already
+        // reports the tool as absent.
         let plan = ResolverHostPortPlan.plan(
             networkId: networkId, addresses: addresses, ipBinaryPath: ipBinaryPath,
-            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
+            tcBinaryPath: tcBinaryPath ?? "tc",
+            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds,
+            ratePPS: tcBinaryPath == nil ? 0 : linkLocalServiceRatePPS)
         do {
             try run("ovs-vsctl", plan.ovsAttach)
             _ = try await verifyOVSBinding(
@@ -1734,7 +1743,7 @@ extension NetworkServiceLinux {
         // A missing `tc` costs the policer, not the service: an unlimited but
         // working resolver beats no resolver, and the host preflight already
         // reports the tool as absent.
-        let ratePPS = tcBinaryPath == nil ? 0 : chassisServiceRatePPS
+        let ratePPS = tcBinaryPath == nil ? 0 : linkLocalServiceRatePPS
         let plan = ChassisServicePlan.plan(
             networkId: networkId,
             ipBinaryPath: ipBinaryPath, tcBinaryPath: tcBinaryPath ?? "tc",
