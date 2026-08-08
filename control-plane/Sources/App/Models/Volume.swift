@@ -367,10 +367,13 @@ extension Volume {
     /// there is no separate guard for it.
     ///
     /// Two caveats that belong to the caller, not to this predicate. No agent
-    /// has an online grow path yet, so growing an attached volume is accepted
-    /// and then sits degraded until the agent-side work lands. And growing the
-    /// block device never grows what is on it: guest-side rescan and filesystem
-    /// expansion stay the user's job.
+    /// has an online grow path yet, so a volume attached to a *running* guest
+    /// is accepted here and then refused by the agent — which is the decision
+    /// working, not a gap: growing an image a live guest holds open would
+    /// corrupt it on any pool whose file locking is unreliable. A volume
+    /// attached to a stopped VM grows normally. And growing the block device
+    /// never grows what is on it: guest-side rescan and filesystem expansion
+    /// stay the user's job.
     var canResize: Bool {
         return desiredStatus == .present
     }

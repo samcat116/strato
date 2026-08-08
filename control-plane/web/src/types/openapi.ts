@@ -965,7 +965,7 @@ export interface paths {
          *
          *     Growing the block device does **not** grow the filesystem on it. Expand the guest filesystem yourself afterwards (`resize2fs`, `xfs_growfs`, or the Windows equivalent); some guests also need a device rescan before they notice the new capacity.
          *
-         *     No agent implements an online grow path yet, so growing an *attached* volume is accepted and then stays unconverged — reported as a degraded condition — until the agent-side work lands. Asynchronous either way: refetch the volume until its `conditions` converge.
+         *     No agent implements an online grow path yet. A volume attached to a *running* guest is therefore accepted here and then refused by the agent, surfacing as a degraded condition until the agent-side work lands. That refusal is deliberate rather than a gap: the offline path would otherwise rewrite disk metadata underneath a live guest on any pool whose file locking is unreliable. A volume attached to a *stopped* VM grows normally. Asynchronous either way: refetch the volume until its `conditions` converge.
          */
         post: operations["resizeVolume"];
         delete?: never;

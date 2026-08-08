@@ -3976,6 +3976,44 @@ extension Agent: ReconcileActuator {
                 "refusing to shrink volume \(item.id) from \(current) to \(desired.sizeBytes) bytes")
         }
         if desired.sizeBytes > current {
+            // Refuse to grow a volume some guest may still have open (STR-19).
+            //
+            // The only path here is `qemu-img resize`, and the only thing
+            // between it and a live hypervisor is the image lock — which
+            // `locking=auto` gives up on *quietly* wherever OFD locks do not
+            // work, NFS being the case to worry about. There the resize would
+            // not fail; it would rewrite qcow2 metadata underneath a running
+            // guest. So the agent checks rather than trusting a property of
+            // the filesystem, which is also what makes "the agent decides
+            // online vs offline" true rather than aspirational: until there is
+            // an online grow path, the agent's decision is *no*.
+            //
+            // Deliberately not `hasLiveSession`: that answers "does this
+            // service track the VM", and it keeps tracking one that is shut
+            // down — so it would refuse the offline grow of a stopped VM's
+            // disk, which is precisely the case that is safe. Only a definite
+            // `.shutdown` proceeds. A status this agent cannot read (no
+            // service for the VM, an unreachable monitor, a re-adopted VM
+            // whose process it has not claimed) refuses, because an
+            // unanswerable question about a live guest is not a no.
+            if let attachment = recordedVolumeAttachments()[item.id] {
+                var isDefinitelyStopped = false
+                if let service = getHypervisorServiceForVM(vmId: attachment.vmId),
+                    let status = try? await service.getVMStatus(vmId: attachment.vmId)
+                {
+                    isDefinitelyStopped = status == .shutdown
+                }
+                // Permanent, not transient: no retry makes a running guest
+                // safer, so the control plane surfaces a degraded volume with a
+                // reason an operator can act on (stop the guest, or detach)
+                // rather than burning the attempt budget on a doomed grow.
+                guard isDefinitelyStopped else {
+                    throw VolumeConvergenceError.unsupported(
+                        "refusing to grow volume \(item.id): it is attached to VM "
+                            + "\(attachment.vmId), which is not confirmed shut down, and this agent "
+                            + "has no online grow path")
+                }
+            }
             try await backend.resizeVolume(volumePath: disk.path, newSizeBytes: desired.sizeBytes)
         }
         volumeSizes[item.id] = desired.sizeBytes

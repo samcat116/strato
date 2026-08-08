@@ -256,25 +256,30 @@ guest's filesystem is not something a retry makes safe. That one grow-only rule
 is also what refuses an attached shrink; there is no separate guard.
 
 Two caveats belong to the caller rather than to the control plane. No agent has
-an online grow path yet, so growing an attached volume today is accepted and
-then sits degraded until the agent-side work lands. And growing the block
-device never grows what is on it: guest-side rescan and filesystem expansion
-(`resize2fs`, `xfs_growfs`, or the Windows equivalent) stay the user's job.
+an online grow path yet, so growing a volume attached to a *running* guest is
+accepted and then degrades — the agent refuses it (see below). And growing the
+block device never grows what is on it: guest-side rescan and filesystem
+expansion (`resize2fs`, `xfs_growfs`, or the Windows equivalent) stay the
+user's job.
 
-Concretely, what an attached grow does today is run `qemu-img resize` against a
-file a live hypervisor holds open. That fails on the image lock, and the
-failure is *bounded*, not a loop: `Reconciler.maxAttemptsPerGeneration` stops
-re-driving after three attempts at one generation, and only a new generation —
-another resize request — re-arms it. So the cost is three failed subprocesses
-and a degraded volume, not a subprocess on every periodic sync.
+Concretely, an attached grow is **refused by the agent**, once and permanently,
+rather than attempted. `volumeReconcileResize` looks up the volume's recorded
+attachment and grows the image only when the owning VM is confirmed
+`.shutdown`; anything else — running, paused, or a status the agent cannot read
+— is a permanent convergence failure naming the VM, so the control plane
+degrades the volume with something an operator can act on.
 
-That bound is the retry budget, though, not a safety guarantee. The lock is
-what makes the failure safe rather than destructive, and `locking=auto` gives
-up quietly on filesystems that cannot support OFD locks (NFS being the case to
-worry about) — on such a pool the resize would rewrite qcow2 metadata under a
-running guest instead of refusing. The agent-side work that adds an online grow
-path is also where that decision belongs, and it should refuse rather than rely
-on the lock.
+The refusal is a check rather than a hope, and that distinction is the point.
+Left to itself, `qemu-img resize` on an open image is turned back by the image
+lock — but `locking=auto` gives up *quietly* wherever OFD locks do not work,
+NFS being the case to worry about, and on such a pool the resize would not fail:
+it would rewrite qcow2 metadata underneath a running guest. Deferring to the
+lock would make correctness a property of the filesystem. This is also what
+makes "the agent decides online vs offline" true rather than aspirational —
+until there is an online grow path, the agent's decision is *no*.
+
+A volume attached to a stopped VM does grow, which the old detach-only rule
+refused outright.
 
 Deletion is the same finalizer dance VMs use. A `DELETE` does not remove the
 row: it marks the volume absent, stamps `agent.absent`, and the row survives
