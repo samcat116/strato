@@ -404,14 +404,6 @@ extension VM {
         setDesiredStatus(.running)
     }
 
-    /// True once the owning agent has confirmed converging to the current
-    /// generation and the observed status satisfies the desired one — the
-    /// `conditions.converged` predicate, in the shape the reconciliation paths
-    /// need it (sandbox parity).
-    var isConverged: Bool {
-        observedGeneration >= generation && desiredStatus.isSatisfied(by: status)
-    }
-
     /// Realigns desired state with observed reality after a failed operation,
     /// bumping the generation. Without this, the unachieved intent lingers —
     /// e.g. a failed boot leaves `desired_status = .running`, which a later

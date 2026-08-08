@@ -54,7 +54,8 @@ swiftly run +6.3.2 swift build --package-path agent
    mutations are level-triggered: there is no operation object to poll and no
    "already pending" 409. Wait by refetching the resource — done ⇔ `conditions`
    `converged` at or past your `targetGeneration`, failed ⇔
-   `degraded.sinceGeneration == targetGeneration`.
+   `degraded.sinceGeneration == targetGeneration`. Exactly one of the two ever
+   holds (STR-191), so a resource reading both is a bug worth reporting.
 2. **Start** → `POST /api/vms/{id}/start` (VMs are created in `Created`, not
    running).
 3. **Boot proof** → poll `GET /api/vms/{id}` for

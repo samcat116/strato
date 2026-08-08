@@ -94,6 +94,37 @@ final class ResourceConditionsTests {
         return try MessageEnvelope(message: report)
     }
 
+    /// A subscription to every event, so the applier tests below can tell which
+    /// convergence branch ran. The row state a success and a failure leave on a
+    /// *running* VM is otherwise identical — `revertDesiredToObserved` has
+    /// nothing to abandon when the observed status already satisfies the desired
+    /// one — so the outbox is the only witness.
+    /// The convergence outcomes in the outbox, in order. Filtered because agent
+    /// registration puts an `agent.connected` row there too, and that is not
+    /// what any of these tests is about.
+    private func mutationOutcomes(app: Application) async throws -> [String] {
+        try await WebhookDelivery.query(on: app.db)
+            .sort(\.$createdAt)
+            .all()
+            .map(\.eventType)
+            .filter { $0.hasPrefix("operation.") }
+    }
+
+    private func subscribeToEverything(app: Application) async throws {
+        let org = try #require(await Organization.query(on: app.db).sort(\.$createdAt).first())
+        let user = try #require(await User.query(on: app.db).sort(\.$createdAt).first())
+        let subscription = WebhookSubscription(
+            organizationID: try org.requireID(),
+            projectID: nil,
+            name: "conditions hook",
+            url: "http://127.0.0.1:1/hook",
+            eventTypes: [],
+            signingSecret: try app.secretsEncryption.encrypt("whsec_test_secret"),
+            createdByID: try user.requireID()
+        )
+        try await subscription.save(on: app.db)
+    }
+
     // MARK: - Derivation
 
     @Test("A VM whose agent has caught up and whose desired status is satisfied is converged")
@@ -171,6 +202,129 @@ final class ResourceConditionsTests {
             // Without a generation the reason can't be placed against
             // `targetGeneration`, which is the only thing that makes it useful.
             #expect(vm.conditions.degraded == nil)
+        }
+    }
+
+    @Test("A failure at the current generation is not converged")
+    func failureAtCurrentGenerationIsNotConverged() async throws {
+        try await withTestApp { app, _, project in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 5
+            vm.observedGeneration = 5
+            vm.lastError = "resize failed: no space left on device"
+            vm.failedGeneration = 5
+
+            // STR-191, from the e2e suite: generation 5 was applied — by the
+            // *boot* — and then the drift-correcting resize the agent planned at
+            // the same generation failed. The agent's `observedGeneration` is
+            // honest; what would be dishonest is calling that converged.
+            let conditions = vm.conditions
+            #expect(!conditions.converged)
+            #expect(conditions.degraded?.sinceGeneration == 5)
+            #expect(conditions.degraded?.reason == "resize failed: no space left on device")
+        }
+    }
+
+    @Test("A failure an older generation left behind does not un-converge the current one")
+    func supersededFailureStillReadsConverged() async throws {
+        try await withTestApp { app, _, project in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 6
+            vm.observedGeneration = 6
+            vm.lastError = "image download failed"
+            vm.failedGeneration = 5
+
+            // The clause excludes a failure at *this* generation, not the
+            // presence of one: a failure a newer mutation already retried past
+            // is documented to stand alongside a converged resource.
+            let conditions = vm.conditions
+            #expect(conditions.converged)
+            #expect(conditions.degraded?.sinceGeneration == 5)
+        }
+    }
+
+    @Test("An unreportable error does not un-converge either")
+    func errorWithoutGenerationDoesNotUnconverge() async throws {
+        try await withTestApp { app, _, project in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 5
+            vm.observedGeneration = 5
+            vm.lastError = "something went wrong"
+            vm.failedGeneration = nil
+
+            // The clause reads the *degraded condition*, not the raw column, so
+            // it stays exactly the negation of "degraded names the target". An
+            // error with nowhere to place it is not a verdict.
+            #expect(vm.conditions.converged)
+            #expect(vm.conditions.degraded == nil)
+        }
+    }
+
+    @Test("converged and degraded are never both an answer")
+    func convergedAndDegradedAreMutuallyExclusive() async throws {
+        try await withTestApp { app, _, project in
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 5
+
+            // The invariant itself rather than one instance of it: whatever the
+            // agent reports, a client reading the documented rule must never get
+            // two answers.
+            for observed in Int64(4)...Int64(6) {
+                for failed in Int64(4)...Int64(6) {
+                    vm.observedGeneration = observed
+                    vm.lastError = "convergence failed"
+                    vm.failedGeneration = failed
+
+                    let conditions = vm.conditions
+                    #expect(
+                        !(conditions.converged
+                            && conditions.degraded?.sinceGeneration == conditions.targetGeneration),
+                        "observed \(observed), failed \(failed)")
+                }
+            }
+        }
+    }
+
+    @Test("isConverged and conditions.converged answer alike for a VM and a sandbox")
+    func bothReadersAgree() async throws {
+        try await withTestApp { app, _, project in
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "cond-vm", project: project)
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 5
+            vm.observedGeneration = 5
+            #expect(vm.isConverged == vm.conditions.converged)
+            #expect(vm.isConverged)
+
+            // The reconciliation paths read `isConverged` and clients read
+            // `conditions.converged`. They are one derivation now (STR-191);
+            // before, each family wrote its own and they had already drifted.
+            vm.lastError = "resize failed"
+            vm.failedGeneration = 5
+            #expect(vm.isConverged == vm.conditions.converged)
+            #expect(!vm.isConverged)
+
+            let sandbox = try await builder.createSandbox(name: "cond-sandbox", project: project)
+            sandbox.setDesiredStatus(.running)
+            sandbox.setStatus(.running)
+            sandbox.generation = 3
+            sandbox.observedGeneration = 3
+            #expect(sandbox.isConverged == sandbox.conditions.converged)
+            #expect(sandbox.isConverged)
+
+            sandbox.lastError = "manifest unknown"
+            sandbox.failedGeneration = 3
+            #expect(sandbox.isConverged == sandbox.conditions.converged)
+            #expect(!sandbox.isConverged)
         }
     }
 
@@ -391,6 +545,132 @@ final class ResourceConditionsTests {
             #expect(refreshed.conditions.phase == nil)
             #expect(refreshed.conditions.degraded?.reason == "manifest unknown")
             #expect(refreshed.conditions.degraded?.sinceGeneration == 1)
+        }
+    }
+
+    // MARK: - A generation applied and then failed at (STR-191)
+
+    @Test("A report that advances the generation and fails at it records the failure, not success")
+    func advanceAndFailInOneReportRecordsFailure() async throws {
+        try await withTestApp { app, user, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "cond-agent", capabilities: ["qemu"])
+            vm.hypervisorId = agentId
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 5
+            vm.observedGeneration = 4
+            vm.extendConvergenceDeadline(by: 120)
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .resize, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
+
+            // One report carrying both halves: the boot applied generation 5,
+            // the resize planned at the same generation failed. The applier used
+            // to take the success branch here — `observedGeneration` advanced and
+            // the status satisfied the desired one — and the `else if` that
+            // records the failure never ran, so the user was told the mutation
+            // completed.
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .running, observedGeneration: 5,
+                        lastError: "resize failed: no space left on device",
+                        failedGeneration: 5)
+                ]
+            )
+            await app.agentService.applyObservedStateReport(
+                envelope, fromAgentKey: agentKey("cond-agent"))
+
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(!refreshed.conditions.converged)
+            #expect(refreshed.conditions.degraded?.sinceGeneration == 5)
+            #expect(
+                refreshed.conditions.degraded?.reason == "resize failed: no space left on device")
+
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+        }
+    }
+
+    @Test("A drift-correcting failure degrades a VM that had already converged")
+    func driftCorrectingFailureDegradesConvergedVM() async throws {
+        try await withTestApp { app, user, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "cond-agent", capabilities: ["qemu"])
+            vm.hypervisorId = agentId
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 5
+            vm.observedGeneration = 5  // the boot already converged and was reported
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .resize, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
+
+            let failing = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .running, observedGeneration: 5,
+                        lastError: "resize failed: no space left on device",
+                        failedGeneration: 5)
+                ]
+            )
+            await app.agentService.applyObservedStateReport(
+                failing, fromAgentKey: agentKey("cond-agent"))
+
+            var refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(!refreshed.conditions.converged)
+            #expect(refreshed.conditions.degraded?.sinceGeneration == 5)
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+
+            // The agent keeps restating the same error on every heartbeat; only
+            // the transition is reportable.
+            await app.agentService.applyObservedStateReport(
+                failing, fromAgentKey: agentKey("cond-agent"))
+            refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(!refreshed.conditions.converged)
+            #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+        }
+    }
+
+    @Test("A retry that succeeds at the same generation re-converges without a second completion")
+    func recoveryAtTheSameGenerationReconverges() async throws {
+        try await withTestApp { app, _, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "cond-agent", capabilities: ["qemu"])
+            vm.hypervisorId = agentId
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.generation = 5
+            vm.observedGeneration = 5
+            vm.lastError = "resize failed: no space left on device"
+            vm.failedGeneration = 5
+            // Cleared when the failure was recorded, which is what keeps the
+            // recovery below from emitting a completion for a mutation whose
+            // outcome the user was already told.
+            vm.convergenceDeadline = nil
+            try await vm.save(on: app.db)
+
+            let recovered = try self.report(
+                agentId: agentId,
+                vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 5)]
+            )
+            await app.agentService.applyObservedStateReport(
+                recovered, fromAgentKey: agentKey("cond-agent"))
+
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.conditions.converged)
+            #expect(refreshed.conditions.degraded == nil)
+            #expect(try await self.mutationOutcomes(app: app) == [])
         }
     }
 }

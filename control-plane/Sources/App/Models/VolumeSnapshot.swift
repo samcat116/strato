@@ -208,17 +208,6 @@ extension VolumeSnapshot: SnapshotArtifactResource {
     /// there is nothing coherent to upload off-node.
     var wantsExport: Bool { false }
 
-    var conditions: ResourceConditions {
-        ResourceConditions(
-            targetGeneration: generation,
-            observedGeneration: observedGeneration,
-            desiredSatisfied: isPresentOnAgent,
-            phase: convergencePhase,
-            lastError: errorMessage,
-            failedGeneration: failedGeneration
-        )
-    }
-
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VolumeSnapshot] {
         try await VolumeSnapshot.query(on: db).filter(\.$convergenceDeadline <= now).all()
     }

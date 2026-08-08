@@ -599,6 +599,14 @@ failed resize is re-planned by the next sync rather than looking applied.
   Entries older than the last applied generation are dropped (replays can't
   roll state back); equal generations still re-plan (drift correction);
   present-but-unlisted workloads are **held**, not deleted (below).
+  Drift correction is the reason an agent can report `observedGeneration` and
+  `failedGeneration` at the same value: a failing item never advances
+  `lastApplied`, so the two coincide only when an *earlier* item applied that
+  generation and a later one at the same number failed — a resized stopped VM
+  boots at the old size (`.boot` starts the definition the host holds) and is
+  corrected by the `.resize` the next sync plans. The control plane resolves
+  the pair on read, treating a failure at the current generation as not
+  converged (STR-191).
 - **The `Reconciler` actor** executes items on **per-workload serial
   lanes** (`SerialTaskQueue` in `MessageOrdering.swift`: FIFO per key,
   concurrent across keys). A VM's lane key is its bare ID — the same lane

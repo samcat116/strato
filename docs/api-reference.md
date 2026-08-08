@@ -80,13 +80,17 @@ Responses carry a **`conditions`** block, which is how a mutation is followed:
 ```
 
 `converged` is true once the owning agent has confirmed converging to
-`targetGeneration` *and* what it observes satisfies the desired state. A
-mutation is done when `observedGeneration` reaches the `targetGeneration` its
-`202` returned and `converged` is true; it failed when `degraded.sinceGeneration`
-equals that generation. The block also reports *what* the agent is doing
-(`phase`), and `degraded` can name an older generation than `targetGeneration`
-while a retry is in flight. Nothing stores it: it is derived on read from the
-resource's generation counters and the convergence progress its agent reports
+`targetGeneration`, what it observes satisfies the desired state, and no attempt
+at that same generation failed. A mutation is done when `observedGeneration`
+reaches the `targetGeneration` its `202` returned and `converged` is true; it
+failed when `degraded.sinceGeneration` equals that generation. **The two are
+mutually exclusive** — a `degraded` naming `targetGeneration` always comes with
+`converged: false` — so you never see both and never have to break a tie. The
+block also reports *what* the agent is doing (`phase`), and `degraded` can name
+an older generation than `targetGeneration` while a retry is in flight, which is
+the case where a converged resource does carry one. Nothing stores it: it is
+derived on read from the resource's generation counters and the convergence
+progress its agent reports
 ([ADR 0001](/adr/0001-declarative-agent-protocol)).
 
 `GET /api/operations/{id}` survives as a compatibility façade, synthesizing the

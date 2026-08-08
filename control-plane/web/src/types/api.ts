@@ -1158,9 +1158,18 @@ export type OperationStatus = "pending" | "succeeded" | "failed";
  * STR-147). After a 202, refetch the resource: done is `converged` with
  * `observedGeneration >= targetGeneration`; failed is a `degraded` whose
  * `sinceGeneration` equals the generation the mutation targeted.
+ *
+ * The two are mutually exclusive (backend STR-191): a failure recorded at the
+ * target generation makes `converged` false, so exactly one of them ever
+ * answers. They used to be able to hold at once — an agent applies a generation
+ * with one work item and can then fail a second at the same number — which left
+ * a client following the rule above with no verdict.
  */
 export interface ResourceConditions {
-  /** The owning agent confirmed the target generation *and* the desired state is satisfied. */
+  /**
+   * The owning agent confirmed the target generation, the desired state is
+   * satisfied, and no attempt at that same generation failed.
+   */
   converged: boolean;
   /** The generation the resource is trying to reach — what the last mutation bumped it to. */
   targetGeneration: number;
@@ -1172,7 +1181,9 @@ export interface ResourceConditions {
    * The last convergence attempt that failed. Can stand against a *newer*
    * `targetGeneration` while a retry is in flight, which is why callers
    * compare `sinceGeneration` against the generation they are waiting on
-   * rather than treating any `degraded` as their own failure.
+   * rather than treating any `degraded` as their own failure. A `degraded`
+   * that names the generation you are waiting on is that mutation's verdict,
+   * and `converged` is false alongside it.
    */
   degraded?: { reason: string; sinceGeneration: number } | null;
 }
