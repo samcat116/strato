@@ -41,22 +41,23 @@ public struct FirmwareOverrides: Equatable, Sendable {
         self.monolithicPath = monolithicPath
     }
 
-    /// Whether the operator named any firmware path at all.
-    ///
-    /// The libvirt driver needs this because `resolve` is not a pure reading of
-    /// these fields: with none of them set it still falls back to its own
-    /// platform candidate list. That is right for the QEMU path, which must
-    /// name files on a command line, and wrong for a domain document, where
-    /// leaving the firmware unnamed is what lets libvirt rank its installed
-    /// descriptors and pick a matching CODE/VARS pair itself. So "the operator
-    /// said nothing" has to be distinguishable from "resolve found something".
-    ///
-    /// Empty strings count as unset, matching `resolve`'s own `nonEmpty` guard
-    /// — a config key present but blank is not a path.
-    public var hasExplicitPaths: Bool {
-        [codePath, varsTemplatePath, secureBootCodePath, secureBootVarsTemplatePath, monolithicPath]
-            .contains { $0?.isEmpty == false }
-    }
+}
+
+/// What a disk-booting libvirt domain document should say about firmware.
+///
+/// The two cases are not interchangeable, and which one a host gets is decided
+/// once per create by `FirmwareResolver.domainFirmware`.
+public enum DomainFirmware: Equatable, Sendable {
+    /// Name this set in the document. For a `.pflash` set that also obliges the
+    /// caller to **materialize the varstore before the domain starts** — see
+    /// `UEFIVarstore` — because the document names an nvram file with no
+    /// `template` to seed it from.
+    case explicit(FirmwareSet)
+    /// Name nothing, and let `<os firmware='efi'>` rank libvirt's own installed
+    /// descriptors. Carries the resolution failure that led here, which is the
+    /// only record of *why* a host ended up on the path that cannot guarantee a
+    /// qcow2 varstore.
+    case autoselect(FirmwareResolver.UnresolvedError)
 }
 
 /// Resolves which EDK2 firmware files a VM boots with.
@@ -76,7 +77,7 @@ public enum FirmwareResolver {
     /// Why no firmware set could be resolved. Secure Boot failures are fatal to
     /// a create — booting the guest without it would quietly contradict what
     /// the API said the VM has.
-    public struct UnresolvedError: Error, CustomStringConvertible, Sendable {
+    public struct UnresolvedError: Error, CustomStringConvertible, Equatable, Sendable {
         public let secureBoot: Bool
         public let architecture: CPUArchitecture
 
@@ -116,6 +117,81 @@ public enum FirmwareResolver {
         architecture: CPUArchitecture = .current,
         fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
     ) throws -> FirmwareSet {
+        guard
+            let set = resolved(
+                secureBoot: secureBoot, perVMPath: perVMPath, overrides: overrides,
+                architecture: architecture, allowingPlatformMonolithic: true, fileExists: fileExists)
+        else {
+            throw UnresolvedError(secureBoot: secureBoot, architecture: architecture)
+        }
+        return set
+    }
+
+    /// What a **disk-booting** libvirt domain names for firmware.
+    ///
+    /// Autoselection (`<os firmware='efi'>`) used to be the normal path here,
+    /// and it cannot be, because Strato's varstore is qcow2 and every EDK2
+    /// descriptor Debian and Ubuntu ship declares its nvram template `raw`
+    /// (STR-188). libvirt matches the requested format against its descriptors
+    /// at *define* time and answers a mismatch with "Unable to find 'efi'
+    /// firmware that is compatible with the current configuration" — which
+    /// reads like a missing OVMF package rather than the format collision it
+    /// is. Naming the pair ourselves takes the descriptor match out of the
+    /// picture entirely.
+    ///
+    /// The format is not negotiable: libvirt refuses an internal snapshot of a
+    /// pflash guest whose varstore is not qcow2, and that snapshot is how VM
+    /// checkpoints are realized. Nor can libvirt be asked to seed a qcow2
+    /// varstore from a raw template ("conversion of the nvram template to
+    /// another target format is not supported") — which is why `.explicit`
+    /// carries an obligation to materialize the file first.
+    ///
+    /// Autoselection survives as the answer for a host this resolver's
+    /// candidate list does not know (openSUSE's `/usr/share/qemu/ovmf-*.bin`,
+    /// say). Such a host may well have descriptors libvirt can rank, and
+    /// failing the create outright would take away a VM that boots today. The
+    /// error it carries is what the caller logs, because on a raw-descriptor
+    /// host the define that follows will fail and this is the reason.
+    ///
+    /// **The platform's monolithic default is not offered here**, which is the
+    /// one candidate this differs from `resolve` on. Its list leads with
+    /// `/usr/share/OVMF/OVMF_CODE.fd` — the *CODE half of a split pair* — so it
+    /// fires exactly when a split build is half-installed and its VARS is
+    /// missing, and it would hand that half to `-bios` as though it were a
+    /// whole firmware. Even a genuine single blob is the wrong trade on this
+    /// path: `-bios` has no writable varstore at all, so the guest's UEFI boot
+    /// entries stop persisting, where autoselect may still find libvirt a
+    /// proper pflash pair. A monolithic the *operator* named still wins — that
+    /// is a deliberate choice about a host, not a guess made on its behalf.
+    public static func domainFirmware(
+        secureBoot: Bool,
+        perVMPath: String? = nil,
+        overrides: FirmwareOverrides = FirmwareOverrides(),
+        architecture: CPUArchitecture = .current,
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+    ) -> DomainFirmware {
+        guard
+            let set = resolved(
+                secureBoot: secureBoot, perVMPath: perVMPath, overrides: overrides,
+                architecture: architecture, allowingPlatformMonolithic: false, fileExists: fileExists)
+        else {
+            return .autoselect(UnresolvedError(secureBoot: secureBoot, architecture: architecture))
+        }
+        return .explicit(set)
+    }
+
+    /// The candidate walk both entry points share. Nil means nothing on this
+    /// host matched — the two callers differ in what they do about it, and in
+    /// whether the platform's monolithic default counts as a match at all (see
+    /// `domainFirmware`).
+    private static func resolved(
+        secureBoot: Bool,
+        perVMPath: String?,
+        overrides: FirmwareOverrides,
+        architecture: CPUArchitecture,
+        allowingPlatformMonolithic: Bool,
+        fileExists: (String) -> Bool
+    ) -> FirmwareSet? {
         // An explicitly configured pair wins outright, including over a per-VM
         // path: the operator named the files this host boots with.
         let configuredCode = secureBoot ? overrides.secureBootCodePath : overrides.codePath
@@ -133,20 +209,20 @@ public enum FirmwareResolver {
 
         // Secure Boot has no monolithic form: a `-bios` firmware cannot hold
         // enrolled keys across a boot, so there is nothing to degrade to.
-        guard !secureBoot else {
-            throw UnresolvedError(secureBoot: true, architecture: architecture)
-        }
+        guard !secureBoot else { return nil }
 
         for candidate in [perVMPath, overrides.monolithicPath] {
             if let path = nonEmpty(candidate), fileExists(path) {
                 return .monolithic(path: path)
             }
         }
-        if let path = defaultMonolithicPath(architecture: architecture), fileExists(path) {
+        if allowingPlatformMonolithic, let path = defaultMonolithicPath(architecture: architecture),
+            fileExists(path)
+        {
             return .monolithic(path: path)
         }
 
-        throw UnresolvedError(secureBoot: false, architecture: architecture)
+        return nil
     }
 
     // MARK: - Platform defaults

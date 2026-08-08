@@ -629,10 +629,10 @@ actor Agent {
             // between (STR-136). Nothing gates checkpoints away from it either:
             // `LibvirtService` realizes a capture as a libvirt system checkpoint
             // (STR-134). The preconditions that make that work — a qcow2 NVRAM
-            // varstore and libvirt >= 11.5 — belong to the domain builder and
-            // the host preflight, and a node failing the version floor stops
-            // advertising `.qemu` at all rather than advertising a checkpoint it
-            // cannot take.
+            // varstore and libvirt >= 11.5 — belong to the domain builder, the
+            // varstore `createVM` materializes (STR-188) and the host preflight,
+            // and a node failing the version floor stops advertising `.qemu` at
+            // all rather than advertising a checkpoint it cannot take.
             #if os(Linux)
             logger.info(
                 "Initializing libvirt hypervisor service", metadata: ["uri": .string(LibvirtProbe.systemURI)])
@@ -650,8 +650,11 @@ actor Agent {
             // `.qemu` as unavailable to match (`HypervisorProbe.qemuReport`), so
             // nothing is ever scheduled onto it.
             logger.warning(
-                "No hypervisor on this platform: registering a MOCK QEMU backend. "
-                    + "This host cannot run VMs — the QEMU driver is libvirtd, which is Linux-only.")
+                "No hypervisor on this platform: registering a MOCK QEMU backend",
+                metadata: [
+                    "detail": .string(
+                        "this host cannot run VMs — the QEMU driver is libvirtd, which is Linux-only")
+                ])
             hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
             #endif
 

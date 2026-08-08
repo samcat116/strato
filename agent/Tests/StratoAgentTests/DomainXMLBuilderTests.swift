@@ -161,7 +161,21 @@ struct DomainXMLBuilderTests {
                 ],
                 cloudInitISOPath: nil,
                 networks: [])),
-        // An operator-configured firmware pair, which suppresses autoselection.
+        // **The document a stock hypervisor node actually gets** (STR-188):
+        // the resolver names the pair every Debian and Ubuntu host ships, and
+        // the nvram element carries a format but no template, because the agent
+        // has already written the varstore. The autoselect scenarios above are
+        // the *fallback* — what a host whose EDK2 build this resolver cannot
+        // find falls back to — not the norm.
+        Scenario(
+            name: "x86_64-uefi-resolved-pair",
+            input: input(
+                spec: spec(),
+                firmware: .pflash(
+                    code: "/usr/share/OVMF/OVMF_CODE_4M.fd",
+                    varsTemplate: "/usr/share/OVMF/OVMF_VARS_4M.fd"))),
+        // An operator-configured firmware pair, which is the same shape with
+        // Secure Boot's `secure='yes'` loader and SMM on top.
         Scenario(
             name: "x86_64-override-pflash",
             input: input(
@@ -599,19 +613,38 @@ struct DomainXMLBuilderTests {
     /// The varstore is qcow2 on every firmware path, and that is load-bearing
     /// rather than cosmetic: libvirt refuses an internal snapshot of a pflash
     /// guest whose varstore is raw, so a raw one silently costs `checkpointVM`
-    /// — the capability the libvirt >= 11.5 floor exists for. STR-188 tracks
-    /// the fact that this cannot currently be satisfied by autoselection on a
-    /// host whose EDK2 descriptors are raw-only; whatever fixes it must keep
-    /// this property.
+    /// — the capability the libvirt >= 11.5 floor exists for. This is the half
+    /// of STR-188 that must survive its fix: the format was never the thing to
+    /// give up.
     @Test("the varstore is qcow2 on every firmware path", arguments: scenarios)
     func varstoreIsAlwaysQcow2(_ scenario: Scenario) throws {
         let xml = try DomainXMLBuilder.build(scenario.input)
         guard let nvram = xml.range(of: "<nvram") else { return }  // direct kernel / monolithic
-        // Attribute order differs between the branches (the `.pflash` one names
-        // `template` first), so match inside the element rather than on a
-        // prefix. `format=` appears nowhere else — disks spell it `type=`.
+        // Match inside the element rather than on a prefix. `format=` appears
+        // nowhere else — disks spell it `type=`.
         let element = xml[nvram.lowerBound...].prefix(while: { $0 != ">" })
         #expect(element.contains("format='qcow2'"))
+    }
+
+    /// The other half of STR-188, and the one that only shows up on a *start*.
+    ///
+    /// A named `template` asks libvirt to seed the varstore from the distro's
+    /// VARS file, and libvirt will not change its format on the way:
+    /// "conversion of the nvram template to another target format is not
+    /// supported". Since the varstore above is qcow2 and every EDK2 descriptor
+    /// Debian and Ubuntu ship declares a raw template, a document naming both
+    /// defines cleanly and then refuses to start — which is worse than failing
+    /// the define, because the create reports success.
+    ///
+    /// So the resolved-pair document names a file and nothing else, and
+    /// `UEFIVarstore` is what guarantees the file is there. An existing nvram
+    /// is never seeded, so it is never converted.
+    @Test("a named varstore is never given a template to seed from", arguments: scenarios)
+    func varstoreIsNeverSeededFromATemplate(_ scenario: Scenario) throws {
+        let xml = try DomainXMLBuilder.build(scenario.input)
+        guard let nvram = xml.range(of: "<nvram") else { return }  // direct kernel / monolithic
+        let element = xml[nvram.lowerBound...].prefix(while: { $0 != ">" })
+        #expect(!element.contains("template="))
     }
 
     /// Secure Boot's `secure='yes'` marks the varstore pflash SMM-only, and ARM
