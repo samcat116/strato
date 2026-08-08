@@ -104,6 +104,15 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// Guest context ID for the single vsock device. CIDs 0–2 are reserved, so
     /// 3 is the first usable guest CID.
+    ///
+    /// The same constant for every sandbox, and deliberately not drawn from
+    /// `VsockCIDAllocator` (STR-72): Firecracker emulates virtio-vsock inside
+    /// its own process and gives the host a Unix-domain socket rather than an
+    /// AF_VSOCK endpoint, so this number is scoped to one microVM and never
+    /// enters the host kernel's namespace. Two sandboxes on CID 3 collide over
+    /// nothing. Allocating host CIDs here would spend a genuinely host-global
+    /// resource on devices that occupy none of it, and would suggest a shared
+    /// namespace where there is not one.
     private static let guestCID: UInt32 = 3
 
     /// Everything the runtime tracks for one managed sandbox.
