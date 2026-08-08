@@ -323,7 +323,9 @@ use in code, tests, docs, and review. Architecture-level maps live in
   space, indistinguishable from what a network's own subnet is drawn from, so a
   tenant subnet overlapping it would inherit the service carve-outs — ACLs no
   security-group rule can override — pointed at tenant addresses. A subnet an
-  operator types is rejected; a generated one is nudged clear.
+  operator types is rejected; a generated one is nudged clear. Networks that
+  predate the reservation are named in a warning at every control-plane
+  startup until an operator renumbers them.
 
 - **Resolver** — the DNS server a network's guests are pointed at, answering on
   a link-local pair of the network's own derived from its `resolver_index`. One

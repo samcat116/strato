@@ -259,19 +259,31 @@ public struct IPv6Address: CustomStringConvertible, Equatable, Hashable, Sendabl
     /// carve-out into a non-overridable allow to a tenant address (STR-186).
     /// A collision is *nudged* out of the way rather than redrawn: a redraw
     /// loop would never terminate on an injected constant, and the
-    /// neighbouring prefix is just as good a ULA. Flipping the lowest bit the
-    /// reserved prefix covers is what moves it (valid while that prefix is
-    /// between /17 and /56, and `v6Space` is a /32).
+    /// neighbouring prefix is just as good a ULA. Flipping the lowest global-ID
+    /// bit the reserved prefix covers is what moves it. A ULA reservation must
+    /// be at least a /9 for any global-ID bit to sit outside it; `v6Space` is a
+    /// /32.
     public static func makeULASubnet64(randomGlobalID: (() -> UInt64)? = nil) -> IPv6CIDR {
+        makeULASubnet64(
+            globalID: randomGlobalID?() ?? UInt64.random(in: 0...UInt64.max),
+            avoiding: NetworkResolverEndpoint.v6SpaceCIDR)
+    }
+
+    /// Deterministic seam for testing the nudge independently of the current
+    /// service-space prefix. Kept internal because callers should always avoid
+    /// `NetworkResolverEndpoint.v6SpaceCIDR`.
+    static func makeULASubnet64(globalID: UInt64, avoiding reserved: IPv6CIDR) -> IPv6CIDR {
         func subnet(globalID: UInt64) -> IPv6CIDR {
             IPv6CIDR(base: IPv6Address(hi: (0xfd << 56) | ((globalID & 0xff_ffff_ffff) << 16), lo: 0), prefix: 64)
         }
-        let globalID = randomGlobalID?() ?? UInt64.random(in: 0...UInt64.max)
         let candidate = subnet(globalID: globalID)
-        guard let reserved = IPv6CIDR(NetworkResolverEndpoint.v6Space), reserved.overlaps(candidate) else {
-            return candidate
-        }
-        return subnet(globalID: globalID ^ (1 << UInt64(reserved.prefix - 16)))
+        guard reserved.overlaps(candidate) else { return candidate }
+
+        // /8 reserves every RFC 4193 locally assigned ULA this generator can
+        // produce, so no global-ID nudge could satisfy that contract.
+        precondition(reserved.prefix >= 9, "ULA reservation leaves no global-ID bit available for a nudge")
+        let lowestCoveredGlobalIDBit = max(0, 48 - reserved.prefix)
+        return subnet(globalID: globalID ^ (1 << UInt64(lowestCoveredGlobalIDBit)))
     }
 }
 

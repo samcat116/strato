@@ -45,30 +45,8 @@ struct AddIPv6ToLogicalNetwork: AsyncMigration {
             return
         }
 
-        let subnet6: IPv6CIDR
-        if let configured = Environment.get("STRATO_DEFAULT_NETWORK_SUBNET6") {
-            // Validate here, where the failure is a clear startup error naming
-            // the bad env var (same rationale as CreateLogicalNetwork). Same
-            // rules as validateAddressing6: judge the masked network address,
-            // reject non-routable prefixes including the unspecified ::/64,
-            // and reject the space Strato's own link-local services are drawn
-            // from (STR-186) — an operator typing a tidy-looking
-            // `fd00:ec2::/64` here is the same vector as typing it at the API.
-            guard let parsed = IPv6CIDR(configured), parsed.prefix == 64,
-                !parsed.networkAddress.isMulticast, !parsed.networkAddress.isLinkLocal,
-                !parsed.networkAddress.isLoopback, !parsed.networkAddress.isUnspecified,
-                IPv6CIDR(NetworkResolverEndpoint.v6Space)?.overlaps(parsed) != true
-            else {
-                throw Abort(
-                    .internalServerError,
-                    reason: "STRATO_DEFAULT_NETWORK_SUBNET6 is not a usable IPv6 /64 CIDR (it must not "
-                        + "overlap \(NetworkResolverEndpoint.v6Space), reserved for instance metadata "
-                        + "and the per-network DNS resolvers): \(configured)")
-            }
-            subnet6 = parsed
-        } else {
-            subnet6 = IPv6Address.makeULASubnet64()
-        }
+        let subnet6 = try Self.resolveDefaultSubnet6(
+            configured: Environment.get("STRATO_DEFAULT_NETWORK_SUBNET6"))
 
         let gateway6: IPv6Address
         if let configured = Environment.get("STRATO_DEFAULT_NETWORK_GATEWAY6") {
@@ -101,6 +79,33 @@ struct AddIPv6ToLogicalNetwork: AsyncMigration {
             .set("gateway6", to: SQLBind(gateway6.description))
             .where("name", .equal, SQLBind(CreateLogicalNetwork.seededDefaultName))
             .run()
+    }
+
+    /// Resolves the operator-supplied default without requiring tests to
+    /// mutate the process environment while other suites are reading it.
+    static func resolveDefaultSubnet6(configured: String?) throws -> IPv6CIDR {
+        if let configured {
+            // Validate here, where the failure is a clear startup error naming
+            // the bad env var (same rationale as CreateLogicalNetwork). Same
+            // rules as validateAddressing6: judge the masked network address,
+            // reject non-routable prefixes including the unspecified ::/64,
+            // and reject the space Strato's own link-local services are drawn
+            // from (STR-186) — an operator typing a tidy-looking
+            // `fd00:ec2::/64` here is the same vector as typing it at the API.
+            guard let parsed = IPv6CIDR(configured), parsed.prefix == 64,
+                !parsed.networkAddress.isMulticast, !parsed.networkAddress.isLinkLocal,
+                !parsed.networkAddress.isLoopback, !parsed.networkAddress.isUnspecified,
+                !NetworkResolverEndpoint.v6SpaceCIDR.overlaps(parsed)
+            else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "STRATO_DEFAULT_NETWORK_SUBNET6 is not a usable IPv6 /64 CIDR (it must not "
+                        + "overlap \(NetworkResolverEndpoint.v6Space), reserved for instance metadata "
+                        + "and the per-network DNS resolvers): \(configured)")
+            }
+            return parsed
+        }
+        return IPv6Address.makeULASubnet64()
     }
 
     func revert(on database: Database) async throws {

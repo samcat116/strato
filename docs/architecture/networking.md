@@ -706,20 +706,32 @@ nothing listened; with STR-56's listener answering it is real, and it is
 tracked as issue #1013 / STR-185. The reserved ACL space above 1003 is where
 such a deny would go.
 
-The v6 collision that made these carve-outs dangerous is closed by construction
-(STR-186). `fd00:ec2::254` is a ULA drawn from the same space as tenant IPv6
-subnets, and a network overlapping it would turn this into a non-overridable
-allow to a *tenant* address on TCP/80 — the localport (STR-49) already collides
-in that scenario, so it was not new, only newly un-counterable by policy. So
-**no tenant IPv6 subnet may overlap `NetworkResolverEndpoint.v6Space`**
-(`fd00:ec2::/32`): `validateAddressing6` rejects one an operator types (as does
+The v6 collision that made these carve-outs dangerous is prevented on new
+writes and surfaced for old ones (STR-186). `fd00:ec2::254` is a ULA drawn from
+the same space as tenant IPv6 subnets, and a network overlapping it would turn
+this into a non-overridable allow to a *tenant* address on TCP/80 — the
+localport (STR-49) already collides in that scenario, so it was not new, only
+newly un-counterable by policy. So **no new tenant IPv6 subnet may overlap
+`NetworkResolverEndpoint.v6SpaceCIDR`** (`fd00:ec2::/32`):
+`validateAddressing6` rejects one an operator types (as does
 `STRATO_DEFAULT_NETWORK_SUBNET6`), and `makeULASubnet64` nudges a generated one
-— a ~1-in-2^24 draw — into the neighbouring prefix. The whole documented `/32`
-rather than the containing `/64`, because it is how the space is described
-everywhere else and it covers the per-network resolvers as well as metadata.
-The realistic vector was always the typed subnet, not the drawn one:
-`fd00:ec2::/64` is a plausible thing for someone to enter precisely because it
-looks tidy.
+— a ~1-in-2^24 draw — into the neighbouring prefix. The reservation is a typed,
+non-optional CIDR so a spelling error cannot make all three checks fail open.
+It covers the whole documented `/32` rather than the containing `/64`, because
+that is how the space is described everywhere else and it includes the
+per-network resolvers as well as metadata. The realistic vector was always the
+typed subnet, not the drawn one: `fd00:ec2::/64` is a plausible thing for
+someone to enter precisely because it looks tidy.
+
+An existing `logical_networks.subnet6` can still overlap the reservation if an
+operator entered it before STR-186, or supplied it through
+`STRATO_DEFAULT_NETWORK_SUBNET6` before the validation existed. The control
+plane cannot safely renumber that network behind its guests' backs, so every
+startup logs a warning naming each colliding network until an operator moves
+it. Those rows continue to run, but any IPv6 edit — including a gateway-only
+change or a bare `ipv6Enabled: true` — revalidates the stored subnet and returns
+`400` until it is moved. This is deliberate: an unrelated edit must not bless
+an address range whose service carve-outs point into tenant space.
 
 The v4 side is *not* symmetric, and deliberately so: `169.254.0.0/16` is
 link-local (RFC 3927), so a tenant subnet drawn from it is a misconfiguration

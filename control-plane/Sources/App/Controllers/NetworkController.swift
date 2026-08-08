@@ -716,7 +716,7 @@ struct NetworkController: RouteCollection {
         // *tenant* address. Reject the whole documented `/32` rather than the
         // containing /64: it is how the space is described everywhere else,
         // and it covers the per-network resolvers as well.
-        if let reserved = IPv6CIDR(NetworkResolverEndpoint.v6Space), reserved.overlaps(cidr) {
+        if NetworkResolverEndpoint.v6SpaceCIDR.overlaps(cidr) {
             throw Abort(
                 .badRequest,
                 reason: "IPv6 subnet '\(trimmed)' overlaps \(NetworkResolverEndpoint.v6Space), which is "

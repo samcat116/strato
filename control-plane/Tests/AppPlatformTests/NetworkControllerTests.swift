@@ -281,6 +281,32 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("STRATO_DEFAULT_NETWORK_SUBNET6 rejects the reserved service space")
+    func defaultNetworkSubnet6RejectsServiceSpace() throws {
+        let error = #expect(throws: Abort.self) {
+            try AddIPv6ToLogicalNetwork.resolveDefaultSubnet6(configured: "fd00:ec2::/64")
+        }
+        #expect(error?.status == .internalServerError)
+        #expect(error?.reason.contains("STRATO_DEFAULT_NETWORK_SUBNET6") == true)
+        #expect(
+            try AddIPv6ToLogicalNetwork.resolveDefaultSubnet6(configured: "fd00:ec3::/64").description
+                == "fd00:ec3::/64")
+    }
+
+    @Test("Startup audit finds networks that predate the service-space reservation")
+    func startupAuditFindsExistingServiceSpaceCollision() async throws {
+        try await withNetworkTestApp { app, user, project, _ in
+            let colliding = LogicalNetwork(
+                name: "legacy-service-space-net", subnet: "10.34.0.0/24", gateway: "10.34.0.1",
+                subnet6: "fd00:ec2:abcd::/64", gateway6: "fd00:ec2:abcd::1",
+                projectID: project.id!, createdByID: user.id!)
+            try await colliding.save(on: app.db)
+
+            let found = try await NetworkServiceSpaceAudit.collidingNetworks(on: app.db)
+            #expect(found.map(\.id).contains(colliding.id))
+        }
+    }
+
     @Test("POST /api/networks rejects an IPv6 subnet overlapping a project sibling (409)")
     func createRejectsOverlappingSubnet6() async throws {
         try await withNetworkTestApp { app, user, project, token in
