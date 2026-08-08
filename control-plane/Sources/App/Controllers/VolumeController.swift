@@ -20,6 +20,7 @@ struct VolumeController: RouteCollection {
         protected.post(":volumeId", "attach", use: attachVolume)
         protected.post(":volumeId", "detach", use: detachVolume)
         protected.post(":volumeId", "resize", use: resizeVolume)
+        protected.post(":volumeId", "io-limits", use: setIOLimits)
         protected.post(":volumeId", "snapshot", use: createSnapshot)
         protected.post(":volumeId", "clone", use: cloneVolume)
 
@@ -177,6 +178,8 @@ struct VolumeController: RouteCollection {
             throw Abort(.badRequest, reason: "'sizeGB' is too large")
         }
 
+        try Self.validateIOLimits(iopsTotal: request.iopsTotal, bpsTotal: request.bpsTotal)
+
         // Every volume lives in a pool; without a pool-selection API yet,
         // that's the default local pool seeded by migration.
         let pool = try await StoragePool.defaultPool(on: req.db)
@@ -194,6 +197,10 @@ struct VolumeController: RouteCollection {
             poolID: pool.id,
             sourceImageID: request.sourceImageId
         )
+        // Set before the insert rather than through a follow-up mutation, so a
+        // volume never exists uncapped even briefly (STR-19).
+        volume.iopsTotal = request.iopsTotal
+        volume.bpsTotal = request.bpsTotal
 
         let app = req.application
         let userID = try user.requireID()
@@ -576,12 +583,13 @@ struct VolumeController: RouteCollection {
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "resize")
         let request = try req.content.decode(ResizeVolumeRequest.self)
 
-        // Offline resize only: growing a disk under a running guest needs the
-        // guest to notice, which nothing here arranges.
+        // Grow-only, but no longer detach-only (STR-19). Whether an attached
+        // volume is grown under the running guest or by the offline path is the
+        // agent's decision, because only it knows whether a process holds the
+        // image open. What is left to refuse here is a volume with no size to
+        // converge on at all.
         guard volume.canResize else {
-            throw Abort(
-                .conflict,
-                reason: "Volume is attached to a VM and cannot be resized. Detach it first.")
+            throw Abort(.conflict, reason: "Volume is being deleted and cannot be resized.")
         }
 
         // Validate the requested size before converting, so an oversized value
@@ -633,6 +641,82 @@ struct VolumeController: RouteCollection {
                 "volumeId": .string(volume.id!.uuidString),
                 "previousSizeGB": .stringConvertible(Double(previousSize) / 1024.0 / 1024.0 / 1024.0),
                 "newSizeGB": .stringConvertible(request.sizeGB),
+            ])
+
+        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
+    }
+
+    // MARK: - I/O Limits
+
+    /// Validates a requested pair of I/O ceilings (STR-19).
+    ///
+    /// Zero is a `400`, not "unlimited". QEMU — and libvirt's `<iotune>` — spell
+    /// unlimited as zero, so accepting it would make a typo indistinguishable
+    /// from a deliberate removal, on the one setting where the difference is
+    /// "this tenant is capped" versus "this tenant is not". Omit the field to
+    /// clear a cap; there is exactly one way to say uncapped.
+    private static func validateIOLimits(iopsTotal: Int64?, bpsTotal: Int64?) throws {
+        if let iops = iopsTotal {
+            guard iops > 0, iops <= Volume.maxIOPSTotal else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "'iopsTotal' must be between 1 and \(Volume.maxIOPSTotal); omit it to remove the cap")
+            }
+        }
+        if let bps = bpsTotal {
+            guard bps > 0, bps <= Volume.maxBPSTotal else {
+                throw Abort(
+                    .badRequest,
+                    reason: "'bpsTotal' must be between 1 and \(Volume.maxBPSTotal); omit it to remove the cap")
+            }
+        }
+    }
+
+    /// Replace a volume's absolute I/O ceilings
+    /// POST /api/volumes/:volumeId/io-limits
+    /// Body: { "iopsTotal"?: int, "bpsTotal"?: int }
+    ///
+    /// A full replacement: an omitted field clears that cap. Answers `202` and
+    /// converges like every other volume mutation — though note that no agent
+    /// applies ceilings yet, so `appliedIOLimits` stays null until the
+    /// agent-side work lands and the request is a recorded intent rather than
+    /// an enforced one.
+    @Sendable
+    func setIOLimits(req: Request) async throws -> Response {
+        let user = try req.auth.require(User.self)
+        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "update")
+        let request = try req.content.decode(SetVolumeIOLimitsRequest.self)
+
+        guard volume.desiredStatus == .present else {
+            throw Abort(.conflict, reason: "Volume is being deleted and its I/O limits cannot be changed.")
+        }
+
+        try Self.validateIOLimits(iopsTotal: request.iopsTotal, bpsTotal: request.bpsTotal)
+
+        guard volume.hypervisorId != nil else {
+            throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
+        }
+        try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
+
+        let userID = try user.requireID()
+        let accepted = try await req.resourceMutation.accept(
+            .throttle, on: volume, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
+            // The requested pair is desired state from here on; the applied
+            // pair is only ever written by an agent's observed report.
+            volume.iopsTotal = request.iopsTotal
+            volume.bpsTotal = request.bpsTotal
+            volume.bumpGeneration()
+        }
+
+        req.logger.info(
+            "Volume I/O limits requested",
+            metadata: [
+                "volumeId": .string(volume.id!.uuidString),
+                "iopsTotal": .string(request.iopsTotal.map(String.init) ?? "uncapped"),
+                "bpsTotal": .string(request.bpsTotal.map(String.init) ?? "uncapped"),
             ])
 
         return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()

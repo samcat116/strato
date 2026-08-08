@@ -1142,7 +1142,11 @@ export type OperationKind =
   // into create/delete because "who plugged this volume into that VM" is a
   // different question from "who made the volume".
   | "attach"
-  | "detach";
+  | "detach"
+  // Per-volume I/O ceilings (backend STR-19). Its own kind for the same reason:
+  // an audit trail that said "resize" when someone halved a throughput cap
+  // would be a lie.
+  | "throttle";
 
 export type OperationStatus = "pending" | "succeeded" | "failed";
 
@@ -1578,6 +1582,16 @@ export type VolumeFormat = "qcow2" | "raw";
 
 export type VolumeType = "boot" | "data";
 
+/**
+ * Absolute per-volume I/O ceilings (backend STR-19). An *absent* member means
+ * uncapped in that dimension — Swift encodes optionals with `encodeIfPresent`,
+ * so the server omits the key rather than sending null.
+ */
+export interface VolumeIOLimits {
+  iopsTotal?: number;
+  bpsTotal?: number;
+}
+
 export interface Volume {
   id?: string;
   name: string;
@@ -1601,6 +1615,21 @@ export interface Volume {
    * one finished, not the `status` string, which lags a generation behind.
    */
   conditions: ResourceConditions;
+  /** The I/O ceilings requested for this volume; absent when uncapped. */
+  ioLimits?: VolumeIOLimits;
+  /**
+   * The ceilings the owning agent reports it has actually applied, and the only
+   * signal that a cap is in force — unlike every other volume mutation,
+   * `conditions` converging on a throttle says the agent accepted the sync, not
+   * that the ceilings took effect. Compare against `ioLimits`: equal means in
+   * force.
+   *
+   * Absent means they are *not* in effect, either because the agent has not
+   * reported any or because it reported none. No agent applies ceilings yet, so
+   * this is absent on every volume; a set `ioLimits` alongside an absent
+   * `appliedIOLimits` is the expected reading today, not a fault.
+   */
+  appliedIOLimits?: VolumeIOLimits;
   sourceImageId?: string;
   sourceVolumeId?: string;
   createdById?: string;

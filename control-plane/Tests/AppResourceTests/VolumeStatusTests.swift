@@ -56,10 +56,15 @@ struct VolumeStatusTests {
         #expect(volume().canDetach == false)
     }
 
-    @Test("canResize admits only a detached volume")
-    func canResizeIsOfflineOnly() {
+    /// Attachment stopped being a reason to refuse a resize in STR-19: whether
+    /// a grow happens online or offline is the agent's call, so the only thing
+    /// left without a size to converge on is a volume on its way out.
+    @Test("canResize admits an attached volume but not a terminating one")
+    func canResizeIsAboutDesiredPresence() {
         #expect(volume().canResize)
-        #expect(volume(attachedTo: UUID(), status: .attached).canResize == false)
+        #expect(volume(attachedTo: UUID(), status: .attached).canResize)
+        // Still converging is fine, for the same reason `canAttach` allows it.
+        #expect(volume(status: .creating, observedGeneration: 0).canResize)
         #expect(volume(desired: .absent).canResize == false)
     }
 

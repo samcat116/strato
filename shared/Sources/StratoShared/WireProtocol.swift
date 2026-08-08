@@ -631,15 +631,60 @@ public enum WireProtocol {
     /// direction only: a pre-v34 control plane driving a v34 agent would send
     /// `vm_reboot` into an envelope the agent can no longer decode and burn the
     /// request's timeout against silence. Upgrade the control plane first.
+    /// Version 35: online volume grow and per-volume I/O ceilings (STR-19).
+    /// `DesiredVolumeState`, `VolumeSpec` and `ObservedVolumeState` each gain
+    /// `ioLimits: VolumeIOLimits?`. No frame is added or removed.
     ///
-    /// Deliberately **not** version 35: STR-152 removed `SuccessMessage.data`
-    /// along with the correlation apparatus that was its only consumer, and an
-    /// optional field is compatible in both directions — an old peer decoding a
-    /// payload without it gets nil, a new peer decoding one with it ignores the
-    /// key. Nothing gates on it, so a gate would only be a version floor with no
-    /// behavior behind it. Every other bump in this changelog protects a
-    /// misreading of silence; this one has none to protect.
-    public static let currentVersion = 34
+    /// Two things make this bump unusual, and both are deliberate.
+    ///
+    /// **It installs no capability gate** — the first bump since v23 that does
+    /// not, which is exactly why its skew behaviour has to be written down here
+    /// rather than inferred from a `supports…` predicate that does not exist.
+    ///
+    /// **No agent implements it yet.** These fields are the wire contract the
+    /// agent-side work fills in; until it lands, the control plane sends
+    /// ceilings nothing enforces and gets nil back for every volume. That is
+    /// the honest state rather than an oversight, and the observed echo below
+    /// is what keeps it visible instead of silently "converged".
+    ///
+    /// *Online grow* is a change in what an existing field means, not a new
+    /// field at all. `sizeBytes` already travels; what changes is that the
+    /// control plane now accepts a grow against an **attached** volume, where
+    /// it used to answer `409 Conflict: detach it first`. An agent handed one
+    /// plans `.resize` and calls `qemu-img resize` on an image a running
+    /// hypervisor holds open, which the image lock refuses — so the volume goes
+    /// degraded with a legible `lastError` and recovers on the next sync once
+    /// the agent has an online path. That is the trade: gating would make the
+    /// control plane's answer depend on *which agent happens to hold the
+    /// volume*, and a request that is legal today and illegal after a
+    /// migration is worse than one that fails loudly, destroys nothing, and
+    /// self-heals on upgrade.
+    ///
+    /// *I/O ceilings* are the asymmetric-absence shape (v3/v5/v26/v27/v31) in
+    /// its cheapest form — read wrong, a guest runs faster than intended and no
+    /// data is at risk — but they get the full treatment anyway, because
+    /// without a gate the generation pair cannot tell "capped" from "ignored":
+    /// an agent that drops the field still advances `observedGeneration`. The
+    /// **observed echo** is what closes that. Nil on `ObservedVolumeState`
+    /// means "this agent does not report applied limits";
+    /// `VolumeIOLimits(iopsTotal: nil, bpsTotal: nil)` — present but empty —
+    /// means "applied, and the answer is uncapped". Nil is never read as a
+    /// clear, so a fleet mid-upgrade shows caps *requested* and not yet
+    /// *applied* instead of showing them as done.
+    ///
+    /// Skew in the other direction is inert: a pre-v35 control plane simply
+    /// never sends `ioLimits`, and a v35 agent reads its absence as "no caps",
+    /// which is what every volume created before this meant. Nothing has to be
+    /// upgraded first.
+    ///
+    /// STR-152 rides this version without claiming one of its own. It removed
+    /// `SuccessMessage.data` along with the correlation apparatus that was its
+    /// only consumer, and deleting an optional field is compatible in both
+    /// directions — an old peer decoding a payload without it gets nil, a new
+    /// peer decoding one with it ignores the key. Every other bump in this
+    /// changelog protects a misreading of silence; this one has none to
+    /// protect, so a gate would be a version floor with no behavior behind it.
+    public static let currentVersion = 35
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

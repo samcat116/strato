@@ -1333,7 +1333,30 @@ paths:
       - $ref: "#/components/parameters/VolumeID"
     post:
       operationId: resizeVolume
-      summary: Resize a volume
+      summary: Grow a volume
+      description: >-
+        Grows a volume to a new size. Grow-only: a smaller size is rejected with
+        `400`, because truncating a disk image destroys whatever the guest had
+        written past the new end. Accepted for **attached and detached volumes
+        alike** — choosing whether to grow the image online or offline is the
+        owning agent's decision, since only it knows whether a hypervisor holds
+        the image open.
+
+
+        Growing the block device does **not** grow the filesystem on it. Expand
+        the guest filesystem yourself afterwards (`resize2fs`, `xfs_growfs`, or
+        the Windows equivalent); some guests also need a device rescan before
+        they notice the new capacity.
+
+
+        No agent implements an online grow path yet. A volume attached to a
+        *running* guest is therefore accepted here and then refused by the
+        agent, surfacing as a degraded condition until the agent-side work
+        lands. That refusal is deliberate rather than a gap: the offline path
+        would otherwise rewrite disk metadata underneath a live guest on any
+        pool whose file locking is unreliable. A volume attached to a *stopped*
+        VM grows normally. Asynchronous either way: refetch the volume until its
+        `conditions` converge.
       tags: [Volumes]
       requestBody:
         required: true
@@ -1341,6 +1364,49 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/ResizeVolumeRequest"
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedVolumeMutation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/volumes/{volumeId}/io-limits:
+    parameters:
+      - $ref: "#/components/parameters/VolumeID"
+    post:
+      operationId: setVolumeIOLimits
+      summary: Replace a volume's I/O limits
+      description: >-
+        Replaces the volume's absolute I/O ceilings. This is a **full
+        replacement**: a field you omit clears that cap. Zero is rejected with
+        `400` rather than treated as unlimited, so a typo cannot be mistaken for
+        a deliberate removal — omit the field instead.
+
+
+        **`conditions` converging does not mean the caps are in effect.** For
+        every other volume mutation, convergence is the outcome; for this one it
+        only means the owning agent accepted the sync carrying the request. An
+        agent with no throttling support plans no work, reports the new
+        generation, and converges — so a client that polls `conditions` alone
+        will record an unenforced cap as applied.
+
+
+        The applied signal is `appliedIOLimits` on the volume. Compare it
+        against `ioLimits`: equal means the ceilings are in force, and a set
+        `ioLimits` with `appliedIOLimits` omitted means they are not.
+
+
+        No agent enforces ceilings yet, so today `appliedIOLimits` is always
+        absent and every request is a recorded intent rather than an enforced
+        limit.
+      tags: [Volumes]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetVolumeIOLimitsRequest"
       responses:
         "202": { $ref: "#/components/responses/AcceptedVolumeMutation" }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -8816,6 +8882,11 @@ components:
         - snapshot_delete
         - restore
         - snapshot_export
+        # Volume-only kinds. `attach`/`detach` arrived with STR-148 and were
+        # never added here; `throttle` is STR-19.
+        - attach
+        - detach
+        - throttle
     OperationStatus:
       type: string
       description: The state of an operation. `pending` is the only non-terminal value.
@@ -9786,6 +9857,20 @@ components:
         sourceImageId:
           type: string
           format: uuid
+        iopsTotal:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Total (read + write) IOPS ceiling. Omit for uncapped; zero is
+            rejected. Not enforced by any agent yet.
+        bpsTotal:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Total (read + write) throughput ceiling in bytes per second. Omit
+            for uncapped; zero is rejected. Not enforced by any agent yet.
     UpdateVolumeRequest:
       type: object
       properties:
@@ -9823,6 +9908,43 @@ components:
       properties:
         sizeGB:
           type: integer
+    SetVolumeIOLimitsRequest:
+      type: object
+      description: >-
+        A full replacement of a volume's I/O ceilings: any field omitted here
+        clears that cap. An empty object removes both. Zero is rejected rather
+        than read as unlimited, so there is exactly one way to say uncapped.
+      properties:
+        iopsTotal:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Total (read + write) IOPS ceiling. Omit to remove the cap.
+        bpsTotal:
+          type: integer
+          format: int64
+          minimum: 1
+          description: >-
+            Total (read + write) throughput ceiling in bytes per second. Omit to
+            remove the cap.
+    VolumeIOLimits:
+      type: object
+      description: >-
+        Absolute per-volume I/O ceilings. A null member means uncapped in that
+        dimension.
+      properties:
+        iopsTotal:
+          type: integer
+          format: int64
+          nullable: true
+          description: Total (read + write) IOPS ceiling, or null for uncapped.
+        bpsTotal:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            Total (read + write) throughput ceiling in bytes per second, or null
+            for uncapped.
     CloneVolumeRequest:
       type: object
       required: [name]
@@ -9902,6 +10024,26 @@ components:
           description: Whether the attachment presents the volume read-only.
         conditions:
           $ref: "#/components/schemas/ResourceConditions"
+        ioLimits:
+          allOf: [{ $ref: "#/components/schemas/VolumeIOLimits" }]
+          description: >-
+            The I/O ceilings requested for this volume. **Omitted entirely**
+            when the volume is uncapped — the key is absent, not null, so test
+            for presence rather than comparing against null.
+        appliedIOLimits:
+          allOf: [{ $ref: "#/components/schemas/VolumeIOLimits" }]
+          description: >-
+            The ceilings the owning agent reports it has actually applied, and
+            the only signal that a cap is in force — `conditions` converging
+            says the sync was accepted, not that the ceilings took effect.
+            Compare against `ioLimits`: equal means in force.
+
+
+            **Omitted** (again absent, not null) means they are *not* in effect,
+            either because the agent has not reported any or because it reported
+            none. No agent applies ceilings yet, so this key is absent on every
+            volume; a set `ioLimits` alongside an absent `appliedIOLimits` is
+            the expected reading today, not a fault.
         sourceImageId:
           type: string
           format: uuid

@@ -74,11 +74,10 @@ enum ResourceEventPhase: String, Codable, CaseIterable, Sendable {
 /// describes (after a successful delete it is the last evidence the resource
 /// existed) and the principal that mutated it.
 ///
-/// This is the durable home of the attribution that lives on
-/// `resource_operations.user_id` today. Mutations dual-write both while the
-/// operations table is retired (ADR 0001, stage 11), and unlike `user_id` this
-/// row can name a machine principal — which is what unblocks JWT-SVID
-/// mutations (STR-15).
+/// This is the durable home of mutation attribution, and since ADR 0001 stage
+/// 11 (STR-152) the only one — `resource_operations.user_id` was the other, and
+/// went with its table. Unlike `user_id` this row can name a machine principal,
+/// which is what unblocks JWT-SVID mutations (STR-15).
 final class ResourceEvent: Model, @unchecked Sendable {
     static let schema = "resource_events"
 
@@ -250,7 +249,7 @@ extension ResourceEvent {
     /// cannot be attributed rolls back instead of applying unrecorded — the
     /// whole value of the table is that it is not missing rows.
     ///
-    /// `scope` is a parameter because `ResourceOperation.begin` already
+    /// `scope` is a parameter because `ResourceMutation.accept` already
     /// resolves one for the operation's webhook delivery context; anyone else
     /// leaves it nil and this resolves its own.
     ///

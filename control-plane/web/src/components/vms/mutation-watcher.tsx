@@ -28,6 +28,11 @@ const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = 
   snapshot_export: { succeeded: "Snapshot exported", infinitive: "export the snapshot of" },
   attach: { succeeded: "Attached", infinitive: "attach" },
   detach: { succeeded: "Detached", infinitive: "detach" },
+  // "Recorded", not "set": for a throttle, convergence means the owning agent
+  // accepted the sync, not that the ceilings are in force. `appliedIOLimits` is
+  // what says that, and no agent populates it yet — so a success toast here
+  // must not claim the caps took effect (backend STR-19).
+  throttle: { succeeded: "I/O limits recorded", infinitive: "record the I/O limits of" },
 };
 
 // The list query key to refresh when a mutation settles, so a create/delete/

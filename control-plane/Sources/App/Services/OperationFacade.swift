@@ -98,9 +98,9 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 // disks, and moving one off-node is out of scope for v1
                 // (issue #564). The budget function stays total.
                 return 300
-            case .attach, .detach:
-                // Volume-only kinds (STR-148); unreachable for VMs. Total
-                // function, unreachable arm.
+            case .attach, .detach, .throttle:
+                // Volume-only kinds (STR-148, STR-19); unreachable for VMs.
+                // Total function, unreachable arm.
                 return 120
             }
         case .sandbox:
@@ -132,7 +132,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 return 3600
             case .snapshotDelete:
                 return 120
-            case .attach, .detach:
+            case .attach, .detach, .throttle:
                 // Unreachable for sandboxes (no endpoint issues them); the
                 // budget function stays total.
                 return 120
@@ -154,6 +154,11 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 // A QMP hot-plug, or — for a powered-off guest — just the
                 // agent recording the attachment.
                 return 120
+            case .throttle:
+                // Setting a ceiling moves no bytes at all (STR-19): the budget
+                // covers a sync round trip and the agent's next report, like
+                // the resize arm above.
+                return 180
             case .boot, .shutdown, .reboot, .pause, .resume,
                 .snapshot, .snapshotDelete, .restore, .snapshotExport:
                 // A volume has no run state, and its snapshot artifacts are
@@ -174,7 +179,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
             case .delete:
                 return 120
             case .boot, .shutdown, .reboot, .pause, .resume, .resize,
-                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach:
+                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach, .throttle:
                 return 120
             }
 
@@ -188,7 +193,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
                 // Dropping an internal snapshot rewrites metadata, not data.
                 return 120
             case .boot, .shutdown, .reboot, .pause, .resume, .resize,
-                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach:
+                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach, .throttle:
                 return 120
             }
 
@@ -206,7 +211,7 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
             case .delete:
                 return 120
             case .boot, .shutdown, .reboot, .pause, .resume, .resize,
-                .snapshot, .snapshotDelete, .restore, .attach, .detach:
+                .snapshot, .snapshotDelete, .restore, .attach, .detach, .throttle:
                 return 120
             }
         }

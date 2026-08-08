@@ -21,6 +21,7 @@ const pendingMutationLabels: Record<OperationKind, string> = {
   snapshot_export: "Exporting snapshot",
   attach: "Attaching",
   detach: "Detaching",
+  throttle: "Setting I/O limits",
 };
 
 /**
