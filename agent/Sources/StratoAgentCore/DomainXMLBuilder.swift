@@ -157,8 +157,19 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 ///   nowhere in the QEMU path either, so honouring them here would smuggle a
 ///   behaviour change into a translation. When they are implemented they become
 ///   `<memoryBacking><hugepages/><access mode='shared'/></memoryBacking>`.
-/// - `<rng>`, `<pm>`, `<metadata>`, `<alias>`, spare `pcie-root-port`s, and any
-///   `<qemu:commandline>` passthrough.
+/// - `<rng>`, `<pm>`, `<metadata>`, `<alias>`, and any `<qemu:commandline>`
+///   passthrough.
+///
+/// ## Spare PCIe root ports are emitted, and are load-bearing
+///
+/// libvirt adds exactly one `pcie-root-port` per PCI device the document
+/// declares, so a domain built from only the devices a VM needs has **no free
+/// slot** and `virDomainAttachDeviceFlags` fails a disk hot-plug with "No more
+/// available PCI slots". A domain document is written once by `createVM` and
+/// never rewritten, so a VM that was defined without spares can never gain them
+/// — the ports have to be there from the start or hot-plug is impossible for
+/// that VM's whole life. `spareHotplugPorts` is therefore a hard ceiling on how
+/// many volumes a VM can be given after it is created (STR-134).
 ///
 /// ## Known divergence from the QEMU command line
 ///
@@ -169,6 +180,14 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// actually returns freed guest pages to the host, which is what that code
 /// wanted in the first place.
 public enum DomainXMLBuilder {
+
+    /// How many empty `pcie-root-port`s every domain carries for later
+    /// hot-plug. Each costs a slot on `pcie-root` (of which q35 and `virt` have
+    /// 31) and a little guest address space, so this trades the ceiling
+    /// described above against the slots left for everything else; four is well
+    /// clear of the one or two volumes a VM typically gains after creation and
+    /// well short of crowding the root complex.
+    static let spareHotplugPorts = 4
 
     /// The domain document for `input`, ready for `virDomainDefineXML`.
     public static func build(_ input: DomainXMLInput) throws -> String {
@@ -429,7 +448,8 @@ public enum DomainXMLBuilder {
             devices.append(
                 diskNode(
                     path: disk.path, format: disk.format.rawValue, index: index,
-                    readonly: disk.readonly, bootOrder: bootOrders[index]))
+                    readonly: disk.readonly, bootOrder: bootOrders[index],
+                    volumeId: disk.volumeId))
         }
         if let isoPath = input.cloudInitISOPath {
             // A read-only virtio *disk*, not a cdrom, matching the QEMU path's
@@ -438,7 +458,17 @@ public enum DomainXMLBuilder {
             devices.append(
                 diskNode(
                     path: isoPath, format: "raw", index: input.disks.count, readonly: true,
-                    bootOrder: nil))
+                    bootOrder: nil, volumeId: nil))
+        }
+
+        // Empty PCIe root ports for later hot-plug. See the type's note: these
+        // cannot be added to a domain after it is defined, and without them
+        // every disk hot-plug fails on a full root complex.
+        for _ in 0..<spareHotplugPorts {
+            // No index and no address: libvirt assigns both, and pinning them
+            // here would only invite a collision with the ports it adds for the
+            // devices above.
+            devices.append(DomainXMLNode("controller", [("type", "pci"), ("model", "pcie-root-port")]))
         }
 
         // libvirt would add both controllers implicitly; declaring them pins
@@ -534,29 +564,45 @@ public enum DomainXMLBuilder {
         devices.append(DomainXMLNode("memballoon", [("model", "virtio"), ("freePageReporting", "on")]))
 
         if hotplugBytes > 0 {
+            // Nothing plugged in at boot; a resize raises `<requested>` through
+            // `virDomainUpdateDeviceFlags` with the same element.
             devices.append(
-                DomainXMLNode(
-                    "memory", [("model", "virtio-mem")],
-                    children: [
-                        DomainXMLNode(
-                            "target",
-                            children: [
-                                DomainXMLNode("size", [("unit", "KiB")], text: kib(hotplugBytes)),
-                                // Points at the single NUMA cell above, which
-                                // libvirt requires for a hot-pluggable device.
-                                DomainXMLNode("node", text: "0"),
-                                DomainXMLNode(
-                                    "block", [("unit", "KiB")],
-                                    text: kib(
-                                        MemoryHotplugPlan.blockBytes(architecture: input.architecture))),
-                                // Nothing plugged in at boot; resize requests
-                                // raise this.
-                                DomainXMLNode("requested", [("unit", "KiB")], text: "0"),
-                            ])
-                    ]))
+                memoryDeviceNode(
+                    sizeBytes: hotplugBytes,
+                    blockBytes: MemoryHotplugPlan.blockBytes(architecture: input.architecture),
+                    requestedBytes: 0))
         }
 
         return devices
+    }
+
+    /// The `<memory model='virtio-mem'>` device.
+    ///
+    /// Shared with the resize path (`DomainDeviceXML.memoryDevice`), which
+    /// updates the device by handing libvirt this same element with a new
+    /// `<requested>`. libvirt matches an update against the device's *identity*
+    /// — model, target node, size and block size — so a fragment assembled
+    /// anywhere but here would silently fail to match the device it meant to
+    /// grow. Sizes are parameters rather than derived for the same reason: the
+    /// resize path reads the domain's real ones back rather than recomputing
+    /// what a newer spec would have asked for.
+    static func memoryDeviceNode(
+        sizeBytes: Int64, blockBytes: Int64, requestedBytes: Int64
+    ) -> DomainXMLNode {
+        DomainXMLNode(
+            "memory", [("model", "virtio-mem")],
+            children: [
+                DomainXMLNode(
+                    "target",
+                    children: [
+                        DomainXMLNode("size", [("unit", "KiB")], text: kib(sizeBytes)),
+                        // Points at the single NUMA cell `cpuNode` emits, which
+                        // libvirt requires for a hot-pluggable device.
+                        DomainXMLNode("node", text: "0"),
+                        DomainXMLNode("block", [("unit", "KiB")], text: kib(blockBytes)),
+                        DomainXMLNode("requested", [("unit", "KiB")], text: kib(requestedBytes)),
+                    ])
+            ])
     }
 
     /// The `<boot order>` for each disk, or nil where none should be emitted.
@@ -585,23 +631,43 @@ public enum DomainXMLBuilder {
         }
     }
 
-    private static func diskNode(
-        path: String, format: String, index: Int, readonly: Bool, bootOrder: Int?
+    /// One `<disk>`. Shared by the create-time document and by the hot-plug
+    /// fragment (`DomainDiskInventory.hotplugDiskXML`), so a disk a VM was
+    /// created with and one plugged in later are described identically —
+    /// including the serial a detach resolves by.
+    static func diskNode(
+        path: String, format: String, target: String, readonly: Bool, bootOrder: Int?,
+        volumeId: String?
     ) -> DomainXMLNode {
         var disk = DomainXMLNode("disk", [("type", "file"), ("device", "disk")])
         // No cache/discard/io tuning: the QEMU path passes none, and adding it
         // here would be a behaviour change disguised as a translation.
         disk.append(DomainXMLNode("driver", [("name", "qemu"), ("type", format)]))
         disk.append(DomainXMLNode("source", [("file", path)]))
-        disk.append(
-            DomainXMLNode("target", [("dev", targetDeviceName(index: index)), ("bus", "virtio")]))
+        disk.append(DomainXMLNode("target", [("dev", target), ("bus", "virtio")]))
         if readonly {
             disk.append(DomainXMLNode("readonly"))
+        }
+        // The volume this disk realizes, written where a later detach can read
+        // it back off the domain. `QEMUDiskIdentity` mints the same string the
+        // QEMU driver names its QMP device with, so one volume has one identity
+        // whichever driver realizes it (STR-129).
+        if let volumeId {
+            disk.append(DomainXMLNode("serial", text: QEMUDiskIdentity.deviceID(volumeId: volumeId)))
         }
         if let bootOrder {
             disk.append(DomainXMLNode("boot", [("order", "\(bootOrder)")]))
         }
         return disk
+    }
+
+    private static func diskNode(
+        path: String, format: String, index: Int, readonly: Bool, bootOrder: Int?,
+        volumeId: String?
+    ) -> DomainXMLNode {
+        diskNode(
+            path: path, format: format, target: targetDeviceName(index: index),
+            readonly: readonly, bootOrder: bootOrder, volumeId: volumeId)
     }
 
     private static func interfaceNode(_ nic: ResolvedNetworkAttachment) throws -> DomainXMLNode {

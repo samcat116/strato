@@ -43,21 +43,28 @@ import StratoShared
 /// of it, and neither is keyed by VM id. Treat any new dictionary keyed by VM id
 /// as a smell worth justifying in review.
 ///
+/// ## The domain document is written once
+///
+/// `createVM` defines a domain and nothing here ever redefines it. That single
+/// fact shapes hot-plug, resize and everything else that mutates a VM in place
+/// (STR-134): every such change is sent with
+/// `LibvirtDomain.affectLiveAndConfig`, so it lands on the running guest *and*
+/// in the persistent definition. The QEMU driver can leave the definition alone
+/// because it respawns a VM from a stored configuration the agent keeps in step
+/// (`updateRecordedVolumes`) and because everything it "defers to the next
+/// boot" is re-read from the spec at that boot. Neither is true here — the next
+/// boot reads libvirt's definition — so a live-only change is a change that
+/// silently un-happens at the guest's next power cycle.
+///
+/// Its one remaining cost: **the hot-plug slots and the memory headroom a VM
+/// will ever have are fixed when it is created.** The document reserves
+/// `DomainXMLBuilder.spareHotplugPorts` empty PCIe root ports and whatever
+/// virtio-mem region the spec asked for; growing past either needs libvirt's
+/// own error, not bookkeeping here.
+///
 /// ## Not here yet
 ///
-/// Disk hot-plug, online resize, checkpoints and lifecycle events are STR-134
-/// and STR-135; the calls below throw `notSupported` or take the protocol's
-/// defaults.
-///
-/// The consequence worth stating plainly: **a volume can only reach a VM at
-/// create time.** The domain document is written once by `createVM` and nothing
-/// here rewrites it, so attaching to an existing VM is refused whether it is
-/// running or stopped — see `hasLiveSession`, which exists in this driver to
-/// make sure that refusal is reached rather than papered over by recording the
-/// attachment. Checkpoint capture is kept away by capability instead: the agent
-/// stops advertising `snapshot:vm_checkpoint` on a libvirt node, because since
-/// STR-150 an artifact inherits its parent's host and a capture admitted here
-/// could only degrade permanently.
+/// Lifecycle events in place of status polling are STR-135.
 actor LibvirtService: HypervisorService {
     private let logger: Logger
     private let storage: (any StorageBackend)?
@@ -707,23 +714,61 @@ actor LibvirtService: HypervisorService {
 
     // MARK: - Guest observation
 
-    /// The guest agent's view, over the `org.qemu.guest_agent.0` channel the
-    /// domain document binds. Identical mechanism to the QEMU path — same
-    /// socket path, same client — because the channel is a QEMU device either
-    /// way; only who launched QEMU differs.
+    /// The guest agent's view — hostname and configured interfaces (issue #563)
+    /// — asked of libvirtd rather than of the VM's `qga.sock` directly.
+    ///
+    /// Same source, same channel: libvirt talks to the guest agent over the
+    /// `org.qemu.guest_agent.0` device the domain document binds, so what
+    /// reaches the control plane does not change with the driver. What goes is
+    /// the transport — the framing, the `guest-sync-delimited` resync and the
+    /// one-client-at-a-time socket `QGAClient` exists to manage are libvirtd's
+    /// problem now, and it multiplexes.
+    ///
+    /// Nil is the normal "no usable agent" answer — a guest with none
+    /// installed, one still booting, a VM this host does not have — and never
+    /// an error, since nothing converges on guest info.
     func guestInfo(vmId: String) async -> GuestInfo? {
-        let vmDirectory = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
-        let socketPath = VMDirectoryLayout.guestAgentSocket(vmDirectory: vmDirectory)
-        guard FileManager.default.fileExists(atPath: socketPath) else { return nil }
-        let client = QGAClient(
-            transport: NIOQGATransport(socketPath: socketPath, logger: logger), logger: logger)
+        guard let dom = try? await domain(vmId) else { return nil }
+        // Independent, so one failing does not cost the other: either answering
+        // is a positive liveness signal, and `LibvirtGuestInfo.parse` reports
+        // whichever came back.
+        async let hostnameParams = optionalGuestQuery(vmId: vmId, stage: "libvirt-guest-info") {
+            client, deadline in
+            try await client.domainGetGuestInfo(
+                dom: dom, types: LibvirtDomain.guestInfoHostname, flags: 0, deadline: deadline)
+        }
+        async let interfaces = optionalGuestQuery(vmId: vmId, stage: "libvirt-interface-addresses") {
+            client, deadline in
+            try await client.domainInterfaceAddresses(
+                dom: dom, source: LibvirtDomain.interfaceAddressesFromAgent, flags: 0,
+                deadline: deadline)
+        }
+        return LibvirtGuestInfo.parse(
+            hostnameParams: await hostnameParams, interfaces: await interfaces)
+    }
+
+    /// Runs one guest-agent query, turning every failure into nil.
+    ///
+    /// Bounded by `guestAgentSeconds` like the qga path it replaces, and
+    /// deliberately blind to *why* it failed: an unreachable agent, a guest
+    /// that has none, and a daemon that answered with an error are all "no
+    /// information this poll", and the slow-poll loop has nowhere to put a
+    /// distinction between them.
+    private func optionalGuestQuery<T: Sendable>(
+        vmId: String, stage: String,
+        _ operation: @escaping @Sendable (LibvirtClient, NIODeadline) async throws -> T
+    ) async -> T? {
         do {
-            return try await StageBudget.run(
-                seconds: StageBudget.guestAgentSeconds, stage: "qga-guest-info", onTimeout: .abandon
-            ) {
-                try await client.collectGuestInfo()
-            }
+            return try await call(stage, vmId: vmId, seconds: StageBudget.guestAgentSeconds, operation)
         } catch {
+            if !LibvirtFailure.isGuestAgentUnavailable(error) {
+                logger.debug(
+                    "Guest observation query failed",
+                    metadata: [
+                        "vmId": .string(vmId), "stage": .string(stage),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
             return nil
         }
     }
@@ -762,33 +807,435 @@ actor LibvirtService: HypervisorService {
     /// runs again for a domain that exists, so an attachment that is only
     /// recorded is realized on no boot, ever.
     ///
-    /// Answering true routes every attach to `attachDisk` below, which refuses
-    /// loudly and degrades the volume until STR-134. That is worse to look at
-    /// and strictly better to have: the alternative converges the volume, shows
-    /// it attached in the UI, and leaves the guest without it forever.
+    /// Answering true routes every attach to `attachDisk`, which writes the
+    /// disk into the domain document as well as into the running guest. The
+    /// alternative — recording the attachment and waiting for a boot to realize
+    /// it — converges the volume, shows it attached in the UI, and leaves the
+    /// guest without it forever.
     func hasLiveSession(vmId: String) async -> Bool {
         (try? await domain(vmId)) != nil
     }
 
-    // MARK: - Deferred to STR-134
+    // MARK: - Disk hot-plug
 
-    /// - Note: this refuses for a *stopped* VM too, which the QEMU driver would
-    ///   have satisfied by recording. See `hasLiveSession`: recording alone is
-    ///   not realization here, so refusing is the only answer that does not
-    ///   quietly lose the disk.
+    /// Plugs `volumeId` into the VM's domain, live and in its definition.
+    ///
+    /// The guest device name is chosen here rather than taken from
+    /// `deviceName`: that is a control-plane label ("disk1") which nothing
+    /// constrains to be unique or to look like a device, and the same reasoning
+    /// keeps `DomainXMLBuilder.targetDeviceName` from trusting it at create
+    /// time. Asking the domain which names it has taken is the only answer that
+    /// cannot collide.
+    ///
+    /// Idempotent: a volume whose serial the domain already carries has nothing
+    /// to do. That matters because attaches are level-triggered and replayed —
+    /// without it a redelivered sync would give the guest the same disk twice
+    /// under two names.
     func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool)
         async throws
     {
-        throw HypervisorServiceError.notSupported(
-            "the libvirt driver cannot attach a volume to an existing VM yet (STR-134): VM \(vmId)'s domain "
-                + "document is written once at create, so volume \(volumeId) has to be part of the VM's spec "
-                + "when it is created")
+        try await perform("attach-disk", vmId: vmId) {
+            let dom = try await domain(vmId)
+            let disks = try await domainDisks(dom, vmId: vmId)
+            if let existing = DomainDiskInventory.disk(forVolume: volumeId, in: disks) {
+                logger.info(
+                    "Volume is already attached to this domain; treating the attach as a no-op",
+                    metadata: [
+                        "vmId": .string(vmId), "volumeId": .string(volumeId),
+                        "target": .string(existing.target),
+                    ])
+                return
+            }
+
+            let target = DomainDiskInventory.nextTargetDevice(after: disks)
+            let xml = DomainDeviceXML.hotplugDisk(
+                path: volumePath, format: DiskFormat(volumePath: volumePath), target: target,
+                readonly: readonly, volumeId: volumeId)
+            let flags = try await deviceFlags(dom, vmId: vmId)
+
+            logger.info(
+                "Attaching disk to libvirt domain",
+                metadata: [
+                    "vmId": .string(vmId), "volumeId": .string(volumeId),
+                    "deviceName": .string(deviceName), "target": .string(target),
+                    "volumePath": .string(volumePath), "readonly": .stringConvertible(readonly),
+                ])
+            try await call("libvirt-attach-disk", vmId: vmId) { client, deadline in
+                try await client.domainAttachDeviceFlags(
+                    dom: dom, xml: xml, flags: flags, deadline: deadline)
+            }
+            logger.info(
+                "Disk attached",
+                metadata: [
+                    "vmId": .string(vmId), "volumeId": .string(volumeId), "target": .string(target),
+                ])
+        }
     }
 
+    /// Unplugs `volumeId` from the VM's domain, live and in its definition.
+    ///
+    /// Resolved by the serial the disk carries — the volume id, unique by
+    /// construction — and never by `deviceName`, for the reason STR-129 gives:
+    /// a device name is a per-VM label two volumes can share, and unplugging
+    /// "whichever one answers to it" pulls a live disk out from under a guest.
+    ///
+    /// A serial no disk carries is a **success**: detaches are level-triggered
+    /// and replayed, so a request whose post-condition already holds has to
+    /// converge rather than fail forever. The one case that hides behind that —
+    /// a domain defined before serials existed, whose create-time volumes are
+    /// unidentifiable — is called out in the log instead, because nothing here
+    /// can fix it and the remedy is to recreate the VM.
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
-        throw HypervisorServiceError.notSupported(
-            "the libvirt driver cannot detach a volume from an existing VM yet (STR-134): VM \(vmId)'s domain "
-                + "document is written once at create, so volume \(volumeId) cannot be removed from it")
+        try await perform("detach-disk", vmId: vmId) {
+            let dom = try await domain(vmId)
+            let disks = try await domainDisks(dom, vmId: vmId)
+            guard let disk = DomainDiskInventory.disk(forVolume: volumeId, in: disks) else {
+                let anonymous = disks.filter { $0.serial == nil }.map(\.target)
+                if anonymous.isEmpty {
+                    logger.info(
+                        "No disk on this domain carries the volume; treating the detach as a no-op",
+                        metadata: ["vmId": .string(vmId), "volumeId": .string(volumeId)])
+                } else {
+                    logger.warning(
+                        """
+                        No disk on this domain carries the volume, and the domain has disks with no serial \
+                        at all — if one of those is this volume it was attached before STR-134 and cannot be \
+                        identified; recreate the VM to detach it
+                        """,
+                        metadata: [
+                            "vmId": .string(vmId), "volumeId": .string(volumeId),
+                            "unidentifiedTargets": .string(anonymous.joined(separator: ",")),
+                        ])
+                }
+                return
+            }
+
+            let flags = try await deviceFlags(dom, vmId: vmId)
+            logger.info(
+                "Detaching disk from libvirt domain",
+                metadata: [
+                    "vmId": .string(vmId), "volumeId": .string(volumeId),
+                    "deviceName": .string(deviceName), "target": .string(disk.target),
+                ])
+            try await call("libvirt-detach-disk", vmId: vmId) { client, deadline in
+                try await client.domainDetachDeviceFlags(
+                    dom: dom, xml: DomainDeviceXML.detachDisk(disk), flags: flags, deadline: deadline)
+            }
+            logger.info(
+                "Disk detached",
+                metadata: [
+                    "vmId": .string(vmId), "volumeId": .string(volumeId),
+                    "target": .string(disk.target),
+                ])
+        }
+    }
+
+    // MARK: - Online resize (issue #568)
+
+    /// Converges a VM's vCPU count and memory size on `spec`, within the
+    /// headroom the *domain* was defined with.
+    ///
+    /// The QEMU driver's `SpawnSizing`/`vmSpawnSizing` have no counterpart:
+    /// that bookkeeping exists because a spawned process's `maxcpus`/`maxmem`
+    /// are only knowable to whoever spawned it, while here the ceiling is in
+    /// the domain's own `<vcpu>` and `<maxMemory>` and exceeding it is
+    /// libvirt's error to report, not ours to predict.
+    ///
+    /// Semantics are the QEMU path's, with one correction that the driver
+    /// forces. There, "deferred to the next reboot" works because the next boot
+    /// respawns from the recorded spec; here the next boot reads libvirt's
+    /// definition, so a deferred change that is not written to `CONFIG` never
+    /// happens at all. So:
+    ///
+    /// - **vCPU growth** applies live and to the definition.
+    /// - **vCPU shrink** is not attempted online — guest support for unplug is
+    ///   unreliable — and is written to the definition alone, which is what
+    ///   makes "it takes effect at the next reboot" true.
+    /// - **Memory** moves through the virtio-mem device's `<requested>` where
+    ///   the VM has one, live and in the definition; a VM with no device gets
+    ///   its new size written to the definition alone.
+    /// - **The balloon target** is best-effort and live only: it is a request
+    ///   the guest may ignore, and `domainMemoryStats`' `actualBalloon` on the
+    ///   next poll is what says whether memory came back.
+    func resizeVM(vmId: String, spec: VMSpec) async throws {
+        try await perform("resize", vmId: vmId) {
+            let dom = try await domain(vmId)
+            let info = try await call(
+                "libvirt-domain-info", vmId: vmId, seconds: StageBudget.statusQuerySeconds
+            ) { client, deadline in
+                try await client.domainGetInfo(dom: dom, deadline: deadline)
+            }
+            let layout = try DomainMemoryInventory.memoryLayout(
+                inDomainXML: try await domainXML(dom, vmId: vmId))
+            // The reconciler only plans a resize for a running VM, but nothing
+            // in the protocol says so, and `AFFECT_LIVE` against an inactive
+            // domain is `VIR_ERR_OPERATION_INVALID` — so the state decides.
+            let live = LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId))
+
+            try await resizeCPUs(
+                dom, vmId: vmId, spec: spec, currentCPUs: Int(info.nrVirtCpu), live: live)
+            try await resizeMemory(dom, vmId: vmId, spec: spec, layout: layout, live: live)
+            if live {
+                await applyBalloonTarget(dom, vmId: vmId, spec: spec, layout: layout)
+            }
+        }
+    }
+
+    private func resizeCPUs(
+        _ dom: Domain, vmId: String, spec: VMSpec, currentCPUs: Int, live: Bool
+    ) async throws {
+        guard spec.cpus != currentCPUs else { return }
+        let growing = spec.cpus > currentCPUs && live
+        let flags = growing ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
+        try await call("libvirt-resize-cpus", vmId: vmId) { client, deadline in
+            try await client.domainSetVCPUSFlags(
+                dom: dom, nvcpus: UInt32(clamping: spec.cpus), flags: flags, deadline: deadline)
+        }
+        logger.info(
+            growing
+                ? "Hot-added vCPUs" : "vCPU shrink written to the domain definition; it lands at the next boot",
+            metadata: [
+                "vmId": .string(vmId), "from": .stringConvertible(currentCPUs),
+                "to": .stringConvertible(spec.cpus),
+            ])
+    }
+
+    private func resizeMemory(
+        _ dom: Domain, vmId: String, spec: VMSpec, layout: DomainMemoryLayout, live: Bool
+    ) async throws {
+        guard let requested = layout.requestedBytes(forTotal: spec.memoryBytes),
+            let virtioMem = layout.virtioMem
+        else {
+            // No memory device: nothing can move on the live guest, so the new
+            // size is written to the definition for the next boot to read.
+            try await setDefinedMemory(dom, vmId: vmId, bytes: spec.memoryBytes, layout: layout)
+            return
+        }
+        guard requested != virtioMem.requestedBytes else { return }
+
+        let xml = DomainDeviceXML.memoryDevice(
+            sizeBytes: virtioMem.sizeBytes, blockBytes: virtioMem.blockBytes,
+            requestedBytes: requested)
+        let flags = live ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
+        try await call("libvirt-resize-memory", vmId: vmId) { client, deadline in
+            try await client.domainUpdateDeviceFlags(
+                dom: dom, xml: xml, flags: flags, deadline: deadline)
+        }
+        logger.info(
+            "Requested virtio-mem resize",
+            metadata: [
+                "vmId": .string(vmId), "targetBytes": .stringConvertible(spec.memoryBytes),
+                "requestedSize": .stringConvertible(requested),
+            ])
+    }
+
+    /// Writes a new memory size into the domain definition only.
+    ///
+    /// Reached exactly for a VM defined with no hot-plug headroom, whose
+    /// `<memory>` and `<currentMemory>` are therefore the same number and have
+    /// to move together. The order is the load-bearing part: libvirt validates
+    /// the pair on every write and refuses a current size above the maximum, so
+    /// the ceiling goes up first when growing and comes down last when
+    /// shrinking. Doing it the other way round fails a request that is
+    /// perfectly valid as a whole, with a message about a bound the caller
+    /// never asked to cross.
+    private func setDefinedMemory(
+        _ dom: Domain, vmId: String, bytes: Int64, layout: DomainMemoryLayout
+    ) async throws {
+        guard bytes != layout.bootBytes || bytes != layout.maximumBytes else { return }
+        let kib = UInt64(clamping: (bytes + 1023) / 1024)
+
+        func set(_ stage: String, maximum: Bool) async throws {
+            let flags =
+                maximum
+                ? LibvirtDomain.affectConfig | LibvirtDomain.affectMaximum : LibvirtDomain.affectConfig
+            try await call(stage, vmId: vmId) { client, deadline in
+                try await client.domainSetMemoryFlags(
+                    dom: dom, memory: kib, flags: flags, deadline: deadline)
+            }
+        }
+
+        if bytes > layout.maximumBytes {
+            try await set("libvirt-resize-max-memory", maximum: true)
+            try await set("libvirt-resize-memory", maximum: false)
+        } else {
+            try await set("libvirt-resize-memory", maximum: false)
+            try await set("libvirt-resize-max-memory", maximum: true)
+        }
+        logger.info(
+            "Memory resize written to the domain definition; it lands at the next boot",
+            metadata: [
+                "vmId": .string(vmId), "fromBytes": .stringConvertible(layout.bootBytes),
+                "toBytes": .stringConvertible(bytes),
+            ])
+    }
+
+    /// Drives the guest's balloon to `spec.balloonTargetBytes`, or back to its
+    /// full grant when the spec carries no target (issue #567 phase 2).
+    ///
+    /// Never fatal to the caller, matching `QEMUService.applyBalloonTarget`: a
+    /// guest that ignores the request is not a convergence failure the agent
+    /// can act on, and a VM created before the balloon device existed has
+    /// nothing to drive. Live only — `<currentMemory>` in the definition is the
+    /// boot size, and writing a balloon target there would quietly change what
+    /// the VM boots with.
+    ///
+    /// Clamped to the domain's own maximum as well as to the spec's size: where
+    /// a resize could only be written to the definition, the guest is still at
+    /// its old size until it reboots, and asking the balloon for the new one
+    /// would fail every resize with a warning about a bound the operator did
+    /// not set.
+    private func applyBalloonTarget(
+        _ dom: Domain, vmId: String, spec: VMSpec, layout: DomainMemoryLayout
+    ) async {
+        let target = min(
+            spec.balloonTargetBytes ?? spec.memoryBytes, spec.memoryBytes, layout.maximumBytes)
+        do {
+            try await call("libvirt-balloon-target", vmId: vmId) { client, deadline in
+                try await client.domainSetMemory(
+                    dom: dom, memory: UInt64(clamping: (target + 1023) / 1024), deadline: deadline)
+            }
+            logger.info(
+                "Requested balloon target",
+                metadata: ["vmId": .string(vmId), "targetBytes": .stringConvertible(target)])
+        } catch {
+            logger.warning(
+                "Balloon target could not be applied",
+                metadata: [
+                    "vmId": .string(vmId), "targetBytes": .stringConvertible(target),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
+    }
+
+    // MARK: - Full-VM checkpoints (issue #564)
+
+    /// Captures guest RAM, device state and the disks at one instant as a
+    /// libvirt **system checkpoint** — an internal snapshot inside the VM's own
+    /// qcow2 files, with the guest left running.
+    ///
+    /// `VMCheckpointTargets`' block-node selection has no counterpart: naming
+    /// no disks in the document lets libvirt capture every disk it can, which
+    /// is the selection those rules spent their effort arriving at. Two host
+    /// preconditions make this work at all, and both are established elsewhere
+    /// — a qcow2 NVRAM varstore (`DomainXMLBuilder`) and libvirt ≥ 11.5
+    /// (`LibvirtProbe.minimumVersion`, gating). See `DomainSnapshotXML`.
+    func checkpointVM(vmId: String, snapshotId: String) async throws -> VMCheckpointReport {
+        try await perform("checkpoint", vmId: vmId) {
+            let dom = try await domain(vmId)
+            let name = VMSnapshotTag.tag(for: snapshotId)
+            let running = LibvirtDomain.isRunningOrPaused(rawState: try await state(of: dom, vmId: vmId))
+
+            logger.info(
+                "Checkpointing libvirt domain",
+                metadata: [
+                    "vmId": .string(vmId), "snapshotId": .string(snapshotId), "name": .string(name),
+                    "includesMemory": .stringConvertible(running),
+                ])
+
+            do {
+                // The budget scales with guest RAM, so it uses the checkpoint
+                // envelope rather than the control-call one, and
+                // `.cancelAndWait`: a save job abandoned mid-write would leave
+                // a half-written snapshot a retry could mistake for a
+                // checkpoint.
+                _ = try await call(
+                    "libvirt-snapshot-create", vmId: vmId, seconds: StageBudget.checkpointSeconds
+                ) { client, deadline in
+                    try await client.domainSnapshotCreateXML(
+                        dom: dom,
+                        xmlDesc: DomainSnapshotXML.document(name: name, includesMemory: running),
+                        flags: 0, deadline: deadline)
+                }
+            } catch {
+                // A create whose reply was lost after the snapshot landed would
+                // otherwise fail on every retry, and STR-150 will keep retrying
+                // — a capture is read while the artifact is absent from the
+                // host. Asking the daemon whether the checkpoint exists turns
+                // that into a fact.
+                guard await snapshotExists(dom, vmId: vmId, name: name) else { throw error }
+                logger.warning(
+                    "Checkpoint create failed but the checkpoint is present; treating it as captured",
+                    metadata: [
+                        "vmId": .string(vmId), "snapshotId": .string(snapshotId),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+
+            let report = await checkpointReport(dom, vmId: vmId, name: name)
+            logger.info(
+                "libvirt domain checkpoint captured",
+                metadata: [
+                    "vmId": .string(vmId), "snapshotId": .string(snapshotId),
+                    "vmStateSizeBytes": .string(report.vmStateSizeBytes.map(String.init) ?? "unknown"),
+                ])
+            return report
+        }
+    }
+
+    /// Loads one of the VM's checkpoints back into it and leaves it running.
+    ///
+    /// Simpler than the QEMU path, which has to respawn a process that exited
+    /// before it has anywhere to load into: reverting a `SHUTOFF` domain to a
+    /// system checkpoint starts it, so "checkpoint → stop → restart the agent →
+    /// restore" needs nothing remembered here either.
+    func restoreVM(vmId: String, snapshotId: String) async throws {
+        try await perform("restore", vmId: vmId) {
+            let dom = try await domain(vmId)
+            let name = VMSnapshotTag.tag(for: snapshotId)
+            logger.info(
+                "Restoring libvirt domain from checkpoint",
+                metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+
+            let snapshot: DomainSnapshot
+            do {
+                snapshot = try await lookupSnapshot(dom, vmId: vmId, name: name)
+            } catch let error where LibvirtFailure.isSnapshotMissing(error) {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "VM \(vmId) has no checkpoint \(snapshotId); it was deleted, or captured on another host")
+            }
+
+            try await call("libvirt-snapshot-revert", vmId: vmId, seconds: StageBudget.checkpointSeconds) {
+                client, deadline in
+                try await client.domainRevertToSnapshot(
+                    snap: snapshot, flags: LibvirtDomain.snapshotRevertRunning, deadline: deadline)
+            }
+            logger.info(
+                "libvirt domain restored from checkpoint",
+                metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+        }
+    }
+
+    /// Removes a checkpoint's stored state.
+    ///
+    /// Idempotent, like the QEMU path: a checkpoint that is already gone is a
+    /// success, since the post-condition holds either way. Unlike the QEMU path
+    /// this works on a **stopped** VM — libvirt deletes an internal snapshot
+    /// through the disks rather than through a live monitor — so a delete no
+    /// longer waits for the operator to start the VM again.
+    func deleteVMCheckpoint(vmId: String, snapshotId: String) async throws {
+        try await perform("delete-checkpoint", vmId: vmId) {
+            let name = VMSnapshotTag.tag(for: snapshotId)
+            do {
+                let dom = try await domain(vmId)
+                let snapshot = try await lookupSnapshot(dom, vmId: vmId, name: name)
+                try await call(
+                    "libvirt-snapshot-delete", vmId: vmId, seconds: StageBudget.checkpointSeconds
+                ) { client, deadline in
+                    try await client.domainSnapshotDelete(snap: snapshot, flags: 0, deadline: deadline)
+                }
+            } catch let error where LibvirtFailure.isSnapshotMissing(error) || LibvirtFailure.isDomainMissing(error) {
+                // No snapshot, or no domain to hold one: the checkpoint lives
+                // inside the VM's own disks, so either way it is gone.
+                logger.info(
+                    "Checkpoint is already absent; delete is a no-op",
+                    metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+                return
+            }
+            logger.info(
+                "libvirt domain checkpoint deleted",
+                metadata: ["vmId": .string(vmId), "snapshotId": .string(snapshotId)])
+        }
     }
 
     // MARK: - Helpers
@@ -814,6 +1261,94 @@ actor LibvirtService: HypervisorService {
         #else
         return .hvf
         #endif
+    }
+
+    /// The domain's current document.
+    ///
+    /// `flags: 0` asks for the *live* configuration of a running domain and the
+    /// persistent one of an inactive domain — in both cases the description the
+    /// next command will act against. The two cannot drift here, because every
+    /// device change this driver makes carries `AFFECT_CONFIG`.
+    private func domainXML(_ dom: Domain, vmId: String) async throws -> String {
+        try await call("libvirt-dumpxml", vmId: vmId, seconds: StageBudget.statusQuerySeconds) {
+            client, deadline in
+            try await client.domainGetXMLDesc(dom: dom, flags: 0, deadline: deadline)
+        }
+    }
+
+    private func domainDisks(_ dom: Domain, vmId: String) async throws -> [DomainDisk] {
+        try DomainDiskInventory.disks(inDomainXML: try await domainXML(dom, vmId: vmId))
+    }
+
+    /// The flags a device change should carry for this domain.
+    ///
+    /// `LIVE|CONFIG` for a domain that is up, `CONFIG` alone for one that is
+    /// not: libvirt answers `VIR_ERR_OPERATION_INVALID` to a request that says
+    /// it affects the live guest of an inactive domain. Both branches write the
+    /// definition, which is the half that survives a power cycle.
+    private func deviceFlags(_ dom: Domain, vmId: String) async throws -> UInt32 {
+        LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId))
+            ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
+    }
+
+    private func lookupSnapshot(_ dom: Domain, vmId: String, name: String) async throws -> DomainSnapshot {
+        try await call("libvirt-snapshot-lookup", vmId: vmId, seconds: StageBudget.statusQuerySeconds) {
+            client, deadline in
+            try await client.domainSnapshotLookupByName(
+                dom: dom, name: name, flags: 0, deadline: deadline)
+        }
+    }
+
+    /// Whether the domain has a snapshot by that name, used to tell a create
+    /// that really failed from one whose reply was lost. A lookup that fails
+    /// for any *other* reason answers false, so the original error is the one
+    /// reported.
+    private func snapshotExists(_ dom: Domain, vmId: String, name: String) async -> Bool {
+        do {
+            _ = try await lookupSnapshot(dom, vmId: vmId, name: name)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// What a captured checkpoint recorded, for the control plane's snapshot
+    /// row.
+    ///
+    /// Every field is best-effort and the whole thing is non-throwing on
+    /// purpose: the checkpoint already exists at this point, and reporting it
+    /// as failed because a follow-up query did not answer would leave an
+    /// artifact on the host that no row describes.
+    private func checkpointReport(_ dom: Domain, vmId: String, name: String) async -> VMCheckpointReport {
+        let stats = try? await call(
+            "libvirt-job-stats", vmId: vmId, seconds: StageBudget.statusQuerySeconds,
+            { client, deadline in
+                try await client.domainGetJobStats(
+                    dom: dom, flags: LibvirtDomain.jobStatsCompleted, deadline: deadline)
+            })
+
+        let snapshotXML: String?
+        if let snapshot = try? await lookupSnapshot(dom, vmId: vmId, name: name) {
+            snapshotXML = try? await call(
+                "libvirt-snapshot-dumpxml", vmId: vmId, seconds: StageBudget.statusQuerySeconds,
+                { client, deadline in
+                    try await client.domainSnapshotGetXMLDesc(
+                        snap: snapshot, flags: 0, deadline: deadline)
+                })
+        } else {
+            snapshotXML = nil
+        }
+
+        let packedVersion = try? await call(
+            "libvirt-hypervisor-version", vmId: vmId, seconds: StageBudget.statusQuerySeconds,
+            { client, deadline in
+                try await client.connectGetVersion(deadline: deadline)
+            })
+
+        return VMCheckpointReport(
+            vmStateSizeBytes: stats.flatMap { DomainSnapshotXML.vmStateSizeBytes(fromJobStats: $0.params) },
+            deviceNodes: snapshotXML.map(DomainSnapshotXML.deviceNodes(inSnapshotXML:)) ?? [],
+            hypervisorVersion: packedVersion.flatMap(DomainSnapshotXML.hypervisorVersion(packed:)))
     }
 
     /// Destroys the domain, treating an already-inactive one as success.
@@ -965,7 +1500,12 @@ actor LibvirtService: HypervisorService {
             disks.append(
                 ResolvedDisk(
                     path: path, format: DiskFormat(volumePath: path), readonly: volume.readonly,
-                    bootOrder: volume.bootOrder))
+                    bootOrder: volume.bootOrder,
+                    // Written into the document as `<serial>`, so a detach can
+                    // resolve this disk without the agent remembering anything
+                    // about it. A volume reference with no id is not one the
+                    // control plane placed and has nothing to be named after.
+                    volumeId: volume.volumeId?.uuidString))
         }
 
         // A disk-boot VM with no disks can only produce an unbootable shell —

@@ -21,7 +21,11 @@ import FoundationXML
 /// this builder:
 ///
 /// - all eight validate against the RELAX-NG schema of both libvirt 11.5.0 (the
-///   version floor) and 12.6.0;
+///   version floor) and 12.6.0 — re-checked against both after STR-134 added
+///   `<serial>` and the spare `pcie-root-port`s, together with the hot-plug and
+///   detach fragments `DomainDeviceXML` sends (asserted in
+///   `DomainDiskInventoryTests`, validated by splicing them into this
+///   scenario's `<devices>`);
 /// - all eight are accepted by `virsh define --validate` on libvirt 11.6.0,
 ///   which runs libvirt's own parser and the QEMU driver's checks on top of the
 ///   schema — that is what caught `<acpi/>` being invalid on aarch64 without
@@ -51,6 +55,8 @@ struct DomainXMLBuilderTests {
     static let vmDirectory = "/var/lib/strato/vms/\(vmId)"
     static let bootDisk = ResolvedDisk(path: "\(vmDirectory)/disk.qcow2", format: .qcow2)
     static let cloudInitISO = "\(vmDirectory)/cloud-init.iso"
+    static let dataVolumeId = "6b1c0a5e-7d2f-4a83-9e10-5c4b3a2d1f00"
+    static let referenceVolumeId = "9f3d7c21-4b6a-4e05-8d92-1a0b7c5e3d44"
 
     static let primaryNIC = ResolvedNetworkAttachment(
         network: "default", attachment: .tap(interface: "tap0f9ea1b23c4d"),
@@ -136,10 +142,16 @@ struct DomainXMLBuilderTests {
                 disks: [
                     // Stored 0-based, as `MigrateVMDisksToVolumes` writes it;
                     // the golden shows the 1-based renumbering libvirt needs.
+                    // No volume id: this is the disk materialized from the VM's
+                    // image, which no volume owns and which therefore carries
+                    // no serial.
                     ResolvedDisk(path: "\(vmDirectory)/disk.qcow2", format: .qcow2, bootOrder: 0),
-                    ResolvedDisk(path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2, bootOrder: 1),
                     ResolvedDisk(
-                        path: "/var/lib/strato/volumes/reference.raw", format: .raw, readonly: true),
+                        path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2, bootOrder: 1,
+                        volumeId: dataVolumeId),
+                    ResolvedDisk(
+                        path: "/var/lib/strato/volumes/reference.raw", format: .raw, readonly: true,
+                        volumeId: referenceVolumeId),
                 ],
                 cloudInitISOPath: nil,
                 networks: [])),
@@ -398,6 +410,42 @@ struct DomainXMLBuilderTests {
         // number that would leave a gap.
         #expect(orders([nil, 3, nil, 7]) == [nil, 1, nil, 2])
         #expect(orders([nil, nil]) == [nil, nil])
+    }
+
+    /// The serial is how a hot-unplug finds the disk again on a domain the
+    /// agent keeps no model of (STR-134). A disk with no volume behind it must
+    /// not get one, or a boot disk would answer to a volume's identity.
+    @Test("a volume-backed disk names its volume, and an image-backed one does not")
+    func volumeSerials() throws {
+        let volumeId = "6b1c0a5e-7d2f-4a83-9e10-5c4b3a2d1f00"
+        let xml = try DomainXMLBuilder.build(
+            Self.input(
+                spec: Self.spec(),
+                disks: [
+                    Self.bootDisk,
+                    ResolvedDisk(path: "/volumes/data.qcow2", format: .qcow2, volumeId: volumeId),
+                ]))
+
+        #expect(xml.contains("<serial>vol-\(volumeId)</serial>"))
+        // Exactly one, so the boot disk and the cloud-init ISO carry none.
+        #expect(xml.components(separatedBy: "<serial>").count == 2)
+        // And it is the same identity the QEMU driver names its QMP device
+        // with, so one volume has one identity whichever driver realizes it.
+        #expect(xml.contains(QEMUDiskIdentity.deviceID(volumeId: volumeId)))
+    }
+
+    /// libvirt adds one `pcie-root-port` per PCI device the document declares,
+    /// so a domain that reserves none has nowhere to hot-plug a disk — and a
+    /// domain document is written once, so a VM defined without spares can
+    /// never gain them.
+    @Test("every domain reserves empty PCIe root ports for hot-plug", arguments: scenarios)
+    func reservesHotplugPorts(_ scenario: Scenario) throws {
+        let xml = try DomainXMLBuilder.build(scenario.input)
+        let ports = xml.components(separatedBy: "<controller type='pci' model='pcie-root-port'/>")
+        #expect(ports.count == DomainXMLBuilder.spareHotplugPorts + 1)
+        // No index or address: libvirt assigns both, and pinning them here
+        // would collide with the ports it adds for the devices above.
+        #expect(!xml.contains("model='pcie-root-port' index"))
     }
 
     /// Secure Boot's `secure='yes'` marks the varstore pflash SMM-only, and ARM

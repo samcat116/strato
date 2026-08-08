@@ -191,30 +191,58 @@ durable store rather than a process the agent has to remember:
 - **Consoles are unchanged.** The domain document binds the serial,
   virtio-console, guest-agent and VNC sockets at the same paths under the VM's
   directory, so `ConsoleSocketManager` and the noVNC relay need no libvirt
-  knowledge. So does guest observation: the guest-agent channel is a QEMU device
-  either way, which is why `guestInfo`/`memoryStats` are `HypervisorService`
-  requirements rather than one driver's methods.
+  knowledge.
+- **Guest observation is a libvirt call.** `domainGetGuestInfo` and
+  `domainInterfaceAddresses(source: AGENT)` reach the same
+  `org.qemu.guest_agent.0` channel `QGAClient` opens directly, and
+  `domainMemoryStats` replaces the third QMP monitor that only existed because
+  a QMP server socket admits one client. What the control plane is told does not
+  change with the driver, which is why `guestInfo`/`memoryStats` are
+  `HypervisorService` requirements rather than one driver's methods.
 
-Not yet implemented, and refused rather than silently skipped: disk hot-plug,
-online resize and VM checkpoints (STR-134), and lifecycle events in place of
-status polling (STR-135). Two of those refusals are load-bearing:
+#### The domain document is written once
 
-- **A volume can only reach a VM at create time.** The domain document is
-  written once by `createVM`, so an attach against an existing VM is refused
-  whichever state it is in. `hasLiveSession` returns true for *any* domain here
-  for that reason: the false branch means "recording the attachment realizes
-  it", which is true of the QEMU driver's respawn-from-configuration path and
-  false of this one, and taking it would converge a volume the guest never sees.
-- **`snapshot:vm_checkpoint` is not advertised** by a libvirt node, so the
-  control plane never admits a capture. Since STR-150 an artifact inherits its
-  parent VM's host and cannot be re-placed, so admitting one would degrade it
-  permanently. Volume snapshots are unaffected — `qemu-img` in the storage
-  backend realizes those, not the hypervisor driver.
+`createVM` defines a domain and nothing redefines it. That single fact shapes
+every in-place mutation (STR-134), and the rule it produces is worth stating on
+its own: **hot-plug and resize are sent with `AFFECT_LIVE|AFFECT_CONFIG`**, so
+they land on the running guest *and* in the persistent definition. The QEMU
+driver can leave the definition alone because it respawns from a stored
+configuration the agent keeps in step (`updateRecordedVolumes`) and re-reads the
+spec at every boot; here the next boot reads libvirt's definition, so a
+live-only change silently un-happens at the guest's next power cycle. The same
+correction applies to a resize the QEMU path "defers to the next reboot" — a
+vCPU shrink, or a memory change on a VM with no virtio-mem device — which is
+written to `CONFIG` alone rather than left for a boot that would not pick it up.
 
-A libvirt node is therefore not yet a full-capability QEMU node even though it
-advertises `qemu`: that is the cost of keeping the driver choice invisible to
-the control plane, which is otherwise what makes rolling a fleet over one node
-at a time possible.
+Two consequences follow:
+
+- **A VM's hot-plug slots and memory headroom are fixed when it is created.**
+  The document reserves `DomainXMLBuilder.spareHotplugPorts` empty
+  `pcie-root-port`s (libvirt adds one port per PCI device present at define
+  time, so a domain that reserves none has nowhere to plug a disk) and whatever
+  virtio-mem region the spec asked for. Growing past either is libvirt's error
+  to report, not bookkeeping the agent keeps — which is why `SpawnSizing` and
+  `vmSpawnSizing` have no counterpart here.
+- **A volume names itself in the document.** Each volume-backed `<disk>` carries
+  `<serial>vol-<uuid></serial>`, minted by the same `QEMUDiskIdentity` the QEMU
+  driver names its QMP device with, so a detach resolves exactly that disk on a
+  domain the agent keeps no model of (STR-129). `hasLiveSession` returns true
+  for *any* domain here for a related reason: its false branch means "recording
+  the attachment realizes it", which is true of the QEMU driver's
+  respawn-from-configuration path and false of this one.
+
+Checkpoints are libvirt **system checkpoints** — `domainSnapshotCreateXML` /
+`domainRevertToSnapshot` / `domainSnapshotDelete`, with libvirt choosing the
+disks in place of `VMCheckpointTargets`. Two host preconditions make them work,
+and both are established elsewhere: the NVRAM varstore is qcow2 rather than raw
+(`DomainXMLBuilder`), and the host runs libvirt ≥ 11.5 — below which
+`snapshot-create-as` refuses a pflash guest outright, since internal snapshots
+only moved onto the modern job API in 10.9. `LibvirtProbe.minimumVersion` gates
+`.qemu` on that floor, so a node too old to checkpoint stops advertising QEMU at
+all rather than advertising a capture it cannot take. Unlike the QEMU path, a
+checkpoint delete works on a stopped VM.
+
+Still to come: lifecycle events in place of status polling (STR-135).
 
 ### Diagnosing a failed QEMU spawn
 

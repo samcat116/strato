@@ -25,6 +25,10 @@
       <source file='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/disk.qcow2'/>
       <target dev='vda' bus='virtio'/>
     </disk>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
     <controller type='virtio-serial' index='0'/>
     <interface type='ethernet'>
       <mac address='52:54:00:12:34:56'/>

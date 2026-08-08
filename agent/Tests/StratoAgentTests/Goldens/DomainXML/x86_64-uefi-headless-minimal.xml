@@ -33,6 +33,10 @@
       <target dev='vdb' bus='virtio'/>
       <readonly/>
     </disk>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
     <controller type='virtio-serial' index='0'/>
     <interface type='ethernet'>
       <mac address='52:54:00:12:34:56'/>

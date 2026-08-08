@@ -30,6 +30,7 @@
       <driver name='qemu' type='qcow2'/>
       <source file='/var/lib/strato/volumes/data.qcow2'/>
       <target dev='vdb' bus='virtio'/>
+      <serial>vol-6b1c0a5e-7d2f-4a83-9e10-5c4b3a2d1f00</serial>
       <boot order='2'/>
     </disk>
     <disk type='file' device='disk'>
@@ -37,7 +38,12 @@
       <source file='/var/lib/strato/volumes/reference.raw'/>
       <target dev='vdc' bus='virtio'/>
       <readonly/>
+      <serial>vol-9f3d7c21-4b6a-4e05-8d92-1a0b7c5e3d44</serial>
     </disk>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' model='pcie-root-port'/>
     <controller type='virtio-serial' index='0'/>
     <serial type='unix'>
       <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/serial.sock'/>
