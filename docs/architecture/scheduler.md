@@ -172,6 +172,17 @@ differently than requested:
   on disk) **and** registered with a wire protocol that carries sandbox
   desired state (v5+). Firecracker support alone never qualifies an agent,
   and neither does the protocol version alone.
+- **Sandbox networking**: a sandbox that has a NIC needs strictly more than the
+  runtime (STR-103) — `AgentRegisterMessage.sandboxNetworkingCapable`, meaning
+  OVN networking, the jailer barrier the NIC's namespace belongs to, and an
+  installed guest image that configures the interface from its config drive.
+  All three are distributed separately from the agent binary, so no version and
+  no other capability implies them. Such a sandbox additionally requires
+  overlay networking and, when its network is site-pinned, that site — unlike a
+  VM's plain NIC, which user-mode/SLIRP satisfies with outbound NAT, a sandbox
+  NIC has no user-mode form at all. Refused rather than degraded: an agent
+  without the capability would boot the sandbox with no interface while the API
+  keeps reporting the address IPAM allocated for it.
 - **Machine profile**: A VM asking for Secure Boot or a TPM only places on an
   agent that registered with a wire protocol carrying `VMSpec.machine` (v17+),
   and a TPM additionally requires that the agent advertised

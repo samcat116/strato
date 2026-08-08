@@ -150,6 +150,30 @@ atomic rename, so the final path never holds a half-written disk; that makes
 the operation safely idempotent — an existing disk at the target path is
 reused.
 
+### Inspection reads through the image lock
+
+Every read of an image's metadata — `volumeInfo`, and the format detection
+behind materialization, cloning and snapshot overlays — goes through one
+`qemu-img info` helper, and that helper passes `-U` (force-share).
+
+A running QEMU holds a write lock on every image it has open, so without `-U`
+the query fails outright against any image a live guest has open (STR-193).
+Resize is where that was reachable: both the size probe and the grow
+precheck inspect the volume, so a grow against an attached volume degraded
+with `Volume info query failed` before it ever reached the guard below that
+was supposed to decide the question. Snapshotting and cloning an attached
+volume would have failed in the same helper, but the control plane refuses
+both at admission for their own reasons, so they never got that far.
+
+`-U` belongs on that call and no other. It is safe on inspection precisely
+because inspection is read-only; the worst case is reading a field a
+concurrent writer is mid-update on. On a mutating invocation (`create`,
+`convert`, `resize`) the lock is doing real work, and forcing it there is
+exactly the "rewrite qcow2 metadata underneath a live guest" failure the grow
+guard exists to prevent. Note that `qemu-img create -b` does *not* need it: it
+opens the backing file read-only, so a snapshot overlay over a live volume
+takes no lock of its own.
+
 ### Deleting a VM removes its directory whole
 
 A materialized boot disk has no volume row, so nothing in the volume lifecycle

@@ -7464,6 +7464,8 @@ export interface components {
             hypervisors: components["schemas"]["AgentHypervisorSupport"][];
             networkCapability?: components["schemas"]["AgentNetworkCapability"];
             sandboxCapable: boolean;
+            /** @description Whether a sandbox on this node can have a NIC: it advertised OVN networking, the sandbox jailer, and a guest image that configures the interface. Strictly stronger than `sandboxCapable` — a node with only that runs network-free sandboxes. Sandboxes created with a network only place on nodes reporting true. */
+            sandboxNetworkingCapable: boolean;
             /** @description Whether this node can back a guest TPM 2.0 (it advertised a usable swtpm at its last registration). VMs requesting `tpm` only place on such nodes. */
             tpmCapable: boolean;
             hostInfo?: components["schemas"]["AgentHostInfo"];

@@ -1347,6 +1347,17 @@ public actor Reconciler {
     /// edited never took" is otherwise invisible in a service with no request
     /// log of its own.
     private func recordMetadata(_ desired: [DesiredVMState], includeMetadata: Bool) async {
+        // Readiness first, and once for the whole sync rather than once per VM
+        // (STR-56). A host that legitimately runs no VMs still becomes ready:
+        // its listener must be able to answer "I do not serve that address"
+        // rather than "I do not know anything yet", and looping over an empty
+        // list would never say so. Gated on `includeMetadata` because a control
+        // plane that predates the field has given this host nothing to serve,
+        // and claiming readiness on its behalf would turn every guest's 503 —
+        // which is retried — into a 404, which is not.
+        if includeMetadata {
+            await metadataStore.markSyncApplied()
+        }
         for entry in desired {
             let outcome: MetadataWriteOutcome
             if entry.wantsAbsent {
@@ -1366,6 +1377,22 @@ public actor Reconciler {
                     "recordedGeneration": .stringConvertible(recorded),
                 ])
         }
+
+        // Arbitrate what was restored from disk against this authoritative
+        // snapshot (STR-56). A VM deleted while this agent was down appears in
+        // no sync at all — not even as `wantsAbsent` — so nothing above would
+        // ever reach it, and the restored payload would stay servable for the
+        // life of the host. Runs after the loop so this sync's own writes have
+        // already cleared their records' provisional mark.
+        guard includeMetadata else { return }
+        let retired = await metadataStore.confirmRestored(namedBy: Set(desired.map(\.vmId)))
+        guard !retired.isEmpty else { return }
+        logger.info(
+            "Retired restored instance metadata the control plane no longer knows about",
+            metadata: [
+                "count": .stringConvertible(retired.count),
+                "vmIds": .string(retired.map(\.uuidString).joined(separator: ",")),
+            ])
     }
 
     private func appliedGenerations(kind: WorkloadKind) -> [String: Int64] {

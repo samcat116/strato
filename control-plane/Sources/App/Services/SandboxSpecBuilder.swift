@@ -6,37 +6,10 @@ import StratoShared
 /// list `VMSpecBuilder` produces; the field mapping itself is shared with the VM
 /// path via `NetworkSpec.build` (issue #597).
 enum SandboxSpecBuilder {
-    /// Whether sandbox NICs go on the wire at all.
-    ///
-    /// Agents can now realize one end to end: STR-100 attaches a veth + TAP
-    /// into the jail's network namespace and binds it to OVN, and STR-101 has
-    /// the guest configure the interface from the config drive's `network`
-    /// block. One thing still gates the wire: this flag is fleet-wide, while
-    /// the capability is per-agent. An agent that is unjailed, non-Linux, too
-    /// old, or paired with a pre-schema-v2 guest image cannot realize a sandbox
-    /// NIC and would fail every placement it received. STR-103 replaces this
-    /// constant with that per-agent gate, and is what flips it.
-    ///
-    /// Meanwhile the sandbox's interface row, its IPAM allocation, and its
-    /// security-group membership all exist control-plane-side: the address
-    /// stays reserved and stable, but the wire spec omits the NetworkSpec so
-    /// the sandbox can actually boot.
-    ///
-    /// Membership is the one of those three that is *partly* observable on the
-    /// wire (STR-102). The per-NIC ids ride inside this NetworkSpec and are
-    /// therefore withheld with it — but the *groups* a sandbox NIC attaches
-    /// are seeded into `DesiredStateMessage.securityGroups` regardless, so a
-    /// topology authority realizes their port groups and ACLs before any
-    /// sandbox port exists to join them. That is deliberate: it means flipping
-    /// this flag does not also become the moment those port groups are first
-    /// created, which would park every first sandbox create on
-    /// `DependencyPendingError`.
-    static let guestNetworkingSupported = false
-
     /// Builds the NetworkSpec for a sandbox's NIC, or nil when the sandbox has
-    /// no interface (or guest networking is not yet supported — see
-    /// `guestNetworkingSupported`). `interface.addresses` must be eager-loaded —
-    /// the per-family address rows are the source of NIC addressing.
+    /// no interface or the receiving agent cannot realize one.
+    /// `interface.addresses` must be eager-loaded — the per-family address rows
+    /// are the source of NIC addressing.
     ///
     /// `network` is the row the NIC's foreign key points at, supplying the name
     /// and the DHCP/DNS configuration agents program into OVN. Nil means the
@@ -46,18 +19,36 @@ enum SandboxSpecBuilder {
     /// `securityGroupIds` is the NIC's membership, from
     /// `SandboxInterfaceSecurityGroup` (STR-102) — same contract as the VM
     /// path, already gated on the receiving agent's protocol version by the
-    /// assembly. It is resolved and passed even while `guestNetworkingSupported`
-    /// is false, so the flip is a one-line change rather than a new code path.
+    /// assembly.
     ///
     /// `sendsMetadataPort` gates `metadataEnabled` on the receiving agent's protocol
     /// version (STR-49), as on the VM path.
+    ///
+    /// `agentRealizesSandboxNICs` is the per-agent gate that replaced this
+    /// type's old fleet-wide `guestNetworkingSupported` constant (STR-103).
+    /// It is the receiving agent's advertised sandbox-networking capability:
+    /// OVN, the jailer barrier the NIC's namespace belongs to, and a guest
+    /// image whose init configures the interface from the config drive — none
+    /// of which any wire version implies, since the guest image is installed
+    /// separately from the agent binary.
+    ///
+    /// Withholding on a `false` is what makes the flag's arrival safe rather
+    /// than a fleet-wide outage. Sandbox NICs have been *allocated* since issue
+    /// #416 while never reaching the wire, so the first sync after this change
+    /// would otherwise hand a NIC to every sandbox on every host at once —
+    /// including hosts whose guest image predates the config drive's `network`
+    /// block, which refuse such a document and would fail every sandbox create
+    /// permanently. Placement (`SchedulerService`) keeps *new* networked
+    /// sandboxes off those hosts; this keeps the NIC off the wire for the ones
+    /// already there.
     static func networkSpec(
         from interface: SandboxNetworkInterface?,
         network: LogicalNetwork?,
         securityGroupIds: [UUID]? = nil,
-        sendsMetadataPort: Bool = true
+        sendsMetadataPort: Bool = true,
+        agentRealizesSandboxNICs: Bool
     ) -> NetworkSpec? {
-        guard guestNetworkingSupported, let interface, let network else { return nil }
+        guard agentRealizesSandboxNICs, let interface, let network else { return nil }
         return NetworkSpec.build(
             interface: interface, network: network, securityGroupIds: securityGroupIds,
             sendsMetadataPort: sendsMetadataPort)

@@ -13114,6 +13114,7 @@ components:
         - resources
         - hypervisors
         - sandboxCapable
+        - sandboxNetworkingCapable
         - tpmCapable
         - isOnline
         - updateAvailable
@@ -13150,6 +13151,14 @@ components:
           $ref: "#/components/schemas/AgentNetworkCapability"
         sandboxCapable:
           type: boolean
+        sandboxNetworkingCapable:
+          type: boolean
+          description: >-
+            Whether a sandbox on this node can have a NIC: it advertised OVN
+            networking, the sandbox jailer, and a guest image that configures
+            the interface. Strictly stronger than `sandboxCapable` — a node with
+            only that runs network-free sandboxes. Sandboxes created with a
+            network only place on nodes reporting true.
         tpmCapable:
           type: boolean
           description: >-

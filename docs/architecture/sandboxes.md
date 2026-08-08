@@ -11,12 +11,12 @@ entrypoint/cmd/env/workdir.
 > **Status**: implemented end to end — the lifecycle and data model, the full
 > agent runtime (OCI pull + rootfs materialization, the guest base image,
 > vsock control, `FirecrackerSandboxRuntime`, jailer hardening), exec/attach
-> + workload logs, and snapshots (checkpoint/restore, warm start, fork,
-> cross-agent mobility) are all landed. The main open front is **guest
-> networking**: the NIC/address model, IPAM allocation and security groups
-> exist, agents can wire a NIC into the jail, and the guest configures it —
-> but the NIC stays off the wire — see
-> [Guest networking](#guest-networking-the-holding-pattern).
+> + workload logs, snapshots (checkpoint/restore, warm start, fork,
+> cross-agent mobility), and **guest networking** are all landed: a sandbox
+> gets a real OVN NIC on any host that advertises the capability, and
+> placement refuses one that does not. What is left of that front is
+> networked-sandbox snapshots (STR-104) — see
+> [Guest networking](#guest-networking).
 > [History](#history) maps the build-out; issue numbers throughout mark which
 > change delivered each piece.
 
@@ -38,10 +38,10 @@ A sandbox is described by `SandboxSpec`
 - **Process**: optional entrypoint/cmd/workdir overrides and an env map,
   merged over the image config by the guest agent.
 - **Networking**: at most one NIC on a `LogicalNetwork`, reusing the VM
-  `NetworkSpec` so agents realize it through the same OVN/user-mode paths
-  (#416). The NIC is modeled, IPAM-allocated, attachable into the jail, and
-  configurable by the guest — but not yet on the wire spec — see
-  [Guest networking](#guest-networking-the-holding-pattern).
+  `NetworkSpec` so agents realize it through the same OVN paths (#416). It
+  reaches the wire only on a host that advertises the sandbox-networking
+  capability, which is also a hard placement constraint — see
+  [Guest networking](#guest-networking).
 - **No** volumes, firmware, boot source, or hypervisor choice — sandboxes are
   Firecracker-only, with no attachable storage.
 
@@ -237,7 +237,7 @@ sandbox identity + vsock port, the OCI **image config plus the sandbox
 overrides** — the guest performs the OCI merge (entrypoint/cmd/env/workdir/user,
 Docker-compatible rules), so those runtime semantics live in exactly one place —
 and, at schema v2, the NIC's static L3 configuration (STR-101, see
-[Guest networking](#guest-networking-the-holding-pattern)). This keeps the
+[Guest networking](#guest-networking)). This keeps the
 container image pristine and lets the workload launch without waiting on the
 host to connect vsock. The host stamps the **minimum schema version the
 document needs** and the guest refuses anything past what it understands, so a
@@ -263,9 +263,13 @@ checksums + default boot args). `StratoAgentCore/SandboxGuestImage` is the
 resolver that reads that layout into concrete kernel/initramfs paths for the
 host arch — the shared contract the sandbox runtime consumes so filenames are
 not hard-coded at the call site. `SandboxRuntimeProbe` only asserts the
-path's presence (it must stay cheap and never fail a capability check on a parse
-error); presence + a usable Firecracker is what lights up the `sandbox_runtime`
-capability. The build/publish pipeline (`.github/workflows/sandbox-guest.yaml`)
+path's presence for the base capability (it must stay cheap and never go dark
+on a parse error); presence + a usable Firecracker is what lights up the
+`sandbox_runtime` capability. The manifest also carries a `capabilities` list
+at schema v2 (STR-103), which the same probe reads for the *networking*
+capability — there a manifest it cannot decode does count against the host,
+because advertising a guest behavior nothing confirmed is how a sandbox create
+fails permanently. The build/publish pipeline (`.github/workflows/sandbox-guest.yaml`)
 builds both arches on a release tag and uploads the tarballs + `.sha256`
 sidecars + a `sandbox-guest-manifest.json`, mirroring the agent release flow;
 `task install-sandbox-guest` / `deploy/agent/install.sh --sandbox-guest` install
@@ -583,7 +587,7 @@ vsock listener — but parks in the `held` state instead of resolving and
 spawning a workload. That point is deliberately **before any per-sandbox
 identity is consumed**: no workload argv/env, no network identity (a template
 is shared across sandboxes, so it carries no NIC at all — see
-[Guest networking](#guest-networking-the-holding-pattern)), nothing but the
+[Guest networking](#guest-networking)), nothing but the
 template's own throwaway nonce in memory. This is the "snapshot before
 identity" sidestep the issue calls out: it keeps most of the fork-identity
 problem (#427) off the table.
@@ -672,9 +676,9 @@ drive is then rewritten with the new identity so adoption and future
 snapshots remain self-describing.
 
 The create transaction always allocates a new sandbox row and default NIC,
-MAC, and IPAM reservation — though, like every sandbox NIC, it stays off the
-wire, and snapshots of networked sandboxes are their own open thread (see
-[Guest networking](#guest-networking-the-holding-pattern)).
+MAC, and IPAM reservation — though a fork's restore refuses a networked
+sandbox outright until STR-104 remaps the device on load (see
+[Guest networking](#guest-networking)).
 
 ### Clone-safety policy
 
@@ -760,18 +764,18 @@ only restores on identical CPU models. Templated creates are gated on v14
 agents (an older agent would silently boot passthrough); the template is
 part of the warm-snapshot cache key.
 
-## Guest networking: the holding pattern
+## Guest networking
 
 A sandbox models **at most one NIC** on a `LogicalNetwork`, reusing the VM
 `NetworkSpec` (#416) so agents realize it through the same OVN paths as VM
 NICs. The interface row, MAC, and IPAM allocation are created at sandbox
-create, so the address is reserved and stable from day one. Agent-side the
-attach path exists too: STR-100 wires a veth + TAP into the jail's network
-namespace and binds it to OVN before the VMM is spawned. The mechanics — the
-tc-redirect-tap topology, why the TAP is created inside the namespace rather
-than moved in (the measured STR-99 failure), teardown, MTU, and host
-requirements — are owned by [Sandbox NICs](./networking.md#sandbox-nics) in
-the networking doc; this section owns the sandbox-side status.
+create, so the address is reserved and stable from day one. Agent-side,
+STR-100 wires a veth + TAP into the jail's network namespace and binds it to
+OVN before the VMM is spawned. The mechanics — the tc-redirect-tap topology,
+why the TAP is created inside the namespace rather than moved in (the measured
+STR-99 failure), teardown, MTU, and host requirements — are owned by
+[Sandbox NICs](./networking.md#sandbox-nics) in the networking doc; this
+section owns the sandbox-side status.
 
 **The guest configures its own NIC** (STR-101). The config drive grew a
 `network` block at schema v2 — MAC, per-family address/prefix/gateway, MTU,
@@ -809,44 +813,102 @@ excluded; delivering it means a `routes` field on the block, and it belongs
 with whichever arm picks up sandbox metadata rather than with the interface
 bring-up.
 
-**The NIC still does not go on the wire.**
-`SandboxSpecBuilder.guestNetworkingSupported` is `false` (#524), so no
-sandbox `NetworkSpec` reaches an agent, for one remaining reason:
+### The NIC reaches the wire per agent, never fleet-wide (STR-103)
 
-- **The flag is fleet-wide while the capability is per-agent** (STR-103): an
-  unjailed, non-Linux, or older agent cannot realize a sandbox NIC and would
-  fail every placement. STR-103 replaces the flag with a per-agent gate and
-  is what flips it.
+What used to withhold every sandbox `NetworkSpec` was a global
+`SandboxSpecBuilder.guestNetworkingSupported = false` (#524). Flipping a
+fleet-wide constant was never an option: three of the things a sandbox NIC
+needs are installed independently of the agent binary, so no wire version and
+no other capability implies them.
 
-**Security groups are in place** (STR-102). The NIC joins the project's default
-group — or the groups named in `securityGroupIds` — through
-`sandbox_interface_security_groups` at create, attach/detach accept a
-`sandboxId`, and the sync assembles both halves the way it does for a VM. They
-land at different times, which is the whole of what is left:
+- **OVN.** The veth + in-namespace TAP recipe is OVS all the way down, and
+  Firecracker's only network backend is a TAP opened by name. An agent in
+  `network_mode = "user"` resolves the NIC to `.userMode` and can realize
+  nothing.
+- **The jailer.** The NIC lives in the jail's network namespace. An unjailed
+  sandbox has no namespace to attach into and no privilege boundary the
+  attachment protects, so `sandboxNICPlacement` refuses rather than quietly
+  realizing it in the host namespace.
+- **The guest image.** Installed separately at `sandbox_guest_image_path`, so
+  the agent's version is not evidence of its guest's. A guest that predates
+  STR-101's `network` block refuses a config drive stamped v2 — correct, but
+  it would fail every sandbox create on that host, permanently.
 
-- **The groups themselves** are seeded into `DesiredStateMessage.securityGroups`
-  today, so a topology authority realizes their port groups and ACLs before any
-  sandbox port exists. That ordering is the point: a memberless port group
-  filters nothing, and having it already there means STR-103's flip is not also
-  the moment the group is created, which would park every first sandbox create
-  on `DependencyPendingError`.
-- **The per-NIC ids** ride inside the `NetworkSpec` and are withheld with it. So
-  a sandbox port joins no port group because there is no port — and when STR-103
-  makes one, it joins the drop group before the veth goes live, the same
-  ordering guarantee a VM's TAP gets, because the agent's port-create path is
-  already shared.
+So the agent probes all three at every registration
+(`SandboxRuntimeProbe.probe` → `AgentRegisterMessage.sandboxNetworkingCapable`,
+persisted on the agent row), advertises `sandbox_networking` in its display
+capabilities, and logs a warning naming the specific blocker when it runs
+sandboxes but cannot network them. The guest half is read from `guest.json`,
+whose manifest schema grew to **v2** with a top-level `capabilities` list; the
+agent accepts `1...2` and a v1 manifest advertises nothing, so an older
+installed image reads as "no networking" rather than as an error. A named
+capability rather than a config-drive version number: an initramfs built
+without the bring-up path would still *parse* a v2 document.
 
-The API reports the honest state as `SandboxDetail.securityGroupsEnforced`:
-`false` for every networked sandbox until STR-103, `null` when there is no NIC
-to judge. Details in [Security groups](./networking.md#security-groups).
+The control plane reads the flag twice, and the two answers are deliberately
+different:
 
-One more arm is queued behind the flag:
+- **Placement refuses.** A sandbox that has a NIC only places on a host with
+  the capability (`SchedulerError.sandboxNetworkingUnsatisfied`), on a host
+  with overlay networking, and — if its network is site-pinned — in that site.
+  Booting it without the NIC was the alternative and is worse: the API keeps
+  reporting the address IPAM allocated while the workload is unreachable, and
+  nothing later notices.
+- **Assembly withholds.** `DesiredStateAssembler` omits `SandboxSpec.network`
+  for a host that does not advertise the capability, and logs which sandbox and
+  host. Placement means a *new* networked sandbox never lands on such a host, so
+  this covers two cases: a control plane upgraded ahead of its agents — every
+  sandbox NIC ever allocated has been waiting control-plane-side, and sending
+  them all at once is exactly the mass failure above — and a host that lost the
+  capability under a sandbox already on it (guest-image rollback, OVN down,
+  jailer deconfigured).
+
+**Security groups** (STR-102) arrive in two halves, at different times. The
+groups themselves are seeded into `DesiredStateMessage.securityGroups` for
+every topology authority regardless, so their port groups and ACLs exist before
+any sandbox port does — a memberless port group filters nothing, and having it
+already there means the first sandbox port on a newly-capable host joins it
+immediately instead of parking on `DependencyPendingError`. The per-NIC ids
+ride inside the `NetworkSpec`, so they arrive with it: the port joins the drop
+group before the veth goes live, the same ordering guarantee a VM's TAP gets,
+because the agent's port-create path is shared.
+
+`SandboxDetail.securityGroupsEnforced` reports `null` with no NIC to judge,
+`false` on a host that cannot realize one (no port exists to filter) or an
+unauthored site, `true` otherwise. Attaching a group to a sandbox on a
+non-capable host is refused with a `409` for the same reason. Details in
+[Security groups](./networking.md#security-groups).
+
+**`true` is a statement about the host, not about the microVM**, and that
+approximation is exact for a VM but not for a sandbox. A VM's OVN port already
+exists, so the topology authority updates its port-group membership out of
+band. A sandbox's port is created *with the sandbox*: `bootSandbox` starts or
+resumes the existing microVM rather than re-provisioning it, and
+`sandboxStatusSteps` plans nothing for `.running`/`.running` — so neither a boot
+nor `POST .../restart` (a desired-running generation bump) attaches a NIC that
+was absent at create. Only delete-and-recreate does. A sandbox created on a host
+before that host advertised sandbox networking therefore reads `true` once the
+host is upgraded while having no interface. The population is every networked
+sandbox predating STR-103, and it ages out with sandbox TTL and the retention
+sweep.
+
+An exact per-sandbox verdict needs an observed NIC signal, and the ordering
+matters: `ObservedSandboxState` carries no such field, and the obvious source —
+`FirecrackerSandboxRuntime.Managed.networkAttachments` — is in-memory and is
+*not* recovered by `adoptSandbox`, so reporting it today would read `false` for
+every correctly-networked sandbox after an agent restart. Recovering the
+attachment at adoption comes first; the wire field and the verdict fold are
+cheap after that.
+
+Two arms are still queued:
 
 - **Snapshots of networked sandboxes** (STR-104): current checkpoints
   contain no Firecracker network device to remap, so restore and fork
   refuse networked sandboxes until STR-104 passes Firecracker
   `network_overrides` on load and reconfigures the guest interface/DHCP
   lease before health succeeds.
+- **Recovering a sandbox's NIC at adoption**, and the observed signal it
+  unlocks — see the enforcement caveat above.
 
 ## Quotas, TTL, and expiry
 
@@ -904,10 +966,10 @@ Sandboxes were designed and built as a phased roadmap under umbrella issue
 Guest networking was deliberately scoped out — #524 kept the NIC off the wire
 spec — and re-planned as STR-99..104: the measured move-a-TAP failure
 (STR-99), the netns attach path (STR-100), the in-guest network config
-(STR-101, config-drive schema v2), and security-group membership assembly
-(STR-102) are landed; the per-agent gate that flips the wire flag (STR-103)
-and networked-snapshot remapping (STR-104) remain — see
-[Guest networking](#guest-networking-the-holding-pattern).
+(STR-101, config-drive schema v2), security-group membership assembly
+(STR-102), and the per-agent capability gate that put the NIC on the wire
+(STR-103) are landed; networked-snapshot remapping (STR-104) remains — see
+[Guest networking](#guest-networking).
 
 ### Open threads
 
@@ -923,8 +985,8 @@ and networked-snapshot remapping (STR-104) remain — see
   that proposal — vsock and an in-house PID 1 are already here — and the
   fork case composes with the clone-safety policy, because identity arrives
   over a live channel rather than baked into the config drive.
-- Guest networking, STR-103 and STR-104 — see
-  [Guest networking](#guest-networking-the-holding-pattern).
+- Networked-sandbox snapshots, STR-104 — see
+  [Guest networking](#guest-networking).
 
 ## Non-goals
 
