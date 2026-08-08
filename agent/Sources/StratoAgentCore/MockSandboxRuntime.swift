@@ -121,16 +121,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
         registryCredential: RegistryCredential?,
         networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
-        // Faithful to the real runtime: a snapshot's captured device set has no
-        // network interface and cannot grow one on load (STR-104). Accepting it
-        // here would let simulation validate a config that fails on real
-        // hardware.
-        if spec.restoreFrom != nil, spec.network != nil {
-            throw SandboxRuntimeError.networkingUnsupported(
-                "restoring a networked sandbox needs the snapshot's network device remapped on load, "
-                    + "which this agent cannot do yet (STR-104)")
-        }
-        // Same reason: Firecracker can only open a TAP by name, so a NIC the
+        // Firecracker can only open a TAP by name, so a NIC the
         // orchestrator degraded to user-mode (no network service, or
         // `network_mode = "user"`) is not realizable. Refusing here keeps
         // simulation from validating a config that fails on real hardware.
@@ -299,10 +290,17 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
 
     public func restoreSandbox(
         sandboxId: String, snapshotId: String,
-        artifacts: [SandboxSnapshotArtifactDescriptor]?
+        artifacts: [SandboxSnapshotArtifactDescriptor]?,
+        networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
         guard sandboxes[sandboxId] != nil else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
+        }
+        // The caller re-realizes the NIC before every restore, so the mock
+        // records it the way `createSandbox` does — a simulated agent restart
+        // then reports the attachment a real one would have.
+        if !networkAttachments.isEmpty {
+            sandboxes[sandboxId]?.networkAttachments = networkAttachments
         }
         // A cross-agent restore (issue #428) hands this host download
         // descriptors for the exported copy; the mock "stages" it by minting

@@ -22,7 +22,13 @@ import Logging
 ///   unjailed ones absolute paths, so the two never mix;
 /// - `cpuTemplate` — the guest-visible CPU surface baked into the held
 ///   memory (issue #428); a templated sandbox must never restore a
-///   passthrough template snapshot or vice versa.
+///   passthrough template snapshot or vice versa;
+/// - `nicCount` — how many network devices the template's topology has
+///   (STR-104). Firecracker will not add or drop devices on load, so a
+///   template built without a NIC can only ever produce a sandbox without
+///   one. Keying on the shape is what makes that a cache miss and a cold
+///   boot, rather than a warm restore that reports healthy while the
+///   sandbox has no interface at all.
 public struct WarmSnapshotKey: Sendable, Equatable {
     public let imageDigest: String
     public let guestVersion: String
@@ -33,6 +39,7 @@ public struct WarmSnapshotKey: Sendable, Equatable {
     public let configCapacityBytes: Int
     public let jailed: Bool
     public let cpuTemplate: String?
+    public let nicCount: Int
 
     public init(
         imageDigest: String,
@@ -43,7 +50,8 @@ public struct WarmSnapshotKey: Sendable, Equatable {
         memoryMiB: Int64,
         configCapacityBytes: Int,
         jailed: Bool,
-        cpuTemplate: String? = nil
+        cpuTemplate: String? = nil,
+        nicCount: Int = 0
     ) {
         self.imageDigest = imageDigest
         self.guestVersion = guestVersion
@@ -54,6 +62,7 @@ public struct WarmSnapshotKey: Sendable, Equatable {
         self.configCapacityBytes = configCapacityBytes
         self.jailed = jailed
         self.cpuTemplate = cpuTemplate
+        self.nicCount = nicCount
     }
 
     /// The cache entry directory name for this key. Every component is
@@ -75,6 +84,12 @@ public struct WarmSnapshotKey: Sendable, Equatable {
         // keep their names (and stay valid) across the agent upgrade.
         if let cpuTemplate {
             components.append(Self.sanitize(cpuTemplate) + "tpl")
+        }
+        // Same reasoning: a networkless template's directory name is unchanged
+        // by STR-104, so entries built by an older agent stay hits for exactly
+        // the sandboxes they were always valid for.
+        if nicCount > 0 {
+            components.append("\(nicCount)nic")
         }
         return components.joined(separator: "_")
     }
