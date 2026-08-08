@@ -68,10 +68,6 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     private var ovnManager: OVNManager?
     private var ovsManager: OVSManager?
     private var isConnected = false
-    #else
-    // Development mode on macOS - mock network storage
-    private var mockNetworks: [String: MockNetwork] = [:]
-    private var mockVMNetworks: [String: MockVMNetworkAttachment] = [:]
     #endif
 
     init(
@@ -421,22 +417,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // Development mode
         logger.info("Creating mock VM network (development mode)", metadata: ["vmId": .string(vmId)])
 
-        let mockAttachment = MockVMNetworkAttachment(
-            vmId: vmId,
-            networkName: config.networkName,
-            macAddress: config.macAddress ?? "02:00:00:00:00:01",
-            ipAddress: config.ipAddress ?? "192.168.1.100"
-        )
-        mockVMNetworks[vmId] = mockAttachment
-
         return VMNetworkInfo(
             vmId: vmId,
             networkName: config.networkName,
             portName: "mock-vm-\(vmId)",
             portUUID: UUID().uuidString,
             attachment: .tap(interface: "tap-\(vmId)"),
-            macAddress: mockAttachment.macAddress,
-            ipAddress: mockAttachment.ipAddress
+            macAddress: config.macAddress ?? "02:00:00:00:00:01",
+            ipAddress: config.ipAddress ?? "192.168.1.100"
         )
         #endif
     }
@@ -500,7 +488,6 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         #else
         // Development mode
         logger.info("Detaching mock VM from network (development mode)", metadata: ["vmId": .string(vmId)])
-        mockVMNetworks.removeValue(forKey: vmId)
         #endif
     }
 

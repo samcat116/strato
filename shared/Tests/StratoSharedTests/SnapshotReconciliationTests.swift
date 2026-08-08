@@ -110,12 +110,10 @@ struct SnapshotReconciliationTests {
             facts: ObservedSnapshotFacts(
                 sizeBytes: 2_147_483_648,
                 architecture: .x86_64,
-                deviceNodes: ["strato-disk0"],
                 qemuVersion: "9.1.0"),
             observedGeneration: 3)
         let decoded = try roundTrip(full)
         #expect(decoded.facts?.sizeBytes == 2_147_483_648)
-        #expect(decoded.facts?.deviceNodes == ["strato-disk0"])
         #expect(decoded.facts?.qemuVersion == "9.1.0")
 
         // A QEMU build that reported no size for the tag it just wrote leaves
@@ -125,7 +123,7 @@ struct SnapshotReconciliationTests {
             kind: .vmCheckpoint,
             parentId: Fixtures.uuidB,
             present: true,
-            facts: ObservedSnapshotFacts(deviceNodes: ["strato-disk0"]),
+            facts: ObservedSnapshotFacts(),
             observedGeneration: 3)
         let decodedSizeless = try roundTrip(sizeless)
         #expect(decodedSizeless.facts?.sizeBytes == nil)

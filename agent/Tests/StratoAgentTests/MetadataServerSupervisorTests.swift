@@ -113,21 +113,6 @@ struct MetadataServerSupervisorTests {
 
     // MARK: - The pure diff
 
-    @Test("Silence from the control plane starts and stops nothing")
-    func nilDesiredIsNotAnInstruction() async {
-        // The `dhcpEnabled` contract: a control plane that predates the field
-        // says nothing, and reading that as "stop every listener" would take
-        // metadata away from every guest on a rollback.
-        #expect(MetadataServerReconciler.actions(desired: nil, running: [UUID()]).isEmpty)
-
-        let network = UUID()
-        let spawner = RecordingSpawner(namespaces: [network])
-        let supervisor = Self.supervisor(spawner)
-        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
-        await supervisor.reconcile(desired: nil, snapshot: Self.snapshot)
-        #expect(await supervisor.runningNetworks() == [network])
-    }
-
     @Test("An empty list is an opinion, and stops everything")
     func emptyDesiredStopsAll() async {
         let network = UUID()

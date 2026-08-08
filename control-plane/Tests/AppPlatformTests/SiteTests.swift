@@ -72,6 +72,9 @@ final class SiteTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
+            hypervisors: [
+                HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+            ],
             networkCapability: networkCapability,
             protocolVersion: protocolVersion
         )
@@ -330,18 +333,6 @@ final class SiteTests {
         try await withSiteTestApp { app, _, _, token in
             let site = try await self.makeSite(app: app, name: "dc-caps")
 
-            // Pre-v4 member: assembly keeps it on legacy per-node scoping, so
-            // designating it would leave the site's topology authored nowhere.
-            let oldId = try await self.registerAgent(
-                app: app, named: "old-proto", siteID: site.id, protocolVersion: 3)
-            try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(
-                    UpdateSiteRequest(description: nil, networkControllerAgentId: UUID(uuidString: oldId)))
-            } afterResponse: { res in
-                #expect(res.status == .badRequest)
-            }
-
             // Non-overlay (user-mode/SLIRP) member: no OVN network service to
             // reconcile topology with.
             let slirpId = try await self.registerAgent(
@@ -352,60 +343,6 @@ final class SiteTests {
                     UpdateSiteRequest(description: nil, networkControllerAgentId: UUID(uuidString: slirpId)))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
-            }
-        }
-    }
-
-    @Test("Designating a pre-v12 controller is refused while floating IPs are attached")
-    func controllerDesignationFloatingIPGate() async throws {
-        try await withSiteTestApp { app, _, project, token in
-            let site = try await self.makeSite(app: app, name: "fip-gate-site")
-            let currentId = try await self.registerAgent(app: app, named: "fip-current", siteID: site.id)
-            let oldId = try await self.registerAgent(
-                app: app, named: "fip-old", siteID: site.id, protocolVersion: 11)
-            try await self.placeVM(
-                app: app, project: project, named: "fip-gate-vm", onAgent: currentId,
-                network: try await self.network(app: app, project: project))
-
-            // An attached floating IP on the site's VM (rows built directly —
-            // the attach API's own gates are covered elsewhere).
-            let vm = try #require(try await VM.query(on: app.db).filter(\.$name == "fip-gate-vm").first())
-            let nic = try #require(
-                try await VMNetworkInterface.query(on: app.db).filter(\.$vm.$id == vm.id!).first())
-            let pool = FloatingIPPool(name: "fip-gate-pool", cidr: "203.0.113.0/29")
-            try await pool.save(on: app.db)
-            let floatingIP = FloatingIP(
-                poolID: pool.id!, address: "203.0.113.2", projectID: project.id!, interfaceID: nic.id!)
-            try await floatingIP.save(on: app.db)
-
-            // A pre-v12 controller would silently drop the attached NAT.
-            try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(
-                    UpdateSiteRequest(description: nil, networkControllerAgentId: UUID(uuidString: oldId)))
-            } afterResponse: { res in
-                #expect(res.status == .badRequest)
-            }
-
-            // A current-protocol controller is fine.
-            try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(
-                    UpdateSiteRequest(
-                        description: nil, networkControllerAgentId: UUID(uuidString: currentId)))
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-            }
-
-            // Detached, the old controller becomes designatable again.
-            floatingIP.$interface.id = nil
-            try await floatingIP.save(on: app.db)
-            try await app.test(.PUT, "/api/sites/\(site.id!.uuidString)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(
-                    UpdateSiteRequest(description: nil, networkControllerAgentId: UUID(uuidString: oldId)))
-            } afterResponse: { res in
-                #expect(res.status == .ok)
             }
         }
     }
@@ -747,27 +684,6 @@ final class SiteTests {
         }
     }
 
-    @Test("Site requirement excludes members on a pre-site-authority protocol")
-    func schedulerSiteFilterExcludesOldProtocol() throws {
-        let siteA = UUID()
-        // A pre-v4 member is kept on legacy per-node network scoping, so a
-        // pinned-network VM placed there would land in its private local NB.
-        let oldMember = makeSchedulable(name: "old-member", siteID: siteA, wireProtocolVersion: 3)
-        let newMember = makeSchedulable(name: "new-member", siteID: siteA)
-
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-        let requirements = VMPlacementRequirements(
-            cpu: 1, memory: 1 << 30, disk: 1 << 30, siteID: siteA)
-
-        let selected = try scheduler.selectAgent(
-            requirements: requirements, from: [oldMember, newMember])
-        #expect(selected == newMember.id)
-
-        #expect(throws: SchedulerError.self) {
-            try scheduler.selectAgent(requirements: requirements, from: [oldMember])
-        }
-    }
-
     @Test("Site requirement excludes members without overlay networking")
     func schedulerSiteFilterExcludesNonOverlay() throws {
         let siteA = UUID()
@@ -862,27 +778,6 @@ final class SiteTests {
         }
     }
 
-    @Test("A sited agent on a pre-v4 protocol keeps legacy scoping (rolling-upgrade safety)")
-    func preSiteAuthorityAgentAssembly() async throws {
-        try await withSiteTestApp { app, _, project, _ in
-            let site = try await self.makeSite(app: app, name: "dc-skew")
-
-            // A v3 binary predates `networksAuthoritative`: it would read the
-            // non-authoritative shape (networks: [] + false) as an
-            // authoritative teardown of all its L3. It must keep receiving its
-            // own networks, authoritative, even though it's in a site.
-            let oldAgentId = try await self.registerAgent(
-                app: app, named: "old-binary", siteID: site.id, protocolVersion: 3)
-            try await self.placeVM(
-                app: app, project: project, named: "old-vm", onAgent: oldAgentId,
-                network: try await self.network(app: app, project: project))
-
-            let sync = try await app.desiredStateAssembler.assemble(agentId: oldAgentId)
-            #expect(sync.networksAuthoritative)
-            #expect(sync.networks.contains { $0.name == "default" })
-        }
-    }
-
     @Test("A site-less agent keeps the legacy model: own networks, authoritative")
     func sitelessAssembly() async throws {
         try await withSiteTestApp { app, _, project, _ in
@@ -928,11 +823,8 @@ final class SiteTests {
             let site = try await self.makeSite(app: app, name: "dc-auto-caps")
             let siteID = try #require(site.id)
 
-            // Pre-v4: assembly keeps it on legacy per-node scoping, so it
-            // would author nothing for the site. User-mode (SLIRP): no OVN
-            // network service to reconcile topology with.
-            _ = try await self.registerAgent(
-                app: app, named: "auto-old", siteID: siteID, protocolVersion: 3)
+            // User-mode (SLIRP): no OVN network service to reconcile topology
+            // with.
             _ = try await self.registerAgent(
                 app: app, named: "auto-slirp", siteID: siteID, networkCapability: .userMode)
             var reloaded = try #require(try await Site.find(siteID, on: app.db))
@@ -1049,41 +941,6 @@ final class SiteTests {
         }
     }
 
-    @Test("A pre-v4 member's workloads are accepted in a controllerless site")
-    func preSiteAuthorityMemberIsNotGated() async throws {
-        try await withSiteTestApp { app, _, project, token in
-            let site = try await self.makeSite(app: app, name: "dc-legacy-guard")
-            let siteID = try #require(site.id)
-            // Pre-v4 and therefore never auto-designated — assembly keeps it
-            // on legacy per-node scoping, authoritative over its own networks,
-            // so its workloads *are* realized even though the site designates
-            // no controller. The preconditions must agree with assembly.
-            let agentId = try await self.registerAgent(
-                app: app, named: "legacy-node", siteID: siteID, protocolVersion: 3)
-            let unmanaged = try #require(try await Site.find(siteID, on: app.db))
-            #expect(unmanaged.$networkControllerAgent.id == nil)
-
-            // Placement: the only schedulable agent, on an unpinned network.
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "legacy-vm", project: project)
-            let unpinned = try await self.network(app: app, project: project)
-            let nic = VMNetworkInterface(
-                vmID: try vm.requireID(), logicalNetworkID: try unpinned.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
-            try await app.agentService.createVM(vm: vm, db: app.db)
-            let placed = try #require(try await VM.find(vm.id, on: app.db))
-            #expect(placed.hypervisorId == agentId)
-
-            // And its boot is accepted rather than 409'd.
-            try await app.test(.POST, "/api/vms/\(try vm.requireID().uuidString)/start") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .accepted)
-            }
-        }
-    }
-
     @Test("Placement onto a controllerless site fails the operation instead of hanging")
     func placementRefusedWithoutController() async throws {
         try await withSiteTestApp { app, _, project, _ in
@@ -1174,8 +1031,7 @@ final class SiteTests {
                 (
                     "slirp", NetworkCapability.userMode, WireProtocol.currentVersion,
                     SiteNetworkAuthority.ControllerFault.noOverlayNetworking
-                ),
-                ("oldbin", NetworkCapability.overlay, 3, .protocolTooOld(3)),
+                )
             ] as [(String, NetworkCapability, Int, SiteNetworkAuthority.ControllerFault)] {
                 let site = try await self.makeSite(app: app, name: "dc-regress-\(name)")
                 let siteID = try #require(site.id)

@@ -80,8 +80,8 @@ default) funnels into `launchAgent`.
   registration-rejected error is terminal (the node's SPIRE identity is no
   longer accepted — re-enroll it).
 - **Desired state arrives by long-poll** (`DesiredStatePoller` in
-  `StratoAgentCore`, STR-146). Against a control plane at wire v29+, and unless
-  `desired_state_pull = false` pins it back, the agent starts a loop over
+  `StratoAgentCore`, STR-146) — the only sync transport since wire v38. The
+  agent starts a loop over
   `GET /agent/desired-state` after registration — over
   `MTLSArtifactDownloader` with the `.longPoll` timeout profile, so the same
   SVID mTLS transport as image downloads, resolved fresh per request so a
@@ -130,13 +130,15 @@ console endpoints, disk hot-(de)attach, `reservedResources()`, an
 opt-in `adoptVM` for orphan re-adoption, and `reclaimVMDirectory` for the
 delete path that has no session to tear down (below).
 
-The two host-inventory queries — `listVMs()` and `reservedResources()` —
-return **optionals** (STR-196). Nil means the backend could not answer, and
-the agent substitutes its durable manifest; an empty list or a zero
-reservation is a positive claim about the host that only a backend which
-actually knows may make. The distinction is load-bearing because a
-synthesized zero reads exactly like an idle host to the scheduler, which is
-how STR-190 stayed invisible in the field.
+The two driver host-inventory queries — `listVMs()` and
+`reservedResources()` — return **optionals** (STR-196). Nil means the backend
+could not answer and must not be coerced to an empty list or zero reservation.
+The agent substitutes its durable manifest for unknown reservations;
+`listVMs()` has no live reporting consumer since the v38 heartbeat stopped
+carrying that inventory, but preserves the same contract for future callers.
+The distinction is load-bearing because a synthesized zero reads exactly like
+an idle host to the scheduler, which is how STR-190 stayed invisible in the
+field.
 
 The registry is a dictionary on the `Agent` actor keyed by
 `HypervisorType`, populated once at `start()`. That dictionary and
@@ -1195,11 +1197,8 @@ would be wrong:
   exactly that guard. A VM the sync merely *omits* keeps its metadata
   (STR-98: omission is not an instruction).
 
-The payload half is gated on `supportsInstanceMetadata(senderVersion)` for
-the `networks`/`sandboxes` reason: from a v26+ control plane a nil `metadata`
-is authoritative and withdraws what we serve, while from an older one it is
-silence, and reading it as an instruction would empty every VM's metadata the
-moment a control plane is rolled back.
+A nil `metadata` on a desired entry is authoritative and withdraws what we
+serve for that VM.
 
 ### Instance metadata server (the guest-facing listener)
 

@@ -63,18 +63,15 @@ public struct SandboxExecStartedMessage: WebSocketMessage {
     public var type: MessageType { .sandboxExecStarted }
     public let requestId: String
     public let timestamp: Date
-    public let sandboxId: String
     public let sessionId: String
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
-        sandboxId: String,
         sessionId: String
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
-        self.sandboxId = sandboxId
         self.sessionId = sessionId
     }
 }
@@ -127,22 +124,19 @@ public struct SandboxExecOutputMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let sessionId: String
-    /// "stdout" or "stderr" (always "stdout" for a tty session).
-    public let stream: String
-    /// Base64-encoded output bytes.
+    /// Base64-encoded output bytes (stdout and stderr interleaved; the
+    /// receiving side renders one stream).
     public let data: String
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         sessionId: String,
-        stream: String,
         data: String
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.sessionId = sessionId
-        self.stream = stream
         self.data = data
     }
 
@@ -150,12 +144,11 @@ public struct SandboxExecOutputMessage: WebSocketMessage {
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         sessionId: String,
-        stream: String,
         rawData: Data
     ) {
         self.init(
             requestId: requestId, timestamp: timestamp, sessionId: sessionId,
-            stream: stream, data: rawData.base64EncodedString())
+            data: rawData.base64EncodedString())
     }
 
     public var rawData: Data? {

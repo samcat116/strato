@@ -188,12 +188,6 @@ actor MockHypervisorService: HypervisorService {
     /// Never nil, for the same reason as `listVMs()`: the specs are held here,
     /// so a zero from this backend is always a real zero.
     func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)? {
-        var vcpus = 0
-        var memoryBytes: Int64 = 0
-        for vm in vms.values {
-            vcpus += vm.spec.cpus
-            memoryBytes += vm.spec.memoryBytes
-        }
-        return (vcpus, memoryBytes)
+        vms.values.lazy.map(\.spec).reservedResources
     }
 }

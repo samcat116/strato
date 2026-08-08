@@ -192,8 +192,8 @@ add those to `.env` (or an override file) to change them:
 
 The single `valkey` service backs two stores with opposite failure contracts:
 
-- **Coordination** (agent presence, socket routing, sweep locks, scheduler
-  reservations, rate-limit counters) is *fail-open*. Losing it degrades
+- **Coordination** (agent presence, sweep locks, scheduler reservations,
+  rate-limit counters) is *fail-open*. Losing it degrades
   convergence, never correctness — agents keep converging via the periodic sync,
   and `/health/ready` grades it `degraded` while still serving traffic.
 - **Session storage** cannot fail open at all. Losing it logs every signed-in

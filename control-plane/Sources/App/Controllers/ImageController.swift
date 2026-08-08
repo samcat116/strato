@@ -1087,27 +1087,6 @@ struct ImageController: RouteCollection {
 
 // MARK: - Helper Types
 
-struct ImageUploadForm: Content {
-    var name: String?
-    var description: String?
-    var file: File?
-    var architecture: String?
-    /// Raw value of `ImageFormat`. Optional: omitted means "detect from the
-    /// file header", which is all callers could do before this field existed.
-    var format: String?
-    var defaultCpu: Int?
-    var defaultMemory: Int?
-    var defaultDisk: Int?
-    var defaultCmdline: String?
-}
-
-/// Multipart form for registering a single typed artifact on an image.
-struct ArtifactUploadForm: Content {
-    /// Raw value of `ArtifactKind` (disk-image/kernel/rootfs/initramfs).
-    var kind: String?
-    var file: File?
-}
-
 /// JSON body for registering a single typed artifact fetched from a URL.
 struct ArtifactFetchRequest: Content {
     /// Raw value of `ArtifactKind` (disk-image/kernel/rootfs/initramfs).

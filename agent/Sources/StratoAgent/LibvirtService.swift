@@ -53,12 +53,11 @@ import StratoShared
 /// than the spec. That single fact shapes hot-plug, resize and everything else
 /// that mutates a VM in place (STR-134): every such change is sent with
 /// `LibvirtDomain.affectLiveAndConfig`, so it lands on the running guest *and*
-/// in the persistent definition. The QEMU driver can leave the definition alone
-/// because it respawns a VM from a stored configuration the agent keeps in step
-/// (`updateRecordedVolumes`) and because everything it "defers to the next
-/// boot" is re-read from the spec at that boot. Neither is true here, so a
-/// live-only change is a change that silently un-happens at the guest's next
-/// power cycle.
+/// in the persistent definition. The deleted process-QEMU driver could leave
+/// its definition alone because it respawned a VM from a stored configuration
+/// the agent kept in step; that is not true here — the next boot reads
+/// libvirt's definition — so a live-only change is a change that silently
+/// un-happens at the guest's next power cycle.
 ///
 /// It used to follow from that that **the hot-plug slots and size ceilings a VM
 /// will ever have are fixed when it is created** — the document reserves
@@ -144,13 +143,15 @@ actor LibvirtService: HypervisorService {
     /// harmful rather than merely uninformative. An empty VM list claims every
     /// VM on this host is gone, which is how an inventory consumer will read it,
     /// and zero reservations advertise capacity the host does not have and
-    /// invite the scheduler to over-place it. The agent's own manifest fallback
-    /// only covers a query that *times out*, so a libvirtd that answers with an
-    /// error has to be covered here. What neither cache can cover — the sweep
-    /// that has never once succeeded — is why both methods return optionals
-    /// (STR-196). The never-answered and staleness decisions belong to
-    /// `LastKnownInventory`, in a package tests can import, because this target
-    /// has none.
+    /// invite the scheduler to over-place it. The reservation caller's manifest
+    /// fallback previously covered only a query that *timed out*, so a libvirtd
+    /// error has to remain explicit too. `listVMs()` preserves the same
+    /// unknown-versus-empty distinction at the driver boundary even though the
+    /// current heartbeat no longer carries that inventory. What neither cache
+    /// can cover — the sweep that has never once succeeded — is why both methods
+    /// return optionals (STR-196). The never-answered and staleness decisions
+    /// belong to `LastKnownInventory`, in a package tests can import, because
+    /// this target has none.
     private var lastKnownVMIds = LastKnownInventory<[String]>(
         staleThreshold: LibvirtService.staleInventoryThreshold)
     private var lastKnownReservations = LastKnownInventory<(vcpus: Int, memoryBytes: Int64)>(
@@ -1001,9 +1002,9 @@ actor LibvirtService: HypervisorService {
     /// serve.
     ///
     /// Includes stopped domains deliberately: a defined-but-off VM holds its
-    /// disks and its placement, and omitting it would make the control plane
-    /// treat it as lost. For exactly that reason the failure path never
-    /// manufactures `[]`, which says the same thing about every domain at once.
+    /// disks and its placement, and omitting it from an inventory says it is
+    /// gone. For exactly that reason the failure path never manufactures `[]`,
+    /// which says the same thing about every domain at once.
     func listVMs() async -> [String]? {
         do {
             let ids = try await call(
@@ -1088,11 +1089,11 @@ actor LibvirtService: HypervisorService {
     /// by a log line nobody reads, while the host goes on looking healthy. Past
     /// the threshold this says so at error level on every heartbeat.
     ///
-    /// The nil this returns for a driver that has never answered travels all the
-    /// way to the agent, which substitutes its durable manifest (STR-196). What
-    /// it must never become is `[]` or `(0, 0)` here: those are claims about the
-    /// host, and a sweep that has never once succeeded has no standing to make
-    /// one.
+    /// For reservations, the nil this returns when the driver has never answered
+    /// travels to the agent, which substitutes its durable manifest (STR-196).
+    /// For a VM-list caller it remains an explicit unknown. What it must never
+    /// become is `[]` or `(0, 0)` here: those are claims about the host, and a
+    /// sweep that has never once succeeded has no standing to make one.
     private func stale<T: Sendable>(
         _ inventory: LastKnownInventory<T>, _ what: String, _ error: any Error
     ) -> T? {

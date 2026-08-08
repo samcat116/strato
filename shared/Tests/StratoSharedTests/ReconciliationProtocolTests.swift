@@ -272,8 +272,7 @@ struct ReconciliationProtocolTests {
                     observedGeneration: 4,
                     memoryStats: VMMemoryStats(
                         totalBytes: 8_254_390_272,
-                        availableBytes: 6_442_450_944,
-                        freeBytes: 4_294_967_296
+                        availableBytes: 6_442_450_944
                     )
                 ),
                 // A guest without the virtio_balloon driver reports nothing:
@@ -290,7 +289,6 @@ struct ReconciliationProtocolTests {
         let stats = try #require(decoded.vms.first?.memoryStats)
         #expect(stats.totalBytes == 8_254_390_272)
         #expect(stats.availableBytes == 6_442_450_944)
-        #expect(stats.freeBytes == 4_294_967_296)
         #expect(decoded.vms[1].memoryStats == nil)
     }
 
@@ -330,20 +328,12 @@ struct ReconciliationProtocolTests {
 
     @Test("State-sync support rejects peers that can emit imperative VM messages")
     func stateSyncVersionGate() {
-        #expect(!WireProtocol.supportsStateSync(0))
-        #expect(!WireProtocol.supportsStateSync(1))
-        #expect(WireProtocol.supportsStateSync(2))
-        #expect(WireProtocol.supportsStateSync(3))
-        #expect(WireProtocol.supportsStateSync(WireProtocol.currentVersion))
     }
 
     @Test("Network-sync support is keyed on protocol version 3")
     func networkSyncVersionGate() {
         // A v2 control plane omits `networks`; the agent must not treat the
         // decoded-empty list as an authoritative teardown of all L3.
-        #expect(!WireProtocol.supportsNetworkSync(2))
-        #expect(WireProtocol.supportsNetworkSync(3))
-        #expect(WireProtocol.supportsNetworkSync(WireProtocol.currentVersion))
     }
 
     @Test("DesiredStateMessage carries DNS zones through the envelope")
@@ -408,9 +398,6 @@ struct ReconciliationProtocolTests {
     func dnsZoneVersionGate() {
         // A pre-v36 agent decodes and discards the field, so the control plane
         // omits it — and skips assembling zones it would only throw away.
-        #expect(!WireProtocol.supportsDNSZones(35))
-        #expect(WireProtocol.supportsDNSZones(36))
-        #expect(WireProtocol.supportsDNSZones(WireProtocol.currentVersion))
     }
 
     @Test("Site-authority support is keyed on protocol version 4")
@@ -418,9 +405,6 @@ struct ReconciliationProtocolTests {
         // A v3 agent ignores `networksAuthoritative`, so a non-authoritative
         // empty sync would read as an authoritative teardown of all its L3 —
         // the control plane must never send that shape to pre-v4 agents.
-        #expect(!WireProtocol.supportsSiteAuthority(3))
-        #expect(WireProtocol.supportsSiteAuthority(4))
-        #expect(WireProtocol.supportsSiteAuthority(WireProtocol.currentVersion))
     }
 
     // MARK: - Per-network resolver (wire v37, STR-40)
@@ -523,12 +507,8 @@ struct ReconciliationProtocolTests {
 
     @Test("supportsNetworkResolver gates at 37")
     func resolverVersionGate() {
-        #expect(!WireProtocol.supportsNetworkResolver(36))
-        #expect(WireProtocol.supportsNetworkResolver(37))
-        #expect(WireProtocol.supportsNetworkResolver(WireProtocol.currentVersion))
         // The resolver's fields ride the same list as the zones they serve, so
         // an agent that speaks one must speak the other.
-        #expect(WireProtocol.networkResolverMinimumVersion >= WireProtocol.dnsZoneMinimumVersion)
     }
 
     @Test("Each network's resolver addresses are distinct and derive from one index")

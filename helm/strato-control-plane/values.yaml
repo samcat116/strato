@@ -2,9 +2,9 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Control-plane replicas. Counts above 1 are supported (issue #261): agent
-# WebSockets are routed between replicas via Valkey (`agent:{name}:replica`
-# keys + pub/sub nudges), all durable state lives in PostgreSQL, and rolling
+# Control-plane replicas. Counts above 1 are supported: mutations ring a
+# contentless doorbell over Valkey and whichever replica holds the agent's
+# parked poll acts on it, all durable state lives in PostgreSQL, and rolling
 # deploys just cause agents to reconnect to surviving replicas. Valkey is
 # required either way; see docs/architecture/multi-replica.md.
 replicaCount: 1

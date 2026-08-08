@@ -288,7 +288,7 @@ struct SandboxReconciliationTests {
         let reconciler = makeReconciler(actuator)
         let message = Self.sync(sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 1)])
 
-        await reconciler.apply(message, includeSandboxes: true)
+        await reconciler.apply(message)
         _ = await actuator.waitForReports(1)
 
         let performed = await actuator.performed
@@ -303,27 +303,15 @@ struct SandboxReconciliationTests {
         #expect(vmGeneration == 0)
     }
 
-    @Test("Sandboxes are not reconciled when the sync's sender predates the sandbox protocol")
-    func sandboxHalfGatedOnSenderVersion() async {
-        // A pre-sandbox control plane omits `sandboxes` (decoded []). That is
-        // not even reported as unrecognized: the agent has no basis to ask
-        // about a half of the protocol the sender doesn't speak.
+    @Test("An empty sync holds an unaccounted sandbox until a tombstone authorizes teardown")
+    func emptySyncHoldsSandboxUntilTombstone() async {
         let sandboxId = UUID()
         let actuator = MockActuator(sandboxPresence: [sandboxId.uuidString: .managed(.running)])
         let reconciler = makeReconciler(actuator)
 
-        await reconciler.apply(Self.sync(), includeSandboxes: false)
-        try? await Task.sleep(nanoseconds: 100_000_000)
-        let performed = await actuator.performed
-        #expect(performed.isEmpty)
-        let presence = await actuator.sandboxPresence
-        #expect(presence.count == 1)
-        let heldWithoutSandboxSync = await reconciler.unrecognizedWorkloads()
-        #expect(heldWithoutSandboxSync.isEmpty)
-
-        // The same empty sync from a sandbox-aware control plane doesn't
-        // delete it either — it reports the sandbox and waits for a verdict.
-        await reconciler.apply(Self.sync(), includeSandboxes: true)
+        // An empty sync doesn't delete the sandbox — it reports it and waits
+        // for a verdict.
+        await reconciler.apply(Self.sync())
         _ = await actuator.waitForReports(1)
         let afterAuthoritative = await actuator.sandboxPresence
         #expect(afterAuthoritative.count == 1)
@@ -334,8 +322,7 @@ struct SandboxReconciliationTests {
         await reconciler.apply(
             Self.sync(tombstones: [
                 DesiredWorkloadTombstone(kind: .sandbox, workloadId: sandboxId, generation: 1)
-            ]),
-            includeSandboxes: true)
+            ]))
         // Two more reports: the held set emptying, and the delete finishing.
         _ = await actuator.waitForReports(3)
         let afterTombstone = await actuator.sandboxPresence
@@ -350,8 +337,7 @@ struct SandboxReconciliationTests {
         let reconciler = makeReconciler(actuator)
 
         await reconciler.apply(
-            Self.sync(sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 1)]),
-            includeSandboxes: true)
+            Self.sync(sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 1)]))
         _ = await actuator.waitForReports(1)
 
         // Adoption first, then the post-adoption plan (stopped → running = boot).
@@ -371,8 +357,7 @@ struct SandboxReconciliationTests {
         await reconciler.apply(
             Self.sync(
                 vms: [Self.desiredVM(vmId, status: .running, generation: 1)],
-                sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 1)]),
-            includeSandboxes: true)
+                sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 1)]))
         _ = await actuator.waitForReports(2)
 
         let performed = await actuator.performed
@@ -396,7 +381,7 @@ struct SandboxReconciliationTests {
         let message = Self.sync(sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 1)])
 
         for attempt in 1...(Reconciler.maxAttemptsPerGeneration + 2) {
-            await reconciler.apply(message, includeSandboxes: true)
+            await reconciler.apply(message)
             _ = await actuator.waitForReports(min(attempt, Reconciler.maxAttemptsPerGeneration))
         }
         try? await Task.sleep(nanoseconds: 100_000_000)
@@ -416,8 +401,7 @@ struct SandboxReconciliationTests {
         // A new generation re-arms the loop.
         await actuator.setFailure(nil)
         await reconciler.apply(
-            Self.sync(sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 2)]),
-            includeSandboxes: true)
+            Self.sync(sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 2)]))
         _ = await actuator.waitForReports(Reconciler.maxAttemptsPerGeneration + 1)
         let performed = await actuator.performed
         #expect(performed.map(\.step) == [.create, .boot])

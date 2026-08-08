@@ -160,18 +160,6 @@ extension ResourceQuota {
         return maxStorage - reservedStorage
     }
 
-    var availableVMs: Int {
-        return maxVMs - vmCount
-    }
-
-    var availableSandboxes: Int {
-        return maxSandboxes - sandboxCount
-    }
-
-    var availableNetworks: Int {
-        return maxNetworks - networkCount
-    }
-
     var cpuUtilizationPercent: Double {
         guard maxVCPUs > 0 else { return 0 }
         return Double(reservedVCPUs) / Double(maxVCPUs) * 100

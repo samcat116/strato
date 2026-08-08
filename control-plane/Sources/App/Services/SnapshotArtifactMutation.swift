@@ -138,26 +138,23 @@ enum SnapshotArtifactMutation {
     }
 
     /// Whether `agentId` names an agent that can converge snapshot artifacts:
-    /// known, online, and speaking wire v33.
+    /// known and online.
     ///
     /// Read on both the admission and the delete path, for opposite purposes —
     /// admission refuses so nothing is accepted that can never converge, and
     /// delete force-clears so nothing becomes undeletable.
     static func agentConvergesSnapshots(_ agentId: String?, app: Application) async -> Bool {
         guard let agentId, let info = await app.agentService.getAgentInfo(agentId) else { return false }
-        return info.status == .online && WireProtocol.supportsSnapshotSync(info.wireProtocolVersion ?? 0)
+        return info.status == .online
     }
 
     /// Preflights capture admission on the agent that would hold the artifact,
     /// translating a refusal into the `409` the API contract uses for "this
     /// cannot be done right now".
     ///
-    /// Two signals, the `sandboxCapable` rule from issue #415 and the shape the
-    /// retired `requireCapableAgent` preflights had: the wire version proves the
-    /// desired entry will be understood, and the capability proves a backend
-    /// that can realize the capture is usable on that host. Either alone admits
-    /// a request that can only fail — one silently, into a desired state
-    /// nothing converges.
+    /// The capability proves a backend that can realize the capture is usable
+    /// on that host (the `sandboxCapable` rule from issue #415); without it the
+    /// request could only fail as a `degraded` condition long after admission.
     static func requireCaptureCapableAgent(
         _ agentId: String, kind: SnapshotArtifactKind, app: Application
     ) async throws {
@@ -166,13 +163,6 @@ enum SnapshotArtifactMutation {
         }
         guard info.status == .online else {
             throw Abort(.conflict, reason: "Agent '\(agentId)' is offline")
-        }
-        guard WireProtocol.supportsSnapshotSync(info.wireProtocolVersion ?? 0) else {
-            throw Abort(
-                .conflict,
-                reason: "Agent '\(agentId)' does not speak declarative snapshots "
-                    + "(wire protocol v\(WireProtocol.snapshotSyncMinimumVersion) required). Upgrade the agent."
-            )
         }
         guard info.capabilities.contains(kind.agentCapability) else {
             throw Abort(

@@ -158,33 +158,19 @@ final class IAMPolicySetVersionTests {
         }
     }
 
-    @Test("The replica cache picks up a new version and tells its listeners")
-    func cacheRefreshNotifiesListeners() async throws {
+    @Test("The replica cache picks up a new version")
+    func cacheRefreshTracksVersion() async throws {
         try await withApp { app in
             let cache = PolicySetVersionCache(logger: app.logger)
-            let observed = ObservedVersions()
-            await cache.onVersionChange { version in
-                await observed.record(version)
-            }
 
             await cache.refresh(on: app.db)
             let afterFirst = await cache.currentVersion
             let expected = try await PolicySetVersionService.current(on: app.db)
             #expect(afterFirst == expected)
 
-            // A refresh with nothing new must not re-fire: listeners rebuild the
-            // compiled policy set, which is not work to do on a timer.
-            await cache.refresh(on: app.db)
-            let afterNoChange = await observed.all()
-            #expect(afterNoChange == [expected])
-
             let bumped = try await PolicySetVersionService.bump(reason: "guardrail created: c", on: app.db)
             await cache.refresh(on: app.db)
-
-            let finalVersion = await cache.currentVersion
-            let recorded = await observed.all()
-            #expect(finalVersion == bumped)
-            #expect(recorded == [expected, bumped])
+            #expect(await cache.currentVersion == bumped)
         }
     }
 
@@ -193,10 +179,9 @@ final class IAMPolicySetVersionTests {
         try await withApp { app in
             let cache = PolicySetVersionCache(logger: app.logger)
             let observed = ObservedVersions()
-            // Unlike the change listeners above, this hook exists for work
-            // that must converge even when the version already advanced — a
-            // compiled-set rebuild that failed gets no second change event,
-            // only the next tick.
+            // This hook exists for work that must converge even when the
+            // version already advanced — a compiled-set rebuild that failed
+            // gets no second change event, only the next tick.
             await cache.onEveryRefresh { version in
                 await observed.record(version)
             }

@@ -167,26 +167,6 @@ final class VMOperationTests {
         }
     }
 
-    /// With `vm_reboot` gone there is no fallback frame, and a pre-v34 agent
-    /// fails *silently*: it decodes the sync, ignores the nonce, plans no work,
-    /// and reports the bumped generation as converged. The API would tell the
-    /// user their VM restarted when it never did.
-    @Test("Restart is refused when the VM's agent predates edge nonces")
-    func restartRefusesPreV34Agent() async throws {
-        try await withVMTestApp { app, _, vm, token in
-            try await placeOnAgent(
-                app: app, vm: vm, wireProtocolVersion: WireProtocol.edgeNonceMinimumVersion - 1)
-
-            try await app.test(.POST, "/api/vms/\(vm.id!)/restart") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-                #expect(res.body.string.contains("too old"))
-            }
-            #expect(try await VM.find(vm.id, on: app.db)?.rebootGeneration == 0)
-        }
-    }
-
     // MARK: - 202 + async failure recording
 
     @Test("POST /api/vms/:id/start returns 202 with the VM and its target generation")

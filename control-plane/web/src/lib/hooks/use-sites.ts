@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { sitesApi } from "@/lib/api/sites";
 import { useOrganization } from "@/providers";
 
@@ -11,9 +11,4 @@ export function useSites() {
     queryFn: () => sitesApi.list(organizationId),
     enabled: !orgLoading,
   });
-}
-
-export function useInvalidateSites() {
-  const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: ["sites"] });
 }

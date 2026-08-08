@@ -129,16 +129,6 @@ public struct X509SVID: Sendable {
         Date() >= expiresAt
     }
 
-    /// Check if the SVID will expire within the given duration
-    public func willExpire(within duration: TimeInterval) -> Bool {
-        Date().addingTimeInterval(duration) >= expiresAt
-    }
-
-    /// Combined certificate chain as single PEM string
-    public var certificateChainPEM: String {
-        certificateChain.joined(separator: "\n")
-    }
-
     /// Combined trust bundle as single PEM string
     public var trustBundlePEM: String {
         trustBundle.joined(separator: "\n")
@@ -216,11 +206,6 @@ public struct JWTSVID: Sendable {
     public var isExpired: Bool {
         Date() >= expiresAt
     }
-
-    /// Check if the token will expire within the given duration
-    public func willExpire(within duration: TimeInterval) -> Bool {
-        Date().addingTimeInterval(duration) >= expiresAt
-    }
 }
 
 /// The result of asking the Workload API to validate a JWT-SVID.
@@ -288,11 +273,6 @@ public struct SPIFFETrustBundle: Sendable {
         self.x509Authorities = x509Authorities
         self.jwtAuthorities = jwtAuthorities
         self.refreshedAt = refreshedAt
-    }
-
-    /// Combined authorities as single PEM string
-    public var x509AuthoritiesPEM: String {
-        x509Authorities.joined(separator: "\n")
     }
 }
 
