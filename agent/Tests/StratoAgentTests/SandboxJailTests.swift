@@ -109,6 +109,26 @@ struct SandboxJailTests {
         #expect(teardown != NICPlacement.hostNamespace)
     }
 
+    /// The crash sweep for warm templates reads `/var/run/netns` back into ids
+    /// (STR-104): a NIC-shaped template's namespace is the first artifact its
+    /// build creates, before the jail root or storage directory the rest of
+    /// the sweep scans, so a crash in that window leaves nothing else to find
+    /// it by.
+    @Test("a namespace name maps back to the id it was derived from")
+    func netnsNameRoundTrips() {
+        for id in ["abc-123", "warm-template-0f9c", UUID().uuidString] {
+            let name = SandboxJailPlan.netnsName(sandboxId: id)
+            #expect(SandboxJailPlan.sandboxId(fromNetnsName: name) == id)
+        }
+
+        // Namespaces that are not ours are left entirely alone — the sweep
+        // deletes what this returns.
+        #expect(SandboxJailPlan.sandboxId(fromNetnsName: "ovnmeta-1234") == nil)
+        #expect(SandboxJailPlan.sandboxId(fromNetnsName: "strato-sbx-") == nil)
+        #expect(SandboxJailPlan.sandboxId(fromNetnsName: "") == nil)
+        #expect(SandboxJailPlan.sandboxId(fromNetnsName: "sbx-abc") == nil)
+    }
+
     @Test("the exec file basename keys the layout, not its directory")
     func execFileBasename() {
         let p = SandboxJailPlan(

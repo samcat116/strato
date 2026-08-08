@@ -4739,9 +4739,21 @@ extension Agent: ReconcileActuator {
         guard let restore = item.desiredSandbox?.restore else {
             throw SandboxRuntimeError.unsupportedStep("restore work item without a restore nonce")
         }
+        // A restore loads the checkpoint resumed, and a resumed guest starts
+        // transmitting immediately — so the whole host-side attachment (netns,
+        // veth, TAP, `tc` filters, OVS port) has to be in place before the
+        // load, not after (STR-104). Re-realizing is idempotent and cheap, and
+        // it is what covers a namespace a crash sweep removed under the
+        // sandbox, or an attachment this agent life never learned because the
+        // sandbox was adopted rather than created here.
+        let networks = item.desiredSandbox?.spec.network.map { [$0] } ?? []
+        let placement =
+            networks.isEmpty ? NICPlacement.hostNamespace : try sandboxNICPlacement(sandboxId: item.id)
+        let attachments = try await networkOrchestrator.prepareAttachments(
+            vmId: item.id, networks: networks, placement: placement)
         try await requireSandboxRuntime().restoreSandbox(
             sandboxId: item.id, snapshotId: restore.snapshotId.uuidString,
-            artifacts: restore.artifacts)
+            artifacts: restore.artifacts, networkAttachments: attachments)
     }
 
     /// Where this host realizes a sandbox's NIC (issue STR-100).

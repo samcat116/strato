@@ -133,6 +133,11 @@ fn bringup() -> Result<(), Box<dyn std::error::Error>> {
         logs: logs.clone(),
         children: children.clone(),
         workload_pid: workload_pid.clone(),
+        // What this guest has already applied, so a later `launch`/`reidentify`
+        // that re-addresses the NIC can find the device by the MAC currently on
+        // it (STR-104). A warm template starts with neither.
+        network: Mutex::new(cfg.network.clone()),
+        hostname: Mutex::new(cfg.hostname.clone()),
     });
     let vsock_port = cfg.vsock_port;
     {

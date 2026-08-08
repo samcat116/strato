@@ -19,7 +19,8 @@ struct WarmSandboxSnapshotCacheTests {
         memoryMiB: Int64 = 512,
         configCapacityBytes: Int = 256 * 1024,
         jailed: Bool = true,
-        cpuTemplate: String? = nil
+        cpuTemplate: String? = nil,
+        nicCount: Int = 0
     ) -> WarmSnapshotKey {
         WarmSnapshotKey(
             imageDigest: digest,
@@ -30,7 +31,8 @@ struct WarmSandboxSnapshotCacheTests {
             memoryMiB: memoryMiB,
             configCapacityBytes: configCapacityBytes,
             jailed: jailed,
-            cpuTemplate: cpuTemplate)
+            cpuTemplate: cpuTemplate,
+            nicCount: nicCount)
     }
 
     private func makeTempRoot() throws -> String {
@@ -95,6 +97,31 @@ struct WarmSandboxSnapshotCacheTests {
         // Nil template must produce the exact historical name so existing
         // cache entries survive the agent upgrade.
         #expect(!passthrough.directoryName.contains("tpl"))
+    }
+
+    /// The whole point of the NIC-shape component (STR-104): Firecracker can
+    /// repoint a restored network device but never add or drop one, so a
+    /// template built without a NIC must *miss* for a networked sandbox and
+    /// send it down the cold path — rather than warm-restoring it into a
+    /// microVM with no interface that reports perfectly healthy.
+    @Test("a template's NIC shape is part of the key; no-NIC keeps its pre-STR-104 name")
+    func nicShapeKeysDistinctEntries() throws {
+        let root = try makeTempRoot()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let cache = WarmSandboxSnapshotCache(rootPath: root)
+
+        let networkless = makeKey()
+        let networked = makeKey(nicCount: 1)
+        #expect(networked.directoryName != networkless.directoryName)
+        #expect(networked.directoryName.contains("1nic"))
+        // Nil/zero must produce the exact historical name so entries built by
+        // an older agent stay hits for exactly the sandboxes they were valid
+        // for.
+        #expect(!networkless.directoryName.contains("nic"))
+
+        _ = try publishEntry(cache, key: networkless)
+        #expect(cache.lookup(networked) == nil, "a no-NIC template cannot warm-start a networked sandbox")
+        #expect(cache.lookup(networkless) != nil)
     }
 
     @Test("sanitizing two different digests cannot alias them")

@@ -167,6 +167,42 @@ struct GuestControlProtocolTests {
             entropy: nil)
         let object = try decodedObject(.launch(request))
         #expect(object["entropy"] == nil)
+        // A network-free sandbox's launch is byte-identical to a pre-STR-104
+        // one: `network` is omitted, never null.
+        #expect(object["network"] == nil)
+    }
+
+    /// A warm template's device was never addressed — the template is shared
+    /// across sandboxes — so the launch is what makes it *this* sandbox's NIC
+    /// (STR-104).
+    @Test("launch carries the sandbox's own NIC configuration")
+    func launchCarriesNetwork() throws {
+        let request = GuestControlProtocol.LaunchRequest(
+            sandboxId: "sb-4", identityNonce: "n-4",
+            imageConfig: SandboxConfigDrive.ImageConfig(
+                env: [], entrypoint: [], cmd: ["/bin/true"], workingDir: "", user: ""),
+            overrides: SandboxConfigDrive.ProcessOverrides(
+                entrypoint: nil, cmd: nil, env: [:], workdir: nil, user: nil),
+            entropy: nil,
+            network: SandboxConfigDrive.NetworkConfig(
+                macAddress: "06:00:ac:10:00:07",
+                ipv4: SandboxConfigDrive.AddressConfig(
+                    address: "172.16.0.7", prefixLength: 24, gateway: "172.16.0.1"),
+                mtu: 1442,
+                nameservers: ["172.16.0.2"],
+                searchDomains: ["proj.strato.internal"]))
+
+        let object = try decodedObject(.launch(request))
+        let network = try #require(object["network"] as? [String: Any])
+        #expect(network["mac_address"] as? String == "06:00:ac:10:00:07")
+        #expect(network["mtu"] as? Int == 1442)
+        #expect(network["nameservers"] as? [String] == ["172.16.0.2"])
+        #expect(network["search_domains"] as? [String] == ["proj.strato.internal"])
+        let ipv4 = try #require(network["ipv4"] as? [String: Any])
+        #expect(ipv4["address"] as? String == "172.16.0.7")
+        #expect(ipv4["prefix_length"] as? Int == 24)
+        #expect(ipv4["gateway"] as? String == "172.16.0.1")
+        #expect(network["ipv6"] == nil)
     }
 
     @Test("launched decodes")
@@ -196,6 +232,35 @@ struct GuestControlProtocolTests {
         #expect(object["hostname"] as? String == "strato-fork")
         #expect(object["entropy"] as? String == entropy.base64EncodedString())
         #expect((object["unix_nanos"] as? NSNumber)?.int64Value == 1_752_700_000_000_000_000)
+        // A network-free fork sends no block, exactly as before STR-104.
+        #expect(object["network"] == nil)
+    }
+
+    /// The fork target's address rides the request that rotates its identity,
+    /// so the guest never runs a moment holding the source's (STR-104).
+    @Test("reidentify carries the fork target's NIC configuration")
+    func reidentifyCarriesNetwork() throws {
+        let request = GuestControlProtocol.ReidentifyRequest(
+            expectedSandboxId: "source",
+            expectedNonce: "old-nonce",
+            sandboxId: "fork",
+            identityNonce: "new-nonce",
+            hostname: "strato-fork",
+            entropy: Data(repeating: 0xA5, count: 32),
+            unixNanos: 1_752_700_000_000_000_000,
+            network: SandboxConfigDrive.NetworkConfig(
+                macAddress: "06:00:ac:10:00:09",
+                ipv6: SandboxConfigDrive.AddressConfig(
+                    address: "fd12:3456:789a::9", prefixLength: 64,
+                    gateway: "fd12:3456:789a::1")))
+
+        let object = try decodedObject(.reidentify(request))
+        let network = try #require(object["network"] as? [String: Any])
+        #expect(network["mac_address"] as? String == "06:00:ac:10:00:09")
+        let ipv6 = try #require(network["ipv6"] as? [String: Any])
+        #expect(ipv6["address"] as? String == "fd12:3456:789a::9")
+        #expect(ipv6["prefix_length"] as? Int == 64)
+        #expect(network["ipv4"] == nil)
     }
 
     @Test("reidentified decodes")

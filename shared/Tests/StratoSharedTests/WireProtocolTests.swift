@@ -99,6 +99,22 @@ struct WireProtocolTests {
                 SandboxGuestControlProtocol.currentVersion))
     }
 
+    /// A networked fork needs one version more than a network-free one: v3
+    /// rotates identity but drops `reidentify`'s `network` block, which would
+    /// leave the fork holding the source sandbox's address (STR-104).
+    @Test("sandbox NIC re-addressing gate is stricter than the fork gate")
+    func sandboxNetworkReconfigureGate() {
+        #expect(!SandboxGuestControlProtocol.supportsNetworkReconfigure(nil))
+        #expect(!SandboxGuestControlProtocol.supportsNetworkReconfigure(3))
+        #expect(SandboxGuestControlProtocol.supportsNetworkReconfigure(4))
+        #expect(
+            SandboxGuestControlProtocol.supportsNetworkReconfigure(
+                SandboxGuestControlProtocol.currentVersion))
+        #expect(
+            SandboxGuestControlProtocol.networkReconfigureMinimumVersion
+                > SandboxGuestControlProtocol.reidentifyMinimumVersion)
+    }
+
     // MARK: - Registration version negotiation
 
     @Test("registration messages default to the current wire version")

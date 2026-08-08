@@ -493,6 +493,33 @@ This differs from the VM path, where cloud-init honours `dhcpEnabled` and omits
 static addressing; a sandbox has no cloud-init, and its address is known before
 it boots. Details in [sandboxes.md](./sandboxes.md#guest-networking).
 
+**A restored guest is re-addressed over vsock, not from the drive** (STR-104).
+A sandbox that came out of *someone else's* checkpoint — a shared warm template,
+or a fork of another sandbox's snapshot — has that guest's MAC and address in
+kernel memory, and the config drive it was booted from is not the one it holds
+a page cache for. So the host repoints the virtio device at this sandbox's TAP
+as it loads the snapshot (Firecracker `network_overrides`, 1.12+) and pushes the
+L3 configuration over the guest control channel instead, on the same request
+that rotates the sandbox's identity. Guest-side that is a flush-and-reapply:
+address removal first (which takes the routes that depended on it), then the MAC
+with the link down, then MTU/address/routes/resolvers. The MAC matters as much
+as the address here — OVN's `port_security` filters on the source MAC of the
+frame, so a fork that kept the source's would be up, addressed, and dropped
+upstream. A restore **in place** needs none of this: same sandbox, same
+identity, and all three device names derive from the sandbox id, so the
+checkpoint already names devices that still exist.
+
+Two things about that boundary are worth stating exactly, because both rest on
+`port_security` rather than on the guest. The flush is complete for IPv6 (every
+non-link-local address on the device, whoever added it) but reaches only the
+**primary** IPv4 address, which is all the `SIOCSIFADDR` API can see — so a
+forked workload that had added its own IPv4 address with netlink carries it in.
+And a fork is loaded *resumed*, so between the load and the re-address the
+guest is briefly running with the source's MAC and IP on the fork's own OVS
+port. In both cases the frames are dropped at the switch, because the port's
+`port_security` was programmed from the fork's own allocation before the veth
+went live; what is wrong is only the guest's view of itself.
+
 **Host requirements.** iproute2's `ip` *and* `tc`, plus the kernel's `sch_clsact`,
 `cls_matchall`, and `act_mirred` modules. Both binaries are invoked by absolute
 path resolved from a fixed candidate list, not via `PATH` — a service manager's
