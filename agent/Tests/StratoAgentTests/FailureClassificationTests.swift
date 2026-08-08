@@ -27,6 +27,19 @@ struct FailureClassificationTests {
         #expect(notFound.failureClassification == .transient)
     }
 
+    /// `blocked` is its own case rather than a flavour of the two above because
+    /// it answers the two questions differently: report it (like permanent),
+    /// keep retrying it (unlike permanent), and burn no attempt doing so
+    /// (like a dependency wait, which is reported to nobody). See STR-199.
+    @Test("A blocked failure is neither permanent nor a silent dependency wait")
+    func blockedIsItsOwnClassification() {
+        let blocked: VolumeConvergenceError = .blocked("the guest holding this image is running")
+        #expect(blocked.failureClassification == .blocked)
+        #expect(blocked.failureClassification != .permanent)
+        #expect(blocked.failureClassification != .waitingOnDependency)
+        #expect(blocked.errorDescription == "the guest holding this image is running")
+    }
+
     @Test("Unclassified errors default to transient handling")
     func unclassifiedErrorsDefaultTransient() {
         struct Boom: Error {}

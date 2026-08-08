@@ -50,7 +50,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 37), stamped on
+`WireProtocol.swift` holds the protocol version (currently 38), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -275,7 +275,10 @@ side of any version. Nothing was added to the observed report to replace it: a
 read is not desired state, and for every field the message carried, one side
 already knew the answer. Format, storage path and attachment have been on
 `ObservedVolumeState` since v31; the requested size is a control-plane column
-whose realization `observedGeneration` confirms. The remainder — allocated
+whose realization `observedGeneration` confirms. (The *virtual* size did come
+back in v38, on the narrower ground below: a refused grow made the desired size
+a misleading answer, and the planner's cache had made the subprocess free.) The
+remainder — allocated
 bytes, the qcow2 dirty flag, the encryption flag — has no reader, and
 allocation moves with every guest write, so it cannot be cached the way virtual
 size is and would cost a `qemu-img info` per volume on a report assembled on
@@ -419,6 +422,18 @@ authored once per network by the topology authority while the listener is per
 chassis, so one incapable host would give that network DNS that works until a VM
 lands somewhere else.
 
+Version 38 lets a volume report the size it actually has (STR-199):
+`ObservedVolumeState` gains `sizeBytes`. Agent→control-plane only, no frame
+changes, and no gate — like v35 there is nothing to gate, since the control
+plane does not change what it *sends* based on the answer and a desired size has
+always converged without it. It closes a gap v32 argued was not worth a
+subprocess: with only the desired `size` to report, a volume whose grow the
+agent had refused answered with the size it had *failed* to reach. The
+subprocess objection expired on its own — the resize planner needs the same
+number and already caches one per volume. Absence is v35's echo shape: nil is
+"this agent said nothing", never zero, so a pre-v38 agent's silence leaves
+`observed_size_bytes` as the last report that spoke left it.
+
 **A capability is sometimes the whole answer, with no bump at all.** STR-103
 put sandbox NICs on the wire without touching the version, because
 `SandboxSpec.network` has been in the shape since v5 — what was missing was
@@ -552,16 +567,13 @@ attachment, and `VMSpec.volumes` is the boot-time convenience that rebuilds the
 same disk set.
 
 `ObservedVolumeState` reports presence, the agent-chosen path and format, the
-attachment, and the usual convergence quartet. A nil `volumes` on the *report*
-has two causes and the control plane treats them identically, because the right
-response to both is to do nothing: an agent below v31 does not speak the field,
-and a v31 agent that cannot enumerate its volume store says so this way rather
-than claiming an empty inventory — the volume counterpart of
-`manifestStatus.inventoryComplete == false`. It deliberately carries no size:
-reading a volume's virtual size means a `qemu-img info` subprocess per volume,
-and the report is assembled on every convergence action plus the heartbeat
-cadence. A resize is confirmed the way a VM resize is, by `observedGeneration`
-catching up.
+attachment, the volume's actual `sizeBytes` (v38+), and the usual convergence
+quartet. A nil `volumes` on the *report* has two causes and the control plane
+treats them identically, because the right response to both is to do nothing:
+an agent below v31 does not speak the field, and a v31 agent that cannot
+enumerate its volume store says so this way rather than claiming an empty
+inventory — the volume counterpart of
+`manifestStatus.inventoryComplete == false`.
 
 ### Desired snapshot artifacts (wire v33)
 

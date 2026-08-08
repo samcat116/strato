@@ -23,7 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
-import { VolumeStatusBadge } from "@/components/volumes";
+import { VolumeSize, VolumeStatusBadge } from "@/components/volumes";
 import { volumesApi } from "@/lib/api/volumes";
 import { useVolumes, useInvalidateVolumes } from "@/lib/hooks/use-volumes";
 import { toast } from "sonner";
@@ -174,7 +174,7 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
                     </Link>
                   </TableCell>
                   <TableCell className="text-foreground/80">
-                    {volume.sizeFormatted}
+                    <VolumeSize volume={volume} />
                   </TableCell>
                   <TableCell>
                     <VolumeStatusBadge status={volume.status} volumeId={volume.id} />

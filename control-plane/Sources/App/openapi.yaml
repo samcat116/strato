@@ -10080,9 +10080,26 @@ components:
         size:
           type: integer
           format: int64
+          description: >-
+            The size asked for by the last accepted create or resize. A resize
+            answers `202` and converges, so this moves when the mutation is
+            accepted, not when the bytes do.
         sizeFormatted:
           type: string
           description: Display form of `size` in binary units (e.g. `10 GiB`).
+        observedSize:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            The size the owning agent reports the image actually has. Absent
+            when no agent has reported one yet. Where it disagrees with `size` a
+            grow is still outstanding — `conditions` says whether it is in
+            flight or degraded.
+        observedSizeFormatted:
+          type: string
+          nullable: true
+          description: Display form of `observedSize` in binary units.
         format:
           $ref: "#/components/schemas/VolumeFormat"
         volumeType:
