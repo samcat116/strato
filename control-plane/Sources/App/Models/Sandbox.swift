@@ -359,6 +359,44 @@ extension Sandbox {
 
 // MARK: - Response DTO
 
+/// A sandbox's NIC as the API reports it (STR-102) — the sandbox analogue of
+/// `NetworkInterfaceResponse`, minus the two fields sandboxes have no notion of
+/// (`orderIndex`, since v1 is single-NIC, and guest-reported `observedAddresses`,
+/// which need a QEMU guest agent).
+struct SandboxNetworkInterfaceResponse: Content {
+    let id: UUID?
+    /// The network this NIC attaches to. The id is the reference; the name is a
+    /// display label, present only when the caller eager-loaded the relation.
+    let networkId: UUID
+    let network: String?
+    let macAddress: String
+    let addresses: [InterfaceAddressResponse]
+    let mtu: Int?
+    let deviceName: String
+    /// The security groups attached to this NIC, sorted to match the order
+    /// agents receive in the spec. Deliberately **nil when the relation wasn't
+    /// eager-loaded**, unlike the `.value ?? []` treatment of `addresses`: an
+    /// empty array here reads as "this NIC is in no group", a security claim a
+    /// forgotten `.with(...)` must not be able to make.
+    let securityGroupIds: [UUID]?
+
+    init(from nic: SandboxNetworkInterface) {
+        self.id = nic.id
+        self.networkId = nic.$logicalNetwork.id
+        self.network = nic.$logicalNetwork.value?.name
+        self.macAddress = nic.macAddress
+        // ipv4-first for a stable, familiar ordering, as on the VM path.
+        self.addresses = (nic.$addresses.value ?? [])
+            .sorted { ($0.family, $0.address) < ($1.family, $1.address) }
+            .map(InterfaceAddressResponse.init)
+        self.mtu = nic.mtu
+        self.deviceName = nic.deviceName
+        self.securityGroupIds = nic.$securityGroupMemberships.value.map { memberships in
+            memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
+        }
+    }
+}
+
 struct SandboxDetailResponse: Content {
     let id: UUID?
     let name: String
@@ -386,17 +424,30 @@ struct SandboxDetailResponse: Content {
     /// relation wasn't eager-loaded *or* the sandbox has no NIC at all —
     /// which are the same thing to a caller, since neither can be filtered.
     ///
-    /// Read-only bookkeeping for now: sandbox NICs are still omitted from the
-    /// wire, so these groups enforce nothing. See
-    /// `SandboxInterfaceSecurityGroup`.
+    /// Kept alongside the per-NIC copy on `networkInterfaces` for clients that
+    /// predate it. Whether these groups filter anything is a separate question:
+    /// see `securityGroupsEnforced`.
     let securityGroupIds: [UUID]?
+    /// The sandbox's NICs (STR-102) — at most one in v1, but a list for parity
+    /// with the VM response and so multi-NIC sandboxes need no shape change.
+    /// Empty when the relation wasn't eager-loaded, which is safe here in a way
+    /// it is not for `securityGroupIds` above: an absent NIC claims nothing
+    /// about filtering.
+    let networkInterfaces: [SandboxNetworkInterfaceResponse]
+    /// Whether the attached groups actually filter traffic. Nil means unknown —
+    /// the sandbox has no NIC — and is *not* a claim that they don't; false
+    /// says they demonstrably do not. Same contract as
+    /// `VMDetailResponse.securityGroupsEnforced`, and false for every networked
+    /// sandbox today: the NIC does not reach the wire until STR-103, so no OVN
+    /// port exists to join a port group.
+    let securityGroupsEnforced: Bool?
     /// How far the sandbox is from the state the API was last asked to put it
     /// in (STR-142) — same contract as the VM's; see `ResourceConditions`.
     let conditions: ResourceConditions
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from sandbox: Sandbox) {
+    init(from sandbox: Sandbox, securityGroupsEnforced: Bool? = nil) {
         self.id = sandbox.id
         self.name = sandbox.name
         self.projectId = sandbox.$project.id
@@ -421,6 +472,10 @@ struct SandboxDetailResponse: Content {
             .$securityGroupMemberships.value?
             .map { $0.$securityGroup.id }
             .sorted { $0.uuidString < $1.uuidString }
+        self.networkInterfaces = (sandbox.$networkInterfaces.value ?? [])
+            .sorted { $0.deviceName < $1.deviceName }
+            .map(SandboxNetworkInterfaceResponse.init)
+        self.securityGroupsEnforced = securityGroupsEnforced
         self.conditions = sandbox.conditions
         self.createdAt = sandbox.createdAt
         self.updatedAt = sandbox.updatedAt

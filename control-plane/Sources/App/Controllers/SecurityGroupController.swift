@@ -361,9 +361,17 @@ struct SecurityGroupController: RouteCollection {
         // the API would report filtering that nothing enforces. Unplaced VMs
         // pass — the default group must be attachable before scheduling, and
         // assembly omits the fields for old agents either way (documented
-        // mixed-fleet semantics). Sandboxes skip the gate entirely: their NICs
-        // are omitted from the wire outright (see `SandboxInterfaceSecurityGroup`),
-        // so no agent version could change what an attachment achieves.
+        // mixed-fleet semantics).
+        //
+        // Sandboxes still skip the gate, but no longer because nothing about
+        // them reaches the wire — since STR-102 their groups ride the topology
+        // authority's closure. A sandbox needs *two* predicates to be filtered:
+        // a v20 host, and its NIC actually on the wire. The second is
+        // per-agent and does not exist yet
+        // (`SandboxSpecBuilder.guestNetworkingSupported`), so enforcing only
+        // the version half here would refuse attaches that are still inert
+        // while passing a v20 agent that cannot realize a sandbox NIC at all.
+        // STR-103 owns the combined gate.
         if case .vm(let vm) = target.workload {
             try await Self.assertRealizersSupportSecurityGroups(for: vm, on: req.db)
         }
@@ -394,12 +402,11 @@ struct SecurityGroupController: RouteCollection {
         }
         guard changed else { return .noContent }
 
-        // Only on a real change, and only for VMs: a sandbox NIC's spec never
-        // reaches an agent, so syncing the fleet for one would be a guaranteed
-        // no-op (see `SandboxInterfaceSecurityGroup`).
-        if case .vm = target.workload {
-            await req.application.agentService.syncDesiredStateToFleet()
-        }
+        // Only on a real change, and for both workloads: since STR-102 a
+        // sandbox attach changes the group closure the topology authority
+        // receives, so skipping the sync would leave the new port group
+        // unrealized until the next periodic pass.
+        await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
             "Security group attached",
@@ -444,9 +451,9 @@ struct SecurityGroupController: RouteCollection {
         }
         guard changed else { return .noContent }
 
-        if case .vm = target.workload {
-            await req.application.agentService.syncDesiredStateToFleet()
-        }
+        // Both workloads, for the same reason as the attach path: a detach can
+        // drop the last NIC referencing a group, which retires its port group.
+        await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
             "Security group detached",

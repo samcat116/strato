@@ -46,9 +46,10 @@ What genuinely remains missing (details in §Known gaps):
 - **No guest-visible metadata service yet**: nothing listens in the metadata
   namespace (STR-56). Everything around it is in place — the localport, the
   advertised routes, and the implicit security-group egress allow (STR-54).
-- **Sandbox guest networking** is plumbed but off the wire — the guest can't
-  configure the NIC (STR-101) and the fleet-wide flag awaits its per-agent
-  gate (STR-103).
+- **Sandbox guest networking** is plumbed but off the wire: the jail attach
+  (STR-100), the guest's own configuration (STR-101) and security groups
+  (STR-102) have all landed, and what remains is the fleet-wide flag awaiting
+  its per-agent gate (STR-103).
 - **CP-hosted ingress** (§Phase 4) and **inter-site L3** (§Phase 5) are
   unbuilt.
 - **DNS realization**: zones are modeled control-plane-side, but guests still
@@ -444,8 +445,8 @@ that the control plane still records as having one.
 
 **Not yet wired end to end.** `SandboxSpecBuilder.guestNetworkingSupported` is
 still `false`, so no sandbox `NetworkSpec` reaches an agent. The full holding
-pattern — what blocks the flag (STR-103) and the security-group and
-snapshot arms queued behind it (STR-102, STR-104) — is tracked in
+pattern — what blocks the flag (STR-103) and the snapshot arm queued behind it
+(STR-104) — is tracked in
 [sandboxes.md](./sandboxes.md#guest-networking-the-holding-pattern).
 
 ## Security groups
@@ -481,20 +482,32 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
   group refuse deletion (409, schema-backstopped) — attachment counts span
   both join tables, so a group held only by a sandbox NIC is just as
   undeletable.
-- **Sandbox NICs carry membership but no enforcement.**
-  `sandbox_interface_security_groups` mirrors the VM join, sandbox create
-  attaches the project default, and attach/detach take a `sandboxId` — but
-  sandbox guest networking is still off
-  (`SandboxSpecBuilder.guestNetworkingSupported`), so a sandbox NIC's
-  `NetworkSpec` never reaches an agent and these rows filter nothing. They
-  exist so the model and the ≥1-group invariant are already right when guest
-  networking lands. The agent-version gate is deliberately *not* applied to
-  the sandbox path: with nothing on the wire, no agent version could change
-  what an attachment achieves. Note that the agent-side realization
-  (`VMNetworkConfig.securityGroupIds`) is nil for a sandbox NIC, so an
-  `sbx-` port joins **no** port groups — not even the drop group. STR-102 is
-  what grows the sync's membership assembly a sandbox arm; until then a sandbox
-  port would come up unfiltered, which is part of why the wire gate stays shut.
+- **Sandbox NICs are inside the machinery** (STR-102), on the same terms as VM
+  NICs: `sandbox_interface_security_groups` mirrors the VM join, sandbox create
+  attaches the project default, attach/detach take a `sandboxId`, and the
+  assembly reads both join tables. The two halves of the sync reach an agent at
+  different times, which is the only asymmetry left:
+  - **The group closure** — every group a sandbox NIC attaches, plus the
+    transitive closure over rule references — is seeded into
+    `DesiredStateMessage.securityGroups`, so a topology authority realizes the
+    port groups and ACLs **today**. A port group with no members filters
+    nothing, so realizing it early costs an OVN row and changes no traffic —
+    and it means the first sandbox port to come up joins immediately rather
+    than parking on `DependencyPendingError`.
+  - **The per-NIC membership** rides inside the sandbox's `NetworkSpec`, which
+    `SandboxSpecBuilder.guestNetworkingSupported` still withholds entirely. So
+    an `sbx-` port joins no port group because there *is* no port, not because
+    the membership is missing. STR-103 flips that flag; when it does, a sandbox
+    port joins the drop group before its veth goes live, exactly as a VM's TAP
+    does — the ids are already assembled and passed.
+
+  The agent-version gate is deliberately *not* applied to the sandbox path.
+  A sandbox needs two predicates to be filtered — a v20 host, and its NIC on
+  the wire — and the second is per-agent and does not exist yet, so enforcing
+  only the version half would refuse attaches that are still inert while
+  passing agents that cannot realize a sandbox NIC at all. STR-103 owns the
+  combined gate. `SandboxDetail.securityGroupsEnforced` reports the honest
+  answer meanwhile: `false` for every networked sandbox.
 
 ### Wire and rollout
 
@@ -633,12 +646,12 @@ the carve-out back off.
 ### Known limitations / follow-ups
 
 - Group-reference peers match only addresses OVN knows from LSP `addresses`.
-- Sandbox NIC membership is recorded but not enforced, pending sandbox guest
-  networking (see the model section above).
+- Sandbox NIC membership is assembled and its groups are realized, but nothing
+  is a member of them until STR-103 puts the sandbox port on the wire (see the
+  model section above).
 - Network-level stateless ACLs (NACLs, switch-attached) are a follow-up, as
   are ACL meters/stats — `log` is wired, `meter` is not, so a chatty logged
   rule has no rate limit.
-- There is no UI for security groups on sandboxes; membership is API-only.
 
 ## OVN dynamic routing (native, 25.03+)
 

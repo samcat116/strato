@@ -12,9 +12,10 @@ extension NetworkSpec {
     /// `network` is the row the NIC's FK points at — non-optional since issue
     /// #765, because a NIC cannot exist without one — and supplies both the
     /// display name and the DHCP/DNS configuration agents program into OVN.
-    /// `securityGroupIds` is the NIC's security-group membership (VM NICs
-    /// only; sandbox NICs pass nil = unmanaged), already gated on the
-    /// receiving agent's protocol version by the assembly.
+    /// `securityGroupIds` is the NIC's security-group membership — VM and
+    /// sandbox NICs alike since STR-102, resolved from whichever join table
+    /// owns the NIC and already gated on the receiving agent's protocol version
+    /// by the assembly. Nil is "unmanaged", never "no groups".
     ///
     /// `sendsMetadataPort` is the same kind of gate, for `metadataEnabled` (STR-49):
     /// false omits the field entirely for an agent that predates it, so nil on

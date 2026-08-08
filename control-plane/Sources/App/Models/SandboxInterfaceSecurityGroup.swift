@@ -7,13 +7,21 @@ import Vapor
 /// cascades these rows) and the group FK is RESTRICT, so a group attached to
 /// a sandbox NIC refuses deletion with the same 409 a VM attachment earns.
 ///
-/// **Bookkeeping only, for now.** Sandbox guest networking is still disabled
-/// (`SandboxSpecBuilder.guestNetworkingSupported`), so a sandbox NIC's
-/// `NetworkSpec` never reaches an agent and these memberships enforce
-/// nothing. They exist so the model, the API, and the ≥1-group invariant are
-/// already right when guest networking lands — at which point the sync's
-/// membership assembly grows a sandbox arm and the rows start mattering
-/// without a data migration.
+/// These rows are read by two halves of the sync, which STR-102 landed
+/// together and which reach an agent at different times:
+///
+/// - **The group closure** — every group a sandbox NIC attaches, plus what its
+///   rules reference, is seeded into `DesiredStateMessage.securityGroups`, so
+///   a topology authority realizes the port groups and ACLs *today*.
+/// - **The per-NIC membership** — the ids inside the sandbox's `NetworkSpec` —
+///   is withheld with the whole spec while
+///   `SandboxSpecBuilder.guestNetworkingSupported` is false. There is no OVN
+///   port yet, so there is nothing to make a member of anything.
+///
+/// STR-103 flips that flag and the second half starts flowing. Realizing the
+/// groups first is what makes that flip safe: a port group with no members
+/// filters nothing, and its existing means the first sandbox port to come up
+/// joins it immediately instead of parking on `DependencyPendingError`.
 final class SandboxInterfaceSecurityGroup: Model, @unchecked Sendable {
     static let schema = "sandbox_interface_security_groups"
 

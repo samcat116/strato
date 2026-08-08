@@ -19,8 +19,11 @@ import {
   acceptedMutation,
   useMutationsStore,
 } from "@/lib/stores/mutations-store";
+import { useNetworks } from "@/lib/hooks/use-networks";
+import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
 import { useProjectContext } from "@/providers";
 import { toast } from "sonner";
+import { MAX_SECURITY_GROUPS_PER_NIC } from "@/types/api";
 
 interface CreateSandboxDialogProps {
   open: boolean;
@@ -38,6 +41,9 @@ const EMPTY_FORM = {
   env: "",
   workingDir: "",
   ttlSeconds: "",
+  // "" means no network, which for a sandbox is a legitimate outcome rather
+  // than an unfilled field — unlike VM create, where a network is required.
+  networkId: "",
 };
 
 /** Splits a command-line-style string into argv, dropping empty tokens. */
@@ -71,10 +77,21 @@ export function CreateSandboxDialog({
   const [isLoading, setIsLoading] = useState(false);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [formData, setFormData] = useState(EMPTY_FORM);
+  const [securityGroupIds, setSecurityGroupIds] = useState<string[]>([]);
 
   // The sandbox is created in the project selected in the header switcher.
   const { currentProject } = useProjectContext();
   const projectId = currentProject?.id;
+
+  const { data: networks = [] } = useNetworks(projectId);
+  const { data: securityGroups = [], isError: securityGroupsFailed } =
+    useSecurityGroups(projectId);
+
+  const toggleSecurityGroup = (id: string) => {
+    setSecurityGroupIds((prev) =>
+      prev.includes(id) ? prev.filter((g) => g !== id) : [...prev, id]
+    );
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -108,6 +125,15 @@ export function CreateSandboxDialog({
         ...(Object.keys(env).length > 0 ? { env } : {}),
         workingDir: formData.workingDir.trim() || undefined,
         ...(Number.isFinite(ttl) && ttl > 0 ? { ttlSeconds: ttl } : {}),
+        // Both omitted without a network: the server rejects
+        // `securityGroupIds` with no NIC to attach them to, and omitting them
+        // *with* a network means the project's default group rather than none.
+        ...(formData.networkId
+          ? {
+              networkId: formData.networkId,
+              ...(securityGroupIds.length > 0 ? { securityGroupIds } : {}),
+            }
+          : {}),
       });
       watch(
         acceptedMutation(accepted, {
@@ -120,6 +146,7 @@ export function CreateSandboxDialog({
       onOpenChange(false);
       onCreated?.();
       setFormData(EMPTY_FORM);
+      setSecurityGroupIds([]);
       setQuotaError(null);
     } catch (error) {
       const message =
@@ -332,10 +359,86 @@ export function CreateSandboxDialog({
               </div>
             </div>
 
-            <p className="text-xs text-muted-foreground">
-              The sandbox attaches to the project&apos;s default network, with
-              its IP allocated automatically.
-            </p>
+            <div className="space-y-2">
+              <Label htmlFor="network" className="text-foreground">
+                Network
+              </Label>
+              <select
+                id="network"
+                value={formData.networkId}
+                onChange={(e) =>
+                  setFormData({ ...formData, networkId: e.target.value })
+                }
+                disabled={isLoading || networks.length === 0}
+                className="w-full h-9 px-3 py-2 bg-background border border-border text-foreground rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {/* Not `disabled`, unlike VM create: a sandbox with no
+                    interface is a supported outcome, not an unfilled field. */}
+                <option value="">No network</option>
+                {networks
+                  .filter((network) => network.id)
+                  .map((network) => (
+                    <option key={network.id} value={network.id!}>
+                      {network.name} ({network.subnet})
+                    </option>
+                  ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {networks.length === 0
+                  ? "This project has no networks yet. The sandbox will be created without an interface."
+                  : "Optional. With a network, the sandbox's IP is allocated automatically; without one it has no interface."}
+              </p>
+            </div>
+
+            {formData.networkId && securityGroups.length > 0 && (
+              <div className="space-y-2">
+                <Label className="text-foreground">Security Groups</Label>
+                <div className="space-y-1 rounded-md border border-border p-3 max-h-36 overflow-y-auto">
+                  {securityGroups.map((group) => {
+                    const checked = securityGroupIds.includes(group.id);
+                    // Block checking one past the server-enforced per-NIC cap.
+                    const atLimit =
+                      !checked &&
+                      securityGroupIds.length >= MAX_SECURITY_GROUPS_PER_NIC;
+                    return (
+                      <label
+                        key={group.id}
+                        className="flex items-center gap-2 text-sm text-foreground"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleSecurityGroup(group.id)}
+                          disabled={isLoading || atLimit}
+                          className="h-4 w-4 rounded border-input bg-background accent-blue-600"
+                        />
+                        {group.name}
+                        {group.description && (
+                          <span className="text-xs text-muted-foreground truncate">
+                            {group.description}
+                          </span>
+                        )}
+                      </label>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Default group is used when none selected. An interface can
+                  attach up to {MAX_SECURITY_GROUPS_PER_NIC} groups. Sandbox
+                  guest networking is not enabled yet, so these are recorded
+                  and take effect when it is.
+                </p>
+              </div>
+            )}
+            {formData.networkId && securityGroupsFailed && (
+              // A failed fetch must not read as "this project has no groups":
+              // the sandbox would silently land on the default group only.
+              <p className="text-xs text-red-600">
+                Failed to load security groups — the sandbox will use the
+                project&apos;s default group. Retry from the Security Groups
+                page.
+              </p>
+            )}
           </div>
           <DialogFooter>
             <Button

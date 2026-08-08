@@ -16,75 +16,55 @@ import {
   NicSecurityGroupNames,
 } from "@/components/security-groups/nic-security-groups";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
-import { type VM, type VMNetworkInterface } from "@/types/api";
+import { type Sandbox, type SandboxNetworkInterface } from "@/types/api";
 
 /** All addresses of a NIC as `address/prefix`. */
-function nicAddresses(nic: VMNetworkInterface): string[] {
+function nicAddresses(nic: SandboxNetworkInterface): string[] {
   return (nic.addresses ?? []).map((a) => `${a.address}/${a.prefixLength}`);
 }
 
-/**
- * Guest-reported addresses (qga), as `address/prefix` — or just `address` when
- * the guest agent didn't supply a prefix length (issue #563).
- */
-function nicObservedAddresses(nic: VMNetworkInterface): string[] {
-  return (nic.observedAddresses ?? []).map((a) =>
-    a.prefixLength != null ? `${a.address}/${a.prefixLength}` : a.address,
-  );
-}
-
-function nicGateways(nic: VMNetworkInterface): string[] {
+function nicGateways(nic: SandboxNetworkInterface): string[] {
   return (nic.addresses ?? []).flatMap((a) => (a.gateway ? [a.gateway] : []));
 }
 
-export function VMNetworkCard({ vm }: { vm: VM }) {
-  const interfaces = vm.networkInterfaces ?? [];
-  const {
-    data: securityGroups = [],
-    isError: securityGroupsFailed,
-  } = useSecurityGroups(vm.projectId);
+/**
+ * A sandbox's NIC and its security groups (backend STR-102) — the sandbox
+ * counterpart of {@link VMNetworkCard}, sharing its attach/detach menu. No
+ * "observed (guest)" column: sandboxes run no guest agent.
+ */
+export function SandboxNetworkCard({ sandbox }: { sandbox: Sandbox }) {
+  const interfaces = sandbox.networkInterfaces ?? [];
+  const { data: securityGroups = [], isError: securityGroupsFailed } =
+    useSecurityGroups(sandbox.projectId);
   const showSecurityGroups = securityGroups.length > 0;
 
   return (
     <Card className="bg-card border-border">
       <CardHeader>
         <CardTitle className="text-lg font-semibold text-foreground">
-          Network Interfaces
+          Network Interface
         </CardTitle>
-        {(vm.observedHostname || vm.qgaAvailable != null) && (
-          <p className="text-sm text-muted-foreground">
-            {vm.observedHostname ? (
-              <>
-                Guest hostname:{" "}
-                <span className="font-mono text-foreground/80">
-                  {vm.observedHostname}
-                </span>
-              </>
-            ) : (
-              "Guest agent connected"
-            )}
-          </p>
-        )}
       </CardHeader>
       <CardContent>
-        {vm.securityGroupsEnforced === false && (
-          // Not a nicety: without this the UI shows attached groups on a host
-          // that ignores them entirely, which reads as "filtered" when it
-          // isn't. Derived server-side — listing agents is admin-only, so a
-          // project user could never work this out from the agent's version.
+        {sandbox.securityGroupsEnforced === false && (
+          // Same reason as the VM banner — showing groups that filter nothing
+          // reads as "filtered" — but a different cause, so different copy:
+          // nothing is wrong with the host here, sandbox guest networking is
+          // simply not switched on yet.
           <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
-              Security groups are <strong>not enforced</strong> on this VM&apos;s
-              host: the agent realizing it predates security-group support, so
-              the groups below filter nothing. Upgrade the agent to enforce
-              them.
+              Security groups are <strong>not enforced</strong> on sandboxes
+              yet: guest networking is not enabled, so this interface is an
+              address reservation and the groups below filter nothing. The
+              memberships are recorded and will take effect as soon as it is.
             </span>
           </div>
         )}
         {interfaces.length === 0 ? (
           <div className="text-center py-6 text-muted-foreground">
-            No network interfaces.
+            No network interface. A sandbox only gets one if a network was
+            chosen when it was created.
           </div>
         ) : (
           <Table>
@@ -101,9 +81,6 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                 </TableHead>
                 <TableHead className="text-muted-foreground font-medium">
                   Addresses
-                </TableHead>
-                <TableHead className="text-muted-foreground font-medium">
-                  Observed (guest)
                 </TableHead>
                 <TableHead className="text-muted-foreground font-medium">
                   Gateway
@@ -146,13 +123,6 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                       : "—"}
                   </TableCell>
                   <TableCell className="text-foreground/80 font-mono text-sm">
-                    {nicObservedAddresses(nic).length > 0
-                      ? nicObservedAddresses(nic).map((address) => (
-                          <div key={address}>{address}</div>
-                        ))
-                      : "—"}
-                  </TableCell>
-                  <TableCell className="text-foreground/80 font-mono text-sm">
                     {nicGateways(nic).length > 0
                       ? nicGateways(nic).map((gateway) => (
                           <div key={gateway}>{gateway}</div>
@@ -173,7 +143,7 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
                       <TableCell className="text-right">
                         {nic.id ? (
                           <NicSecurityGroupMenu
-                            target={{ vmId: vm.id }}
+                            target={{ sandboxId: sandbox.id }}
                             nic={nic}
                             groups={securityGroups}
                           />
@@ -186,10 +156,10 @@ export function VMNetworkCard({ vm }: { vm: VM }) {
             </TableBody>
           </Table>
         )}
-        {showSecurityGroups && (
+        {showSecurityGroups && interfaces.length > 0 && (
           <p className="mt-3 text-xs text-muted-foreground">
-            Every NIC belongs to at least one security group. Rules are managed
-            on the{" "}
+            Every interface belongs to at least one security group. Rules are
+            managed on the{" "}
             <Link
               href="/security-groups"
               className="text-blue-600 hover:underline"

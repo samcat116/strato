@@ -2309,17 +2309,46 @@ extension Agent {
                 // (decoded as []); that absence must NOT be read as "tear down
                 // all L3" — skip network reconciliation and fall back to VM-only.
                 if WireProtocol.supportsNetworkSync(envelope.senderVersion) {
-                    // This host's own VM ports' desired security-group
+                    // This host's own workload ports' desired security-group
                     // membership, derived from each NIC's spec (nicIndex is
                     // the NIC's position in the spec list, matching the LSP
                     // names createVMNetwork derives). Converged on every
                     // agent; port groups + ACLs themselves are authored only
                     // by the topology authority from `message.securityGroups`.
-                    let portMemberships = message.vms.flatMap { vm in
+                    var portMemberships = message.vms.flatMap { vm in
                         vm.spec.networks.enumerated().map { index, spec in
                             DesiredPortMembership(
                                 portName: OVNNaming.vmPortName(
                                     vmId: vm.vmId.uuidString, nicIndex: index),
+                                securityGroupIds: spec.securityGroupIds)
+                        }
+                    }
+                    // The sandbox arm (STR-102). Three things here are exact
+                    // rather than approximate, and each fails silently if it
+                    // drifts — `reconcileMembership` says nothing about a port
+                    // name `observeMembership` didn't return:
+                    //
+                    // - `nicIndex: 0` because a sandbox has exactly one NIC:
+                    //   `sandboxReconcileCreate` builds its attachment list as
+                    //   `spec.network.map { [$0] } ?? []`.
+                    // - `uuidString` (uppercase) because that is the string the
+                    //   reconciler's work item carried into `createVMNetwork`
+                    //   as `vmId`, and therefore what the LSP is named after.
+                    // - `sandboxPortName`, not `vmPortName`: `sbx-` and `vm-`
+                    //   are deliberately separate namespaces (see OVNNaming).
+                    //
+                    // No `supportsSandboxSync` gate, unlike `metadataNetworks`
+                    // below, and the asymmetry is the point: a control plane
+                    // that omits `sandboxes` decodes to [], which yields no
+                    // memberships, and membership convergence never removes a
+                    // port it wasn't given — silence is already inert. For
+                    // `metadataNetworks` an empty list is an instruction, and
+                    // acting on it would tear down live namespaces.
+                    portMemberships += message.sandboxes.compactMap { sandbox in
+                        sandbox.spec.network.map { spec in
+                            DesiredPortMembership(
+                                portName: OVNNaming.sandboxPortName(
+                                    sandboxId: sandbox.sandboxId.uuidString, nicIndex: 0),
                                 securityGroupIds: spec.securityGroupIds)
                         }
                     }

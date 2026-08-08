@@ -313,13 +313,20 @@ public struct NetworkSpec: Codable, Sendable {
     public let leaseTime: Int?
     /// Security groups this NIC belongs to. The agent adds the NIC's logical
     /// switch port to each group's OVN port group (and to the global drop
-    /// group) — port-group *membership* is per-VM and owned by the hosting
-    /// agent, while the groups' ACLs are authored by the topology authority
-    /// from `DesiredStateMessage.securityGroups`. Nil means the NIC is
-    /// unmanaged (specs from control planes that predate security groups, and
-    /// sandbox NICs): the port joins no groups, including the drop group, so
-    /// legacy traffic keeps flowing. When present the list is never empty —
-    /// the control plane enforces the ≥1-group invariant.
+    /// group) — port-group *membership* is per-workload and owned by the
+    /// hosting agent, while the groups' ACLs are authored by the topology
+    /// authority from `DesiredStateMessage.securityGroups`. Nil means the NIC
+    /// is unmanaged — a control plane that predates security groups, or one
+    /// omitting the field for a pre-v20 agent: the port joins no groups,
+    /// including the drop group, so legacy traffic keeps flowing. When present
+    /// the list is never empty — the control plane enforces the ≥1-group
+    /// invariant.
+    ///
+    /// VM and sandbox NICs carry membership on identical terms (STR-102);
+    /// nothing here distinguishes them. A sandbox's NIC does not reach the wire
+    /// at all yet — `SandboxSpecBuilder.guestNetworkingSupported` withholds the
+    /// whole `NetworkSpec` until STR-103 replaces it with a per-agent gate — so
+    /// a sandbox's membership is *authored* today but never *sent*.
     public let securityGroupIds: [UUID]?
     /// Whether this NIC's network publishes the instance metadata service.
     ///

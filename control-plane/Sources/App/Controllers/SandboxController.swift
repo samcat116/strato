@@ -54,8 +54,7 @@ struct SandboxController: RouteCollection {
     static func acceptedResponse(
         for sandbox: Sandbox, _ accepted: ResourceMutation.Accepted, on req: Request
     ) async throws -> Response {
-        try await loadNICSecurityGroups(sandbox, on: req.db)
-        return try AcceptedMutation(SandboxDetailResponse(from: sandbox), accepted).acceptedResponse()
+        return try AcceptedMutation(await detailResponse(for: sandbox, on: req.db), accepted).acceptedResponse()
     }
 
     // `beginOperation` and `completeOperation` — the sandbox-flavored front of
@@ -84,8 +83,13 @@ struct SandboxController: RouteCollection {
 
         // Scoped through the sandbox's project, as in VMController.index.
         var query = Sandbox.query(on: req.db)
-            // The response reports the NIC's security groups (STR-34).
-            .with(\.$networkInterfaces) { $0.with(\.$securityGroupMemberships) }
+            // The response reports each NIC's network, addresses and security
+            // groups (STR-34, STR-102). Fluent batches children one `IN` query
+            // per relation, so this is three extra queries for the whole page,
+            // not three per sandbox.
+            .with(\.$networkInterfaces) {
+                $0.with(\.$securityGroupMemberships).with(\.$addresses).with(\.$logicalNetwork)
+            }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
@@ -99,10 +103,21 @@ struct SandboxController: RouteCollection {
         let nodes = allSandboxes.compactMap { $0.id.map { IAMNode(type: .sandbox, id: $0) } }
         let readable = try await req.canFilter("sandbox:read", on: nodes)
 
-        return allSandboxes.compactMap { sandbox in
-            guard let id = sandbox.id, readable.contains(IAMNode(type: .sandbox, id: id)) else { return nil }
-            return SandboxDetailResponse(from: sandbox)
+        var responses: [SandboxDetailResponse] = []
+        for sandbox in allSandboxes {
+            guard let id = sandbox.id, readable.contains(IAMNode(type: .sandbox, id: id)) else { continue }
+            // Per row rather than batched, because it costs nothing today: the
+            // verdict short-circuits on `guestNetworkingSupported` before it
+            // reaches the database. STR-103 removes that short-circuit and owes
+            // this loop the per-host/per-site memoization `enforcementByVM`
+            // does for the VM list.
+            responses.append(
+                SandboxDetailResponse(
+                    from: sandbox,
+                    securityGroupsEnforced: try await SecurityGroupService.sandboxEnforcement(
+                        for: sandbox, on: req.db)))
         }
+        return responses
     }
 
     /// Fetch a sandbox by its :sandboxID route parameter and enforce a
@@ -115,32 +130,48 @@ struct SandboxController: RouteCollection {
         return try await req.authorizedSandbox(sandboxID, permission: permission)
     }
 
-    /// Loads the NIC and its security-group memberships so the response can
-    /// report `securityGroupIds`. Without this the field is nil, which reads
-    /// as "no NIC" — so every handler that returns a detail response calls it.
-    private static func loadNICSecurityGroups(_ sandbox: Sandbox, on db: Database) async throws {
+    /// Loads the NIC and everything the response reports about it: its
+    /// addresses, its logical network (for the display name), and its
+    /// security-group memberships. Without this `securityGroupIds` is nil,
+    /// which reads as "no NIC" — so every handler that returns a detail
+    /// response calls it.
+    private static func loadNICDetail(_ sandbox: Sandbox, on db: Database) async throws {
         try await sandbox.$networkInterfaces.load(on: db)
         for interface in sandbox.networkInterfaces {
             try await interface.$securityGroupMemberships.load(on: db)
+            try await interface.$addresses.load(on: db)
+            try await interface.$logicalNetwork.load(on: db)
         }
+    }
+
+    /// The detail response for one sandbox, with its NIC loaded and its
+    /// enforcement verdict resolved. The verdict costs no query today —
+    /// `sandboxEnforcement` short-circuits on `guestNetworkingSupported` before
+    /// reaching the database — which is why the list path below can afford it
+    /// per row. STR-103 removes that short-circuit and must add batching.
+    private static func detailResponse(for sandbox: Sandbox, on db: Database) async throws
+        -> SandboxDetailResponse
+    {
+        try await loadNICDetail(sandbox, on: db)
+        return SandboxDetailResponse(
+            from: sandbox,
+            securityGroupsEnforced: try await SecurityGroupService.sandboxEnforcement(for: sandbox, on: db))
     }
 
     func show(req: Request) async throws -> SandboxDetailResponse {
         _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
-        try await Self.loadNICSecurityGroups(sandbox, on: req.db)
-        return SandboxDetailResponse(from: sandbox)
+        return try await Self.detailResponse(for: sandbox, on: req.db)
     }
 
     func status(req: Request) async throws -> SandboxDetailResponse {
         _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
-        try await Self.loadNICSecurityGroups(sandbox, on: req.db)
 
         // The database row *is* the observed state: the owning agent's
         // periodic observed-state reports keep it fresh, so no agent
         // round-trip happens here (replica-independent, like VMs).
-        return SandboxDetailResponse(from: sandbox)
+        return try await Self.detailResponse(for: sandbox, on: req.db)
     }
 
     func listOperations(req: Request) async throws -> [OperationResponse] {
@@ -183,13 +214,14 @@ struct SandboxController: RouteCollection {
             let cpuTemplate: String?
             /// Logical network for the sandbox's NIC, within its own project
             /// (issue #765). Mutually exclusive with `networkName`; omitting
-            /// both means no NIC, since sandbox guest networking does not exist
-            /// yet (see `attachNIC`).
+            /// both means no NIC, and a NIC is still a control-plane address
+            /// reservation only until STR-103 (see `attachNIC`).
             let networkId: UUID?
             let networkName: String?
-            /// Security groups for the sandbox's NIC (STR-34). Omitted means
-            /// the project's default group. Only meaningful alongside a
-            /// network, since without one there is no NIC to attach them to.
+            /// Security groups for the sandbox's NIC (STR-34, STR-102).
+            /// Omitted means the project's default group — never "no groups".
+            /// Only meaningful alongside a network, since without one there is
+            /// no NIC to attach them to.
             let securityGroupIds: [UUID]?
         }
 
@@ -520,19 +552,22 @@ struct SandboxController: RouteCollection {
     ///
     /// A named network is resolved within the sandbox's own project, exactly as
     /// VM create resolves it (issue #765). Naming none is not an error the way
-    /// it is for a VM — the sandbox is simply created **with no NIC**. Guest
-    /// networking does not exist for sandboxes yet (sync assembly omits the NIC
-    /// from the wire spec, see `SandboxSpecBuilder.guestNetworkingSupported`,
-    /// because agents reject networked sandbox specs), so the NIC is a pure
-    /// control-plane address reservation; refusing the create, or silently
-    /// picking a network on the caller's behalf, would both be worse than
-    /// reserving nothing.
+    /// it is for a VM — the sandbox is simply created **with no NIC**. The NIC
+    /// is still a pure control-plane address reservation: agents can realize a
+    /// sandbox NIC end to end since STR-100/101, but the wire spec withholds it
+    /// until STR-103 replaces the fleet-wide
+    /// `SandboxSpecBuilder.guestNetworkingSupported` with a per-agent gate.
+    /// Refusing the create, or silently picking a network on the caller's
+    /// behalf, would both be worse than reserving nothing.
     ///
-    /// The NIC joins its security groups here too (STR-34), the project's
-    /// default when the caller named none — the same ≥1-group invariant VM
-    /// create establishes, so the rows are already right when sandbox guest
-    /// networking lands. Conditional on a NIC existing, unlike the VM path:
-    /// a network-less sandbox has nothing to attach groups to.
+    /// The NIC joins its security groups here too (STR-34, STR-102), the
+    /// project's default when the caller named none — the same ≥1-group
+    /// invariant VM create establishes, and the reason a sandbox is never even
+    /// briefly unfiltered once its port does exist: the memberships are written
+    /// in this same transaction, long before the sandbox is placeable, so the
+    /// agent's port create has them in hand and joins the drop group before the
+    /// veth goes live. Conditional on a NIC existing, unlike the VM path: a
+    /// network-less sandbox has nothing to attach groups to.
     private static func attachNIC(
         to sandboxID: UUID, projectID: UUID, requestedNetworkID: UUID?, requestedNetworkName: String?,
         securityGroupIDs: [UUID], on db: Database
@@ -617,8 +652,7 @@ struct SandboxController: RouteCollection {
         }
 
         try await sandbox.save(on: req.db)
-        try await Self.loadNICSecurityGroups(sandbox, on: req.db)
-        return SandboxDetailResponse(from: sandbox)
+        return try await Self.detailResponse(for: sandbox, on: req.db)
     }
 
     // MARK: - Lifecycle

@@ -395,6 +395,27 @@ struct SecurityGroupReconcilerTests {
         #expect(observedPorts == ["vm-A"])
     }
 
+    /// A sandbox port is nothing special to the reconciler (STR-102): only the
+    /// name differs, and the `sbx-`/`vm-` split is deliberate. Pinned here
+    /// because getting the name wrong upstream is a *silent* failure — a port
+    /// `observeMembership` never returns is skipped without a log line.
+    @Test("Sandbox ports converge exactly as VM ports do, under their own name")
+    func sandboxPortMembership() async {
+        let sandboxPort = OVNNaming.sandboxPortName(sandboxId: "S", nicIndex: 0)
+        #expect(sandboxPort != OVNNaming.vmPortName(vmId: "S", nicIndex: 0))
+
+        let actuator = RecordingSecurityGroupActuator(
+            membership: [sandboxPort: [OVNNaming.dropPortGroupName, peerPG]])
+        await SecurityGroupReconciler.reconcileMembership(
+            memberships: [
+                DesiredPortMembership(portName: sandboxPort, securityGroupIds: [groupId])
+            ],
+            actuator: actuator, logger: Logger(label: "test"))
+
+        #expect(await actuator.added == [Membership(port: sandboxPort, group: pg)])
+        #expect(await actuator.removed == [Membership(port: sandboxPort, group: peerPG)])
+    }
+
     @Test("A port joins the drop group before any allow group")
     func membershipDropGroupFirst() async {
         let actuator = RecordingSecurityGroupActuator()

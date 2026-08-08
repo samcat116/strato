@@ -154,8 +154,9 @@ struct CreateSecurityGroupRuleRequest: Content {
 /// handler has to re-derive the rule.
 struct AttachSecurityGroupRequest: Content {
     let vmId: UUID?
-    /// The sandbox to attach to. Sandbox memberships are bookkeeping only for
-    /// now — see `SandboxInterfaceSecurityGroup`.
+    /// The sandbox to attach to. Realizes the group's port group and ACLs, but
+    /// not yet the membership — see `SandboxInterfaceSecurityGroup` for which
+    /// half of the sync reaches an agent today.
     let sandboxId: UUID?
     /// The NIC to attach to; defaults to the workload's first interface.
     let interfaceId: UUID?

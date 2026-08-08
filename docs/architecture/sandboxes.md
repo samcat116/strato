@@ -13,9 +13,9 @@ entrypoint/cmd/env/workdir.
 > vsock control, `FirecrackerSandboxRuntime`, jailer hardening), exec/attach
 > + workload logs, and snapshots (checkpoint/restore, warm start, fork,
 > cross-agent mobility) are all landed. The main open front is **guest
-> networking**: the NIC/address model and IPAM allocation exist, agents can
-> wire a NIC into the jail, and the guest configures it — but the NIC stays
-> off the wire — see
+> networking**: the NIC/address model, IPAM allocation and security groups
+> exist, agents can wire a NIC into the jail, and the guest configures it —
+> but the NIC stays off the wire — see
 > [Guest networking](#guest-networking-the-holding-pattern).
 > [History](#history) maps the build-out; issue numbers throughout mark which
 > change delivered each piece.
@@ -816,16 +816,30 @@ sandbox `NetworkSpec` reaches an agent, for one remaining reason:
   fail every placement. STR-103 replaces the flag with a per-agent gate and
   is what flips it.
 
-Two more arms are queued behind those:
+**Security groups are in place** (STR-102). The NIC joins the project's default
+group — or the groups named in `securityGroupIds` — through
+`sandbox_interface_security_groups` at create, attach/detach accept a
+`sandboxId`, and the sync assembles both halves the way it does for a VM. They
+land at different times, which is the whole of what is left:
 
-- **Security groups** (STR-34): the NIC joins the project's default group —
-  or the groups named in `securityGroupIds` — through
-  `sandbox_interface_security_groups`, and attach/detach accept a
-  `sandboxId`, but the membership filters nothing yet: STR-102 grows the
-  sync's membership assembly a sandbox arm, and until then a sandbox port
-  would come up in no port groups at all — not even the drop group — which
-  is part of why the wire gate stays shut. Details in
-  [Security groups](./networking.md#security-groups).
+- **The groups themselves** are seeded into `DesiredStateMessage.securityGroups`
+  today, so a topology authority realizes their port groups and ACLs before any
+  sandbox port exists. That ordering is the point: a memberless port group
+  filters nothing, and having it already there means STR-103's flip is not also
+  the moment the group is created, which would park every first sandbox create
+  on `DependencyPendingError`.
+- **The per-NIC ids** ride inside the `NetworkSpec` and are withheld with it. So
+  a sandbox port joins no port group because there is no port — and when STR-103
+  makes one, it joins the drop group before the veth goes live, the same
+  ordering guarantee a VM's TAP gets, because the agent's port-create path is
+  already shared.
+
+The API reports the honest state as `SandboxDetail.securityGroupsEnforced`:
+`false` for every networked sandbox until STR-103, `null` when there is no NIC
+to judge. Details in [Security groups](./networking.md#security-groups).
+
+One more arm is queued behind the flag:
+
 - **Snapshots of networked sandboxes** (STR-104): current checkpoints
   contain no Firecracker network device to remap, so restore and fork
   refuse networked sandboxes until STR-104 passes Firecracker
@@ -887,9 +901,9 @@ Sandboxes were designed and built as a phased roadmap under umbrella issue
 
 Guest networking was deliberately scoped out — #524 kept the NIC off the wire
 spec — and re-planned as STR-99..104: the measured move-a-TAP failure
-(STR-99), the netns attach path (STR-100), and the in-guest network config
-(STR-101, config-drive schema v2) are landed; security-group membership
-assembly (STR-102), the per-agent gate that flips the wire flag (STR-103),
+(STR-99), the netns attach path (STR-100), the in-guest network config
+(STR-101, config-drive schema v2), and security-group membership assembly
+(STR-102) are landed; the per-agent gate that flips the wire flag (STR-103)
 and networked-snapshot remapping (STR-104) remain — see
 [Guest networking](#guest-networking-the-holding-pattern).
 
@@ -907,7 +921,7 @@ and networked-snapshot remapping (STR-104) remain — see
   that proposal — vsock and an in-house PID 1 are already here — and the
   fork case composes with the clone-safety policy, because identity arrives
   over a live channel rather than baked into the config drive.
-- Guest networking, STR-102..104 — see
+- Guest networking, STR-103 and STR-104 — see
   [Guest networking](#guest-networking-the-holding-pattern).
 
 ## Non-goals
