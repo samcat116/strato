@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { VolumeStatusBadge } from "./volume-status-badge";
+import { VolumeSize } from "./volume-size";
 import { VolumeActions } from "./volume-actions";
 import type { VM, Volume } from "@/types/api";
 
@@ -96,7 +97,7 @@ export function VolumeTable({
                 <span className="text-muted-foreground"> · {volume.format}</span>
               </TableCell>
               <TableCell className="text-foreground/80">
-                {volume.sizeFormatted}
+                <VolumeSize volume={volume} />
               </TableCell>
               <TableCell>
                 {attachedVM ? (

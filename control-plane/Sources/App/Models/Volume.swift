@@ -62,7 +62,9 @@ final class Volume: Model, @unchecked Sendable {
     @Parent(key: "project_id")
     var project: Project
 
-    // Volume specifications
+    // Volume specifications. `size` is **desired** — what the last accepted
+    // create or resize asked for — and the agent's report of what the image
+    // actually is lands in `observedSizeBytes` below.
     @Field(key: "size")
     var size: Int64  // Size in bytes
 
@@ -92,6 +94,16 @@ final class Volume: Model, @unchecked Sendable {
 
     @Field(key: "observed_generation")
     var observedGeneration: Int64
+
+    /// The virtual size the owning agent last reported the image actually has
+    /// (STR-199), as opposed to the `size` someone asked for.
+    ///
+    /// NULL means **no agent has said** — a volume whose bytes are not on a
+    /// host yet, one owned by a pre-v37 agent, or one whose size probe failed.
+    /// It never means zero, and `ObservedStateApplier` never writes an agent's
+    /// silence through as a clear.
+    @OptionalField(key: "observed_size_bytes")
+    var observedSizeBytes: Int64?
 
     // Convergence progress mirrored from the agent's observed-state report.
     // `errorMessage` doubles as `lastError` — one column, because a volume has
@@ -530,8 +542,21 @@ struct VolumeResponse: Content {
     let name: String
     let description: String
     let projectId: UUID?
+    /// The size **asked for** — the last create or resize the API accepted.
+    /// A resize answers `202` and converges, so this moves the moment the
+    /// mutation is accepted, well before any bytes do.
     let size: Int64
     let sizeFormatted: String
+    /// The size the owning agent reports the image **actually has** (STR-199).
+    ///
+    /// Null means no agent has said — the bytes are not on a host yet, or the
+    /// agent predates wire v37. Where it disagrees with `size`, a grow is still
+    /// outstanding, and `conditions` says whether it is in flight or degraded:
+    /// a grow refused because the volume's guest is running holds this at the
+    /// old size for as long as the guest keeps running. Reporting only `size`
+    /// is how a refused grow read as a completed one.
+    let observedSize: Int64?
+    let observedSizeFormatted: String?
     let format: VolumeFormat
     let volumeType: VolumeType
     let status: VolumeStatus
@@ -569,6 +594,8 @@ struct VolumeResponse: Content {
         self.projectId = volume.$project.id
         self.size = volume.size
         self.sizeFormatted = volume.size.formattedByteSize
+        self.observedSize = volume.observedSizeBytes
+        self.observedSizeFormatted = volume.observedSizeBytes?.formattedByteSize
         self.format = volume.format
         self.volumeType = volume.volumeType
         self.status = volume.status

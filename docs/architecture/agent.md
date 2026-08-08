@@ -649,7 +649,12 @@ failed resize is re-planned by the next sync rather than looking applied.
   the imperative message handlers use — so reconcile and imperative
   operations can never interleave on one VM. Failures are tracked per
   generation with a 3-attempt budget (permanent failures exhaust it
-  immediately; a new generation re-arms it). `.adopt` executes first and
+  immediately; a new generation re-arms it). Two classifications sit outside
+  the budget, for opposite reasons: `waitingOnDependency` records nothing and
+  retries silently, and `blocked` records the reason and retries anyway —
+  the precondition it names (a guest that has to stop before its volume can
+  grow) clears without anyone minting a new generation, so the cap must not be
+  what decides whether the remedy works (STR-199). `.adopt` executes first and
   then re-plans from the adopted workload's actual status.
 
 ### Volume lanes and the enqueue order (STR-148)

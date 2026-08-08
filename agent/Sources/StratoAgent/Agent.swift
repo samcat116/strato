@@ -4235,12 +4235,20 @@ extension Agent: ReconcileActuator {
                 {
                     isDefinitelyStopped = status == .shutdown
                 }
-                // Permanent, not transient: no retry makes a running guest
-                // safer, so the control plane surfaces a degraded volume with a
-                // reason an operator can act on (stop the guest, or detach)
-                // rather than burning the attempt budget on a doomed grow.
+                // Blocked, not permanent (STR-199). The reason names a remedy —
+                // stop the guest, or detach — and the whole point of naming one
+                // is that applying it works: the block clears without anyone
+                // re-asking for the size, so the refusal must not consume the
+                // attempt budget that decides whether the next sync tries
+                // again. Classified permanent, this guard reported what to do
+                // and then ignored an operator who did it, leaving a volume
+                // permanently short of a size nothing had withdrawn.
+                //
+                // Still not transient: an operator has to see the reason, and a
+                // transient failure that outlives its three attempts is degraded
+                // with no more explanation than one that never had a remedy.
                 guard isDefinitelyStopped else {
-                    throw VolumeConvergenceError.unsupported(
+                    throw VolumeConvergenceError.blocked(
                         "refusing to grow volume \(item.id): it is attached to VM "
                             + "\(attachment.vmId), which is not confirmed shut down, and this agent "
                             + "has no online grow path")
@@ -5172,6 +5180,12 @@ extension Agent: ReconcileActuator {
                     present: true,
                     storagePath: facts.path,
                     format: facts.format.rawValue,
+                    // The same number the planner just compared against the
+                    // desired size (STR-199), so what the API reports and what
+                    // this agent is converging on cannot disagree. Nil when the
+                    // probe could not read the image — reported as "no answer",
+                    // never as zero.
+                    sizeBytes: facts.sizeBytes,
                     attachedVMId: facts.attachedVMId.flatMap { UUID(uuidString: $0) },
                     deviceName: facts.deviceName,
                     observedGeneration: await reconciler.observedGeneration(for: volumeId, kind: .volume),

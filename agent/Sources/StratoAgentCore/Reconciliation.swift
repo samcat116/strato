@@ -588,9 +588,10 @@ public protocol ReconcileActuator: Sendable {
 /// support receives sandbox work. Should be unreachable: such agents never
 /// advertise the sandbox capability, so the control plane never places
 /// sandboxes on them — permanent, because retrying cannot grow a runtime.
-/// Why a volume could not be converged (STR-148). Both cases carry a
+/// Why a volume could not be converged (STR-148). Every case carries a
 /// classification rather than being plain errors, because the difference
-/// decides whether an operator ever sees them.
+/// decides whether an operator ever sees them — and, for `blocked`, whether
+/// acting on what they see achieves anything.
 public enum VolumeConvergenceError: ClassifiableError, LocalizedError, Sendable {
     /// Something the agent cannot do however many times it is asked: a shrink,
     /// an unknown format, a host with no storage backend. Permanent, so the
@@ -603,17 +604,23 @@ public enum VolumeConvergenceError: ClassifiableError, LocalizedError, Sendable 
     /// attempt, records no error, and simply retries on the next
     /// level-triggered sync.
     case sourceNotReady(String)
+    /// Refused by a precondition nobody has to mint a new generation to clear:
+    /// a grow against a volume whose guest is still running (STR-199). Reported
+    /// like `unsupported` — the reason names what to do — but retried on every
+    /// sync, so doing it converges the size that was already asked for.
+    case blocked(String)
 
     public var failureClassification: FailureClassification {
         switch self {
         case .unsupported: return .permanent
         case .sourceNotReady: return .waitingOnDependency
+        case .blocked: return .blocked
         }
     }
 
     public var errorDescription: String? {
         switch self {
-        case .unsupported(let reason), .sourceNotReady(let reason): return reason
+        case .unsupported(let reason), .sourceNotReady(let reason), .blocked(let reason): return reason
         }
     }
 }
@@ -1543,7 +1550,16 @@ public actor Reconciler {
             if failure.generation != item.generation {
                 failure = ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
             }
-            failure.attempts += 1
+            // A blocked failure burns no attempt (STR-199). It is recorded like
+            // any other — the reason names a remedy, and an operator who never
+            // sees it cannot apply one — but the precondition it names clears
+            // without anyone minting a new generation, so the cap must not be
+            // what decides whether the remedy works. Consuming the budget here
+            // is exactly how a grow refused against a running guest stayed
+            // refused after the guest was stopped.
+            if classification != .blocked {
+                failure.attempts += 1
+            }
             // A permanent failure (host misconfiguration: missing binary,
             // permissions, disk full) cannot succeed on retry — exhaust the
             // budget now so the remaining attempts aren't burned re-running a
@@ -1552,19 +1568,28 @@ public actor Reconciler {
             if classification == .permanent {
                 failure.attempts = max(failure.attempts, Self.maxAttemptsPerGeneration)
             }
-            failure.lastError = error.localizedDescription
+            let reason = error.localizedDescription
+            // A blocked item is re-driven on every sync for as long as the
+            // block holds, so only the *transition* is worth an error line;
+            // repeating one every sync forever would bury the failures that
+            // are actually new. Everything else logs each attempt, as before —
+            // their attempts are capped, so there are at most three.
+            let repeating = classification == .blocked && failure.lastError == reason
+            failure.lastError = reason
             failures[ref] = failure
-            logger.error(
-                classification == .permanent
-                    ? "Workload convergence failed permanently; not retrying this generation (operator action required)"
-                    : "Workload convergence failed",
-                metadata: [
-                    "kind": .string(item.kind.rawValue),
-                    "workloadId": .string(item.id),
-                    "generation": .stringConvertible(item.generation),
-                    "attempt": .stringConvertible(failure.attempts),
-                    "error": .string(error.localizedDescription),
-                ])
+            let metadata: Logger.Metadata = [
+                "kind": .string(item.kind.rawValue),
+                "workloadId": .string(item.id),
+                "generation": .stringConvertible(item.generation),
+                "attempt": .stringConvertible(failure.attempts),
+                "error": .string(reason),
+            ]
+            let message = Self.failureLogMessage(classification)
+            if repeating {
+                logger.debug(message, metadata: metadata)
+            } else {
+                logger.error(message, metadata: metadata)
+            }
         }
         // Only clear the marker this item owns: a newer-generation item may
         // already be queued behind this one (shouldExecute admits it and
@@ -1576,6 +1601,18 @@ public actor Reconciler {
             currentPhase.removeValue(forKey: ref)
         }
         await actuator.convergenceDidChange()
+    }
+
+    /// What a failed convergence says in the log, by classification.
+    private static func failureLogMessage(_ classification: FailureClassification) -> Logger.Message {
+        switch classification {
+        case .permanent:
+            return "Workload convergence failed permanently; not retrying this generation (operator action required)"
+        case .blocked:
+            return "Workload convergence is blocked; retrying every sync until the block clears"
+        case .transient, .waitingOnDependency:
+            return "Workload convergence failed"
+        }
     }
 
     /// How long a single step may run before the agent starts saying so, and

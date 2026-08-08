@@ -1101,6 +1101,19 @@ struct ObservedStateApplier {
             volume.storagePath = path
             changed = true
         }
+
+        // The size the image actually has (STR-199) — recorded here for the same
+        // reason the path is, and with the same asymmetry as the applied I/O
+        // ceilings below: it is a fact about the volume rather than a verdict on
+        // the mutation, so it lands before the converging early-return, and an
+        // agent that reported *nothing* (pre-v37, or a probe that could not read
+        // the image) leaves the column alone instead of clearing it. Writing nil
+        // through would turn a silent agent into "this volume has no size",
+        // which is the same wrong answer in the other direction.
+        if let reported = observed.sizeBytes, volume.observedSizeBytes != reported {
+            volume.observedSizeBytes = reported
+            changed = true
+        }
         if observed.present {
             try await recordReplica(
                 volumeID: volumeID, agentId: agentId, datasetPath: observed.storagePath, on: db)

@@ -838,6 +838,10 @@ public func configure(_ app: Application) async throws {
     // table it constrains already exists in its final shape.
     app.migrations.add(BoundResourceTextColumns())
 
+    // STR-199: the size a volume actually has, next to the size it was asked
+    // for, so a grow the agent has refused stops reading as one that landed.
+    app.migrations.add(AddVolumeObservedSize())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.

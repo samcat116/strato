@@ -1102,11 +1102,13 @@ public struct ObservedSandboxState: Codable, Sendable {
 /// STR-148). Field semantics for the convergence quartet match
 /// `ObservedVMState` — see the doc comments there.
 ///
-/// There is deliberately no `sizeBytes`. Reading a volume's virtual size means
-/// a `qemu-img info` subprocess per volume, and this report is assembled on
-/// every convergence action plus the heartbeat cadence; on a dense host that is
-/// not affordable. A resize is confirmed the same way a VM resize is, by
-/// `observedGeneration` catching up.
+/// `sizeBytes` was deliberately absent until STR-199, on the grounds that
+/// reading a volume's virtual size meant a `qemu-img info` subprocess per
+/// volume per report. That cost is no longer hypothetical *or* avoidable: the
+/// agent's planner needs the same number to decide whether a grow is
+/// outstanding, so it already computes and caches one per volume — every write
+/// path records the size it produced, and the probe fires only for a volume
+/// this process has not seen written. Reporting it adds no work at all.
 ///
 /// ADR stage 7 (STR-149) settled the same question for the rest of what
 /// `volume_info` used to return, and settled it the same way: nothing was
@@ -1131,6 +1133,19 @@ public struct ObservedVolumeState: Codable, Sendable {
     /// The format the volume actually has on disk ("qcow2"/"raw"), as detected
     /// rather than assumed.
     public let format: String?
+    /// The volume's **virtual size on disk** (STR-199) — what `qemu-img info`
+    /// reports, not what anyone asked for.
+    ///
+    /// It exists because the two can disagree for a long time and nothing said
+    /// so. A grow refused while the guest holding the image is running leaves
+    /// the desired size persisted and the file untouched; before this field the
+    /// API answered that volume's size with the number it had failed to reach,
+    /// which reads exactly like a grow that worked.
+    ///
+    /// Nil means **this agent did not say** — a pre-v37 agent, or a volume
+    /// whose size probe failed. Never "zero bytes", and never a licence to
+    /// clear what a previous report recorded.
+    public let sizeBytes: Int64?
     /// The VM this volume is attached to, from the agent's *durable attachment
     /// record* rather than a live hypervisor query. A powered-off guest has no
     /// QMP device list, and reporting "detached" for it would plan an attach
@@ -1169,6 +1184,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         present: Bool,
         storagePath: String? = nil,
         format: String? = nil,
+        sizeBytes: Int64? = nil,
         attachedVMId: UUID? = nil,
         deviceName: String? = nil,
         observedGeneration: Int64,
@@ -1181,6 +1197,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         self.present = present
         self.storagePath = storagePath
         self.format = format
+        self.sizeBytes = sizeBytes
         self.attachedVMId = attachedVMId
         self.deviceName = deviceName
         self.observedGeneration = observedGeneration
