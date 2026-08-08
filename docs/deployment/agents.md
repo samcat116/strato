@@ -520,10 +520,14 @@ running daemon does not make the node TPM-capable until libvirtd restarts
 install). The agent asks `virsh domcapabilities` for an emulated TPM backend
 rather than looking for the binary, so the restart is what it is waiting on.
 
-`ovmf` also installs QEMU's firmware descriptors under
-`/usr/share/qemu/firmware`, which is what lets libvirt autoselect a UEFI
-CODE/VARS pair. Their absence is advisory: VMs then boot with the firmware
-paths configured explicitly (`firmware_code_path` and friends).
+`ovmf` matters for a second reason: it installs the CODE/VARS pair the agent
+names in every UEFI domain it defines. The agent resolves that pair itself
+rather than asking libvirt to autoselect one — autoselection cannot produce the
+qcow2 variable store VM checkpoints require on a host whose firmware descriptors
+declare a raw template, which is every Debian and Ubuntu host. A node whose EDK2
+build lives somewhere the agent does not look for it falls back to
+autoselection and says so in its log; point `firmware_code_path` and
+`firmware_vars_template` at the right files to take the fallback out of play.
 
 ## mTLS (SPIFFE/SPIRE)
 

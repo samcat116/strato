@@ -629,10 +629,10 @@ actor Agent {
             // between (STR-136). Nothing gates checkpoints away from it either:
             // `LibvirtService` realizes a capture as a libvirt system checkpoint
             // (STR-134). The preconditions that make that work — a qcow2 NVRAM
-            // varstore and libvirt >= 11.5 — belong to the domain builder and
-            // the host preflight, and a node failing the version floor stops
-            // advertising `.qemu` at all rather than advertising a checkpoint it
-            // cannot take.
+            // varstore and libvirt >= 11.5 — belong to the domain builder, the
+            // varstore `createVM` materializes (STR-188) and the host preflight,
+            // and a node failing the version floor stops advertising `.qemu` at
+            // all rather than advertising a checkpoint it cannot take.
             #if os(Linux)
             logger.info(
                 "Initializing libvirt hypervisor service", metadata: ["uri": .string(LibvirtProbe.systemURI)])

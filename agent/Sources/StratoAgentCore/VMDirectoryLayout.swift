@@ -107,6 +107,10 @@ public enum VMDirectoryLayout {
     /// `nvram.fd` left behind by the QEMU driver at this path is therefore not
     /// interchangeable — converting existing varstores is part of the cutover,
     /// not of this file.
+    ///
+    /// `UEFIVarstore` is what writes it, before the domain is defined, because
+    /// libvirt will seed a varstore from a template but not change its format
+    /// on the way (STR-188).
     public static func nvram(vmDirectory: String) -> String {
         path(vmDirectory, "nvram.fd")
     }
