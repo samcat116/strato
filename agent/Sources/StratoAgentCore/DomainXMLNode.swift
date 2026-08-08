@@ -36,9 +36,16 @@ struct DomainXMLNode: Equatable {
     private(set) var children: [DomainXMLNode]
     /// Character data. Mutually exclusive with `children`: an element in this
     /// document is either a leaf with text or a container, and `render` has no
-    /// mixed-content form. Asserted at both mutation points rather than left as
-    /// a convention, since the failure would otherwise be a silently dropped
-    /// value.
+    /// mixed-content form — it emits text only where there are no children, so
+    /// breaking the rule loses the text.
+    ///
+    /// The `assert`s at the mutation points below say so to whoever writes the
+    /// call, and that is all they do: they are compiled out at `-O`, which is
+    /// the build hypervisor nodes run. Anything that edits a document it did not
+    /// itself construct therefore has to establish this for real —
+    /// `DomainXMLNode.parse` refuses mixed content on the way in, and
+    /// `DomainRedefinition` refuses a document whose `<devices>` or `<cpu>` is a
+    /// leaf before it adds anything to either.
     private(set) var text: String?
 
     /// Builds an element. Attributes whose value is nil are dropped, so a

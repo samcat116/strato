@@ -8,15 +8,15 @@ import StratoShared
 /// ## Why this exists at all
 ///
 /// `LibvirtService.createVM` writes a domain document once, and until this
-/// existed nothing ever rewrote it. Both limits above are decided in that
+/// existed nothing ever rewrote it. All three limits are decided in that
 /// document — libvirt allocates a root port per PCI device present at define
-/// time, so the spares have to be declared up front, and the virtio-mem region
-/// is whatever `maxMemoryBytes - memoryBytes` asked for at create — so a VM that
-/// outgrew either could only be *recreated*. The process driver had neither
-/// limit, because it re-spawned from the current spec on every boot, and a
-/// restart was enough to widen both; under libvirt a restart changed nothing.
-/// That was a real capability difference between two drivers the control plane
-/// cannot tell apart.
+/// time, so the spares have to be declared up front, and the region and the vCPU
+/// maximum are whatever the spec asked for at create — so a VM that outgrew any
+/// of them could only be *recreated*. The process driver had none of those
+/// limits, because it re-spawned from the current spec on every boot, and a
+/// restart was enough to widen all three; under libvirt a restart changed
+/// nothing. That was a real capability difference between two drivers the
+/// control plane cannot tell apart.
 ///
 /// So this is what a boot does before it starts a stopped domain: it makes the
 /// definition able to satisfy the spec the VM is being booted for. "Recreate the
@@ -47,16 +47,26 @@ import StratoShared
 ///   device sits in is not free, and a port that is free is already the thing
 ///   being counted.
 /// - **Memory headroom.** Only ever upward, and only when the spec asks for a
-///   *higher ceiling* than the domain has. The rewritten elements are exactly
-///   what `DomainXMLBuilder` would emit for this spec — `<maxMemory>`,
-///   `<memory>`, `<currentMemory>`, the NUMA cell's memory and the virtio-mem
-///   device's `<target><size>` — with `<requested>` reset to zero, because the
-///   boot size moves up to `spec.memoryBytes` and a region left plugged on top
-///   of it would hand the guest that memory twice.
+///   *higher total* than the domain has. What it writes is exactly what
+///   `DomainXMLBuilder` would emit for this spec — `<maxMemory>`, `<memory>`,
+///   `<currentMemory>`, the NUMA cell's memory and the virtio-mem device's
+///   `<target><size>` — with `<requested>` reset to zero, because the boot size
+///   moves up to `spec.memoryBytes` and a region left plugged on top of it would
+///   hand the guest that memory twice. A spec that asks for **no** region takes
+///   `<maxMemory>` with the device: the element is what enables memory hot-plug,
+///   and leaving it behind alone is a domain QEMU refuses to start.
 /// - **The vCPU ceiling.** Likewise upward only, in `<vcpu>` and the NUMA cell's
-///   `cpus` range. What the VM *boots* with is pinned rather than moved: raising
-///   a ceiling is not the same as changing a size, and the size is the resize
-///   path's to converge.
+///   `cpus` range.
+///
+/// The boot *size* moves with the ceiling in both cases — `<currentMemory>` and
+/// `<vcpu current=…>` are written from the spec — and that is deliberate rather
+/// than scope creep. `addResizes` plans nothing for a stopped VM, so a size left
+/// behind here is converged a whole reconcile later, as a *hot-add*: memory the
+/// guest may take, vCPUs most guests will not online without a udev rule. The
+/// operator told to "stop and start the VM" would restart and still see the old
+/// size. This is not a resize path for all that: a domain whose ceilings already
+/// fit its spec is left completely alone, and converging *that* VM's size stays
+/// `resizeVM`'s job.
 public enum DomainRedefinition {
 
     /// The outcome of one widening pass.
@@ -107,6 +117,18 @@ public enum DomainRedefinition {
         guard domain.firstIndex(ofChildNamed: "devices") != nil else {
             throw DomainInventoryError.unparseable("the domain document declares no <devices>")
         }
+        // The two elements this pass gives children to must not be leaves.
+        // `DomainXMLNode` states that exclusivity with an `assert`, which is
+        // compiled out at `-O` — so on a hypervisor node an `append` to an
+        // element carrying character data would silently drop the data instead,
+        // in a document about to redefine an existing VM. `parse` refuses mixed
+        // content, so the only way in is an element that is *only* text where
+        // this expects a container; libvirt writes no such document, and one
+        // that arrives anyway is refused here rather than re-emitted short.
+        for container in ["devices", "cpu"] where domain.child(named: container)?.text != nil {
+            throw DomainInventoryError.unparseable(
+                "<\(container)> carries character data, so it is not an element this can add to")
+        }
 
         var refusals: [String] = []
         // Order is not arbitrary. vCPUs first, because a NUMA cell has to span
@@ -143,10 +165,20 @@ public enum DomainRedefinition {
     /// already raises a stopped VM's recorded `maxCpu` on the assumption that a
     /// boot re-reads it — this is what makes both true.
     ///
-    /// **What the VM boots with does not move.** `current` is pinned to what the
-    /// document already said, explicitly where libvirt was leaving it implicit,
-    /// so raising the ceiling cannot hand the guest vCPUs nobody asked for.
-    /// Converging the count itself stays `resizeCPUs`' job.
+    /// **`current` moves to `spec.cpus` with it**, which is the same rule the
+    /// memory pass follows for `<currentMemory>`: where this rewrites a domain's
+    /// sizing it writes the size the spec asks for, not just the ceiling. The
+    /// alternative — pinning the count and leaving it to `resizeCPUs` — makes
+    /// the operator's remedy land in two power cycles rather than one, because
+    /// `addResizes` plans nothing for a stopped VM, and the follow-up arrives as
+    /// a vCPU *hot-add* that most guests will not online without a udev rule. So
+    /// a VM resized 2 → 16 while stopped would restart, as instructed, and still
+    /// show 2.
+    ///
+    /// This does not make the pass a resize path. It rewrites sizing only where
+    /// it is already rewriting a *ceiling*; a domain whose ceilings already fit
+    /// its spec is left entirely alone, and converging the count there stays
+    /// `resizeCPUs`' job.
     private static func widenVCPUs(
         _ domain: inout DomainXMLNode, spec: VMSpec, refusals: inout [String]
     ) -> Int? {
@@ -180,9 +212,12 @@ public enum DomainRedefinition {
             return nil
         }
 
-        let boot = vcpu.attribute("current") ?? "\(current)"
+        // Clamped at both ends: never above the ceiling being written, and never
+        // zero, which libvirt rejects — a spec is not normalized on the way off
+        // the wire (`DomainXMLBuilderError.invalidCPUCount`).
+        let boot = min(max(spec.cpus, 1), wanted)
         domain.editChild(named: "vcpu") {
-            $0.setAttribute("current", boot)
+            $0.setAttribute("current", "\(boot)")
             $0.setText("\(wanted)")
         }
         domain.editChild(named: "cpu") { cpu in
@@ -361,66 +396,80 @@ public enum DomainRedefinition {
             refusals.append("the domain declares no <cpu> element to hang a NUMA cell off")
             return .unchanged
         }
+        // A *new* device is `DomainXMLBuilder.memoryDeviceNode`, whose `<node>`
+        // is 0 — the cell the builder writes — and libvirt refuses a backend for
+        // a guest node that does not exist. Retargeting it at the cell instead
+        // would not help: `DomainDeviceXML.memoryDevice` builds the resize
+        // fragment from the same function and matches libvirt's device by
+        // identity, so a device on node 1 would be one no later resize could
+        // find. Refusing keeps both honest. Strato writes no such document; nor
+        // does it write `<qemu:commandline>`, which `parse` survives on purpose.
+        let cellID = cells?.first?.attribute("id") ?? "0"
+        if size > 0, existing == nil, cellID != "0" {
+            refusals.append(
+                "the domain's only NUMA cell is node \(cellID) rather than node 0, and a memory device "
+                    + "this pass added would name a node no later resize could match")
+            return .unchanged
+        }
 
-        // `<maxMemory>` before `<memory>`, which is where libvirt's schema puts
-        // it — appending would produce a document it rejects. An existing one
-        // keeps its `slots`, since that is a fact about the domain rather than
-        // about the size. A domain with no headroom on either side of this
-        // rewrite gets none: the element is what enables memory hot-plug, and
-        // adding it would drag a NUMA topology in behind it for nothing.
+        // **`<maxMemory>` tracks the region, in both directions.** It is what
+        // turns memory hot-plug on — `virDomainDefHasMemoryHotplug` is true for
+        // its presence alone — and libvirt then starts QEMU with
+        // `-m size=…,slots=…,maxmem=…`. With no device left, initial memory
+        // *is* the total, so keeping the element would hand QEMU a `maxmem`
+        // equal to `size` alongside a slot count, which it refuses outright:
+        // "memory slots were specified but maximum memory size … is equal to
+        // the initial memory size". libvirt's own hot-plug validation does not
+        // catch it, because the NUMA cell it checks for is still there.
+        //
+        // `DomainXMLBuilder` emits the element only for `hotplugBytes > 0`, so
+        // no *created* VM is ever in that state and this pass is the only thing
+        // that could put one there — a domain that defines and then will not
+        // start, which is precisely the regression this type's note rules out.
+        // Where the element is kept, it keeps its `slots`: that is a fact about
+        // the domain rather than about the size. Where it is added, it goes
+        // before `<memory>`, which is where libvirt's schema puts it.
         let ceiling = DomainXMLBuilder.kib(total)
+        let boot = DomainXMLBuilder.kib(spec.memoryBytes)
+        let maxCPUs = domain.child(named: "vcpu")?.text
+        guard size > 0 else {
+            domain.removeChildren(named: "maxMemory")
+            rewriteMemorySizes(&domain, total: ceiling, boot: boot)
+            // The cell can stay: a single NUMA node without hot-plug is a valid
+            // domain, and removing it would change the guest's visible topology
+            // on the same boot its size moves.
+            if cells?.isEmpty == false {
+                domain.editChild(named: "cpu") {
+                    setNUMACell(&$0, bootMemory: boot, maxCPUs: maxCPUs)
+                }
+            }
+            domain.editChild(named: "devices") { $0.removeChildren(named: "memory") }
+            return MemoryWidening(ceilingBytes: total, addedDevice: false)
+        }
+
         let hadMaxMemory = domain.editChild(
             named: "maxMemory",
             {
                 $0.setAttribute("unit", "KiB"); $0.setText(ceiling)
             })
-        if !hadMaxMemory, size > 0, let memoryIndex = domain.firstIndex(ofChildNamed: "memory") {
+        if !hadMaxMemory, let memoryIndex = domain.firstIndex(ofChildNamed: "memory") {
             domain.insert(
                 DomainXMLNode("maxMemory", [("slots", "1"), ("unit", "KiB")], text: ceiling),
                 at: memoryIndex)
         }
-        domain.editChild(named: "memory") {
-            $0.setAttribute("unit", "KiB"); $0.setText(ceiling)
-        }
 
-        // The boot size, in all three of the places libvirt reads it from.
-        let boot = DomainXMLBuilder.kib(spec.memoryBytes)
-        if domain.editChild(
-            named: "currentMemory",
-            {
-                $0.setAttribute("unit", "KiB"); $0.setText(boot)
-            }) == false,
-            let memoryIndex = domain.firstIndex(ofChildNamed: "memory")
-        {
-            domain.insert(
-                DomainXMLNode("currentMemory", [("unit", "KiB")], text: boot), at: memoryIndex + 1)
-        }
-        // A cell is only touched where there is one, or where the domain is
-        // gaining hot-pluggable memory and libvirt therefore requires one.
-        let maxCPUs = domain.child(named: "vcpu")?.text
-        if size > 0 || cells?.isEmpty == false {
-            domain.editChild(named: "cpu") { setNUMACell(&$0, bootMemory: boot, maxCPUs: maxCPUs) }
-        }
+        rewriteMemorySizes(&domain, total: ceiling, boot: boot)
+        domain.editChild(named: "cpu") { setNUMACell(&$0, bootMemory: boot, maxCPUs: maxCPUs) }
 
         // `<requested>` back to zero, always. The guest now boots at
         // `spec.memoryBytes`, so a region left plugged from an earlier grow
         // would be that memory handed over a second time.
-        //
-        // A region of zero is a device libvirt will not accept, so the device
-        // goes instead — which costs the VM nothing it had. The spec's ceiling
-        // *is* its size, the region is unplugged by the line above, and the port
-        // the device occupied comes back for a hot-plug to use. A later spec
-        // that asks for headroom again grows a fresh device at its next boot.
-        let addedDevice = existing == nil && size > 0
+        let addedDevice = existing == nil
         domain.editChild(named: "devices") { devices in
             if addedDevice {
                 devices.append(
                     DomainXMLBuilder.memoryDeviceNode(
                         sizeBytes: size, blockBytes: block, requestedBytes: 0))
-                return
-            }
-            guard size > 0 else {
-                devices.removeChildren(named: "memory")
                 return
             }
             devices.editChildren(named: "memory") { device in
@@ -437,6 +486,26 @@ public enum DomainRedefinition {
             }
         }
         return MemoryWidening(ceilingBytes: total, addedDevice: addedDevice)
+    }
+
+    /// Writes `<memory>` and `<currentMemory>` — the domain's total and the size
+    /// the guest boots with — inserting `<currentMemory>` where libvirt left it
+    /// implicit.
+    private static func rewriteMemorySizes(
+        _ domain: inout DomainXMLNode, total: String, boot: String
+    ) {
+        domain.editChild(named: "memory") {
+            $0.setAttribute("unit", "KiB"); $0.setText(total)
+        }
+        let hadCurrent = domain.editChild(
+            named: "currentMemory",
+            {
+                $0.setAttribute("unit", "KiB"); $0.setText(boot)
+            })
+        if !hadCurrent, let memoryIndex = domain.firstIndex(ofChildNamed: "memory") {
+            domain.insert(
+                DomainXMLNode("currentMemory", [("unit", "KiB")], text: boot), at: memoryIndex + 1)
+        }
     }
 
     /// Writes the boot size into `<cpu><numa><cell>`, creating the topology

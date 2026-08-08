@@ -1441,19 +1441,23 @@ actor LibvirtService: HypervisorService {
         }
 
         // Past the ceiling this domain was defined with, `requestedBytes` clamps
-        // to the whole region — so without this the resize would plug everything
-        // there is, report success, and leave the VM short of the size it was
-        // asked for with nothing anywhere saying so. The clamp is right (a
-        // request above the device's size is one QEMU refuses outright); what
-        // was missing is that the shortfall has to be the caller's problem, and
-        // it is one they can now act on: a power cycle rewrites the region
-        // (`redefineVM`, STR-187).
-        guard spec.memoryBytes <= layout.maximumBytes else {
+        // to the whole region, which makes "at the ceiling" and "beyond it" the
+        // same answer — so the shortfall is asked for separately, and it is the
+        // one thing here the caller can act on: a power cycle rewrites the
+        // region (`redefineVM`, STR-187). The arithmetic is
+        // `DomainMemoryLayout`'s so that it can be tested; only the sentence is
+        // this driver's.
+        //
+        // The vCPU half of the resize has already been applied and committed by
+        // the time this throws. That is correct level-triggered behaviour — a
+        // partial convergence is not one to undo — but it does mean an operator
+        // reads "cannot reach N bytes" on a VM whose CPU count did move.
+        if let shortfall = layout.shortfall(forTotal: spec.memoryBytes) {
             throw HypervisorServiceError.invalidConfiguration(
                 "VM \(vmId) cannot reach \(spec.memoryBytes) bytes: its domain was defined with a ceiling of "
-                    + "\(layout.maximumBytes) bytes, and a virtio-mem region is fixed until the definition is "
-                    + "rewritten. \(live ? "Stop and start" : "Start") the VM — a boot redefines it with the "
-                    + "headroom its current size range asks for.")
+                    + "\(layout.maximumBytes) bytes, \(shortfall) short, and a virtio-mem region is fixed "
+                    + "until the definition is rewritten. \(live ? "Stop and start" : "Start") the VM — a "
+                    + "boot redefines it with the headroom its current size range asks for.")
         }
         guard requested != virtioMem.requestedBytes else { return }
 

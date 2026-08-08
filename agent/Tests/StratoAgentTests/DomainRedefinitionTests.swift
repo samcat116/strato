@@ -400,9 +400,15 @@ struct DomainRedefinitionTests {
         // No headroom is asked for, so the region goes rather than becoming a
         // device of size zero, which libvirt will not accept.
         #expect(virtioMem(widened) == nil)
-        // And the port it sat in comes back free, so the domain needs one fewer
-        // new port than it would otherwise.
-        #expect(widened.child(named: "maxMemory")?.text == "\(16 * Self.gib / 1024)")
+        // **And `<maxMemory>` goes with it.** Keeping it leaves memory hot-plug
+        // enabled with no device, so libvirt starts QEMU with a `maxmem` equal
+        // to the initial size alongside a slot count — which QEMU refuses, and
+        // libvirt's own validation does not catch because the NUMA cell is
+        // still there. The domain would define and then fail to start.
+        #expect(widened.child(named: "maxMemory") == nil)
+        // The cell stays: valid without hot-plug, and removing it would change
+        // the guest's visible topology on the same boot its size moves.
+        #expect(numaCell(widened)?.attribute("memory") == "\(16 * Self.gib / 1024)")
     }
 
     /// A domain that never had headroom and is only being given a bigger boot
@@ -469,8 +475,10 @@ struct DomainRedefinitionTests {
         #expect(widening.vcpuCeiling == 16)
         let widened = try DomainXMLNode.parse(#require(widening.xml))
         #expect(widened.child(named: "vcpu")?.text == "16")
-        // What the VM boots with is untouched: a ceiling is not a size, and the
-        // size is `resizeCPUs`' to converge.
+        // The boot count moves to the spec's, exactly as `<currentMemory>` does
+        // in the memory pass: pinning it would make the operator's restart land
+        // the ceiling but not the vCPUs, since the follow-up arrives as a
+        // hot-add a guest may never online.
         #expect(widened.child(named: "vcpu")?.attribute("current") == "2")
         // The cell has to span every vCPU the domain can now reach, or libvirt
         // refuses the document outright.
@@ -478,10 +486,10 @@ struct DomainRedefinitionTests {
     }
 
     /// A domain whose `<vcpu>` carries no `current` is one booting every vCPU it
-    /// has. Raising the ceiling without pinning that would silently hand the
-    /// guest the new ones.
-    @Test("raising the ceiling pins a boot count libvirt was leaving implicit")
-    func impliedBootCountIsPinned() throws {
+    /// has, so raising the ceiling without writing one would hand the guest all
+    /// sixteen — a size nobody asked for.
+    @Test("raising the ceiling writes a boot count libvirt was leaving implicit")
+    func impliedBootCountIsWritten() throws {
         let document = Self.definedDomain().replacingOccurrences(
             of: "<vcpu placement='static' current='2'>8</vcpu>",
             with: "<vcpu placement='static'>8</vcpu>")
@@ -489,7 +497,21 @@ struct DomainRedefinitionTests {
 
         let widened = try DomainXMLNode.parse(#require(widening.xml))
         #expect(widened.child(named: "vcpu")?.text == "16")
-        #expect(widened.child(named: "vcpu")?.attribute("current") == "8")
+        #expect(widened.child(named: "vcpu")?.attribute("current") == "2")
+    }
+
+    /// `current` is clamped to the ceiling being written. A spec whose `cpus`
+    /// exceeds its own `maxCpus` is not normalized anywhere on the way off the
+    /// wire, and `current` above the maximum is a document libvirt rejects.
+    @Test("a boot count above the ceiling is clamped to it")
+    func bootCountIsClampedToTheCeiling() throws {
+        let spec = VMSpec(
+            cpus: 12, maxCpus: 10, memoryBytes: 2 * Self.gib, boot: .disk(firmware: nil))
+        let widening = try Self.widening(Self.definedDomain(), spec: spec)
+
+        let widened = try DomainXMLNode.parse(#require(widening.xml))
+        #expect(widened.child(named: "vcpu")?.text == "12")
+        #expect(widened.child(named: "vcpu")?.attribute("current") == "12")
     }
 
     @Test("a domain with a declared CPU topology is refused rather than desynchronized")
@@ -529,6 +551,41 @@ struct DomainRedefinitionTests {
         #expect(widening.memoryCeilingBytes == nil)
         #expect(widening.refusals.count == 1)
         #expect(widening.refusals[0].contains("2 memory devices"))
+    }
+
+    /// `memoryDeviceNode` names node 0, and so does the resize fragment built
+    /// from the same function — so a device added against a cell numbered
+    /// anything else is one libvirt refuses to back and no later resize could
+    /// match. Only a *new* device is affected; an existing one keeps whatever
+    /// `<node>` it already had.
+    @Test("a lone NUMA cell that is not node 0 refuses a new memory device")
+    func nonZeroNUMACellRefusesANewDevice() throws {
+        let document = Self.definedDomain(bootGiB: 4, headroomGiB: nil).replacingOccurrences(
+            of: "  <cpu mode='host-passthrough' check='none'>",
+            with: "  <cpu mode='host-passthrough' check='none'>\n    <numa>\n"
+                + "      <cell id='1' cpus='0-7' memory='4194304' unit='KiB'/>\n    </numa>")
+        let widening = try Self.widening(
+            document, spec: Self.spec(memoryBytes: 4 * Self.gib, maxMemoryBytes: 12 * Self.gib))
+
+        #expect(widening.memoryCeilingBytes == nil)
+        #expect(widening.refusals.count == 1)
+        #expect(widening.refusals[0].contains("node 1"))
+    }
+
+    /// `DomainXMLNode` states its text/children exclusivity with an `assert`,
+    /// which is compiled out of the build hypervisor nodes run — so a container
+    /// that is really a leaf has to be refused here, in every build, rather than
+    /// silently losing its character data to an `append`.
+    @Test("a container this pass adds to is refused when it is really a leaf")
+    func leafContainersAreRefused() {
+        for container in ["devices", "cpu"] {
+            let document = Self.definedDomain().replacingOccurrences(
+                of: container == "devices" ? "  <devices>" : "  <cpu mode='host-passthrough' check='none'>",
+                with: "  <\(container)>text</\(container)>\n  <\(container)-unused>")
+            #expect(throws: DomainInventoryError.self) {
+                try Self.widening(document, spec: Self.spec(maxCpus: 16))
+            }
+        }
     }
 
     @Test("a domain with two NUMA cells is refused rather than divided up")

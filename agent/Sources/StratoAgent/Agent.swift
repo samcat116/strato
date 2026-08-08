@@ -3829,17 +3829,24 @@ extension Agent: ReconcileActuator {
     /// remedy those ceilings name ("stop and start the VM") has to actually take
     /// effect for the advice to be worth giving.
     ///
-    /// Two things keep this from being a risk to a boot that would otherwise
-    /// have worked. A VM created in this same item is skipped outright: its
-    /// configuration was built from the very spec below, moments ago, so the
-    /// widening could only find nothing while still costing a round trip on
-    /// every create. And a widening that *fails* is logged rather than thrown —
-    /// the backend contract says best effort, because a VM that comes up with
-    /// the ceiling it already had is the status quo, while a VM that does not
-    /// come up is a regression.
+    /// Two steps in the same item make the widening pointless, and both are
+    /// skipped rather than spent. A `.create` built the configuration from the
+    /// very spec below moments ago, so there is nothing to find. A `.restore`
+    /// runs *after* the boot (`Reconciliation.edgeSteps` plans edges after the
+    /// status steps) and converges through `virDomainRevertToSnapshot`, which
+    /// replaces the definition with the one recorded in the checkpoint — so the
+    /// widening would be defined, immediately overwritten, and paid for again on
+    /// every boot forever. A VM being restored keeps the ceilings its checkpoint
+    /// was captured with; "stop and start it to widen" holds for its *next*
+    /// boot, the one with no restore outstanding.
+    ///
+    /// A widening that *fails* is logged rather than thrown — the backend
+    /// contract says best effort, because a VM that comes up with the ceiling it
+    /// already had is the status quo, while a VM that does not come up is a
+    /// regression.
     private func reconcileBoot(_ item: ReconcileWorkItem) async throws {
         let service = try reconcileService(for: item.vmId)
-        if !item.steps.contains(.create), let spec = item.desired?.spec {
+        if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {
                 try await service.redefineVM(vmId: item.vmId, spec: spec)
             } catch {

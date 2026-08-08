@@ -310,12 +310,29 @@ What it changes is only the three ceilings above: it tops the spare
 `pcie-root-port`s back up to `spareHotplugPorts` *free* ones, raises
 `<maxMemory>`, `<memory>`, `<currentMemory>`, the NUMA cell and the virtio-mem
 region to what the current spec asks for, and raises `<vcpu>` with the cell's
-`cpus` range. Never downward — a lowered ceiling is the resize path's business —
-and never the VM's *size*: `<vcpu current=…>` is pinned to what the document
-already said, explicitly where libvirt left it implicit, so a widening cannot
-hand the guest vCPUs nobody asked for. A domain created with no headroom at all
-grows the `<maxMemory>`, the NUMA cell and the memory device that libvirt
-requires together.
+`cpus` range. Never downward — a lowered ceiling is the resize path's business.
+A domain created with no headroom at all grows the `<maxMemory>`, the NUMA cell
+and the memory device that libvirt requires together; a spec that asks for **no**
+region takes `<maxMemory>` away with the device, because that element is what
+enables memory hot-plug and leaving it behind alone gives QEMU a `maxmem` equal
+to the initial size next to a slot count, which it refuses to start.
+
+The boot *size* moves with the ceiling — `<currentMemory>` and `<vcpu
+current=…>` are both written from the spec — because `addResizes` plans nothing
+for a stopped VM, so a size left behind is converged a whole reconcile later,
+and arrives as a *hot-add*: memory the guest may take, vCPUs most guests will
+not online without a udev rule. An operator told to "stop and start the VM"
+would otherwise restart and still see the old size. This is not a resize path
+for all that: a domain whose ceilings already fit its spec is left completely
+alone.
+
+Two steps in the same work item skip the widening. A `.create` built the
+configuration from that spec moments earlier. A `.restore` runs *after* the boot
+and converges through `virDomainRevertToSnapshot`, which replaces the definition
+with the one recorded in the checkpoint — so the widening would be defined,
+immediately overwritten, and paid for again on every boot forever. A VM being
+restored keeps the ceilings its checkpoint was captured with, and widens on its
+next boot instead.
 
 **It edits the existing document rather than rebuilding one**, and that is the
 design decision worth knowing. Rebuilding from the spec looks obvious and is
@@ -326,9 +343,10 @@ was created — so each of those would have to be recovered from the domain
 anyway, and a recovery this got wrong would silently change a VM's hardware at
 its next power cycle. Editing inverts the failure mode: everything not named
 above is carried through exactly as libvirt wrote it, and an edit the pass cannot
-make (two memory devices, two NUMA cells, a declared CPU topology, a domain
-already at the root-port index ceiling) becomes a **refusal** the driver logs
-rather than a rewrite, so the VM keeps the ceiling it had. A widening that fails
+make (two memory devices, two NUMA cells, a lone cell that is not node 0, a
+declared CPU topology, a domain already at the root-port index ceiling) becomes
+a **refusal** the driver logs rather than a rewrite, so the VM keeps the ceiling
+it had. A widening that fails
 outright is logged and the boot proceeds: a VM that comes up with its old ceiling
 is the status quo, while a VM that does not come up is a regression.
 
@@ -337,7 +355,10 @@ nothing more general — it is for documents libvirt produced. Attribute order i
 not preserved (there is none to preserve in `XMLParser`'s dictionary) and
 comments are dropped, while **mixed content and CDATA are refused rather than
 dropped**, because a document that cannot be re-emitted faithfully is one that
-must not reach `virDomainDefineXML`.
+must not reach `virDomainDefineXML`. `DomainXMLNode`'s text/children exclusivity
+is only an `assert`, which is compiled out of the build hypervisor nodes run, so
+the widening independently refuses a document whose `<devices>` or `<cpu>` is a
+leaf rather than trusting it.
 
 Checkpoints are libvirt **system checkpoints** — `domainSnapshotCreateXML` /
 `domainRevertToSnapshot` / `domainSnapshotDelete`, with libvirt choosing the

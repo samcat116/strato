@@ -686,6 +686,75 @@ struct DomainXMLLibvirtTests {
         }
     }
 
+    /// **A define is not enough for this one, and that is the whole point.**
+    ///
+    /// A stopped VM resized past its ceiling arrives with
+    /// `maxMemoryBytes == memoryBytes`, so the widening writes a domain with no
+    /// virtio-mem region at all. Leaving `<maxMemory>` behind there keeps memory
+    /// hot-plug enabled with nothing plugged into it, and libvirt then starts
+    /// QEMU with a `maxmem` equal to the initial size alongside a slot count —
+    /// which QEMU refuses ("memory slots were specified but maximum memory size
+    /// … is equal to the initial memory size"). libvirt's own validation passes
+    /// it straight through, because the NUMA cell it checks for is still there.
+    ///
+    /// So the domain defines cleanly and fails to start, which is the one
+    /// failure mode `DomainRedefinition` rules out for itself — and only a guest
+    /// that actually boots can catch it.
+    @Test(
+        "a domain widened to no memory region still starts",
+        .enabled(if: startsGuests, "STRATO_LIBVIRT_TEST_START is not set"))
+    func wideningToNoRegionStillStarts() throws {
+        let bootROM = try #require(Self.hostBootROM)
+        let architecture = try #require(Self.hostArchitecture)
+        let name = "strato-test-widen-noregion"
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("strato-\(name)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let disk = directory.appendingPathComponent("disk.raw")
+        FileManager.default.createFile(atPath: disk.path, contents: nil)
+        try FileHandle(forWritingTo: disk).truncate(atOffset: 1024 * 1024)
+
+        // Created with headroom: 1 GiB boot, 2 GiB ceiling.
+        let gib: Int64 = 1024 * 1024 * 1024
+        let input = DomainXMLInput(
+            vmId: name, vmDirectory: directory.path,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: gib, maxMemoryBytes: 2 * gib, boot: .disk(firmware: nil),
+                console: ConsoleSpec(console: .socket, serial: .socket)),
+            disks: [ResolvedDisk(path: disk.path, format: .raw)],
+            networks: [], architecture: architecture,
+            accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
+            firmware: .monolithic(path: bootROM))
+        let document = Self.defineable(
+            try DomainXMLBuilder.build(input), name: name, substitutingFirmware: false)
+
+        try Self.withDefinedDomain(name: name, document: document) { _ in
+            // The spec a stopped resize to 2 GiB produces: no headroom asked
+            // for, and a total the domain can already hold in `<memory>` but
+            // not as *boot* memory.
+            let resized = VMSpec(
+                cpus: 1, memoryBytes: 2 * gib, maxMemoryBytes: 2 * gib, boot: .disk(firmware: nil),
+                console: ConsoleSpec(console: .socket, serial: .socket))
+            let widening = try DomainRedefinition.widening(
+                forInactiveDomainXML: try Self.run(["dumpxml", "--inactive", name]).output,
+                spec: resized, architecture: architecture)
+            let xml = try #require(widening.xml, "the boot size has to move, so this is a widening")
+            #expect(!xml.contains("<maxMemory"))
+
+            let file = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("\(name)-widened.xml")
+            try xml.write(to: file, atomically: true, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(at: file) }
+            let redefined = try Self.run(["define", file.path])
+            #expect(redefined.status == 0, "libvirt refused the widened document:\n\(redefined.output)")
+
+            let started = try Self.run(["start", name])
+            #expect(started.status == 0, "the widened domain would not start: \(started.output)")
+        }
+    }
+
     private static func attachConfig(_ fragment: String, to domain: String, called name: String) throws
         -> Bool
     {
