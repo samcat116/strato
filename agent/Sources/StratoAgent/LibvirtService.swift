@@ -946,21 +946,21 @@ actor LibvirtService: HypervisorService {
                 // already share one absolute deadline, so serializing them turns
                 // a host's domain count into `N x RTT` inside a budget sized for
                 // a single query — on a busy host, reliably unfinishable.
-                return try await withThrowingTaskGroup(of: (vcpus: Int, memoryBytes: Int64).self) {
-                    group in
+                return try await withThrowingTaskGroup(of: DomainGetInfoRet.self) { group in
                     for dom in domains {
                         group.addTask {
-                            let info = try await client.domainGetInfo(dom: dom, deadline: deadline)
-                            return LibvirtDomain.reservation(from: info)
+                            try await client.domainGetInfo(dom: dom, deadline: deadline)
                         }
                     }
-                    var vcpus = 0
-                    var memoryBytes: Int64 = 0
-                    for try await (domVCPUs, domMemory) in group {
-                        vcpus += domVCPUs
-                        memoryBytes += domMemory
+                    var infos: [DomainGetInfoRet] = []
+                    infos.reserveCapacity(domains.count)
+                    for try await info in group {
+                        infos.append(info)
                     }
-                    return (vcpus: vcpus, memoryBytes: memoryBytes)
+                    // Both the arithmetic and the fold are `LibvirtDomain`'s, so
+                    // "a host with domains never reports zero" is asserted in a
+                    // package with no daemon in it — this target has no tests.
+                    return LibvirtDomain.reservation(from: infos)
                 }
             }
             lastKnownReservations = Cached(reserved)

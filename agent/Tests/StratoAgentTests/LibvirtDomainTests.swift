@@ -479,4 +479,51 @@ struct LibvirtDomainTests {
         #expect(reserved.vcpus == 1)
         #expect(reserved.memoryBytes == Int64(2) * 1024 * 1024 * 1024)
     }
+
+    /// The sentence STR-190 made false, asserted on the sum rather than on a
+    /// domain: no arrangement of live domains adds up to an idle host. A
+    /// per-domain test cannot say this — the bug produced no per-domain answers
+    /// at all, and the fold over nothing is what read as zero.
+    @Test("A host with domains on it never reports zero")
+    func aPopulatedHostNeverReadsIdle() {
+        let infos = [
+            DomainGetInfoRet(state: 1, maxMem: 4 * 1024 * 1024, memory: 0, nrVirtCpu: 2, cpuTime: 0),
+            DomainGetInfoRet(state: 5, maxMem: 2 * 1024 * 1024, memory: 0, nrVirtCpu: 1, cpuTime: 0),
+            DomainGetInfoRet(state: 3, maxMem: 1024 * 1024, memory: 0, nrVirtCpu: 1, cpuTime: 0),
+        ]
+        let reserved = LibvirtDomain.reservation(from: infos)
+        #expect(reserved.vcpus == 4)
+        #expect(reserved.memoryBytes == Int64(7) * 1024 * 1024 * 1024)
+    }
+
+    /// The one host that truthfully reserves nothing — and the state the cached
+    /// zero in STR-190 was legitimately recorded from, before the first VM
+    /// landed and every later sweep started failing back onto it.
+    @Test("A host with no domains reserves nothing")
+    func anEmptyHostReservesNothing() {
+        let reserved = LibvirtDomain.reservation(from: [])
+        #expect(reserved.vcpus == 0)
+        #expect(reserved.memoryBytes == 0)
+    }
+
+    /// Saturation, not a trap. `maxMem` here is the eight bytes of `cpuTime`
+    /// from the golden reply above — what the STR-190 misalignment actually
+    /// delivered into this field — and `× 1024` on it overflows `Int64`. The
+    /// agent reporting an absurd reservation for one heartbeat is recoverable;
+    /// the agent crashing inside the heartbeat's task group is not.
+    @Test("A corrupt memory ceiling saturates rather than trapping")
+    func absurdCeilingSaturates() {
+        let misaligned = DomainGetInfoRet(
+            state: 1, maxMem: 0x18C9_D6C1_DA65_A518, memory: 0, nrVirtCpu: 2, cpuTime: 0)
+        #expect(LibvirtDomain.reservation(from: misaligned).memoryBytes == .max)
+
+        let maximal = DomainGetInfoRet(
+            state: 1, maxMem: .max, memory: 0, nrVirtCpu: .max, cpuTime: 0)
+        #expect(LibvirtDomain.reservation(from: maximal).memoryBytes == .max)
+        #expect(LibvirtDomain.reservation(from: maximal).vcpus == Int(UInt32.max))
+
+        // And the fold over them, which would otherwise trap on the addition.
+        let total = LibvirtDomain.reservation(from: [maximal, maximal])
+        #expect(total.memoryBytes == .max)
+    }
 }

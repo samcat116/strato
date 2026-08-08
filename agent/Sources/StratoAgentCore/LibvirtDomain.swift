@@ -343,10 +343,43 @@ public enum LibvirtDomain {
     /// a host is what the scheduler places against, and a wrong answer is
     /// indistinguishable from a right one at a glance: an idle-looking host is
     /// exactly what an over-reporting *or* under-reporting node looks like.
+    ///
+    /// Saturating throughout, never trapping. These are wire values from a
+    /// decoder that has been wrong before: the misalignment STR-190 fixed would
+    /// have handed `maxMem` the bytes of `cpuTime` (~1.8e18), which is exactly
+    /// the range where `× 1024` overflows `Int64`. A nonsense reservation is a
+    /// scheduling mistake that the next sweep corrects; a trap is the agent
+    /// process dying inside the heartbeat's task group.
     public static func reservation(from info: DomainGetInfoRet) -> (
         vcpus: Int, memoryBytes: Int64
     ) {
-        (vcpus: Int(info.nrVirtCpu), memoryBytes: Int64(clamping: info.maxMem) * 1024)
+        let kib = Int64(clamping: info.maxMem)
+        let (bytes, overflowed) = kib.multipliedReportingOverflow(by: 1024)
+        return (vcpus: Int(clamping: info.nrVirtCpu), memoryBytes: overflowed ? .max : bytes)
+    }
+
+    /// What every domain on a host takes out of it, together.
+    ///
+    /// The fold belongs next to the per-domain arithmetic rather than at the
+    /// call site, because the property worth asserting is a property of the
+    /// sum: **a host with domains on it never reports zero**. That is the
+    /// sentence STR-190 made false — a decoder that never once worked reported
+    /// the same figure an idle host does — and it is not checkable one domain
+    /// at a time.
+    ///
+    /// An empty host really is zero, and says so: no domains is the one case
+    /// where nothing reserved is the truth.
+    public static func reservation(from infos: [DomainGetInfoRet]) -> (
+        vcpus: Int, memoryBytes: Int64
+    ) {
+        infos.reduce(into: (vcpus: 0, memoryBytes: Int64(0))) { total, info in
+            let domain = reservation(from: info)
+            let (vcpus, vcpusOverflowed) = total.vcpus.addingReportingOverflow(domain.vcpus)
+            total.vcpus = vcpusOverflowed ? .max : vcpus
+            let (bytes, bytesOverflowed) = total.memoryBytes.addingReportingOverflow(
+                domain.memoryBytes)
+            total.memoryBytes = bytesOverflowed ? .max : bytes
+        }
     }
 }
 
