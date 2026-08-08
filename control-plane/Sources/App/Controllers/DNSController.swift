@@ -94,14 +94,10 @@ struct DNSController: RouteCollection {
         let user = try req.auth.require(User.self)
         let request = try req.content.decode(CreateDNSZoneRequest.self)
 
-        let projectID = try await Self.resolveProject(req: req, user: user, requested: request.projectId)
-        let allowed = try await req.can("create_dns_zone", on: "project", id: projectID.uuidString)
-        guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have permission to create DNS zones in this project")
-        }
-        guard try await Project.find(projectID, on: req.db) != nil else {
-            throw Abort(.badRequest, reason: "Project \(projectID) does not exist")
-        }
+        let project = try await req.authorizedProjectForCreate(
+            requested: request.projectId, user: user,
+            action: "create_dns_zone", resourceKind: "DNS zones")
+        let projectID = try project.requireID()
 
         let name = try DNSName.normalizedZoneName(request.name)
         let creatorID = try user.requireID()
@@ -519,22 +515,6 @@ struct DNSController: RouteCollection {
             "Network", in: network.$project.id,
             sameProjectAs: "the DNS zone", in: zone.$project.id)
         return network
-    }
-
-    /// Same project resolution as networks, volumes, and security groups.
-    private static func resolveProject(req: Request, user: User, requested: UUID?) async throws -> UUID {
-        if let requested { return requested }
-        guard let currentOrgID = user.currentOrganizationId else {
-            throw Abort(.badRequest, reason: "No project specified and user has no current organization")
-        }
-        guard
-            let defaultProject = try await Project.query(on: req.db)
-                .filter(\.$organization.$id == currentOrgID)
-                .first()
-        else {
-            throw Abort(.badRequest, reason: "No project specified and no default project found")
-        }
-        return try defaultProject.requireID()
     }
 
     static func validatedTTL(_ ttl: Int?) throws -> Int {

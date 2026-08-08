@@ -256,6 +256,7 @@ private func launchAgent(options: AgentOptions) async throws {
         ovnChassisConfig: config.ovnChassisConfig,
         ovnUplink: config.ovnUplink,
         ovnDynamicRouting: config.ovnDynamicRouting,
+        resolverConfig: config.resolver,
         ovnNorthbound: config.ovnNorthbound,
         ovnNorthboundTLS: config.ovnNorthboundTLS,
         logger: logger,

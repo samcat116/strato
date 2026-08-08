@@ -89,31 +89,10 @@ struct SecurityGroupController: RouteCollection {
         let user = try req.auth.require(User.self)
         let request = try req.content.decodeValidated(CreateSecurityGroupRequest.self)
 
-        // Same project resolution as networks/volumes/floating IPs.
-        let projectId: UUID
-        if let requestProjectId = request.projectId {
-            projectId = requestProjectId
-        } else if let currentOrgId = user.currentOrganizationId {
-            guard
-                let defaultProject = try await Project.query(on: req.db)
-                    .filter(\.$organization.$id == currentOrgId)
-                    .first()
-            else {
-                throw Abort(.badRequest, reason: "No project specified and no default project found")
-            }
-            projectId = defaultProject.id!
-        } else {
-            throw Abort(.badRequest, reason: "No project specified and user has no current organization")
-        }
-
-        let hasPermission = try await req.can("create_security_group", on: "project", id: projectId.uuidString)
-        guard hasPermission else {
-            throw Abort(
-                .forbidden, reason: "You don't have permission to create security groups in this project")
-        }
-        guard try await Project.find(projectId, on: req.db) != nil else {
-            throw Abort(.badRequest, reason: "Project \(projectId) does not exist")
-        }
+        let project = try await req.authorizedProjectForCreate(
+            requested: request.projectId, user: user,
+            action: "create_security_group", resourceKind: "security groups")
+        let projectId = try project.requireID()
 
         // Trimmed and bounded by `CreateSecurityGroupRequest.validate()`.
         let name = request.name

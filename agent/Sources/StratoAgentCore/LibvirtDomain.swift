@@ -249,11 +249,12 @@ public enum LibvirtDomain {
     /// `virDomainDeviceModifyFlags.VIR_DOMAIN_AFFECT_LIVE | _CONFIG` — apply to
     /// the running guest *and* to the persistent definition.
     ///
-    /// Both bits, always, and the `CONFIG` half is the load-bearing one:
-    /// nothing here ever rewrites a domain document after `createVM`, so a
-    /// device attached live and not written to the definition is silently gone
-    /// at the guest's next power cycle — with the control plane still showing
-    /// the volume attached.
+    /// Both bits, always, and the `CONFIG` half is the load-bearing one: the
+    /// domain document *is* the stored configuration, and the only thing that
+    /// rewrites it — `redefineVM` — adds spare capacity without touching a
+    /// device (STR-187), so a device attached live and not written to the
+    /// definition is silently gone at the guest's next power cycle, with the
+    /// control plane still showing the volume attached.
     ///
     /// The same reasoning covers a resize: a change deferred "to the next
     /// boot" only happens at all if the next boot reads it, and here the next
@@ -267,6 +268,16 @@ public enum LibvirtDomain {
     /// request that says otherwise; and for the dimensions of a resize that are
     /// deliberately not applied to a running guest.
     public static let affectConfig: UInt32 = 1 << 1
+
+    /// `virDomainXMLFlags.VIR_DOMAIN_XML_INACTIVE` — describe the domain's
+    /// persistent definition rather than the running guest.
+    ///
+    /// Only the redefine path asks for it, and it asks because the two
+    /// descriptions differ in exactly the places that path reads: a live
+    /// document is the configuration this guest was *started* with, while the
+    /// widening is about what the next boot will read. Every other dumpxml here
+    /// passes `0` on purpose — see `domainXML`.
+    public static let xmlInactive: UInt32 = 1 << 1
 
     /// `VIR_DOMAIN_VCPU_MAXIMUM` / `VIR_DOMAIN_MEM_MAXIMUM`. Both enums put the
     /// bit in the same place; it selects the domain's *ceiling* rather than its

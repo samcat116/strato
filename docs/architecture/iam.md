@@ -1364,6 +1364,18 @@ Two enforcement details worth naming:
     scope of #881 did, which was written against VMs. A reader applying the
     bullet above to `attachSecurityGroup` should expect the VM half only until
     sandbox parity lands.
+- **A project named in a create body is checked for existence *after* the
+  permission check** (issue #1049). The five project-scoped creates — volume,
+  network, security group, floating IP, DNS zone — resolve their target project
+  through `Request.authorizedProjectForCreate`, which authorizes first and
+  confirms the row second, so `400 "Project {id} does not exist"` cannot be told
+  apart from `403` by a caller sweeping ids. In practice that `400` is
+  unreachable from the API: a missing project's chain never reaches an
+  organization, so the truncated-chain rule above denies the check outright and
+  every one of the five answers `403` — for a system admin, and for a principal
+  holding a binding pinned directly at the missing id. The assertion stays as
+  the backstop against inserting against a dangling foreign key. Pinned by
+  `ProjectResolutionTests`.
 
 #### The request-scoped cache (shipped with #686, extended by #735)
 

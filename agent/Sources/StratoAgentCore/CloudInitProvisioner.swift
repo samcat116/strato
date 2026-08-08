@@ -543,8 +543,11 @@ public struct CloudInitProvisioner {
     /// get an explicit address/gateway/nameservers block, including the
     /// network's search domain.
     ///
-    /// A NIC on a network publishing the instance metadata service also carries
-    /// on-link routes to its addresses — see `metadataRoutesBlock`.
+    /// A NIC on a network publishing a link-local service — instance metadata,
+    /// the network's DNS resolver, or both — also carries on-link routes to its
+    /// addresses, and a resolver-enabled static NIC is pointed at the resolver
+    /// instead of at the network's configured servers. See
+    /// `linkLocalRoutesBlock`.
     ///
     /// Returns nil when no NIC needs configuring — no `network-config` is written
     /// and the guest keeps its default behavior (DHCP), which is also what
@@ -556,9 +559,15 @@ public struct CloudInitProvisioner {
         // A v4-only NIC — DHCP or static — settles v4 while leaving v6 for
         // whichever later NIC actually has an IPv6 address, and one flag for
         // both would let it swallow the claim and render nothing, costing the
-        // VM the only v6 delivery path there is. See `metadataRoutesBlock`.
+        // VM the only v6 delivery path there is. See `linkLocalRoutesBlock`.
+        //
+        // Tracked per *service* as well as per family, because a VM's two NICs
+        // may enable different ones: the NIC that discharges the metadata route
+        // is not necessarily the one that discharges the resolver route.
         var metadataV4RouteClaimed = false
         var metadataV6RouteClaimed = false
+        var resolverV4RouteClaimed = false
+        var resolverV6RouteClaimed = false
 
         for (index, nic) in attachments.enumerated() {
             // User-mode NICs are addressed by SLIRP's built-in DHCP.
@@ -595,21 +604,26 @@ public struct CloudInitProvisioner {
                     section += "\n    accept-ra: true"
                     section += "\n    ipv6-address-generation: eui64"
                 }
-                if nic.metadataEnabled {
-                    // v4 is settled without rendering anything: OVN's responder
-                    // hands this guest the same route in DHCP option 121, which
-                    // reaches every DHCP client rather than only the ones
-                    // booting from this seed. Claiming it stops a later static
-                    // NIC from writing a second route to the same destination.
-                    metadataV4RouteClaimed = true
-                    // v6 has no such option, so the seed is the only way to
-                    // deliver it — and only this NIC can, since a route needs a
-                    // source address of the same family.
-                    if hasIPv6, !metadataV6RouteClaimed {
-                        metadataV6RouteClaimed = true
-                        section += metadataRoutesBlock(includeIPv4: false, includeIPv6: true)
-                    }
-                }
+                // v4 is settled without rendering anything: OVN's responder
+                // hands this guest the same routes in DHCP option 121, which
+                // reach every DHCP client rather than only the ones booting
+                // from this seed. Claiming them stops a later static NIC from
+                // writing a second route to the same destination.
+                //
+                // v6 has no such option, so the seed is the only way to deliver
+                // it — and only a NIC with a v6 address can, since a route
+                // needs a source address of the same family.
+                if nic.metadataEnabled { metadataV4RouteClaimed = true }
+                if !nic.resolverAddresses.isEmpty { resolverV4RouteClaimed = true }
+                let dhcpMetadataV6 = nic.metadataEnabled && hasIPv6 && !metadataV6RouteClaimed
+                let dhcpResolverV6 =
+                    hasIPv6 && !resolverV6RouteClaimed
+                    ? nic.resolverAddresses.first(where: { IPv6Address($0) != nil }) : nil
+                metadataV6RouteClaimed = metadataV6RouteClaimed || dhcpMetadataV6
+                resolverV6RouteClaimed = resolverV6RouteClaimed || (dhcpResolverV6 != nil)
+                section += linkLocalRoutesBlock(
+                    metadataIPv4: false, metadataIPv6: dhcpMetadataV6,
+                    resolverIPv4: nil, resolverIPv6: dhcpResolverV6)
                 sections.append(section)
                 continue
             }
@@ -642,10 +656,34 @@ public struct CloudInitProvisioner {
             // character that could end it. `validatedDNS` has enforced this on
             // write since the field's first release, so nothing reachable is
             // dropped here — the renderer just stops depending on that.
-            let dns =
-                nic.dnsServers
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { IPv4Address($0) != nil || IPv6Address($0) != nil }
+            // With the resolver on, the guest is pointed at it rather than at
+            // the network's configured servers — which are the resolver's
+            // upstreams, not the guest's (STR-40). This is the static
+            // counterpart of the `dns_server` substitution
+            // `OVNDHCPOptionsBuilder` makes, and it has to happen here too or a
+            // statically addressed guest would resolve nothing internal while
+            // its DHCP neighbours on the same network resolved everything.
+            //
+            // The v6 address is added only when the control plane allocated a
+            // v6 address for this NIC: without one the guest has no valid
+            // source address for a ULA destination, and an unreachable entry in
+            // `resolv.conf` costs every lookup a timeout before the v4 fallback.
+            let dns: [String]
+            if !nic.resolverAddresses.isEmpty {
+                // The network's own pair, filtered to families this NIC can
+                // actually source from: without a global v6 address the guest
+                // has no valid source for a ULA destination, and an unreachable
+                // entry in `resolv.conf` costs every lookup a timeout before the
+                // v4 fallback.
+                dns = nic.resolverAddresses.filter { address in
+                    IPv4Address(address) != nil || (hasIPv6 && IPv6Address(address) != nil)
+                }
+            } else {
+                dns =
+                    nic.dnsServers
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { IPv4Address($0) != nil || IPv6Address($0) != nil }
+            }
             // The network's domain reaches DHCP guests as the OVN responder's
             // domain_name/domain_search option; static guests only get it here,
             // so unqualified lookups need this `search` list to behave the same.
@@ -665,15 +703,27 @@ public struct CloudInitProvisioner {
                 section += "\n    mtu: \(mtu)"
             }
             // No DHCP responder on this NIC, so the seed is what carries both
-            // families' metadata routes — each claimed only for what it
-            // actually renders, so a v4-only NIC leaves v6 to a later one.
+            // families' routes for both services — each claimed only for what
+            // it actually renders, so a v4-only NIC leaves v6 to a later one.
+            let staticMetadataV4 = nic.metadataEnabled && !metadataV4RouteClaimed
+            let staticMetadataV6 = nic.metadataEnabled && hasIPv6 && !metadataV6RouteClaimed
+            let staticResolverV4 =
+                resolverV4RouteClaimed
+                ? nil : nic.resolverAddresses.first(where: { IPv4Address($0) != nil })
+            let staticResolverV6 =
+                (hasIPv6 && !resolverV6RouteClaimed)
+                ? nic.resolverAddresses.first(where: { IPv6Address($0) != nil }) : nil
             if nic.metadataEnabled {
-                let rendersIPv4 = !metadataV4RouteClaimed
-                let rendersIPv6 = hasIPv6 && !metadataV6RouteClaimed
                 metadataV4RouteClaimed = true
                 metadataV6RouteClaimed = metadataV6RouteClaimed || hasIPv6
-                section += metadataRoutesBlock(includeIPv4: rendersIPv4, includeIPv6: rendersIPv6)
             }
+            if !nic.resolverAddresses.isEmpty {
+                resolverV4RouteClaimed = true
+                resolverV6RouteClaimed = resolverV6RouteClaimed || hasIPv6
+            }
+            section += linkLocalRoutesBlock(
+                metadataIPv4: staticMetadataV4, metadataIPv6: staticMetadataV6,
+                resolverIPv4: staticResolverV4, resolverIPv6: staticResolverV6)
             sections.append(section)
         }
 
@@ -686,12 +736,15 @@ public struct CloudInitProvisioner {
             """
     }
 
-    /// The `routes:` block giving a guest on-link routes to the instance
-    /// metadata addresses (STR-53). Neither address belongs to the network's
-    /// subnets, so without this the guest has no path to the `localport` that
-    /// terminates them (STR-49) — most Linux images carry a `169.254.0.0/16`
-    /// link-local route that covers the v4 address by accident, but that is not
-    /// universal and nothing covers the v6 ULA.
+    /// The `routes:` block giving a guest on-link routes to the link-local
+    /// service addresses its networks publish — instance metadata (STR-53) and
+    /// the network's DNS resolver (STR-40).
+    ///
+    /// None of these addresses belongs to the network's subnets, so without
+    /// this the guest has no path to the `localport` that terminates them
+    /// (STR-49) — most Linux images carry a `169.254.0.0/16` link-local route
+    /// that covers both v4 addresses by accident, but that is not universal and
+    /// nothing covers the v6 ULAs.
     ///
     /// **One NIC per family carries them, within this document.** Two
     /// interfaces claiming the same destination is a duplicate route the guest
@@ -703,8 +756,8 @@ public struct CloudInitProvisioner {
     /// This is a property of the seed, **not an invariant of the feature**.
     /// DHCP option 121 is authored on the *network's* `DHCP_Options` row and
     /// delivered to every DHCP client on that network, which nothing here
-    /// arbitrates: a VM with NICs on two metadata-enabled DHCP networks
-    /// receives the v4 route on both, and the loser of the guest's route
+    /// arbitrates: a VM with NICs on two service-enabled DHCP networks
+    /// receives the v4 routes on both, and the loser of the guest's route
     /// insert is whichever its client writes second. Harmless — either route
     /// reaches a namespace serving that same VM — but the claim below is not
     /// what makes it so.
@@ -728,19 +781,28 @@ public struct CloudInitProvisioner {
     /// would crash them outright (above) and a self-referential next hop needs
     /// an `onlink` flag that cloud-init's v2 conversion drops, so a no-op on
     /// those two renderers is the best available outcome.
-    static func metadataRoutesBlock(includeIPv4: Bool, includeIPv6: Bool) -> String {
+    static func linkLocalRoutesBlock(
+        metadataIPv4: Bool, metadataIPv6: Bool, resolverIPv4: String?, resolverIPv6: String?
+    ) -> String {
         var block = ""
-        if includeIPv4 {
-            block += "\n      - to: \(InstanceMetadataEndpoint.cidr)"
-            block += "\n        via: 0.0.0.0"
-        }
-        if includeIPv6 {
-            // Quoted: `via: ::` is a YAML scanner error (a plain scalar may not
-            // open with a `:` indicator), and an unparseable network-config
-            // costs the guest every other setting in this document too.
-            block += "\n      - to: \(InstanceMetadataEndpoint.cidrV6)"
-            block += "\n        via: \"::\""
-        }
+        // Metadata first, so a NIC that carries both renders the same bytes it
+        // did before the resolver existed plus an appended pair — a diffable
+        // seed rather than a reordered one.
+        if metadataIPv4 { block += ipv4Route(to: InstanceMetadataEndpoint.cidr) }
+        if metadataIPv6 { block += ipv6Route(to: InstanceMetadataEndpoint.cidrV6) }
+        if let resolverIPv4 { block += ipv4Route(to: "\(resolverIPv4)/32") }
+        if let resolverIPv6 { block += ipv6Route(to: "\(resolverIPv6)/128") }
         return block.isEmpty ? "" : "\n    routes:" + block
+    }
+
+    private static func ipv4Route(to destination: String) -> String {
+        "\n      - to: \(destination)\n        via: 0.0.0.0"
+    }
+
+    private static func ipv6Route(to destination: String) -> String {
+        // Quoted: `via: ::` is a YAML scanner error (a plain scalar may not
+        // open with a `:` indicator), and an unparseable network-config costs
+        // the guest every other setting in this document too.
+        "\n      - to: \(destination)\n        via: \"::\""
     }
 }

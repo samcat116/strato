@@ -5,6 +5,9 @@
 - **Deciders**: Sam Schmitt
 - **Scope**: agent-side instance metadata dataplane (STR-49), and the listener
   design it constrains (STR-56)
+- **Amended**: 2026-08-08 (STR-40) — the deferred per-namespace listener cost has
+  been paid, and a second service moved in and back out again. See "Amendment"
+  below.
 
 ## Summary
 
@@ -139,7 +142,7 @@ here, with no listener in hand.
   tmpfs. After a host reboot the row returns, `ovs-vswitchd` recreates the
   netdev, and `ovn-controller` rebinds the localport and answers guest ARP for
   the metadata address — with no namespace, no addresses, and no routes behind
-  it, so guests hang instead of failing fast. `ObservedMetadataPort` therefore
+  it, so guests hang instead of failing fast. `ObservedChassisServicePort` (`ObservedMetadataPort` when this was written) therefore
   probes the namespace path alongside the row, and a setup that fails partway
   rolls the namespace back so the next pass observes an honest "not built".
 - **No MTU is set on the namespace interface**, unlike the sandbox NIC path.
@@ -152,3 +155,44 @@ here, with no listener in hand.
   internal port is a datapath port owned by `ovs-vswitchd`, and relocating one
   is the standard OpenStack pattern. The scar is close enough that the agent
   verifies `ofport` and `error` after the move rather than trusting the rows.
+
+## Amendment (2026-08-08, STR-40)
+
+Two things this ADR left open have since been settled, by the per-network DNS
+resolver rather than by the metadata listener it was written for.
+
+**The namespace briefly hosted two services, and now hosts one again.** The
+per-network DNS resolver was placed here (ADR 0007) and then moved to the host
+namespace (ADR 0008), because a namespace whose only addresses are link-local has
+no egress and a forwarding resolver needs one. Metadata stays, and the reversal
+sharpens rather than weakens the argument above: attribution is the whole reason
+this namespace exists, metadata's security model *is* attribution, and metadata
+needs no egress at all because it answers out of the agent's own state. DNS
+needed the opposite on both counts.
+
+What survives from the two-service period is the ingress `tc` policer, which caps
+the packet rate guests may push at the interface — what it protects is the
+hypervisor, so it applies to a one-service namespace just as well, and now
+applies to the resolver's own host-namespace port too.
+
+**The per-namespace listener cost has been paid twice, and both times the shape
+was a helper process.** This ADR argued that per-namespace listening "does not
+compose cheaply with a single-process Swift agent" and left STR-56 to choose
+between a helper process per namespace and a namespace-entering listener.
+STR-56 and STR-40 answered it independently and in parallel — the metadata
+listener with a forked `MetadataServerSupervisor`, the DNS resolver with a
+supervised CoreDNS — each carrying its own supervision, adoption and backoff
+machinery. Neither inherited the choice from the other, which makes the agreement
+worth more than a precedent would have been: the constraint recorded here is
+real, not an artifact of whichever feature reached it first.
+
+The two supervisors did not merge, and now clearly should not: after ADR 0008 the
+metadata one runs a process per namespace and the DNS one runs a single
+host-namespace process for every network on the host. They also differ in what
+they supervise — a Strato subcommand whose protocol we own, versus a third-party
+binary configured through files on disk. A future reader should expect to find
+both and know why.
+
+[ADR 0006](./0007-coredns-per-chassis-namespace.md) records why the resolver
+reused this namespace instead of the single host-namespace listener its own
+issue proposed.

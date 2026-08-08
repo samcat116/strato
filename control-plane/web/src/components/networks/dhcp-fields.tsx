@@ -60,6 +60,13 @@ interface DHCPFieldsProps {
   value: DhcpFormState;
   onChange: (value: DhcpFormState) => void;
   disabled?: boolean;
+  /**
+   * Whether the network's built-in resolver is on. Only relabels the DNS
+   * servers field — with the resolver on, those addresses are its upstream
+   * forwarders rather than what guests are told (STR-40). The field itself is
+   * unchanged, so the two readings share one input.
+   */
+  resolverEnabled?: boolean;
 }
 
 /**
@@ -75,7 +82,12 @@ interface DHCPFieldsProps {
  * stable `instance-id`, so a static NIC applies this DNS once at VM creation
  * and never again.
  */
-export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
+export function DHCPFields({
+  value,
+  onChange,
+  disabled,
+  resolverEnabled = false,
+}: DHCPFieldsProps) {
   return (
     <div className="space-y-4 rounded-md border border-border p-3">
       <label className="flex items-center gap-2 text-sm text-foreground">
@@ -98,7 +110,7 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
 
       <div className="space-y-2">
         <Label htmlFor="dnsServers" className="text-foreground">
-          DNS servers
+          {resolverEnabled ? "Upstream DNS forwarders" : "DNS servers"}
         </Label>
         <Input
           id="dnsServers"
@@ -110,10 +122,22 @@ export function DHCPFields({ value, onChange, disabled }: DHCPFieldsProps) {
           aria-describedby="dnsServersHelp"
         />
         <p id="dnsServersHelp" className="text-xs text-muted-foreground">
-          Comma- or space-separated IPv4 or IPv6 addresses. Advertised over DHCP
-          when it&apos;s on (each family&apos;s servers go to its own DHCP
-          option), and written into cloud-init&apos;s nameservers on statically
-          addressed NICs.
+          {resolverEnabled ? (
+            <>
+              Comma- or space-separated IPv4 or IPv6 addresses. The
+              network&apos;s built-in resolver forwards to these for names it
+              doesn&apos;t serve itself; guests are pointed at the resolver, not
+              at these. Leaving it empty means internal names resolve and
+              everything else is refused.
+            </>
+          ) : (
+            <>
+              Comma- or space-separated IPv4 or IPv6 addresses. Advertised over
+              DHCP when it&apos;s on (each family&apos;s servers go to its own
+              DHCP option), and written into cloud-init&apos;s nameservers on
+              statically addressed NICs.
+            </>
+          )}
         </p>
       </div>
 

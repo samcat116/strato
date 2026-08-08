@@ -10237,6 +10237,11 @@ components:
           type: array
           items:
             type: string
+          description: >-
+            The network's resolvers. With `resolverEnabled` (the default) these
+            are the upstream forwarders the network's built-in resolver sends
+            misses to; with it off they are advertised to guests over DHCP
+            verbatim.
         domainName:
           type: string
           maxLength: 253
@@ -10253,6 +10258,23 @@ components:
           description: >-
             Whether the network publishes the link-local instance metadata
             service to its guests. Defaults true; this is an opt-out.
+        resolverEnabled:
+          type: boolean
+          description: >-
+            Whether the network gives its guests a DNS resolver at its own
+            link-local address, serving the zones attached to the network in
+            full — including the CNAME, TXT and SRV records the datapath cannot
+            express — and forwarding everything else to `dnsServers` through the
+            hypervisor's own egress. Defaults true. Enabling it allocates the
+            network a resolver address pair, which is kept if it is later
+            disabled.
+        resolverAddresses:
+          type: array
+          items:
+            type: string
+          description: >-
+            The addresses this network's guests resolve through, IPv4 first.
+            Distinct per network, and absent until the resolver is first enabled.
         siteId:
           type: string
           format: uuid
@@ -10277,6 +10299,11 @@ components:
           type: array
           items:
             type: string
+          description: >-
+            The network's resolvers. With `resolverEnabled` (the default) these
+            are the upstream forwarders the network's built-in resolver sends
+            misses to; with it off they are advertised to guests over DHCP
+            verbatim.
         domainName:
           type: string
           maxLength: 253
@@ -10293,6 +10320,16 @@ components:
           description: >-
             Whether the network publishes the link-local instance metadata
             service to its guests. Defaults true; this is an opt-out.
+        resolverEnabled:
+          type: boolean
+          description: >-
+            Whether the network gives its guests a DNS resolver at its own
+            link-local address, serving the zones attached to the network in
+            full — including the CNAME, TXT and SRV records the datapath cannot
+            express — and forwarding everything else to `dnsServers` through the
+            hypervisor's own egress. Defaults true. Enabling it allocates the
+            network a resolver address pair, which is kept if it is later
+            disabled.
         primaryDnsZoneId:
           type: string
           format: uuid
@@ -10315,6 +10352,7 @@ components:
         - dnsServers
         - externalAccess
         - metadataEnabled
+        - resolverEnabled
       properties:
         id:
           type: string
@@ -10342,6 +10380,11 @@ components:
           type: array
           items:
             type: string
+          description: >-
+            The network's resolvers. With `resolverEnabled` (the default) these
+            are the upstream forwarders the network's built-in resolver sends
+            misses to; with it off they are advertised to guests over DHCP
+            verbatim.
         domainName:
           type: string
         leaseTime:
@@ -10353,6 +10396,16 @@ components:
           description: >-
             Whether the network publishes the link-local instance metadata
             service to its guests. Defaults true; this is an opt-out.
+        resolverEnabled:
+          type: boolean
+          description: >-
+            Whether the network gives its guests a DNS resolver at its own
+            link-local address, serving the zones attached to the network in
+            full — including the CNAME, TXT and SRV records the datapath cannot
+            express — and forwarding everything else to `dnsServers` through the
+            hypervisor's own egress. Defaults true. Enabling it allocates the
+            network a resolver address pair, which is kept if it is later
+            disabled.
         siteId:
           type: string
           format: uuid

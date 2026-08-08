@@ -47,11 +47,11 @@ import StratoShared
 /// of it, and neither is keyed by VM id. Treat any new dictionary keyed by VM id
 /// as a smell worth justifying in review.
 ///
-/// ## The domain document is written once
+/// ## The domain document is authoritative, so every change is written to it
 ///
-/// `createVM` defines a domain and nothing here ever redefines it. That single
-/// fact shapes hot-plug, resize and everything else that mutates a VM in place
-/// (STR-134): every such change is sent with
+/// `createVM` defines a domain, and the *next boot reads that definition* rather
+/// than the spec. That single fact shapes hot-plug, resize and everything else
+/// that mutates a VM in place (STR-134): every such change is sent with
 /// `LibvirtDomain.affectLiveAndConfig`, so it lands on the running guest *and*
 /// in the persistent definition. The deleted process-QEMU driver could leave
 /// its definition alone because it respawned a VM from a stored configuration
@@ -59,13 +59,21 @@ import StratoShared
 /// libvirt's definition — so a live-only change is a change that silently
 /// un-happens at the guest's next power cycle.
 ///
-/// Its one remaining cost: **the hot-plug slots and the memory headroom a VM
-/// will ever have are fixed when it is created.** The document reserves
-/// `DomainXMLBuilder.spareHotplugPorts` empty PCIe root ports — numbered past
-/// every port the domain's own devices will occupy, which is what makes them
-/// reservations rather than decoration (STR-192) — and whatever virtio-mem
-/// region the spec asked for; growing past either needs libvirt's own error,
-/// not bookkeeping here.
+/// It used to follow from that that **the hot-plug slots and size ceilings a VM
+/// will ever have are fixed when it is created** — the document reserves
+/// `DomainXMLBuilder.spareHotplugPorts` empty PCIe root ports, numbered past
+/// every port the domain's own devices will occupy (STR-192), plus whatever
+/// virtio-mem region and `<vcpu>` maximum the spec asked for, and nothing ever
+/// rewrote any of it. That was a real capability difference from the process
+/// driver, which re-spawned from the current spec and so widened all three on
+/// any restart.
+///
+/// `redefineVM` is where that difference goes (STR-187). It is the **one** other
+/// place the document is written, it runs on a stopped domain only, and it
+/// widens exactly those three ceilings — leaving every other element of the
+/// document as libvirt wrote it. So the remedy for all of them is now "stop and
+/// start the VM", which is what `attachDisk` and `resizeMemory` say when they
+/// hit one.
 ///
 /// ## Lifecycle events
 ///
@@ -634,15 +642,16 @@ actor LibvirtService: HypervisorService {
 
             // A VM with enough devices of its own to reach the root-port ceiling
             // gets fewer spare ports than the builder would like to give it, and
-            // possibly none. That is decided here and never again — the document
-            // is written once — so the one moment it can be said out loud is
-            // this one. Left unsaid, its only other symptom is the bare "No more
-            // available PCI slots" on some later attach, which is
-            // indistinguishable from the bug STR-192 fixed.
+            // possibly none. `redefineVM` tops the spares up before every boot,
+            // but it cannot lift the ceiling this VM has already reached — so
+            // this shortfall really is for that VM's whole life, and this is the
+            // one moment it can be said out loud. Left unsaid, its only other
+            // symptom is the bare "No more available PCI slots" on some later
+            // attach, which is indistinguishable from the bug STR-192 fixed.
             let spares = DomainXMLBuilder.reservedHotplugPortCount(input)
             if spares < DomainXMLBuilder.spareHotplugPorts {
                 logger.warning(
-                    "VM has fewer spare PCIe root ports than usual; its hot-plug capacity is fixed here",
+                    "VM has fewer spare PCIe root ports than usual, and a boot cannot win them back",
                     metadata: [
                         "vmId": .string(vmId),
                         "sparePorts": .stringConvertible(spares),
@@ -650,7 +659,7 @@ actor LibvirtService: HypervisorService {
                         "detail": .string(
                             "this VM declares enough PCI devices (\(disks.count) disks, "
                                 + "\(networkAttachments.count) NICs) to crowd the root complex, so it can accept "
-                                + "at most \(spares) hot-plugged device(s) for its whole life; attach further "
+                                + "at most \(spares) hot-plugged device(s) at a time; attach further "
                                 + "volumes with the VM stopped"),
                     ])
             }
@@ -665,6 +674,60 @@ actor LibvirtService: HypervisorService {
             }
 
             logger.info("libvirt domain defined", metadata: ["vmId": .string(vmId)])
+        }
+    }
+
+    /// Rewrites a stopped domain's definition so it can satisfy `spec`
+    /// (STR-187) — see `DomainRedefinition` for what that means and, more to the
+    /// point, for what it deliberately leaves alone.
+    ///
+    /// This is the one place the domain document is written a second time, and
+    /// the two conditions guarding it are why that is safe. It runs **only on an
+    /// inactive domain**, because the ports it counts are the ones libvirt's own
+    /// address allocator assigned and a running domain's document describes a
+    /// guest that is already holding them; and it defines **only a document that
+    /// differs**, so the ordinary boot of an unchanged VM costs one `dumpxml` and
+    /// nothing else.
+    ///
+    /// A domain that has gone missing or come up between the state read and the
+    /// define is not a failure to report: nothing has been changed, the boot that
+    /// follows will reach the same daemon, and its error is the one worth
+    /// surfacing. The caller treats everything here as best effort for the same
+    /// reason — a VM that boots at the ceiling it already had is the status quo,
+    /// while a VM that does not boot is a regression.
+    func redefineVM(vmId: String, spec: VMSpec) async throws {
+        try await perform("redefine", vmId: vmId) {
+            let dom = try await domain(vmId)
+            guard !LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
+                return
+            }
+
+            let widening = try DomainRedefinition.widening(
+                forInactiveDomainXML: try await inactiveDomainXML(dom, vmId: vmId),
+                spec: spec, architecture: .current)
+            for refusal in widening.refusals {
+                logger.warning(
+                    "This VM's definition could not be widened to what its spec asks for",
+                    metadata: ["vmId": .string(vmId), "detail": .string(refusal)])
+            }
+            guard let xml = widening.xml else { return }
+
+            logger.info(
+                "Widening the domain definition before boot",
+                metadata: [
+                    "vmId": .string(vmId),
+                    "addedHotplugPorts": .stringConvertible(widening.addedHotplugPorts),
+                    "memoryCeilingBytes": widening.memoryCeilingBytes.map {
+                        .stringConvertible($0)
+                    } ?? .string("unchanged"),
+                    "vcpuCeiling": widening.vcpuCeiling.map {
+                        .stringConvertible($0)
+                    } ?? .string("unchanged"),
+                ])
+            _ = try await call("libvirt-redefine", vmId: vmId, seconds: StageBudget.hypervisorSpawnSeconds) {
+                client, deadline in
+                try await client.domainDefineXML(xml: xml, deadline: deadline)
+            }
         }
     }
 
@@ -1138,8 +1201,9 @@ actor LibvirtService: HypervisorService {
     /// enough to realize it. The protocol documents the false branch as "is
     /// already realized by having been recorded, since the spawn path rebuilds
     /// a VM's disk set from the recorded volumes" — and this driver does not
-    /// rebuild anything. `createVM` writes the domain document once and never
-    /// runs again for a domain that exists, so an attachment that is only
+    /// rebuild anything. Its boot reads the domain document, and the only thing
+    /// that ever rewrites that is `redefineVM`, which deliberately touches no
+    /// device the VM already has (STR-187) — so an attachment that is only
     /// recorded is realized on no boot, ever.
     ///
     /// Answering true routes every attach to `attachDisk`, which writes the
@@ -1203,15 +1267,18 @@ actor LibvirtService: HypervisorService {
             } catch let error where LibvirtFailure.isPCISlotsExhausted(error) {
                 // libvirt's own text is accurate and completely unactionable:
                 // it names a full root complex without saying that the complex
-                // was sized when the domain was defined and cannot be resized,
-                // so the natural response — retry, or free something — is
-                // wasted. Every VM defined before STR-192 is in exactly this
-                // state, so this is the fleet's error until those are recreated.
+                // cannot be grown under a running guest, so the natural response
+                // — retry, or free something — is wasted. The remedy is a power
+                // cycle, and it is one only because `redefineVM` tops the spare
+                // ports back up before every boot (STR-187); before that the
+                // only remedy was recreating the VM. Every VM defined before
+                // STR-192 reserved no usable spares at all, so this is the
+                // fleet's error until each of those has been stopped once.
                 throw HypervisorServiceError.invalidConfiguration(
-                    "VM \(vmId) has no free PCIe root port to attach volume \(volumeId) into. A domain's ports "
-                        + "are fixed when it is defined and cannot be added to a VM that already exists, so this "
-                        + "will not succeed on retry: attach the volume with the VM stopped, or recreate the VM "
-                        + "(issue #1026). VMs created before STR-192 reserved no usable spare ports at all.")
+                    "VM \(vmId) has no free PCIe root port to attach volume \(volumeId) into. A running "
+                        + "domain's ports cannot be added to, so this will not succeed on retry: stop and start "
+                        + "the VM, which redefines it with fresh spare ports, or attach the volume while it is "
+                        + "stopped.")
             }
             logger.info(
                 "Disk attached",
@@ -1287,8 +1354,11 @@ actor LibvirtService: HypervisorService {
     /// The QEMU driver's `SpawnSizing`/`vmSpawnSizing` have no counterpart:
     /// that bookkeeping exists because a spawned process's `maxcpus`/`maxmem`
     /// are only knowable to whoever spawned it, while here the ceiling is in
-    /// the domain's own `<vcpu>` and `<maxMemory>` and exceeding it is
-    /// libvirt's error to report, not ours to predict.
+    /// the domain's own `<vcpu>` and `<maxMemory>` — read back off the domain
+    /// rather than predicted. A memory target *above* that ceiling is the one
+    /// case libvirt does not report, because nothing reaches libvirt at all:
+    /// virtio-mem's `<requested>` clamps to the region, so `resizeMemory` raises
+    /// it here instead, naming the boot that would fix it.
     ///
     /// Semantics are the QEMU path's, with one correction that the driver
     /// forces. There, "deferred to the next reboot" works because the next boot
@@ -1367,6 +1437,26 @@ actor LibvirtService: HypervisorService {
             // size is written to the definition for the next boot to read.
             try await setDefinedMemory(dom, vmId: vmId, bytes: spec.memoryBytes, layout: layout)
             return
+        }
+
+        // Past the ceiling this domain was defined with, `requestedBytes` clamps
+        // to the whole region, which makes "at the ceiling" and "beyond it" the
+        // same answer — so the shortfall is asked for separately, and it is the
+        // one thing here the caller can act on: a power cycle rewrites the
+        // region (`redefineVM`, STR-187). The arithmetic is
+        // `DomainMemoryLayout`'s so that it can be tested; only the sentence is
+        // this driver's.
+        //
+        // The vCPU half of the resize has already been applied and committed by
+        // the time this throws. That is correct level-triggered behaviour — a
+        // partial convergence is not one to undo — but it does mean an operator
+        // reads "cannot reach N bytes" on a VM whose CPU count did move.
+        if let shortfall = layout.shortfall(forTotal: spec.memoryBytes) {
+            throw HypervisorServiceError.invalidConfiguration(
+                "VM \(vmId) cannot reach \(spec.memoryBytes) bytes: its domain was defined with a ceiling of "
+                    + "\(layout.maximumBytes) bytes, \(shortfall) short, and a virtio-mem region is fixed "
+                    + "until the definition is rewritten. \(live ? "Stop and start" : "Start") the VM — a "
+                    + "boot redefines it with the headroom its current size range asks for.")
         }
         guard requested != virtioMem.requestedBytes else { return }
 
@@ -1659,6 +1749,21 @@ actor LibvirtService: HypervisorService {
         try await call("libvirt-dumpxml", vmId: vmId, seconds: StageBudget.statusQuerySeconds) {
             client, deadline in
             try await client.domainGetXMLDesc(dom: dom, flags: 0, deadline: deadline)
+        }
+    }
+
+    /// The domain's **persistent** definition, whatever state it is in.
+    ///
+    /// `flags: 0` above answers with the live configuration of a running domain,
+    /// which is the right description for a command about to act on that guest.
+    /// A redefine is the opposite question — what the *next boot* will read — and
+    /// asking for it explicitly is what keeps the answer from depending on a
+    /// domain state that could change between the read and the define.
+    private func inactiveDomainXML(_ dom: Domain, vmId: String) async throws -> String {
+        try await call("libvirt-dumpxml-inactive", vmId: vmId, seconds: StageBudget.statusQuerySeconds) {
+            client, deadline in
+            try await client.domainGetXMLDesc(
+                dom: dom, flags: LibvirtDomain.xmlInactive, deadline: deadline)
         }
     }
 

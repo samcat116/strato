@@ -134,9 +134,16 @@ export function NetworkTable({
                     </Badge>
                   )}
                   <div className="text-xs text-muted-foreground font-mono">
-                    {network.dnsServers.length > 0
-                      ? network.dnsServers.join(", ")
-                      : "no DNS"}
+                    {/* With the resolver on, these are its upstream forwarders
+                        rather than what guests are told, so the label has to
+                        say which reading applies (STR-40). */}
+                    {network.resolverEnabled
+                      ? network.dnsServers.length > 0
+                        ? `resolver → ${network.dnsServers.join(", ")}`
+                        : "resolver, no forwarders"
+                      : network.dnsServers.length > 0
+                        ? network.dnsServers.join(", ")
+                        : "no DNS"}
                   </div>
                 </div>
               </TableCell>

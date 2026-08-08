@@ -1,9 +1,15 @@
 import Foundation
 import StratoShared
 
-/// The chassis-local half of the instance metadata dataplane (STR-49): the OVS
-/// internal port that terminates a network's metadata `localport` on *this*
+/// The chassis-local half of a network's instance metadata service: the OVS
+/// internal port that terminates the network's metadata `localport` on *this*
 /// host, and the network namespace that holds it.
+///
+/// The resolver briefly shared this namespace and now has its own foot in the
+/// *host* namespace (`ResolverHostPortPlan`). The split is the whole of ADR
+/// 0008: metadata needs a namespace because the source address is its only
+/// identification mechanism, while a resolver needs egress it cannot have
+/// inside one.
 ///
 /// Pure by construction, like `SandboxNetnsAttachmentPlan` and for the same
 /// reason: `NetworkServiceLinux` lives in the executable target and cannot be
@@ -40,7 +46,7 @@ import StratoShared
 /// the standard pattern OpenStack's router and metadata namespaces rely on. The
 /// scar is close enough to be worth naming, so the executor verifies `ofport`
 /// and `error` after the move rather than trusting the OVSDB rows.
-public struct MetadataChassisPlan: Sendable, Equatable {
+public struct ChassisServicePlan: Sendable, Equatable {
     /// The host-side OVS internal interface name (15 chars, `IFNAMSIZ`).
     public let interfaceName: String
     /// The namespace holding it.
@@ -70,14 +76,14 @@ public struct MetadataChassisPlan: Sendable, Equatable {
     /// Namespace removal. Runs after `ovsDetach`, which destroys the device.
     public let teardown: [NetnsCommand]
 
-    /// The namespace holding a network's metadata interface on this chassis.
+    /// Where iproute2 keeps its named namespaces.
+    public static let netnsDirectory = "/var/run/netns"
+
+    /// The namespace holding a network's service interface on this chassis.
     /// Mirrors `SandboxJail`'s `strato-sbx-<id>`.
     public static func netnsName(networkId: UUID) -> String {
         "strato-md-\(networkId.uuidString.lowercased())"
     }
-
-    /// Where iproute2 keeps its named namespaces.
-    public static let netnsDirectory = "/var/run/netns"
 
     /// Where iproute2 keeps that namespace's handle. On tmpfs — which is the
     /// whole reason observation cannot key on the OVS row alone: `conf.db` is on
@@ -90,10 +96,9 @@ public struct MetadataChassisPlan: Sendable, Equatable {
     /// of ours.
     ///
     /// The inverse of `netnsName`, and the only way to learn which networks this
-    /// host was serving metadata on before the agent restarted: the namespaces
-    /// outlive the agent process (they are created by the chassis reconcile and
-    /// cleared only by a host reboot), while the desired-state list that named
-    /// them does not.
+    /// host was serving before the agent restarted: the namespaces outlive the
+    /// agent process (they are created by the chassis reconcile and cleared only
+    /// by a host reboot), while the desired-state list that named them does not.
     public static func networkId(fromNetnsName name: String) -> UUID? {
         let prefix = "strato-md-"
         guard name.hasPrefix(prefix) else { return nil }
@@ -104,16 +109,21 @@ public struct MetadataChassisPlan: Sendable, Equatable {
     ///
     /// `ipBinaryPath` is injected rather than assumed so the plan stays testable
     /// and a service manager's stripped `PATH` can't break it.
+    /// `ratePPS` caps the packet rate guests may push at the metadata service;
+    /// 0 disables the policer. `tcBinaryPath` is only consulted when it is
+    /// non-zero.
     public static func plan(
         networkId: UUID,
         ipBinaryPath: String,
+        tcBinaryPath: String,
         bridge: String,
-        ovsTimeoutSeconds: Int
-    ) -> MetadataChassisPlan {
-        let device = metadataInterfaceName(networkId: networkId.uuidString)
+        ovsTimeoutSeconds: Int,
+        ratePPS: Int
+    ) -> ChassisServicePlan {
+        let device = chassisServiceInterfaceName(networkId: networkId.uuidString)
         let namespace = netnsName(networkId: networkId)
-        let logicalPort = OVNNaming.metadataPortName(networkId: networkId)
-        let mac = OVNNaming.metadataPortMAC(networkId: networkId)
+        let logicalPort = OVNNaming.serviceLocalPortName(networkId: networkId)
+        let mac = OVNNaming.serviceLocalPortMAC(networkId: networkId)
 
         let ip = { (args: [String], tolerated: [String]) in
             NetnsCommand(ipBinaryPath, args, tolerated: tolerated)
@@ -134,44 +144,107 @@ public struct MetadataChassisPlan: Sendable, Equatable {
             // Up before addressing, so the IPv6 assignment below lands on a live
             // interface.
             ip(["-n", namespace, "link", "set", "dev", device, "up"], []),
-            // The listener binds to the metadata addresses, but anything that
+            // The listeners bind to the service addresses, but anything that
             // resolves a local name will also want loopback.
             ip(["-n", namespace, "link", "set", "dev", "lo", "up"], []),
         ]
 
         // Both families are established independently: on a host without IPv6
-        // the v6 commands fail and the v4 metadata service still works, matching
-        // how a malformed `external_cidr6` degrades the uplink to v4 rather than
+        // the v6 commands fail and the v4 services still work, matching how a
+        // malformed `external_cidr6` degrades the uplink to v4 rather than
         // failing it.
-        setup.append(
-            ip(["-n", namespace, "addr", "add", InstanceMetadataEndpoint.cidr, "dev", device], ["File exists"]))
-        // `nodad` deliberately: Duplicate Address Detection leaves an IPv6
-        // address `tentative` for roughly a second, during which `bind()` fails
-        // with EADDRNOTAVAIL. The address is unique by construction — one per
-        // namespace, one namespace per network per chassis — so DAD buys nothing
-        // and costs the listener a startup race on every agent restart.
+        //
+        // `nodad` on every IPv6 address, deliberately: Duplicate Address
+        // Detection leaves an address `tentative` for roughly a second, during
+        // which `bind()` fails with EADDRNOTAVAIL. They are unique by
+        // construction — one set per namespace, one namespace per network per
+        // chassis — so DAD buys nothing and costs each listener a startup race
+        // on every agent restart.
         setup.append(
             ip(
-                ["-n", namespace, "addr", "add", InstanceMetadataEndpoint.cidrV6, "dev", device, "nodad"],
+                ["-n", namespace, "addr", "add", InstanceMetadataEndpoint.cidr, "dev", device],
                 ["File exists"]))
+        setup.append(
+            ip(
+                [
+                    "-n", namespace, "addr", "add", InstanceMetadataEndpoint.cidrV6, "dev", device,
+                    "nodad",
+                ], ["File exists"]))
 
         // Replies go to the guest's tenant address, for which the namespace has
         // no route otherwise. A default route is unambiguous here because the
         // namespace has exactly one non-loopback interface, and it covers any
         // number of subnets on the switch without needing an IPAM allocation
         // from each (which is how OpenStack solves the same problem).
+        //
+        let preferredSource = InstanceMetadataEndpoint.address
+        let preferredSource6 = InstanceMetadataEndpoint.addressV6
         setup.append(
             ip(
                 [
                     "-n", namespace, "route", "add", "default", "dev", device,
-                    "src", InstanceMetadataEndpoint.address,
+                    "src", preferredSource,
                 ], ["File exists", "RTNETLINK answers: File exists"]))
         setup.append(
             ip(
                 [
                     "-n", namespace, "-6", "route", "add", "default", "dev", device,
-                    "src", InstanceMetadataEndpoint.addressV6,
+                    "src", preferredSource6,
                 ], ["File exists", "RTNETLINK answers: File exists"]))
+
+        // An aggregate ingress rate limit on what guests may push at these
+        // services (STR-40). AWS caps its link-local services the same way and
+        // for the same reason: one namespace serves every guest on the network
+        // from a process on the hypervisor, so an unbounded query rate from a
+        // single VM is a noisy-neighbour lever on every other VM on the host.
+        //
+        // Policed on *ingress*, so the cost of a flood is paid before the
+        // listener wakes up, and in packets rather than bytes because a DNS
+        // query is small and cheap to send but not cheap to answer.
+        //
+        // `replace` with an explicit handle rather than `add`: setup re-runs on
+        // every retry and after every agent restart, and `tc filter add` would
+        // stack a second identical policer each time — halving the effective
+        // rate on each pass.
+        if ratePPS > 0 {
+            // **Every policer command tolerates its own unavailability.**
+            // `interfaceSetup` is executed fail-fast, and a throw there rolls
+            // the whole namespace back — so an untolerated `tc` failure would
+            // not merely skip the limiter, it would destroy the namespace and
+            // the OVS port, and the next sync would rebuild and destroy them
+            // again. That loop would take instance metadata down on hosts where
+            // it works today.
+            //
+            // It is a real risk rather than a hypothetical: `police pkts_rate`
+            // needs iproute2 >= 5.10 and a 5.11 kernel, so an older LTS host
+            // rejects these as unknown arguments. The type doc already argues
+            // an unlimited resolver beats no resolver; these tolerations are
+            // what make the code agree with it.
+            let unsupported = [
+                "Unknown", "unknown", "Illegal", "illegal", "invalid", "Invalid", "Usage:",
+                "not supported", "No such file or directory",
+            ]
+            let tc = { (args: [String], tolerated: [String]) in
+                NetnsCommand(tcBinaryPath, args, tolerated: tolerated)
+            }
+            setup.append(
+                tc(
+                    ["-n", namespace, "qdisc", "add", "dev", device, "handle", "ffff:", "ingress"],
+                    ["File exists"] + unsupported))
+            setup.append(
+                tc(
+                    [
+                        "-n", namespace, "filter", "replace", "dev", device, "parent", "ffff:",
+                        "handle", "0x1", "prio", "1", "protocol", "all", "matchall",
+                        "action", "police",
+                        "pkts_rate", String(ratePPS),
+                        // A quarter-second of headroom, floored so a very low
+                        // configured rate still admits a burst of one query and
+                        // its retry rather than dropping every other packet.
+                        "pkts_burst", String(max(ratePPS / 4, 32)),
+                        "conform-exceed", "drop",
+                    ], unsupported))
+        }
 
         // No `rp_filter` or `disable_ipv6` sysctls here, deliberately. Both
         // looked necessary and are not: network sysctls are per-namespace and a
@@ -183,7 +256,7 @@ public struct MetadataChassisPlan: Sendable, Equatable {
         // namespace to establish state that already holds.
 
         let timeout = "--timeout=\(ovsTimeoutSeconds)"
-        return MetadataChassisPlan(
+        return ChassisServicePlan(
             interfaceName: device,
             netnsName: namespace,
             logicalPortName: logicalPort,
@@ -191,9 +264,9 @@ public struct MetadataChassisPlan: Sendable, Equatable {
                 timeout, "--may-exist", "add-port", bridge, device,
                 "--", "set", "Interface", device, "type=internal",
                 "external_ids:iface-id=\(logicalPort)",
-                "external_ids:\(MetadataChassisPlan.managedKey)=\(MetadataChassisPlan.managedValue)",
-                "external_ids:\(MetadataChassisPlan.roleKey)=\(MetadataChassisPlan.roleValue)",
-                "external_ids:\(MetadataChassisPlan.networkIDKey)=\(networkId.uuidString.lowercased())",
+                "external_ids:\(ChassisServicePlan.managedKey)=\(ChassisServicePlan.managedValue)",
+                "external_ids:\(ChassisServicePlan.roleKey)=\(ChassisServicePlan.roleValue)",
+                "external_ids:\(ChassisServicePlan.networkIDKey)=\(networkId.uuidString.lowercased())",
             ],
             ovsVerify: [timeout, "get", "Interface", device, "ofport", "error"],
             namespaceSetup: namespaceSetup,
@@ -221,7 +294,7 @@ public struct MetadataChassisPlan: Sendable, Equatable {
         networkId: UUID, interfaceName: String? = nil, ipBinaryPath: String, bridge: String,
         ovsTimeoutSeconds: Int
     ) -> (ovsDetach: [String], commands: [NetnsCommand]) {
-        let device = interfaceName ?? metadataInterfaceName(networkId: networkId.uuidString)
+        let device = interfaceName ?? chassisServiceInterfaceName(networkId: networkId.uuidString)
         return (
             ovsDetach: ["--timeout=\(ovsTimeoutSeconds)", "--if-exists", "del-port", bridge, device],
             commands: [
@@ -240,8 +313,14 @@ public struct MetadataChassisPlan: Sendable, Equatable {
     /// never mistaken for Strato's and removed.
     public static let managedKey = "strato-managed"
     public static let managedValue = "true"
-    /// Distinguishes a metadata interface from every other Strato-managed OVS
-    /// interface (VM TAPs, sandbox veths) in one lookup.
+    /// Distinguishes a chassis service interface from every other
+    /// Strato-managed OVS interface (VM TAPs, sandbox veths) in one lookup.
+    ///
+    /// The value stays `metadata` although the interface now terminates the
+    /// resolver too. It is an ownership marker on rows that already exist on
+    /// every live site, and observation keys off it — changing the string would
+    /// make every existing interface unrecognized, so every agent would build a
+    /// second one beside it and never reap the first.
     public static let roleKey = "strato-role"
     public static let roleValue = "metadata"
     /// Carries the network id so teardown can rederive the namespace to delete
@@ -249,10 +328,8 @@ public struct MetadataChassisPlan: Sendable, Equatable {
     public static let networkIDKey = "strato-network-id"
 }
 
-// MARK: - Chassis-side reconciliation
-
-/// One metadata interface this chassis owns, as observed on the host.
-public struct ObservedMetadataPort: Equatable, Sendable {
+/// One chassis service interface this chassis owns, as observed on the host.
+public struct ObservedChassisServicePort: Equatable, Sendable {
     public let networkId: UUID
     /// The device name read off the OVS row, not rederived.
     public let interfaceName: String
@@ -268,7 +345,6 @@ public struct ObservedMetadataPort: Equatable, Sendable {
     /// answered, which is strictly worse than the fast failure they get with no
     /// metadata port at all.
     public let namespacePresent: Bool
-
     public init(networkId: UUID, interfaceName: String, namespacePresent: Bool) {
         self.networkId = networkId
         self.interfaceName = interfaceName
@@ -277,7 +353,7 @@ public struct ObservedMetadataPort: Equatable, Sendable {
 }
 
 /// One chassis-side side effect.
-public enum MetadataChassisAction: Equatable, Sendable {
+public enum ChassisServiceAction: Equatable, Sendable {
     /// Run the (idempotent) setup plan: either the network has no interface yet,
     /// or it has one whose namespace went missing.
     case realize(networkId: UUID)
@@ -291,7 +367,7 @@ public enum MetadataChassisAction: Equatable, Sendable {
 /// Lives here rather than in the actor because this is the half that *deletes*
 /// namespaces, and `NetworkServiceLinux` is in the executable target where no
 /// test can reach it.
-public enum MetadataChassisReconciler {
+public enum ChassisServiceReconciler {
 
     /// The side effects that converge this chassis toward `desired`.
     ///
@@ -299,13 +375,14 @@ public enum MetadataChassisReconciler {
     /// actions at all, so silence is never read as "tear every namespace down".
     /// An empty (non-nil) list *is* an opinion and removes everything.
     public static func actions(
-        desired: [UUID]?, observed: [ObservedMetadataPort]
-    ) -> [MetadataChassisAction] {
+        desired: [UUID]?, observed: [ObservedChassisServicePort]
+    ) -> [ChassisServiceAction] {
         guard let desired else { return [] }
         let wanted = Set(desired)
-        let byNetwork = Dictionary(observed.map { ($0.networkId, $0) }, uniquingKeysWith: { first, _ in first })
+        let byNetwork = Dictionary(
+            observed.map { ($0.networkId, $0) }, uniquingKeysWith: { first, _ in first })
 
-        var actions: [MetadataChassisAction] = []
+        var actions: [ChassisServiceAction] = []
         // Realize covers both "never built" and "built, but its namespace is
         // gone". The plan is idempotent, so one path serves both and there is no
         // repair-only branch to get subtly wrong.

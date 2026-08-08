@@ -564,6 +564,206 @@ struct DomainXMLLibvirtTests {
         }
     }
 
+    // MARK: - Property 4: a widened definition is one libvirt still accepts
+
+    /// The half of STR-187 that only a daemon can answer, and it is two
+    /// questions rather than one.
+    ///
+    /// The first is whether the document `DomainRedefinition` produces is still
+    /// a domain: it is the original read back through `DomainXMLNode.parse` and
+    /// re-rendered, which no other path in the agent does, and a define is the
+    /// only thing that can say whether that survived contact with libvirt's own
+    /// parser — attribute order, the elements libvirt adds that the builder
+    /// never writes, `<address>`, `<alias>`, `<target chassis=…>` and the rest.
+    ///
+    /// The second is whether it *worked*: a domain whose every spare port has
+    /// been filled has to come back out of the redefine with `spareHotplugPorts`
+    /// free again, counted by libvirt's own allocator rather than by us. That is
+    /// what makes "stop and start the VM" the remedy the attach error now names.
+    ///
+    /// No guest is started — the whole question is settled at define time — so
+    /// this runs wherever a daemon answers, unlike the hot-plug test above.
+    @Test(
+        "a domain with its spare ports filled gets them back from a redefine",
+        .enabled(if: libvirtIsReachable, "no libvirt daemon at STRATO_LIBVIRT_TEST_URI"),
+        arguments: defineableScenarios)
+    func wideningRestoresSparePorts(_ scenario: DomainXMLBuilderTests.Scenario) throws {
+        let name = "strato-test-widen-\(scenario.name)"
+        let document = Self.defineable(try DomainXMLBuilder.build(scenario.input), name: name)
+
+        try Self.withDefinedDomain(name: name, document: document) { _ in
+            // Fill every spare, the way attaching volumes to a stopped VM does:
+            // `--config` alone, which is what `deviceFlags` sends for an
+            // inactive domain. The files are never opened — a define does not
+            // touch a disk's source.
+            for (index, target) in ["vdw", "vdx", "vdy", "vdz"].enumerated() {
+                let fragment = DomainDeviceXML.hotplugDisk(
+                    path: "\(NSTemporaryDirectory())strato-widen-\(index).qcow2", format: .qcow2,
+                    target: target, readonly: false,
+                    volumeId: "00000000-0000-4000-8000-00000000000\(index)")
+                let attached = try Self.attachConfig(fragment, to: name, called: "\(name)-\(target)")
+                #expect(attached, "a --config attach failed, which grows the bus on any document")
+            }
+
+            let filled = try Self.run(["dumpxml", "--inactive", name]).output
+            let before = Self.portCensus(filled)
+            let widening = try DomainRedefinition.widening(
+                forInactiveDomainXML: filled, spec: scenario.input.spec,
+                architecture: scenario.input.architecture)
+            #expect(widening.refusals.isEmpty, "\(widening.refusals)")
+
+            // Nothing to widen is a legitimate answer only where libvirt left
+            // the domain with its spares intact; anything else means the pass
+            // read the census wrong.
+            guard let xml = widening.xml else {
+                #expect(before.ports - before.occupied >= DomainXMLBuilder.spareHotplugPorts)
+                return
+            }
+
+            let file = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("\(name)-widened.xml")
+            try xml.write(to: file, atomically: true, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(at: file) }
+            let redefined = try Self.run(["define", file.path])
+            #expect(redefined.status == 0, "libvirt refused the widened document:\n\(redefined.output)")
+
+            let after = Self.portCensus(try Self.run(["dumpxml", "--inactive", name]).output)
+            #expect(
+                after.ports - after.occupied >= DomainXMLBuilder.spareHotplugPorts,
+                """
+                \(scenario.name) came back from the redefine with \(after.ports) ports and \
+                \(after.occupied) occupied, so a hot-plug into it still fails
+                """)
+        }
+    }
+
+    /// The devices are the other half: a redefine that lost one would be a VM
+    /// quietly missing hardware at its next boot, and libvirt would accept the
+    /// document without a word.
+    @Test(
+        "a widened definition keeps every disk, NIC and controller it had",
+        .enabled(if: libvirtIsReachable, "no libvirt daemon at STRATO_LIBVIRT_TEST_URI"),
+        arguments: defineableScenarios)
+    func wideningKeepsEveryDevice(_ scenario: DomainXMLBuilderTests.Scenario) throws {
+        let name = "strato-test-widen-devices-\(scenario.name)"
+        let document = Self.defineable(try DomainXMLBuilder.build(scenario.input), name: name)
+        // A grown size range, so the memory half of the pass runs too: this is a
+        // VM whose ceiling was raised past what it was created with.
+        let spec = scenario.input.spec
+        let grown = VMSpec(
+            cpus: spec.cpus, maxCpus: spec.maxCpus, memoryBytes: spec.memoryBytes,
+            maxMemoryBytes: spec.memoryBytes + 8 * 1024 * 1024 * 1024, boot: spec.boot,
+            machine: spec.machine, console: spec.console)
+
+        try Self.withDefinedDomain(name: name, document: document) { defined in
+            let widening = try DomainRedefinition.widening(
+                forInactiveDomainXML: try Self.run(["dumpxml", "--inactive", name]).output,
+                spec: grown, architecture: scenario.input.architecture)
+            let xml = try #require(widening.xml, "a raised ceiling should always be a widening")
+            #expect(widening.refusals.isEmpty, "\(widening.refusals)")
+
+            let file = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("\(name)-widened.xml")
+            try xml.write(to: file, atomically: true, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(at: file) }
+            let redefined = try Self.run(["define", file.path])
+            #expect(redefined.status == 0, "libvirt refused the widened document:\n\(redefined.output)")
+
+            let after = try Self.run(["dumpxml", "--inactive", name]).output
+            #expect(
+                try DomainDiskInventory.disks(inDomainXML: after).map(\.target)
+                    == DomainDiskInventory.disks(inDomainXML: defined).map(\.target))
+            for element in ["<interface", "<serial", "<console", "<channel", "<video", "<memballoon"] {
+                #expect(
+                    after.components(separatedBy: element).count
+                        == defined.components(separatedBy: element).count,
+                    "\(element) count changed across the redefine")
+            }
+            // And the ceiling really moved, in the element the next boot reads.
+            #expect(
+                try DomainMemoryInventory.memoryLayout(inDomainXML: after).maximumBytes
+                    == spec.memoryBytes + 8 * 1024 * 1024 * 1024)
+        }
+    }
+
+    /// **A define is not enough for this one, and that is the whole point.**
+    ///
+    /// A stopped VM resized past its ceiling arrives with
+    /// `maxMemoryBytes == memoryBytes`, so the widening writes a domain with no
+    /// virtio-mem region at all. Leaving `<maxMemory>` behind there keeps memory
+    /// hot-plug enabled with nothing plugged into it, and libvirt then starts
+    /// QEMU with a `maxmem` equal to the initial size alongside a slot count —
+    /// which QEMU refuses ("memory slots were specified but maximum memory size
+    /// … is equal to the initial memory size"). libvirt's own validation passes
+    /// it straight through, because the NUMA cell it checks for is still there.
+    ///
+    /// So the domain defines cleanly and fails to start, which is the one
+    /// failure mode `DomainRedefinition` rules out for itself — and only a guest
+    /// that actually boots can catch it.
+    @Test(
+        "a domain widened to no memory region still starts",
+        .enabled(if: startsGuests, "STRATO_LIBVIRT_TEST_START is not set"))
+    func wideningToNoRegionStillStarts() throws {
+        let bootROM = try #require(Self.hostBootROM)
+        let architecture = try #require(Self.hostArchitecture)
+        let name = "strato-test-widen-noregion"
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("strato-\(name)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let disk = directory.appendingPathComponent("disk.raw")
+        FileManager.default.createFile(atPath: disk.path, contents: nil)
+        try FileHandle(forWritingTo: disk).truncate(atOffset: 1024 * 1024)
+
+        // Created with headroom: 1 GiB boot, 2 GiB ceiling.
+        let gib: Int64 = 1024 * 1024 * 1024
+        let input = DomainXMLInput(
+            vmId: name, vmDirectory: directory.path,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: gib, maxMemoryBytes: 2 * gib, boot: .disk(firmware: nil),
+                console: ConsoleSpec(console: .socket, serial: .socket)),
+            disks: [ResolvedDisk(path: disk.path, format: .raw)],
+            networks: [], architecture: architecture,
+            accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
+            firmware: .monolithic(path: bootROM))
+        let document = Self.defineable(
+            try DomainXMLBuilder.build(input), name: name, substitutingFirmware: false)
+
+        try Self.withDefinedDomain(name: name, document: document) { _ in
+            // The spec a stopped resize to 2 GiB produces: no headroom asked
+            // for, and a total the domain can already hold in `<memory>` but
+            // not as *boot* memory.
+            let resized = VMSpec(
+                cpus: 1, memoryBytes: 2 * gib, maxMemoryBytes: 2 * gib, boot: .disk(firmware: nil),
+                console: ConsoleSpec(console: .socket, serial: .socket))
+            let widening = try DomainRedefinition.widening(
+                forInactiveDomainXML: try Self.run(["dumpxml", "--inactive", name]).output,
+                spec: resized, architecture: architecture)
+            let xml = try #require(widening.xml, "the boot size has to move, so this is a widening")
+            #expect(!xml.contains("<maxMemory"))
+
+            let file = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("\(name)-widened.xml")
+            try xml.write(to: file, atomically: true, encoding: .utf8)
+            defer { try? FileManager.default.removeItem(at: file) }
+            let redefined = try Self.run(["define", file.path])
+            #expect(redefined.status == 0, "libvirt refused the widened document:\n\(redefined.output)")
+
+            let started = try Self.run(["start", name])
+            #expect(started.status == 0, "the widened domain would not start: \(started.output)")
+        }
+    }
+
+    private static func attachConfig(_ fragment: String, to domain: String, called name: String) throws
+        -> Bool
+    {
+        let file = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("\(name).xml")
+        try fragment.write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        return try run(["attach-device", domain, file.path, "--config"]).status == 0
+    }
+
     /// Defines `document`, hands the resulting `dumpxml` to `body`, and undefines
     /// on every path — a leaked test domain is a domain the *next* run collides
     /// with by name.

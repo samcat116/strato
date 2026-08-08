@@ -193,6 +193,23 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// agents decode fine; absent means push mode, which is the safe default
     /// in both directions of skew.
     public let pullsDesiredState: Bool?
+    /// Whether this host can actually run the per-network DNS resolver
+    /// (STR-40): it is in OVN network mode and has a usable CoreDNS binary.
+    ///
+    /// Like `sandboxCapable` and `tpmCapable`, speaking the wire version is
+    /// deliberately not sufficient — a v37 build understands `resolverEnabled`,
+    /// but only a host with CoreDNS installed can answer on the resolver
+    /// address, and a guest pointed at an address nothing listens on loses
+    /// external name resolution entirely.
+    ///
+    /// The control plane combines this **across the whole site** before
+    /// enabling a network's resolver, because the DHCP option is authored once
+    /// per network by the topology authority while the listener is per
+    /// chassis: one incapable host would otherwise give a network DNS that
+    /// works until a VM lands somewhere else. Optional so registrations from
+    /// older agents decode fine; absent means not capable, which is the safe
+    /// default in both directions of skew.
+    public let resolverCapable: Bool?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -212,7 +229,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         tpmCapable: Bool? = nil,
         operatingSystem: OperatingSystem? = nil,
         hostInfo: HostInfo? = nil,
-        pullsDesiredState: Bool? = nil
+        pullsDesiredState: Bool? = nil,
+        resolverCapable: Bool? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -232,6 +250,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.operatingSystem = operatingSystem
         self.hostInfo = hostInfo
         self.pullsDesiredState = pullsDesiredState
+        self.resolverCapable = resolverCapable
     }
 
     /// The hypervisor list to act on: the probed report when the agent sent

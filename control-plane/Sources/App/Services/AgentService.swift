@@ -360,6 +360,7 @@ actor AgentService {
             // three inputs each time it reconnects.
             agent.sandboxNetworkingCapable = message.sandboxNetworkingCapable ?? false
             agent.tpmCapable = message.tpmCapable ?? false
+            agent.resolverCapable = message.resolverCapable ?? false
             agent.updateResources(message.resources)
             agent.status = .online
         } else {

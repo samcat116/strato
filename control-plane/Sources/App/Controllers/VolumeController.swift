@@ -109,30 +109,10 @@ struct VolumeController: RouteCollection {
         let user = try req.auth.require(User.self)
         let request = try req.content.decodeValidated(CreateVolumeRequest.self)
 
-        // Determine project
-        let projectId: UUID
-        if let requestProjectId = request.projectId {
-            projectId = requestProjectId
-        } else if let currentOrgId = user.currentOrganizationId {
-            // Get default project for user's current organization
-            guard
-                let defaultProject = try await Project.query(on: req.db)
-                    .filter(\.$organization.$id == currentOrgId)
-                    .first()
-            else {
-                throw Abort(.badRequest, reason: "No project specified and no default project found")
-            }
-            projectId = defaultProject.id!
-        } else {
-            throw Abort(.badRequest, reason: "No project specified and user has no current organization")
-        }
-
-        // Check permission to create volumes in this project
-        let hasPermission = try await req.can("create_volume", on: "project", id: projectId.uuidString)
-
-        guard hasPermission else {
-            throw Abort(.forbidden, reason: "You don't have permission to create volumes in this project")
-        }
+        let project = try await req.authorizedProjectForCreate(
+            requested: request.projectId, user: user,
+            action: "create_volume", resourceKind: "volumes")
+        let projectId = try project.requireID()
 
         // Validate format and volume type
         let format = try VolumeNaming.parseFormat(request.format)

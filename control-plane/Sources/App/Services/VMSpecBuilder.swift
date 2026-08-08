@@ -128,12 +128,14 @@ struct VMSpecBuilder {
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
         sendsMetadataPort: Bool = true,
+        siteResolverCapable: Bool? = true,
         logger: Logger? = nil
     ) -> [NetworkSpec] {
         networkSpecs(
             fromResolved: resolvedInterfaces(from: interfaces, networks: networks, logger: logger),
             securityGroupsByInterface: securityGroupsByInterface,
-            sendsMetadataPort: sendsMetadataPort)
+            sendsMetadataPort: sendsMetadataPort,
+            siteResolverCapable: siteResolverCapable)
     }
 
     /// The same, for a caller that resolved the NICs itself — the sync, which
@@ -143,14 +145,16 @@ struct VMSpecBuilder {
     static func networkSpecs(
         fromResolved resolved: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadataPort: Bool = true
+        sendsMetadataPort: Bool = true,
+        siteResolverCapable: Bool? = true
     ) -> [NetworkSpec] {
         resolved.map { interface, network in
             NetworkSpec.build(
                 interface: interface,
                 network: network,
                 securityGroupIds: interface.id.flatMap { id in securityGroupsByInterface[id] },
-                sendsMetadataPort: sendsMetadataPort)
+                sendsMetadataPort: sendsMetadataPort,
+                siteResolverCapable: siteResolverCapable)
         }
     }
 
@@ -216,6 +220,7 @@ struct VMSpecBuilder {
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
         sendsMetadataPort: Bool = true,
+        siteResolverCapable: Bool? = true,
         logger: Logger? = nil
     ) -> VMSpec {
         buildVMSpecWithVolumes(
@@ -223,7 +228,8 @@ struct VMSpecBuilder {
             resolvedInterfaces: resolvedInterfaces(
                 from: networkInterfaces, networks: networks, logger: logger),
             securityGroupsByInterface: securityGroupsByInterface,
-            sendsMetadataPort: sendsMetadataPort)
+            sendsMetadataPort: sendsMetadataPort,
+            siteResolverCapable: siteResolverCapable)
     }
 
     /// The same, for a caller holding an already-resolved NIC list (see
@@ -232,7 +238,8 @@ struct VMSpecBuilder {
         from vm: VM, image: Image?, volumes: [Volume],
         resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
-        sendsMetadataPort: Bool = true
+        sendsMetadataPort: Bool = true,
+        siteResolverCapable: Bool? = true
     ) -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
@@ -262,7 +269,8 @@ struct VMSpecBuilder {
             networks: networkSpecs(
                 fromResolved: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
-                sendsMetadataPort: sendsMetadataPort),
+                sendsMetadataPort: sendsMetadataPort,
+                siteResolverCapable: siteResolverCapable),
             console: ConsoleSpec(
                 console: vm.consoleMode, serial: vm.serialMode,
                 // nil, not an explicit `.headless`, so the key is omitted

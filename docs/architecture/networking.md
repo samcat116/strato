@@ -52,9 +52,11 @@ What genuinely remains missing (details in §Known gaps):
   (STR-103).
 - **CP-hosted ingress** (§Phase 4) and **inter-site L3** (§Phase 5) are
   unbuilt.
-- **DNS realization**: zones are modeled control-plane-side, but guests still
-  get DHCP option delivery only; the OVN `DNS` table is not yet written (see
-  [dns](./dns.md)).
+- **DNS**: realized in the datapath. The OVN `DNS` table answers A/AAAA/PTR
+  (STR-39), and each network's link-local CoreDNS answers the full record
+  vocabulary and forwards the rest through the hypervisor's egress (STR-40).
+  Inbound resolution from outside the overlay and external publication are still
+  open. See [dns](./dns.md).
 
 ## Target deployment topology
 
@@ -159,18 +161,47 @@ geneve specifically to carry its logical metadata (datapath + ingress/egress
 port); VXLAN cannot, and OVN restricts VXLAN to limited hardware-VTEP
 integration. EVPN belongs in the underlay/edge, not the tenant overlay.
 
-#### Instance metadata (IMDS) — the localport
+#### Link-local services — the localport
 
-Every logical switch with `metadataEnabled` publishes the metadata service's
-addresses — `169.254.169.254` and `fd00:ec2::254`, the two cloud-init's Ec2
-datasource already probes — via an OVN logical switch port of type
-**`localport`** (STR-49). A localport is the primitive designed for exactly
-this: `ovn-controller` instantiates it on every chassis and never forwards it
-across geneve tunnels, so one address can be published site-wide and every
-guest still reaches its own host. OpenStack's neutron metadata agent and
-ovn-kubernetes' management port both use it. OVN answers guest ARP and Neighbor
-Solicitation from the port's `addresses` field, which is why the addresses need
-not belong to the switch's subnets.
+A logical switch publishes its **link-local service addresses** via an OVN
+logical switch port of type **`localport`**. A localport is the primitive
+designed for exactly this: `ovn-controller` instantiates it on every chassis and
+never forwards it across geneve tunnels, so one address can be published
+site-wide and every guest still reaches its own host. OpenStack's neutron
+metadata agent and ovn-kubernetes' management port both use it. OVN answers
+guest ARP and Neighbor Solicitation from the port's `addresses` field, which is
+why the addresses need not belong to the switch's subnets.
+
+Two services ride localports, each with its own per-network opt-out — and they
+get **a port each**, because they terminate in different namespaces and a
+localport attaches to exactly one:
+
+- **Instance metadata** (`metadataEnabled`, STR-49) on `169.254.169.254` and
+  `fd00:ec2::254`, the two cloud-init's Ec2 datasource already probes,
+  terminated in the network's chassis namespace.
+- **The network's DNS resolver** (`resolverEnabled`, STR-40) on a per-network
+  pair derived from an allocated index — `169.254.<hi>.<lo>` and
+  `fd00:ec2:1::<index>` — terminated in the **host** namespace, because a
+  resolver has to forward and a chassis namespace has no egress. See
+  [dns](./dns.md) §Where it runs and
+  [ADR 0008](../adr/0008-resolver-in-host-namespace.md).
+
+The two ports share a teardown set, but each is protected from teardown by *its
+own* service's silence, so a sync with no opinion about one does not reap the
+other's port. Within a port, `addresses` carries one `"<mac> <ip>…"` entry whose
+address order is fixed (v4 then v6) because the drift check compares that one
+joined string.
+
+The metadata port's name keeps its historical `-metadata` suffix, and its OVS
+interface the `strato-role=metadata` marker. Renaming either would orphan the
+rows every live site already has, which is a fleet-wide localport outage bought
+for a cosmetic gain. The resolver's port is `lsp-<uuid>-resolver` with
+`strato-role=resolver`, new in STR-40 and free to be named plainly.
+`external_ids:strato-resolver-addresses` records which addresses its interface
+was built for, so a re-indexed network re-realizes.
+`external_ids:strato-services` records which services a namespace
+was actually built for, so turning a resolver on re-realizes exactly the
+namespaces that need it rather than all of them or none.
 
 The localport is the *transport* half of the IMDS story. The *payload* half
 is the per-VM metadata document itself: the control plane builds it (the
@@ -194,17 +225,41 @@ and that shape is load-bearing rather than incidental:
 
 - The **localport itself** is one row in the shared northbound database, so it
   is authored only by the site's network controller, from
-  `DesiredNetworkState.metadataEnabled`. It rides the network desired state
-  rather than the per-VM spec for `dhcpEnabled`'s reason: network-level edits
-  don't bump VM generations, so a converged VM would never re-realize it.
+  `DesiredNetworkState.metadataEnabled` / `.resolverEnabled`. It rides the
+  network desired state rather than the per-VM spec for `dhcpEnabled`'s reason:
+  network-level edits don't bump VM generations, so a converged VM would never
+  re-realize it.
 - The **chassis-local termination** — an OVS internal port on `br-int` carrying
-  `external_ids:iface-id=<lsp>`, moved into a namespace and given both
-  addresses — must exist on *every* host running a NIC on that network,
-  including the sited agents that receive an empty `networks` list because they
-  may not author topology. Its input is therefore the agent's own workload specs
-  (`NetworkSpec.metadataEnabled`), and it converges before the reconciler's
-  authority guard. Its teardown trigger is different too: the last local NIC
-  leaving the network, not the network being deleted.
+  `external_ids:iface-id=<lsp>`, moved into a namespace and given the enabled
+  services' addresses — must exist on *every* host running a NIC on that
+  network, including the sited agents that receive an empty `networks` list
+  because they may not author topology. Its input is therefore the agent's own
+  workload specs (`NetworkSpec.metadataEnabled` / `.resolverEnabled`), and it
+  converges before the reconciler's authority guard. Its teardown trigger is
+  different too: the last local NIC leaving the network, not the network being
+  deleted.
+
+The **resolver has the same two halves with the same two owners** — its own
+localport authored by the site controller, its own OVS internal port realized on
+every host with a local NIC — but the second half stays in the **host**
+namespace, with a per-network routing table and an `ip rule` matching its source
+address so replies leave the right port. Its **CoreDNS is a third piece with the
+second one's ownership**: a *single* host-wide process binding one server block
+per network address pair, converged immediately after the ports and likewise
+ahead of the authority guard. Guests may push at most `[resolver] rate_limit_pps`
+packets per second at either interface — 1024 by default, AWS's ceiling for its
+link-local services — policed on ingress with `tc`, because what it protects is
+the hypervisor rather than either service.
+
+Because that foot is in the host namespace it is fenced explicitly: forwarding
+disabled for both families, `rp_filter` set loose (strict would drop the guest
+queries the policy-routed table has no return route for), `arp_ignore=1` /
+`arp_announce=2` so the host does not answer ARP there for addresses on its
+other interfaces, and `accept_ra=0` so a guest's Router Advertisements never
+reach the host's routing table. The loose `rp_filter` needs
+`net.ipv4.conf.all.rp_filter` to not be `1` — the kernel takes the max of the
+two — which the agent's preflight reports rather than changing. See
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md).
 
 **One namespace per network per chassis** (`strato-md-<network-uuid>`, mirroring
 OpenStack's `ovnmeta-<network>`). Not an isolation nicety — overlapping tenant
@@ -232,14 +287,14 @@ both halves of the reconcile derive from one input with no drift. In practice a
 guest can only *use* it on a dual-stack network: with no global IPv6 address it
 has no valid source address for a ULA destination.
 
-Neither address belongs to the switch's subnets, so both need an advertised
-route before a guest can reach them. Most Linux images carry a `169.254.0.0/16`
+None of these addresses belongs to the switch's subnets, so each needs an
+advertised route before a guest can reach it. Most Linux images carry a `169.254.0.0/16`
 link-local route that covers the v4 address by accident, but that is not
 universal and nothing covers the v6 ULA — so STR-53 advertises both explicitly,
 through **two mechanisms with different reach**:
 
 - **DHCP option 121** (`classless_static_route` on the network's OVN
-  `DHCP_Options` row) carries the v4 route to any DHCP client that asks for the
+  `DHCP_Options` row) carries the v4 routes to any DHCP client that asks for the
   option, whatever the guest OS and whether or not it read a cloud-init seed. A
   client that leaves 121 out of its parameter request list — an older
   `dhclient` without `rfc3442-classless-static-routes` in `request` — never
@@ -286,8 +341,16 @@ and option 121 arrives with the next lease — within one `lease_time` (3600s by
 default) of enabling the service on a network.
 
 Reachability does not depend on the guest's security groups: the drop group
-carries an implicit, non-overridable egress allow to both metadata addresses
-(STR-54, §Security groups → The implicit metadata allow).
+carries implicit, non-overridable egress allows to both metadata addresses
+(STR-54) and to both resolver addresses (STR-40) — see §Security groups → The
+implicit link-local allows.
+
+**With the resolver enabled, the network's `dnsServers` change meaning.** The
+DHCP `dns_server` option becomes the resolver's link-local address, and the
+configured list becomes what that resolver forwards to. The field, its
+validation and its wire shape are unchanged; only the consumer moves. A pre-v37
+agent never sees `resolverEnabled` and keeps handing the list to guests
+verbatim, so the redefinition is inert across skew in both directions.
 
 ### Layer 2 — Edge / north-south
 
@@ -605,14 +668,26 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
   the LSP, so `to-lport` ACLs see the post-DNAT destination and the external
   source — a FIP'd service is opened with an ordinary CIDR ingress rule.
 
-### The implicit metadata allow
+### The implicit link-local allows
 
-The drop group also carries two `allow-related` ACLs for egress to the instance
-metadata service, at priority **1003** — above every rule-derived allow. Two,
-not one, because an OVN ACL match is per-family: `169.254.169.254:80` and
-`[fd00:ec2::254]:80`. Since every managed port is a drop-group member, **this
-applies regardless of which security groups the NIC belongs to, and no rule can
-override it** (STR-54).
+The drop group also carries `allow-related` ACLs for egress to the link-local
+services, at priority **1003** — above every rule-derived allow. Six of them,
+because an OVN ACL match is per family *and* per protocol:
+
+- instance metadata (STR-54): `169.254.169.254:80` and `[fd00:ec2::254]:80`;
+- the network's DNS resolver (STR-40): `169.254.0.0/16` and `fd00:ec2::/32`,
+  each on **both** udp/53 and tcp/53 — DNS falls back to TCP on truncation, and
+  a resolver that answers only UDP breaks every response large enough to set TC
+  in a way that reads as an intermittent network fault.
+
+Since every managed port is a drop-group member, **this applies regardless of
+which security groups the NIC belongs to, and no rule can override it**.
+
+The resolver carve-out matters more than the metadata one. Without the metadata
+allow a default-denied guest loses IMDS; without this one it loses name
+resolution outright — including for the SNAT'd egress its security groups *do*
+permit — and the symptom reads as a broken network rather than as the policy
+outcome it is.
 
 It is deliberate, not a side effect of the `default` group shipping an
 allow-all egress rule. **Anyone tightening that group must not expect metadata
@@ -667,8 +742,9 @@ Three scoping decisions, each narrowing what the carve-out opens:
   alternative (a per-network port group) is a whole new object lifetime bought
   for the ability to deny traffic that already goes nowhere.
 
-`dropGroupRevision` was bumped to **4** so the drop group is rewritten on
-upgrade instead of waiting for an unrelated rule edit. Note **whose** upgrade:
+`dropGroupRevision` was bumped to **5** (4 added the metadata allow, 5 the
+resolver's) so the drop group is rewritten on upgrade instead of waiting for an
+unrelated rule edit. Note **whose** upgrade:
 port groups and their ACLs are authored only by the site's network-controller
 agent, so the carve-out appears when *that* agent reaches this build — in a
 mixed-version site with an older authority, guests on freshly upgraded agents
@@ -686,6 +762,21 @@ the carve-out back off.
 - Network-level stateless ACLs (NACLs, switch-attached) are a follow-up, as
   are ACL meters/stats — `log` is wired, `meter` is not, so a chatty logged
   rule has no rate limit.
+- The per-network resolver puts one interface and one `ip rule` per network in
+  the **host** namespace. Forwarding off, loose `rp_filter`, ARP scoped to the
+  interface's own addresses, RAs ignored, an ingress policer and a source-keyed
+  rule fence it (see [ADR 0008](../adr/0008-resolver-in-host-namespace.md)), but
+  it is a larger host-side surface than the chassis-namespace design it replaced.
+  It also inherits a host setting it does not own: a host with
+  `net.ipv4.conf.all.rp_filter=1` drops every guest query, which the agent's
+  preflight reports rather than fixes.
+- Resolver indexes are allocated fleet-wide from ~65k addresses and are never
+  reused while a network holds one; exhaustion is a `409` on network create.
+- A mixed-version site whose network-controller agent predates
+  `dropGroupRevision` 5 leaves the resolver carve-out off for every port in the
+  site, including ports on hosts that already run a resolver. On a network whose
+  guests are in a restrictive security group that reads as a broken resolver
+  until the controller is upgraded.
 
 ## OVN dynamic routing (native, 25.03+)
 
@@ -987,7 +1078,8 @@ verification on real multi-node hardware (recipe in
   whose namespace failed to converge (the reboot/tmpfs case above) still gives
   a guest a route to a black hole, which now shows up as a hung probe rather
   than a refused connection — that is the failure mode to watch for when
-  rolling this out.
+  rolling this out. The same namespace now also holds the network's resolver
+  (STR-40), so a convergence failure there costs both services at once.
 - **cloud-init's Ec2 datasource can complete the handshake, and will find
   almost nothing.** The listener speaks EC2's header names deliberately
   ([ADR 0006](../adr/0006-imds-session-auth.md)), so a guest that probes
@@ -995,6 +1087,16 @@ verification on real multi-node hardware (recipe in
   is 404 until STR-65 renders it, and `user-data` until STR-60. Nothing depends
   on this today: Strato still writes a NoCloud seed ISO, and `datasource_list`
   puts NoCloud ahead of Ec2.
+- **A downgrade below wire v37 strips a network's resolver addresses** from its
+  localport and reverts the DHCP row in the same sync, so guests are told to use
+  the network's configured servers again at their next lease (within one
+  `lease_time`). That is a consistent rollback rather than a half-state, and it
+  is deliberate: the localport's opinionless guard protects the port from being
+  *deleted* when a sync says nothing about either service, not from having one
+  service's addresses removed. On a network without external access those
+  configured servers are unreachable, so such a network loses external
+  resolution again on rollback — which is the pre-STR-40 behaviour, not a new
+  fault.
 - **STR-53 landed on renderer-level verification only.** The entry it replaced
   gated it on STR-49 being verified against a live deployment first, for the
   black-hole reason above. What was actually verified is that the generated
@@ -1022,7 +1124,9 @@ verification on real multi-node hardware (recipe in
   then `ovs-vsctl del-port <name>` and `ip netns del strato-md-<uuid>`.
 - **Name resolution** is a separate track: see [dns](./dns.md). What exists on
   this substrate today is DHCP option delivery only (`dns_servers` /
-  `domain_name` → OVN `DHCP_Options`); the OVN `DNS` table is not yet written.
+  `domain_name` → OVN `DHCP_Options`), plus the OVN `DNS` table (STR-39) and a
+  per-network link-local CoreDNS (STR-40). `dns_servers` are the resolver's
+  upstream forwarders on a network with the resolver enabled.
 
 ## References
 

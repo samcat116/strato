@@ -361,8 +361,8 @@ private actor RecordingDNSActuator: NetworkActuator {
 
     func observeTopology() async throws -> ObservedNetworkTopology { ObservedNetworkTopology() }
     func ensureSwitch(_ desired: DesiredSwitch) async throws {}
-    func ensureMetadataPort(_ port: DesiredMetadataPort) async throws {}
-    func removeMetadataPort(name: String) async throws {}
+    func ensureServiceLocalPort(_ port: DesiredServiceLocalPort) async throws {}
+    func removeServiceLocalPort(name: String) async throws {}
     func ensureRouter(_ router: DesiredRouter) async throws {}
     func ensureRouterPort(_ port: DesiredRouterPort, onRouter routerName: String) async throws {}
     func ensureUplink(for router: DesiredRouter) async throws -> Bool { false }
