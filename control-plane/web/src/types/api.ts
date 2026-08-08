@@ -1637,8 +1637,20 @@ export interface Volume {
   name: string;
   description: string;
   projectId?: string;
+  /**
+   * The size asked for by the last accepted create or resize — not necessarily
+   * the size on disk. A resize is accepted and then converges.
+   */
   size: number;
   sizeFormatted: string;
+  /**
+   * The size the owning agent reports the image actually has (backend
+   * STR-199). Absent until an agent reports one. A disagreement with `size`
+   * means a grow is still outstanding; `conditions` says whether it is in
+   * flight or degraded.
+   */
+  observedSize?: number;
+  observedSizeFormatted?: string;
   format: VolumeFormat;
   volumeType: VolumeType;
   status: VolumeStatus;

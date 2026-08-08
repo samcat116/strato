@@ -776,7 +776,28 @@ public enum WireProtocol {
     /// neither key, a v37 agent reads nil for both, and guests keep receiving
     /// the configured resolver list over DHCP exactly as before.
     ///
-    /// Version 38: the skew window closes (deferred-cleanup sweep). Both sides
+    /// Version 38: a volume reports the size it actually has (STR-199).
+    /// `ObservedVolumeState` gains `sizeBytes: Int64?`. Agent→control-plane
+    /// only, no frame added or removed, and — like v35 — no capability gate,
+    /// because there is nothing to gate: the control plane does not change what
+    /// it *sends* based on the answer, and a volume's desired size has always
+    /// travelled and converged without it.
+    ///
+    /// The field closes a gap the old comment on `ObservedVolumeState` argued
+    /// was not worth a subprocess: a desired size the agent has refused to
+    /// realize (a grow against a running guest) was the only size the API
+    /// could report, so a volume that never grew answered with the size it had
+    /// failed to reach. The subprocess objection expired on its own — the
+    /// planner needs the same number to decide whether a grow is outstanding
+    /// and already caches one per volume.
+    ///
+    /// Absence is read strictly in the one direction that matters: nil is "this
+    /// agent said nothing", never "zero bytes", so a pre-v38 agent's silence
+    /// leaves `observed_size_bytes` exactly as the last report that spoke left
+    /// it rather than clearing it. Skew the other way is inert — a pre-v38
+    /// control plane's decoder drops the unknown key.
+    ///
+    /// v38 also closes the skew window (deferred-cleanup sweep). Both sides
     /// refuse any peer below `minimumSupportedVersion`, so every per-feature
     /// `supports*` gate this file carried since v2 is gone, along with the
     /// dual paths they guarded — most notably the push transport for desired
@@ -787,7 +808,7 @@ public enum WireProtocol {
     /// `AgentUnregisterMessage.reason`, the `VMLogMessage` detail fields,
     /// `ObservedVolumeState.format`/`.deviceName`, the `ObservedSnapshotFacts`
     /// size breakdown, `ObservedManifestStatus.preservedCopyPath`,
-    /// `UnrecognizedWorkload.status`, `VMMemoryStats.freeBytes`,
+    /// `VMMemoryStats.freeBytes`,
     /// `SandboxExecStartedMessage.sandboxId`, `SandboxExecOutputMessage.stream`,
     /// `ConsoleSpec.console`/`.serial`) and the enum cases nothing produced.
     public static let currentVersion = 38

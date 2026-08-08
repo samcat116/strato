@@ -1,4 +1,5 @@
 export { VolumeStatusBadge } from "./volume-status-badge";
+export { VolumeSize } from "./volume-size";
 export { SnapshotStatusBadge } from "./snapshot-status-badge";
 export { VolumeTable } from "./volume-table";
 export { VolumeActions } from "./volume-actions";

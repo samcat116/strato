@@ -65,8 +65,23 @@ struct VolumeReconciliationTests {
         /// as distinct from one that holds nothing.
         var inventoryReadable = true
 
+        /// When set, every `.resize` is refused with it — the shape of the
+        /// agent's guard against growing an image a running guest holds open
+        /// (STR-199).
+        var resizeFailure: Error?
+
         func setPresenceComplete(_ complete: Bool) { presenceComplete = complete }
         func setInventoryReadable(_ readable: Bool) { inventoryReadable = readable }
+        func setResizeFailure(_ error: Error?) { resizeFailure = error }
+
+        func waitForReports(_ count: Int, timeoutMillis: Int = 5000) async -> Int {
+            var waited = 0
+            while reportCount < count && waited < timeoutMillis {
+                try? await Task.sleep(nanoseconds: 5_000_000)
+                waited += 5
+            }
+            return reportCount
+        }
         func presenceIsComplete() -> Bool { presenceComplete }
         func observedPresence() -> [String: VMPresence] { [:] }
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
@@ -76,6 +91,7 @@ struct VolumeReconciliationTests {
 
         func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
             performed.append((step, item.id))
+            if step == .resize, let resizeFailure { throw resizeFailure }
             guard let desired = item.desiredVolume else { return }
             switch step {
             case .create:
@@ -157,16 +173,90 @@ struct VolumeReconciliationTests {
         #expect(plan.items.first?.steps == [.resize])
     }
 
-    /// A size the agent could not probe plans nothing, rather than a resize on
-    /// a guess: leaving an unreadable volume alone beats growing it repeatedly.
-    @Test("An unprobeable size plans no resize")
-    func unknownSizePlansNoResize() {
+    /// A size the agent could not probe never grows anything on a guess — but
+    /// it must not pass *silently* either. Planning nothing let the item run
+    /// with no steps, and an empty run records its generation as applied, so a
+    /// resize whose current size was never read reported as converged
+    /// (STR-199). It plans `.resize`, which the actuator refuses as blocked.
+    @Test("An unprobeable size plans a resize the actuator will refuse")
+    func unknownSizePlansARefusableResize() {
         let id = UUID()
         let plan = Reconciler.planVolumes(
-            desired: [Self.desired(id, sizeBytes: 20 << 30)],
+            desired: [Self.desired(id, generation: 2, sizeBytes: 20 << 30)],
             present: [id.uuidString: .managed(Self.facts(sizeBytes: nil))],
             lastApplied: [id.uuidString: 1])
-        #expect(plan.items.isEmpty)
+        #expect(plan.items.first?.steps == [.resize])
+    }
+
+    /// The same rule with nothing outstanding: an unreadable size is unreadable
+    /// whether or not anyone asked for a new one, because "it already matches"
+    /// is exactly the claim the agent cannot make.
+    @Test("An unprobeable size is not reported as a matching size")
+    func unknownSizeIsNotTreatedAsMatching() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id, generation: 2)],
+            present: [id.uuidString: .managed(Self.facts(sizeBytes: nil))],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.resize])
+    }
+
+    /// An unreadable size must not starve the attachment work above it, which
+    /// needs no size at all.
+    @Test("An unprobeable size still lets an attach be planned")
+    func unknownSizeDoesNotStarveAttach() {
+        let id = UUID()
+        let vmId = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [
+                Self.desired(
+                    id, attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: .disk(1)))
+            ],
+            present: [id.uuidString: .managed(Self.facts(sizeBytes: nil))],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.attach])
+    }
+
+    /// The other half of STR-199's remedy. The grow guard tells an operator to
+    /// stop the guest *or detach*, and with `.resize` planned ahead of a desired
+    /// removal only the first of those could ever run: the refused resize was
+    /// the only step planned, so the detach that would lift the refusal was
+    /// never reached. A removal outranks a pending grow for that reason.
+    @Test("A desired detach is planned ahead of a pending grow")
+    func desiredDetachOutranksAPendingGrow() {
+        let id = UUID()
+        let vmId = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id, generation: 2, sizeBytes: 20 << 30, attachment: nil)],
+            present: [
+                id.uuidString: .managed(
+                    Self.facts(
+                        sizeBytes: 10 << 30, attachedVMId: vmId.uuidString, deviceName: "disk1"))
+            ],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.detach])
+    }
+
+    /// An attachment that is *moving* keeps the original order: the grow lands
+    /// before the slot changes underneath it.
+    @Test("A grow still precedes an attachment that is only moving")
+    func growStillPrecedesAMovingAttachment() {
+        let id = UUID()
+        let wanted = UUID()
+        let actual = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [
+                Self.desired(
+                    id, generation: 2, sizeBytes: 20 << 30,
+                    attachment: DesiredVolumeAttachment(vmId: wanted, deviceName: .disk(1)))
+            ],
+            present: [
+                id.uuidString: .managed(
+                    Self.facts(
+                        sizeBytes: 10 << 30, attachedVMId: actual.uuidString, deviceName: "disk1"))
+            ],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.resize])
     }
 
     @Test("A volume whose desired attachment is unrealized is attached")
@@ -290,6 +380,9 @@ struct VolumeReconciliationTests {
         #expect(
             VolumeConvergenceError.sourceNotReady("vm not here").failureClassification
                 == .waitingOnDependency)
+        // A refusal whose remedy is "stop the guest" is neither: an operator
+        // has to see it, and doing what it says has to work (STR-199).
+        #expect(VolumeConvergenceError.blocked("guest is running").failureClassification == .blocked)
     }
 
     // MARK: - Lanes
@@ -489,6 +582,68 @@ struct VolumeReconciliationTests {
         #expect(await actuator.performed.map(\.step) == [.create])
         #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volume) == 1)
         #expect(await reconciler.lastError(for: id.uuidString, kind: .volume) == nil)
+    }
+
+    /// The regression behind STR-199. The guard refusing to grow a volume whose
+    /// guest is still running names a remedy — stop it, or detach — and while
+    /// the refusal was classified permanent, applying that remedy did nothing:
+    /// the attempt cap had already been exhausted at the first refusal, so no
+    /// later sync re-drove the grow and the volume sat short of a size nothing
+    /// had withdrawn until someone asked for a *different* one.
+    @Test("A blocked grow is retried on every sync and converges when the block clears")
+    func blockedResizeRetriesUntilTheBlockClears() async {
+        let id = UUID()
+        let actuator = MockVolumeActuator(
+            volumes: [id.uuidString: .managed(Self.facts(sizeBytes: 1 << 30))])
+        await actuator.setResizeFailure(
+            VolumeConvergenceError.blocked(
+                "refusing to grow volume \(id): it is attached to VM x, which is not confirmed "
+                    + "shut down, and this agent has no online grow path"))
+        let reconciler = Self.reconciler(actuator)
+        let message = Self.sync(volumes: [Self.desired(id, generation: 3, sizeBytes: 3 << 30)])
+
+        // Every sync re-drives the refused grow, well past the attempt cap.
+        let rounds = Reconciler.maxAttemptsPerGeneration + 3
+        for round in 1...rounds {
+            await reconciler.apply(message)
+            _ = await actuator.waitForReports(round)
+        }
+        #expect(await actuator.performed.map(\.step) == Array(repeating: .resize, count: rounds))
+        // And unlike a dependency wait, the reason is reported every time — the
+        // thing that lifts this block is a person, and a person who is never
+        // told cannot lift it.
+        let blockedError = await reconciler.lastError(for: id.uuidString, kind: .volume)
+        #expect(blockedError?.contains("not confirmed shut down") == true)
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volume) == 0)
+
+        // The operator stops the guest. The *same* generation converges — the
+        // point being that nobody had to re-ask for the size.
+        await actuator.setResizeFailure(nil)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(rounds + 1)
+
+        #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volume) == 3)
+        #expect(await reconciler.lastError(for: id.uuidString, kind: .volume) == nil)
+    }
+
+    /// The other half of the same rule: a block burning no attempt must not
+    /// make every *other* failure unbounded too.
+    @Test("A permanent resize failure still stops at the first attempt")
+    func permanentResizeStillCapsImmediately() async {
+        let id = UUID()
+        let actuator = MockVolumeActuator(
+            volumes: [id.uuidString: .managed(Self.facts(sizeBytes: 1 << 30))])
+        await actuator.setResizeFailure(VolumeConvergenceError.unsupported("no storage backend"))
+        let reconciler = Self.reconciler(actuator)
+        let message = Self.sync(volumes: [Self.desired(id, generation: 3, sizeBytes: 3 << 30)])
+
+        for _ in 1...(Reconciler.maxAttemptsPerGeneration + 2) {
+            await reconciler.apply(message)
+            _ = await actuator.waitForReports(1)
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+
+        #expect(await actuator.performed.count == 1)
     }
 
     /// Generations are namespaced by kind, so a VM and a volume that happen to

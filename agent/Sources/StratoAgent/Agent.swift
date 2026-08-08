@@ -3736,9 +3736,14 @@ extension Agent: ReconcileActuator {
     /// Every write path records the size it produced, so the steady state runs
     /// no subprocess at all; the probe below only fires for a volume this
     /// process has not seen written — one created by a previous incarnation of
-    /// the agent — and then once per volume, not once per sync. A probe that
-    /// fails yields nil, which plans no resize: leaving an unreadable volume
-    /// alone beats growing it repeatedly on a guess.
+    /// the agent — and then once per volume, not once per sync.
+    ///
+    /// A probe that fails yields nil, and nil never grows anything: the planner
+    /// and the resize actuator both read this, and both treat an unreadable
+    /// size as a `blocked` convergence naming the image rather than a resize on
+    /// a guess. What nil must *not* do is pass silently — an item that runs no
+    /// steps records its generation as applied, which is how an unreadable
+    /// volume used to report a grow it never attempted as converged (STR-199).
     private func volumeVirtualSize(volumeId: String, path: String) async -> Int64? {
         if let cached = volumeSizes[volumeId] { return cached }
         guard let storageBackend else { return nil }
@@ -4250,7 +4255,26 @@ extension Agent: ReconcileActuator {
         guard let disk = try await backend.listVolumes()[item.id] else {
             throw VolumeConvergenceError.sourceNotReady("volume \(item.id) is not present on this agent")
         }
-        let current = try await backend.volumeInfo(volumePath: disk.path).virtualSize
+        // The planner's cached size, not a fresh `qemu-img info` (STR-199).
+        //
+        // Two reasons, and the second is the load-bearing one. It is the same
+        // number the planner compared to decide this step was needed, so the
+        // actuator can no longer disagree with the plan it was handed. And a
+        // blocked grow is re-driven on *every* sync for as long as the guest
+        // runs, so a subprocess here would be a subprocess per volume per sync,
+        // indefinitely — the very cost this work argued was too high to pay for
+        // reporting the size in the first place. The cache is authoritative
+        // because every write path records the size it produced; the probe
+        // behind it fires once per volume, not once per attempt.
+        guard let current = await volumeVirtualSize(volumeId: item.id, path: disk.path) else {
+            // Blocked rather than transient: an image whose size cannot be read
+            // is not one to grow on a guess, and this is how the refusal
+            // reaches an operator instead of the item running no steps and
+            // recording the generation as converged.
+            throw VolumeConvergenceError.blocked(
+                "cannot read the current size of volume \(item.id) at \(disk.path), so its size "
+                    + "cannot be converged; check the image with `qemu-img info`")
+        }
         guard desired.sizeBytes >= current else {
             // Shrinking a disk image truncates the guest's filesystem. There is
             // no retry that makes this safe, so it is permanent: the control
@@ -4287,12 +4311,20 @@ extension Agent: ReconcileActuator {
                 {
                     isDefinitelyStopped = status == .shutdown
                 }
-                // Permanent, not transient: no retry makes a running guest
-                // safer, so the control plane surfaces a degraded volume with a
-                // reason an operator can act on (stop the guest, or detach)
-                // rather than burning the attempt budget on a doomed grow.
+                // Blocked, not permanent (STR-199). The reason names a remedy —
+                // stop the guest, or detach — and the whole point of naming one
+                // is that applying it works: the block clears without anyone
+                // re-asking for the size, so the refusal must not consume the
+                // attempt budget that decides whether the next sync tries
+                // again. Classified permanent, this guard reported what to do
+                // and then ignored an operator who did it, leaving a volume
+                // permanently short of a size nothing had withdrawn.
+                //
+                // Still not transient: an operator has to see the reason, and a
+                // transient failure that outlives its three attempts is degraded
+                // with no more explanation than one that never had a remedy.
                 guard isDefinitelyStopped else {
-                    throw VolumeConvergenceError.unsupported(
+                    throw VolumeConvergenceError.blocked(
                         "refusing to grow volume \(item.id): it is attached to VM "
                             + "\(attachment.vmId), which is not confirmed shut down, and this agent "
                             + "has no online grow path")
@@ -5230,6 +5262,12 @@ extension Agent: ReconcileActuator {
                     volumeId: uuid,
                     present: true,
                     storagePath: facts.path,
+                    // The same number the planner just compared against the
+                    // desired size (STR-199), so what the API reports and what
+                    // this agent is converging on cannot disagree. Nil when the
+                    // probe could not read the image — reported as "no answer",
+                    // never as zero.
+                    sizeBytes: facts.sizeBytes,
                     attachedVMId: facts.attachedVMId.flatMap { UUID(uuidString: $0) },
                     observedGeneration: await reconciler.observedGeneration(for: volumeId, kind: .volume),
                     convergencePhase: await reconciler.convergencePhase(for: volumeId, kind: .volume),

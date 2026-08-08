@@ -36,7 +36,19 @@ export function ResizeVolumeDialog({
   onOpenChange,
   onSuccess,
 }: ResizeVolumeDialogProps) {
+  // The floor is the size already *requested*, because that is what the
+  // endpoint compares against — a grow to less than an outstanding one is
+  // refused with a 400 even when the image on disk is smaller still.
   const currentSizeGB = Math.ceil(volume.size / GB);
+  // What is actually on disk, when the owning agent has reported it. A grow the
+  // agent has refused leaves the two apart for as long as the refusal holds
+  // (backend STR-199), and telling the operator the requested number is
+  // "current" is the conflation that made a refused grow look applied.
+  const growOutstanding =
+    volume.observedSize != null && volume.observedSize < volume.size;
+  const sizeSummary = growOutstanding
+    ? `On disk: ${volume.observedSizeFormatted} (${volume.sizeFormatted} requested, not applied yet).`
+    : `Current size: ${volume.observedSizeFormatted ?? volume.sizeFormatted}.`;
   const { isLoading, run } = useAcceptedMutation();
   const [sizeGB, setSizeGB] = useState(String(currentSizeGB));
 
@@ -46,7 +58,7 @@ export function ResizeVolumeDialog({
     const newSize = parseInt(sizeGB);
     if (!newSize || newSize <= currentSizeGB) {
       toast.error(
-        `New size must be larger than the current size (${volume.sizeFormatted})`
+        `New size must be larger than the size already requested (${volume.sizeFormatted})`
       );
       return;
     }
@@ -73,8 +85,9 @@ export function ResizeVolumeDialog({
         <DialogHeader>
           <DialogTitle>Resize {volume.name}</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Current size: {volume.sizeFormatted}. Volumes can only grow, and
-            must be detached to resize.
+            {sizeSummary} Volumes can only grow. One attached to a running VM
+            cannot be grown yet — stop the VM or detach the volume, and the
+            resize completes on its own.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>

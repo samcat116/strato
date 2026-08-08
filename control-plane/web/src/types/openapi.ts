@@ -5865,10 +5865,20 @@ export interface components {
             description: string;
             /** Format: uuid */
             projectId?: string;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The size asked for by the last accepted create or resize. A resize answers `202` and converges, so this moves when the mutation is accepted, not when the bytes do.
+             */
             size: number;
             /** @description Display form of `size` in binary units (e.g. `10 GiB`). */
             sizeFormatted: string;
+            /**
+             * Format: int64
+             * @description The size the owning agent reports the image actually has. Absent when no agent has reported one yet. Where it disagrees with `size` a grow is still outstanding — `conditions` says whether it is in flight or degraded.
+             */
+            observedSize?: number | null;
+            /** @description Display form of `observedSize` in binary units. */
+            observedSizeFormatted?: string | null;
             format: components["schemas"]["VolumeFormat"];
             volumeType: components["schemas"]["VolumeType"];
             status: components["schemas"]["VolumeStatus"];

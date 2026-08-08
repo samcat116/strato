@@ -286,12 +286,35 @@ block device never grows what is on it: guest-side rescan and filesystem
 expansion (`resize2fs`, `xfs_growfs`, or the Windows equivalent) stay the
 user's job.
 
-Concretely, an attached grow is **refused by the agent**, once and permanently,
-rather than attempted. `volumeReconcileResize` looks up the volume's recorded
-attachment and grows the image only when the owning VM is confirmed
-`.shutdown`; anything else — running, paused, or a status the agent cannot read
-— is a permanent convergence failure naming the VM, so the control plane
-degrades the volume with something an operator can act on.
+Concretely, an attached grow is **refused by the agent** rather than attempted.
+`volumeReconcileResize` looks up the volume's recorded attachment and grows the
+image only when the owning VM is confirmed `.shutdown`; anything else —
+running, paused, or a status the agent cannot read — is a convergence failure
+naming the VM, so the control plane degrades the volume with something an
+operator can act on.
+
+That refusal is **blocked, not permanent** (STR-199), and the distinction is
+the whole value of naming a remedy. Classified permanent, the refusal exhausted
+the generation's attempt budget on its first try: an operator who read "stop the
+guest, or detach" and did it got nothing, because no later sync re-drove the
+grow. The volume sat short of a size nothing had withdrawn until someone asked
+for a *different* one. A `blocked` failure is reported exactly like a permanent
+one — the reason has to reach a person — but burns no attempt, so every
+level-triggered sync retries and the grow lands the moment the guest stops.
+Nobody re-asks; the desired size was never in doubt.
+
+The two are still distinct classifications, because most permanent failures
+name no remedy that a retry would notice. A shrink is permanent: no state of
+the host makes truncating a filesystem safe.
+
+Both halves of the remedy have to be reachable for any of this to be true, and
+the *detach* half was not. `volumeSteps` planned the grow before it looked at
+the attachment, so a volume detached while a grow was outstanding got `.resize`
+— refused — as its only step, forever, and the detach that would have lifted
+the refusal was never planned. A desired **removal** of an attachment now
+outranks a pending grow; an attachment that is merely *moving* keeps the
+original order, since there the resize really does have to land before the slot
+changes underneath it.
 
 The refusal is a check rather than a hope, and that distinction is the point.
 Left to itself, `qemu-img resize` on an open image is turned back by the image
@@ -304,6 +327,24 @@ until there is an online grow path, the agent's decision is *no*.
 
 A volume attached to a stopped VM does grow, which the old detach-only rule
 refused outright.
+
+**A volume reports the size it has, not just the size it was asked for**
+(STR-199, wire v38). `Volume.size` is desired state — a resize answers `202` and
+converges, so it moves when the mutation is accepted — and until `sizeBytes`
+joined `ObservedVolumeState` it was also the only size the API could report. A
+volume whose grow the agent had refused therefore answered with the size it had
+*failed* to reach, which reads exactly like a grow that worked. The observed
+size lands in `observed_size_bytes` and surfaces as `observedSize` alongside
+`size`, so a grow still outstanding is legible as `1 GiB → 3 GiB` rather than
+silently as `3 GiB`.
+
+The original argument against the field — a `qemu-img info` subprocess per
+volume per report — expired on its own: the planner needs the same number to
+decide whether a grow is outstanding, so the agent already computes and caches
+one per volume, and reporting it adds no work. Absence is read the way the
+applied I/O ceilings are: nil is "this agent said nothing" (a pre-v38 agent, or
+a probe that could not read the image), never zero, and never a licence to
+clear what a previous report recorded.
 
 Deletion is the same finalizer dance VMs use. A `DELETE` does not remove the
 row: it marks the volume absent, stamps `agent.absent`, and the row survives
