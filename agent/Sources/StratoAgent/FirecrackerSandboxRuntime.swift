@@ -102,6 +102,32 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// recovery never finds them). Runs on the first create.
     private var warmTemplateSweepDone = false
 
+    /// Whether this host's Firecracker can repoint a restored network device
+    /// at a different host TAP (STR-104), resolved once per agent life from
+    /// `firecracker --version`. The binary cannot change under a running
+    /// agent — an update replaces the agent too — so a version the probe
+    /// actually read is cached for good.
+    ///
+    /// A probe *failure* is not, deliberately: `firecrackerVersion` answers nil
+    /// for a spawn error, a timeout and a non-zero exit as readily as for a
+    /// build too old to say, and memoizing that would let one `--version` fork
+    /// timing out under create pressure make every networked fork on the host
+    /// fail permanently until a restart.
+    private var networkOverridesSupport: Bool?
+
+    /// The Firecracker interface id every sandbox NIC is configured with. It
+    /// is what `network_overrides` names on a snapshot load, so it has to be
+    /// the same string on the cold path, the template path, and the restore.
+    private static let networkInterfaceId = "eth0"
+
+    /// The MAC a warm template's throwaway NIC is created with.
+    ///
+    /// Deliberately constant and obviously synthetic: it is baked into every
+    /// template snapshot, the guest never configures the device while held,
+    /// and the sandbox's real MAC is applied by the `launch` request. A
+    /// per-template random MAC would only make identical templates differ.
+    private static let templateMACAddress = "06:00:00:00:00:01"
+
     /// Guest context ID for the single vsock device. CIDs 0–2 are reserved, so
     /// 3 is the first usable guest CID.
     ///
@@ -313,18 +339,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // identity, and report it healthy as one create operation. No registry
         // pull or cold/warm image provisioning belongs on this path.
         if let restoreFrom = spec.restoreFrom {
-            // A snapshot captures its device set: one taken before guest
-            // networking has no network interface, and Firecracker cannot add
-            // one to a restored VM — the restore has to remap an existing device
-            // via `network_overrides` (STR-104). Refuse rather than restore a
-            // sandbox whose NIC would silently not exist.
-            guard spec.network == nil else {
-                throw SandboxRuntimeError.networkingUnsupported(
-                    "restoring a networked sandbox needs the snapshot's network device remapped on load, "
-                        + "which this agent cannot do yet (STR-104)")
-            }
             try await provisionFromSandboxSnapshot(
-                sandboxId: sandboxId, spec: spec, restoreFrom: restoreFrom)
+                sandboxId: sandboxId, spec: spec, restoreFrom: restoreFrom,
+                networkAttachments: networkAttachments)
             return
         }
 
@@ -350,27 +367,41 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             minimumBytes: SandboxConfigDrive.standardBlockImageBytes)
 
         // Warm start (issue #426): when a template snapshot for this exact
-        // (image, guest, machine shape) exists, provision by restoring it —
-        // the microVM comes up already booted to the held point, and
-        // `bootSandbox` launches the real workload into it. Any failure here
-        // falls back to the cold path; a config document too large for the
-        // standard capacity is cold-only (the device size would not match
-        // the template's).
-        // A networked sandbox is cold-only, for the same reason a fork is
-        // refused above: a warm template's snapshot has no network device, and
-        // a restored VM cannot grow one (STR-104). Cold-booting costs the warm
-        // path's latency saving, which is the honest trade until the remap
-        // lands.
+        // (image, guest, machine shape, NIC shape) exists, provision by
+        // restoring it — the microVM comes up already booted to the held
+        // point, and `bootSandbox` launches the real workload into it. Any
+        // failure here falls back to the cold path; a config document too
+        // large for the standard capacity is cold-only (the device size would
+        // not match the template's).
+        //
+        // A networked sandbox additionally needs a Firecracker that can point
+        // the template's network device at *this* sandbox's TAP as it loads
+        // (STR-104). On an older VMM the honest answer is a cold boot, which
+        // costs the latency saving and nothing else.
+        let warmNetworkRemapOK: Bool
+        if networkAttachments.isEmpty {
+            warmNetworkRemapOK = true
+        } else {
+            // A host that could not be asked reads the same as one that
+            // cannot: warm start only ever trades latency, so an unknown is a
+            // cold boot rather than something to fail or retry over.
+            warmNetworkRemapOK = await probeNetworkOverridesSupport() == true
+        }
         let warmEligible =
-            warmStartActive && spec.network == nil
+            warmStartActive && warmNetworkRemapOK
             && configData.count == SandboxConfigDrive.standardBlockImageBytes
-        if warmStartActive, spec.network != nil {
+        if warmStartActive, !warmNetworkRemapOK {
             logger.debug(
-                "Sandbox has a NIC, so it is cold-provisioned (warm templates carry no network device)",
-                metadata: ["sandboxId": .string(sandboxId)])
+                "Firecracker predates snapshot network remapping, so this networked sandbox is cold-provisioned",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "minimumFirecracker": .string(
+                        FirecrackerSnapshotFeatures.networkOverridesMinimumVersion),
+                ])
         }
         let warmKey = warmSnapshotKey(
-            imageDigest: materialized.manifestDigest, guestImage: guestImage, spec: spec)
+            imageDigest: materialized.manifestDigest, guestImage: guestImage, spec: spec,
+            nicCount: networkAttachments.count)
         var warmMissed = true
         if warmEligible, let warmEntry = warmCache.lookup(warmKey) {
             warmMissed = false
@@ -382,11 +413,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                         "cache entry has no readable meta sidecar")
                 }
                 let vm = try await provisionFromWarmSnapshot(
-                    sandboxId: sandboxId, spec: spec, entry: warmEntry, configData: configData)
+                    sandboxId: sandboxId, spec: spec, entry: warmEntry, configData: configData,
+                    networkAttachments: networkAttachments)
                 sandboxes[sandboxId] = Managed(
                     spec: spec, rootfsPath: vm.rootfsPath, configPath: vm.configPath,
                     vsockUdsPath: vm.vsockUdsPath, identityNonce: nonce, jail: vm.jail,
                     registryCredential: registryCredential,
+                    networkAttachments: networkAttachments,
                     warmHeldIdentity: (meta.templateId, meta.templateNonce),
                     manager: vm.manager, lastExitCode: nil)
                 logger.info(
@@ -422,6 +455,106 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         if warmEligible, warmMissed {
             maybeStartWarmTemplateBuild(
                 key: warmKey, materialized: materialized, guestImage: guestImage, spec: spec)
+        }
+    }
+
+    /// Whether this host's Firecracker accepts `network_overrides` on a
+    /// snapshot load — the single thing that makes a checkpoint's network
+    /// device reusable under a different host TAP (STR-104).
+    ///
+    /// **Nil means "could not tell", not "no".** The three answers are
+    /// genuinely different to callers: `true` remaps, `false` is a permanent
+    /// property of the host, and nil is a probe that failed for reasons a
+    /// retry can clear.
+    private func probeNetworkOverridesSupport() async -> Bool? {
+        if let networkOverridesSupport { return networkOverridesSupport }
+        guard let version = await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath)
+        else {
+            // Deliberately not memoized — see the property.
+            logger.warning(
+                "Could not read the Firecracker version, so whether a restored network device can be remapped is unknown",
+                metadata: ["firecrackerBinaryPath": .string(firecrackerBinaryPath)])
+            return nil
+        }
+        let supported = FirecrackerSnapshotFeatures.supportsNetworkOverrides(version)
+        networkOverridesSupport = supported
+        if !supported {
+            logger.info(
+                "Firecracker cannot remap a restored network device; networked sandboxes cold-boot and cannot be forked",
+                metadata: [
+                    "firecrackerVersion": .string(version),
+                    "minimumVersion": .string(
+                        FirecrackerSnapshotFeatures.networkOverridesMinimumVersion),
+                ])
+        }
+        return supported
+    }
+
+    /// The host TAP backing this sandbox's NIC, or nil when it has none.
+    ///
+    /// Throws for a NIC realized as anything else, for the same reason the cold
+    /// path does: Firecracker's only network backend is a TAP opened by name —
+    /// no fd passing, no vhost-user — so an agent in `network_mode = "user"`
+    /// (or with no network service at all) resolves every NIC to `.userMode`
+    /// and can realize nothing. Silently skipping it would produce a sandbox
+    /// with no interface that the control plane records as having one.
+    private func sandboxTAPName(_ attachments: [ResolvedNetworkAttachment]) throws -> String? {
+        // A spec is capped at one NIC, so the first attachment is the whole set.
+        guard let nic = attachments.first else { return nil }
+        guard case .tap(let tapName) = nic.attachment else {
+            throw SandboxRuntimeError.networkingUnsupported(
+                "this agent realized the sandbox's NIC as \(nic.attachment), but a jailed "
+                    + "Firecracker can only open a TAP by name inside its namespace; "
+                    + "sandbox networking needs network_mode = \"ovn\" with a working OVN/OVS")
+        }
+        return tapName
+    }
+
+    /// The `network_overrides` entry pointing a restored NIC at `tapName`,
+    /// where the remap is *optional*: nil when there is no NIC, and nil rather
+    /// than an error when this host cannot (or could not be asked to) remap.
+    ///
+    /// Only restore **in place** may use this. It does not need the remap at
+    /// all — the TAP name derives from the sandbox id, which a restore in
+    /// place does not change, so the checkpoint already names the right device
+    /// — and a Firecracker that predates the field rejects the whole load body
+    /// over it, so the key has to be absent rather than present-and-ignored.
+    private func optionalNetworkOverrides(
+        forTAP tapName: String?
+    ) async -> [SnapshotLoadConfig.NetworkOverride]? {
+        guard let tapName, await probeNetworkOverridesSupport() == true else { return nil }
+        return [
+            SnapshotLoadConfig.NetworkOverride(
+                ifaceId: Self.networkInterfaceId, hostDevName: tapName)
+        ]
+    }
+
+    /// The `network_overrides` entry for a load that cannot work without one —
+    /// a fork, or a warm restore — or nil when there is no NIC to remap.
+    ///
+    /// Separates the two ways this can be unavailable, because they call for
+    /// opposite handling. A Firecracker too old is a property of the host, so
+    /// it is permanent and the caller's convergence stops. A probe that could
+    /// not answer is transient: the version is unread, not old, and retrying
+    /// is what distinguishes them.
+    private func requiredNetworkOverrides(
+        forTAP tapName: String?, operation: String
+    ) async throws -> [SnapshotLoadConfig.NetworkOverride]? {
+        guard let tapName else { return nil }
+        switch await probeNetworkOverridesSupport() {
+        case true:
+            return [
+                SnapshotLoadConfig.NetworkOverride(
+                    ifaceId: Self.networkInterfaceId, hostDevName: tapName)
+            ]
+        case false:
+            throw SandboxRuntimeError.networkingUnsupported(
+                "\(operation) needs Firecracker "
+                    + "\(FirecrackerSnapshotFeatures.networkOverridesMinimumVersion) or newer to point the "
+                    + "checkpointed network device at this sandbox's TAP")
+        case nil:
+            throw SandboxRuntimeError.hostCapabilityUnknown(
+                "could not read the Firecracker version, so \(operation) cannot be shown to be safe yet")
         }
     }
 
@@ -634,24 +767,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             // orchestrator created inside this sandbox's network namespace and
             // chowned to the jail's uid; Firecracker opens it by name from
             // inside the jail, which the jailer has already entered via
-            // `--netns` (issue STR-100). A spec is capped at one NIC, so the
-            // first attachment is the whole set.
-            if let nic = networkAttachments.first {
-                // Firecracker's only network backend is a TAP opened by name —
-                // no fd passing, no vhost-user — so anything else cannot be
-                // realized here. Refuse loudly: an agent in `network_mode =
-                // "user"` (which is not macOS-only) or with no network service
-                // at all resolves every NIC to `.userMode`, and silently
-                // skipping it would boot the sandbox with no interface while
-                // the control plane records it as having one.
-                guard case .tap(let tapName) = nic.attachment else {
-                    throw SandboxRuntimeError.networkingUnsupported(
-                        "this agent realized the sandbox's NIC as \(nic.attachment), but a jailed "
-                            + "Firecracker can only open a TAP by name inside its namespace; "
-                            + "sandbox networking needs network_mode = \"ovn\" with a working OVN/OVS")
-                }
+            // `--netns` (issue STR-100). `sandboxTAPName` is what refuses a
+            // NIC realized as anything else.
+            if let tapName = try sandboxTAPName(networkAttachments) {
                 try await manager.configureNetwork(
-                    NetworkInterface.tap(id: "eth0", tapName: tapName, macAddress: nic.macAddress))
+                    NetworkInterface.tap(
+                        id: Self.networkInterfaceId, tapName: tapName,
+                        macAddress: networkAttachments[0].macAddress))
             }
 
             try await manager.configureVsock(
@@ -681,12 +803,22 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         sandboxId: String,
         spec: SandboxSpec,
         entry: WarmSnapshotEntry,
-        configData: Data
+        configData: Data,
+        networkAttachments: [ResolvedNetworkAttachment]
     ) async throws -> ProvisionedMicroVM {
         guard jailNewSandboxes else {
             throw SandboxRuntimeError.warmStartFailed(
                 "warm restore requires the jailer (snapshots record chroot-relative paths)")
         }
+        // The template's NIC is a throwaway TAP in the template's own
+        // namespace, long gone by now; the shape key guarantees the device
+        // exists, and this is what points it at this sandbox's real TAP
+        // (STR-104). Warm eligibility already established the remap, so a
+        // throw here is a contradiction rather than a routine refusal — and
+        // every warm failure falls back to a cold boot either way.
+        let tapName = try sandboxTAPName(networkAttachments)
+        let overrides = try await requiredNetworkOverrides(
+            forTAP: tapName, operation: "warm-starting a networked sandbox")
         let plan = SandboxJailPlan(
             sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
         do {
@@ -730,13 +862,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    resumeVM: false))
+                    resumeVM: false,
+                    networkOverrides: overrides))
             return ProvisionedMicroVM(
                 rootfsPath: rootfsHost, configPath: configHost,
                 vsockUdsPath: plan.vsockUDSHostPath, jail: plan, manager: manager)
         } catch {
             try? await client.destroyVM(vmId: sandboxId)
-            await removeJailArtifacts(plan)
+            // The caller falls back to a cold provision under this same id and
+            // NIC, so the namespace and its devices have to survive.
+            await removeJailArtifacts(plan, removingNetns: false)
             throw error
         }
     }
@@ -748,12 +883,22 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     private func provisionFromSandboxSnapshot(
         sandboxId: String,
         spec: SandboxSpec,
-        restoreFrom: SandboxSnapshotRef
+        restoreFrom: SandboxSnapshotRef,
+        networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
         guard jailNewSandboxes else {
             throw SandboxRuntimeError.warmStartFailed(
                 "sandbox forks require the jailer because snapshot devices record their backing paths")
         }
+
+        // The fork's own TAP, which the load repoints the checkpointed device
+        // at (STR-104). Firecracker will not add a device on load, so a NIC
+        // this host cannot remap is a permanent refusal here rather than a
+        // sandbox published with an interface that opens the *source's* TAP.
+        let targetNetwork = try guestNetwork(attachments: networkAttachments)
+        let tapName = try sandboxTAPName(networkAttachments)
+        let overrides = try await requiredNetworkOverrides(
+            forTAP: tapName, operation: "forking a networked sandbox")
 
         let sourceSandboxId = restoreFrom.sourceSandboxId.uuidString
         let snapshotId = restoreFrom.snapshotId.uuidString
@@ -773,6 +918,21 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         guard sourceConfig.sandboxId == sourceSandboxId else {
             throw GuestControlError.identityMismatch(
                 expected: sourceSandboxId, got: sourceConfig.sandboxId)
+        }
+
+        // The checkpoint's device topology has to match the fork's, because a
+        // load can remap devices but never add or drop them. The archived
+        // config drive is the exact witness: the runtime writes its `network`
+        // block precisely when it configures a Firecracker NIC, so the two
+        // cannot disagree. Both directions are a refusal — a networked fork of
+        // a network-free checkpoint has no device to address, and a
+        // network-free fork of a networked one would restore a device pointing
+        // at a TAP that no longer exists.
+        guard (sourceConfig.network != nil) == (targetNetwork != nil) else {
+            throw SandboxRuntimeError.networkingUnsupported(
+                sourceConfig.network == nil
+                    ? "the snapshot was captured without a network device, so the fork cannot have a NIC"
+                    : "the snapshot was captured with a network device, so the fork must have a NIC")
         }
 
         let plan = SandboxJailPlan(
@@ -803,13 +963,27 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             }
             try await createNetns(plan.netnsName)
 
+            // Loaded resumed, which opens a window: `reidentify` cannot be sent
+            // until the restored guest's vsock listener is back, so for those
+            // few hundred milliseconds the guest is running with the *source*
+            // sandbox's MAC and IP and transmitting onto the fork's own OVS
+            // port. What closes it is OVN `port_security` on that port, which
+            // the agent sets unconditionally from the fork's own allocation
+            // (`NetworkServiceLinux.createVMNetwork`): frames whose source
+            // MAC/IP are not the fork's are dropped at the switch, so a
+            // gratuitous ARP for a live source's address never reaches the L2
+            // domain. It is the only thing standing there, so it is worth
+            // naming — `NetworkConfiguration.portSecurity` exists on the wire
+            // and is never consulted, and this is one of the places that would
+            // quietly depend on it if it ever became real.
             let manager = try await client.restoreVM(
                 vmId: sandboxId,
                 jail: makeJailerOptions(plan: plan, guestMemoryBytes: spec.memoryBytes),
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    resumeVM: true))
+                    resumeVM: true,
+                    networkOverrides: overrides))
 
             let sourceResponse = try await sendControl(
                 .ping, udsPath: plan.vsockUDSHostPath, timeout: 20)
@@ -830,6 +1004,20 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 throw GuestControlError.malformedResponse(
                     "checkpointed guest does not advertise re-identification support")
             }
+            // Only a *networked* fork needs the newer guest: an older one
+            // decodes `reidentify` fine but drops the unknown `network` field,
+            // which would publish this sandbox as managed while its guest still
+            // holds the source's address (STR-104). A network-free fork has
+            // nothing to re-address and stays forkable on a v3 guest.
+            if targetNetwork != nil,
+                !SandboxGuestControlProtocol.supportsNetworkReconfigure(
+                    sourceResponse.controlProtocolVersion)
+            {
+                throw SandboxRuntimeError.networkingUnsupported(
+                    "the checkpointed guest speaks control protocol "
+                        + "\(sourceResponse.controlProtocolVersion ?? 0) and cannot re-address its NIC "
+                        + "(need >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))")
+            }
 
             let nonce = UUID().uuidString
             let entropy = Self.freshEntropy()
@@ -843,7 +1031,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                         identityNonce: nonce,
                         hostname: hostname,
                         entropy: entropy,
-                        unixNanos: Int64(Date().timeIntervalSince1970 * 1_000_000_000))),
+                        unixNanos: Int64(Date().timeIntervalSince1970 * 1_000_000_000),
+                        network: targetNetwork)),
                 udsPath: plan.vsockUDSHostPath,
                 timeout: 20)
             guard case .reidentified = response else {
@@ -868,7 +1057,11 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 overrides: sourceConfig.overrides,
                 // The same name `reidentify` just gave the live guest, so the
                 // persisted drive and the running sandbox agree.
-                hostname: hostname)
+                hostname: hostname,
+                // Likewise the NIC: this drive is what a later checkpoint of
+                // the fork archives, and the "a network block means a network
+                // device" invariant is what the shape check above reads.
+                network: targetNetwork)
             let originalConfigBytes = max(Int(fileSize(archiveConfig)), 512)
             try targetConfig.blockImage(minimumBytes: originalConfigBytes)
                 .write(to: URL(fileURLWithPath: configHost), options: .atomic)
@@ -878,7 +1071,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 spec: spec, rootfsPath: rootfsHost, configPath: configHost,
                 vsockUdsPath: plan.vsockUDSHostPath, identityNonce: nonce,
                 guestControlProtocolVersion: health.controlProtocolVersion,
-                jail: plan, manager: manager, lastExitCode: nil)
+                jail: plan, networkAttachments: networkAttachments,
+                manager: manager, lastExitCode: nil)
             startLogFollow(sandboxId: sandboxId)
             logger.info(
                 "Sandbox fork restored and re-identified",
@@ -1065,6 +1259,26 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             )
         }
 
+        // A networked sandbox needs a guest that acts on the launch request's
+        // `network` block (STR-104). An older guest would drop the unknown
+        // field, spawn the workload, and answer healthy on an unaddressed
+        // interface — so ask before launching, and let the failure demote this
+        // sandbox to a cold boot, which configures the NIC from the config
+        // drive the way it always has.
+        if drive.network != nil {
+            let capability = try await sendControl(
+                .ping, udsPath: managed.vsockUdsPath, timeout: 10)
+            guard
+                SandboxGuestControlProtocol.supportsNetworkReconfigure(
+                    capability.controlProtocolVersion)
+            else {
+                throw SandboxRuntimeError.warmStartFailed(
+                    "the template's guest speaks control protocol "
+                        + "\(capability.controlProtocolVersion ?? 0) and cannot configure a NIC on launch "
+                        + "(need >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))")
+            }
+        }
+
         // Clock first, launch second: the workload should start with a sane
         // wall clock. Best-effort, mirroring the restore-in-place flow.
         await resyncGuestClock(sandboxId: sandboxId, udsPath: managed.vsockUdsPath)
@@ -1079,7 +1293,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             // The template guest booted under the template's identity, so the
             // hostname travels with the launch — otherwise a warm-provisioned
             // sandbox would differ from a cold one by warm-cache state alone.
-            hostname: drive.hostname)
+            hostname: drive.hostname,
+            // Same argument for the NIC (STR-104): the template's device was
+            // never addressed, because a template is shared across sandboxes.
+            // The snapshot load pointed it at this sandbox's TAP; this is what
+            // gives it this sandbox's MAC, address, routes and resolvers.
+            network: drive.network)
         let response = try await sendControl(
             .launch(launch), udsPath: managed.vsockUdsPath, timeout: 20)
         guard case .launched = response else {
@@ -1128,15 +1347,17 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
         try? await client.destroyVM(vmId: sandboxId)
         if let plan = managed.jail {
-            await removeJailArtifacts(plan)
+            // The namespace stays: it holds the veth, TAP and `tc` filters the
+            // orchestrator realized for this sandbox's NIC, and the cold
+            // provision below configures Firecracker against exactly that TAP.
+            await removeJailArtifacts(plan, removingNetns: false)
         }
         removeArtifacts(sandboxId)
         sandboxes.removeValue(forKey: sandboxId)
 
-        // Unreachable with a NIC today — networked specs never warm-start, so
-        // there is no warm launch to demote — but carried through rather than
-        // dropped, so the day that changes this path rebuilds the same device
-        // set instead of silently producing an unnetworked sandbox.
+        // The same device set, not a dropped one: since STR-104 a networked
+        // sandbox can warm-start, so this path is reachable with a NIC and has
+        // to rebuild it.
         try await coldProvisionAndRegister(
             sandboxId: sandboxId, spec: managed.spec, credential: managed.registryCredential,
             materialized: materialized, guestImage: guestImage, nonce: nonce, configData: configData,
@@ -1511,7 +1732,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     func restoreSandbox(
         sandboxId: String, snapshotId: String,
-        artifacts: [SandboxSnapshotArtifactDescriptor]?
+        artifacts: [SandboxSnapshotArtifactDescriptor]?,
+        networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
         guard let managed = sandboxes[sandboxId] else {
             throw SandboxRuntimeError.sandboxNotFound(sandboxId)
@@ -1521,6 +1743,22 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
         checkpointing.insert(sandboxId)
         defer { checkpointing.remove(sandboxId) }
+
+        // The reconciler re-realized this sandbox's NIC (idempotently) before
+        // calling, so the netns, veth, TAP, tc filters and OVS port are all in
+        // place before the guest resumes and starts transmitting. Record what
+        // it produced: `adoptSandbox` cannot recover the attachment, so for an
+        // adopted sandbox this is the first time the runtime learns it.
+        //
+        // A restore *in place* keeps the sandbox's identity, and the TAP name
+        // is derived from that id, so the checkpoint already names the right
+        // device — the override is redundant reinforcement, and deliberately
+        // omitted on a Firecracker that would reject it (see
+        // `networkOverrides`).
+        if !networkAttachments.isEmpty {
+            sandboxes[sandboxId]?.networkAttachments = networkAttachments
+        }
+        let overrides = await optionalNetworkOverrides(forTAP: try sandboxTAPName(networkAttachments))
 
         // Resolve the archive: local artifacts when this host took the
         // snapshot, otherwise a verified download of the exported copy
@@ -1583,7 +1821,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
                     memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    resumeVM: true))
+                    resumeVM: true,
+                    networkOverrides: overrides))
         } else {
             // Unjailed: replace the live rootfs with the checkpointed copy
             // and load memory/vmstate straight from the archive (Firecracker
@@ -1601,7 +1840,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 snapshot: SnapshotLoadConfig(
                     snapshotPath: archiveVmstate,
                     memFilePath: archiveMemory,
-                    resumeVM: true))
+                    resumeVM: true,
+                    networkOverrides: overrides))
         }
 
         sandboxes[sandboxId]?.manager = newManager
@@ -1931,7 +2171,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// standard-capacity config drives, and only standard-capacity sandboxes
     /// are warm-eligible, so the capacity component is the constant.
     private func warmSnapshotKey(
-        imageDigest: String, guestImage: SandboxGuestImage, spec: SandboxSpec
+        imageDigest: String, guestImage: SandboxGuestImage, spec: SandboxSpec, nicCount: Int
     ) -> WarmSnapshotKey {
         WarmSnapshotKey(
             imageDigest: imageDigest,
@@ -1942,7 +2182,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             memoryMiB: spec.memoryBytes / (1024 * 1024),
             configCapacityBytes: SandboxConfigDrive.standardBlockImageBytes,
             jailed: jailNewSandboxes,
-            cpuTemplate: spec.cpuTemplate)
+            cpuTemplate: spec.cpuTemplate,
+            nicCount: nicCount)
     }
 
     /// Kick off a background warm-template build for `key`. Skipped — not
@@ -2011,10 +2252,19 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             }
 
             // A template is per-(image, machine shape) and shared across
-            // sandboxes, so it can never carry a particular sandbox's NIC.
+            // sandboxes, so it never carries a particular sandbox's NIC — but
+            // a template for *networked* sandboxes must carry a network
+            // **device**, because a snapshot load can repoint one and never
+            // add one (STR-104). The device is backed by a throwaway TAP in
+            // the template's own namespace, attached to nothing: the held
+            // guest never addresses it, and the restore points it at the real
+            // sandbox's TAP before the guest is ever launched.
+            let templateAttachments = try await prepareTemplateNIC(
+                templateId: templateId, nicCount: key.nicCount)
             let provisioned = try await provisionColdMicroVM(
                 vmId: templateId, spec: spec, rootfsSourcePath: materialized.rootfsPath,
-                configData: configData, guestImage: guestImage, networkAttachments: [])
+                configData: configData, guestImage: guestImage,
+                networkAttachments: templateAttachments)
             vm = provisioned
             try await provisioned.manager.start()
 
@@ -2029,6 +2279,25 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             else {
                 throw SandboxRuntimeError.warmStartFailed(
                     "the guest did not enter the held state (guest image predates warm start?)")
+            }
+
+            // A NIC-shaped template is only useful to a guest that will
+            // configure the device on `launch` (STR-104). Checking here rather
+            // than only at launch time means an installed guest that predates
+            // v4 costs one failed build with a retry interval, instead of a
+            // published template every networked sandbox demotes away from.
+            if !templateAttachments.isEmpty {
+                let capability = try await sendControl(
+                    .ping, udsPath: provisioned.vsockUdsPath, timeout: 10)
+                guard
+                    SandboxGuestControlProtocol.supportsNetworkReconfigure(
+                        capability.controlProtocolVersion)
+                else {
+                    throw SandboxRuntimeError.warmStartFailed(
+                        "the guest speaks control protocol \(capability.controlProtocolVersion ?? 0) "
+                            + "and cannot configure a NIC on launch "
+                            + "(need >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))")
+                }
             }
 
             try await provisioned.manager.pause()
@@ -2096,6 +2365,60 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         }
     }
 
+    /// Create the throwaway NIC a networked warm template is snapshotted with
+    /// (STR-104), and describe it the way `provisionColdMicroVM` expects.
+    ///
+    /// A bare TAP inside the template's own network namespace, wired to
+    /// nothing: there is no logical port to bind it to (a template is not a
+    /// sandbox and has no IPAM allocation), and it needs no connectivity — the
+    /// guest parks `held` without ever addressing the device. All that has to
+    /// survive into the snapshot is the *device*, since a load can repoint one
+    /// but not add one. It dies with the namespace when the template is torn
+    /// down.
+    private func prepareTemplateNIC(
+        templateId: String, nicCount: Int
+    ) async throws -> [ResolvedNetworkAttachment] {
+        guard nicCount > 0 else { return [] }
+        guard let ipBinaryPath = jailerConfig.ipBinaryPath else {
+            throw SandboxRuntimeError.warmStartFailed(
+                "the `ip` tool (iproute2) was not found on this host")
+        }
+        let plan = SandboxJailPlan(
+            sandboxId: templateId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
+        // Same derivation as a real sandbox's NIC, so the leak sweep's
+        // namespace removal is all the cleanup this ever needs.
+        let tapName = sandboxNICDeviceNames(sandboxId: templateId, nicIndex: 0).tap
+        try await createNetns(plan.netnsName)
+        for arguments in [
+            [
+                "-n", plan.netnsName, "tuntap", "add", "dev", tapName, "mode", "tap",
+                "user", String(plan.uid), "group", String(plan.gid),
+            ],
+            ["-n", plan.netnsName, "link", "set", tapName, "up"],
+        ] {
+            let result: ProcessResult
+            do {
+                result = try await ProcessRunner.run(
+                    executableURL: URL(fileURLWithPath: ipBinaryPath), arguments: arguments)
+            } catch {
+                throw SandboxRuntimeError.warmStartFailed(
+                    "spawning `\(ipBinaryPath) \(arguments.joined(separator: " "))` failed: "
+                        + error.localizedDescription)
+            }
+            guard result.terminationStatus == 0 else {
+                throw SandboxRuntimeError.warmStartFailed(
+                    "`ip \(arguments.joined(separator: " "))` failed (exit \(result.terminationStatus)): "
+                        + result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+        }
+        return [
+            ResolvedNetworkAttachment(
+                network: "warm-template",
+                attachment: .tap(interface: tapName),
+                macAddress: Self.templateMACAddress)
+        ]
+    }
+
     /// Remove template debris a crash mid-build left behind: destroy any
     /// still-running template microVM (best-effort adopt-then-destroy — the
     /// self-describing `warm-template-` id prefix is what makes this safe
@@ -2120,6 +2443,17 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             jailerConfig.chrootBaseDir + "/" + (firecrackerBinaryPath as NSString).lastPathComponent
         if let names = try? fileManager.contentsOfDirectory(atPath: jailBase) {
             leaked.formUnion(names.filter { $0.hasPrefix("warm-template-") })
+        }
+        // The namespace of a NIC-shaped template (STR-104), which is the
+        // *first* artifact its build creates — before the jail root or the
+        // storage directory the two scans above look at. A crash in that
+        // window leaves a namespace with no other trace of the template, and
+        // template ids are random and never retried, so nothing else would
+        // ever reap it.
+        if let names = try? fileManager.contentsOfDirectory(atPath: SandboxJailPlan.netnsDirectory) {
+            leaked.formUnion(
+                names.compactMap(SandboxJailPlan.sandboxId(fromNetnsName:))
+                    .filter { $0.hasPrefix("warm-template-") })
         }
         for templateId in leaked.sorted() {
             logger.warning(
@@ -2917,11 +3251,22 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// Best-effort teardown of a jailed sandbox's host-side leftovers: the
     /// chroot subtree and per-VM cgroup directory (normally the client's job,
     /// but a crash can orphan both) and the network namespace.
-    private func removeJailArtifacts(_ plan: SandboxJailPlan) async {
+    ///
+    /// `removingNetns: false` is for the paths that rebuild the *same* sandbox
+    /// under the same id — a failed warm restore falling back to a cold boot,
+    /// and the demotion of a failed warm launch. The namespace holds the veth,
+    /// TAP and `tc` filters the orchestrator realized for this sandbox's NIC
+    /// (STR-100), and the runtime cannot recreate them: deleting it there would
+    /// leave the rebuilt microVM configured against a TAP that no longer
+    /// exists. Every other caller is tearing the sandbox down for good, or
+    /// rolling a create back to the reconciler that will tear the attachment
+    /// down itself.
+    private func removeJailArtifacts(_ plan: SandboxJailPlan, removingNetns: Bool = true) async {
         try? FileManager.default.removeItem(atPath: plan.jailDirectory)
         _ = rmdir(
             JailerOptions.cgroupDirectory(
                 firecrackerBinaryPath: firecrackerBinaryPath, vmId: plan.sandboxId))
+        guard removingNetns else { return }
         // `ip netns delete` is just an unmount plus unlink of the bind-mounted
         // name (ip-netns(8)); doing the syscalls directly means teardown keeps
         // working even when iproute2 was removed after a previous agent life
@@ -3000,7 +3345,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     func restoreSandbox(
         sandboxId: String, snapshotId: String,
-        artifacts: [SandboxSnapshotArtifactDescriptor]?
+        artifacts: [SandboxSnapshotArtifactDescriptor]?,
+        networkAttachments: [ResolvedNetworkAttachment]
     ) async throws {
         throw HypervisorServiceError.notSupported("sandboxes are only available on Linux")
     }

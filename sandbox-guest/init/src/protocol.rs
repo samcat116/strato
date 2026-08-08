@@ -38,7 +38,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::config::{ImageConfig, ProcessOverrides};
+use crate::config::{ImageConfig, NetworkConfig, ProcessOverrides};
 
 /// Well-known guest vsock port the agent listens on when the config drive does
 /// not override it. Ports below 1024 are conventionally reserved; 1024 is the
@@ -48,7 +48,12 @@ pub const DEFAULT_VSOCK_PORT: u32 = 1024;
 /// Version of the guest control surface. This is advertised in `pong` so an
 /// upgraded host can distinguish a new guest from an older init frozen inside
 /// a checkpoint.
-pub const CONTROL_PROTOCOL_VERSION: u32 = 3;
+///
+/// v4 (STR-104) adds the `network` block on [`Request::Launch`] and
+/// [`Request::Reidentify`]: a guest restored from someone else's checkpoint
+/// carries that sandbox's address in kernel memory, and re-addressing it in
+/// place is what makes warm start and fork work for networked sandboxes.
+pub const CONTROL_PROTOCOL_VERSION: u32 = 4;
 
 /// Default for [`Request::Exec`]'s `tty` when the host omits it.
 pub const DEFAULT_EXEC_TTY: bool = false;
@@ -152,6 +157,21 @@ pub enum Request {
         /// and a rename failing must not fail the launch.
         #[serde(default)]
         hostname: Option<String>,
+        /// The launched-into sandbox's NIC configuration (v4, STR-104).
+        ///
+        /// A warm template carries a network *device* but no addressing — it
+        /// is shared across sandboxes, so it holds nothing sandbox-specific —
+        /// and the host repoints that device at the sandbox's own TAP as it
+        /// loads the snapshot. This is the other half: the MAC, addresses,
+        /// routes, MTU and resolvers the guest applies to it, exactly what a
+        /// cold boot would have read off the config drive.
+        ///
+        /// Absent for a network-free sandbox. Unlike the hostname this is
+        /// **not** best effort: a sandbox that reports running must be on the
+        /// network its desired state says it is, so a failure leaves the guest
+        /// `held` for the host to retry or demote.
+        #[serde(default)]
+        network: Option<Box<NetworkConfig>>,
     },
     /// Rotate all guest identity material after restoring a user checkpoint as
     /// a new sandbox (v5, issue #427). The source fields prevent a host from
@@ -166,6 +186,15 @@ pub enum Request {
         entropy: String,
         /// Current wall clock as nanoseconds since the Unix epoch.
         unix_nanos: i64,
+        /// The fork target's NIC configuration (v4, STR-104).
+        ///
+        /// The checkpointed guest holds the *source* sandbox's MAC and address
+        /// in kernel memory, and the target has its own IPAM allocation, so a
+        /// fork that skipped this would boot onto the network claiming an
+        /// address that belongs to something else. Absent when the fork has no
+        /// NIC; strict, like every other step of re-identification.
+        #[serde(default)]
+        network: Option<Box<NetworkConfig>>,
     },
 }
 
@@ -312,7 +341,7 @@ mod tests {
 
     #[test]
     fn launch_round_trips() {
-        let line = r#"{"type":"launch","sandbox_id":"sb-2","identity_nonce":"n-2","image_config":{"Env":["PATH=/bin"],"Cmd":["/bin/sh"]},"overrides":{"env":{"DEBUG":"1"}},"entropy":"c2VlZA==","hostname":"strato-sb2"}"#;
+        let line = r#"{"type":"launch","sandbox_id":"sb-2","identity_nonce":"n-2","image_config":{"Env":["PATH=/bin"],"Cmd":["/bin/sh"]},"overrides":{"env":{"DEBUG":"1"}},"entropy":"c2VlZA==","hostname":"strato-sb2","network":{"mac_address":"06:00:ac:10:00:07","ipv4":{"address":"172.16.0.7","prefix_length":24,"gateway":"172.16.0.1"}}}"#;
         let req = decode_request(line).expect("decode");
         match &req {
             Request::Launch {
@@ -322,6 +351,7 @@ mod tests {
                 overrides,
                 entropy,
                 hostname,
+                network,
             } => {
                 assert_eq!(sandbox_id, "sb-2");
                 assert_eq!(identity_nonce, "n-2");
@@ -329,6 +359,10 @@ mod tests {
                 assert_eq!(overrides.env.get("DEBUG").map(String::as_str), Some("1"));
                 assert_eq!(entropy.as_deref(), Some("c2VlZA=="));
                 assert_eq!(hostname.as_deref(), Some("strato-sb2"));
+                assert_eq!(
+                    network.as_ref().and_then(|n| n.mac_address.as_deref()),
+                    Some("06:00:ac:10:00:07")
+                );
             }
             other => panic!("decoded wrong variant: {other:?}"),
         }
@@ -337,7 +371,8 @@ mod tests {
     }
 
     /// A host that predates the hostname field (or has no name to give) sends
-    /// no key, and the guest keeps whatever it booted with.
+    /// no key, and the guest keeps whatever it booted with. Likewise `network`:
+    /// its absence is a network-free sandbox, not a NIC to leave misconfigured.
     #[test]
     fn launch_minimal_defaults_config_entropy_and_hostname() {
         let req = decode_request(r#"{"type":"launch","sandbox_id":"sb-3","identity_nonce":"n-3"}"#)
@@ -351,6 +386,7 @@ mod tests {
                 overrides: Box::default(),
                 entropy: None,
                 hostname: None,
+                network: None,
             }
         );
     }
@@ -367,12 +403,39 @@ mod tests {
     fn reidentify_round_trips() {
         let line = r#"{"type":"reidentify","expected_sandbox_id":"source","expected_nonce":"old","sandbox_id":"fork","identity_nonce":"new","hostname":"strato-fork","entropy":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=","unix_nanos":1752700000000000000}"#;
         let req = decode_request(line).expect("decode");
+        assert!(
+            matches!(&req, Request::Reidentify { network, .. } if network.is_none()),
+            "a network-free fork sends no network block"
+        );
         let decoded: Request = serde_json::from_str(encode_line(&req).trim()).expect("re-decode");
         assert_eq!(decoded, req);
         assert_eq!(
             encode_line(&Response::Reidentified).trim(),
             r#"{"type":"reidentified"}"#
         );
+    }
+
+    /// The fork target's own addressing rides the same request that rotates
+    /// its identity, so the guest never runs a moment with the source's
+    /// address under the target's name (STR-104).
+    #[test]
+    fn reidentify_carries_the_targets_network() {
+        let line = r#"{"type":"reidentify","expected_sandbox_id":"source","expected_nonce":"old","sandbox_id":"fork","identity_nonce":"new","hostname":"strato-fork","entropy":"MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=","unix_nanos":1752700000000000000,"network":{"mac_address":"06:00:ac:10:00:09","ipv4":{"address":"172.16.0.9","prefix_length":24,"gateway":"172.16.0.1"},"mtu":1442,"nameservers":["172.16.0.2"],"search_domains":["proj.strato.internal"]}}"#;
+        let req = decode_request(line).expect("decode");
+        match &req {
+            Request::Reidentify { network, .. } => {
+                let network = network.as_ref().expect("network block");
+                assert_eq!(network.mac_address.as_deref(), Some("06:00:ac:10:00:09"));
+                assert_eq!(
+                    network.ipv4.as_ref().map(|a| a.address.as_str()),
+                    Some("172.16.0.9")
+                );
+                assert_eq!(network.mtu, Some(1442));
+            }
+            other => panic!("decoded wrong variant: {other:?}"),
+        }
+        let decoded: Request = serde_json::from_str(encode_line(&req).trim()).expect("re-decode");
+        assert_eq!(decoded, req);
     }
 
     #[test]
@@ -507,7 +570,7 @@ mod tests {
         assert!(line.ends_with('\n'));
         assert_eq!(
             line.trim(),
-            "{\"type\":\"pong\",\"sandbox_id\":\"sb-1\",\"nonce\":\"n-1\",\"control_protocol_version\":3}"
+            "{\"type\":\"pong\",\"sandbox_id\":\"sb-1\",\"nonce\":\"n-1\",\"control_protocol_version\":4}"
         );
     }
 

@@ -138,11 +138,35 @@ drive.
 Testable end to end with a hand-plugged TAP on a dev host: boot the guest with
 a `network` block and a `tap` device, no OVN or control plane involved.
 
-### vsock control protocol (v2)
+### Re-addressing a restored guest ([STR-104])
+
+A guest that came out of *someone else's* checkpoint — a warm template shared
+across sandboxes, or a fork of another sandbox's snapshot — holds that guest's
+MAC and address in kernel memory, and the config drive staged for it is not the
+one its page cache describes. So its NIC is configured over vsock instead, on
+the `launch`/`reidentify` request that also delivers its identity (control
+protocol v4). The host has already repointed the virtio device at this
+sandbox's TAP before the guest was resumed.
+
+The guest side is a flush-and-reapply, in an order that matters: remove the
+addresses first (which takes the routes that depended on them with them), then
+set the MAC with the link down — the kernel refuses `SIOCSIFHWADDR` on a
+running device — then MTU, link up, addresses, routes, resolver files. The MAC
+is not cosmetic: OVN's `port_security` filters on the source MAC of the frame,
+so a fork that kept the source's would be up, addressed, and silently dropped
+upstream. Fatal on failure like the cold path, and idempotent, because the host
+retries: the device is found by the *new* MAC first (an already-applied retry),
+then the previously applied one, then — with exactly one non-loopback interface
+present — that one.
+
+### vsock control protocol (v4)
 
 Newline-delimited JSON, host connects to the guest port; one guest thread per
-connection. See [`init/src/protocol.rs`](init/src/protocol.rs). The **first
-request on a connection determines its role**:
+connection. See [`init/src/protocol.rs`](init/src/protocol.rs). `pong` carries
+`control_protocol_version`, which is how a host tells a new guest from an older
+init frozen inside a checkpoint — v3 added `sync_clock`, `launch` and
+`reidentify`; v4 ([STR-104]) put a `network` block on the latter two. The
+**first request on a connection determines its role**:
 
 - **Control** — `{"type":"ping"}` → `{"type":"pong",…}`;
   `{"type":"get_status"}` →
@@ -230,3 +254,4 @@ and its sha256 together.
 [#423]: https://github.com/samcat116/strato/issues/423
 [#426]: https://github.com/samcat116/strato/issues/426
 [STR-101]: https://github.com/samcat116/strato/issues/846
+[STR-104]: https://github.com/samcat116/strato/issues/849
