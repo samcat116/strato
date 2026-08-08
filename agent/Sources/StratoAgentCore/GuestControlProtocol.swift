@@ -205,6 +205,16 @@ public enum GuestControlProtocol {
         /// cache state. Optional and additive: omitted when nil, and a guest
         /// that predates it ignores the field.
         public let hostname: String?
+        /// The launched-into sandbox's NIC configuration (STR-104), for the
+        /// device the snapshot load just repointed at this sandbox's TAP. Nil
+        /// for a network-free sandbox.
+        ///
+        /// Unlike the hostname this is **not** ignorable: a guest that
+        /// silently dropped it would run with an unaddressed interface while
+        /// reporting healthy, so a networked launch is only ever sent to a
+        /// guest that advertised control protocol
+        /// ``SandboxGuestControlProtocol/networkReconfigureMinimumVersion``.
+        public let network: SandboxConfigDrive.NetworkConfig?
 
         public init(
             sandboxId: String,
@@ -212,7 +222,8 @@ public enum GuestControlProtocol {
             imageConfig: SandboxConfigDrive.ImageConfig,
             overrides: SandboxConfigDrive.ProcessOverrides,
             entropy: Data?,
-            hostname: String? = nil
+            hostname: String? = nil,
+            network: SandboxConfigDrive.NetworkConfig? = nil
         ) {
             self.sandboxId = sandboxId
             self.identityNonce = identityNonce
@@ -220,6 +231,7 @@ public enum GuestControlProtocol {
             self.overrides = overrides
             self.entropy = entropy
             self.hostname = hostname
+            self.network = network
         }
     }
 
@@ -235,6 +247,12 @@ public enum GuestControlProtocol {
         public let hostname: String
         public let entropy: Data
         public let unixNanos: Int64
+        /// The fork target's NIC configuration (STR-104). The checkpointed
+        /// kernel holds the *source* sandbox's MAC and address — generally one
+        /// that still belongs to a live sandbox — so re-addressing the device
+        /// is part of the identity boundary, not an afterthought to it. Nil
+        /// when the fork has no NIC.
+        public let network: SandboxConfigDrive.NetworkConfig?
 
         public init(
             expectedSandboxId: String,
@@ -243,7 +261,8 @@ public enum GuestControlProtocol {
             identityNonce: String,
             hostname: String,
             entropy: Data,
-            unixNanos: Int64
+            unixNanos: Int64,
+            network: SandboxConfigDrive.NetworkConfig? = nil
         ) {
             self.expectedSandboxId = expectedSandboxId
             self.expectedNonce = expectedNonce
@@ -252,6 +271,7 @@ public enum GuestControlProtocol {
             self.hostname = hostname
             self.entropy = entropy
             self.unixNanos = unixNanos
+            self.network = network
         }
     }
 
@@ -332,6 +352,7 @@ public enum GuestControlProtocol {
             let overrides: SandboxConfigDrive.ProcessOverrides
             let entropy: String?
             let hostname: String?
+            let network: SandboxConfigDrive.NetworkConfig?
 
             enum CodingKeys: String, CodingKey {
                 case type
@@ -341,6 +362,7 @@ public enum GuestControlProtocol {
                 case overrides
                 case entropy
                 case hostname
+                case network
             }
         }
 
@@ -353,6 +375,7 @@ public enum GuestControlProtocol {
             let hostname: String
             let entropy: String
             let unixNanos: Int64
+            let network: SandboxConfigDrive.NetworkConfig?
 
             enum CodingKeys: String, CodingKey {
                 case type
@@ -363,6 +386,7 @@ public enum GuestControlProtocol {
                 case hostname
                 case entropy
                 case unixNanos = "unix_nanos"
+                case network
             }
         }
 
@@ -380,7 +404,8 @@ public enum GuestControlProtocol {
                         identityNonce: request.identityNonce,
                         hostname: request.hostname,
                         entropy: request.entropy.base64EncodedString(),
-                        unixNanos: request.unixNanos))
+                        unixNanos: request.unixNanos,
+                        network: request.network))
             case .launch(let request):
                 // The one request with nested payloads — encoded via its own
                 // raw shape instead of the flat RawRequest.
@@ -391,7 +416,8 @@ public enum GuestControlProtocol {
                     imageConfig: request.imageConfig,
                     overrides: request.overrides,
                     entropy: request.entropy?.base64EncodedString(),
-                    hostname: request.hostname)
+                    hostname: request.hostname,
+                    network: request.network)
                 return Self.terminatedLine(encoding: rawLaunch)
             case .ping:
                 raw = RawRequest(type: "ping")

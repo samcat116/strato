@@ -24,7 +24,9 @@ use std::os::fd::{FromRawFd, OwnedFd};
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
-use strato_sandbox_init::config::{self, ImageConfig, ProcessOverrides, ResolvedProcess};
+use strato_sandbox_init::config::{
+    self, ImageConfig, NetworkConfig, ProcessOverrides, ResolvedProcess,
+};
 use strato_sandbox_init::logbuf::LogBuffer;
 use strato_sandbox_init::protocol::{
     decode_base64, decode_request, encode_line, Request, Response, WorkloadState,
@@ -63,6 +65,15 @@ pub struct GuestState {
     /// The workload's pid, filled in at spawn time — at boot for a normal
     /// guest, at `launch` for a warm-hold guest.
     pub workload_pid: SharedWorkloadPid,
+    /// The NIC configuration currently applied, seeded from the config drive
+    /// and replaced by a `launch`/`reidentify` that re-addresses the device
+    /// (STR-104). Kept because the *host* cannot supply it: after a restore
+    /// the device still carries the checkpointed guest's MAC, and that MAC is
+    /// how this init finds the interface it is about to rename.
+    pub network: Mutex<Option<NetworkConfig>>,
+    /// The hostname currently in effect, for the `/etc/hosts` entries that map
+    /// it to the NIC's addresses.
+    pub hostname: Mutex<Option<String>>,
 }
 
 /// Bind the guest vsock port and serve connections forever, one thread each.
@@ -262,14 +273,18 @@ fn control_response(request: Request, state: &GuestState) -> Response {
             overrides,
             entropy,
             hostname,
+            network,
         } => handle_launch(
             state,
-            sandbox_id,
-            identity_nonce,
-            image_config,
-            overrides,
-            entropy,
-            hostname,
+            LaunchArgs {
+                sandbox_id,
+                identity_nonce,
+                image_config,
+                overrides,
+                entropy,
+                hostname,
+                network,
+            },
         ),
         Request::Reidentify {
             expected_sandbox_id,
@@ -279,15 +294,19 @@ fn control_response(request: Request, state: &GuestState) -> Response {
             hostname,
             entropy,
             unix_nanos,
+            network,
         } => handle_reidentify(
             state,
-            &expected_sandbox_id,
-            &expected_nonce,
-            sandbox_id,
-            identity_nonce,
-            &hostname,
-            &entropy,
-            unix_nanos,
+            ReidentifyArgs {
+                expected_sandbox_id,
+                expected_nonce,
+                sandbox_id,
+                identity_nonce,
+                hostname,
+                entropy,
+                unix_nanos,
+                network,
+            },
         ),
         Request::GetStatus => {
             let s = state.status.lock().expect("status poisoned");
@@ -311,24 +330,37 @@ fn control_response(request: Request, state: &GuestState) -> Response {
     }
 }
 
-/// Handle a warm-start `launch` (issue #426): mix host entropy into the
-/// frozen RNG, resolve the process with the cold-boot rules, spawn the
-/// workload, and only then adopt the restored-into sandbox's identity.
-/// Only valid in the `held` state; on any failure the guest returns to
-/// `held` still carrying the *template* identity — deferring the identity
-/// swap to success is what keeps an interrupted launch recoverable (a host
-/// that reconnects later still sees template identity + `held` and can
-/// retry the launch or demote).
-#[allow(clippy::too_many_arguments)]
-fn handle_launch(
-    state: &GuestState,
+/// The `launch` request's payload, grouped so the handler takes one argument
+/// rather than eight.
+struct LaunchArgs {
     sandbox_id: String,
     identity_nonce: String,
     image_config: Box<ImageConfig>,
     overrides: Box<ProcessOverrides>,
     entropy: Option<String>,
     hostname: Option<String>,
-) -> Response {
+    network: Option<Box<NetworkConfig>>,
+}
+
+/// Handle a warm-start `launch` (issue #426): mix host entropy into the
+/// frozen RNG, take the sandbox's hostname and NIC, resolve the process with
+/// the cold-boot rules, spawn the workload, and only then adopt the
+/// restored-into sandbox's identity.
+/// Only valid in the `held` state; on any failure the guest returns to
+/// `held` still carrying the *template* identity — deferring the identity
+/// swap to success is what keeps an interrupted launch recoverable (a host
+/// that reconnects later still sees template identity + `held` and can
+/// retry the launch or demote).
+fn handle_launch(state: &GuestState, args: LaunchArgs) -> Response {
+    let LaunchArgs {
+        sandbox_id,
+        identity_nonce,
+        image_config,
+        overrides,
+        entropy,
+        hostname,
+        network,
+    } = args;
     {
         let mut s = state.status.lock().expect("status poisoned");
         if s.state != WorkloadState::Held {
@@ -357,6 +389,30 @@ fn handle_launch(
             eprintln!("[sandbox-init] could not set hostname '{hostname}' on launch: {e}");
         }
     }
+    // Recorded only when the host named one: a launch without a hostname
+    // leaves the guest under whatever it booted with, so overwriting with
+    // `None` here would drop that name out of `/etc/hosts` below.
+    if let Some(hostname) = hostname {
+        *state.hostname.lock().expect("hostname poisoned") = Some(hostname);
+    }
+
+    // The NIC (STR-104). A warm template's device exists but was never
+    // addressed — it is shared across sandboxes — and the host has just
+    // repointed it at this sandbox's TAP, so this is where it becomes this
+    // sandbox's interface. Fatal, unlike the hostname: the alternative is a
+    // workload running on a dead or misaddressed NIC while the host reports
+    // the sandbox healthy.
+    if let Some(network) = network.as_deref() {
+        if let Err(e) = apply_network(state, network) {
+            let mut s = state.status.lock().expect("status poisoned");
+            s.state = WorkloadState::Held;
+            return Response::Error {
+                message: format!("configure launch network: {e}"),
+            };
+        }
+    }
+    // Both halves of the identity are recorded by now, networked or not.
+    rewrite_resolver_files(state);
 
     let process = match config::resolve_process(&image_config, &overrides) {
         Ok(process) => process,
@@ -387,6 +443,41 @@ fn handle_launch(
     }
 }
 
+/// Re-address the NIC of a guest restored from someone else's checkpoint
+/// (STR-104), and record what was applied so a later request can still find
+/// the device by the MAC this one gave it.
+fn apply_network(state: &GuestState, network: &NetworkConfig) -> Result<(), String> {
+    let previous = state.network.lock().expect("network poisoned").clone();
+    let name = super::net::reconfigure_interface(previous.as_ref(), network)?;
+    *state.network.lock().expect("network poisoned") = Some(network.clone());
+    eprintln!("[sandbox-init] reconfigured {name}");
+    Ok(())
+}
+
+/// Rewrite `/etc/resolv.conf` and `/etc/hosts` from whatever identity the
+/// guest now carries, after a `launch` or `reidentify` has updated it.
+///
+/// Driven by the recorded state rather than by the request, so the two warm
+/// paths cannot diverge: a network-free sandbox launched out of a template
+/// would otherwise keep the *template's* `/etc/hosts`, with its own hostname
+/// unresolvable, purely because the request had no `network` block to hang
+/// this off.
+///
+/// Straight into the live root: `switch_into_rootfs` chroots into the
+/// container rootfs before the vsock server thread starts, so `/` really is
+/// the container's root by the time any control request lands. Best effort,
+/// for the reason the boot path gives — a read-only rootfs is a legitimate
+/// sandbox shape.
+fn rewrite_resolver_files(state: &GuestState) {
+    let hostname = state.hostname.lock().expect("hostname poisoned").clone();
+    let network = state.network.lock().expect("network poisoned").clone();
+    super::net::write_resolver_files(
+        std::path::Path::new("/"),
+        hostname.as_deref(),
+        network.as_ref(),
+    );
+}
+
 /// Mix host-supplied random bytes into the kernel RNG by writing them to
 /// `/dev/urandom`. Uncredited (no RNDADDENTROPY), which is enough to
 /// diverge the pool contents across clones of one warm snapshot; failures
@@ -410,20 +501,33 @@ fn reseed_entropy(b64: &str) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
+/// The `reidentify` request's payload, grouped so the handler takes one
+/// argument rather than eight.
+struct ReidentifyArgs {
+    expected_sandbox_id: String,
+    expected_nonce: String,
+    sandbox_id: String,
+    identity_nonce: String,
+    hostname: String,
+    entropy: String,
+    unix_nanos: i64,
+    network: Option<Box<NetworkConfig>>,
+}
+
 /// Apply the post-checkpoint identity boundary for a fork. Identity is swapped
 /// last, after every fallible mutation, so a failed request remains retryable
 /// under the checkpoint's source id/nonce.
-#[allow(clippy::too_many_arguments)]
-fn handle_reidentify(
-    state: &GuestState,
-    expected_sandbox_id: &str,
-    expected_nonce: &str,
-    sandbox_id: String,
-    identity_nonce: String,
-    hostname: &str,
-    entropy: &str,
-    unix_nanos: i64,
-) -> Response {
+fn handle_reidentify(state: &GuestState, args: ReidentifyArgs) -> Response {
+    let ReidentifyArgs {
+        expected_sandbox_id,
+        expected_nonce,
+        sandbox_id,
+        identity_nonce,
+        hostname,
+        entropy,
+        unix_nanos,
+        network,
+    } = args;
     {
         let s = state.status.lock().expect("status poisoned");
         if s.sandbox_id != expected_sandbox_id || s.nonce != expected_nonce {
@@ -436,7 +540,7 @@ fn handle_reidentify(
         }
     }
 
-    let entropy_bytes = match reseed_entropy(entropy) {
+    let entropy_bytes = match reseed_entropy(&entropy) {
         Ok(bytes) => bytes,
         Err(e) => {
             return Response::Error {
@@ -444,11 +548,12 @@ fn handle_reidentify(
             };
         }
     };
-    if let Err(e) = crate::linux::net::set_hostname(hostname) {
+    if let Err(e) = crate::linux::net::set_hostname(&hostname) {
         return Response::Error {
             message: format!("set hostname failed: {e}"),
         };
     }
+    *state.hostname.lock().expect("hostname poisoned") = Some(hostname);
     if let Err(e) = reset_machine_id(&entropy_bytes) {
         return Response::Error {
             message: format!("reset machine-id failed: {e}"),
@@ -459,6 +564,20 @@ fn handle_reidentify(
             message: format!("clock_settime failed: {e}"),
         };
     }
+    // The fork target's own addressing (STR-104). The checkpointed kernel is
+    // still holding the *source* sandbox's MAC and IP — an address that
+    // generally still belongs to a live sandbox — so this is as much a part of
+    // the identity boundary as the machine-id, and just as strict.
+    if let Some(network) = network.as_deref() {
+        if let Err(e) = apply_network(state, network) {
+            return Response::Error {
+                message: format!("reconfigure network failed: {e}"),
+            };
+        }
+    }
+    // The fork's own name and addresses, not the source's — and unconditional
+    // for the same reason as on the launch path.
+    rewrite_resolver_files(state);
 
     // Log records belong to the identity that produced them. Keep the
     // monotonic sequence and active stdio writers, but start target delivery

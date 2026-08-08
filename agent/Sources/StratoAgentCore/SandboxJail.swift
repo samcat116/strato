@@ -200,8 +200,21 @@ public struct SandboxJailPlan: Sendable, Equatable {
     /// Host view of the vsock UDS the runtime's control connections dial.
     public var vsockUDSHostPath: String { hostPath(forInJail: Self.vsockUDSPathInJail) }
 
+    /// Where `ip netns add` bind-mounts every namespace it creates. Scanned by
+    /// the crash sweeps, which have to find namespaces whose owning workload
+    /// left no other trace.
+    public static let netnsDirectory = "/var/run/netns"
+
     /// The netns bind-mount path `ip netns add` creates and the jailer joins.
-    public var netnsPath: String { "/var/run/netns/\(netnsName)" }
+    public var netnsPath: String { "\(Self.netnsDirectory)/\(netnsName)" }
+
+    /// The sandbox (or warm template) id a namespace name belongs to, or nil
+    /// when the name is not one of ours. The inverse of ``netnsName(sandboxId:)``.
+    public static func sandboxId(fromNetnsName name: String) -> String? {
+        let prefix = netnsName(sandboxId: "")
+        guard name.hasPrefix(prefix), name.count > prefix.count else { return nil }
+        return String(name.dropFirst(prefix.count))
+    }
 
     /// The jailer cgroup memory ceiling for a sandbox with `guestMemoryBytes`
     /// of guest RAM: guest size plus a fixed 128 MiB VMM allowance

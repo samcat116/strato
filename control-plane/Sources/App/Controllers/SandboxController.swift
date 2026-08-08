@@ -286,6 +286,9 @@ struct SandboxController: RouteCollection {
 
         var restoreSnapshot: SandboxSnapshot?
         var restoreSource: Sandbox?
+        /// The logical network the checkpointed sandbox's NIC sits on, when it
+        /// had one. A fork inherits it (see the shape gate below).
+        var restoreSourceNetworkID: UUID?
         if let snapshotID = createRequest.restoreFrom {
             guard createRequest.image == nil, createRequest.cpus == nil, createRequest.memory == nil,
                 createRequest.entrypoint == nil, createRequest.cmd == nil, createRequest.env == nil,
@@ -354,6 +357,56 @@ struct SandboxController: RouteCollection {
                         "Snapshot's checkpointed guest is too old for sandbox forks (guest control protocol \(snapshot.guestControlProtocolVersion ?? 0), need >= \(SandboxGuestControlProtocol.reidentifyMinimumVersion))"
                 )
             }
+            // The fork's NIC shape has to match the checkpoint's (STR-104). A
+            // snapshot load can repoint a network device at a different host
+            // TAP but can neither add nor drop one, so a fork that disagrees
+            // with its source about having a NIC is unbootable — and the
+            // agent, which can prove the checkpoint's device set from the
+            // archived config drive, refuses it permanently.
+            //
+            // Which makes the NIC part of the shape a fork *inherits*, exactly
+            // like its image and vCPU/memory: naming no network gets the
+            // source's, rather than dropping a device the restore cannot drop.
+            // The fork still gets its own MAC and IPAM allocation — sharing
+            // those with a possibly-live source is the thing `reidentify`
+            // exists to prevent. Naming one explicitly still works and is the
+            // only option when the fork lands in a different project, since
+            // networks are project-scoped.
+            restoreSourceNetworkID = try await source.$networkInterfaces.get(on: req.db)
+                .first?.logicalNetworkID
+            if restoreSourceNetworkID == nil,
+                createRequest.networkId != nil || createRequest.networkName != nil
+            {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "The snapshot's sandbox has no NIC, so the fork cannot have a network: a checkpoint's device set cannot grow one on restore"
+                )
+            }
+            // And a networked fork needs a checkpointed guest that can take
+            // the target's address, not just rotate its identity.
+            if restoreSourceNetworkID != nil,
+                !SandboxGuestControlProtocol.supportsNetworkReconfigure(
+                    snapshot.guestControlProtocolVersion)
+            {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "Snapshot's checkpointed guest cannot re-address its NIC (guest control protocol \(snapshot.guestControlProtocolVersion ?? 0), need >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))"
+                )
+            }
+            // …and a *host* that can point the checkpointed network device at
+            // the fork's TAP. Capture needs no such thing, so a networked
+            // snapshot can exist on a host that cannot fork it; without this
+            // the only place that shows up is a permanent agent-side refusal
+            // the caller sees as a degraded sandbox. Same shape as the gate
+            // above it: only refuse a fork that could never place anywhere,
+            // and leave the per-agent filtering to the scheduler.
+            if restoreSourceNetworkID != nil, !snapshot.isExported, let pinnedAgent,
+                let blocker = SandboxSnapshotCompatibility.networkedForkBlocker(target: pinnedAgent)
+            {
+                throw Abort(.conflict, reason: blocker)
+            }
             restoreSnapshot = snapshot
             restoreSource = source
         } else {
@@ -375,6 +428,25 @@ struct SandboxController: RouteCollection {
         )
         let projectId = try project.requireID()
 
+        // The network the fork inherits when it named none (STR-104). Only
+        // within the source's own project: networks are project-scoped, so a
+        // cross-project fork has to name one in the target — and saying that
+        // is better than resolving the source's id against a project it does
+        // not belong to and reporting it as "not found".
+        let inheritedNetworkID: UUID? = try {
+            guard let restoreSourceNetworkID, let restoreSource,
+                createRequest.networkId == nil, createRequest.networkName == nil
+            else { return nil }
+            guard restoreSource.$project.id == projectId else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "The snapshot's sandbox has a NIC and this fork lands in a different project, so it must name a network of its own: a checkpoint's network device cannot be dropped on restore"
+                )
+            }
+            return restoreSourceNetworkID
+        }()
+
         // The NIC's security groups (STR-34), validated against this project
         // before anything is written. Naming groups without a network is a
         // mistake worth reporting rather than silently dropping: there would
@@ -382,7 +454,8 @@ struct SandboxController: RouteCollection {
         let requestedSecurityGroupIds = try await SecurityGroupService.resolveRequestedGroupIDs(
             createRequest.securityGroupIds, projectID: projectId, on: req.db)
         if !requestedSecurityGroupIds.isEmpty,
-            createRequest.networkId == nil, createRequest.networkName == nil
+            createRequest.networkId == nil, createRequest.networkName == nil,
+            inheritedNetworkID == nil
         {
             throw Abort(
                 .badRequest,
@@ -531,7 +604,7 @@ struct SandboxController: RouteCollection {
                     try await Self.attachNIC(
                         to: sandboxID,
                         projectID: projectId,
-                        requestedNetworkID: createRequest.networkId,
+                        requestedNetworkID: createRequest.networkId ?? inheritedNetworkID,
                         requestedNetworkName: createRequest.networkName,
                         securityGroupIDs: requestedSecurityGroupIds,
                         on: db
@@ -604,7 +677,9 @@ struct SandboxController: RouteCollection {
     ///
     /// A named network is resolved within the sandbox's own project, exactly as
     /// VM create resolves it (issue #765). Naming none is not an error the way
-    /// it is for a VM — the sandbox is simply created **with no NIC**. The NIC
+    /// it is for a VM — the sandbox is simply created **with no NIC**, except
+    /// for a fork, whose caller passes the source's network here because the
+    /// restore cannot drop the checkpointed device (STR-104). The NIC
     /// pins where the sandbox can be placed: since STR-103 a NIC constrains the
     /// sandbox to a host that advertises sandbox networking (and, if the network
     /// is site-pinned, to that site), and placement is refused rather than
