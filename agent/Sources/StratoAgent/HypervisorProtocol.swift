@@ -243,7 +243,22 @@ public protocol HypervisorService: Actor, Sendable {
     /// Stop, releasing whatever the backend registered with its hypervisor and
     /// finishing the stream. Called from `Agent.stop()`, which is the only
     /// scope in which a subscription could otherwise outlive its purpose.
+    ///
+    /// Scoped to the subscription and nothing else — a backend that wants to
+    /// release a connection has `shutdown()` for that, so this stays safe to
+    /// call for its stated purpose alone.
     func stopObservingLifecycle() async
+
+    /// Release whatever this backend holds open, because the agent is going
+    /// away.
+    ///
+    /// Separate from `stopObservingLifecycle` because they are different
+    /// questions with different scopes: one ends a subscription, this ends the
+    /// backend. A driver whose connection is durable — `LibvirtService` holds
+    /// one shared RPC connection every call path uses — has no other hook to
+    /// close it on, and closing it from the subscription's teardown would make
+    /// "stop observing" quietly mean "stop everything".
+    func shutdown() async
 
     /// What the guest agent reports about itself — hostname and configured
     /// interfaces (issue #563).
@@ -305,6 +320,11 @@ public extension HypervisorService {
     nonisolated var lifecycleChanges: AsyncStream<VMLifecycleChange>? { nil }
     func startObservingLifecycle() async {}
     func stopObservingLifecycle() async {}
+
+    /// Backends whose resources are per-VM rather than per-driver — every one
+    /// but `LibvirtService` today — have nothing to release when the agent
+    /// exits.
+    func shutdown() async {}
 
     /// Backends with no guest-agent channel (Firecracker, the mock) report
     /// nothing rather than an error: guest observation is informational, and

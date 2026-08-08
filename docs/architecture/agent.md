@@ -210,6 +210,9 @@ durable store rather than a process the agent has to remember:
   Reconnection is the loop's own job: the subscription dies with its connection,
   and the re-established one yields a resynchronize signal from *inside* the
   subscription scope, so the window it was disconnected for cannot fall in a gap.
+  What this changes is **visibility latency, not repair latency**: a guest that
+  powers itself off is *reported* in about a second, but nothing here rings the
+  desired-state doorbell, so the reconciler still restarts it on its own cadence.
 
 Not yet implemented, and refused rather than silently skipped: disk hot-plug,
 online resize and VM checkpoints (STR-134). Two of those refusals are

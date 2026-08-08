@@ -304,23 +304,32 @@ actor LibvirtService: HypervisorService {
         await eventTask?.value
         eventTask = nil
         lifecycleContinuation.finish()
+    }
 
-        // The first and only place this driver closes its connection — nothing
-        // did before, which was a real (if quiet) leak on agent shutdown.
-        //
-        // Cancel-then-close looks careless and is not. Cancelling ends the
-        // drain, so `withDomainEvents` unwinds and runs its own teardown: the
-        // local sink deregistration always lands, and only the wire-level
-        // `connectDomainEventCallbackDeregisterAny` may be skipped on an
-        // already-cancelled task. Closing here sends `CONNECT_CLOSE`, and the
-        // server-side registration is scoped to the connection, so it dies with
-        // it. Racing a stop signal against the drain inside a task group would
-        // buy one best-effort RPC on a path that drops the socket a millisecond
-        // later; it is not worth the machinery.
-        if let client {
-            self.client = nil
-            try? await client.close()
-        }
+    /// Closes the one connection this driver holds.
+    ///
+    /// The first and only place that happens — nothing did before, which was a
+    /// real (if quiet) leak on agent shutdown. It lives here rather than in
+    /// `stopObservingLifecycle` because the connection is not the
+    /// subscription's: every call path in this file shares it, and ending a
+    /// subscription is no reason to take it away from them.
+    ///
+    /// Cancel-then-close looks careless and is not. `stopObservingLifecycle`
+    /// has already cancelled the drain, so `withDomainEvents` unwound and ran
+    /// its own teardown: the local sink deregistration always lands, and only
+    /// the wire-level `connectDomainEventCallbackDeregisterAny` may be skipped
+    /// on an already-cancelled task. The `CONNECT_CLOSE` here finishes the job,
+    /// because the server-side registration is scoped to the connection and
+    /// dies with it. Racing a stop signal against the drain inside a task group
+    /// would buy one best-effort RPC on a path that drops the socket a
+    /// millisecond later; it is not worth the machinery.
+    ///
+    /// If the caller's budget abandons this, the connection stays open — which
+    /// is the very leak above, bounded to a process that is exiting anyway.
+    func shutdown() async {
+        guard let client else { return }
+        self.client = nil
+        try? await client.close()
     }
 
     /// Holds a lifecycle subscription for as long as the agent wants one,

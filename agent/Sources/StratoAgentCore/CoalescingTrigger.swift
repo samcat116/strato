@@ -7,12 +7,19 @@ import Logging
 /// observed-state reports — and its three properties are all load-bearing for
 /// that caller rather than general good manners:
 ///
-/// - **Two runs are never in flight at once.** `sendObservedStateReport` stamps
-///   an epoch when it starts assembling and re-checks it immediately before
-///   sending, so an overlapping report finds itself superseded and drops. Fire
-///   faster than a report completes without serializing and the result is a
-///   stream of reports of which *none* transmits. Serializing here is what
-///   keeps that epoch a supersession guard rather than a starvation bug.
+/// - **Two *trigger-initiated* runs are never in flight at once.** Scoped
+///   deliberately: `sendObservedStateReport` has other callers, and
+///   `Agent.convergenceDidChange()` is one of them — the reconciler calls it
+///   directly, unserialized, once per convergence transition. So this actor
+///   cannot promise that two reports never assemble at once, and nothing may
+///   be built on the assumption that it does; the epoch check on those other
+///   paths is load-bearing and must stay. What it does promise is that the
+///   *event-driven* runs, which a guest can drive at will, do not pile up on
+///   their own. That matters because `sendObservedStateReport` stamps an epoch
+///   when it starts assembling and re-checks it before sending: firing faster
+///   than a report completes yields a stream of reports of which none
+///   transmits, and newest-wins supersession only helps if something eventually
+///   finishes.
 /// - **`signal()` never awaits the action.** Its caller is a pump draining a
 ///   bounded, drop-oldest event stream; blocking it turns back pressure into
 ///   silent event loss. A cheap signal keeps the loss where it was designed to
@@ -21,9 +28,12 @@ import Logging
 ///   so the common case (one guest changed) pays no added latency at all; the
 ///   interval only bites during a burst.
 ///
-/// Worst case is two runs per interval — one leading, one trailing for whatever
-/// arrived while the leading run was in flight — and the steady state under
-/// continuous signalling is one per interval.
+/// The rate bound is one run per *(action duration + interval)*, not one per
+/// interval: the next run is scheduled from when the last one **ended**, so a
+/// slow action spaces runs out further rather than letting them stack. Under
+/// continuous signalling that is the steady state; a burst against an idle
+/// trigger costs at most two runs — one leading, one trailing for whatever
+/// arrived while the leading run was still in flight.
 ///
 /// The clock is injected as a concrete `ContinuousClock` rather than an
 /// `any Clock`, matching `DesiredStatePoller`: the tests run in real time with a
@@ -36,9 +46,16 @@ public actor CoalescingTrigger {
     /// A report is O(VMs) sequential status round trips plus a full domain-list
     /// sweep for the host's resources, and a host-wide power cycle emits
     /// stopped → started → resumed *per VM*, so mapping events to reports 1:1
-    /// is quadratic in the fleet size. 500 ms caps the event-driven rate at two
-    /// reports a second on the worst host while staying well inside the "within
-    /// a second or two" this exists to deliver.
+    /// is quadratic in the fleet size.
+    ///
+    /// 500 ms is the *idle-host* spacing — small enough to stay well inside the
+    /// "within a second or two" this exists to deliver. It is not the bound on
+    /// a loaded one, and reading it as "at most two reports a second" gets the
+    /// worst host backwards: because runs are spaced from when the last ended,
+    /// a host where a report takes three seconds settles at roughly one report
+    /// per three and a half, not two per second. The interval adds to the
+    /// report's own cost rather than competing with it, which is the safe
+    /// direction and the reason a single number can be used here at all.
     public static let observedStateInterval: Duration = .milliseconds(500)
 
     private let interval: Duration

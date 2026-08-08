@@ -968,25 +968,30 @@ actor Agent {
 
         // Stop the lifecycle pumps and their trigger before the backends they
         // drain, so nothing is still asking for a report while the drivers are
-        // being torn down. The subscription teardown is budgeted because it
-        // talks to the hypervisor, and a wedged daemon must not hold up
-        // shutdown; abandoning it is safe because the process is exiting and
-        // the registration is scoped to a connection that dies with it.
+        // being torn down.
         for task in lifecyclePumpTasks.values { task.cancel() }
         lifecyclePumpTasks.removeAll()
         await observedStateTrigger?.stop()
         observedStateTrigger = nil
-        let observingServices = Array(hypervisorServices.values)
-        do {
-            try await StageBudget.run(
-                seconds: 5, stage: "lifecycle-observation-stop", onTimeout: .abandon
-            ) {
-                for service in observingServices {
+
+        // Then the backends themselves. Budgeted because both steps talk to a
+        // hypervisor and a wedged daemon must not hold up shutdown, and budgeted
+        // **per backend** rather than over the sweep: one wedged driver would
+        // otherwise eat the budget its peers still need to release theirs.
+        // Abandoning is safe because the process is exiting.
+        for (type, service) in hypervisorServices {
+            do {
+                try await StageBudget.run(
+                    seconds: 5, stage: "hypervisor-shutdown", onTimeout: .abandon
+                ) {
                     await service.stopObservingLifecycle()
+                    await service.shutdown()
                 }
+            } catch {
+                logger.warning(
+                    "Hypervisor shutdown exceeded its budget",
+                    metadata: ["hypervisor": .string(type.rawValue)])
             }
-        } catch {
-            logger.warning("Stopping hypervisor lifecycle observation exceeded its budget")
         }
 
         hypervisorServices.removeAll()
@@ -3075,15 +3080,27 @@ extension Agent {
         }
         for (type, service) in hypervisorServices {
             guard lifecyclePumpTasks[type] == nil, let changes = service.lifecycleChanges else { continue }
-            await service.startObservingLifecycle()
-            logger.info(
-                "Observing hypervisor lifecycle events",
-                metadata: ["hypervisor": .string(type.rawValue)])
+
+            // The slot is claimed *before* the first suspension, which is what
+            // makes the idempotence above real rather than incidental: the
+            // guard is read and written in one actor step, so two concurrent
+            // callers cannot both pass it and attach two iterators to one
+            // `AsyncStream`, which is single-consumer and would split the
+            // events arbitrarily between them. `LibvirtService.connecting`
+            // exists for the same reason one file over.
+            //
+            // Pumping before the subscription starts loses nothing: the stream
+            // is created in the driver's `init` and buffered, so anything
+            // yielded in the gap either way is held for whoever attaches.
             lifecyclePumpTasks[type] = Task { [weak self] in
                 for await change in changes {
                     await self?.handleLifecycleChange(change, from: type)
                 }
             }
+            await service.startObservingLifecycle()
+            logger.info(
+                "Observing hypervisor lifecycle events",
+                metadata: ["hypervisor": .string(type.rawValue)])
         }
     }
 
@@ -3099,6 +3116,15 @@ extension Agent {
         // no agent id to send it under, and the post-registration baseline
         // report covers whatever happened in the meantime.
         guard controlPlaneSupportsStateSync, assignedAgentID != nil else { return }
+
+        // And not while the socket is down. `assignedAgentID` is set once at
+        // registration and never cleared, so it does not answer this on its
+        // own — without the second check a guest that flaps during a
+        // control-plane outage would drive a full O(VMs) re-reading of the host
+        // every coalescing window, for a report that can only throw
+        // `notConnected`. Reconnection re-registers, and registration sends the
+        // baseline report that covers the gap.
+        guard await websocketClient?.isConnected == true else { return }
 
         switch change {
         case .vm(let id, let reason):
@@ -4737,6 +4763,12 @@ extension Agent: ReconcileActuator {
 
         do {
             try await websocketClient?.sendMessage(report)
+        } catch let error as WebSocketClientError where error.isNotConnected {
+            // Not an error: the socket dropped, the reconnect loop owns that,
+            // and registration re-sends a baseline report. Logging it at
+            // `error` turned a control-plane outage into per-report noise on
+            // every agent — worst on the paths a guest can drive.
+            logger.debug("Skipped observed-state report: control-plane socket is down")
         } catch {
             logger.error("Failed to send observed-state report: \(error)")
         }
