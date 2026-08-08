@@ -58,6 +58,20 @@ final class ResourceQuota: Model, @unchecked Sendable {
     @Field(key: "sandbox_count")
     var sandboxCount: Int
 
+    /// Volume count limit (STR-181), or nil for no limit.
+    ///
+    /// Optional where the other two counts are required, and that asymmetry is
+    /// the point: `max_vms` was the only plausible backfill and it is the wrong
+    /// one, since a deployment that gives each VM a data disk or two has more
+    /// volumes than VMs and would come out of the upgrade refusing creates
+    /// against a limit nobody chose. Bytes (`maxStorage`) are the ceiling that
+    /// protects the host; this is here for an operator who wants a count too.
+    @OptionalField(key: "max_volumes")
+    var maxVolumes: Int?
+
+    @Field(key: "volume_count")
+    var volumeCount: Int
+
     // Network limits
     @Field(key: "max_networks")
     var maxNetworks: Int
@@ -92,6 +106,7 @@ final class ResourceQuota: Model, @unchecked Sendable {
         maxStorage: Int64,
         maxVMs: Int,
         maxSandboxes: Int? = nil,
+        maxVolumes: Int? = nil,
         maxNetworks: Int = 10,
         environment: String? = nil,
         isEnabled: Bool = true
@@ -113,6 +128,10 @@ final class ResourceQuota: Model, @unchecked Sendable {
         // default the migration backfills for pre-existing quota rows.
         self.maxSandboxes = maxSandboxes ?? maxVMs
         self.sandboxCount = 0
+        // No default: an unspecified volume limit is *no* volume limit, not one
+        // inferred from the VM count.
+        self.maxVolumes = maxVolumes
+        self.volumeCount = 0
         self.maxNetworks = maxNetworks
         self.networkCount = 0
         self.environment = environment
@@ -168,6 +187,11 @@ extension ResourceQuota {
         return maxSandboxes - sandboxCount
     }
 
+    /// Nil when no volume count limit is set (STR-181).
+    var availableVolumes: Int? {
+        maxVolumes.map { $0 - volumeCount }
+    }
+
     var availableNetworks: Int {
         return maxNetworks - networkCount
     }
@@ -195,6 +219,13 @@ extension ResourceQuota {
     var sandboxUtilizationPercent: Double {
         guard maxSandboxes > 0 else { return 0 }
         return Double(sandboxCount) / Double(maxSandboxes) * 100
+    }
+
+    /// Nil when no volume count limit is set — distinct from 0%, which would
+    /// read as "a limit, entirely unused".
+    var volumeUtilizationPercent: Double? {
+        guard let maxVolumes, maxVolumes > 0 else { return nil }
+        return Double(volumeCount) / Double(maxVolumes) * 100
     }
 }
 
@@ -359,14 +390,18 @@ extension ResourceQuota {
         sandboxCount += 1
     }
 
-    /// Check whether `bytes` of sandbox-snapshot storage fits (issue #426).
-    /// Snapshots draw from the same storage pool as VM disks.
+    /// Check whether `bytes` of storage fits, for the objects that draw on the
+    /// shared pool without being a VM: snapshot artifacts (issue #426) and
+    /// volumes (STR-181).
     ///
     /// Like the sibling checks above, overflow is treated as "does not fit"
     /// rather than trapping the process: `bytes` is caller-influenced (it is
-    /// seeded from the sandbox's guest memory), so a plain `+` here was a
-    /// remotely reachable crash (issue #826).
-    func canAccommodateSnapshotStorage(_ bytes: Int64) -> (allowed: Bool, reason: String?) {
+    /// seeded from a sandbox's guest memory, or from a requested volume size),
+    /// so a plain `+` here was a remotely reachable crash (issue #826).
+    ///
+    /// - Parameter subject: What the refusal names, so the operator reads
+    ///   "for the volume" rather than a generic overage.
+    func canAccommodateStorage(_ bytes: Int64, for subject: String) -> (allowed: Bool, reason: String?) {
         if !isEnabled {
             return (true, nil)
         }
@@ -376,22 +411,48 @@ extension ResourceQuota {
             let requestedGB = Double(bytes) / 1024 / 1024 / 1024
             return (
                 false,
-                "Insufficient storage quota for the snapshot: \(String(format: "%.2f", availableGB))GiB available, \(String(format: "%.2f", requestedGB))GiB requested"
+                "Insufficient storage quota for \(subject): \(String(format: "%.2f", availableGB))GiB available, \(String(format: "%.2f", requestedGB))GiB requested"
             )
         }
         return (true, nil)
     }
 
-    /// Reserve sandbox-snapshot storage (issue #426). The add cannot trap; see
-    /// ``reserving(_:_:)``. `bytes` is not certain to be positive here — the
-    /// export path passes an agent-reported size — which is the other reason
-    /// the result floors at zero.
-    func reserveSnapshotStorage(_ bytes: Int64) throws {
-        let check = canAccommodateSnapshotStorage(bytes)
+    /// Whether one more volume fits, in *bytes and count* (STR-181).
+    ///
+    /// The count half is skipped entirely when `maxVolumes` is nil, which is the
+    /// default and means no count limit — unlike VMs and sandboxes, where the
+    /// limit always exists.
+    func canAccommodateVolume(size: Int64) -> (allowed: Bool, reason: String?) {
+        let storage = canAccommodateStorage(size, for: "the volume")
+        guard storage.allowed else { return storage }
+        if isEnabled, let maxVolumes, volumeCount >= maxVolumes {
+            return (false, "Volume limit reached: \(maxVolumes) volumes allowed")
+        }
+        return (true, nil)
+    }
+
+    /// Reserve storage for a snapshot artifact or a volume resize (issues #426,
+    /// #564, STR-181). The add cannot trap; see ``reserving(_:_:)``. `bytes` is
+    /// not certain to be positive here — the export path passes an
+    /// agent-reported size — which is the other reason the result floors at
+    /// zero.
+    func reserveStorage(_ bytes: Int64, for subject: String) throws {
+        let check = canAccommodateStorage(bytes, for: subject)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
         reservedStorage = Self.reserving(reservedStorage, bytes)
+    }
+
+    /// Reserve one volume's bytes and, when a count limit is set, its slot
+    /// (STR-181).
+    func reserveVolumeResources(size: Int64) throws {
+        let check = canAccommodateVolume(size: size)
+        if !check.allowed {
+            throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
+        }
+        reservedStorage = Self.reserving(reservedStorage, size)
+        volumeCount += 1
     }
 }
 
@@ -426,6 +487,13 @@ extension ResourceQuota {
         if maxVCPUs <= 0 || maxMemory <= 0 || maxStorage <= 0 || maxVMs <= 0 || maxSandboxes <= 0 {
             throw Abort(.badRequest, reason: "All resource limits must be positive")
         }
+
+        // `maxVolumes` is optional, so "unset" and "zero" have to stay
+        // distinguishable: nil is no limit, and a limit of zero — which would
+        // admit nothing at all — is a mistake, not a policy.
+        if let maxVolumes, maxVolumes <= 0 {
+            throw Abort(.badRequest, reason: "The volume limit must be positive when set")
+        }
     }
 }
 
@@ -442,6 +510,9 @@ struct CreateResourceQuotaRequest: Content, ValidatedRequestBody {
     let maxVMs: Int
     /// Sandbox count limit; defaults to `maxVMs` when omitted.
     let maxSandboxes: Int?
+    /// Volume count limit; omitted means **no** count limit, not a default
+    /// borrowed from `maxVMs` (STR-181).
+    let maxVolumes: Int?
     let maxNetworks: Int?
     var environment: String?
     let isEnabled: Bool?
@@ -459,6 +530,15 @@ struct UpdateResourceQuotaRequest: Content, ValidatedRequestBody {
     let maxStorageGB: Double?
     let maxVMs: Int?
     let maxSandboxes: Int?
+    /// The volume count limit (STR-181). Omitted leaves it as it is; **`0`
+    /// removes it**.
+    ///
+    /// A sentinel because this is the one limit that can legitimately be unset,
+    /// and Swift's synthesized decoding cannot tell an absent key from an
+    /// explicit null — the same wall `SetVolumeIOLimitsRequest` documents. Zero
+    /// is free to mean this: a limit of zero would admit no volume at all, so
+    /// `validate()` refuses it on the model and nothing can want it.
+    let maxVolumes: Int?
     let maxNetworks: Int?
     let isEnabled: Bool?
 
@@ -485,6 +565,8 @@ struct ResourceQuotaResponse: Content {
         let maxStorageGB: Double
         let maxVMs: Int
         let maxSandboxes: Int
+        /// Null means no volume count limit (STR-181).
+        let maxVolumes: Int?
         let maxNetworks: Int
     }
 
@@ -494,6 +576,7 @@ struct ResourceQuotaResponse: Content {
         let reservedStorageGB: Double
         let vmCount: Int
         let sandboxCount: Int
+        let volumeCount: Int
         let networkCount: Int
     }
 
@@ -503,6 +586,9 @@ struct ResourceQuotaResponse: Content {
         let storagePercent: Double
         let vmPercent: Double
         let sandboxPercent: Double
+        /// Null when no volume count limit is set — not 0%, which would read as
+        /// a limit nobody is using.
+        let volumePercent: Double?
     }
 
     init(from quota: ResourceQuota) {
@@ -534,6 +620,7 @@ struct ResourceQuotaResponse: Content {
             maxStorageGB: Double(quota.maxStorage) / 1024 / 1024 / 1024,
             maxVMs: quota.maxVMs,
             maxSandboxes: quota.maxSandboxes,
+            maxVolumes: quota.maxVolumes,
             maxNetworks: quota.maxNetworks
         )
 
@@ -543,6 +630,7 @@ struct ResourceQuotaResponse: Content {
             reservedStorageGB: Double(quota.reservedStorage) / 1024 / 1024 / 1024,
             vmCount: quota.vmCount,
             sandboxCount: quota.sandboxCount,
+            volumeCount: quota.volumeCount,
             networkCount: quota.networkCount
         )
 
@@ -551,7 +639,8 @@ struct ResourceQuotaResponse: Content {
             memoryPercent: quota.memoryUtilizationPercent,
             storagePercent: quota.storageUtilizationPercent,
             vmPercent: quota.vmUtilizationPercent,
-            sandboxPercent: quota.sandboxUtilizationPercent
+            sandboxPercent: quota.sandboxUtilizationPercent,
+            volumePercent: quota.volumeUtilizationPercent
         )
 
         self.createdAt = quota.createdAt
@@ -573,6 +662,8 @@ struct QuotaLimits: Content {
     let maxStorageGB: Double
     let maxVMs: Int
     let maxSandboxes: Int
+    /// Null means no volume count limit (STR-181).
+    let maxVolumes: Int?
     let maxNetworks: Int
 }
 
@@ -582,6 +673,7 @@ struct QuotaUsage: Content {
     let storageGB: Double
     let vms: Int
     let sandboxes: Int
+    let volumes: Int
     let networks: Int
 }
 
@@ -591,6 +683,8 @@ struct QuotaUtilization: Content {
     let storagePercent: Double
     let vmPercent: Double
     let sandboxPercent: Double
+    /// Null when no volume count limit is set (STR-181).
+    let volumePercent: Double?
 }
 
 struct QuotaUsageResponse: Content {

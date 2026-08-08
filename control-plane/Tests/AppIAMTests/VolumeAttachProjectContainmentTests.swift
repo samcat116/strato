@@ -56,7 +56,7 @@ struct VolumeAttachProjectContainmentTests {
             let volume = Volume(
                 name: "containment-volume",
                 description: "volume under the project-containment guard",
-                projectID: volumeProject.id!,
+                projectID: volumeProject.id!, environment: "development",
                 size: 10 * 1024 * 1024 * 1024,
                 status: .available,
                 createdByID: admin.id!)

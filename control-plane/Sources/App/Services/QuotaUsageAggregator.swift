@@ -39,15 +39,17 @@ struct QuotaScope: Sendable {
 struct QuotaMeasuredUsage: Sendable {
     var vcpus: Int
     var memoryBytes: Int64
-    /// VM disks plus sandbox-snapshot artifacts. Sandboxes themselves reserve
-    /// no storage, but their checkpoints persist real bytes in the same pool
-    /// (issue #426).
+    /// Everything in the shared storage pool: VM disks, sandbox-snapshot
+    /// artifacts and VM checkpoints (issues #426, #564), and volumes and their
+    /// snapshots (STR-181). Sandboxes themselves reserve no storage; their
+    /// checkpoints persist real bytes in the same pool.
     var storageBytes: Int64
     var vmCount: Int
     var sandboxCount: Int
+    var volumeCount: Int
 
     static let none = QuotaMeasuredUsage(
-        vcpus: 0, memoryBytes: 0, storageBytes: 0, vmCount: 0, sandboxCount: 0)
+        vcpus: 0, memoryBytes: 0, storageBytes: 0, vmCount: 0, sandboxCount: 0, volumeCount: 0)
 
     /// The API-facing projection.
     var asQuotaUsage: QuotaUsage {
@@ -57,9 +59,20 @@ struct QuotaMeasuredUsage: Sendable {
             storageGB: storageBytes.bytesToGB,
             vms: vmCount,
             sandboxes: sandboxCount,
+            volumes: volumeCount,
             networks: 0  // TODO: Implement network counting when networking is added
         )
     }
+}
+
+/// What a scope's volumes and volume snapshots add to it (STR-181): the bytes
+/// they occupy in the shared storage pool, and how many volumes there are for
+/// the optional count limit.
+struct QuotaVolumeTotals: Sendable {
+    let storageBytes: Int64
+    let volumeCount: Int
+
+    static let none = QuotaVolumeTotals(storageBytes: 0, volumeCount: 0)
 }
 
 /// A breakdown of a scope's VMs by environment and by status, for the quota
@@ -109,7 +122,8 @@ struct QuotaUsageAggregator {
     }
 
     /// Measures `scope` with one aggregate per workload table: VMs, sandboxes,
-    /// and the snapshot artifacts that also occupy the storage pool.
+    /// the snapshot artifacts that also occupy the storage pool, and volumes
+    /// with their own snapshots (STR-181, which shares a single round trip).
     static func measure(_ scope: QuotaScope, on db: Database) async throws -> QuotaMeasuredUsage {
         if case .none = scope.projects { return .none }
         let sql = try requireSQL(db)
@@ -149,13 +163,16 @@ struct QuotaUsageAggregator {
 
         let snapshotStorage = try await snapshotStorageBytes(in: scope, on: db)
         let checkpointStorage = try await vmCheckpointStorageBytes(in: scope, on: db)
+        let volumes = try await volumeTotals(in: scope, on: db)
 
         return QuotaMeasuredUsage(
             vcpus: Int(vms?.vcpus ?? 0) + Int(sandboxes?.vcpus ?? 0),
             memoryBytes: (vms?.memory_bytes ?? 0) + (sandboxes?.memory_bytes ?? 0),
-            storageBytes: (vms?.disk_bytes ?? 0) + snapshotStorage + checkpointStorage,
+            storageBytes: (vms?.disk_bytes ?? 0) + snapshotStorage + checkpointStorage
+                + volumes.storageBytes,
             vmCount: Int(vms?.vm_count ?? 0),
-            sandboxCount: Int(sandboxes?.sandbox_count ?? 0)
+            sandboxCount: Int(sandboxes?.sandbox_count ?? 0),
+            volumeCount: volumes.volumeCount
         )
     }
 
@@ -222,6 +239,78 @@ struct QuotaUsageAggregator {
         ).first(decoding: StorageTotal.self)
         return total?.storage_bytes ?? 0
     }
+
+    /// What volumes and their snapshots occupy in scope, and how many volumes
+    /// there are (STR-181).
+    ///
+    /// Both tables in one round trip, and both figures from one statement,
+    /// because this runs under the per-quota advisory lock on every workload
+    /// create: a query not issued here is lock time every other create in the
+    /// organization does not wait for (issue #692).
+    ///
+    /// Three things about what is counted:
+    ///
+    /// * **A volume is charged the size it asked for**, not
+    ///   `observed_size_bytes`. The two differ exactly when a grow is
+    ///   outstanding — STR-199's refused-because-the-guest-is-running case — and
+    ///   that grow is blocked, not withdrawn: it lands the moment the guest
+    ///   stops, with no admission point in between. Charging the observed size
+    ///   would make it free until then.
+    /// * **A volume that *is* its VM's boot disk is skipped**, because
+    ///   `SUM(vms.disk)` already charges that file. Only the rows
+    ///   `MigrateVMDisksToVolumes` backfilled can match — nothing since inserts a
+    ///   volume for a VM's boot disk — but for a deployment upgraded from before
+    ///   volumes existed, counting both would double every legacy VM's disk and
+    ///   the symptom would be creates refused against a quota nobody changed.
+    ///   The predicate is the agent's own rule: `LibvirtService.resolveDisks`
+    ///   dedupes the pair by path into a single disk.
+    /// * **A snapshot is charged what its overlay actually occupies** once the
+    ///   agent reports it (wire v39), and the parent volume's size until then.
+    ///   The estimate is the bound — an overlay cannot outgrow the volume behind
+    ///   it — so the pool can never be oversubscribed by snapshots that have not
+    ///   diverged yet, while a project that took five snapshots of a 1 TiB volume
+    ///   is not billed 5 TiB for 1 MiB of overlay. `error` rows are excluded,
+    ///   matching the other two artifact families.
+    ///
+    /// No status filter on `volumes`, deliberately: a row existing means the
+    /// bytes are either asked for or not yet reclaimed. A volume being deleted
+    /// keeps its row precisely until the agent confirms the data is gone.
+    static func volumeTotals(in scope: QuotaScope, on db: Database) async throws -> QuotaVolumeTotals {
+        if case .none = scope.projects { return .none }
+        let sql = try requireSQL(db)
+        let inScope = scope.predicate
+
+        struct Totals: Decodable {
+            let volume_bytes: Int64
+            let volume_count: Int64
+            let snapshot_bytes: Int64
+        }
+        let totals = try await sql.raw(
+            """
+            SELECT
+                (SELECT COALESCE(SUM(size), 0)::bigint FROM volumes
+                 WHERE \(inScope) AND \(Self.volumeIsNotAVMBootDisk)) AS volume_bytes,
+                (SELECT COUNT(*)::bigint FROM volumes
+                 WHERE \(inScope) AND \(Self.volumeIsNotAVMBootDisk)) AS volume_count,
+                (SELECT COALESCE(SUM(COALESCE(observed_size_bytes, size)), 0)::bigint
+                 FROM volume_snapshots
+                 WHERE \(inScope) AND status::text <> \(bind: SnapshotStatus.error.rawValue)
+                ) AS snapshot_bytes
+            """
+        ).first(decoding: Totals.self)
+
+        return QuotaVolumeTotals(
+            storageBytes: (totals?.volume_bytes ?? 0) + (totals?.snapshot_bytes ?? 0),
+            volumeCount: Int(totals?.volume_count ?? 0))
+    }
+
+    /// The boot-disk exclusion above, as a predicate on a `volumes` row.
+    private static let volumeIsNotAVMBootDisk: SQLQueryString = """
+        NOT EXISTS (
+            SELECT 1 FROM vms
+            WHERE vms.id = volumes.vm_id AND vms.disk_path = volumes.storage_path
+        )
+        """
 
     /// Counts the scope's VMs by environment and by status in one grouped
     /// aggregate, for the per-quota usage endpoint.

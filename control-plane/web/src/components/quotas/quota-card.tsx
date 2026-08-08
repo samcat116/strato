@@ -100,10 +100,21 @@ export function QuotaCard({
           limit={limits.maxVMs}
           percent={utilization.vmPercent}
         />
+        {limits.maxVolumes !== null && (
+          <UsageBar
+            label="Volumes"
+            used={usage.volumeCount}
+            limit={limits.maxVolumes}
+            percent={utilization.volumePercent ?? 0}
+          />
+        )}
       </div>
 
       <div className="text-xs text-muted-foreground">
         Networks: {usage.networkCount} / {limits.maxNetworks}
+        {limits.maxVolumes === null && (
+          <> &middot; Volumes: {usage.volumeCount} (no limit)</>
+        )}
       </div>
     </div>
   );

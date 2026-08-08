@@ -217,11 +217,29 @@ public struct DesiredSnapshotState: Codable, Sendable {
 /// zero" — a footprint the agent could not measure must never silently become a
 /// free one in quota accounting.
 public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
-    /// Total on-disk footprint this artifact adds, in bytes. For a VM
-    /// checkpoint that is the machine state alone: the disks it lives inside
-    /// are already charged as volume storage, and an internal snapshot does not
-    /// copy them.
+    /// Total on-disk footprint this artifact adds, **as measured at capture**.
+    /// For a VM checkpoint that is the machine state alone: the disks it lives
+    /// inside are already charged as volume storage (STR-181 made that true),
+    /// and an internal snapshot does not copy them.
+    ///
+    /// Final for the two families that are finished when they are written. For a
+    /// volume snapshot it is an empty overlay's header and `currentSizeBytes` is
+    /// the figure to read instead.
     public let sizeBytes: Int64?
+    /// The footprint re-measured at *report* time, for an artifact that keeps
+    /// growing after capture (STR-181).
+    ///
+    /// Today that is only a volume snapshot's overlay, which starts as an empty
+    /// qcow2 and grows toward its parent's size as the volume is written.
+    /// `sizeBytes` is what the agent measured *at* capture and is frozen there —
+    /// for an overlay it is the header, which is why the control plane ignored
+    /// it. This one is re-read on every report, so it is what the storage quota
+    /// charges.
+    ///
+    /// Nil for every other kind, and from any agent that does not re-measure —
+    /// which is what makes the field readable without a version gate. Nil is
+    /// "unknown", never zero: the control plane keeps its admission estimate.
+    public let currentSizeBytes: Int64?
     /// Where the agent put it, when the artifact is a file or directory the
     /// agent names. Nil for a VM checkpoint, which lives inside disks it does
     /// not get to name.
@@ -261,6 +279,7 @@ public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
 
     public init(
         sizeBytes: Int64? = nil,
+        currentSizeBytes: Int64? = nil,
         storagePath: String? = nil,
         architecture: CPUArchitecture? = nil,
         deviceNodes: [String]? = nil,
@@ -274,6 +293,7 @@ public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
         cpuTemplate: String? = nil
     ) {
         self.sizeBytes = sizeBytes
+        self.currentSizeBytes = currentSizeBytes
         self.storagePath = storagePath
         self.architecture = architecture
         self.deviceNodes = deviceNodes

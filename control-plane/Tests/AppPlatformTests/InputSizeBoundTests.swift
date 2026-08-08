@@ -422,7 +422,7 @@ final class InputSizeBoundTests {
                     req.headers.bearerAuthorization = BearerAuthorization(token: token)
                     try req.content.encode(
                         CreateVolumeRequest(
-                            name: name, description: description, projectId: project.id,
+                            name: name, description: description, projectId: project.id, environment: nil,
                             sizeGB: 1, format: "qcow2", volumeType: "data", sourceImageId: nil,
                             iopsTotal: nil, bpsTotal: nil))
                 } afterResponse: { res in
@@ -609,7 +609,7 @@ final class InputSizeBoundTests {
             let volume = Volume(
                 name: self.string(Validate.nameLength + 1),
                 description: "",
-                projectID: project.id!,
+                projectID: project.id!, environment: "development",
                 size: 1024,
                 format: .qcow2,
                 volumeType: .data,

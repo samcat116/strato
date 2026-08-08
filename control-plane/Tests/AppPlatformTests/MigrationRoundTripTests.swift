@@ -35,6 +35,49 @@ struct MigrationRoundTripTests {
         }
     }
 
+    /// STR-181: `AddVolumeQuotaAccounting` adds an environment column to two
+    /// tables that never had one, so the interesting case is a row that predates
+    /// it. Written through raw SQL with the column nulled out, because the live
+    /// model cannot express a volume without an environment.
+    @Test("Pre-existing volumes are backfilled with their project's default environment")
+    func volumeEnvironmentBackfillUsesProjectDefault() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "backfill", email: "backfill@example.com")
+            let org = try await builder.createOrganization(name: "Backfill Org")
+            let project = try await builder.createProject(
+                name: "Backfill Project", description: "p", organization: org)
+            project.defaultEnvironment = "production"
+            try await project.save(on: app.db)
+
+            let volume = try await builder.createVolume(
+                name: "legacy", project: project, createdBy: user)
+            let snapshot = VolumeSnapshot(
+                name: "legacy-snap", description: "", volumeID: try volume.requireID(),
+                projectID: try project.requireID(), environment: "development",
+                size: 1 << 30, createdByID: try user.requireID())
+            try await snapshot.save(on: app.db)
+
+            // Rewind both rows to the pre-migration shape.
+            for table in ["volumes", "volume_snapshots"] {
+                try await sql.raw(
+                    "ALTER TABLE \(ident: table) ALTER COLUMN environment DROP NOT NULL"
+                ).run()
+                try await sql.raw("UPDATE \(ident: table) SET environment = NULL").run()
+            }
+
+            try await AddVolumeQuotaAccounting().backfillEnvironments(on: app.db)
+
+            let backfilledVolume = try #require(try await Volume.find(volume.id, on: app.db))
+            let backfilledSnapshot = try #require(
+                try await VolumeSnapshot.find(snapshot.id, on: app.db))
+            #expect(backfilledVolume.environment == "production")
+            #expect(backfilledSnapshot.environment == "production")
+        }
+    }
+
     @Test("Legacy NIC address columns are dropped from the migrated schema")
     func legacyNICAddressColumnsAreDropped() async throws {
         try await withTestApp { app in
@@ -175,6 +218,10 @@ struct MigrationRoundTripTests {
                 // one identity per VM, and the lookup the sync assembly makes
                 // once per poll.
                 + AddVMToWorkloadRegistration.indexes
+                // `volume_snapshots.project_id` (STR-181): the two other
+                // snapshot tables got theirs in their create migrations for the
+                // quota aggregate, and volume snapshots joined that aggregate.
+                + AddVolumeQuotaAccounting.indexes
             for index in expected {
                 let exists = present.contains(index.name)
                 #expect(exists, "missing index \(index.name)")

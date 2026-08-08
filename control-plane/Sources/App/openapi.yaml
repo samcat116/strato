@@ -9934,6 +9934,11 @@ components:
         projectId:
           type: string
           format: uuid
+        environment:
+          type: string
+          description: >-
+            Which of the project's environments the volume's bytes are charged
+            to. Omit for the project's default, as VM and sandbox create do.
         sizeGB:
           type: integer
         format:
@@ -10059,6 +10064,7 @@ components:
       required:
         - name
         - description
+        - environment
         - size
         - sizeFormatted
         - format
@@ -10077,6 +10083,10 @@ components:
         projectId:
           type: string
           format: uuid
+        environment:
+          type: string
+          description: >-
+            The project environment this volume's bytes are charged to.
         size:
           type: integer
           format: int64
@@ -10164,7 +10174,7 @@ components:
           format: date-time
     VolumeSnapshot:
       type: object
-      required: [name, description, size, sizeFormatted, status]
+      required: [name, description, environment, size, sizeFormatted, status]
       properties:
         id:
           type: string
@@ -10179,12 +10189,33 @@ components:
         projectId:
           type: string
           format: uuid
+        environment:
+          type: string
+          description: >-
+            The project environment this snapshot's bytes are charged to.
         size:
           type: integer
           format: int64
+          description: >-
+            The parent volume's size when the snapshot was taken — what a
+            restore sizes its target to, and what the storage quota admits
+            against.
         sizeFormatted:
           type: string
           description: Display form of `size` in binary units (e.g. `10 GiB`).
+        observedSize:
+          type: integer
+          format: int64
+          nullable: true
+          description: >-
+            What the overlay actually occupies, as last reported by the owning
+            agent. Null means no agent has said — the bytes are not on a host
+            yet, or the agent predates wire v39 — in which case the storage
+            quota charges `size` instead.
+        observedSizeFormatted:
+          type: string
+          nullable: true
+          description: Display form of `observedSize` in binary units.
         status:
           $ref: "#/components/schemas/VolumeSnapshotStatus"
         errorMessage:
@@ -12125,11 +12156,23 @@ components:
               type: integer
             maxSandboxes:
               type: integer
+            maxVolumes:
+              type: integer
+              nullable: true
             maxNetworks:
               type: integer
         usage:
           type: object
-          required: [reservedVCPUs, reservedMemoryGB, reservedStorageGB, vmCount, sandboxCount, networkCount]
+          required:
+            [
+              reservedVCPUs,
+              reservedMemoryGB,
+              reservedStorageGB,
+              vmCount,
+              sandboxCount,
+              volumeCount,
+              networkCount,
+            ]
           properties:
             reservedVCPUs:
               type: integer
@@ -12143,12 +12186,18 @@ components:
               type: integer
             sandboxCount:
               type: integer
+            volumeCount:
+              type: integer
             networkCount:
               type: integer
         utilization:
           type: object
           required: [cpuPercent, memoryPercent, storagePercent, vmPercent, sandboxPercent]
           properties:
+            volumePercent:
+              type: number
+              format: double
+              nullable: true
             cpuPercent:
               type: number
               format: double
@@ -13025,6 +13074,13 @@ components:
           type: integer
         maxSandboxes:
           type: integer
+        maxVolumes:
+          type: integer
+          nullable: true
+          description: >-
+            Volume count limit. Null means no count limit — unlike the VM and
+            sandbox limits, this one is optional, because `maxStorageGB` is the
+            ceiling that protects the host.
         maxNetworks:
           type: integer
 
@@ -13044,6 +13100,8 @@ components:
         vmCount:
           type: integer
         sandboxCount:
+          type: integer
+        volumeCount:
           type: integer
         networkCount:
           type: integer
@@ -13068,6 +13126,11 @@ components:
         sandboxPercent:
           type: number
           format: double
+        volumePercent:
+          type: number
+          format: double
+          nullable: true
+          description: Null when no volume count limit is set.
 
     CreateResourceQuotaRequest:
       type: object
@@ -13088,6 +13151,11 @@ components:
         maxSandboxes:
           type: integer
           description: Defaults to `maxVMs` when omitted.
+        maxVolumes:
+          type: integer
+          description: >-
+            Volume count limit. Omitted means **no** count limit, not a default
+            borrowed from `maxVMs`.
         maxNetworks:
           type: integer
           description: Defaults to 10.
@@ -13120,6 +13188,11 @@ components:
           type: integer
         maxSandboxes:
           type: integer
+        maxVolumes:
+          type: integer
+          description: >-
+            The volume count limit. Omit to leave it as it is; send `0` to
+            remove it.
         maxNetworks:
           type: integer
         isEnabled:
@@ -13161,7 +13234,7 @@ components:
 
     QuotaUsageCounts:
       type: object
-      required: [vcpus, memoryGB, storageGB, vms, sandboxes, networks]
+      required: [vcpus, memoryGB, storageGB, vms, sandboxes, volumes, networks]
       properties:
         vcpus:
           type: integer
@@ -13174,6 +13247,8 @@ components:
         vms:
           type: integer
         sandboxes:
+          type: integer
+        volumes:
           type: integer
         networks:
           type: integer

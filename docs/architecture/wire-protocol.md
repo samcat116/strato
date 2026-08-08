@@ -50,7 +50,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 38), stamped on
+`WireProtocol.swift` holds the protocol version (currently 39), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -620,6 +620,19 @@ on every heartbeat, so the same facts simply arrive again. Every field is
 optional and every consumer treats nil as *unknown*, never zero — a footprint
 the agent could not measure must not silently become a free one in quota
 accounting.
+
+`ObservedSnapshotFacts` carries **two** sizes (STR-181, wire v39), and which one
+answers depends on whether the artifact is finished when it is captured.
+`sizeBytes` is measured once, at capture — the final answer for a VM checkpoint's
+machine state and a sandbox snapshot's archive. `currentSizeBytes` is re-measured
+on every report, for the one family whose bytes keep growing afterwards: a volume
+snapshot is an overlay that starts as an empty qcow2 and fills toward its
+parent's size as the volume is written, so its capture-time figure is a header
+and nothing else. The storage quota charges the live figure where there is one
+and the admission estimate where there is not. Splitting them rather than
+redefining `sizeBytes` is what makes a pre-v39 agent safe: it sends only the
+frozen header size, under a name whose meaning did not change, and the nil in the
+new field is read as "does not re-measure".
 
 A nil `snapshots` on the report has v31's two causes and the same response:
 an agent below v33 does not speak the field, and a v33 agent that cannot read

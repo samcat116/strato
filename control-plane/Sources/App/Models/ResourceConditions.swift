@@ -423,6 +423,13 @@ extension Volume: ConvergingResource {
         hypervisorId = committed.hypervisorId
         storagePath = committed.storagePath
         finalizers = committed.finalizers
+        // The desired size, for the same read-modify-write reason as the
+        // attachment below: `accept` saves the whole model, so an attach or a
+        // throttle accepted while a resize commits would write its pre-request
+        // snapshot back over the new size. Adopting it is also what lets
+        // `resizeVolume` compute its quota delta (STR-181) against the row as it
+        // is under the lock rather than as the request found it.
+        size = committed.size
         // The desired attachment, which is not reconciliation-owned but is
         // read-modify-written by every mutation all the same: `accept` saves
         // the whole model, so a resize accepted while an attach commits would

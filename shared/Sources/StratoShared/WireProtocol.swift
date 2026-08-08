@@ -796,7 +796,30 @@ public enum WireProtocol {
     /// leaves `observed_size_bytes` exactly as the last report that spoke left
     /// it rather than clearing it. Skew the other way is inert — a pre-v38
     /// control plane's decoder drops the unknown key.
-    public static let currentVersion = 38
+    ///
+    /// Version 39: a volume snapshot reports the footprint it has *now*
+    /// (STR-181). `ObservedSnapshotFacts` gains `currentSizeBytes: Int64?`.
+    /// Agent→control-plane only, no frame added or removed, and — like v38 — no
+    /// capability gate, because the control plane does not change what it sends
+    /// based on the answer.
+    ///
+    /// It is a second size field rather than a redefinition of `sizeBytes`, and
+    /// that is the whole point. `sizeBytes` is measured once, when the capture
+    /// happens; for a VM checkpoint and a sandbox snapshot that is the artifact's
+    /// final size, but a volume snapshot's overlay is stat'd immediately after
+    /// `qemu-img create`, so the recorded number is an empty qcow2's header and
+    /// stays there however far the volume diverges. Reusing the field would have
+    /// made every pre-v39 agent's snapshots read as ~200 KB to the storage quota
+    /// that now charges them, and no version gate would have caught it, because
+    /// the observed-state applier deliberately reads the payload rather than the
+    /// `wire_protocol_version` column. A distinct optional field is that rule
+    /// applied: nil means "this agent does not re-measure", and the control plane
+    /// falls back to the admission estimate.
+    ///
+    /// Skew in both directions is inert. A pre-v39 agent sends no key and the
+    /// control plane keeps charging the parent volume's size; a pre-v39 control
+    /// plane's decoder drops it.
+    public static let currentVersion = 39
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).

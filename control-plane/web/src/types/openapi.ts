@@ -5790,6 +5790,8 @@ export interface components {
             description?: string;
             /** Format: uuid */
             projectId?: string;
+            /** @description Which of the project's environments the volume's bytes are charged to. Omit for the project's default, as VM and sandbox create do. */
+            environment?: string;
             sizeGB: number;
             format?: components["schemas"]["VolumeFormat"];
             volumeType?: components["schemas"]["VolumeType"];
@@ -5865,6 +5867,8 @@ export interface components {
             description: string;
             /** Format: uuid */
             projectId?: string;
+            /** @description The project environment this volume's bytes are charged to. */
+            environment: string;
             /**
              * Format: int64
              * @description The size asked for by the last accepted create or resize. A resize answers `202` and converges, so this moves when the mutation is accepted, not when the bytes do.
@@ -5922,10 +5926,22 @@ export interface components {
             volumeId?: string;
             /** Format: uuid */
             projectId?: string;
-            /** Format: int64 */
+            /** @description The project environment this snapshot's bytes are charged to. */
+            environment: string;
+            /**
+             * Format: int64
+             * @description The parent volume's size when the snapshot was taken — what a restore sizes its target to, and what the storage quota admits against.
+             */
             size: number;
             /** @description Display form of `size` in binary units (e.g. `10 GiB`). */
             sizeFormatted: string;
+            /**
+             * Format: int64
+             * @description What the overlay actually occupies, as last reported by the owning agent. Null means no agent has said — the bytes are not on a host yet, or the agent predates wire v39 — in which case the storage quota charges `size` instead.
+             */
+            observedSize?: number | null;
+            /** @description Display form of `observedSize` in binary units. */
+            observedSizeFormatted?: string | null;
             status: components["schemas"]["VolumeSnapshotStatus"];
             errorMessage?: string;
             /** @description The agent holding the snapshot's overlay. */
@@ -6923,6 +6939,7 @@ export interface components {
                 maxStorageGB: number;
                 maxVMs: number;
                 maxSandboxes: number;
+                maxVolumes?: number | null;
                 maxNetworks: number;
             };
             usage: {
@@ -6933,9 +6950,12 @@ export interface components {
                 reservedStorageGB: number;
                 vmCount: number;
                 sandboxCount: number;
+                volumeCount: number;
                 networkCount: number;
             };
             utilization: {
+                /** Format: double */
+                volumePercent?: number | null;
                 /** Format: double */
                 cpuPercent: number;
                 /** Format: double */
@@ -7384,6 +7404,8 @@ export interface components {
             maxStorageGB: number;
             maxVMs: number;
             maxSandboxes: number;
+            /** @description Volume count limit. Null means no count limit — unlike the VM and sandbox limits, this one is optional, because `maxStorageGB` is the ceiling that protects the host. */
+            maxVolumes?: number | null;
             maxNetworks: number;
         };
         /** @description Reservations the control plane holds against the quota. */
@@ -7395,6 +7417,7 @@ export interface components {
             reservedStorageGB: number;
             vmCount: number;
             sandboxCount: number;
+            volumeCount?: number;
             networkCount: number;
         };
         /** @description Reserved amounts as a percentage of each limit. */
@@ -7409,6 +7432,11 @@ export interface components {
             vmPercent: number;
             /** Format: double */
             sandboxPercent: number;
+            /**
+             * Format: double
+             * @description Null when no volume count limit is set.
+             */
+            volumePercent?: number | null;
         };
         CreateResourceQuotaRequest: {
             name: string;
@@ -7420,6 +7448,8 @@ export interface components {
             maxVMs: number;
             /** @description Defaults to `maxVMs` when omitted. */
             maxSandboxes?: number;
+            /** @description Volume count limit. Omitted means **no** count limit, not a default borrowed from `maxVMs`. */
+            maxVolumes?: number;
             /** @description Defaults to 10. */
             maxNetworks?: number;
             /** @description Project quotas only — narrows the quota to one of the project's deployment environments. */
@@ -7437,6 +7467,8 @@ export interface components {
             maxStorageGB?: number;
             maxVMs?: number;
             maxSandboxes?: number;
+            /** @description The volume count limit. Omit to leave it as it is; send `0` to remove it. */
+            maxVolumes?: number;
             maxNetworks?: number;
             isEnabled?: boolean;
         };
@@ -7466,6 +7498,7 @@ export interface components {
             storageGB: number;
             vms: number;
             sandboxes: number;
+            volumes: number;
             networks: number;
         };
         /** @description A registered hypervisor node. */

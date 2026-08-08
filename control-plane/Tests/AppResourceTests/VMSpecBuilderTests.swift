@@ -318,7 +318,7 @@ struct VMSpecBuilderTests {
     ) -> Volume {
         let volume = Volume(
             id: id, name: "v-\(id.uuidString.prefix(4))", description: "",
-            projectID: UUID(), size: 1 << 30, status: .attached, createdByID: UUID())
+            projectID: UUID(), environment: "development", size: 1 << 30, status: .attached, createdByID: UUID())
         volume.$vm.id = UUID()
         volume.deviceName = deviceName
         volume.bootOrder = bootOrder

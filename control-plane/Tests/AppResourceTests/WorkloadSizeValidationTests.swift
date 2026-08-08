@@ -44,7 +44,7 @@ final class WorkloadSizeValidationTests {
     func snapshotStorageOverflowIsRejected(bytes: Int64) async throws {
         // Any non-zero reservation is enough to push these sizes over the top.
         let quota = quota(reservedStorage: Int64.max / 2 + 1)
-        let check = quota.canAccommodateSnapshotStorage(bytes)
+        let check = quota.canAccommodateStorage(bytes, for: "the snapshot")
         #expect(check.allowed == false)
         #expect(check.reason?.range(of: "storage quota", options: .caseInsensitive) != nil)
     }
@@ -53,7 +53,7 @@ final class WorkloadSizeValidationTests {
     func reserveSnapshotStorageThrowsOnOverflow() async throws {
         let quota = quota(reservedStorage: gb(10))
         let error = #expect(throws: Abort.self) {
-            try quota.reserveSnapshotStorage(Int64.max)
+            try quota.reserveStorage(Int64.max, for: "the snapshot")
         }
         #expect(error?.status == .forbidden)
         // The rejection must not have moved the counter.
@@ -65,7 +65,7 @@ final class WorkloadSizeValidationTests {
         // A disabled quota never blocks but still tracks reservations, so the
         // unbounded operand reaches the add with no check in front of it.
         let quota = quota(reservedStorage: Int64.max - 10, isEnabled: false)
-        try quota.reserveSnapshotStorage(Int64.max)
+        try quota.reserveStorage(Int64.max, for: "the snapshot")
         #expect(quota.reservedStorage == Int64.max)
     }
 
@@ -95,16 +95,16 @@ final class WorkloadSizeValidationTests {
         // operand is not hypothetical; a negative reservation is meaningless
         // for a counter that caches measured usage.
         let quota = quota(reservedStorage: gb(1))
-        try quota.reserveSnapshotStorage(gb(-5))
+        try quota.reserveStorage(gb(-5), for: "the snapshot")
         #expect(quota.reservedStorage == 0)
     }
 
     @Test("A snapshot that fits is still admitted and reserved")
     func snapshotWithinQuotaIsAdmitted() async throws {
         let quota = quota(reservedStorage: gb(10))
-        let check = quota.canAccommodateSnapshotStorage(gb(5))
+        let check = quota.canAccommodateStorage(gb(5), for: "the snapshot")
         #expect(check.allowed)
-        try quota.reserveSnapshotStorage(gb(5))
+        try quota.reserveStorage(gb(5), for: "the snapshot")
         #expect(quota.reservedStorage == gb(15))
     }
 
@@ -112,9 +112,9 @@ final class WorkloadSizeValidationTests {
     func snapshotAtLimitIsAdmitted() async throws {
         let quota = quota(reservedStorage: gb(40))
         let remaining = quota.maxStorage - quota.reservedStorage
-        let check = quota.canAccommodateSnapshotStorage(remaining)
+        let check = quota.canAccommodateStorage(remaining, for: "the snapshot")
         #expect(check.allowed)
-        try quota.reserveSnapshotStorage(remaining)
+        try quota.reserveStorage(remaining, for: "the snapshot")
         #expect(quota.reservedStorage == quota.maxStorage)
     }
 

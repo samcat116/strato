@@ -39,11 +39,17 @@ struct AddSandboxCountToResourceQuota: AsyncMigration {
     }
 
     /// Correlated-subquery recount of one workload table into one counter column.
-    static func recountSQL(workloadTable: String, countColumn: String) -> String {
+    ///
+    /// - Parameter excluding: An extra SQL predicate on the workload row, aliased
+    ///   `w`, for a table where not every row counts — the volume recount
+    ///   (STR-181) has to skip a VM's boot disk, which `vms.disk` already
+    ///   charges. Empty for the two families where every row does.
+    static func recountSQL(workloadTable: String, countColumn: String, excluding: String = "") -> String {
         """
         UPDATE resource_quotas SET \(countColumn) = (
             SELECT COUNT(*) FROM \(workloadTable) w
             WHERE (resource_quotas.environment IS NULL OR w.environment = resource_quotas.environment)
+            \(excluding.isEmpty ? "" : "AND \(excluding)")
             AND w.project_id IN (
                 SELECT p.id FROM projects p
                 WHERE (resource_quotas.project_id IS NOT NULL

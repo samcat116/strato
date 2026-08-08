@@ -1811,6 +1811,8 @@ export interface QuotaLimits {
   maxMemoryGB: number;
   maxStorageGB: number;
   maxVMs: number;
+  /** Volume count limit. Null means no count limit. */
+  maxVolumes: number | null;
   maxNetworks: number;
 }
 
@@ -1819,6 +1821,7 @@ export interface QuotaReservedUsage {
   reservedMemoryGB: number;
   reservedStorageGB: number;
   vmCount: number;
+  volumeCount: number;
   networkCount: number;
 }
 
@@ -1827,6 +1830,8 @@ export interface QuotaUtilization {
   memoryPercent: number;
   storagePercent: number;
   vmPercent: number;
+  /** Null when no volume count limit is set. */
+  volumePercent: number | null;
 }
 
 export interface ResourceQuota {
@@ -1848,6 +1853,8 @@ export interface CreateQuotaRequest {
   maxMemoryGB: number;
   maxStorageGB: number;
   maxVMs: number;
+  /** Omitted means no volume count limit, not one inferred from `maxVMs`. */
+  maxVolumes?: number;
   maxNetworks?: number;
   environment?: string;
   isEnabled?: boolean;
@@ -1859,6 +1866,8 @@ export interface UpdateQuotaRequest {
   maxMemoryGB?: number;
   maxStorageGB?: number;
   maxVMs?: number;
+  /** Omit to leave the volume limit alone; send `0` to remove it. */
+  maxVolumes?: number;
   maxNetworks?: number;
   isEnabled?: boolean;
 }

@@ -62,6 +62,17 @@ final class Volume: Model, @unchecked Sendable {
     @Parent(key: "project_id")
     var project: Project
 
+    /// The deployment environment this volume's bytes are attributed to
+    /// (STR-181), resolved from the creating request against its project the way
+    /// a VM's is.
+    ///
+    /// Here for one reason: a resource quota is scoped by `(project,
+    /// environment?)` and `QuotaScope.predicate` filters every workload table on
+    /// both columns. Without it a volume could not be measured at all, which is
+    /// why its bytes were free. Immutable after create, like a VM's.
+    @Field(key: "environment")
+    var environment: String
+
     // Volume specifications. `size` is **desired** — what the last accepted
     // create or resize asked for — and the agent's report of what the image
     // actually is lands in `observedSizeBytes` below.
@@ -215,6 +226,7 @@ final class Volume: Model, @unchecked Sendable {
         name: String,
         description: String,
         projectID: UUID,
+        environment: String,
         size: Int64,
         format: VolumeFormat = .qcow2,
         volumeType: VolumeType = .data,
@@ -228,6 +240,7 @@ final class Volume: Model, @unchecked Sendable {
         self.name = name
         self.description = description
         self.$project.id = projectID
+        self.environment = environment
         self.size = size
         self.format = format
         self.volumeType = volumeType
@@ -479,6 +492,10 @@ struct CreateVolumeRequest: Content, ValidatedRequestBody {
     var name: String
     let description: String?
     let projectId: UUID?
+    /// Which of the project's environments the volume's bytes are charged to
+    /// (STR-181). Omitted takes the project's default, exactly as VM and sandbox
+    /// create do.
+    let environment: String?
     let sizeGB: Int  // Size in GB for user convenience
     let format: String?  // "qcow2" or "raw", defaults to qcow2
     let volumeType: String?  // "boot" or "data", defaults to data
@@ -542,6 +559,8 @@ struct VolumeResponse: Content {
     let name: String
     let description: String
     let projectId: UUID?
+    /// The project environment this volume's bytes are charged to (STR-181).
+    let environment: String
     /// The size **asked for** — the last create or resize the API accepted.
     /// A resize answers `202` and converges, so this moves the moment the
     /// mutation is accepted, well before any bytes do.
@@ -592,6 +611,7 @@ struct VolumeResponse: Content {
         self.name = volume.name
         self.description = volume.description
         self.projectId = volume.$project.id
+        self.environment = volume.environment
         self.size = volume.size
         self.sizeFormatted = volume.size.formattedByteSize
         self.observedSize = volume.observedSizeBytes

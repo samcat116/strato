@@ -88,16 +88,7 @@ extension Request {
         }
 
         // Determine and validate the environment.
-        let environment = requestedEnvironment ?? project.defaultEnvironment
-        if !project.hasEnvironment(environment) {
-            throw Abort(
-                .badRequest,
-                reason:
-                    "Environment '\(environment)' not available in project. Available: \(project.environments.joined(separator: ", "))"
-            )
-        }
-
-        return (project, environment)
+        return (project, try project.resolveEnvironment(requestedEnvironment))
     }
 
     /// The project a project-scoped create lands in — resolved, authorized, and

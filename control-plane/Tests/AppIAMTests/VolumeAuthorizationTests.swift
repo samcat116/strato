@@ -64,7 +64,7 @@ final class VolumeAuthorizationTests {
         CreateVolumeRequest(
             name: "vol-from-image",
             description: "volume sourced from an image",
-            projectId: project.id!,
+            projectId: project.id!, environment: nil,
             sizeGB: 10,
             format: "qcow2",
             volumeType: "boot",

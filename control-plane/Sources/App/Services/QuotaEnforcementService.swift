@@ -3,12 +3,13 @@ import Vapor
 import Fluent
 import SQLKit
 
-/// Enforces resource quotas across the VM and sandbox lifecycle. Resolves the
-/// project/OU/org quotas that govern a workload (matching its environment),
-/// rejects creations that would exceed an enabled quota, and keeps each quota's
-/// reservation counters in step as workloads are created and deleted. Both
-/// workload kinds draw vCPUs and memory from the same pools (issue #415); only
-/// VMs consume storage, and each kind has its own count limit.
+/// Enforces resource quotas across the VM, sandbox and volume lifecycle.
+/// Resolves the project/OU/org quotas that govern a workload (matching its
+/// environment), rejects creations that would exceed an enabled quota, and keeps
+/// each quota's reservation counters in step as workloads are created and
+/// deleted. VMs and sandboxes draw vCPUs and memory from the same pools (issue
+/// #415); VMs, snapshot artifacts and volumes draw from the same storage pool
+/// (STR-181), and each family has its own count limit — the volume one optional.
 ///
 /// Scoping mirrors ``QuotaScope`` exactly — a workload is reserved against
 /// precisely the quotas that measured usage would later count it against (its
@@ -148,9 +149,9 @@ struct QuotaEnforcementService {
         on db: Database
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
-            let check = quota.canAccommodateSnapshotStorage(size)
+            let check = quota.canAccommodateStorage(size, for: "the snapshot")
             guard check.allowed else { return check }
-            try quota.reserveSnapshotStorage(size)
+            try quota.reserveStorage(size, for: "the snapshot")
             return check
         }
     }
@@ -167,9 +168,9 @@ struct QuotaEnforcementService {
         on db: Database
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
-            let check = quota.canAccommodateSnapshotStorage(size)
+            let check = quota.canAccommodateStorage(size, for: "the snapshot")
             guard check.allowed else { return check }
-            try quota.reserveSnapshotStorage(size)
+            try quota.reserveStorage(size, for: "the snapshot")
             return check
         }
     }
@@ -186,9 +187,77 @@ struct QuotaEnforcementService {
         on db: Database
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
-            let check = quota.canAccommodateSnapshotStorage(size)
+            let check = quota.canAccommodateStorage(size, for: "the snapshot")
             guard check.allowed else { return check }
-            try quota.reserveSnapshotStorage(size)
+            try quota.reserveStorage(size, for: "the snapshot")
+            return check
+        }
+    }
+
+    /// Admission for creating or cloning a volume (STR-181). Checks the
+    /// provisioned `size` against every applicable quota's storage pool, plus
+    /// the optional volume count limit. Call inside the same transaction as the
+    /// volume insert, so a rejection — or a later failure to persist the row —
+    /// rolls the reservation back atomically.
+    ///
+    /// A clone is a full copy of the source's file, so it is admitted exactly
+    /// like a create: the source's size, charged to the new row.
+    static func reserveVolume(
+        for project: Project,
+        environment: String,
+        size: Int64,
+        on db: Database
+    ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateVolume(size: size)
+            guard check.allowed else { return check }
+            try quota.reserveVolumeResources(size: size)
+            return check
+        }
+    }
+
+    /// Admission for growing a volume (STR-181): only the *delta* is checked and
+    /// reserved, since the volume's current size is already counted, and the
+    /// count limit is untouched because no volume is being added. Call inside the
+    /// same transaction as the size write and *before* it, so the resync baseline
+    /// still reflects the old size — the same contract as ``reserveVMResize``.
+    ///
+    /// Resize is grow-only today, so this never credits back; the floor in
+    /// ``ResourceQuota/reserveStorage(_:for:)`` covers it if that changes.
+    static func reserveVolumeResize(
+        for project: Project,
+        environment: String,
+        sizeDelta: Int64,
+        on db: Database
+    ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateStorage(sizeDelta, for: "the volume resize")
+            guard check.allowed else { return check }
+            try quota.reserveStorage(sizeDelta, for: "the volume resize")
+            return check
+        }
+    }
+
+    /// Admission for a volume snapshot (STR-181). Call inside the same
+    /// transaction as the snapshot insert.
+    ///
+    /// `size` is the **parent volume's whole size**, not a guess at how big the
+    /// overlay will get, and that is the enforcement point for the whole family:
+    /// an overlay grows toward its parent as the volume diverges, with no API
+    /// call to refuse along the way, so a snapshot is admitted only when the pool
+    /// could absorb it fully grown. What the quota then *measures* is the real
+    /// footprint the agent reports, which is why a project that keeps five
+    /// untouched snapshots is not billed as though it kept five copies.
+    static func reserveVolumeSnapshot(
+        for project: Project,
+        environment: String,
+        size: Int64,
+        on db: Database
+    ) async throws {
+        try await reserveWorkload(for: project, environment: environment, on: db) { quota in
+            let check = quota.canAccommodateStorage(size, for: "the snapshot")
+            guard check.allowed else { return check }
+            try quota.reserveStorage(size, for: "the snapshot")
             return check
         }
     }
@@ -295,6 +364,17 @@ struct QuotaEnforcementService {
         try await releaseWorkload(projectID: sandbox.$project.id, environment: sandbox.environment, on: db)
     }
 
+    /// Volume counterpart (STR-181): call *after* the volume row is deleted.
+    ///
+    /// One call covers the volume's snapshots too, because deleting the row
+    /// cascades them and this recomputes rather than decrements.
+    static func release(
+        for volume: Volume,
+        on db: Database
+    ) async throws {
+        try await releaseWorkload(projectID: volume.$project.id, environment: volume.environment, on: db)
+    }
+
     private static func releaseWorkload(projectID: UUID, environment: String, on db: Database) async throws {
         guard let project = try await Project.find(projectID, on: db) else { return }
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
@@ -321,8 +401,8 @@ struct QuotaEnforcementService {
         }
     }
 
-    /// Sets a quota's reservation counters to the exact usage of the VMs and
-    /// sandboxes currently in its scope. Takes the raw `Int64` byte totals (not the
+    /// Sets a quota's reservation counters to the exact usage of the VMs,
+    /// sandboxes and volumes currently in its scope. Takes the raw `Int64` byte totals (not the
     /// lossy GB figures in `QuotaUsage`) so memory/storage stay byte-accurate. Does
     /// not persist — the caller saves.
     ///
@@ -342,10 +422,12 @@ struct QuotaEnforcementService {
         let usage = try await QuotaUsageAggregator.measure(scope, on: db)
         quota.reservedVCPUs = usage.vcpus
         quota.reservedMemory = usage.memoryBytes
-        // Storage: VM disks, sandbox snapshot artifacts (issue #426), and
-        // full-VM checkpoint machine state (issue #564).
+        // Storage: VM disks, sandbox snapshot artifacts (issue #426), full-VM
+        // checkpoint machine state (issue #564), and volumes plus their
+        // snapshots (STR-181).
         quota.reservedStorage = usage.storageBytes
         quota.vmCount = usage.vmCount
         quota.sandboxCount = usage.sandboxCount
+        quota.volumeCount = usage.volumeCount
     }
 }

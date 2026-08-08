@@ -592,6 +592,30 @@ package struct TestDataBuilder {
         return sandbox
     }
 
+    /// A saved volume, for the suites that only need one to exist (STR-181's
+    /// quota accounting, mostly). Suites that drive convergence keep their own
+    /// richer builders — this one sets no agent, path or attachment.
+    package func createVolume(
+        name: String,
+        project: Project,
+        environment: String = "development",
+        sizeGB: Int = 10,
+        status: VolumeStatus = .available,
+        createdBy: User
+    ) async throws -> Volume {
+        let volume = Volume(
+            name: name,
+            description: "Test volume",
+            projectID: try project.requireID(),
+            environment: environment,
+            size: Int64(sizeGB) * 1024 * 1024 * 1024,
+            status: status,
+            createdByID: try createdBy.requireID()
+        )
+        try await volume.save(on: db)
+        return volume
+    }
+
     package func createImage(
         name: String = "Test Image",
         description: String = "Test image description",
