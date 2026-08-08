@@ -119,6 +119,16 @@ actor Agent {
     // Owned here rather than by the reconciler because the guest-facing
     // listener will read the same instance.
     private let metadataStore = MetadataStore()
+    // The durable copy of that store (STR-56), so a restarted agent keeps
+    // answering its guests even while the control plane is unreachable.
+    private let metadataSnapshotStore: MetadataSnapshotStore
+    // One guest-facing listener per network this host serves metadata on.
+    private var metadataServers: MetadataServerSupervisor?
+    // Debounces the durable write: a 100-VM sync applies 100 records and must
+    // still cost one file write.
+    private var metadataPersistTrigger: CoalescingTrigger?
+    private let metadataServiceEnabled: Bool
+    private let metadataHopLimit: Int
     // Whether the control plane we registered with speaks state sync (wire
     // protocol >= 2). Gates observed-state reports so an old control plane
     // isn't sent envelopes it logs as unknown.
@@ -395,7 +405,9 @@ actor Agent {
         spiffeConfig: SPIFFEConfig? = nil,
         teardownGuard: TeardownGuard = TeardownGuard(),
         desiredStatePull: Bool = true,
-        desiredStateFullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval
+        desiredStateFullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval,
+        metadataServiceEnabled: Bool = true,
+        metadataHopLimit: Int = 1
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
@@ -439,6 +451,14 @@ actor Agent {
             path: (vmStoragePath as NSString).appendingPathComponent("snapshot-records.json"),
             logger: logger
         )
+        // Beside the VM manifest, because it answers the same question about
+        // the same workloads and shares its lifetime (STR-56).
+        self.metadataSnapshotStore = MetadataSnapshotStore(
+            path: (vmStoragePath as NSString).appendingPathComponent("instance-metadata.json"),
+            logger: logger
+        )
+        self.metadataServiceEnabled = metadataServiceEnabled
+        self.metadataHopLimit = metadataHopLimit
 
         let (stream, continuation) = AsyncStream.makeStream(of: MessageEnvelope.self)
         self.inboundMessages = stream
@@ -773,6 +793,8 @@ actor Agent {
             actuator: self, queue: messageQueue, logger: logger, teardownGuard: teardownGuard,
             metadataStore: metadataStore)
 
+        await startMetadataService()
+
         logger.info("Initializing console socket manager")
         consoleSocketManager = ConsoleSocketManager(logger: logger, eventLoopGroup: eventLoopGroup)
         await consoleSocketManager?.setOnConsoleData { [weak self] vmId, sessionId, data in
@@ -891,6 +913,15 @@ actor Agent {
         logger.info("Stopping agent")
         shutdownRequested = true
         isRunning = false
+
+        // Before anything else that can block: the listeners are separate
+        // processes, and one left running would keep answering guests with
+        // nobody supervising it. They also exit on their own when this process
+        // dies (their control stream closes), so this is belt and braces.
+        await metadataPersistTrigger?.stop()
+        metadataPersistTrigger = nil
+        await metadataServers?.shutdown()
+        metadataServers = nil
 
         reconnectTask?.cancel()
         reconnectTask = nil
@@ -2307,6 +2338,9 @@ extension Agent {
                 // authoritative `networks` list. An older control plane omits it
                 // (decoded as []); that absence must NOT be read as "tear down
                 // all L3" — skip network reconciliation and fall back to VM-only.
+                // Declared out here because the guest-facing listeners below
+                // are driven from the same list, after the reconciler has run.
+                var metadataNetworks: [UUID]?
                 if WireProtocol.supportsNetworkSync(envelope.senderVersion) {
                     // This host's own workload ports' desired security-group
                     // membership, derived from each NIC's spec (nicIndex is
@@ -2360,7 +2394,6 @@ extension Agent {
                     // same "this host owns it without topology authority"
                     // reason. Nil for a control plane that predates the field,
                     // so silence is never read as "tear every namespace down".
-                    let metadataNetworks: [UUID]?
                     if WireProtocol.supportsMetadataPort(envelope.senderVersion) {
                         var ids = Set(
                             message.vms.flatMap { $0.spec.networks }
@@ -2369,8 +2402,6 @@ extension Agent {
                             message.sandboxes.compactMap { $0.spec.network }
                                 .filter { $0.metadataEnabled == true }.map(\.networkId))
                         metadataNetworks = ids.sorted { $0.uuidString < $1.uuidString }
-                    } else {
-                        metadataNetworks = nil
                     }
                     // DNS zones (STR-39) carry the same "silence is not an
                     // instruction" contract as volumes, and for a sharper
@@ -2406,6 +2437,15 @@ extension Agent {
                     includeVolumes: WireProtocol.supportsVolumeSync(envelope.senderVersion),
                     includeSnapshots: WireProtocol.supportsSnapshotSync(envelope.senderVersion),
                     includeMetadata: WireProtocol.supportsInstanceMetadata(envelope.senderVersion))
+                // The guest-facing listeners, after the reconciler rather than
+                // beside the network reconcile above (STR-56). Both orderings
+                // are needed and only this one has both: `reconcileNetworks`
+                // has already realized the namespaces a listener binds in, and
+                // `apply` has already written this sync's metadata to the store
+                // the snapshot is built from. Driven off the same
+                // `metadataNetworks` list, so there is no second derivation to
+                // drift.
+                await reconcileMetadataServers(networks: metadataNetworks)
                 // Declarative agent self-update (issue #434), after the
                 // reconciler so freshly enqueued work items are visible to the
                 // precondition gate — the update only runs on a sync that
@@ -5130,5 +5170,98 @@ extension Agent: ReconcileActuator {
         }
 
         return observed
+    }
+}
+
+// MARK: - Instance metadata service (STR-56)
+
+extension Agent {
+
+    /// Bring up the guest-facing metadata service.
+    ///
+    /// Restoring the durable copy comes first and unconditionally — before the
+    /// supervisor, and even when this host will serve nothing. A restored store
+    /// is what lets a listener answer during a control-plane outage that spans
+    /// an agent restart, and the restore is also what turns a listener's "I know
+    /// nothing" 503 into an honest 404 for an address this host really does not
+    /// serve.
+    func startMetadataService() async {
+        switch metadataSnapshotStore.load() {
+        case .records(let records):
+            await metadataStore.restore(records)
+            logger.info(
+                "Restored instance metadata from the previous run",
+                metadata: ["instances": .stringConvertible(records.count)])
+        case .unknown:
+            // No file, or one this build could not read. Either way this host
+            // knows nothing until the first sync, and its listeners will say so
+            // rather than guess.
+            break
+        }
+
+        // Debounced, because a sync applies one record per VM and the durable
+        // copy only has to reflect the sync as a whole.
+        metadataPersistTrigger = CoalescingTrigger(
+            interval: .seconds(2), logger: logger,
+            action: { [weak self] in await self?.persistInstanceMetadata() })
+
+        guard metadataServiceEnabled else {
+            logger.info("Instance metadata service disabled by configuration")
+            return
+        }
+        #if os(Linux)
+        // OVN only: the namespaces the listeners bind in are created by the OVN
+        // chassis path, and user-mode networking has no localport to terminate.
+        // macOS reaches its guests through SLIRP `guestfwd` instead (STR-61).
+        guard effectiveNetworkMode == .ovn else {
+            logger.info("Instance metadata service needs OVN networking; not starting it")
+            return
+        }
+        let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+        guard let ipBinaryPath = SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable) else {
+            logger.warning(
+                """
+                Instance metadata service needs the iproute2 `ip` tool to enter each network's namespace, \
+                and it was not found; guests on this host will not be able to read their metadata
+                """,
+                metadata: ["searched": .string(SandboxJailerResolver.ipBinaryCandidates.joined(separator: ", "))])
+            return
+        }
+        metadataServers = MetadataServerSupervisor(
+            spawner: MetadataServerProcessSpawner(
+                ipBinaryPath: ipBinaryPath, logLevel: logger.logLevel.rawValue,
+                hopLimit: metadataHopLimit, logger: logger),
+            logger: logger)
+        #endif
+    }
+
+    /// Converge the listener fleet and hand each one its network's current
+    /// servable set.
+    ///
+    /// `networks` nil ≙ a control plane that predates the field: no listener is
+    /// started or stopped, matching what the chassis reconcile does with the
+    /// same value. The store is still persisted, since a sync that says nothing
+    /// about metadata ports may still have carried metadata.
+    func reconcileMetadataServers(networks: [UUID]?) async {
+        await metadataPersistTrigger?.signal()
+
+        guard let metadataServers else { return }
+        let origin = await metadataStore.origin()
+        let servable = await metadataStore.snapshot()
+        await metadataServers.reconcile(desired: networks) { networkId in
+            // One network's slice. Built here rather than in the listener so a
+            // child only ever holds the instances it may serve — a listener
+            // cannot leak what it was never given.
+            MetadataSnapshot(
+                networkId: networkId, origin: origin,
+                instances: servable.values.filter { instance in
+                    instance.nics.contains { $0.networkId == networkId }
+                }.sorted { $0.instanceId.uuidString < $1.instanceId.uuidString })
+        }
+    }
+
+    /// Write the durable copy. Coalesced by `metadataPersistTrigger`.
+    private func persistInstanceMetadata() async {
+        metadataSnapshotStore.save(await metadataStore.exportRecords())
     }
 }

@@ -1,0 +1,307 @@
+import Foundation
+import Logging
+import StratoShared
+import Testing
+
+@testable import StratoAgentCore
+
+@Suite("Metadata Server Supervisor Tests")
+struct MetadataServerSupervisorTests {
+
+    // MARK: - Doubles
+
+    private final class RecordingHandle: MetadataServerHandle, @unchecked Sendable {
+        private let lock = NSLock()
+        private var alive = true
+        private var pushed: [MetadataSnapshot] = []
+        private var pushFailure: (any Error)?
+
+        init(pushFailure: (any Error)? = nil) { self.pushFailure = pushFailure }
+
+        var isRunning: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return alive
+        }
+
+        var snapshots: [MetadataSnapshot] {
+            lock.lock()
+            defer { lock.unlock() }
+            return pushed
+        }
+
+        var terminated: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return !alive
+        }
+
+        /// Simulate the child dying on its own.
+        func die() {
+            lock.lock()
+            alive = false
+            lock.unlock()
+        }
+
+        func push(_ snapshot: MetadataSnapshot) throws {
+            lock.lock()
+            let failure = pushFailure
+            if failure == nil { pushed.append(snapshot) }
+            lock.unlock()
+            if let failure { throw failure }
+        }
+
+        func terminate() {
+            lock.lock()
+            alive = false
+            lock.unlock()
+        }
+    }
+
+    private struct SpawnFailure: Error {}
+
+    private final class RecordingSpawner: MetadataServerSpawning, @unchecked Sendable {
+        private let lock = NSLock()
+        private var namespaces: Set<UUID>
+        private var failFor: Set<UUID>
+        private var pushFailFor: Set<UUID>
+        private(set) var handles: [UUID: RecordingHandle] = [:]
+        private(set) var spawnCount = 0
+
+        init(namespaces: Set<UUID> = [], failFor: Set<UUID> = [], pushFailFor: Set<UUID> = []) {
+            self.namespaces = namespaces
+            self.failFor = failFor
+            self.pushFailFor = pushFailFor
+        }
+
+        func present(_ networkId: UUID) {
+            lock.lock()
+            namespaces.insert(networkId)
+            lock.unlock()
+        }
+
+        func namespaceExists(networkId: UUID) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return namespaces.contains(networkId)
+        }
+
+        func spawn(networkId: UUID) throws -> any MetadataServerHandle {
+            lock.lock()
+            defer { lock.unlock() }
+            spawnCount += 1
+            guard !failFor.contains(networkId) else { throw SpawnFailure() }
+            let handle = RecordingHandle(pushFailure: pushFailFor.contains(networkId) ? SpawnFailure() : nil)
+            handles[networkId] = handle
+            return handle
+        }
+    }
+
+    private static func supervisor(_ spawner: RecordingSpawner) -> MetadataServerSupervisor {
+        MetadataServerSupervisor(spawner: spawner, logger: Logger(label: "test"))
+    }
+
+    private static func snapshot(_ networkId: UUID) -> MetadataSnapshot {
+        MetadataSnapshot(networkId: networkId, origin: .live, instances: [])
+    }
+
+    // MARK: - The pure diff
+
+    @Test("Silence from the control plane starts and stops nothing")
+    func nilDesiredIsNotAnInstruction() async {
+        // The `dhcpEnabled` contract: a control plane that predates the field
+        // says nothing, and reading that as "stop every listener" would take
+        // metadata away from every guest on a rollback.
+        #expect(MetadataServerReconciler.actions(desired: nil, running: [UUID()]).isEmpty)
+
+        let network = UUID()
+        let spawner = RecordingSpawner(namespaces: [network])
+        let supervisor = Self.supervisor(spawner)
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+        await supervisor.reconcile(desired: nil, snapshot: Self.snapshot)
+        #expect(await supervisor.runningNetworks() == [network])
+    }
+
+    @Test("An empty list is an opinion, and stops everything")
+    func emptyDesiredStopsAll() async {
+        let network = UUID()
+        let spawner = RecordingSpawner(namespaces: [network])
+        let supervisor = Self.supervisor(spawner)
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+
+        await supervisor.reconcile(desired: [], snapshot: Self.snapshot)
+        #expect(await supervisor.runningNetworks().isEmpty)
+        #expect(spawner.handles[network]?.terminated == true)
+    }
+
+    @Test("Starts and stops are derived as a set difference, in a stable order")
+    func diffIsASetDifference() {
+        let first = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
+        let second = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
+        let actions = MetadataServerReconciler.actions(desired: [second, first], running: [])
+        #expect(actions == [.start(networkId: first), .start(networkId: second)])
+        #expect(
+            MetadataServerReconciler.actions(desired: [first], running: [first, second])
+                == [.stop(networkId: second)])
+    }
+
+    // MARK: - Lifecycle
+
+    @Test("A network whose namespace is not built yet is deferred, then started")
+    func namespaceMustExistFirst() async {
+        // The ordinary state on the sync that creates the namespace: the chassis
+        // reconcile and this one are separate steps.
+        let network = UUID()
+        let spawner = RecordingSpawner()
+        let supervisor = Self.supervisor(spawner)
+
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+        #expect(await supervisor.runningNetworks().isEmpty)
+        #expect(spawner.spawnCount == 0)
+
+        spawner.present(network)
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+        #expect(await supervisor.runningNetworks() == [network])
+    }
+
+    @Test("A listener that failed to start is retried on the next sync")
+    func failedStartIsRetried() async {
+        // Syncs are the retry timer, which is why there is no backoff
+        // bookkeeping in the supervisor to get wrong.
+        let network = UUID()
+        let spawner = RecordingSpawner(namespaces: [network], failFor: [network])
+        let supervisor = Self.supervisor(spawner)
+
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+        #expect(spawner.spawnCount == 2)
+        #expect(await supervisor.runningNetworks().isEmpty)
+    }
+
+    @Test("A listener that dies on its own is restarted")
+    func deadListenerIsRestarted() async {
+        let network = UUID()
+        let spawner = RecordingSpawner(namespaces: [network])
+        let supervisor = Self.supervisor(spawner)
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+        let first = spawner.handles[network]
+
+        first?.die()
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+
+        #expect(spawner.spawnCount == 2)
+        #expect(await supervisor.runningNetworks() == [network])
+        #expect(spawner.handles[network] !== first)
+    }
+
+    @Test("A listener whose control channel broke is reaped rather than written to forever")
+    func brokenChannelIsReaped() async {
+        // A child on its way out: the pipe is gone but the process has not been
+        // reaped. Left alone, the agent would push into a closed pipe on every
+        // sync for as long as that lasted.
+        let network = UUID()
+        let spawner = RecordingSpawner(namespaces: [network], pushFailFor: [network])
+        let supervisor = Self.supervisor(spawner)
+
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+        #expect(spawner.handles[network]?.terminated == true)
+        #expect(await supervisor.runningNetworks().isEmpty)
+
+        // And the next sync starts a replacement.
+        await supervisor.reconcile(desired: [network], snapshot: Self.snapshot)
+        #expect(spawner.spawnCount == 2)
+    }
+
+    // MARK: - Pushes
+
+    @Test("Every running listener is handed its own network's snapshot")
+    func snapshotsArePerNetwork() async {
+        let first = UUID()
+        let second = UUID()
+        let spawner = RecordingSpawner(namespaces: [first, second])
+        let supervisor = Self.supervisor(spawner)
+
+        await supervisor.reconcile(desired: [first, second], snapshot: Self.snapshot)
+
+        #expect(spawner.handles[first]?.snapshots.map(\.networkId) == [first])
+        #expect(spawner.handles[second]?.snapshots.map(\.networkId) == [second])
+    }
+
+    @Test("Shutting down terminates every listener")
+    func shutdownTerminatesAll() async {
+        let first = UUID()
+        let second = UUID()
+        let spawner = RecordingSpawner(namespaces: [first, second])
+        let supervisor = Self.supervisor(spawner)
+        await supervisor.reconcile(desired: [first, second], snapshot: Self.snapshot)
+
+        await supervisor.shutdown()
+
+        #expect(await supervisor.runningNetworks().isEmpty)
+        #expect(spawner.handles[first]?.terminated == true)
+        #expect(spawner.handles[second]?.terminated == true)
+    }
+}
+
+@Suite("Metadata Control Protocol Tests")
+struct MetadataControlProtocolTests {
+
+    private static func snapshot(instances: Int) -> MetadataSnapshot {
+        MetadataSnapshot(
+            networkId: UUID(), origin: .live,
+            instances: (0..<instances).map { index in
+                InstanceMetadata(instanceId: UUID(), hostname: "host-\(index)", projectId: UUID())
+            })
+    }
+
+    @Test("A frame survives being delivered one byte at a time")
+    func reassemblesAcrossChunks() throws {
+        // A pipe splits wherever it likes, which is the whole reason the frames
+        // carry their own length.
+        let snapshot = Self.snapshot(instances: 3)
+        let frame = try MetadataControlProtocol.encode(snapshot)
+
+        var reader = MetadataFrameReader()
+        var decoded: [Data] = []
+        for byte in frame {
+            decoded.append(contentsOf: try reader.append(Data([byte])))
+        }
+        #expect(decoded.count == 1)
+        #expect(try JSONDecoder().decode(MetadataSnapshot.self, from: decoded[0]) == snapshot)
+    }
+
+    @Test("Several frames in one chunk all come out, in order")
+    func severalFramesAtOnce() throws {
+        let first = Self.snapshot(instances: 1)
+        let second = Self.snapshot(instances: 2)
+        var stream = try MetadataControlProtocol.encode(first)
+        stream.append(try MetadataControlProtocol.encode(second))
+
+        var reader = MetadataFrameReader()
+        let frames = try reader.append(stream)
+        #expect(frames.count == 2)
+        let decoder = JSONDecoder()
+        #expect(try decoder.decode(MetadataSnapshot.self, from: frames[0]) == first)
+        #expect(try decoder.decode(MetadataSnapshot.self, from: frames[1]) == second)
+    }
+
+    @Test("A partial frame yields nothing until it is complete")
+    func partialFrameWaits() throws {
+        let snapshot = Self.snapshot(instances: 1)
+        let frame = try MetadataControlProtocol.encode(snapshot)
+        var reader = MetadataFrameReader()
+
+        #expect(try reader.append(frame.prefix(frame.count - 1)).isEmpty)
+        #expect(try reader.append(frame.suffix(1)).count == 1)
+    }
+
+    @Test("An impossible length is refused rather than waited on")
+    func oversizedFrameThrows() {
+        // A desynchronized stream would otherwise buffer forever, which looks
+        // exactly like a quiet parent.
+        var reader = MetadataFrameReader(maxFrameBytes: 16)
+        #expect(throws: MetadataControlProtocol.Error.frameTooLarge(bytes: 0x7fff_ffff)) {
+            _ = try reader.append(Data([0x7f, 0xff, 0xff, 0xff]))
+        }
+    }
+}

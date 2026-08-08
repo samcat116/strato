@@ -1347,6 +1347,17 @@ public actor Reconciler {
     /// edited never took" is otherwise invisible in a service with no request
     /// log of its own.
     private func recordMetadata(_ desired: [DesiredVMState], includeMetadata: Bool) async {
+        // Readiness first, and once for the whole sync rather than once per VM
+        // (STR-56). A host that legitimately runs no VMs still becomes ready:
+        // its listener must be able to answer "I do not serve that address"
+        // rather than "I do not know anything yet", and looping over an empty
+        // list would never say so. Gated on `includeMetadata` because a control
+        // plane that predates the field has given this host nothing to serve,
+        // and claiming readiness on its behalf would turn every guest's 503 —
+        // which is retried — into a 404, which is not.
+        if includeMetadata {
+            await metadataStore.markSyncApplied()
+        }
         for entry in desired {
             let outcome: MetadataWriteOutcome
             if entry.wantsAbsent {

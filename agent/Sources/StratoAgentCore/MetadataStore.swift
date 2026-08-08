@@ -35,16 +35,20 @@ public enum MetadataWriteOutcome: Sendable, Equatable {
 /// the control plane said, not the current truth — which is the whole reason
 /// the payload rides the level-triggered sync, where the next one corrects it.
 ///
-/// **The guarantee is scoped to this process, not to this host.** The store is
-/// in memory only, while the VM manifest is durable, so a restarted agent
-/// re-adopts running VMs it can serve nothing for until the first sync lands —
-/// and if the control plane is unreachable at that moment, for as long as that
-/// lasts. That is the same outage this design claims immunity to, arriving
-/// through the other door. It is survivable only because nothing serves reads
-/// yet; the listener (STR-56) has to close it, by persisting alongside the
-/// manifest or by refusing to answer until the first sync has been applied.
-/// Serving a guest a confidently empty document would be worse than making it
-/// wait.
+/// **The guarantee was once scoped to this process rather than to this host**:
+/// the store is in memory while the VM manifest is durable, so a restarted agent
+/// re-adopted running VMs it could serve nothing for until the first sync landed
+/// — and if the control plane was unreachable at that moment, for as long as
+/// that lasted. That is the same outage this design claims immunity to, arriving
+/// through the other door.
+///
+/// STR-56 closes it from both ends, because the two halves answer different
+/// failures. `exportRecords`/`restore` give the agent a durable copy
+/// (`MetadataSnapshotStore`, written beside the VM manifest), so a restart
+/// keeps serving what the last sync said even with the control plane down. And
+/// `origin()` reports whether anything is known at all, so a host with no sync
+/// *and* no restorable file answers 503 rather than a confidently empty
+/// document — the state where waiting is strictly better than answering.
 ///
 /// ## Generations
 ///
@@ -100,6 +104,12 @@ public actor MetadataStore {
     }
 
     private var records: [UUID: Record] = [:]
+    /// Whether a durable copy was read at startup. True even when that copy held
+    /// nothing: "this host served nothing when it last ran" is knowledge, and a
+    /// listener may answer 404 on it. Not having looked is not.
+    private var restoredFromDisk = false
+    /// Whether a desired-state sync has been applied in this process.
+    private var syncApplied = false
 
     public init() {}
 
@@ -164,5 +174,71 @@ public actor MetadataStore {
     /// the generation guard.
     public func snapshot() -> [UUID: InstanceMetadata] {
         records.compactMapValues(\.metadata)
+    }
+
+    // MARK: - Readiness (STR-56)
+
+    /// Record that a sync has been applied, whatever it contained.
+    ///
+    /// Called once per sync rather than once per VM, so a host that legitimately
+    /// runs no VMs still becomes ready — otherwise its listener would answer
+    /// "not available yet" forever, which is exactly the wrong answer for the
+    /// host that most confidently serves nothing.
+    public func markSyncApplied() {
+        syncApplied = true
+    }
+
+    /// How much this store's contents can be trusted to mean anything, which is
+    /// what separates a listener's 404 from its 503.
+    public func origin() -> MetadataSnapshotOrigin {
+        if syncApplied { return .live }
+        return restoredFromDisk ? .restored : .cold
+    }
+
+    // MARK: - Durability (STR-56)
+
+    /// The full record set, generations and seals included, for the durable
+    /// copy.
+    ///
+    /// Withdrawn records are exported too. They carry no payload, but they carry
+    /// the generation that refuses a late replay of the sync which still listed
+    /// the VM — dropping them at the file boundary would reintroduce, once per
+    /// agent restart, exactly the resurrection `withdraw` exists to prevent.
+    public func exportRecords() -> [UUID: PersistedMetadataRecord] {
+        records.mapValues {
+            PersistedMetadataRecord(generation: $0.generation, metadata: $0.metadata, withdrawn: $0.withdrawn)
+        }
+    }
+
+    /// Adopt a durable copy read at startup.
+    ///
+    /// Merged under the same forward-only rule as everything else rather than
+    /// assigned wholesale: a restore racing the first sync must not roll a VM
+    /// backward just because the file is older than the message. In the ordinary
+    /// case the store is empty and every record is taken.
+    public func restore(_ persisted: [UUID: PersistedMetadataRecord]) {
+        for (vmId, record) in persisted {
+            if let existing = records[vmId], existing.generation >= record.generation { continue }
+            records[vmId] = Record(
+                generation: record.generation, metadata: record.metadata, withdrawn: record.withdrawn)
+        }
+        restoredFromDisk = true
+    }
+}
+
+/// One store record as it is written to disk.
+///
+/// A separate type from the actor's private `Record` on purpose: this one is a
+/// wire format with a compatibility obligation, and coupling it to the in-memory
+/// shape would make every future field on the latter a migration.
+public struct PersistedMetadataRecord: Codable, Sendable, Equatable {
+    public let generation: Int64
+    public let metadata: InstanceMetadata?
+    public let withdrawn: Bool
+
+    public init(generation: Int64, metadata: InstanceMetadata?, withdrawn: Bool) {
+        self.generation = generation
+        self.metadata = metadata
+        self.withdrawn = withdrawn
     }
 }
