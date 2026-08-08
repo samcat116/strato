@@ -462,6 +462,14 @@ public enum DomainXMLBuilder {
                     bootOrder: nil, volumeId: nil))
         }
 
+        // The root complex itself, declared before any port hangs off it. Both
+        // machine types the builder emits (q35, virt) reserve PCI controller
+        // index 0 for `pcie-root`, and libvirt numbers un-indexed controllers
+        // from 0 — so without this the first spare port below claims index 0
+        // and the whole document is rejected. libvirt's implicit-controller
+        // pass would add this, but it runs after the validation that rejects.
+        devices.append(DomainXMLNode("controller", [("type", "pci"), ("index", "0"), ("model", "pcie-root")]))
+
         // Empty PCIe root ports for later hot-plug. See the type's note: these
         // cannot be added to a domain after it is defined, and without them
         // every disk hot-plug fails on a full root complex.
