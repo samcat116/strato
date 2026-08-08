@@ -89,7 +89,7 @@ struct GroupController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        let createRequest = try req.content.decode(CreateGroupRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateGroupRequest.self)
 
         // Verify user has admin access to organization
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
@@ -127,7 +127,7 @@ struct GroupController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization or group ID")
         }
 
-        let updateRequest = try req.content.decode(UpdateGroupRequest.self)
+        let updateRequest = try req.content.decodeValidated(UpdateGroupRequest.self)
 
         // Verify user has admin access
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)

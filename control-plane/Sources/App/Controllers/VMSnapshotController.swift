@@ -48,7 +48,7 @@ extension VMController {
         if req.body.data == nil {
             request = CreateVMSnapshotRequest(name: nil, description: nil, ttlSeconds: nil)
         } else {
-            request = try req.content.decode(CreateVMSnapshotRequest.self)
+            request = try req.content.decodeValidated(CreateVMSnapshotRequest.self)
         }
 
         // Only a VM with live machine state can be checkpointed. A shut-down

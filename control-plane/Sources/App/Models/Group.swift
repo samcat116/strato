@@ -104,14 +104,24 @@ extension UserGroup: Content {}
 
 // MARK: - DTOs
 
-struct CreateGroupRequest: Content {
-    let name: String
+struct CreateGroupRequest: Content, ValidatedRequestBody {
+    var name: String
     let description: String
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
-struct UpdateGroupRequest: Content {
-    let name: String?
+struct UpdateGroupRequest: Content, ValidatedRequestBody {
+    var name: String?
     let description: String?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
 struct GroupResponse: Content {

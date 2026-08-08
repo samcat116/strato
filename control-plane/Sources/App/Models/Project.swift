@@ -176,7 +176,25 @@ extension Project {
 // MARK: - Validations
 
 extension Project {
+    /// Hard cap on deployment environments per project. A project's
+    /// environments are caller-supplied strings that every VM and sandbox in it
+    /// is tagged with and that quotas can be scoped per; the list is a
+    /// small enumeration, not a data structure to grow.
+    static let maxEnvironments = 32
+
+    /// Bounds and structural checks, run by every create and update path
+    /// immediately before the save — including the generated OpenAPI service,
+    /// which doesn't decode a `ValidatedRequestBody`. This is the one place the
+    /// project's own text is held to a ceiling, so it is where the ceiling goes
+    /// (STR-195).
     func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+        try Validate.stringList(
+            environments, "environments", maxEntries: Self.maxEnvironments,
+            maxLength: Validate.nameLength)
+        _ = try Validate.name(defaultEnvironment, "defaultEnvironment")
+
         // Ensure project belongs to either org or OU, but not both
         if self.$organization.id != nil && self.$organizationalUnit.id != nil {
             throw Abort(.badRequest, reason: "Project cannot belong to both an organization and a folder")

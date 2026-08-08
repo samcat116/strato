@@ -444,8 +444,8 @@ extension Volume {
 
 // MARK: - Request/Response DTOs
 
-struct CreateVolumeRequest: Content {
-    let name: String
+struct CreateVolumeRequest: Content, ValidatedRequestBody {
+    var name: String
     let description: String?
     let projectId: UUID?
     let sizeGB: Int  // Size in GB for user convenience
@@ -455,11 +455,21 @@ struct CreateVolumeRequest: Content {
     /// Absolute I/O ceilings (STR-19). Omit for uncapped.
     let iopsTotal: Int64?
     let bpsTotal: Int64?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
-struct UpdateVolumeRequest: Content {
-    let name: String?
+struct UpdateVolumeRequest: Content, ValidatedRequestBody {
+    var name: String?
     let description: String?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
 struct AttachVolumeRequest: Content {
@@ -486,9 +496,14 @@ struct SetVolumeIOLimitsRequest: Content {
     let bpsTotal: Int64?
 }
 
-struct CloneVolumeRequest: Content {
-    let name: String
+struct CloneVolumeRequest: Content, ValidatedRequestBody {
+    var name: String
     let description: String?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
 struct VolumeResponse: Content {

@@ -111,16 +111,26 @@ extension UserOrganization: Content {}
 
 // MARK: - DTOs
 
-struct CreateOrganizationRequest: Content {
-    let name: String
+struct CreateOrganizationRequest: Content, ValidatedRequestBody {
+    var name: String
     // Optional: the frontend omits this when the description field is left
     // blank. Decoding a required field here 400s the whole create request.
     let description: String?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
-struct UpdateOrganizationRequest: Content {
-    let name: String?
+struct UpdateOrganizationRequest: Content, ValidatedRequestBody {
+    var name: String?
     let description: String?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
 struct OrganizationResponse: Content {

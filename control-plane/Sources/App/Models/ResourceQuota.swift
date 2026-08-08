@@ -431,8 +431,11 @@ extension ResourceQuota {
 
 // MARK: - DTOs
 
-struct CreateResourceQuotaRequest: Content {
-    let name: String
+struct CreateResourceQuotaRequest: Content, ValidatedRequestBody {
+    /// Bounded because it does not stay in the database: a rejection
+    /// interpolates it into the `403` body
+    /// (`QuotaEnforcementService.rejectionReason`).
+    var name: String
     let maxVCPUs: Int
     let maxMemoryGB: Double
     let maxStorageGB: Double
@@ -440,12 +443,17 @@ struct CreateResourceQuotaRequest: Content {
     /// Sandbox count limit; defaults to `maxVMs` when omitted.
     let maxSandboxes: Int?
     let maxNetworks: Int?
-    let environment: String?
+    var environment: String?
     let isEnabled: Bool?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        environment = try Validate.name(environment, "environment")
+    }
 }
 
-struct UpdateResourceQuotaRequest: Content {
-    let name: String?
+struct UpdateResourceQuotaRequest: Content, ValidatedRequestBody {
+    var name: String?
     let maxVCPUs: Int?
     let maxMemoryGB: Double?
     let maxStorageGB: Double?
@@ -453,6 +461,10 @@ struct UpdateResourceQuotaRequest: Content {
     let maxSandboxes: Int?
     let maxNetworks: Int?
     let isEnabled: Bool?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+    }
 }
 
 struct ResourceQuotaResponse: Content {

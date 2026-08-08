@@ -49,6 +49,33 @@ is a paged envelope — `items` (the requested slice), `total` (the count after
 authorization filtering), plus the clamped `limit` and `offset` actually
 applied. Non-integer values are rejected with `400`.
 
+### Input size limits
+
+Every caller-supplied string and list is bounded, and a value past its ceiling
+is a `400` naming the field (STR-195). Two ceilings cover almost the whole
+surface:
+
+- **128 characters** for a `name` — and for anything else that behaves like one
+  (a quota's `environment`, a project's environment labels). Names are trimmed
+  of surrounding whitespace before they are measured and stored, and a name that
+  is empty after the trim is rejected rather than accepted as blank.
+- **4096 characters** for free text — every `description`, plus `cmdline`,
+  an image's `defaultCmdline`, and `sshPublicKey`.
+
+Fields with a grammar of their own keep it and are stricter: `userData` is
+capped at 64 KiB and must open with a cloud-init header, a network's
+`domainName` must be a sequence of RFC 1123 labels, and `sshPublicKey` must be a
+single `<type> <base64 key> [comment]` line whose blob carries the same
+algorithm name as its prefix. List inputs are bounded by cardinality too —
+notably `securityGroupIds`, which is held to the same five-per-interface cap at
+create that the attach endpoint enforces.
+
+Characters are counted the way Postgres counts them, and the same ceilings are
+enforced by `CHECK` constraints on the columns, so the API and the database
+reject exactly the same values. Independently of any field, a collected request
+body is capped at **1 MiB**; the image-upload and snapshot-transfer routes
+stream instead of collecting and carry their own, much larger limits.
+
 ### Asynchronous mutations
 
 VM, sandbox, volume and snapshot mutations (create/start/stop/restart/delete,
