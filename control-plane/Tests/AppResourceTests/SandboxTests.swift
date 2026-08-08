@@ -1207,9 +1207,10 @@ final class SandboxTests {
                 address: "192.168.1.7", prefixLength: 24, gateway: network.gateway
             ).save(on: app.db)
 
-            // The v1 guest image has no in-guest networking and agents reject
-            // networked sandbox specs, so the NIC row must stay off the wire
-            // even when it holds an address.
+            // `guestNetworkingSupported` is fleet-wide while the capability is
+            // per-agent (STR-103), so the NIC row must stay off the wire even
+            // when it holds an address — and even though its security-group
+            // ids are now resolved and passed to the builder (STR-102).
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first)
             #expect(entry.spec.network == nil)
@@ -1245,14 +1246,14 @@ final class SandboxTests {
             let created = try #require(await Sandbox.find(sandboxID, on: app.db))
             let agentId = try await self.registerAgent(app: app, sandbox: created)
 
-            // Agents can realize a sandbox NIC now (STR-100 attaches one into
-            // the jail's network namespace), but two things still keep it off
-            // the wire: the guest cannot configure the interface (STR-101), and
-            // `guestNetworkingSupported` is fleet-wide while the capability is
-            // per-agent — an unjailed or older agent would fail every placement
-            // it received. STR-103 replaces the flag with a per-agent gate; until
-            // then a freshly created sandbox converges only with no NIC on the
-            // wire.
+            // Agents can realize a sandbox NIC end to end now — STR-100
+            // attaches one into the jail's network namespace, STR-101 has the
+            // guest configure it, STR-102 gives it security groups. One thing
+            // still keeps it off the wire: `guestNetworkingSupported` is
+            // fleet-wide while the capability is per-agent, and an unjailed or
+            // older agent would fail every placement it received. STR-103
+            // replaces the flag with a per-agent gate; until then a freshly
+            // created sandbox converges only with no NIC on the wire.
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first { $0.sandboxId == sandboxID })
             #expect(entry.spec.network == nil)
@@ -1265,6 +1266,121 @@ final class SandboxTests {
                     .with(\.$addresses)
                     .first())
             #expect(nic.ipv4Address != nil)
+        }
+    }
+
+    /// The seam STR-103 flips, from both sides: the new `securityGroupIds`
+    /// parameter must not become a way around the flag, and the field mapping
+    /// underneath it must actually carry the ids — otherwise the flip would
+    /// land sandbox ports unmanaged, which is the one outcome STR-102 exists
+    /// to prevent.
+    @Test("Security-group ids reach a sandbox NIC's wire spec, but the wire gate still withholds it")
+    func sandboxNICSpecCarriesSecurityGroupsBehindTheGate() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            let nic = SandboxNetworkInterface(
+                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: "00:0c:29:ab:cd:11")
+            try await nic.save(on: app.db)
+            try await SandboxInterfaceAddress(
+                interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
+                address: "192.168.1.9", prefixLength: 24, gateway: network.gateway
+            ).save(on: app.db)
+            try await nic.$addresses.load(on: app.db)
+
+            let groupIDs = [UUID(), UUID()]
+            // The gate is still the outermost check: ids or no ids.
+            #expect(SandboxSpecBuilder.guestNetworkingSupported == false)
+            #expect(
+                SandboxSpecBuilder.networkSpec(
+                    from: nic, network: network, securityGroupIds: groupIDs) == nil)
+
+            // The mapping below it is live, and generic over `NetworkAddressable`
+            // — the same call the builder makes once the gate opens.
+            let spec = NetworkSpec.build(
+                interface: nic, network: network, securityGroupIds: groupIDs)
+            #expect(spec.securityGroupIds == groupIDs)
+            #expect(spec.macAddress == nic.macAddress)
+            #expect(spec.ipAddress == "192.168.1.9")
+            // Nil stays nil: "unmanaged", never "no groups".
+            #expect(NetworkSpec.build(interface: nic, network: network).securityGroupIds == nil)
+        }
+    }
+
+    @Test("A sandbox's NIC response carries its network, addresses and groups")
+    func sandboxDetailReportsNIC() async throws {
+        try await withSandboxTestApp { app, _, project, _, token in
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            var accepted: AcceptedSandbox?
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "nic-detail",
+                    "image": "ghcr.io/acme/worker:v3",
+                    "projectId": project.id!.uuidString,
+                    "networkId": try network.requireID().uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                accepted = try res.content.decode(AcceptedSandbox.self)
+            }
+            let sandboxID = try #require(accepted?.resource.id)
+            try await self.pollSandboxDegraded(sandboxID, on: app.db)
+
+            try await app.test(.GET, "/api/sandboxes/\(sandboxID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let detail = try res.content.decode(SandboxDetailResponse.self)
+                let reported = try #require(detail.networkInterfaces.first)
+                #expect(reported.networkId == (try network.requireID()))
+                #expect(reported.network == network.name)
+                #expect(reported.deviceName == "net0")
+                #expect(reported.addresses.contains { $0.family == "ipv4" })
+                // Create attached the project's default group, so this is
+                // exactly one id — and non-nil, which is the load-bearing half:
+                // nil would mean the handler forgot to eager-load membership.
+                let ids = try #require(reported.securityGroupIds)
+                #expect(ids.count == 1)
+                #expect(detail.securityGroupIds == ids)
+            }
+        }
+    }
+
+    /// The flat `securityGroupIds` and the `networkInterfaces` list must agree
+    /// about which interface is the sandbox's first. They are derived from one
+    /// ordering, but nothing in the types enforces it, and v1's single NIC hides
+    /// a disagreement — so pin it against a second interface whose insertion
+    /// order is the reverse of its device name.
+    @Test("The flat security-group ids come from the same NIC the list orders first")
+    func sandboxDetailFlatIDsMatchFirstOrderedNIC() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: try project.requireID(), on: app.db)
+            let other = SecurityGroup(
+                projectID: try project.requireID(), name: "sbx-second", description: nil)
+            try await other.save(on: app.db)
+
+            // Saved net1 first, so insertion order and device-name order differ.
+            for (deviceName, group) in [("net1", other), ("net0", defaultGroup)] {
+                let nic = SandboxNetworkInterface(
+                    sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+                    macAddress: VMNetworkInterface.generateMACAddress(), deviceName: deviceName)
+                try await nic.save(on: app.db)
+                try await SandboxInterfaceSecurityGroup(
+                    interfaceID: try nic.requireID(), securityGroupID: try group.requireID()
+                ).save(on: app.db)
+            }
+
+            try await sandbox.$networkInterfaces.load(on: app.db)
+            for interface in sandbox.networkInterfaces {
+                try await interface.$securityGroupMemberships.load(on: app.db)
+            }
+            let detail = SandboxDetailResponse(from: sandbox)
+            #expect(detail.networkInterfaces.map(\.deviceName) == ["net0", "net1"])
+            #expect(detail.securityGroupIds == [try defaultGroup.requireID()])
+            #expect(detail.securityGroupIds == detail.networkInterfaces.first?.securityGroupIds)
         }
     }
 

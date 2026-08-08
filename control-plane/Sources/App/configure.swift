@@ -698,8 +698,9 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddGraphicsConsoleToVM())
 
     // Security-group follow-ups (STR-34): per-rule OVN ACL logging, and
-    // sandbox NIC membership (bookkeeping only — sandbox NICs are still off
-    // the wire, see `SandboxInterfaceSecurityGroup`). The join must follow
+    // sandbox NIC membership — which STR-102 turned from bookkeeping into the
+    // seed of the group closure a topology authority realizes, even though the
+    // per-NIC ids still wait on STR-103. The join must follow
     // `RekeyInterfacesToLogicalNetworkID`, which rewrites the sandbox NIC
     // table it references.
     app.migrations.add(AddLogToSecurityGroupRules())

@@ -1266,14 +1266,50 @@ export interface Sandbox {
   exitCode?: number | null;
   /**
    * Security groups on the sandbox's NIC (flat: a sandbox has at most one).
-   * Absent when the sandbox has no NIC. Recorded but not yet enforced —
-   * sandbox NICs are still omitted from the agent sync entirely.
+   * Absent when the sandbox has no NIC. Kept alongside the per-NIC copy on
+   * `networkInterfaces` for clients that predate it.
    */
   securityGroupIds?: string[];
+  /** The sandbox's NICs — at most one today, a list for parity with VMs. */
+  networkInterfaces?: SandboxNetworkInterface[];
+  /**
+   * Whether the attached groups actually filter traffic. `undefined` means the
+   * sandbox has no NIC, so there is nothing to judge — not a claim that they
+   * are unenforced. `false` for every networked sandbox today: sandbox guest
+   * networking is not enabled, so no port exists to join the groups.
+   */
+  securityGroupsEnforced?: boolean;
   /** Convergence state (backend STR-142) — the VM contract exactly. */
   conditions: ResourceConditions;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * A sandbox's NIC. The sandbox analogue of {@link VMNetworkInterface}, without
+ * `orderIndex` (sandboxes are single-NIC) or `observedAddresses` (no guest
+ * agent).
+ */
+export interface SandboxNetworkInterface {
+  id?: string;
+  /** The logical network this NIC attaches to. */
+  networkId: string;
+  /**
+   * Display name of that network. Present only when the response eager-loaded
+   * it; names are unique per project, so the id is the reference.
+   */
+  network?: string;
+  macAddress: string;
+  /** All addresses on the NIC, one per family on a dual-stack network. */
+  addresses?: InterfaceAddress[];
+  mtu?: number;
+  deviceName: string;
+  /**
+   * The security groups attached to this NIC. `undefined` means the server did
+   * not report membership, never that the NIC is in no group — an empty array
+   * is what says that.
+   */
+  securityGroupIds?: string[];
 }
 
 export interface CreateSandboxRequest {
@@ -1297,6 +1333,18 @@ export interface CreateSandboxRequest {
    * sandbox's snapshots restorable across same-arch hosts.
    */
   cpuTemplate?: string;
+  /**
+   * Logical network for the sandbox's NIC. Omitting it (and `networkName`)
+   * creates the sandbox with no interface at all, which is legitimate — unlike
+   * VM create, where a network is required.
+   */
+  networkId?: string;
+  networkName?: string;
+  /**
+   * Security groups for the NIC. Omitted means the project's default group,
+   * never "no groups". Sending these without a network is a 400.
+   */
+  securityGroupIds?: string[];
 }
 
 // Full-VM checkpoints (issue #564): guest memory + device state + disks at one
@@ -2003,7 +2051,11 @@ export interface CreateSecurityGroupRuleRequest {
  */
 export interface AttachSecurityGroupRequest {
   vmId?: string;
-  /** Sandbox memberships are recorded but not yet enforced. */
+  /**
+   * Attaching to a sandbox realizes the group's ACLs but not yet the
+   * membership: the sandbox has no OVN port to make a member until guest
+   * networking is enabled. See `Sandbox.securityGroupsEnforced`.
+   */
   sandboxId?: string;
   /** The NIC to attach to; defaults to the workload's first interface. */
   interfaceId?: string;

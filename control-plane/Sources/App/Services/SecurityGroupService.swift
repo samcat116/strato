@@ -151,15 +151,6 @@ enum SecurityGroupService {
         return protocolName
     }
 
-    /// The ids of every group attached to `interfaceID`, sorted for stable
-    /// wire output.
-    static func groupIDs(forInterface interfaceID: UUID, on db: Database) async throws -> [UUID] {
-        let memberships = try await VMInterfaceSecurityGroup.query(on: db)
-            .filter(\.$interface.$id == interfaceID)
-            .all()
-        return memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
-    }
-
     /// Validates the security groups a workload create asked for and returns
     /// them deduplicated, order preserved. Empty in means empty out — the
     /// caller substitutes the project default inside its create transaction,
@@ -315,7 +306,15 @@ enum SecurityGroupService {
     }
 
     static func realization(for vm: VM, on db: Database) async throws -> Realization {
-        guard let hypervisorId = vm.hypervisorId,
+        try await realization(forHypervisorId: vm.hypervisorId, on: db)
+    }
+
+    /// The placement-keyed half. Named by the hypervisor id rather than the
+    /// workload because that is all the answer ever depended on — which is what
+    /// lets sandboxes reuse it (STR-102) without a second copy of the
+    /// unplaced/authority reasoning below.
+    static func realization(forHypervisorId hypervisorId: String?, on db: Database) async throws -> Realization {
+        guard let hypervisorId,
             let agentUUID = UUID(uuidString: hypervisorId),
             let host = try await Agent.find(agentUUID, on: db)
         else { return .unplaced }
@@ -357,6 +356,24 @@ enum SecurityGroupService {
     /// the groups are attached and nothing will ever write their ACLs.
     static func enforcement(for vm: VM, on db: Database) async throws -> Bool? {
         enforcement(of: try await realization(for: vm, on: db))
+    }
+
+    /// The sandbox twin (STR-102). `sandbox.$networkInterfaces` must be
+    /// eager-loaded; an unloaded relation reads as "no NIC", which is the same
+    /// contract `SandboxDetailResponse.securityGroupIds` already keeps — the
+    /// two are shown side by side, so they must agree about what silence means.
+    static func sandboxEnforcement(for sandbox: Sandbox, on db: Database) async throws -> Bool? {
+        // No interface, nothing to filter. Nil is "unknown", not "unenforced" —
+        // the same distinction an unplaced VM gets.
+        guard let interfaces = sandbox.$networkInterfaces.value, !interfaces.isEmpty else { return nil }
+        // The NIC is not on the wire, so no port exists to join a port group,
+        // whatever the host's version says. Returning here also means the whole
+        // check costs zero queries today, which is why the sandbox *list*
+        // endpoint can call it per row without the per-host/per-site memoization
+        // `enforcementByVM` needs. STR-103 removes this clause — and must add
+        // that batching in the same change.
+        guard SandboxSpecBuilder.guestNetworkingSupported else { return false }
+        return enforcement(of: try await realization(forHypervisorId: sandbox.hypervisorId, on: db))
     }
 
     private static func enforcement(of realization: Realization) -> Bool? {

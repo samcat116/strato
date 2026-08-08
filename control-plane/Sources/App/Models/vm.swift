@@ -493,7 +493,9 @@ struct InterfaceAddressResponse: Content {
     let prefixLength: Int
     let gateway: String?
 
-    init(from address: VMInterfaceAddress) {
+    /// Generic over `InterfaceAddressRow` so the sandbox NIC response reuses
+    /// this DTO rather than growing a field-identical twin (STR-102).
+    init(from address: some InterfaceAddressRow) {
         self.family = address.family
         self.address = address.address
         self.prefixLength = address.prefixLength

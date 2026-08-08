@@ -5510,11 +5510,11 @@ export interface components {
             ttlSeconds?: number;
             /**
              * Format: uuid
-             * @description Logical network for the sandbox's NIC, within its own project. Mutually exclusive with `networkName`; omitting both attaches no NIC, since sandbox guest networking is not implemented yet.
+             * @description Logical network for the sandbox's NIC, within its own project. Mutually exclusive with `networkName`; omitting both attaches no NIC. A NIC is an address reservation only until sandbox guest networking is enabled.
              */
             networkId?: string;
             networkName?: string;
-            /** @description Security groups for the sandbox's NIC. Omitting them attaches the project's default group; supplying them without a network is a 400, since there would be no NIC to attach them to. Recorded but not yet enforced. */
+            /** @description Security groups for the sandbox's NIC. Omitting them attaches the project's default group — never "no groups"; supplying them without a network is a 400, since there would be no NIC to attach them to. See `securityGroupsEnforced` on the sandbox for whether they filter anything yet. */
             securityGroupIds?: string[];
         };
         UpdateSandboxRequest: {
@@ -5547,13 +5547,36 @@ export interface components {
             restoredFromSnapshotId?: string;
             status: components["schemas"]["SandboxStatus"];
             exitCode?: number;
-            /** @description The security groups attached to the sandbox's NIC (flat: a sandbox has at most one). Absent when the sandbox has no NIC. Recorded but **not enforced** — sandbox NICs are still omitted from the agent sync entirely. */
+            /** @description The security groups attached to the sandbox's NIC (flat: a sandbox has at most one). Absent when the sandbox has no NIC. Kept alongside the per-NIC copy on `networkInterfaces` for clients that predate it. Whether these groups filter anything is a separate question — see `securityGroupsEnforced`. */
             securityGroupIds?: string[];
+            /** @description The sandbox's NICs — at most one today, but a list for parity with the VM response. */
+            networkInterfaces?: components["schemas"]["SandboxNetworkInterface"][];
+            /** @description Whether this sandbox's attached security groups are actually being enforced. Absent means the sandbox has no NIC, so there is nothing to judge — not a claim that they are unenforced. False today for every networked sandbox: sandbox guest networking is not yet enabled, so no OVN port exists to join the groups' port groups. */
+            securityGroupsEnforced?: boolean;
             conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
             updatedAt?: string;
+        };
+        /** @description A sandbox's NIC. The sandbox analogue of `NetworkInterface`, without `orderIndex` (sandboxes are single-NIC) or `observedAddresses` (which need a guest agent). */
+        SandboxNetworkInterface: {
+            /** Format: uuid */
+            id?: string;
+            /**
+             * Format: uuid
+             * @description The logical network this NIC attaches to.
+             */
+            networkId: string;
+            /** @description Display name of the network. Present only when the response eager-loaded it; names are unique per project, so the id is the reference. */
+            network?: string;
+            macAddress: string;
+            addresses: components["schemas"]["InterfaceAddress"][];
+            mtu?: number;
+            /** @description Stable device name (always net0 today). */
+            deviceName: string;
+            /** @description The security groups attached to this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
+            securityGroupIds?: string[];
         };
         /** @enum {string} */
         SandboxStatus: "Stopped" | "Running" | "Exited" | "Starting" | "Stopping" | "Error" | "Unknown";
@@ -6146,7 +6169,7 @@ export interface components {
             vmId?: string;
             /**
              * Format: uuid
-             * @description Sandbox memberships are recorded but not yet enforced: sandbox NICs are still omitted from the agent sync entirely.
+             * @description Attaching to a sandbox realizes the group's port group and ACLs, but not yet the membership: sandbox guest networking is not enabled, so the sandbox has no OVN port to make a member. See `securityGroupsEnforced` on the sandbox.
              */
             sandboxId?: string;
             /**

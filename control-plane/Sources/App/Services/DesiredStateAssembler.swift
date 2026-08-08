@@ -26,6 +26,11 @@ struct DesiredStateAssembler {
         /// with NICs while deriving the network scope, so security-group
         /// assembly must reuse them rather than querying the same rows again.
         let coveredVMs: [VM]
+        /// Sandboxes whose topology this agent authors (STR-102), on the same
+        /// terms and for the same reason as `coveredVMs`: the network scope
+        /// already loads them with NICs to union their logical-network
+        /// references, so seeding the group closure from them costs no query.
+        let coveredSandboxes: [Sandbox]
     }
 
     /// The full authoritative sync for an agent. Image download URLs are
@@ -95,11 +100,15 @@ struct DesiredStateAssembler {
         let sendMetadataPort =
             agent.map { WireProtocol.supportsMetadataPort($0.wireProtocolVersion ?? 0) } ?? true
         let securityGroupsByInterface: [UUID: [UUID]]
+        let sandboxSecurityGroupsByInterface: [UUID: [UUID]]
         if sendSecurityGroups {
             securityGroupsByInterface = try await nicSecurityGroupMemberships(
                 interfaceIDs: vms.flatMap { $0.networkInterfaces.compactMap(\.id) }, on: db)
+            sandboxSecurityGroupsByInterface = try await sandboxNICSecurityGroupMemberships(
+                interfaceIDs: sandboxes.flatMap { $0.networkInterfaces.compactMap(\.id) }, on: db)
         } else {
             securityGroupsByInterface = [:]
+            sandboxSecurityGroupsByInterface = [:]
         }
 
         // Instance metadata (STR-51): what each VM's link-local metadata
@@ -351,14 +360,20 @@ struct DesiredStateAssembler {
             // The sandbox's single NIC spec (issue #416), built from its
             // eager-loaded interface + the interface's logical network (for
             // DHCP/DNS config), reusing the networks index gathered above.
-            // Nil until guest networking lands (see
-            // SandboxSpecBuilder.guestNetworkingSupported) — agents reject
-            // networked sandbox specs, so a NIC on the wire would fail every
-            // create.
+            //
+            // Still nil in every deployment: agents can realize a sandbox NIC
+            // end to end since STR-100/101, but
+            // `SandboxSpecBuilder.guestNetworkingSupported` is fleet-wide while
+            // the capability is per-agent, and STR-103 is what replaces it. The
+            // security-group ids are resolved and passed anyway (STR-102), so
+            // that flip is a one-line change rather than a new code path — and
+            // so a reader can see that a sandbox NIC, when it does reach the
+            // wire, arrives filtered rather than unmanaged.
             let interface = sandbox.networkInterfaces.first
             let networkSpec = SandboxSpecBuilder.networkSpec(
                 from: interface,
                 network: interface.flatMap { networksByID[$0.logicalNetworkID] },
+                securityGroupIds: interface?.id.flatMap { sandboxSecurityGroupsByInterface[$0] },
                 sendsMetadataPort: sendMetadataPort)
             // The restore *edge* (STR-151), as distinct from the fork create
             // strategy above. Its artifacts follow the same rule for the same
@@ -397,15 +412,15 @@ struct DesiredStateAssembler {
         }
 
         // The security groups the topology authority realizes as port groups
-        // + ACLs: groups attached to NICs of VMs on the hosts whose topology
-        // the receiving agent authors, plus the transitive closure of groups
-        // their rules reference (so `$pg_…` address-set references always
-        // resolve). Nil for non-authoritative agents — they only consume the
-        // per-NIC membership above — and for pre-v20 agents.
+        // + ACLs: groups attached to NICs of VMs and sandboxes on the hosts
+        // whose topology the receiving agent authors, plus the transitive
+        // closure of groups their rules reference (so `$pg_…` address-set
+        // references always resolve). Nil for non-authoritative agents — they
+        // only consume the per-NIC membership above — and for pre-v20 agents.
         let securityGroups: [DesiredSecurityGroup]?
         if sendSecurityGroups && scope.authoritative {
             securityGroups = try await desiredSecurityGroups(
-                forVMs: scope.coveredVMs, on: db)
+                forVMs: scope.coveredVMs, sandboxes: scope.coveredSandboxes, on: db)
         } else {
             securityGroups = nil
         }
@@ -949,7 +964,8 @@ struct DesiredStateAssembler {
                 networkIDs: ownReferences,
                 authoritative: true,
                 floatingIPAgentIDs: [agentId],
-                coveredVMs: ownVMs)
+                coveredVMs: ownVMs,
+                coveredSandboxes: ownSandboxes)
         }
 
         // A pre-v4 agent doesn't know `networksAuthoritative` and would read
@@ -969,7 +985,8 @@ struct DesiredStateAssembler {
                 networkIDs: ownReferences,
                 authoritative: true,
                 floatingIPAgentIDs: [agentId],
-                coveredVMs: ownVMs)
+                coveredVMs: ownVMs,
+                coveredSandboxes: ownSandboxes)
         }
 
         guard let controllerID = site.$networkControllerAgent.id else {
@@ -983,14 +1000,16 @@ struct DesiredStateAssembler {
                 networkIDs: [],
                 authoritative: false,
                 floatingIPAgentIDs: [],
-                coveredVMs: [])
+                coveredVMs: [],
+                coveredSandboxes: [])
         }
         guard controllerID == agentUUID else {
             return NetworkAssemblyScope(
                 networkIDs: [],
                 authoritative: false,
                 floatingIPAgentIDs: [],
-                coveredVMs: [])
+                coveredVMs: [],
+                coveredSandboxes: [])
         }
 
         let siteAgentIDs = try await Agent.query(on: db)
@@ -1003,7 +1022,10 @@ struct DesiredStateAssembler {
             .all()
         var ids = Set(siteVMs.flatMap { $0.networkInterfaces.map(\.logicalNetworkID) })
         // Sandboxes placed anywhere in the site reference networks the
-        // controller must realize too (issue #416).
+        // controller must realize too (issue #416) — and, since STR-102, the
+        // security groups whose port groups it must author. Both come off this
+        // one query: it already loads the NICs, so `coveredSandboxes` below is
+        // a reuse of these rows, not a second read of them.
         let siteSandboxes = try await Sandbox.query(on: db)
             .filter(\.$hypervisorId ~~ siteAgentIDs)
             .with(\.$networkInterfaces)
@@ -1017,10 +1039,11 @@ struct DesiredStateAssembler {
             networkIDs: ids,
             authoritative: true,
             floatingIPAgentIDs: Set(siteAgentIDs),
-            coveredVMs: siteVMs)
+            coveredVMs: siteVMs,
+            coveredSandboxes: siteSandboxes)
     }
 
-    /// NIC id → attached security-group ids (sorted for stable wire output)
+    /// VM NIC id → attached security-group ids (sorted for stable wire output)
     /// for the given interfaces.
     private func nicSecurityGroupMemberships(
         interfaceIDs: [UUID], on db: any Database
@@ -1036,22 +1059,77 @@ struct DesiredStateAssembler {
         return byInterface.mapValues { $0.sorted { $0.uuidString < $1.uuidString } }
     }
 
-    /// The security groups the desired-state sync should carry for a topology
-    /// authority: every group attached to a NIC of a VM placed on `agentIDs`
-    /// (the hosts whose topology the receiving agent authors), expanded to
-    /// the transitive closure over rule references so every `$pg_…`
-    /// address-set match resolves against an existing port group.
-    private func desiredSecurityGroups(
-        forVMs vms: [VM], on db: any Database
-    ) async throws -> [DesiredSecurityGroup] {
-        let interfaceIDs = vms.flatMap { $0.networkInterfaces.compactMap(\.id) }
-        guard !interfaceIDs.isEmpty else { return [] }
+    /// The sandbox twin (STR-102), reading the sandbox NICs' own join table.
+    ///
+    /// Its result is **discarded on every sync today**, and deliberately: the
+    /// only consumer is `SandboxSpecBuilder.networkSpec`, which returns nil
+    /// under a closed `guestNetworkingSupported`. That is one `IN` query per
+    /// sync per agent that hosts sandbox NICs (the `isEmpty` guard means agents
+    /// without them pay nothing), bought so the STR-103 flip is a one-line
+    /// change rather than a new code path — and so nobody has to prove, at
+    /// flip time, that a sandbox port comes up filtered. Named here so it is
+    /// not later rediscovered as a mystery and optimized into a gap.
+    ///
+    /// Kept as a separate query and a separate dictionary rather than merged
+    /// with the VM map: the two ids could only share a keyspace because they
+    /// come from different tables and so cannot collide, which is true but
+    /// unstated — and the cost of not relying on it is one local. Generalizing
+    /// the two queries behind a protocol is worse still: the join models'
+    /// `@Parent` fields are differently typed, so it would buy two call sites a
+    /// layer of Fluent generics.
+    private func sandboxNICSecurityGroupMemberships(
+        interfaceIDs: [UUID], on db: any Database
+    ) async throws -> [UUID: [UUID]] {
+        guard !interfaceIDs.isEmpty else { return [:] }
+        let memberships = try await SandboxInterfaceSecurityGroup.query(on: db)
+            .filter(\.$interface.$id ~~ interfaceIDs)
+            .all()
+        var byInterface: [UUID: [UUID]] = [:]
+        for membership in memberships {
+            byInterface[membership.$interface.id, default: []].append(membership.$securityGroup.id)
+        }
+        return byInterface.mapValues { $0.sorted { $0.uuidString < $1.uuidString } }
+    }
 
-        var groupIDs = Set(
-            try await VMInterfaceSecurityGroup.query(on: db)
-                .filter(\.$interface.$id ~~ interfaceIDs)
-                .all()
-                .map { $0.$securityGroup.id })
+    /// The security groups the desired-state sync should carry for a topology
+    /// authority: every group attached to a NIC of a VM *or sandbox* placed on
+    /// the hosts whose topology the receiving agent authors, expanded to the
+    /// transitive closure over rule references so every `$pg_…` address-set
+    /// match resolves against an existing port group.
+    ///
+    /// The sandbox arm (STR-102) runs even though a sandbox's `NetworkSpec` —
+    /// and with it the per-NIC membership — is still withheld from the wire by
+    /// `SandboxSpecBuilder.guestNetworkingSupported`. That is the point: the
+    /// authority realizes a sandbox's port groups and ACLs *before* any sandbox
+    /// port exists, so STR-103's flip is not also the moment those groups are
+    /// first created, which would park every first sandbox create on
+    /// `DependencyPendingError`. A port group with no members matches nothing,
+    /// so realizing it early costs an OVN row and changes no traffic.
+    private func desiredSecurityGroups(
+        forVMs vms: [VM], sandboxes: [Sandbox], on db: any Database
+    ) async throws -> [DesiredSecurityGroup] {
+        let vmInterfaceIDs = vms.flatMap { $0.networkInterfaces.compactMap(\.id) }
+        let sandboxInterfaceIDs = sandboxes.flatMap { $0.networkInterfaces.compactMap(\.id) }
+        // Both seeds, not just the VM one: an agent (or a whole site) hosting
+        // sandboxes and no VM NICs would otherwise silently receive no groups
+        // at all, and nothing downstream would report the omission.
+        guard !vmInterfaceIDs.isEmpty || !sandboxInterfaceIDs.isEmpty else { return [] }
+
+        var groupIDs: Set<UUID> = []
+        if !vmInterfaceIDs.isEmpty {
+            groupIDs.formUnion(
+                try await VMInterfaceSecurityGroup.query(on: db)
+                    .filter(\.$interface.$id ~~ vmInterfaceIDs)
+                    .all()
+                    .map { $0.$securityGroup.id })
+        }
+        if !sandboxInterfaceIDs.isEmpty {
+            groupIDs.formUnion(
+                try await SandboxInterfaceSecurityGroup.query(on: db)
+                    .filter(\.$interface.$id ~~ sandboxInterfaceIDs)
+                    .all()
+                    .map { $0.$securityGroup.id })
+        }
 
         // Reference closure: rules pointing at groups outside the attached
         // set pull those groups in (definitions only — their ACLs matter for

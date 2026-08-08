@@ -11,6 +11,7 @@ import {
   Terminal,
   ScrollText,
   GitFork,
+  Network,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +23,7 @@ import {
   SandboxLogViewer,
   SandboxTtlCard,
   SandboxSnapshotsCard,
+  SandboxNetworkCard,
 } from "@/components/sandboxes";
 import { formatMemory } from "@/lib/format-bytes";
 import { useSandbox, useInvalidateSandboxes } from "@/lib/hooks";
@@ -153,6 +155,10 @@ export default function SandboxDetailPage() {
           <TabsTrigger value="logs" className="data-[state=active]:bg-muted">
             <ScrollText className="h-4 w-4 mr-2" />
             Logs
+          </TabsTrigger>
+          <TabsTrigger value="network" className="data-[state=active]:bg-muted">
+            <Network className="h-4 w-4 mr-2" />
+            Network
           </TabsTrigger>
           <TabsTrigger
             value="snapshots"
@@ -369,6 +375,10 @@ export default function SandboxDetailPage() {
 
         <TabsContent value="logs" className="mt-6">
           <SandboxLogViewer sandboxId={id} />
+        </TabsContent>
+
+        <TabsContent value="network" className="mt-6">
+          <SandboxNetworkCard sandbox={sandbox} />
         </TabsContent>
 
         <TabsContent value="snapshots" className="mt-6">

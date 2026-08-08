@@ -735,7 +735,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             }
         }
         logger.debug(
-            "VM port joined security groups",
+            "Workload port joined security groups",
             metadata: [
                 "portName": .string(portName),
                 "groups": .stringConvertible(groups.count),

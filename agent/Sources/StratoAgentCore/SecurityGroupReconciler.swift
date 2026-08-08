@@ -31,7 +31,7 @@ extension OVNNaming {
         "pg_" + securityGroupId.uuidString.lowercased().replacingOccurrences(of: "-", with: "")
     }
 
-    /// The site-singleton drop port group: every managed VM port is a member,
+    /// The site-singleton drop port group: every managed workload port is a member,
     /// and its low-priority drop ACLs are what make security groups
     /// default-deny (allows win at higher priority). Mirrors Neutron's
     /// `neutron_pg_drop`.
@@ -406,10 +406,12 @@ public struct ObservedPortGroup: Equatable, Sendable {
     }
 }
 
-/// The desired group membership of one VM port on this host. `groupIds` nil
-/// means the NIC is unmanaged (spec from a pre-security-group control plane,
-/// or a sandbox NIC): its membership is left exactly as-is — absence of the
-/// field is "no opinion", never "remove from all groups".
+/// The desired group membership of one workload port on this host — a VM's or
+/// a sandbox's, indistinguishably (STR-102); only the port name differs.
+/// `groupIds` nil means the NIC is unmanaged (a spec from a pre-security-group
+/// control plane, or one omitting the field for this agent's version): its
+/// membership is left exactly as-is — absence of the field is "no opinion",
+/// never "remove from all groups".
 public struct DesiredPortMembership: Equatable, Sendable {
     public let portName: String
     public let securityGroupIds: [UUID]?
