@@ -29,6 +29,14 @@ CONFIG_UNIX=y
 CONFIG_PACKET=y
 CONFIG_NETDEVICES=y
 
+# IPv6, stated rather than inherited — same reasoning (and same settings) as
+# the x86_64 fragment: the init assigns a dual-stack address itself (STR-101),
+# nothing autoconfigures, and the IPv6-in-IPv4 tunnel would otherwise be built
+# in for want of loadable modules.
+CONFIG_IPV6=y
+# CONFIG_IPV6_SIT is not set
+# CONFIG_IP_PNP is not set
+
 # Block layer + ext4 rootfs
 CONFIG_BLOCK=y
 CONFIG_EXT4_FS=y

@@ -17,22 +17,32 @@ public struct VMManifestEntry: Codable, Sendable {
     /// reservation-only projection of `sandboxSpec` (cpus/memory), so
     /// restart-survival capacity accounting reads one shape for both kinds.
     ///
-    /// `var` only so `withSpec(_:)` can rewrite it in place; every caller goes
+    /// `var` only so `with(spec:)` can rewrite it in place; every caller goes
     /// through that method rather than assigning here.
     public private(set) var spec: VMSpec
     /// The sandbox's own spec (present iff `kind == .sandbox`), kept so the
     /// sandbox runtime can re-adopt the orphan after a restart.
     public let sandboxSpec: SandboxSpec?
+    /// This VM's context ID in the host's vsock namespace (STR-72), nil for a
+    /// workload that draws no CID from it — every sandbox, every Firecracker
+    /// VM, and any VM created before the allocator existed.
+    ///
+    /// It lives here because the namespace is host-global and the manifest is
+    /// the only durable record of what this host is running: a restarted agent
+    /// that forgot its assignments would hand a live VM's CID to a new one,
+    /// which is two guests on one control channel rather than a lost number.
+    /// See ``VsockCIDAllocator``.
+    public let vsockCID: UInt32?
     /// The edge nonces this host has already applied for the workload — the
     /// last reboot and the last restore (ADR 0001 stage 9, STR-151).
     ///
     /// **Nonce durability is the correctness invariant of that stage**, and this
-    /// field is where it lives. A generation is idempotent, so the reconciler's
-    /// in-process `lastApplied` may reset with the agent for free: re-converging
-    /// a state that already holds does nothing. An edge is not — re-driving one
-    /// reboots a guest a second time, or rewinds it to a checkpoint it has been
-    /// writing past — so what the agent has consumed has to outlive the process
-    /// that consumed it.
+    /// field is where it lives, for the reason `vsockCID` does: the manifest is
+    /// the agent's only memory across a restart. A generation is idempotent, so
+    /// the reconciler's in-process `lastApplied` may reset with the process for
+    /// free — re-converging a state that already holds does nothing. An edge is
+    /// not: re-driving one reboots a guest a second time, or rewinds it to a
+    /// checkpoint it has been writing past.
     ///
     /// Optional, and `nil` means "no record", never "applied nothing". An entry
     /// written by a build older than this field decodes to nil, and a nil is
@@ -41,11 +51,17 @@ public struct VMManifestEntry: Codable, Sendable {
     /// history. See `AppliedEdgeNonces`.
     public var appliedEdges: AppliedEdgeNonces?
 
-    public init(hypervisorType: HypervisorType, spec: VMSpec, appliedEdges: AppliedEdgeNonces? = nil) {
+    public init(
+        hypervisorType: HypervisorType,
+        spec: VMSpec,
+        vsockCID: UInt32? = nil,
+        appliedEdges: AppliedEdgeNonces? = nil
+    ) {
         self.kind = .vm
         self.hypervisorType = hypervisorType
         self.spec = spec
         self.sandboxSpec = nil
+        self.vsockCID = vsockCID
         self.appliedEdges = appliedEdges
     }
 
@@ -57,7 +73,28 @@ public struct VMManifestEntry: Codable, Sendable {
         self.spec = VMSpec(
             cpus: sandboxSpec.cpus, memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil))
         self.sandboxSpec = sandboxSpec
+        self.vsockCID = nil
         self.appliedEdges = appliedEdges
+    }
+
+    /// The same workload with a new spec — a resize, or a volume attached or
+    /// detached.
+    ///
+    /// Copying rather than re-constructing is what keeps a spec change from
+    /// silently dropping everything else the entry carries, and two fields have
+    /// now needed exactly that. The vsock CID (STR-72) is allocated once at
+    /// create and belongs to the VM for its whole life, so a resize that rebuilt
+    /// the entry from `(hypervisorType, spec)` would free a running VM's CID for
+    /// reuse. The edge-nonce record (STR-151) is what this host has already
+    /// *done* to the workload, so dropping it would make the next sync read "no
+    /// record" and quietly discard a reboot or restore the user had asked for.
+    ///
+    /// It mutates a copy rather than listing the fields to carry, so a field
+    /// added later is preserved without anyone having to remember this method.
+    public func with(spec newSpec: VMSpec) -> VMManifestEntry {
+        var copy = self
+        copy.spec = newSpec
+        return copy
     }
 
     // Custom decode so `kind` tolerates absence: entries persisted by a
@@ -69,23 +106,8 @@ public struct VMManifestEntry: Codable, Sendable {
         hypervisorType = try c.decode(HypervisorType.self, forKey: .hypervisorType)
         spec = try c.decode(VMSpec.self, forKey: .spec)
         sandboxSpec = try c.decodeIfPresent(SandboxSpec.self, forKey: .sandboxSpec)
+        vsockCID = try c.decodeIfPresent(UInt32.self, forKey: .vsockCID)
         appliedEdges = try c.decodeIfPresent(AppliedEdgeNonces.self, forKey: .appliedEdges)
-    }
-
-    /// This entry with a new spec and everything the spec does not describe
-    /// carried over.
-    ///
-    /// Exists so the edge-nonce record cannot be lost by a rewrite of what the
-    /// host is *running* (STR-151). A volume attach, a detach and a resize all
-    /// rebuild the entry around a new `VMSpec`, and every one of them used to
-    /// mean writing a fresh `VMManifestEntry` — which would silently drop the
-    /// record of what this host has already *done* and make the next sync read
-    /// "no record", quietly discarding a reboot or restore the user had asked
-    /// for. One method, so there is one place to remember.
-    public func withSpec(_ newSpec: VMSpec) -> VMManifestEntry {
-        var copy = self
-        copy.spec = newSpec
-        return copy
     }
 }
 
@@ -119,6 +141,14 @@ public struct QuarantinedManifestEntry: Sendable {
     public let cpus: Int
     public let memoryBytes: Int64
     public let diskBytes: Int64
+    /// Salvaged vsock CID (STR-72). Reserved exactly like the CPU and memory
+    /// above, and for a sharper reason: the workload under this entry may still
+    /// be running on that CID, and the namespace is host-global, so handing it
+    /// to a new VM would join two guests' control channels. Nil when the entry
+    /// carried none or it could not be read — the same under-count the
+    /// reservations take, and the same reason it is only an under-count: this
+    /// build cannot create the workload again either way.
+    public let vsockCID: UInt32?
     /// Why this entry could not be used, for the log and the operator.
     public let reason: String
     /// The entry as read, for verbatim re-persistence.
@@ -130,6 +160,7 @@ public struct QuarantinedManifestEntry: Sendable {
         cpus: Int,
         memoryBytes: Int64,
         diskBytes: Int64,
+        vsockCID: UInt32?,
         reason: String,
         raw: CodableValue
     ) {
@@ -138,6 +169,7 @@ public struct QuarantinedManifestEntry: Sendable {
         self.cpus = cpus
         self.memoryBytes = memoryBytes
         self.diskBytes = diskBytes
+        self.vsockCID = vsockCID
         self.reason = reason
         self.raw = raw
     }
@@ -447,6 +479,7 @@ private struct PartiallyDecodedManifest: Decodable {
             cpus: reservation?.cpus ?? 0,
             memoryBytes: reservation?.memoryBytes ?? 0,
             diskBytes: reservation?.diskBytes ?? 0,
+            vsockCID: salvaged?.vsockCID,
             reason: reason,
             raw: raw
         )
@@ -479,9 +512,10 @@ private struct SalvagedEntry: Decodable {
     let hypervisorType: String?
     let spec: Reservation?
     let sandboxSpec: Reservation?
+    let vsockCID: UInt32?
 
     enum CodingKeys: String, CodingKey {
-        case kind, hypervisorType, spec, sandboxSpec
+        case kind, hypervisorType, spec, sandboxSpec, vsockCID
     }
 
     init(from decoder: any Decoder) throws {
@@ -490,6 +524,7 @@ private struct SalvagedEntry: Decodable {
         hypervisorType = try? c.decodeIfPresent(String.self, forKey: .hypervisorType)
         spec = try? c.decodeIfPresent(Reservation.self, forKey: .spec)
         sandboxSpec = try? c.decodeIfPresent(Reservation.self, forKey: .sandboxSpec)
+        vsockCID = try? c.decodeIfPresent(UInt32.self, forKey: .vsockCID)
     }
 }
 
