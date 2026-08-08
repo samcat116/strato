@@ -491,6 +491,43 @@ final class VMOperationTests {
         }
     }
 
+    /// The ticket's own case: a VM whose agent applied generation N — by the
+    /// boot — and then failed the drift-correcting resize planned at the same N.
+    /// The façade already read `degraded` first, so it answered `failed`; the
+    /// resource read `converged: true` alongside it, so a client following the
+    /// documented rule got both answers. Asserting the two together is what
+    /// pins them to one.
+    @Test("A VM converged at the generation a failure names reports failed on both readers")
+    func facadeAndConditionsAgreeAtOneGeneration() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.observedGeneration = vm.generation
+            try await vm.save(on: app.db)
+            let event = try await record(.resize, on: vm, by: user, on: app.db)
+
+            vm.lastError = "resize failed: no space left on device"
+            vm.failedGeneration = vm.generation
+            try await vm.save(on: app.db)
+
+            try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let operation = try res.content.decode(OperationResponse.self)
+                #expect(operation.status == .failed)
+                #expect(operation.error == "resize failed: no space left on device")
+            }
+
+            try await app.test(.GET, "/api/vms/\(try vm.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let detail = try res.content.decode(VMDetailResponse.self)
+                #expect(!detail.conditions.converged)
+                #expect(detail.conditions.degraded?.sinceGeneration == detail.conditions.targetGeneration)
+            }
+        }
+    }
+
     @Test("A superseded mutation reads as succeeded, not pending forever")
     func facadeReportsSupersededAsSucceeded() async throws {
         try await withVMTestApp { app, user, vm, token in
@@ -678,6 +715,34 @@ final class VMOperationTests {
             let second = try #require(try await VM.find(vm.id, on: app.db))
             #expect(second.generation == generation)
             #expect(second.lastError == reason)
+        }
+    }
+
+    /// `degradeOverdue` skips a converged resource. Since STR-191 a VM already
+    /// degraded at its current generation is no longer converged, so it falls
+    /// through — onto `recordFailure`'s own `failedGeneration == generation`
+    /// guard, which is the same condition stated once more. The claim clears the
+    /// deadline; nothing else changes, and the agent's reason is not replaced
+    /// with a timeout the user cannot act on.
+    @Test("The sweep does not degrade a VM that is already degraded at this generation")
+    func sweepDoesNotDegradeTwice() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.observedGeneration = vm.generation
+            vm.lastError = "resize failed: no space left on device"
+            vm.failedGeneration = vm.generation
+            vm.convergenceDeadline = Date().addingTimeInterval(-1)
+            try await vm.save(on: app.db)
+            _ = try await record(.resize, on: vm, by: user, on: app.db)
+            let generation = vm.generation
+
+            await app.agentService.sweepStuckConvergence()
+
+            let swept = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(swept.lastError == "resize failed: no space left on device")
+            #expect(swept.generation == generation)
+            #expect(swept.convergenceDeadline == nil)
         }
     }
 

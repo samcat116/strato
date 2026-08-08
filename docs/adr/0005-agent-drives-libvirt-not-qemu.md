@@ -205,9 +205,10 @@ misleading message underneath its real failure.
   device or attribute needs re-validating against both ends of the supported
   libvirt range.
 - **Some behaviour is fixed at create time.** The document is written once, so a
-  VM's hot-plug slots (four spare `pcie-root-port`s) and its memory headroom are
-  decided when it is created. Exceeding either fails with libvirt's error rather
-  than growing the domain.
+  VM's hot-plug slots (four spare `pcie-root-port`s, at indexes past the ports
+  the domain's own devices occupy — un-indexed ones reserve nothing, STR-192)
+  and its memory headroom are decided when it is created. Exceeding either fails
+  with libvirt's error rather than growing the domain.
   ([issue #1026](https://github.com/samcat116/strato/issues/1026) tracks lifting
   this.)
 - **libvirtd caches host capabilities.** Installing swtpm under a running daemon

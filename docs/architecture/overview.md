@@ -71,7 +71,9 @@ pause/resume/resize, sandbox restart) write the desired-state change and
 return **202 Accepted** with `{resource, targetGeneration, mutationId}`.
 Clients refetch the resource and read its `conditions` block: done once the
 owning agent has confirmed `targetGeneration` and the desired state is
-satisfied, failed when a `degraded` reason names that same generation. A
+satisfied, failed when a `degraded` reason names that same generation. The two
+are mutually exclusive — a failure at the target generation is also what makes
+`converged` false — so exactly one of them answers. A
 **stuck-convergence sweep** degrades a resource that misses the deadline the
 mutation stamped, and runs lock-free on every replica.
 

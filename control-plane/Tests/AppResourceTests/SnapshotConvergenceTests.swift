@@ -464,8 +464,8 @@ final class SnapshotConvergenceTests {
 
     /// A bare export request must not read as converged the moment the agent's
     /// generation catches up: `isConverged` (which fires the convergence event
-    /// and the completion webhook) and `conditions.desiredSatisfied` (which
-    /// answers the client) are one predicate, so both wait for the copy.
+    /// and the completion webhook) and `conditions.converged` (which answers the
+    /// client) are one derivation, so both wait for the copy.
     @Test("An outstanding export keeps the snapshot unconverged on both readers")
     func outstandingExportBlocksConvergence() async throws {
         try await withSnapshotApp { app, builder, user, project in
@@ -497,6 +497,74 @@ final class SnapshotConvergenceTests {
             snapshot.exportedAt = Date()
             #expect(snapshot.isConverged)
             #expect(snapshot.conditions.converged)
+        }
+    }
+
+    /// STR-191, on the artifact families. Their resolution for a failed mutation
+    /// is deliberately nothing, so `failedGeneration == generation` stands until
+    /// a new mutation moves the target — which is exactly the state that used to
+    /// read `converged` and `degraded` at once.
+    @Test("A failure at the current generation un-converges an artifact on both readers")
+    func currentGenerationFailureUnconvergesArtifact() async throws {
+        try await withSnapshotApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "artifact-degraded")
+            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            sandbox.hypervisorId = agentId
+            try await sandbox.save(on: app.db)
+
+            let snapshot = SandboxSnapshot(
+                name: "failed-capture",
+                sandboxID: try sandbox.requireID(),
+                projectID: try project.requireID(),
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: try user.requireID())
+            snapshot.status = .ready
+            snapshot.observedGeneration = snapshot.generation
+            snapshot.errorMessage = "capture failed: no space left on device"
+            snapshot.failedGeneration = snapshot.generation
+            try await snapshot.save(on: app.db)
+
+            #expect(!snapshot.isConverged)
+            #expect(!snapshot.conditions.converged)
+            #expect(snapshot.conditions.degraded?.sinceGeneration == snapshot.generation)
+
+            // A failure a newer mutation already moved past still stands, but it
+            // is not this generation's verdict.
+            snapshot.generation += 1
+            snapshot.observedGeneration = snapshot.generation
+            #expect(snapshot.isConverged)
+            #expect(snapshot.conditions.converged)
+            #expect(snapshot.conditions.degraded != nil)
+        }
+    }
+
+    @Test("A terminating artifact reads unconverged on both readers")
+    func terminatingArtifactIsNeverConverged() async throws {
+        try await withSnapshotApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "artifact-terminating")
+            let sandbox = try await builder.createSandbox(name: "sb", project: project)
+            sandbox.hypervisorId = agentId
+            try await sandbox.save(on: app.db)
+
+            let snapshot = SandboxSnapshot(
+                name: "going-away",
+                sandboxID: try sandbox.requireID(),
+                projectID: try project.requireID(),
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: try user.requireID())
+            snapshot.status = .ready
+            snapshot.setDesiredStatus(.absent)
+            snapshot.observedGeneration = snapshot.generation
+            try await snapshot.save(on: app.db)
+
+            // Absence is confirmed by omission from the agent's report, which
+            // reaps the row — a still-present row has not converged. Unifying the
+            // derivation is what brought the client-facing half in line with the
+            // reconciliation half here (STR-191).
+            #expect(!snapshot.isConverged)
+            #expect(!snapshot.conditions.converged)
         }
     }
 

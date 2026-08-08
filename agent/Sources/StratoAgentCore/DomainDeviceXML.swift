@@ -22,7 +22,11 @@ public enum DomainDeviceXML {
     /// order the create-time document already gave the boot disk.
     ///
     /// No `<address>` either — libvirt picks a free PCIe root port, of which
-    /// the document reserves `DomainXMLBuilder.spareHotplugPorts`.
+    /// the create-time document reserves `DomainXMLBuilder.spareHotplugPorts`
+    /// at indexes past every port the domain's own devices occupy. That
+    /// numbering is what makes them free; before STR-192 the ports were declared
+    /// without it, libvirt filled them with the domain's own devices, and every
+    /// attach this function feeds failed with "No more available PCI slots".
     public static func hotplugDisk(
         path: String, format: DiskFormat, target: String, readonly: Bool, volumeId: String
     ) -> String {

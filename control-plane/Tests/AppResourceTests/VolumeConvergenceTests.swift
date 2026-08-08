@@ -288,6 +288,43 @@ final class VolumeConvergenceTests {
         }
     }
 
+    /// The STR-191 shape, which the test above does not reach: there the agent
+    /// had never applied generation 3, so `converged` was false on the
+    /// generation clause alone. Here it *has* — a resize planned at a generation
+    /// an earlier work item already applied — and only the failure clause keeps
+    /// the two conditions from both answering.
+    @Test("A resize that fails at an already-applied generation un-converges the volume")
+    func failureAtAppliedGenerationUnconverges() async throws {
+        try await withVolumeApp { app, _, user, project in
+            let agentId = try await registerAgent(app: app, named: "drift-agent")
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                status: .available, generation: 3, observedGeneration: 3)
+            let volumeID = try #require(volume.id)
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: agentId,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true, storagePath: "/p", format: "qcow2",
+                            observedGeneration: 3,
+                            lastError: "no space left on device", failedGeneration: 3)
+                    ]))
+
+            let degraded = try await #require(try await Volume.find(volumeID, on: app.db))
+            #expect(!degraded.conditions.converged)
+            #expect(degraded.conditions.degraded?.sinceGeneration == 3)
+
+            // …and the bytes are still at rest, so the two verbs that copy them
+            // keep working. Gating those on convergence would lock the volume out
+            // permanently: nothing clears a failed resize's generation.
+            #expect(degraded.bytesAtRest)
+            #expect(degraded.canSnapshot)
+            #expect(degraded.canClone)
+        }
+    }
+
     /// `deviceName` is the *desired* slot, read straight back out by the
     /// assembler. An observation that disagrees must not overwrite it: doing so
     /// would replace what the user asked for with what the agent happens to

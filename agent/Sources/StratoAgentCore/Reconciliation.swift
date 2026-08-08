@@ -1671,10 +1671,25 @@ public actor Reconciler {
     /// RPC: it survives dropped syncs by construction, since the next
     /// level-triggered sync re-derives the same diff.
     ///
-    /// A VM with other steps planned is left alone: `.create`/`.boot` build
-    /// the process from the new spec wholesale, so resizing on top would be
-    /// redundant at best. Likewise for a VM that isn't running — a stopped
-    /// VM picks the new size up at its next boot.
+    /// A VM with other steps planned is left alone: `.create` builds the
+    /// process from the new spec wholesale, so resizing on top would be
+    /// redundant at best. A VM that isn't running is left alone too — but "a
+    /// stopped VM picks the new size up at its next boot" is only half the
+    /// story, and the missing half is why the equal-generation rule below
+    /// exists. `.boot` starts the definition **the host already holds**
+    /// (`bootVM` takes no spec; only `.create` writes one), so a resized
+    /// stopped VM comes up at the *old* size, `lastApplied` advances to the
+    /// entry's generation, and the size is realized on the next sync by the
+    /// drift-correcting `.resize` planned here — a second work item at a
+    /// generation already applied.
+    ///
+    /// That second item is the only way this agent can report
+    /// `observedGeneration` and `failedGeneration` at the same value (STR-191):
+    /// a failing item never advances `lastApplied`, so the two coincide only
+    /// when something *else* already applied that generation successfully.
+    /// Nothing here compensates for it — `lastApplied` is honest and must stay
+    /// honest. The control plane resolves the pair on read, by treating a
+    /// failure at the current generation as not converged.
     private static func addResizes(
         to items: inout [ReconcileWorkItem],
         desired: [DesiredVMState],
@@ -1692,7 +1707,9 @@ public actor Reconciler {
                 observed.differs(from: entry.spec)
             else { continue }
             // Same staleness rule as the core diff: an older sync must never
-            // undo a newer one, and an equal generation is drift correction.
+            // undo a newer one, and an equal generation is drift correction —
+            // which is deliberately *not* "already done". See the note above
+            // for what an equal-generation retry means to the control plane.
             if let applied = lastApplied[id], entry.generation < applied { continue }
 
             if let index = items.firstIndex(where: { $0.kind == .vm && $0.id == id }) {

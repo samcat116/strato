@@ -26,10 +26,10 @@
       <target dev='vda' bus='virtio'/>
     </disk>
     <controller type='pci' index='0' model='pcie-root'/>
-    <controller type='pci' model='pcie-root-port'/>
-    <controller type='pci' model='pcie-root-port'/>
-    <controller type='pci' model='pcie-root-port'/>
-    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' index='8' model='pcie-root-port'/>
+    <controller type='pci' index='9' model='pcie-root-port'/>
+    <controller type='pci' index='10' model='pcie-root-port'/>
+    <controller type='pci' index='11' model='pcie-root-port'/>
     <controller type='virtio-serial' index='0'/>
     <interface type='ethernet'>
       <mac address='52:54:00:12:34:56'/>

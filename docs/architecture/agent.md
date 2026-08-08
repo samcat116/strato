@@ -263,6 +263,21 @@ Two consequences follow:
   virtio-mem region the spec asked for. Growing past either is libvirt's error
   to report, not bookkeeping the agent keeps — which is why a process driver's
   spawn-sizing table has no counterpart here.
+
+  The spares carry **explicit indexes**, derived from the count of PCI devices
+  the document declares, and that is the whole mechanism rather than a detail
+  (STR-192). An un-indexed `pcie-root-port` is numbered by libvirt out of the
+  range it was going to allocate for the domain's own devices and then filled
+  with one of them, so it reserves nothing: before the indexes went in, every
+  golden defined with zero free ports and every disk hot-plug on a running VM
+  failed with "No more available PCI slots". libvirt materializes every index
+  below the highest one declared, so the top index is the port count and the
+  spares are what is left over the top.
+
+  The ceiling binds **live** attaches only. An attach to a stopped VM goes to
+  the persistent definition with `AFFECT_CONFIG` alone, and libvirt grows the
+  bus there itself — so a VM out of spare ports can still be given volumes by
+  stopping it, which is what `attachDisk`'s error says when it runs out.
 - **A volume names itself in the document.** Each volume-backed `<disk>` carries
   `<serial>vol-<uuid></serial>`, minted by `QEMUDiskIdentity`, so a detach
   resolves exactly that disk on a domain the agent keeps no model of (STR-129).
@@ -599,6 +614,14 @@ failed resize is re-planned by the next sync rather than looking applied.
   Entries older than the last applied generation are dropped (replays can't
   roll state back); equal generations still re-plan (drift correction);
   present-but-unlisted workloads are **held**, not deleted (below).
+  Drift correction is the reason an agent can report `observedGeneration` and
+  `failedGeneration` at the same value: a failing item never advances
+  `lastApplied`, so the two coincide only when an *earlier* item applied that
+  generation and a later one at the same number failed — a resized stopped VM
+  boots at the old size (`.boot` starts the definition the host holds) and is
+  corrected by the `.resize` the next sync plans. The control plane resolves
+  the pair on read, treating a failure at the current generation as not
+  converged (STR-191).
 - **The `Reconciler` actor** executes items on **per-workload serial
   lanes** (`SerialTaskQueue` in `MessageOrdering.swift`: FIFO per key,
   concurrent across keys). A VM's lane key is its bare ID — the same lane

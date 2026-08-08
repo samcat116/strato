@@ -268,6 +268,26 @@ struct LibvirtDomainTests {
         #expect(!LibvirtFailure.isOperationInvalid(daemonError(.noDomain)))
     }
 
+    /// The one classification that reads a message rather than a code, because
+    /// libvirt reports a full root complex as a bare `internalError`. It exists
+    /// only to reword the error a hot-plug fails with (STR-192), so the cases
+    /// that matter are that it recognizes libvirt's wording and does not claim
+    /// every other internal error.
+    @Test("A full root complex is recognized by its message, and nothing else is")
+    func classifiesExhaustedPCISlots() {
+        #expect(
+            LibvirtFailure.isPCISlotsExhausted(
+                daemonError(.internalError, "No more available PCI slots")))
+        // libvirt prefixes and wraps this text on its way out; the match has to
+        // survive that, and the daemon's own casing is not a contract either.
+        #expect(
+            LibvirtFailure.isPCISlotsExhausted(
+                daemonError(.internalError, "internal error: no more available PCI slots")))
+        #expect(!LibvirtFailure.isPCISlotsExhausted(daemonError(.internalError, "boom")))
+        #expect(!LibvirtFailure.isPCISlotsExhausted(daemonError(.operationFailed)))
+        #expect(!LibvirtFailure.isPCISlotsExhausted(LibvirtClientError(.connectionClosed)))
+    }
+
     @Test("Only a dead channel drops the cached connection")
     func classifiesConnectionLoss() {
         for code in [

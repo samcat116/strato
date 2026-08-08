@@ -5153,7 +5153,7 @@ export interface components {
         /**
          * @description The body of a `202` from a VM lifecycle mutation. The VM as the mutation left it, plus the generation it now has to converge on.
          *
-         *     Done means the VM's `conditions` report `converged` with `observedGeneration >= targetGeneration`; failed means `conditions.degraded.sinceGeneration == targetGeneration`, with the agent's reason. Both are readable from `GET /api/vms/{vmID}` — no operation object is involved.
+         *     Done means the VM's `conditions` report `converged` with `observedGeneration >= targetGeneration`; failed means `conditions.degraded.sinceGeneration == targetGeneration`, with the agent's reason. The two are mutually exclusive, so exactly one of them ever answers. Both are readable from `GET /api/vms/{vmID}` — no operation object is involved.
          *
          *     `mutationId` names the audit record of the request, and is what `GET /api/operations/{operationID}` answers for. Its one *necessary* use is `deleteVM`: a delete succeeds by the VM ceasing to exist, and a client polling the VM would see a `404` that means deleted, never-existed and not-authorized alike.
          */
@@ -5416,7 +5416,7 @@ export interface components {
         };
         /** @description How far a resource is from the state the API was last asked to put it in. Derived on read from the resource's own generation counters and the convergence progress its agent reports — polling this block is the supported alternative to polling the operation a mutation returned. */
         ResourceConditions: {
-            /** @description Whether the owning agent has confirmed converging to `targetGeneration` *and* what it observes satisfies the desired state. Always false once a delete is in flight: a terminating resource is on its way out, not converging on anything, and it disappears when the last finalizer clears rather than settling. */
+            /** @description Whether the owning agent has confirmed converging to `targetGeneration`, what it observes satisfies the desired state, and no attempt at that same generation is on record as having failed. False whenever `degraded.sinceGeneration` equals `targetGeneration` — the two are mutually exclusive, so a client always has exactly one verdict. Always false once a delete is in flight: a terminating resource is on its way out, not converging on anything, and it disappears when the last finalizer clears rather than settling. */
             converged: boolean;
             /**
              * Format: int64
@@ -5439,7 +5439,7 @@ export interface components {
             reason: string;
             /**
              * Format: int64
-             * @description The generation whose convergence produced `reason`. Compare with `targetGeneration` to tell a failure of the state currently being pursued from one a newer mutation has already superseded.
+             * @description The generation whose convergence produced `reason`. Compare with `targetGeneration` to tell a failure of the state currently being pursued from one a newer mutation has already superseded. Equal to `targetGeneration` means this is the current state's verdict, and `converged` is false alongside it.
              */
             sinceGeneration: number;
         };
@@ -9144,7 +9144,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The mutation was accepted. Refetch the VM until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        /** @description The mutation was accepted. Refetch the VM until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true, or `degraded.sinceGeneration == targetGeneration` — the failure, with the agent's reason. Exactly one of the two ever holds. */
         AcceptedVMMutation: {
             headers: {
                 [name: string]: unknown;
@@ -9153,7 +9153,7 @@ export interface components {
                 "application/json": components["schemas"]["AcceptedVMMutation"];
             };
         };
-        /** @description The mutation was accepted. Refetch the sandbox until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        /** @description The mutation was accepted. Refetch the sandbox until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true, or `degraded.sinceGeneration == targetGeneration` — the failure, with the agent's reason. Exactly one of the two ever holds. */
         AcceptedSandboxMutation: {
             headers: {
                 [name: string]: unknown;
@@ -9162,7 +9162,7 @@ export interface components {
                 "application/json": components["schemas"]["AcceptedSandboxMutation"];
             };
         };
-        /** @description The mutation was accepted. Refetch the volume until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        /** @description The mutation was accepted. Refetch the volume until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true, or `degraded.sinceGeneration == targetGeneration` — the failure, with the agent's reason. Exactly one of the two ever holds. */
         AcceptedVolumeMutation: {
             headers: {
                 [name: string]: unknown;
@@ -9171,7 +9171,7 @@ export interface components {
                 "application/json": components["schemas"]["AcceptedVolumeMutation"];
             };
         };
-        /** @description The mutation was accepted. Refetch the checkpoint until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. A delete's completion is the checkpoint's absence — poll `GET /api/operations/{mutationId}` for that one. */
+        /** @description The mutation was accepted. Refetch the checkpoint until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true, or `degraded.sinceGeneration == targetGeneration` — the failure, with the agent's reason. Exactly one of the two ever holds. A delete's completion is the checkpoint's absence — poll `GET /api/operations/{mutationId}` for that one. */
         AcceptedVMSnapshotMutation: {
             headers: {
                 [name: string]: unknown;
@@ -9180,7 +9180,7 @@ export interface components {
                 "application/json": components["schemas"]["AcceptedVMSnapshotMutation"];
             };
         };
-        /** @description The mutation was accepted. Refetch the snapshot until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        /** @description The mutation was accepted. Refetch the snapshot until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true, or `degraded.sinceGeneration == targetGeneration` — the failure, with the agent's reason. Exactly one of the two ever holds. */
         AcceptedSandboxSnapshotMutation: {
             headers: {
                 [name: string]: unknown;
@@ -9189,7 +9189,7 @@ export interface components {
                 "application/json": components["schemas"]["AcceptedSandboxSnapshotMutation"];
             };
         };
-        /** @description The mutation was accepted. Refetch the snapshot until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
+        /** @description The mutation was accepted. Refetch the snapshot until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true, or `degraded.sinceGeneration == targetGeneration` — the failure, with the agent's reason. Exactly one of the two ever holds. */
         AcceptedVolumeSnapshotMutation: {
             headers: {
                 [name: string]: unknown;

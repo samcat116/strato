@@ -459,9 +459,11 @@ footprint and a host, which an agent can enumerate, diff and converge on.
 What changes, uniformly:
 
 - **Capture and delete answer `202`** with `{resource, targetGeneration,
-  mutationId}`; the client polls the artifact's own `conditions`. A delete's
-  success is the artifact's absence, so it polls the operations façade with
-  `mutationId` instead — the rule everywhere else in ADR 0001.
+  mutationId}`; the client polls the artifact's own `conditions`, where
+  `converged` and a `degraded` naming the target generation are mutually
+  exclusive. A delete's success is the artifact's absence, so it polls the
+  operations façade with `mutationId` instead — the rule everywhere else in
+  ADR 0001.
 - **The row outlives the delete.** It goes only once the owning agent's
   full-list report omits the artifact, which is the only thing that confirms
   the bytes are gone. A delete against an agent that cannot confirm (offline,

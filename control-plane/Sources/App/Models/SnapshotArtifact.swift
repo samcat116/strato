@@ -113,24 +113,18 @@ extension SnapshotArtifactResource {
         generation += 1
     }
 
-    /// True once the owning agent has confirmed the current generation and
-    /// everything the desired state asks for exists.
+    /// Everything the desired state asks for exists on the agent.
     ///
     /// The presence clause is the artifact's analogue of
-    /// `DesiredVMStatus.isSatisfied(by:)`, and it is what
-    /// `observedGeneration >= generation` alone cannot say: an artifact whose
-    /// files were removed out of band would otherwise stay "converged", because
-    /// nothing bumps a generation to notice.
+    /// `DesiredVMStatus.isSatisfied(by:)`, and it is what the generation clause
+    /// alone cannot say: an artifact whose files were removed out of band would
+    /// otherwise stay "converged", because nothing bumps a generation to notice.
     ///
-    /// `exportSatisfied` is here so this and `conditions.desiredSatisfied` stay
-    /// one predicate. They are read by different callers — this one fires the
-    /// convergence event and the completion webhook, that one answers the
-    /// client — and if they disagreed, a bare export request would emit
-    /// "converged" the moment the agent's generation caught up while the client
-    /// was still correctly waiting for the copy it asked for.
-    var isConverged: Bool {
-        desiredStatus == .present && observedGeneration >= generation && isPresentOnAgent
-            && exportSatisfied
+    /// `exportSatisfied` is here because a bare export request would otherwise
+    /// read satisfied the moment the agent's generation caught up, while the
+    /// client was still correctly waiting for the copy it asked for.
+    var desiredSatisfied: Bool {
+        desiredStatus == .present && isPresentOnAgent && exportSatisfied
     }
 
     /// The failure resolution for an artifact is deliberately *nothing*.
