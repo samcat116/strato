@@ -1265,9 +1265,22 @@ constant-time comparison is needed: nothing here ever compares a secret.
 **Verdicts.** 503 + `Retry-After` while the store is `.cold` (checked *before*
 identification: with no knowledge, 404 would assert something the agent cannot
 know); 404 for an unresolvable or ambiguous caller, and for a withdrawn
-instance; 401 for a missing, expired, or wrong-instance token; 404 for an
-unserved path, but only *after* authentication, so nothing that merely reaches
-the address can map the tree.
+instance; 404 for an instance whose metadata kill switch is thrown; 401 for a
+missing, expired, or wrong-instance token; 404 for an unserved path, but only
+*after* authentication, so nothing that merely reaches the address can map the
+tree.
+
+**The kill switch is checked after identification and before the handshake**
+(STR-185). After, because there is no way to know whose switch to read until
+the caller has a name; before, because a switched-off instance must not be able
+to mint a session it could never spend. Its 404 is `.unknown`'s answer verbatim,
+so a guest cannot learn that it was singled out. Note what this is *not*: the
+control plane keeps sending the document and the instance stays in
+`MetadataCallerIndex`, because dropping it from the servable set would take its
+addresses out of the index — and the collision that resolves `.ambiguous` today
+would then resolve to the neighbour whose identity it was hardened away from.
+Throwing the switch also retires the instance's live sessions on the next push
+rather than leaving them to expire.
 
 **Responses carry a hop limit of 1** (`IP_TTL` / `IPV6_UNICAST_HOPS`, set on
 the listener and on each accepted child). The guest is one L2 hop away — both

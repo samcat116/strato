@@ -254,6 +254,14 @@ struct VMController: RouteCollection {
             // project's default group — every NIC must belong to at least one
             // group.
             let securityGroupIds: [UUID]?
+            // The per-instance metadata kill switch (STR-185), EC2's
+            // `MetadataOptions.HttpEndpoint`. Defaults true — the metadata
+            // service replaces the boot-time seed ISO, so a VM created with it
+            // off may well not finish provisioning, which is a choice to make
+            // deliberately. Editable afterwards, unlike `graphicsConsole`
+            // above: hardening a workload that is already running is the case
+            // this exists for.
+            let metadataEnabled: Bool?
 
             mutating func validate() throws {
                 name = try Validate.name(name)
@@ -412,7 +420,8 @@ struct VMController: RouteCollection {
             maxMemory: maxMemoryValue,
             secureBoot: createRequest.secureBoot ?? false,
             tpmEnabled: createRequest.tpm ?? false,
-            graphicsConsole: createRequest.graphicsConsole ?? false
+            graphicsConsole: createRequest.graphicsConsole ?? false,
+            metadataEnabled: createRequest.metadataEnabled ?? true
         )
         vm.cmdline = cmdlineValue
         // Link VM to source image
@@ -790,9 +799,13 @@ struct VMController: RouteCollection {
             /// `.some(nil)` (explicit null) clears it and hands the guest its
             /// whole grant back.
             let balloonTarget: Int64??
+            /// The per-instance metadata kill switch (STR-185). Absent leaves
+            /// it alone; this is the endpoint an operator hardening a running
+            /// workload against SSRF reaches for.
+            let metadataEnabled: Bool?
 
             enum CodingKeys: String, CodingKey {
-                case name, hostname, description, cpu, memory, balloonTarget
+                case name, hostname, description, cpu, memory, balloonTarget, metadataEnabled
             }
 
             init(from decoder: any Decoder) throws {
@@ -802,6 +815,7 @@ struct VMController: RouteCollection {
                 description = try c.decodeIfPresent(String.self, forKey: .description)
                 cpu = try c.decodeIfPresent(Int.self, forKey: .cpu)
                 memory = try c.decodeIfPresent(Int64.self, forKey: .memory)
+                metadataEnabled = try c.decodeIfPresent(Bool.self, forKey: .metadataEnabled)
                 balloonTarget =
                     c.contains(.balloonTarget)
                     ? .some(try c.decodeIfPresent(Int64.self, forKey: .balloonTarget)) : .none
@@ -834,6 +848,41 @@ struct VMController: RouteCollection {
         // is re-realized, only the network-carried zone it registers into.
         let hostnameChanged = existingVM.hostname != originalHostname
 
+        // The metadata kill switch (STR-185). Gated on the *placed* agent, and
+        // only when the switch is actually being thrown: an operator turning
+        // the service back on is asking for the pre-STR-185 behavior, which
+        // every agent already gives, so refusing that would strand a VM in the
+        // off state on a fleet mid-upgrade. Switching it off against an agent
+        // that cannot hear the field would instead report a kill switch that
+        // killed nothing.
+        let metadataEnabledChanged: Bool
+        if let requested = updateRequest.metadataEnabled, requested != existingVM.metadataEnabled {
+            if !requested {
+                try await Self.requireMetadataOptOutCapableAgent(existingVM, app: req.application)
+            }
+            existingVM.metadataEnabled = requested
+            metadataEnabledChanged = true
+        } else {
+            metadataEnabledChanged = false
+        }
+
+        // Neither of the two edits above bumps the VM's generation, so neither
+        // rides a mutation's own dispatch — each needs an explicit nudge at
+        // whichever of the three exits below it leaves by. A hostname edit is
+        // realized by a topology authority that may be neither this VM's agent
+        // nor even in its site (STR-39), so it rings the fleet; the kill switch
+        // is enforced entirely on the VM's own host, so it rings that one. The
+        // fleet ring is a superset, which is why this is `else if` rather than
+        // two independent sends.
+        let placedAgentId = existingVM.hypervisorId
+        let nudgeAgents: @Sendable () async -> Void = { [app = req.application] in
+            if hostnameChanged {
+                await app.agentService.syncDesiredStateToFleet()
+            } else if metadataEnabledChanged, let placedAgentId {
+                await app.agentService.syncDesiredState(agentId: placedAgentId)
+            }
+        }
+
         if let description = updateRequest.description {
             existingVM.description = description
         }
@@ -844,7 +893,7 @@ struct VMController: RouteCollection {
         let balloonChanged = newBalloonTarget != existingVM.balloonTarget
         guard newCPU != existingVM.cpu || newMemory != existingVM.memory || balloonChanged else {
             try await existingVM.save(on: req.db)
-            if hostnameChanged { await req.application.agentService.syncDesiredStateToFleet() }
+            await nudgeAgents()
             return try await Self.detailResponse(for: existingVM, on: req)
         }
 
@@ -910,7 +959,7 @@ struct VMController: RouteCollection {
                 existingVM.bumpGeneration()
                 try await existingVM.save(on: db)
             }
-            if hostnameChanged { await req.application.agentService.syncDesiredStateToFleet() }
+            await nudgeAgents()
             return try await Self.detailResponse(for: existingVM, on: req)
         }
 
@@ -981,8 +1030,12 @@ struct VMController: RouteCollection {
             existingVM.bumpGeneration()
         }
         // The resize's own dispatch reaches this VM's agent and its site
-        // controller; a hostname edge riding along needs the wider ring.
-        if hostnameChanged { await req.application.agentService.syncDesiredStateToFleet() }
+        // controller — which already covers a kill-switch edge riding along,
+        // since the sync it triggers is the whole desired entry. A hostname
+        // edge needs the wider ring, and that is what this call is for; the
+        // redundant placement ring in the other branch is harmless (identical
+        // syncs diff to nothing on the agent) and keeps one exit rule.
+        await nudgeAgents()
         return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
     }
 
@@ -1375,5 +1428,39 @@ struct VMController: RouteCollection {
                     "Agent '\(agentId)' cannot realize this request (capability '\(capability)' not "
                     + "advertised); upgrade the agent, or place the VM on a host with a backend that can.")
         }
+    }
+
+    /// Refuse to switch the metadata service off for a VM whose agent would not
+    /// honour it (STR-185).
+    ///
+    /// The refusal exists because the alternative is the worst outcome a
+    /// security control has: `VM.metadataEnabled` reads `false`, the UI shows
+    /// the switch thrown, and a pre-v39 agent goes on serving the guest its
+    /// instance identity — which is precisely the thing an operator threw the
+    /// switch to stop an SSRF reaching. A 409 naming the upgrade is the honest
+    /// answer.
+    ///
+    /// **An unplaced VM passes.** Unlike `requireEdgeNonceCapableAgent`, whose
+    /// verbs need a host to act on, this is a stored intent that placement
+    /// enforces later: `VMPlacementRequirements.requiresMetadataOptOut` keeps a
+    /// switched-off VM off a pre-v39 agent in the first place, so a VM with no
+    /// agent yet is not a VM whose switch cannot be honoured — it is one whose
+    /// host has not been chosen, and this constrains that choice.
+    ///
+    /// An agent the service has never heard of is treated the same way, and for
+    /// the same reason: `getAgentInfo` returning nil is an unknown version, not
+    /// a known-old one, and the placement constraint reads the row rather than
+    /// the in-memory registry.
+    static func requireMetadataOptOutCapableAgent(_ vm: VM, app: Application) async throws {
+        guard let agentId = vm.hypervisorId,
+            let agent = await app.agentService.getAgentInfo(agentId)
+        else { return }
+        guard !WireProtocol.supportsMetadataOptOut(agent.wireProtocolVersion ?? 0) else { return }
+        throw Abort(
+            .conflict,
+            reason:
+                "Agent '\(agentId)' is too old to switch the metadata service off for one VM (wire protocol "
+                + "v\(WireProtocol.metadataOptOutMinimumVersion) required), and would keep serving this guest "
+                + "its metadata. Upgrade the agent, or turn 'metadataEnabled' off on the whole network.")
     }
 }

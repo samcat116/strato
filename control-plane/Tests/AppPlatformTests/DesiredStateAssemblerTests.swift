@@ -274,6 +274,40 @@ final class DesiredStateAssemblerTests {
         }
     }
 
+    @Test("The per-instance kill switch rides the document it governs")
+    func metadataCarriesTheKillSwitch() async throws {
+        try await withAssemblerApp { app, _, project in
+            let agentId = try await self.registerAgent(app: app, named: "switch-agent")
+
+            let served = try await self.placeVM(
+                app: app, project: project, named: "served-vm", onAgent: agentId)
+            let hardened = try await self.placeVM(
+                app: app, project: project, named: "hardened-vm", onAgent: agentId)
+            hardened.metadataEnabled = false
+            try await hardened.save(on: app.db)
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+
+            // Sent as the column's literal value both ways rather than omitted
+            // when on, so the agent never has to distinguish "left on" from
+            // "this control plane has no opinion" for a VM it is being told
+            // about right now.
+            let servedMetadata = try #require(sync.vms.first { $0.vmId == served.id }?.metadata)
+            #expect(servedMetadata.serviceEnabled == true)
+            #expect(servedMetadata.isServiceEnabled)
+
+            let hardenedMetadata = try #require(sync.vms.first { $0.vmId == hardened.id }?.metadata)
+            #expect(hardenedMetadata.serviceEnabled == false)
+            #expect(!hardenedMetadata.isServiceEnabled)
+            // The rest of the document still travels: the switch is enforced by
+            // the listener refusing the caller, not by withholding the payload,
+            // because withholding it would take the VM's addresses out of the
+            // listener's caller index — see `MetadataCallerIndex`.
+            #expect(hardenedMetadata.instanceId == hardened.id)
+            #expect(hardenedMetadata.projectId == project.id)
+        }
+    }
+
     @Test("Metadata is omitted entirely for pre-v26 agents")
     func metadataOmittedForOldAgents() async throws {
         try await withAssemblerApp { app, _, project in

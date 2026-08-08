@@ -144,6 +144,12 @@ struct VMNetworkConfig: Sendable {
     /// planes without security groups, and sandbox NICs) — the port joins no
     /// groups at all.
     let securityGroupIds: [UUID]?
+    /// Whether this NIC's workload has its per-instance metadata switch off
+    /// (STR-185), which adds the metadata deny group to the set the port joins
+    /// at creation — for `securityGroupIds`' reason, so a fresh VM is never
+    /// briefly able to reach an endpoint its operator switched off. Only
+    /// consulted for a managed NIC; an unmanaged one joins no groups at all.
+    let metadataDenied: Bool
     /// MTU to apply to every host-side device this NIC creates, so the host path
     /// and the guest are told the same number. Nil leaves the kernel default.
     /// (Before issue STR-100 this stopped at `ResolvedNetworkAttachment` and only
@@ -166,7 +172,8 @@ struct VMNetworkConfig: Sendable {
         networkName: String, networkId: UUID, macAddress: String? = nil, ipAddress: String? = nil,
         subnet: String? = nil, gateway: String? = nil, ip6Address: String? = nil, prefixLength6: Int? = nil,
         gateway6: String? = nil, subnet6: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
-        domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil, mtu: Int? = nil,
+        domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil,
+        metadataDenied: Bool = false, mtu: Int? = nil,
         metadataEnabled: Bool = false,
         resolverAddresses: [String] = []
     ) {
@@ -185,6 +192,7 @@ struct VMNetworkConfig: Sendable {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.securityGroupIds = securityGroupIds
+        self.metadataDenied = metadataDenied
         self.mtu = mtu
         self.metadataEnabled = metadataEnabled
         self.resolverAddresses = resolverAddresses

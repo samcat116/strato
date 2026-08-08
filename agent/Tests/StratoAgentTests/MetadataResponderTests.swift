@@ -21,7 +21,8 @@ struct MetadataResponderTests {
         network: UUID,
         mac: String = "52:54:00:00:00:01",
         ipv4: String? = nil,
-        ipv6: String? = nil
+        ipv6: String? = nil,
+        serviceEnabled: Bool? = nil
     ) -> InstanceMetadata {
         InstanceMetadata(
             instanceId: vmId,
@@ -32,7 +33,8 @@ struct MetadataResponderTests {
                     deviceName: "net0", macAddress: mac, networkId: network, networkName: "tenant",
                     ipAddress: ipv4, prefixLength: ipv4 == nil ? nil : 24,
                     ipv6Address: ipv6, ipv6PrefixLength: ipv6 == nil ? nil : 64)
-            ])
+            ],
+            serviceEnabled: serviceEnabled)
     }
 
     private static func responder(
@@ -262,6 +264,107 @@ struct MetadataResponderTests {
         // 404 at identification — the address no longer names an instance this
         // host serves, which is what stops a released VM's metadata reaching
         // whoever next holds its address.
+        #expect(response.status == 404)
+    }
+
+    // MARK: - The per-instance kill switch (STR-185)
+
+    @Test("A switched-off instance cannot even mint a token")
+    func killSwitchRefusesTheHandshake() async {
+        let responder = Self.responder(instances: [
+            Self.instance(UUID(), network: Self.networkA, ipv4: "10.0.0.5", serviceEnabled: false)
+        ])
+        let response = await Self.mint(responder, from: "10.0.0.5")
+        // Refused before the handshake, so a guest cannot make this process
+        // hold a session it could never spend.
+        #expect(response.status == 404)
+    }
+
+    @Test("A switched-off instance is refused with the same answer an unknown address gets")
+    func killSwitchIsIndistinguishableFromUnknown() async {
+        let off = Self.responder(instances: [
+            Self.instance(UUID(), network: Self.networkA, ipv4: "10.0.0.5", serviceEnabled: false)
+        ])
+        let unknown = Self.responder(instances: [
+            Self.instance(UUID(), network: Self.networkA, ipv4: "10.0.0.6")
+        ])
+        let refused = await off.respond(
+            to: Self.request("GET", "/latest/meta-data/instance-id", from: "10.0.0.5"), at: .now)
+        let missing = await unknown.respond(
+            to: Self.request("GET", "/latest/meta-data/instance-id", from: "10.0.0.5"), at: .now)
+        // Byte for byte: a guest must not be able to learn that it was singled
+        // out, only that nothing answers.
+        #expect(refused.status == missing.status)
+        #expect(refused.body == missing.body)
+    }
+
+    @Test("An absent serviceEnabled serves, so a control plane that predates the switch opts nobody out")
+    func absentSwitchServes() async {
+        let vmId = UUID()
+        let responder = Self.responder(instances: [
+            Self.instance(vmId, network: Self.networkA, ipv4: "10.0.0.5", serviceEnabled: nil)
+        ])
+        let now = ContinuousClock.now
+        let token = await Self.mint(responder, from: "10.0.0.5", at: now).body
+        let response = await responder.respond(
+            to: Self.request(
+                "GET", "/latest/meta-data/instance-id", from: "10.0.0.5", (MetadataHeaderName.token, token)),
+            at: now)
+        #expect(response.status == 200)
+        #expect(response.body == vmId.uuidString)
+    }
+
+    @Test("Throwing the switch retires the session the guest already holds")
+    func killSwitchRevokesLiveSessions() async {
+        let vmId = UUID()
+        let responder = Self.responder(instances: [
+            Self.instance(vmId, network: Self.networkA, ipv4: "10.0.0.5")
+        ])
+        let now = ContinuousClock.now
+        let token = await Self.mint(responder, from: "10.0.0.5", at: now).body
+
+        // An operator throws the switch; the next sync carries the same
+        // document with `serviceEnabled: false`.
+        await responder.update(
+            MetadataSnapshot(
+                networkId: Self.networkA, origin: .live,
+                instances: [
+                    Self.instance(vmId, network: Self.networkA, ipv4: "10.0.0.5", serviceEnabled: false)
+                ]))
+
+        let response = await responder.respond(
+            to: Self.request(
+                "GET", "/latest/meta-data/instance-id", from: "10.0.0.5", (MetadataHeaderName.token, token)),
+            at: now)
+        #expect(response.status == 404)
+
+        // …and turning it back on does not resurrect the old token: the switch
+        // retired it, so the guest has to mint again.
+        await responder.update(
+            MetadataSnapshot(
+                networkId: Self.networkA, origin: .live,
+                instances: [Self.instance(vmId, network: Self.networkA, ipv4: "10.0.0.5")]))
+        let afterRestore = await responder.respond(
+            to: Self.request(
+                "GET", "/latest/meta-data/instance-id", from: "10.0.0.5", (MetadataHeaderName.token, token)),
+            at: now)
+        #expect(afterRestore.status == 401)
+    }
+
+    @Test("A switched-off instance still shadows a colliding address rather than yielding it")
+    func killSwitchKeepsTheCollisionDetectable() async {
+        // The reason the switch is a refusal rather than an omission: were the
+        // switched-off instance dropped from the servable set, `10.0.0.5` would
+        // resolve cleanly to its neighbour, and the hardened workload could read
+        // that neighbour's identity from the address they share.
+        let neighbour = UUID()
+        let responder = Self.responder(instances: [
+            Self.instance(
+                UUID(), network: Self.networkA, mac: "52:54:00:00:00:0a", ipv4: "10.0.0.5",
+                serviceEnabled: false),
+            Self.instance(neighbour, network: Self.networkA, mac: "52:54:00:00:00:0b", ipv4: "10.0.0.5"),
+        ])
+        let response = await Self.mint(responder, from: "10.0.0.5")
         #expect(response.status == 404)
     }
 

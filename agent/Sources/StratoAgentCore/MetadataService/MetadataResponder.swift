@@ -48,11 +48,17 @@ public actor MetadataResponder {
     /// here rather than left to expire: an address outlives the VM it was
     /// allocated to, so a token minted by a deleted instance must not stay valid
     /// for whoever inherits its address.
+    ///
+    /// An instance whose kill switch has just been thrown counts as no longer
+    /// servable, so throwing it *revokes* the session rather than only refusing
+    /// the next request with it. Step 4 of `respond(to:at:)` would catch that
+    /// request anyway; retiring the token means the guest cannot be holding one
+    /// at the moment an operator decides it should not.
     public func update(_ snapshot: MetadataSnapshot) async {
         self.snapshot = snapshot
         self.index = MetadataCallerIndex(networkId: snapshot.networkId, instances: snapshot.instances)
         self.byVM = Dictionary(snapshot.instances.map { ($0.instanceId, $0) }, uniquingKeysWith: { first, _ in first })
-        await tokens.retain(servable: Set(byVM.keys))
+        await tokens.retain(servable: Set(byVM.filter { $0.value.isServiceEnabled }.keys))
     }
 
     public func currentOrigin() -> MetadataSnapshotOrigin { snapshot.origin }
@@ -111,7 +117,35 @@ public actor MetadataResponder {
             return .rejected(404, "not found")
         }
 
-        // 4. The session handshake.
+        // 4. The per-instance kill switch (STR-185). After identification —
+        //    there is no way to know whose switch to read before the caller has
+        //    a name — and deliberately *before* the handshake, so a switched-off
+        //    instance cannot even mint a token: a session it could never spend
+        //    is state a guest can make this process hold by asking.
+        //
+        //    The instance stays in `index` rather than being dropped from the
+        //    servable set, which is the whole reason this check exists as its
+        //    own step. Omitting it upstream would have been simpler and is
+        //    wrong: its addresses would leave the index, so a collision with a
+        //    live instance would stop resolving `.ambiguous` and start
+        //    resolving to the *other* VM — handing its identity to the very
+        //    workload someone hardened. Refusing a caller we can name costs one
+        //    branch and keeps the collision detectable.
+        if let metadata = byVM[vmId], !metadata.isServiceEnabled {
+            logger.debug(
+                "Refusing metadata: the service is switched off for this instance",
+                metadata: [
+                    "networkId": .string(snapshot.networkId.uuidString),
+                    "vmId": .string(vmId.uuidString),
+                ])
+            // Again `.unknown`'s answer. A guest learning that the service is
+            // *deliberately* off for it learns which of its neighbours are
+            // worth attacking instead, and it has nothing to do with the
+            // information either way.
+            return .rejected(404, "not found")
+        }
+
+        // 5. The session handshake.
         switch route {
         case .mintToken(let ttlSeconds):
             let token = await tokens.mint(for: vmId, ttlSeconds: ttlSeconds, at: now)
@@ -141,7 +175,7 @@ public actor MetadataResponder {
             return .rejected(400, "bad request")
         }
 
-        // 5. The document itself, now that the caller is known and authenticated.
+        // 6. The document itself, now that the caller is known and authenticated.
         guard case .document(let path) = route else { return .rejected(404, "not found") }
         guard let metadata = byVM[vmId], let body = MetadataDocument.render(path, for: metadata) else {
             // A key that exists in the tree but not for this instance — a

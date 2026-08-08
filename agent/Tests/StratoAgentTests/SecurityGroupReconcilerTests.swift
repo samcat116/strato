@@ -154,7 +154,7 @@ struct SecurityGroupReconcilerTests {
         let group = DesiredSecurityGroup(
             id: groupId, generation: 1, rules: [rule(log: true, id: groupId)])
         let (plans, _) = SecurityGroupReconciler.plan(securityGroups: [group])
-        let acl = plans[1].acls[0]
+        let acl = plans[2].acls[0]
         #expect(acl.log)
         #expect(acl.severity == "info")
         #expect(acl.name == "sgr_aaaaaaaabbbbccccddddeeeeffff0001")
@@ -282,8 +282,8 @@ struct SecurityGroupReconcilerTests {
         // test would keep passing while no longer testing its own premise —
         // that the group is restrictive *and* real.
         #expect(unexpressed.isEmpty)
-        #expect(plans[1].acls.count == 1)
-        #expect(plans[1].acls[0].direction == "to-lport")
+        #expect(plans[2].acls.count == 1)
+        #expect(plans[2].acls[0].direction == "to-lport")
         #expect(plans[0].name == OVNNaming.dropPortGroupName)
         for metadata in SecurityGroupACLBuilder.metadataEgressACLs() {
             #expect(plans[0].acls.contains(metadata))
@@ -291,6 +291,124 @@ struct SecurityGroupReconcilerTests {
 
         let membership = DesiredPortMembership(portName: "lsp-vm", securityGroupIds: [groupId])
         #expect(membership.desiredGroups?.contains(OVNNaming.dropPortGroupName) == true)
+    }
+
+    // MARK: - The per-instance kill switch (STR-185)
+
+    @Test("The kill switch drops the whole metadata address, one ACL per family")
+    func metadataDenyShape() {
+        let pgDeny = OVNNaming.metadataDenyPortGroupName
+        let acls = SecurityGroupACLBuilder.metadataDenyACLs()
+
+        #expect(acls.count == 2)
+        // No `tcp.dst == 80` clause, unlike the allow: the allow is narrowed
+        // because a wider allow only widens what a guest may probe, and the
+        // deny wants exactly the opposite — a switched-off guest should not be
+        // able to ping the address either.
+        #expect(
+            acls.map(\.match) == [
+                "inport == @\(pgDeny) && ip4 && ip4.dst == 169.254.169.254",
+                "inport == @\(pgDeny) && ip6 && ip6.dst == fd00:ec2::254",
+            ])
+        // `drop`, not `reject`: a blackhole is what a disabled endpoint looks
+        // like, and an RST would tell a probe something is deliberately here.
+        #expect(acls.allSatisfy { $0.action == "drop" })
+        // Egress only — nothing returns from a connection never established.
+        #expect(acls.allSatisfy { $0.direction == "from-lport" })
+        #expect(acls.allSatisfy { $0.externalIDs["strato-managed"] == "true" })
+    }
+
+    @Test("The kill switch outranks the carve-out it cancels, and nothing a tenant writes")
+    func metadataDenyOutranksTheAllow() {
+        // Strictly above, not equal: two ACLs matching at the same priority
+        // resolve arbitrarily in OVN, so an equal deny would silence IMDS only
+        // most of the time.
+        #expect(SecurityGroupACLBuilder.metadataDenyPriority > SecurityGroupACLBuilder.metadataAllowPriority)
+        #expect(SecurityGroupACLBuilder.metadataAllowPriority > SecurityGroupACLBuilder.allowPriority)
+    }
+
+    @Test("The kill switch's deny never lands on the drop group every port belongs to")
+    func metadataDenyIsNotOnTheDropGroup() {
+        // The whole point of a second group: `dropGroupACLs` reaches every
+        // managed port in the site, so a deny there would switch metadata off
+        // fleet-wide.
+        let drop = SecurityGroupACLBuilder.dropGroupACLs()
+        for deny in SecurityGroupACLBuilder.metadataDenyACLs() {
+            #expect(!drop.contains(deny))
+        }
+        #expect(drop.allSatisfy { !$0.match.contains(OVNNaming.metadataDenyPortGroupName) })
+    }
+
+    @Test("The deny group is planned unconditionally, so no port ever waits for it")
+    func metadataDenyGroupIsAlwaysPlanned() {
+        // Even with no security groups and nobody switched off: a conditional
+        // group would be created and reaped as the last switched-off VM came
+        // and went, and the first port to need it would wait a sync.
+        let (plans, _) = SecurityGroupReconciler.plan(securityGroups: [])
+        let deny = plans.first { $0.name == OVNNaming.metadataDenyPortGroupName }
+        #expect(deny?.acls == SecurityGroupACLBuilder.metadataDenyACLs())
+        #expect(deny?.generation == SecurityGroupACLBuilder.metadataDenyGroupRevision)
+    }
+
+    @Test("A switched-off port joins the deny group; an unmanaged one still joins nothing")
+    func metadataDeniedMembership() {
+        let denied = DesiredPortMembership(
+            portName: "vm-X", securityGroupIds: [groupId], metadataDenied: true)
+        #expect(
+            denied.desiredGroups == [pg, OVNNaming.dropPortGroupName, OVNNaming.metadataDenyPortGroupName])
+
+        let served = DesiredPortMembership(portName: "vm-X", securityGroupIds: [groupId])
+        #expect(served.desiredGroups == [pg, OVNNaming.dropPortGroupName])
+
+        // Unmanaged stays "no opinion" even under the switch: converging a port
+        // this pass is meant to leave alone would strip it out of whatever an
+        // operator put it in, and the listener refuses the caller regardless.
+        let unmanaged = DesiredPortMembership(
+            portName: "vm-Y", securityGroupIds: nil, metadataDenied: true)
+        #expect(unmanaged.desiredGroups == nil)
+    }
+
+    @Test("Both deny groups are joined before any allow group")
+    func denyGroupsJoinFirst() {
+        #expect(SecurityGroupReconciler.additionRank(of: OVNNaming.dropPortGroupName) == 0)
+        #expect(SecurityGroupReconciler.additionRank(of: OVNNaming.metadataDenyPortGroupName) == 0)
+        #expect(SecurityGroupReconciler.additionRank(of: pg) == 1)
+    }
+
+    @Test("A switched-off port is denied metadata even inside an allow-all-egress group")
+    func killSwitchBeatsAPermissiveGroup() async {
+        // The end-to-end shape of "non-overridable": the tenant's own group
+        // permits everything outbound, the site carve-out permits IMDS
+        // specifically, and the deny still wins because nothing either of them
+        // can write reaches 1004.
+        let permissive = DesiredSecurityGroup(
+            id: groupId, generation: 1, rules: [rule(direction: "egress")])
+        let (plans, unexpressed) = SecurityGroupReconciler.plan(securityGroups: [permissive])
+        #expect(unexpressed.isEmpty)
+        let groupPlan = plans.first { $0.name == pg }
+        #expect(groupPlan?.acls.count == 1)
+        let denyPlan = plans.first { $0.name == OVNNaming.metadataDenyPortGroupName }
+        for acl in denyPlan?.acls ?? [] {
+            #expect(acl.priority > (groupPlan?.acls.first?.priority ?? 0))
+            #expect(acl.priority > SecurityGroupACLBuilder.metadataAllowPriority)
+        }
+
+        let actuator = RecordingSecurityGroupActuator(membership: ["vm-A": []])
+        await SecurityGroupReconciler.reconcileMembership(
+            memberships: [
+                DesiredPortMembership(portName: "vm-A", securityGroupIds: [groupId], metadataDenied: true)
+            ],
+            actuator: actuator, logger: Logger(label: "test"))
+        // Asserted as the exact order, not just membership: what makes the deny
+        // safe to add at all is that it lands before the group that would
+        // otherwise let this port out.
+        let added = await actuator.added
+        #expect(
+            added == [
+                Membership(port: "vm-A", group: OVNNaming.dropPortGroupName),
+                Membership(port: "vm-A", group: OVNNaming.metadataDenyPortGroupName),
+                Membership(port: "vm-A", group: pg),
+            ])
     }
 
     // MARK: - Plan and teardown
@@ -303,13 +421,18 @@ struct SecurityGroupReconcilerTests {
         let (plans, unexpressed) = SecurityGroupReconciler.plan(securityGroups: [group])
 
         #expect(unexpressed.isEmpty)
-        #expect(plans.count == 2)
+        // Two site-singleton groups then one per security group (STR-185 added
+        // the second): the drop group carrying default-deny, and the metadata
+        // deny group carrying the kill switch.
+        #expect(plans.count == 3)
         #expect(plans[0].name == OVNNaming.dropPortGroupName)
         #expect(plans[0].generation == SecurityGroupACLBuilder.dropGroupRevision)
-        #expect(plans[1].name == pg)
-        #expect(plans[1].generation == 4)
-        #expect(plans[1].acls.count == 1)
-        #expect(plans[1].acls[0].externalIDs["strato-sg-id"] == groupId.uuidString.lowercased())
+        #expect(plans[1].name == OVNNaming.metadataDenyPortGroupName)
+        #expect(plans[1].generation == SecurityGroupACLBuilder.metadataDenyGroupRevision)
+        #expect(plans[2].name == pg)
+        #expect(plans[2].generation == 4)
+        #expect(plans[2].acls.count == 1)
+        #expect(plans[2].acls[0].externalIDs["strato-sg-id"] == groupId.uuidString.lowercased())
     }
 
     @Test("Inexpressible rules are reported, the rest of the group still plans")
@@ -319,7 +442,7 @@ struct SecurityGroupReconcilerTests {
         let group = DesiredSecurityGroup(id: groupId, generation: 1, rules: [bad, good])
         let (plans, unexpressed) = SecurityGroupReconciler.plan(securityGroups: [group])
         #expect(unexpressed == [bad.id])
-        #expect(plans[1].acls.count == 1)
+        #expect(plans[2].acls.count == 1)
     }
 
     @Test("Teardown removes managed groups the plan no longer wants, never the drop group")
@@ -327,6 +450,10 @@ struct SecurityGroupReconcilerTests {
         let (plans, _) = SecurityGroupReconciler.plan(securityGroups: [])
         let observed = [
             ObservedPortGroup(name: OVNNaming.dropPortGroupName, generation: 1),
+            // Present with no members, which is the ordinary state of a site
+            // where nobody has thrown the switch — and it must survive the reap
+            // anyway, or a port would have to wait a sync for it to come back.
+            ObservedPortGroup(name: OVNNaming.metadataDenyPortGroupName, generation: 1),
             ObservedPortGroup(name: pg, generation: 3),
             ObservedPortGroup(name: peerPG, generation: nil),
         ]
@@ -476,7 +603,13 @@ struct SecurityGroupReconcilerTests {
 
         let ensured = await actuator.ensured
         let removedGroups = await actuator.removedGroups
-        #expect(ensured.map(\.name) == [OVNNaming.dropPortGroupName, pg])
+        #expect(
+            ensured.map(\.name) == [
+                OVNNaming.dropPortGroupName, OVNNaming.metadataDenyPortGroupName, pg,
+            ])
+        // The metadata deny group is absent from `observed` here, which is the
+        // pre-STR-185 site: it is created by this pass rather than reaped, and
+        // the group the authority no longer wants still goes.
         #expect(removedGroups == [peerPG])
     }
 }

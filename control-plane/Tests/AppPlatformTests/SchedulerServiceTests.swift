@@ -45,7 +45,8 @@ struct SchedulerServiceTests {
         supportsSandboxNetworking: Bool = false,
         supportsVTPM: Bool = false,
         supportsMachineProfile: Bool = false,
-        supportsGraphicsConsole: Bool = false
+        supportsGraphicsConsole: Bool = false,
+        wireProtocolVersion: Int? = nil
     ) -> SchedulableAgent {
         return SchedulableAgent(
             id: id,
@@ -61,6 +62,7 @@ struct SchedulerServiceTests {
             supportedHypervisors: supportedHypervisors,
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
+            wireProtocolVersion: wireProtocolVersion,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
             supportsVTPM: supportsVTPM,
@@ -954,5 +956,79 @@ struct SchedulerServiceTests {
         let graphical = createTestVM(cpu: 2)
         graphical.graphicsConsole = true
         #expect(SchedulerService.placementRequirements(for: graphical).requiresGraphicsConsole)
+    }
+
+    // MARK: - The per-instance metadata kill switch (STR-185)
+
+    /// Requirements for a VM whose metadata service has been switched off.
+    private func metadataOptOutRequirements() -> VMPlacementRequirements {
+        VMPlacementRequirements(
+            cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu, requiresMetadataOptOut: true)
+    }
+
+    /// A pre-v39 agent decodes the sync fine and ignores
+    /// `InstanceMetadata.serviceEnabled`, so it keeps serving the guest its
+    /// identity while the API reports the switch as thrown. That is worse than
+    /// a degraded feature — it is a security control reported as applied — so
+    /// placement is refused.
+    @Test("An agent too old to honour the metadata kill switch is not eligible")
+    func testMetadataOptOutRequiresNewEnoughAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+        let agents = [
+            createTestAgent(
+                id: "old", name: "old",
+                wireProtocolVersion: WireProtocol.metadataOptOutMinimumVersion - 1)
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: metadataOptOutRequirements(), from: agents)
+            Issue.record("Expected metadataOptOutUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .metadataOptOutUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected metadataOptOutUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 1)
+        }
+    }
+
+    @Test("A switched-off VM places on the one agent new enough to honour it")
+    func testMetadataOptOutPlacesOnCapableAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+        let agents = [
+            createTestAgent(
+                id: "old", name: "old", availableCPU: 8,
+                wireProtocolVersion: WireProtocol.metadataOptOutMinimumVersion - 1),
+            createTestAgent(
+                id: "new", name: "new", availableCPU: 2,
+                wireProtocolVersion: WireProtocol.metadataOptOutMinimumVersion),
+        ]
+
+        // "old" has more free CPU, so a strategy-only choice would pick it.
+        #expect(try scheduler.selectAgent(requirements: metadataOptOutRequirements(), from: agents) == "new")
+    }
+
+    /// The default must not narrow placement. This is the load-bearing half of
+    /// "absence means enabled": every VM in an existing fleet leaves the switch
+    /// on, so a gate that engaged by default would make the whole fleet
+    /// unplaceable the moment this shipped.
+    @Test("A VM with metadata left on places on an agent that predates the switch")
+    func testMetadataServedVMIgnoresTheGate() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+        let agents = [
+            createTestAgent(id: "old", name: "old", wireProtocolVersion: nil)
+        ]
+
+        #expect(try scheduler.selectAgent(for: createTestVM(cpu: 2), from: agents) == "old")
+    }
+
+    @Test("Placement requirements carry the VM's metadata kill switch")
+    func testPlacementRequirementsCarryMetadataOptOut() throws {
+        let served = createTestVM(cpu: 2)
+        #expect(!SchedulerService.placementRequirements(for: served).requiresMetadataOptOut)
+
+        let hardened = createTestVM(cpu: 2)
+        hardened.metadataEnabled = false
+        #expect(SchedulerService.placementRequirements(for: hardened).requiresMetadataOptOut)
     }
 }

@@ -796,7 +796,39 @@ public enum WireProtocol {
     /// leaves `observed_size_bytes` exactly as the last report that spoke left
     /// it rather than clearing it. Skew the other way is inert — a pre-v38
     /// control plane's decoder drops the unknown key.
-    public static let currentVersion = 38
+    ///
+    /// Version 39: a per-instance metadata kill switch (STR-185).
+    /// `InstanceMetadata` gains `serviceEnabled`, EC2's
+    /// `MetadataOptions.HttpEndpoint` — the per-*workload* lever STR-54's
+    /// non-overridable IMDS allow deliberately shipped without, and the one an
+    /// operator hardening a single VM against SSRF needs now that STR-56 has a
+    /// listener answering.
+    ///
+    /// A v39 agent enforces it twice, and the two cover different failures. The
+    /// **listener** refuses the caller after identifying it, which is what makes
+    /// the switch unconditional: it needs no port group, so it holds for a NIC
+    /// whose `securityGroupIds` is nil (unmanaged, and therefore in no ACL's
+    /// reach) and it holds while the site's topology authority is still on an
+    /// older build. The **ACL** — a drop on the new `pg_strato_no_metadata`
+    /// group at priority 1004, one step above `metadataAllowPriority`, exactly
+    /// the reserved space v34's carve-out set aside — is what makes it a kill
+    /// switch rather than a refusal: the packet never reaches the chassis, so
+    /// the guest cannot probe the endpoint at all, and it is as non-overridable
+    /// as the allow it cancels.
+    ///
+    /// Absence is read as **enabled**, which is the opposite of this protocol's
+    /// usual conservative default and is the only safe reading here: a pre-v39
+    /// control plane has opted nobody out, and taking silence for a denial would
+    /// blackhole IMDS fleet-wide on upgrade. The hazard therefore runs the other
+    /// way — a pre-v39 *agent* decodes the sync, ignores the field, and serves a
+    /// guest its operator switched off while the API reports the switch as
+    /// thrown. That is v20's security-group hazard and v23's graphics-console
+    /// one, and it is gated the same way: `supportsMetadataOptOut` refuses to
+    /// *set* the switch on a VM whose placed agent is too old, and placement
+    /// refuses to put a switched-off VM on one in the first place. Unlike v20,
+    /// create is gated too — a VM can be created without the switch, so gating
+    /// it strands nobody.
+    public static let currentVersion = 39
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -1207,6 +1239,33 @@ public enum WireProtocol {
     /// site-wide before the field is sent — see the version 37 notes.
     public static func supportsNetworkResolver(_ version: Int) -> Bool {
         version >= networkResolverMinimumVersion
+    }
+
+    /// The lowest protocol version that honours the per-instance metadata kill
+    /// switch (see `currentVersion` version 39 notes).
+    public static let metadataOptOutMinimumVersion = 39
+
+    /// Whether an agent registered with `version` enforces
+    /// `InstanceMetadata.serviceEnabled`.
+    ///
+    /// This one *is* an admission gate, in `supportsEdgeNonces`' sense rather
+    /// than `supportsNetworkResolver`'s, and for a reason neither of those has:
+    /// what a pre-v39 agent silently does with a field it cannot read is keep
+    /// serving instance identity to a workload an operator switched off. There
+    /// is no partial credit and no "it just arrives later" — the API would
+    /// report a kill switch that killed nothing, which is the worst answer a
+    /// security control can give. So the control plane refuses to set it on a VM
+    /// whose placed agent is older, and refuses to place a switched-off VM on
+    /// one.
+    ///
+    /// Note which agent's version is the question: the VM's **own host**, the
+    /// one running the listener that would refuse the caller. The site's
+    /// topology authority authors the deny ACL, and an older authority means the
+    /// carve-out is merely not withdrawn at the network layer — the listener
+    /// still refuses, so the switch holds. That is why the gate is per placement
+    /// rather than site-wide.
+    public static func supportsMetadataOptOut(_ version: Int) -> Bool {
+        version >= metadataOptOutMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

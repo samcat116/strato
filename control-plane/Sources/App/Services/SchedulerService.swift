@@ -226,6 +226,14 @@ struct VMPlacementRequirements: Sendable {
     /// ignores the field, and boots the guest headless while the API reports a
     /// display — the same silent degradation the machine profile is gated on.
     let requiresGraphicsConsole: Bool
+    /// Whether the VM's per-instance metadata switch is off (STR-185). Hard
+    /// constraint on the wire protocol, `requiresGraphicsConsole`'s shape and
+    /// the sharpest instance of its argument: a pre-v39 agent ignores
+    /// `InstanceMetadata.serviceEnabled` and serves the guest its identity
+    /// anyway, so placing a switched-off VM there does not degrade a feature —
+    /// it silently unthrows a kill switch, while the API keeps reporting it
+    /// thrown.
+    let requiresMetadataOptOut: Bool
 
     init(
         cpu: Int,
@@ -239,7 +247,8 @@ struct VMPlacementRequirements: Sendable {
         requiresSandboxNetworking: Bool = false,
         requiresVTPM: Bool = false,
         requiresSecureBoot: Bool = false,
-        requiresGraphicsConsole: Bool = false
+        requiresGraphicsConsole: Bool = false,
+        requiresMetadataOptOut: Bool = false
     ) {
         self.cpu = cpu
         self.memory = memory
@@ -253,6 +262,7 @@ struct VMPlacementRequirements: Sendable {
         self.requiresVTPM = requiresVTPM
         self.requiresSecureBoot = requiresSecureBoot
         self.requiresGraphicsConsole = requiresGraphicsConsole
+        self.requiresMetadataOptOut = requiresMetadataOptOut
     }
 }
 
@@ -268,6 +278,7 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case vtpmUnsatisfied(eligibleAgents: Int)
     case machineProfileUnsatisfied(eligibleAgents: Int)
     case graphicsConsoleUnsatisfied(eligibleAgents: Int)
+    case metadataOptOutUnsatisfied(eligibleAgents: Int)
     case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
@@ -316,6 +327,11 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
             return
                 "No eligible agent is new enough to realize a graphics console (\(eligibleAgents) agent(s) "
                 + "checked) — upgrade the agents on your hypervisor nodes"
+        case .metadataOptOutUnsatisfied(let eligibleAgents):
+            return
+                "No eligible agent is new enough to switch the metadata service off for one VM "
+                + "(\(eligibleAgents) agent(s) checked) — upgrade the agents on your hypervisor nodes, or "
+                + "create the VM with 'metadataEnabled' left on"
         case .siteUnsatisfied(let requiredSiteID):
             return
                 "No online agent belongs to site \(requiredSiteID) required by the VM's network pinning"
@@ -385,7 +401,8 @@ final class SchedulerService: @unchecked Sendable {
             siteID: siteID,
             requiresVTPM: vm.tpmEnabled,
             requiresSecureBoot: vm.secureBoot,
-            requiresGraphicsConsole: vm.graphicsConsole
+            requiresGraphicsConsole: vm.graphicsConsole,
+            requiresMetadataOptOut: !vm.metadataEnabled
         )
     }
 
@@ -648,6 +665,21 @@ final class SchedulerService: @unchecked Sendable {
                 throw SchedulerError.graphicsConsoleUnsatisfied(eligibleAgents: machineCapable.count)
             }
             machineCapable = graphicsCapable
+        }
+
+        // The metadata kill switch rides `InstanceMetadata.serviceEnabled`,
+        // which only a v39+ agent reads. Same categorical, silent-failure shape
+        // as the two above, and the failure is worse than a missing feature:
+        // the guest keeps being served its instance identity while the API says
+        // the switch is thrown (STR-185).
+        if requirements.requiresMetadataOptOut {
+            let optOutCapable = machineCapable.filter {
+                WireProtocol.supportsMetadataOptOut($0.wireProtocolVersion ?? 0)
+            }
+            guard !optOutCapable.isEmpty else {
+                throw SchedulerError.metadataOptOutUnsatisfied(eligibleAgents: machineCapable.count)
+            }
+            machineCapable = optOutCapable
         }
 
         // An agent with unknown architecture cannot prove it satisfies an

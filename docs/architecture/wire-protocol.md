@@ -50,7 +50,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 38), stamped on
+`WireProtocol.swift` holds the protocol version (currently 39), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -85,6 +85,7 @@ ad-hoc checks scattered through the code:
 | `supportsEdgeNonces` | 34 | Reboot and restore as monotonic nonces on the desired entry — and an **admission** gate: with the imperative frames gone, a pre-v34 agent would ignore the field and report the bumped generation as converged, so the API would claim a restart that never happened |
 | `supportsDNSZones` | 36 | `DesiredStateMessage.dnsZones` — the zones an agent realizes, into the OVN `DNS` table (topology authority) and into its networks' resolvers (any agent with a local NIC). A *field* gate only: a pre-v36 agent leaves names unresolved, which is visible and self-healing, so there is nothing to refuse at the API |
 | `supportsNetworkResolver` | 37 | `DesiredNetworkState.resolverEnabled`/`.resolverAddresses`, the same pair on `NetworkSpec`, and `DesiredDNSRecord.ttl` — the per-network link-local resolver. A *field* gate; whether the host can actually serve one is the separate `AgentRegisterMessage.resolverCapable`, folded site-wide before the field is sent |
+| `supportsMetadataOptOut` | 39 | `InstanceMetadata.serviceEnabled` — the per-instance metadata kill switch. An **admission** gate, and a *placement* one: a pre-v39 agent ignores the field and keeps serving a guest whose API record says the switch is thrown, so switching it off on such a VM is refused and a switched-off VM is never placed there. Turning it back on is never refused |
 
 The v9 `supportsSandboxSnapshots` and v22 `supportsVMCheckpoint` gates were
 removed with the last frames they guarded (v33 and v34): every question either
@@ -434,6 +435,36 @@ number and already caches one per volume. Absence is v35's echo shape: nil is
 "this agent said nothing", never zero, so a pre-v38 agent's silence leaves
 `observed_size_bytes` as the last report that spoke left it.
 
+Version 39 adds the per-instance metadata kill switch (STR-185):
+`InstanceMetadata` gains `serviceEnabled`, EC2's
+`MetadataOptions.HttpEndpoint`, and the per-*workload* lever STR-54's
+non-overridable IMDS allow deliberately shipped without. A v39 agent enforces it
+twice — the listener refuses the caller after identifying it, and a drop ACL on
+a new `pg_strato_no_metadata` port group at priority 1004 keeps the packet off
+the chassis — because the two cover different failures: the refusal needs no
+port group, so it holds for an unmanaged NIC and while the site's authority is
+still on an older build, while the ACL is what makes the switch a kill switch
+rather than a 404.
+
+It rides `InstanceMetadata` rather than sitting beside it on `DesiredVMState`,
+which is worth stating because the two look interchangeable. Inside the
+document, the policy cannot drift from the payload it governs and — the reason
+that settles it — it comes back with `MetadataStore`'s durable restore. A policy
+stored anywhere else would be the one thing a fail-static restart did not bring
+back, and an agent that comes up serving a VM its operator switched off is the
+exact failure the field exists to prevent.
+
+**Absence means enabled**, inverting this protocol's usual conservative default,
+because a pre-v39 control plane opted nobody out and reading its silence as a
+denial would blackhole IMDS fleet-wide on upgrade. The hazard therefore runs
+toward the *agent*, and it is v20's and v23's: a pre-v39 agent decodes the sync,
+ignores the field, and serves a guest whose API record says the switch is
+thrown. `supportsMetadataOptOut` refuses to set it on a VM placed on such an
+agent, and placement refuses to put a switched-off VM there — unlike v20, create
+is gated too, since a VM can simply be created with the switch left on. Turning
+the service back *on* is never refused: that is the behavior every agent already
+has.
+
 **A capability is sometimes the whole answer, with no bump at all.** STR-103
 put sandbox NICs on the wire without touching the version, because
 `SandboxSpec.network` has been in the shape since v5 — what was missing was
@@ -777,6 +808,13 @@ The rest of the package is vocabulary used on both sides:
   `instanceId`/`projectId` are required keys: `DesiredVMState` decodes
   synthesized, so a missing required key inside `metadata` throws out of the
   whole `DesiredStateMessage` and stops that agent converging on everything.
+
+  `serviceEnabled` (v39) is the one field here that is *not* published — it is
+  the switch deciding whether any of the rest is. It lives on the document
+  rather than beside it so that policy and payload cannot drift, and so that
+  `MetadataStore`'s durable restore brings both back together after a restart
+  with the control plane unreachable. Nil means enabled, inverting the usual
+  conservative default for the reason the v39 notes give.
 
   `userData`/`vendorData` are carried **inline**, unlike `imageInfo`'s fetched
   paths. That is deliberate — the agent must serve exactly what the last sync

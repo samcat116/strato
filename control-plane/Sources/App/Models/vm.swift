@@ -114,6 +114,30 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "hostname")
     var hostname: String?
 
+    /// Whether the instance metadata service answers this VM (STR-185) —
+    /// Strato's equivalent of EC2's `MetadataOptions.HttpEndpoint`, and the
+    /// per-workload lever `LogicalNetwork.metadataEnabled` is too coarse to be.
+    ///
+    /// An opt-*out*, defaulting true. Off is enforced twice by the VM's agent:
+    /// the listener refuses the caller, and the VM's OVN ports join a deny group
+    /// whose ACL outranks the non-overridable IMDS allow, so the guest cannot
+    /// reach the address at all. The two together are what make it a kill
+    /// switch rather than a preference.
+    ///
+    /// Composes with the network switch as an AND — a VM on a network with
+    /// metadata off has no service either way — and neither is derived from the
+    /// other, so this column reports what an operator asked of *this VM*.
+    ///
+    /// Editing it deliberately does **not** bump `generation`, like the
+    /// network's: nothing about how the VM is realized changes, and both
+    /// enforcement points are level-triggered — the listener re-reads the
+    /// document on every push (`MetadataStore` applies at an equal generation
+    /// for exactly this class of edit) and membership converges on every sync.
+    /// A bump would additionally mean a hardening edit could not be applied to
+    /// a VM whose convergence is already failing.
+    @Field(key: "metadata_enabled")
+    var metadataEnabled: Bool
+
     // Observed guest-agent (qga) state (issue #563). Purely informational and
     // best-effort: nil until the agent's guest-info poll first sees a
     // responsive qga on this VM. `qgaAvailable` records the positive liveness
@@ -301,7 +325,8 @@ final class VM: Model, @unchecked Sendable {
         serialMode: ConsoleMode = .pty,
         secureBoot: Bool = false,
         tpmEnabled: Bool = false,
-        graphicsConsole: Bool = false
+        graphicsConsole: Bool = false,
+        metadataEnabled: Bool = true
     ) {
         self.id = id
         self.name = name
@@ -330,6 +355,7 @@ final class VM: Model, @unchecked Sendable {
         self.secureBoot = secureBoot
         self.tpmEnabled = tpmEnabled
         self.graphicsConsole = graphicsConsole
+        self.metadataEnabled = metadataEnabled
     }
 }
 
@@ -585,6 +611,13 @@ struct VMDetailResponse: Content {
     /// Graphics console (issue #566): whether the guest has a display device
     /// whose framebuffer the web UI can attach to. Fixed at create.
     let graphicsConsole: Bool
+    /// Whether the instance metadata service answers this VM (STR-185).
+    /// Editable, unlike the two above — hardening an existing workload is the
+    /// case it was added for. This is the VM's own switch: a VM on a network
+    /// with `metadataEnabled` off still reports `true` here if nobody asked for
+    /// it to be off, because that is what an operator set and what turning the
+    /// network's switch back on would restore.
+    let metadataEnabled: Bool
     /// Observed guest-agent view (issue #563). `qgaAvailable` is nil until the
     /// agent's slow poll first sees a responsive qga; `observedHostname` is the
     /// guest OS's own hostname when it reported one.
@@ -657,6 +690,7 @@ struct VMDetailResponse: Content {
         self.secureBoot = vm.secureBoot
         self.tpmEnabled = vm.tpmEnabled
         self.graphicsConsole = vm.graphicsConsole
+        self.metadataEnabled = vm.metadataEnabled
         self.qgaAvailable = vm.qgaAvailable
         self.observedHostname = vm.observedHostname
         self.guestMemoryTotalBytes = vm.guestMemoryTotalBytes
