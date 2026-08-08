@@ -137,7 +137,7 @@ instead of assuming qcow2.
 
 `materializeDisk(at:from:format:)` is the single image → disk path, used by:
 
-- `QEMUService` for boot disks (`<vmStoragePath>/<vmId>/disk.qcow2`),
+- `LibvirtService` for boot disks (`<vmStoragePath>/<vmId>/disk.qcow2`),
 - `FirecrackerService` for root drives (`<vmStoragePath>/<vmId>/rootfs.raw`),
 - `createVolumeFromImage` for image-backed volumes.
 

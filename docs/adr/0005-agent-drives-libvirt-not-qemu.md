@@ -108,10 +108,13 @@ for real under `virtqemud`.
 
 There is no binary probe left. libvirtd selects the emulator from its own
 capabilities, so a `qemu_binary_path` would have no consumer and no meaning.
-`HypervisorProbe` reports `.qemu` available on Linux and leaves the verdict to
-the host preflight, whose libvirt checks are gating: an unreachable daemon, or
-one below the version floor, demotes `.qemu` to unavailable so the node stops
-attracting placements it cannot serve.
+`HypervisorProbe.qemuReport` takes the libvirt status instead and reports
+`.qemu` unavailable for a daemon it cannot reach; the **version floor** stays in
+`HostPreflight`, which owns the check and its remediation and demotes the entry
+through `gate`. Splitting it that way keeps one place to get the version
+comparison wrong while making the probe honest to its name: a caller that never
+reaches the gate cannot come away believing a host with no libvirt can run
+VMs.
 
 ### 4. libvirt ≥ 11.5, gating
 
@@ -129,6 +132,13 @@ Whether a node can back a guest vTPM is `virsh domcapabilities` reporting a
 `stat`. On a containerized agent those are different questions — it sees its own
 image, not libvirtd's host — and the libvirt answer is the one that decides
 whether a domain starts.
+
+That costs subprocesses on a path that runs at every registration *and* every
+reconnect, so the shape is deliberate: `virsh version --daemon` answers
+reachability and version in one call, and `virsh domcapabilities` is asked only
+of a daemon that answered it. A healthy host pays two invocations per
+registration; a host with no libvirt pays one, and is spared a second
+misleading message underneath its real failure.
 
 ## Alternatives considered
 

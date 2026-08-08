@@ -168,12 +168,16 @@ linking libvirt's C library. It builds on the pieces that landed ahead of it:
 settings the agent's own-every-path invariant needs.
 
 **libvirt's reachability is what `.qemu` availability means.** There is no
-binary probe left: libvirtd picks the emulator from its own capabilities, so
-`HypervisorProbe` reports `.qemu` available on Linux and leaves the verdict to
-the host preflight, whose libvirt checks are **gating**. An unreachable
-libvirtd, or one below the 11.5 floor, demotes `.qemu` to unavailable so the
-node stops attracting placements it cannot serve. The rationale for driving
-libvirt rather than QEMU — and what it cost — is
+binary probe left — libvirtd picks the emulator from its own capabilities — so
+one `virsh version --daemon` call answers both reachability and version, and its
+result is threaded into `HypervisorProbe.probeAll` rather than looked up twice.
+The split between the two is deliberate: the probe reports *unavailable* for a
+daemon it cannot reach, so a caller that never reaches the gate cannot come away
+believing a host with no libvirt can run VMs, while the **version floor** stays
+in `HostPreflight`, which owns the check and its remediation. The preflight's
+libvirt checks are gating, so a daemon below the 11.5 floor is demoted there.
+Either way the node stops attracting placements it cannot serve. The rationale
+for driving libvirt rather than QEMU — and what it cost — is
 [ADR 0005](../adr/0005-agent-drives-libvirt-not-qemu.md).
 
 It is much smaller than the process driver it replaced, and the reason is that
@@ -198,9 +202,13 @@ libvirtd is a durable store rather than a process the agent has to remember:
   vTPM is possible at all is libvirt's answer to give: the agent reads
   `virsh domcapabilities` for a `<tpm>` `emulator` backend (`DomainCapabilities`)
   rather than looking for an `swtpm` binary it might not even share a filesystem
-  with. libvirtd caches host capabilities, so installing swtpm under a running
-  daemon changes nothing until it restarts — the preflight's remediation says
-  so.
+  with. That second `virsh` call is only made of a daemon that answered the
+  first: on a host whose libvirt is unusable the preflight reports the vTPM
+  answer as *not checked* rather than printing an "install swtpm" remedy
+  underneath the gating "libvirt is not usable" one. libvirtd also caches host
+  capabilities, so installing swtpm under a running daemon changes nothing until
+  it restarts — the preflight's remediation, and the scheduler's placement
+  error, both say so.
 - **Consoles are unchanged.** The domain document binds the serial,
   virtio-console, guest-agent and VNC sockets at the same paths under the VM's
   directory, so `ConsoleSocketManager` and the noVNC relay need no libvirt

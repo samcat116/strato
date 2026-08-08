@@ -1187,8 +1187,15 @@ actor Agent {
         if isSimulationMode {
             hypervisors = simulatedHypervisorSupport()
         } else {
+            // One `virsh` call answers reachability and version together; the
+            // vTPM question is a second one, and it is only worth asking of a
+            // daemon that answered the first. Skipping it on a broken host
+            // saves a subprocess per reconnect and, more importantly, keeps the
+            // preflight from printing an "install swtpm" remedy underneath the
+            // gating "libvirt is not usable" one.
+            let libvirt = await probeLibvirt()
             let preflight = runHostPreflight(
-                libvirt: await probeLibvirt(), tpmSupport: await probeTPMSupport())
+                libvirt: libvirt, tpmSupport: await probeTPMSupport(libvirt: libvirt))
             tpmAvailable = preflight.tpmAvailable
             logHostPreflight(preflight)
             // The domain builder refuses a `<tpm>` element this host cannot
@@ -1198,7 +1205,8 @@ actor Agent {
             // after a restart.
             await libvirtService?.setTPMSupported(tpmAvailable)
             let probed = preflight.gate(
-                HypervisorProbe.probeAll(firecrackerBinaryPath: firecrackerBinaryPath))
+                HypervisorProbe.probeAll(
+                    libvirt: libvirt, firecrackerBinaryPath: firecrackerBinaryPath))
             // Firecracker's binary version rides the registration (issue
             // #428): snapshot mobility keys cross-agent restore placement on
             // version equality, so the control plane needs to know what each
@@ -1663,10 +1671,17 @@ actor Agent {
         #endif
     }
 
-    /// Whether libvirt can back a guest vTPM (issue #565). Off Linux there is
-    /// no daemon to ask and no hypervisor to run the answer on.
-    private func probeTPMSupport() async -> LibvirtProbe.TPMSupport {
+    /// Whether libvirt can back a guest vTPM (issue #565).
+    ///
+    /// Asked only of a daemon that already answered `probeLibvirt()`. Off Linux
+    /// there is no daemon at all, and on a host whose libvirt is missing or
+    /// unreachable the answer is decided by that failure rather than by
+    /// anything a second `virsh` invocation would find.
+    private func probeTPMSupport(libvirt: LibvirtProbe.Status?) async -> LibvirtProbe.TPMSupport {
         #if os(Linux)
+        guard case .reachable = libvirt else {
+            return .unknown(libvirt?.summary ?? "libvirt was not probed")
+        }
         return await LibvirtProbe.probeTPM()
         #else
         return .unknown("libvirt is only supported on Linux")

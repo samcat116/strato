@@ -741,6 +741,11 @@ struct SchedulerServiceTests {
             }
             #expect(eligibleAgents == 2)
             #expect(error.description.contains("swtpm"))
+            // Installing the package is not enough: libvirtd starts and
+            // supervises swtpm and caches host capabilities, so a node that
+            // does not restart it keeps reporting no TPM however many times
+            // its agent re-registers (STR-136).
+            #expect(error.description.contains("restart libvirtd"))
         }
     }
 

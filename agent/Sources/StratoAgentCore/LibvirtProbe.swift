@@ -78,6 +78,18 @@ public enum LibvirtProbe {
         case unrecognizedOutput(String)
         /// Connected; the daemon reports this version.
         case reachable(Version)
+
+        /// A one-line description for a log line or an `unavailabilityReason`.
+        /// Deliberately terse and remediation-free: the remediation belongs to
+        /// `HostPreflight`, which has room for it and knows the severity.
+        public var summary: String {
+            switch self {
+            case .clientMissing: return "libvirt is not installed here (no virsh on PATH)"
+            case .unreachable(let detail): return "cannot connect: \(detail)"
+            case .unrecognizedOutput(let detail): return "connected, but the daemon version was unreadable: \(detail)"
+            case .reachable(let version): return "libvirt \(version)"
+            }
+        }
     }
 
     /// Bounds the probe, which runs on the registration path. Matches

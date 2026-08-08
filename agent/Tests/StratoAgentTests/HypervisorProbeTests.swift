@@ -13,15 +13,16 @@ struct HypervisorProbeTests {
     private let executableBinary = "/bin/ls"
     private let missingBinary = "/nonexistent/path/to/hypervisor"
 
+    private let libvirtOK = LibvirtProbe.Status.reachable(LibvirtProbe.Version(major: 11, minor: 5, patch: 0))
+
     // MARK: - QEMU
 
     /// There is no QEMU binary to look for any more (STR-136): the agent drives
     /// libvirtd, which picks the emulator from its own capabilities. What
-    /// decides availability is whether that daemon is reachable and new enough,
-    /// and `HostPreflight.gate` applies it — see `HostPreflightTests`.
-    @Test("QEMU availability is left to the libvirt gate rather than a binary probe")
+    /// decides availability is that daemon.
+    @Test("QEMU availability is a libvirt fact")
     func qemuAvailabilityIsALibvirtFact() {
-        let report = HypervisorProbe.qemuReport(acceleration: accelerationOn)
+        let report = HypervisorProbe.qemuReport(libvirt: libvirtOK, acceleration: accelerationOn)
 
         #expect(report.type == .qemu)
         #expect(report.capabilities == .qemu)
@@ -38,9 +39,35 @@ struct HypervisorProbeTests {
         #endif
     }
 
+    /// The gate would demote these too, but a caller that never reaches the gate
+    /// must not come away believing a host with no libvirt can run VMs.
+    @Test(
+        "an unusable libvirt is unavailable at the probe, not only at the gate",
+        arguments: [
+            LibvirtProbe.Status.clientMissing, .unreachable("Failed to connect to the hypervisor"),
+            .unrecognizedOutput("Using library: libvirt 12.0.0"),
+        ])
+    func unusableLibvirtIsUnavailable(_ status: LibvirtProbe.Status) {
+        let report = HypervisorProbe.qemuReport(libvirt: status, acceleration: accelerationOn)
+        #expect(!report.available)
+        #expect(!report.accelerated)
+        #expect(report.unavailabilityReason != nil)
+    }
+
+    /// The version floor lives in `HostPreflight`, which owns the remediation;
+    /// duplicating the comparison here would give two places to get it wrong.
+    @Test("the version floor is left to the preflight, not applied twice")
+    func versionFloorIsNotDuplicated() {
+        let tooOld = LibvirtProbe.Status.reachable(LibvirtProbe.Version(major: 10, minor: 0, patch: 0))
+        let report = HypervisorProbe.qemuReport(libvirt: tooOld, acceleration: accelerationOn)
+        #if os(Linux)
+        #expect(report.available)
+        #endif
+    }
+
     @Test("QEMU stays available without acceleration (TCG fallback)")
     func qemuAvailableUnaccelerated() {
-        let report = HypervisorProbe.qemuReport(acceleration: accelerationOff)
+        let report = HypervisorProbe.qemuReport(libvirt: libvirtOK, acceleration: accelerationOff)
 
         #expect(!report.accelerated)
         #if os(Linux)
@@ -82,7 +109,7 @@ struct HypervisorProbeTests {
 
     @Test("probeAll reports both hypervisor types exactly once")
     func probeAllCoversAllTypes() {
-        let reports = HypervisorProbe.probeAll(firecrackerBinaryPath: missingBinary)
+        let reports = HypervisorProbe.probeAll(libvirt: libvirtOK, firecrackerBinaryPath: missingBinary)
 
         #expect(reports.count == HypervisorType.allCases.count)
         for type in HypervisorType.allCases {
@@ -93,7 +120,7 @@ struct HypervisorProbeTests {
     @Test("probeAll marks Firecracker unavailable on non-Linux platforms")
     func probeAllFirecrackerPlatformGate() throws {
         #if os(macOS)
-        let reports = HypervisorProbe.probeAll(firecrackerBinaryPath: executableBinary)
+        let reports = HypervisorProbe.probeAll(libvirt: libvirtOK, firecrackerBinaryPath: executableBinary)
         let firecracker = try #require(reports.first { $0.type == .firecracker })
         #expect(!firecracker.available)
         #expect(firecracker.unavailabilityReason != nil)
@@ -124,7 +151,7 @@ struct HypervisorProbeTests {
 
     @Test("stampingFirecrackerVersion only touches the Firecracker entry")
     func stampingTargetsFirecrackerOnly() throws {
-        let reports = HypervisorProbe.probeAll(firecrackerBinaryPath: executableBinary)
+        let reports = HypervisorProbe.probeAll(libvirt: libvirtOK, firecrackerBinaryPath: executableBinary)
         let stamped = HypervisorProbe.stampingFirecrackerVersion(reports, version: "1.7.0")
         let firecracker = try #require(stamped.first { $0.type == .firecracker })
         let qemu = try #require(stamped.first { $0.type == .qemu })

@@ -287,13 +287,20 @@ public enum HostPreflight {
 
         checks.append(checkQemuImg(inputs.qemuImgPath))
         checks.append(checkFirmware(inputs.firmwarePath))
-        checks.append(checkTPMSupport(inputs.tpmSupport))
+
+        // libvirt before the vTPM check, and not only for reading order: a host
+        // whose daemon is unusable was never asked about a vTPM, and saying so
+        // depends on knowing that the check above already failed. Every
+        // remaining check is independent of both.
+        var libvirtUsable = false
+        if let libvirt = inputs.libvirt {
+            let libvirtChecks = checkLibvirt(libvirt, minimumVersion: inputs.minimumLibvirtVersion)
+            libvirtUsable = libvirtChecks.allSatisfy(\.passed)
+            checks.append(contentsOf: libvirtChecks)
+        }
+        checks.append(checkTPMSupport(inputs.tpmSupport, libvirtUsable: libvirtUsable))
         if let descriptorPath = inputs.qemuFirmwareDescriptorPath {
             checks.append(checkFirmwareDescriptors(descriptorPath))
-        }
-        if let libvirt = inputs.libvirt {
-            checks.append(
-                contentsOf: checkLibvirt(libvirt, minimumVersion: inputs.minimumLibvirtVersion))
         }
 
         if inputs.ovnMode {
@@ -421,7 +428,19 @@ public enum HostPreflight {
     /// libvirt starts and supervises swtpm per domain, so an `swtpm` binary the
     /// agent can see says nothing about whether *libvirtd* can use it — a
     /// containerized agent sees its own image, not the host's.
-    static func checkTPMSupport(_ support: LibvirtProbe.TPMSupport) -> Check {
+    static func checkTPMSupport(_ support: LibvirtProbe.TPMSupport, libvirtUsable: Bool) -> Check {
+        // `libvirtUsable` suppresses the remedy rather than the check. On a host
+        // with no usable libvirt the vTPM answer is unknown *because* of the
+        // gating failure right above it, and telling that operator to install
+        // swtpm would send them after the wrong thing — the second message they
+        // read would contradict the first.
+        guard libvirtUsable else {
+            return .fail(
+                .vtpmSupport, severity: .advisory,
+                "not checked: libvirt is not usable on this host (see the libvirt check), so it could not "
+                    + "be asked whether it can back a guest TPM 2.0. Fix libvirt first; this answers itself.")
+        }
+
         // Shared, because the remedy is the same either way and only the lede
         // differs. The restart matters: libvirtd caches its capabilities, so
         // installing swtpm under a running daemon changes nothing until it is

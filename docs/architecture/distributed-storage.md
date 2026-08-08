@@ -177,8 +177,9 @@ guest ── virtio-blk ── Firecracker ─────┤
 - **QEMU** opens the image natively: `blockdev-add` with `driver=rbd`,
   carrying pool, image, cephx user and auth mode. No local file, no host
   path. This reuses the existing hot-plug path
-  (`QEMUService.attachDisk`/`detachDisk`) — it is a change to *what* is
-  attached, not a new hypervisor driver.
+  (`LibvirtService.attachDisk`/`detachDisk`, which sends libvirt a `<disk
+  type='network'>` fragment) — it is a change to *what* is attached, not a new
+  hypervisor driver.
 - **Firecracker** has no librbd, so the agent maps the image with krbd
   (`rbd map` → `/dev/rbdN`) and hands Firecracker the resulting block
   device. The kernel RBD client lags librbd on features, and a `map` of an

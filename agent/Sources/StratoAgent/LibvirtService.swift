@@ -93,10 +93,13 @@ actor LibvirtService: HypervisorService {
     ///
     /// Set from the registration path, which is where the answer arrives
     /// (`LibvirtProbe.probeTPM` via the host preflight), and re-set on every
-    /// reconnect. Permissive until then: the first registration completes
-    /// before any placement can reach this actor, and if the flag were ever
-    /// stale in the other direction libvirt would refuse the domain itself.
-    private var tpmSupported = true
+    /// reconnect. **Nil until then, and nil is refused** — the ordering that
+    /// makes a placement impossible before the first registration is a temporal
+    /// invariant spanning two files with nothing enforcing it, and the entire
+    /// point of this flag is to be the check that holds when something else
+    /// did not. A permissive default would make it the check that holds only
+    /// when nothing went wrong.
+    private var tpmSupported: Bool?
     /// KVM on Linux, HVF on macOS; when false, domains run under TCG.
     private let hardwareAccelerationEnabled: Bool
 
@@ -182,7 +185,9 @@ actor LibvirtService: HypervisorService {
     /// Records what libvirt said about backing a guest vTPM. Called from the
     /// registration path, which probes the daemon on the same cadence as every
     /// other host capability, so a host that gains swtpm starts accepting vTPM
-    /// VMs on the next reconnect rather than after an agent restart.
+    /// VMs on the next reconnect rather than after an agent restart. Until the
+    /// first call, `createVM` refuses a vTPM spec rather than assuming one way
+    /// or the other.
     func setTPMSupported(_ supported: Bool) {
         tpmSupported = supported
     }
@@ -560,13 +565,23 @@ actor LibvirtService: HypervisorService {
             // The agent never advertises the TPM capability where libvirt
             // reports no emulator backend, so reaching here means the placement
             // gate was bypassed. libvirt would fail the domain start with a
-            // message about the backend; this one names the actual remedy.
-            if machine.tpm && !tpmSupported {
-                throw HypervisorServiceError.invalidConfiguration(
-                    "VM \(vmId) requires a TPM 2.0 but libvirt at \(uri) reports no emulated TPM backend. "
-                        + "libvirt starts and supervises swtpm per domain, so install it (Debian/Ubuntu: "
-                        + "`apt install swtpm swtpm-tools`) and restart libvirtd, which caches its "
-                        + "capabilities.")
+            // message about the backend; these name the actual remedy.
+            if machine.tpm {
+                switch tpmSupported {
+                case true:
+                    break
+                case false:
+                    throw HypervisorServiceError.invalidConfiguration(
+                        "VM \(vmId) requires a TPM 2.0 but libvirt at \(uri) reports no emulated TPM backend. "
+                            + "libvirt starts and supervises swtpm per domain, so install it (Debian/Ubuntu: "
+                            + "`apt install swtpm swtpm-tools`) and restart libvirtd, which caches its "
+                            + "capabilities.")
+                case nil:
+                    throw HypervisorServiceError.invalidConfiguration(
+                        "VM \(vmId) requires a TPM 2.0, but this host has not finished registering and does "
+                            + "not yet know whether libvirt at \(uri) can back one. Retrying is safe: the "
+                            + "answer arrives with the next registration.")
+                }
             }
 
             let vmDirectory = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
