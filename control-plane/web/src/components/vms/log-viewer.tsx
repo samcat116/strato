@@ -49,14 +49,20 @@ const LOG_LEVEL_CONFIG: Record<
     icon: <AlertCircle className="h-4 w-4" />,
     className: "text-red-600",
   },
+  // A line the backend could not classify — possibly an error from a newer
+  // agent — must not masquerade as success; muted, not green.
+  unknown: {
+    icon: <Info className="h-4 w-4" />,
+    className: "text-muted-foreground",
+  },
 };
 
 const EVENT_TYPE_CONFIG: Record<VMEventType, string> = {
   status_change: "bg-purple-500/20 text-purple-700 border-purple-500/30",
   operation: "bg-blue-500/20 text-blue-700 border-blue-500/30",
-  qemu_output: "bg-gray-500/20 text-foreground/80 border-gray-500/30",
   error: "bg-red-500/20 text-red-700 border-red-500/30",
   info: "bg-green-500/20 text-green-700 border-green-500/30",
+  unknown: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
 };
 
 export function LogViewer({ vmId, className }: LogViewerProps) {
@@ -217,12 +223,11 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
                 {logs.map((log, idx) => {
                   const level = getLogLevel(log);
                   const eventType = getEventType(log);
-                  // Labels come from Loki as arbitrary strings; an agent newer
-                  // than this build can emit values outside the unions (the
-                  // backend decodes those tolerantly as `unknown`), so fall
-                  // back rather than crash on an unrecognized level.
-                  const levelConfig = LOG_LEVEL_CONFIG[level] ?? LOG_LEVEL_CONFIG.info;
-                  const eventTypeClass = EVENT_TYPE_CONFIG[eventType] ?? EVENT_TYPE_CONFIG.info;
+                  // Labels come from Loki as arbitrary strings (historical
+                  // rows may carry retired vocabulary), so fall back rather
+                  // than crash on anything outside the unions.
+                  const levelConfig = LOG_LEVEL_CONFIG[level] ?? LOG_LEVEL_CONFIG.unknown;
+                  const eventTypeClass = EVENT_TYPE_CONFIG[eventType] ?? EVENT_TYPE_CONFIG.unknown;
 
                   return (
                     <tr

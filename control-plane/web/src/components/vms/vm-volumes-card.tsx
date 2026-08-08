@@ -25,12 +25,9 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { VolumeStatusBadge } from "@/components/volumes";
 import { volumesApi } from "@/lib/api/volumes";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useVolumes, useInvalidateVolumes } from "@/lib/hooks/use-volumes";
 import { toast } from "sonner";
-import {
-  acceptedMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
 import type { VM } from "@/types/api";
 
 const selectClassName =
@@ -42,8 +39,8 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
 
   const [attachOpen, setAttachOpen] = useState(false);
   const [attachVolumeId, setAttachVolumeId] = useState("");
-  const [busyVolumeId, setBusyVolumeId] = useState<string | null>(null);
-  const [isAttaching, setIsAttaching] = useState(false);
+  const { isLoading: isAttaching, run: runAttach } = useAcceptedMutation();
+  const { busyKey: busyVolumeId, run: runDetach } = useAcceptedMutation();
 
   const attachedVolumes = useMemo(
     () => volumes.filter((v) => v.vmId === vm.id),
@@ -56,57 +53,43 @@ export function VMVolumesCard({ vm }: { vm: VM }) {
     () => volumes.filter((v) => v.id && !v.vmId),
     [volumes]
   );
-  const watch = useMutationsStore((state) => state.watch);
-
   const handleAttach = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!attachVolumeId) {
       toast.error("Please select a volume");
       return;
     }
-    setIsAttaching(true);
-    try {
-      const attaching = volumes.find((v) => v.id === attachVolumeId);
-      watch(
-        acceptedMutation(await volumesApi.attach(attachVolumeId, { vmId: vm.id }), {
-          kind: "attach",
-          resourceKind: "volume",
-          resourceId: attachVolumeId,
-          resourceName: attaching?.name ?? "volume",
-        })
-      );
-      setAttachOpen(false);
-      setAttachVolumeId("");
-      invalidateVolumes();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to attach volume"
-      );
-    } finally {
-      setIsAttaching(false);
-    }
+    const attaching = volumes.find((v) => v.id === attachVolumeId);
+    await runAttach({
+      request: () => volumesApi.attach(attachVolumeId, { vmId: vm.id }),
+      watch: {
+        kind: "attach",
+        resourceKind: "volume",
+        resourceId: attachVolumeId,
+        resourceName: attaching?.name ?? "volume",
+      },
+      errorMessage: "Failed to attach volume",
+      onSuccess: () => {
+        setAttachOpen(false);
+        setAttachVolumeId("");
+        invalidateVolumes();
+      },
+    });
   };
 
-  const handleDetach = async (volumeId: string, name: string) => {
-    setBusyVolumeId(volumeId);
-    try {
-      watch(
-        acceptedMutation(await volumesApi.detach(volumeId), {
-          kind: "detach",
-          resourceKind: "volume",
-          resourceId: volumeId,
-          resourceName: name,
-        })
-      );
-      invalidateVolumes();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to detach volume"
-      );
-    } finally {
-      setBusyVolumeId(null);
-    }
-  };
+  const handleDetach = (volumeId: string, name: string) =>
+    runDetach({
+      busyKey: volumeId,
+      request: () => volumesApi.detach(volumeId),
+      watch: {
+        kind: "detach",
+        resourceKind: "volume",
+        resourceId: volumeId,
+        resourceName: name,
+      },
+      errorMessage: "Failed to detach volume",
+      onSuccess: () => invalidateVolumes(),
+    });
 
   return (
     <Card className="bg-card border-border">

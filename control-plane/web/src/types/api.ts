@@ -1736,14 +1736,17 @@ export interface CreateVolumeSnapshotRequest {
 }
 
 // VM Log types
-export type VMLogLevel = "debug" | "info" | "warning" | "error";
-export type VMLogSource = "agent" | "qemu" | "control_plane";
+// Each union carries "unknown": the backend decodes unrecognized values
+// tolerantly into that case (a newer agent may emit vocabulary this build
+// doesn't know) and forwards it, so the UI must render it, not crash on it.
+export type VMLogLevel = "debug" | "info" | "warning" | "error" | "unknown";
+export type VMLogSource = "agent" | "control_plane" | "unknown";
 export type VMEventType =
   | "status_change"
   | "operation"
-  | "qemu_output"
   | "error"
-  | "info";
+  | "info"
+  | "unknown";
 
 export interface VMLogEntry {
   timestamp: string;

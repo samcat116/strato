@@ -14,11 +14,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { toast } from "sonner";
-import {
-  acceptedMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
 
 import type { Volume } from "@/types/api";
 
@@ -40,8 +37,7 @@ export function ResizeVolumeDialog({
   onSuccess,
 }: ResizeVolumeDialogProps) {
   const currentSizeGB = Math.ceil(volume.size / GB);
-  const [isLoading, setIsLoading] = useState(false);
-  const watch = useMutationsStore((state) => state.watch);
+  const { isLoading, run } = useAcceptedMutation();
   const [sizeGB, setSizeGB] = useState(String(currentSizeGB));
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -55,25 +51,20 @@ export function ResizeVolumeDialog({
       return;
     }
 
-    setIsLoading(true);
-    try {
-      watch(
-        acceptedMutation(await volumesApi.resize(volume.id!, { sizeGB: newSize }), {
-          kind: "resize",
-          resourceKind: "volume",
-          resourceId: volume.id!,
-          resourceName: volume.name,
-        })
-      );
-      onOpenChange(false);
-      onSuccess?.();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to resize volume"
-      );
-    } finally {
-      setIsLoading(false);
-    }
+    await run({
+      request: () => volumesApi.resize(volume.id!, { sizeGB: newSize }),
+      watch: {
+        kind: "resize",
+        resourceKind: "volume",
+        resourceId: volume.id!,
+        resourceName: volume.name,
+      },
+      errorMessage: "Failed to resize volume",
+      onSuccess: () => {
+        onOpenChange(false);
+        onSuccess?.();
+      },
+    });
   };
 
   return (

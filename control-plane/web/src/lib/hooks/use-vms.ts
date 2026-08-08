@@ -1,37 +1,21 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { vmsApi } from "@/lib/api/vms";
 import { useOrganization } from "@/providers";
+import { makeResourceQueryHooks } from "./use-resource-queries";
+
+const hooks = makeResourceQueryHooks({
+  queryKey: "vms",
+  scopeKey: "orgId",
+  list: (organizationId) => vmsApi.list(organizationId),
+  get: (id) => vmsApi.get(id),
+  listSnapshots: (id) => vmsApi.listSnapshots(id),
+  listRefetchInterval: 5000, // Poll every 5 seconds
+});
 
 export function useVMs() {
   const { currentOrg, isLoading: orgLoading } = useOrganization();
-  const organizationId = currentOrg?.id;
-
-  return useQuery({
-    queryKey: ["vms", { orgId: organizationId ?? null }],
-    queryFn: () => vmsApi.list(organizationId),
-    enabled: !orgLoading,
-    refetchInterval: 5000, // Poll every 5 seconds
-  });
+  return hooks.useList(currentOrg?.id, { enabled: !orgLoading });
 }
 
-export function useVM(id: string) {
-  return useQuery({
-    queryKey: ["vms", id],
-    queryFn: () => vmsApi.get(id),
-    enabled: !!id,
-  });
-}
-
-export function useVMSnapshots(id: string) {
-  return useQuery({
-    queryKey: ["vms", id, "snapshots"],
-    queryFn: () => vmsApi.listSnapshots(id),
-    enabled: !!id,
-    refetchInterval: 5000,
-  });
-}
-
-export function useInvalidateVMs() {
-  const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: ["vms"] });
-}
+export const useVM = hooks.useDetail;
+export const useVMSnapshots = hooks.useSnapshots;
+export const useInvalidateVMs = hooks.useInvalidate;

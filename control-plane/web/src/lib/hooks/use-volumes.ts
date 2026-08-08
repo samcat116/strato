@@ -1,23 +1,30 @@
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries } from "@tanstack/react-query";
 import { volumesApi } from "@/lib/api/volumes";
 import type { Volume } from "@/types/api";
+import { makeResourceQueryHooks } from "./use-resource-queries";
+
+const hooks = makeResourceQueryHooks({
+  queryKey: "volumes",
+  scopeKey: "projectId",
+  list: (projectId) => volumesApi.list(projectId),
+  get: (id) => volumesApi.get(id),
+  listSnapshots: (id) => volumesApi.listSnapshots(id),
+  // Still polled, but as a backstop rather than the mechanism: since backend
+  // STR-148 a volume's own mutations are followed by MutationWatcher off its
+  // `conditions`, and this only has to catch changes nothing in this tab
+  // requested (another operator's, or an agent reporting drift).
+  listRefetchInterval: 10000,
+});
 
 export function useVolumes(projectId?: string) {
-  return useQuery({
-    queryKey: ["volumes", { projectId: projectId ?? null }],
-    queryFn: () => volumesApi.list(projectId),
-    // Still polled, but as a backstop rather than the mechanism: since backend
-    // STR-148 a volume's own mutations are followed by MutationWatcher off its
-    // `conditions`, and this only has to catch changes nothing in this tab
-    // requested (another operator's, or an agent reporting drift).
-    refetchInterval: 10000,
-  });
+  return hooks.useList(projectId);
 }
 
 /**
  * Aggregates snapshots across many volumes. The backend only exposes
  * per-volume snapshot listing, so the global snapshots page fans out one
- * query per volume and flattens the results.
+ * query per volume and flattens the results. (The per-volume keys match the
+ * factory's `useSnapshots` keys, so invalidation covers both.)
  */
 export function useSnapshotsForVolumes(volumes: Volume[]) {
   return useQueries({
@@ -35,8 +42,4 @@ export function useSnapshotsForVolumes(volumes: Volume[]) {
   });
 }
 
-export function useInvalidateVolumes() {
-  const queryClient = useQueryClient();
-  // Prefix match also invalidates per-volume and snapshot queries
-  return () => queryClient.invalidateQueries({ queryKey: ["volumes"] });
-}
+export const useInvalidateVolumes = hooks.useInvalidate;
