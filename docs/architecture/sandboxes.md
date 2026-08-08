@@ -855,13 +855,13 @@ terminal record (status and exit code) for `SANDBOX_RETENTION_HOURS`
 (default 24; a non-positive value keeps terminal records forever), then the
 row goes. Errored sandboxes are included because they are terminal too and
 would otherwise hold their quota indefinitely. Both take the *same* path as
-`DELETE /api/sandboxes/:id` — a `resource_operations` row (attributed to a
-system sentinel user, so the unattended deletion stays auditable) plus
-desired `.absent` in one transaction, then agent teardown or, with no agent
-to converge on, a direct record delete — so quota and placement reservations
-release identically. Level-triggered like every sweep: a sandbox whose
-deletion is deferred (an operation is already pending) is simply
-re-evaluated next tick.
+`DELETE /api/sandboxes/:id` — a `resource_events` row attributed to the
+**system** actor, so the unattended deletion stays auditable, plus desired
+`.absent` in one transaction, then agent teardown or, with no agent to converge
+on, a direct record delete — so quota and placement reservations release
+identically. Level-triggered like every sweep: marking `.absent` is idempotent,
+so a sandbox the sweep cannot finish this tick is simply re-evaluated next
+tick.
 
 ## History
 

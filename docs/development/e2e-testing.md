@@ -125,15 +125,12 @@ To wait for one, refetch the resource and read its `conditions`:
 Prefer that over `status` alone. VMs are still created in `Created` rather than
 running, so start them explicitly with `POST /api/vms/{id}/start`.
 
-Two carve-outs keep the older machinery:
+One carve-out keeps the older machinery:
 
 - **Delete** is the one mutation whose success is the resource's *absence*, so
   conditions cannot report it. Poll the compatibility façade
   `GET /api/operations/{mutationId}` instead. Past its deadline a delete reads
   `pending`, not `failed` — a slow teardown is not a failed one.
-- **VM restart** and every **snapshot** verb are imperative agent RPCs with no
-  generation to converge on. They still write `ResourceOperation` rows and still
-  return 409 when one is already pending.
 
 ### Confirming the guest actually booted
 

@@ -409,13 +409,24 @@ extension SandboxController {
         guard let source = try await Sandbox.find(sourceID, on: db), source.desiredStatus != .absent else {
             throw Abort(.conflict, reason: "Snapshot source sandbox is being deleted")
         }
-        let pendingRestore = try await ResourceOperation.query(on: db)
-            .filter(\.$resourceKind == .sandbox)
-            .filter(\.$resourceID == sourceID)
-            .filter(\.$status == .pending)
-            .filter(\.$kind == .restore)
-            .first()
-        guard pendingRestore == nil else {
+        // An in-place restore in flight: the source's rootfs is about to be
+        // replaced under the fork's feet, so the layout this fork would clone
+        // is not the one it read.
+        //
+        // Read from the audit trail plus the source's own convergence rather
+        // than from a pending operation row, which is what this used to query
+        // and which nothing has written since restore became an edge-nonce
+        // (STR-151). A restore bumps the sandbox's generation alongside its
+        // `restoreGeneration` (`requestRestore` → `setDesiredStatus(.running)`),
+        // so "the newest requested mutation is a restore the agent has not
+        // confirmed" is exactly the window the row used to mark, and it closes
+        // when the agent reports the generation rather than when an RPC
+        // returned.
+        let latest = try await ResourceEvent.latest(
+            .requested, resourceKind: .sandbox, resourceID: sourceID, on: db)
+        if let latest, latest.mutation == .restore,
+            source.observedGeneration < (latest.targetGeneration ?? source.generation)
+        {
             throw Abort(.conflict, reason: "Snapshot is being restored in place")
         }
     }

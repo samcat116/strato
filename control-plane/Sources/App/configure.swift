@@ -419,9 +419,6 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(MigrateVMNetworkConfigToInterfaces())
     app.migrations.add(RemoveLegacyVMNetworkFields())
 
-    // Async VM operations (issue #259)
-    app.migrations.add(CreateVMOperation())
-
     // Logical networks + control-plane IPAM (issue #212)
     app.migrations.add(CreateLogicalNetwork())
     app.migrations.add(AddGatewayToVMNetworkInterface())
@@ -494,11 +491,6 @@ public func configure(_ app: Application) async throws {
     // named as its token/userinfo/JWKS endpoints, so an IdP serving keys from a
     // second domain (Google) works without editing the global allow-list.
     app.migrations.add(AddDiscoveredHostsToOIDCProvider())
-
-    // Generalize the async-operation machinery beyond VMs (issue #412):
-    // vm_operations becomes resource_operations with a resource_kind
-    // discriminator, so new resource types reuse the 202/poll/sweep pattern.
-    app.migrations.add(GeneralizeVMOperations())
 
     // Sandboxes (issue #413): OCI-image Firecracker microVMs as a first-class
     // workload type, parallel to VMs.
@@ -601,20 +593,11 @@ public func configure(_ app: Application) async throws {
     // the full migration history.
     app.migrations.add(EnforcePersistedEnumValues())
 
-    // Snapshot export (issue #428) added a `resource_operations.kind` value;
-    // deployments whose enum constraints were installed before it must have
-    // the constraint re-installed with the extended list. Idempotent on
-    // fresh databases. Ordered after EnforcePersistedEnumValues.
-    app.migrations.add(AddSnapshotExportOperationKind())
-
     // virtio-balloon guest memory stats (issue #567).
     app.migrations.add(AddGuestMemoryStatsToVM())
 
-    // CPU/memory hot-add (issue #568): the memory headroom column, and the
-    // `resize` operation kind its online path records. Both ordered after
-    // EnforcePersistedEnumValues, whose constraint the latter re-installs.
+    // CPU/memory hot-add (issue #568): the memory headroom column.
     app.migrations.add(AddMaxMemoryToVM())
-    app.migrations.add(AddResizeOperationKind())
 
     // Operator balloon targets (issue #567 phase 2): the requested guest
     // ceiling and the balloon size actually reached.
@@ -671,9 +654,6 @@ public func configure(_ app: Application) async throws {
     // plus the transactional delivery outbox drained by the delivery sweep.
     app.migrations.add(CreateWebhookSubscription())
     app.migrations.add(CreateWebhookDelivery())
-    // Delivery context stamped at operation-begin time so delete completions
-    // can still be announced after the resource row is gone (PR #668 review).
-    app.migrations.add(AddDeliveryContextToResourceOperation())
 
     // Security groups: NIC-attached firewall rule sets realized as OVN ACLs
     // on port groups, with a mandatory per-project default group.
@@ -814,6 +794,11 @@ public func configure(_ app: Application) async throws {
     // ADR 0001 stage 9 (STR-151): reboot and restore become edge-nonces on the
     // desired entry, retiring the last three durable-resource agent RPCs.
     app.migrations.add(AddEdgeNoncesToWorkloads())
+
+    // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
+    // Deliberately last in the list: it must run after every migration that
+    // ever touched the table, and nothing is left to order after it.
+    app.migrations.add(DropResourceOperations())
 
     try await app.autoMigrate()
 

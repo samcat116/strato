@@ -158,8 +158,8 @@ bounded; unmatched requests fall back to `unmatched`.
 | `strato_agent_send_failures_total` | counter | `kind` = `message` \| `success` \| `error` | Failed to encode/send a message to an agent over its WebSocket |
 | `strato_agent_up` | gauge | `agent` = agent name | `1` while connected, `0` once disconnected. Durable per-agent up/down signal — keeps reporting `0` after the stale sweep, so it's the basis for the "agent down" alert |
 | `strato_agent_heartbeat_staleness_seconds` | gauge | `agent` = agent name | Seconds since the agent's last heartbeat, recorded each ~30s cycle **while connected**. Secondary "heartbeats slowing" signal; stops updating once the agent is swept |
-| `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `stuck_transition` \| `agent_reported` \| `operation_failed` \| `stuck_operation` \| `convergence_failed` | A VM transitioned into `.error` |
-| `strato_vm_drift_total` | counter | — | A VM's observed state changed out-of-band with no operation in flight (issue #260) |
+| `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `convergence_failed` \| `stuck_convergence` \| `mutation_failed` | A VM transitioned into `.error` |
+| `strato_vm_drift_total` | counter | — | A VM's observed state changed out-of-band with no mutation in flight (issue #260) |
 
 ### Teardown safety & site networking
 

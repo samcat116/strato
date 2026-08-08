@@ -103,22 +103,21 @@ The important ones to know when navigating `Services/`:
   and the teardown verdicts described below. The connection half (decode,
   ownership check, agent-row refresh, per-agent ordering) stays with
   `AgentService`.
-- **`ResourceOperationCoordinator`** — owns one asynchronous resource
-  operation end to end (begin → dispatch → verdict) for VMs and sandboxes
-  alike: controllers name a transition and a dispatch strategy, and the
-  coordinator owns the background hand-off after the 202 and the single
-  verdict-recording choke point the stuck-operation sweep shares. It reaches
-  agents through the `AgentDispatch` seam (`syncDesiredState(agentId:)`,
-  `performOperationAwaitingResponse`), which `AgentService` implements and
-  tests replace with a fake.
+- **`ResourceMutation`** — accepts one asynchronous lifecycle mutation on a
+  VM, sandbox or volume: controllers name a transition and a dispatch strategy,
+  and it applies the desired-state change, stamps the convergence deadline,
+  appends the attribution event and hands off to the agent, all in one
+  transaction. It reaches agents through the `AgentDispatch` seam
+  (`agentIsOnline`, `syncDesiredState`), which `AgentService` implements and
+  tests replace with a fake. (This is what `ResourceOperationCoordinator` was;
+  the coordinator went with the operations table in STR-152.)
 - **`CoordinationService`** (actor) — the Valkey layer: agent presence keys,
-  socket routing, singleton sweep locks, placement reservations, and
-  replica pub/sub (nudges + RPC). See [multi-replica](./multi-replica.md).
+  singleton sweep locks, placement reservations, image-download grants, and the
+  fleet-wide desired-state doorbell. See [multi-replica](./multi-replica.md).
 - **`ReplicaMessageBridge`** (actor, `app.replicaBridge`) — the cross-replica
-  seam over `CoordinationService`: route recording, the routing decision,
-  sync-nudge fan-out, correlated RPC forwarding, and the subscription
-  lifecycle. Delegates the two socket-bound operations back to `AgentService`
-  via `ReplicaBridgeDelegate`. See [multi-replica](./multi-replica.md).
+  seam over `CoordinationService`: the broadcast doorbell and the subscription
+  lifecycle. Delegates acting on a doorbell back to `AgentService` via
+  `ReplicaBridgeDelegate`. See [multi-replica](./multi-replica.md).
 - **`SchedulerService`** (actor) — placement decisions; see
   [scheduler](./scheduler.md).
 - **`IPAMService`** — control-plane IP allocation (IPv4/IPv6) from a
@@ -338,17 +337,22 @@ the request: with no imperative frame left, a pre-v34 agent would ignore the
 field and report the bumped generation as converged, so the API would claim a
 restart that never happened.
 
-The cluster-singleton stuck-operation sweep and
-`ResourceOperationCoordinator.recordVerdict` survive for exactly one job: taking
-rows written by the *previous* build terminal across an upgrade. Nothing
-constructs a `ResourceOperation` now; the table, the sweep and the
-pending-request apparatus go in ADR stage 11 (STR-152).
+**The table itself is gone** (ADR stage 11, STR-152). With nothing constructing
+a `ResourceOperation`, what remained — the model and its per-kind budgets,
+`ResourceOperationCoordinator`, the cluster-singleton stuck-operation sweep and
+its `lock:sweep:stuck_operations` lock, the transitional-status backstop, and
+the generic pending-request apparatus in `AgentService` — was deleted along with
+the cross-replica RPC bridge that carried the exchanges. The completion-budget
+figures survive as `OperationResourceKind.completionBudgetSeconds(for:)`, read
+once at accept time to stamp `convergence_deadline`. The one non-operation half
+of the old sweep, releasing volumes left attached to a VM that no longer exists
+(STR-129), moved to `sweepStrandedVolumeAttachments`.
 
-**The operations API survives as a façade** (`Services/OperationFacade.swift`).
-`GET /api/operations/:id` resolves an operation row first, then falls back to
-the `resource_events` row a lifecycle mutation wrote, synthesizing status from
-the resource's conditions. Nothing new depends on the table, and a client
-written against the old contract keeps working.
+**The operations API survives as a façade** (`Services/OperationFacade.swift`),
+and is now nothing else. `GET /api/operations/:id` resolves the
+`resource_events` row a mutation wrote and synthesizes the status from the
+resource's conditions. A client written against the old contract keeps working;
+nothing about the wire shape says which source answered, which is the point.
 
 **Delete is the one mutation the resource cannot answer for.** Its success is
 the resource ceasing to exist, and a polling client's `404` means deleted,
@@ -449,8 +453,8 @@ future work.
   node's enrollment row rather than from any bearer credential — there is no
   token join, so an unattested agent simply cannot connect.
 - **Agents are keyed by full SPIFFE ID, never by bare name.** The connection
-  map, the Valkey presence/route keys and console/exec session ownership all
-  use `spiffe://<trust-domain>/agent/<name>` (`AgentIdentity.key`), and
+  map, the Valkey presence key and console/exec session ownership all use
+  `spiffe://<trust-domain>/agent/<name>` (`AgentIdentity.key`), and
   `agents`/`agent_enrollments` are unique on `(trust_domain, name)`. With one
   trust domain this is invisible; with a trust domain per organization
   ([per-org trust domains](#per-organization-trust-domains)) two tenants may
@@ -458,9 +462,10 @@ future work.
   the other's desired state. Bare names remain what logs and metric labels
   show.
 - Message dispatch switches on the envelope type: registration, heartbeats,
-  correlated success/error responses, observed-state reports,
-  console/exec/log frames (see [wire-protocol](./wire-protocol.md)
-  for the catalog).
+  observed-state reports, console/exec/log frames (see
+  [wire-protocol](./wire-protocol.md) for the catalog). There is no arm for
+  `success`/`error`: nothing correlates them since STR-152, and the agent
+  stopped sending them at the same change.
 - **Sync assembly** (`DesiredStateAssembler.assemble`) reads the
   authoritative set straight from Postgres — VMs with volumes/NICs/image
   artifacts (download URLs are mTLS-authenticated relative paths, so nothing
@@ -474,8 +479,9 @@ future work.
   every sync, so a per-VM read here is a fleet-wide load multiplier.
 - **Observed-state ingestion** chains per-agent tasks so reports apply in
   send order; `ObservedStateApplier.apply` updates observed
-  status/generation, completes satisfied operations, and confirms deletions
-  by absence from the report.
+  status/generation, settles convergence (success or failure, with the
+  completion webhook in the same transaction), and confirms deletions by
+  absence from the report.
 - **Authorizing a teardown** (STR-98). An agent that holds a workload no sync
   listed reports it rather than destroying it, and the applier decides once,
   recording the verdict in `agent_workload_claims`:
@@ -577,9 +583,10 @@ live Valkey presence key exists), pub/sub subscription re-arming, the
 periodic sync to this replica's agents (every other tick, revision-gated to
 agents whose desired state changed since their last successful sync; every
 20th tick — ~10 minutes — forces an unconditional full-fleet resend, the
-backstop for a lost cross-replica nudge), and five sweeps — stuck convergence
-(STR-147), stuck operations, orphaned terminating resources (STR-144), expired
-sandboxes (TTL + retention reaping), and agent auto-update rollout.
+backstop for a lost doorbell), and five sweeps — stuck convergence (STR-147),
+stranded volume attachments (STR-129), orphaned terminating resources
+(STR-144), expired sandboxes (TTL + retention reaping), and agent auto-update
+rollout.
 
 Most sweeps take singleton locks via `app.coordination.acquireSweepLock(...)`
 (Valkey `SET NX EX`, 25s TTL, never explicitly released — the TTL expiring
@@ -611,10 +618,10 @@ what makes the test harness safe.
   — which only `ObservedStateApplier` writes and only the `conditions`
   projection reads, plus `convergenceDeadline`, which only the mutation path
   writes and only the stuck-convergence sweep reads.
-- `ResourceOperation` has a plain `resource_id` column, deliberately **not**
-  a foreign key, so delete operations survive the resource row's removal.
-  `ResourceEvent` goes further: *every* id on it is foreign-key-free, since
-  the audit row has to outlive both the resource and the principal it names.
+- `ResourceEvent` is foreign-key-free on *every* id it carries, since the audit
+  row has to outlive both the resource it names and the principal that acted.
+  It inherited the pattern from the retired `resource_operations` table, whose
+  `resource_id` had to survive the row a delete removed for the same reason.
 - Migrations target Postgres (raw-SQL backfills gated on `as? SQLDatabase`),
   and never query live models in a migration — snapshot the columns in a
   private model instead. Migration ordering in `configure.swift` matters when

@@ -10,40 +10,9 @@ import AppTestSupport
 /// so the bridge can be exercised without any real agent sockets.
 private actor FakeBridgeDelegate: ReplicaBridgeDelegate {
     private(set) var deliveredDoorbells: [String] = []
-    private(set) var localExchanges: [String] = []
-    private var localExchangeResult: Result<AgentServiceResponse, Error> = .success(.success(nil))
-
-    func setLocalExchangeResult(_ result: Result<AgentServiceResponse, Error>) {
-        localExchangeResult = result
-    }
-
-    func runLocalExchange(
-        _ envelope: MessageEnvelope,
-        requestId: String,
-        agentId: String,
-        agentKey: String,
-        timeout: Duration
-    ) async throws -> AgentServiceResponse {
-        localExchanges.append(requestId)
-        return try localExchangeResult.get()
-    }
 
     func deliverDoorbell(agentKey: String) async {
         deliveredDoorbells.append(agentKey)
-    }
-}
-
-/// Collects pub/sub deliveries for assertions.
-private actor DeliveryCollector {
-    private(set) var messages: [String] = []
-    func append(_ message: String) { messages.append(message) }
-
-    func waitFor(count: Int, timeoutMilliseconds: Int = 2000) async -> [String] {
-        for _ in 0..<(timeoutMilliseconds / 20) {
-            if messages.count >= count { return messages }
-            try? await Task.sleep(for: .milliseconds(20))
-        }
-        return messages
     }
 }
 
@@ -51,6 +20,10 @@ private actor DeliveryCollector {
 /// delegate — the cross-replica seam AgentService used to carry inline (issue
 /// #261). Everything runs over an in-memory coordination store; no real agent
 /// sockets are involved.
+///
+/// Two thirds of this suite went with STR-152: the `remoteRoute` decision table
+/// and the requester/holder RPC outcomes. What is left is the doorbell, which
+/// is what the bridge is now.
 @Suite("Replica Message Bridge Tests", .serialized)
 final class ReplicaMessageBridgeTests {
 
@@ -75,33 +48,6 @@ final class ReplicaMessageBridgeTests {
             throw error
         }
         try await app.shutdownForTesting()
-    }
-
-    // MARK: remoteRoute decision table
-
-    @Test("remoteRoute reports no route when none is recorded")
-    func remoteRouteNoRoute() async throws {
-        try await withBridge { bridge, _, _, _ in
-            #expect(await bridge.remoteRoute(agentKey: "agent-x") == .noRoute)
-        }
-    }
-
-    @Test("remoteRoute reports our own replica for a self-owned route")
-    func remoteRouteOwnReplica() async throws {
-        try await withBridge { bridge, _, _, _ in
-            await bridge.recordRoute(agentKey: "agent-x")
-            #expect(await bridge.remoteRoute(agentKey: "agent-x") == .ownReplica)
-        }
-    }
-
-    @Test("remoteRoute forwards to the replica that holds the socket")
-    func remoteRouteForward() async throws {
-        try await withBridge { bridge, _, store, _ in
-            // Another replica's claim, written straight to the shared store.
-            await store.setValue(
-                CoordinationService.routeKey(agentKey: "agent-x"), value: "replica-b", ttlSeconds: 60)
-            #expect(await bridge.remoteRoute(agentKey: "agent-x") == .forward(replicaId: "replica-b"))
-        }
     }
 
     // MARK: Doorbell dispatch
@@ -157,99 +103,6 @@ final class ReplicaMessageBridgeTests {
         try await withBridge { bridge, delegate, _, _ in
             await bridge.handleDoorbell("no-separator-here")
             #expect(await delegate.deliveredDoorbells.isEmpty)
-        }
-    }
-
-    // MARK: Requester-side RPC outcomes
-
-    @Test("call resolves the awaited result on an error reply")
-    func callResolvesErrorReply() async throws {
-        try await withBridge { bridge, _, store, _ in
-            // Stand in for the holder replica: decode the forwarded request and
-            // reply straight back through the requester's reply handler.
-            await store.subscribe(
-                channel: CoordinationService.rpcChannel(replicaId: "replica-b")
-            ) { payload in
-                Task {
-                    guard
-                        let request = try? JSONDecoder().decode(
-                            ReplicaMessageBridge.AgentRPCRequest.self, from: Data(payload.utf8))
-                    else { return }
-                    let reply = ReplicaMessageBridge.AgentRPCReply(
-                        rpcId: request.rpcId, outcome: .error, data: nil, error: "boom", details: "why")
-                    guard let encoded = try? JSONEncoder().encode(reply) else { return }
-                    await bridge.handleRPCReply(String(decoding: encoded, as: UTF8.self))
-                }
-            }
-
-            let envelope = try MessageEnvelope(
-                message: ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"))
-            let response = try await bridge.call(
-                envelope, requestId: "rpc-err", agentId: UUID().uuidString,
-                agentKey: "agent-x", toReplica: "replica-b", timeout: .seconds(5))
-
-            guard case .error(let message, let details) = response else {
-                Issue.record("Expected error response, got \(response)")
-                return
-            }
-            #expect(message == "boom")
-            #expect(details == "why")
-        }
-    }
-
-    @Test("call throws connectionLost on an unreachable reply")
-    func callThrowsOnUnreachable() async throws {
-        try await withBridge { bridge, _, store, _ in
-            await store.subscribe(
-                channel: CoordinationService.rpcChannel(replicaId: "replica-b")
-            ) { payload in
-                Task {
-                    guard
-                        let request = try? JSONDecoder().decode(
-                            ReplicaMessageBridge.AgentRPCRequest.self, from: Data(payload.utf8))
-                    else { return }
-                    let reply = ReplicaMessageBridge.AgentRPCReply(
-                        rpcId: request.rpcId, outcome: .unreachable, data: nil, error: "gone", details: nil)
-                    guard let encoded = try? JSONEncoder().encode(reply) else { return }
-                    await bridge.handleRPCReply(String(decoding: encoded, as: UTF8.self))
-                }
-            }
-
-            let envelope = try MessageEnvelope(
-                message: ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"))
-            await #expect(throws: AgentServiceError.self) {
-                _ = try await bridge.call(
-                    envelope, requestId: "rpc-unreach", agentId: UUID().uuidString,
-                    agentKey: "agent-x", toReplica: "replica-b", timeout: .seconds(5))
-            }
-        }
-    }
-
-    @Test("A forwarded request for an unheld socket is answered unreachable")
-    func handleRPCRequestWithoutSocket() async throws {
-        try await withBridge { bridge, _, store, _ in
-            let collector = DeliveryCollector()
-            let replyChannel = "replica:test-requester:rpc-replies"
-            await store.subscribe(channel: replyChannel) { message in
-                Task { await collector.append(message) }
-            }
-
-            let envelope = try MessageEnvelope(
-                message: ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"))
-            let request = ReplicaMessageBridge.AgentRPCRequest(
-                rpcId: "rpc-nosock",
-                replyChannel: replyChannel,
-                agentId: UUID().uuidString,
-                agentKey: "agent-x",
-                envelope: envelope,
-                timeoutSeconds: 1
-            )
-            await bridge.handleRPCRequest(String(decoding: try JSONEncoder().encode(request), as: UTF8.self))
-
-            let replies = await collector.waitFor(count: 1)
-            let reply = try JSONDecoder().decode(
-                ReplicaMessageBridge.AgentRPCReply.self, from: Data(try #require(replies.first).utf8))
-            #expect(reply.outcome == .unreachable)
         }
     }
 }

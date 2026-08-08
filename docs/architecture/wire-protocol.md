@@ -35,14 +35,18 @@ struct MessageEnvelope {
   strings** inside JSON messages, with `rawData` conveniences on the message
   structs.
 - Every concrete message conforms to `WebSocketMessage`: a `type`
-  discriminator, a `requestId` for request/response correlation, and a
-  `timestamp`. Streaming messages (console, sandbox exec) correlate by
-  `sessionId` instead and are never answered with success/error — ordering
-  comes from the WebSocket itself (see the header comment in
+  discriminator, a `requestId`, and a `timestamp`. **Nothing correlates on
+  `requestId` any more** — the generic pending-request apparatus went with the
+  last imperative exchange (STR-152), so the field survives as a log-correlation
+  handle. Streaming messages (console, sandbox exec) correlate by `sessionId`
+  and take their ordering from the WebSocket itself (see the header comment in
   `SandboxExecMessages.swift`).
-- Responses are the generic `SuccessMessage` (optional dynamic `data` via
-  `AnyCodableValue`) and `ErrorMessage` (with machine-readable codes such as
-  `unsupported_protocol_version`).
+- `SuccessMessage` and `ErrorMessage` survive as **unsolicited** frames, sent
+  control plane → agent only: an acknowledgement the agent logs (register,
+  heartbeat, unregister), and a registration rejection whose machine-readable
+  `code` (`invalid_token`, `unsupported_protocol_version`) the agent's reconnect
+  loop reads. `SuccessMessage.data` went with the correlation (STR-152) —
+  every typed reply that rode it is a field on `ObservedStateReport` now.
 
 ## Versioning
 
@@ -365,7 +369,9 @@ v34 no `vm_reboot`, `vm_restore` or `sandbox_restore` either.
 | `console_connected`, `console_disconnected`, `console_data` | Console session lifecycle and output |
 | `sandbox_exec_started`, `sandbox_exec_output`, `sandbox_exec_exit`, `sandbox_exec_closed` | Exec stream responses |
 
-**Either direction**: `success` / `error`, correlated by `requestId`.
+Nothing in the agent → control plane direction is a *reply*. `success` and
+`error` travel control plane → agent only, unsolicited and uncorrelated
+(STR-152); the agent stopped sending them entirely at the same change.
 
 ## The reconciliation contract
 
@@ -504,9 +510,9 @@ generation it applied and ignores older ones, so dropped, replayed, or
 reordered syncs can never roll a resource backward. The observed side reports
 `observedGeneration` (what it last converged toward), a `convergencePhase`
 progress string, and on failure a `lastError` paired with `failedGeneration` —
-the control plane only fails a pending operation when `failedGeneration`
-matches the current generation, which prevents attributing a stale error to a
-newer change.
+the control plane marks a resource degraded only when `failedGeneration` matches
+the current generation, which prevents attributing a stale error to a newer
+change.
 
 ### Two transports, one payload (wire v29)
 
@@ -666,9 +672,11 @@ The rest of the package is vocabulary used on both sides:
 - **Images** — `ArtifactKind` (`disk-image`/`kernel`/`initramfs`/`rootfs`),
   `ImageInfo`/`ArtifactInfo`, and `OCIImageReference` (parse/normalize OCI
   references, Docker Hub normalization).
-- **Operations** (`OperationModels.swift`) — `VMOperationKind` and
-  `VMOperationStatus` (`pending`/`succeeded`/`failed`), the vocabulary the
-  frontend polls against.
+- **Mutations** (`OperationModels.swift`) — `VMOperationKind` and
+  `VMOperationStatus` (`pending`/`succeeded`/`failed`). Named for the retired
+  `resource_operations` table, but they outlived it: the kind is the
+  `resource_events` mutation column and the per-kind convergence budget, and
+  the status is the vocabulary the operations façade answers in.
 - **Networking/addressing** (`NetworkModels.swift`, `IPAddressing.swift`) —
   network config/status DTOs and the project's own IPv4/IPv6 value types with
   CIDR math (containment, overlap, RFC 5952 canonicalization, EUI-64/ULA

@@ -4,14 +4,12 @@ import StratoShared
 
 /// Read API for asynchronous resource operations (issue #259).
 ///
-/// Since ADR 0001 stage 4 (STR-147) this is a **compatibility façade**. VM and
-/// sandbox lifecycle mutations answer `202 {resource, targetGeneration,
-/// mutationId}` and are meant to be followed by polling the resource's
-/// `conditions`; they write no operation row. This endpoint keeps answering for
-/// them anyway, synthesizing the operation view from the `resource_events` row
-/// the mutation did write plus the resource's current conditions
-/// (`OperationFacade`), so a client written against the old contract keeps
-/// working unchanged.
+/// Since ADR 0001 stage 4 (STR-147) this is a **compatibility façade**, and
+/// since stage 11 (STR-152) it is nothing else: no mutation writes an operation
+/// row, because the table is gone. Every answer is synthesized from the
+/// `resource_events` row the mutation did write plus the resource's current
+/// conditions (`OperationFacade`), so a client written against the old contract
+/// keeps working unchanged.
 ///
 /// It is also the *supported* way to follow a **delete** to completion, for the
 /// one thing conditions cannot express: a delete succeeds by its resource
@@ -20,9 +18,7 @@ import StratoShared
 /// done for the caller and the answer comes from the terminal event the reap
 /// appended, so `succeeded` is a positive record rather than an inference.
 ///
-/// The verbs still dispatched as imperative agent RPCs — VM reboot, the
-/// snapshot verbs — keep real rows, and are served from them. Per-resource
-/// history lives under `GET /api/vms/:vmID/operations`.
+/// Per-resource history lives under `GET /api/vms/:vmID/operations`.
 struct OperationController: RouteCollection {
     func boot(routes: any RoutesBuilder) throws {
         let operations = routes.grouped("api", "operations")
@@ -36,19 +32,10 @@ struct OperationController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid operation ID")
         }
 
-        // An operation row first — the id space is disjoint, and rows are the
-        // narrower, older case.
-        if let operation = try await ResourceOperation.find(operationID, on: req.db) {
-            try await authorize(
-                resourceKind: operation.resourceKind, resourceID: operation.resourceID,
-                initiatedBy: operation.userID == user.id, req: req)
-            return OperationResponse(from: operation)
-        }
-
-        // Otherwise a recorded mutation. Only `.requested` rows are addressable:
-        // a terminal row is the evidence a request's verdict is read from, not
-        // an operation in its own right, and answering for its id would report
-        // one mutation under two ids.
+        // The id names a recorded mutation. Only `.requested` rows are
+        // addressable: a terminal row is the evidence a request's verdict is
+        // read from, not an operation in its own right, and answering for its
+        // id would report one mutation under two ids.
         guard let event = try await ResourceEvent.find(operationID, on: req.db),
             event.phase == .requested
         else {

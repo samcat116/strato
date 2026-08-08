@@ -559,10 +559,10 @@ final class QuotaEnforcementTests {
             #expect(afterCreate.reservedStorage == gb(20))
             #expect(afterCreate.vmCount == 1)
 
-            // Wait for the background create dispatch (which fails — no agents run
-            // in tests) to complete its operation, so the DELETE below isn't
-            // rejected by the pending-operation conflict guard.
-            try await waitForNoPendingOperations(vmID: createdVMID!, on: app.db)
+            // Let the background create dispatch (which fails — no agents run
+            // in tests) settle before the DELETE, so the two are not racing to
+            // write the same row.
+            try await waitForCreateToSettle(vmID: createdVMID!, on: app.db)
 
             try await app.test(.DELETE, "/api/vms/\(createdVMID!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -582,16 +582,15 @@ final class QuotaEnforcementTests {
         }
     }
 
-    private func waitForNoPendingOperations(vmID: UUID, on db: any Database) async throws {
+    /// Waits for the background create dispatch to fail (no agents run in
+    /// tests). Since STR-152 that failure is `degraded` on the VM rather than a
+    /// terminal operation row, so the VM is what gets polled.
+    private func waitForCreateToSettle(vmID: UUID, on db: any Database) async throws {
         for _ in 0..<100 {
-            let pending = try await ResourceOperation.query(on: db)
-                .filter(\.$resourceID == vmID)
-                .filter(\.$status == .pending)
-                .count()
-            if pending == 0 { return }
+            if try await VM.find(vmID, on: db)?.failedGeneration != nil { return }
             try await Task.sleep(for: .milliseconds(50))
         }
-        Issue.record("operations for VM \(vmID) never reached a terminal state")
+        Issue.record("the create dispatch for VM \(vmID) never settled")
     }
 
     private func waitForVMDeletion(_ vmID: UUID, on db: any Database) async throws {

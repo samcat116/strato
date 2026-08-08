@@ -631,6 +631,14 @@ public enum WireProtocol {
     /// direction only: a pre-v34 control plane driving a v34 agent would send
     /// `vm_reboot` into an envelope the agent can no longer decode and burn the
     /// request's timeout against silence. Upgrade the control plane first.
+    ///
+    /// Deliberately **not** version 35: STR-152 removed `SuccessMessage.data`
+    /// along with the correlation apparatus that was its only consumer, and an
+    /// optional field is compatible in both directions — an old peer decoding a
+    /// payload without it gets nil, a new peer decoding one with it ignores the
+    /// key. Nothing gates on it, so a gate would only be a version floor with no
+    /// behavior behind it. Every other bump in this changelog protects a
+    /// misreading of silence; this one has none to protect.
     public static let currentVersion = 34
 
     /// The lowest protocol version that speaks reconciliation state sync

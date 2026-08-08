@@ -52,7 +52,13 @@ public enum MessageType: String, Codable, Sendable {
     case desiredState = "desired_state"
     case observedState = "observed_state"
 
-    // Responses
+    // Responses. Not correlated any more: the control plane's generic
+    // pending-request apparatus went with the last imperative exchange (ADR
+    // 0001 stage 11, STR-152), so nothing awaits a `requestId`. What survives
+    // is control-plane → agent only, and unsolicited in both directions that
+    // matter — an ACK the agent logs (register, heartbeat, unregister) and a
+    // registration rejection the agent's reconnect loop reads for its
+    // `ErrorMessage.code`.
     case success = "success"
     case error = "error"
     // VM Logs
@@ -443,23 +449,26 @@ public struct ImageInfo: Codable, Sendable {
 
 // MARK: - Response Messages
 
+/// An unsolicited acknowledgement — registration, heartbeat, unregister. The
+/// `data` field went with the correlation apparatus (STR-152): every typed
+/// reply that used to ride it (volume info, snapshot metadata, checkpoint
+/// results) is now a field on `ObservedStateReport`, so nothing has a payload
+/// to return. `requestId` echoes the acknowledged frame's id for log
+/// correlation only; no sender awaits it.
 public struct SuccessMessage: WebSocketMessage {
     public var type: MessageType { .success }
     public let requestId: String
     public let timestamp: Date
     public let message: String?
-    public let data: AnyCodableValue?
 
     public init(
         requestId: String,
         timestamp: Date = Date(),
-        message: String? = nil,
-        data: AnyCodableValue? = nil
+        message: String? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.message = message
-        self.data = data
     }
 }
 

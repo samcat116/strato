@@ -91,30 +91,13 @@ struct EnforcePersistedEnumValues: AsyncMigration {
             table: "image_artifacts", column: "status",
             allowedValues: ["pending", "downloading", "ready", "error"], defaultValue: "ready"
         ),
-        .init(
-            table: "resource_operations", column: "resource_kind",
-            allowedValues: [
-                "virtual_machine", "sandbox", "volume",
-                // Snapshot artifacts (STR-150). They write no operation rows —
-                // their mutations are level-triggered — but the constraint is
-                // widened anyway, because `AddSnapshotOperationKinds` installs
-                // it from this list and `PersistedEnumConstraintTests` pins it
-                // against `OperationResourceKind.allCases`.
-                "volume_snapshot", "vm_checkpoint", "sandbox_snapshot",
-            ],
-            defaultValue: "virtual_machine"
-        ),
-        .init(
-            table: "resource_operations", column: "kind",
-            allowedValues: [
-                "create", "boot", "shutdown", "reboot", "pause", "resume", "delete", "resize",
-                "snapshot", "snapshot_delete", "restore", "snapshot_export", "attach", "detach",
-            ]
-        ),
-        .init(
-            table: "resource_operations", column: "status",
-            allowedValues: ["pending", "succeeded", "failed"]
-        ),
+        // The three `resource_operations` columns this list used to guard —
+        // `resource_kind`, `kind`, `status` — went with the table (STR-152).
+        // The same vocabularies are still guarded where they are still stored:
+        // `resource_events.resource_kind`/`.mutation` (installed by
+        // `CreateResourceEvent`, widened by `AddVolumeOperationKinds` and
+        // `AddSnapshotOperationKinds`) and
+        // `agent_workload_claims.resource_kind`.
         .init(
             table: "sandboxes", column: "status",
             allowedValues: ["Stopped", "Running", "Exited", "Starting", "Stopping", "Error", "Unknown"]

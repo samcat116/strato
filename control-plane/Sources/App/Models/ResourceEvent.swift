@@ -18,10 +18,12 @@ enum MutationActorType: String, Codable, CaseIterable, Sendable {
 
 /// Who performed a mutation.
 ///
-/// Unlike `resource_operations.user_id` — a non-null *user* id, which is
-/// exactly what keeps machine principals off the mutation endpoints (issue
-/// #495) — this names the principal's type alongside its id, and carries no id
-/// at all for the system actor.
+/// The attribution `resource_operations.user_id` used to carry, minus that
+/// column's two limitations: it was a non-null *user* id, so it could name
+/// neither a machine principal nor the control plane acting on its own, and
+/// the latter had to be spelled as a sentinel UUID matching no real user. This
+/// names the principal's type alongside its id, and carries no id at all for
+/// `.system`.
 struct MutationActor: Sendable, Equatable {
     let type: MutationActorType
 
@@ -36,18 +38,6 @@ struct MutationActor: Sendable, Equatable {
     /// The control plane acting with no principal behind it — the sandbox
     /// expiry sweep (issue #424).
     static let system = MutationActor(type: .system, id: nil)
-}
-
-extension MutationActor {
-    /// The actor behind an operation attributed only by `user_id`, which is
-    /// every mutation today: the sweep's sentinel is the system actor rather
-    /// than a user that does not exist, and everything else is a real user
-    /// because the mutation endpoints still refuse machine principals
-    /// (`requireActingUser`). STR-15 replaces this derivation with an actor
-    /// threaded from the request principal.
-    init(operationUserID id: UUID) {
-        self = id == ResourceOperation.systemUserID ? .system : .user(id)
-    }
 }
 
 /// Which half of a mutation's life a `ResourceEvent` row records.

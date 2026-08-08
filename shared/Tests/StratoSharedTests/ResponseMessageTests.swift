@@ -5,40 +5,34 @@ import StratoShared
 @Suite("Success / error messages")
 struct ResponseMessageTests {
     @Test func successRoundTrip() throws {
-        let payload = try AnyCodableValue(["state": "Running"])
         let decoded = try throughEnvelope(
             SuccessMessage(
                 requestId: Fixtures.requestId,
                 timestamp: Fixtures.timestamp,
-                message: "done",
-                data: payload
+                message: "done"
             )
         )
         #expect(decoded.type == .success)
+        #expect(decoded.requestId == Fixtures.requestId)
         #expect(decoded.message == "done")
-        #expect(try decoded.data?.decode(as: [String: String].self) == ["state": "Running"])
     }
 
-    @Test func successWithTypedDataRoundTrip() throws {
-        // `SuccessMessage.data` carries an arbitrary `Codable` through
-        // `AnyCodableValue`, and this pins that mechanism rather than any one
-        // payload: every typed reply that used to ride it is gone —
-        // `VolumeStatusResponse` and the two snapshot reports with wire v33
-        // (STR-150), `VolumeInfoResponse` with v32 (STR-149) — because the
-        // facts they carried are desired/observed state now. The remaining
-        // senders answer with a bare success, so a live wire struct stands in.
-        let guest = GuestInfo(
-            qgaAvailable: true, hostname: "guest-1",
-            interfaces: [
-                GuestNetworkInterface(
-                    name: "eth0", hardwareAddress: "52:54:00:ab:cd:ef",
-                    addresses: [GuestIPAddress(family: .ipv4, address: "10.0.0.5")])
-            ])
-        let message = SuccessMessage(requestId: Fixtures.requestId, data: try AnyCodableValue(guest))
-        let decoded = try throughEnvelope(message)
-        let extracted = try #require(try decoded.data?.decode(as: GuestInfo.self))
-        #expect(extracted.hostname == "guest-1")
-        #expect(extracted.interfaces.first?.addresses.first?.address == "10.0.0.5")
+    /// `SuccessMessage.data` carried an arbitrary `Codable` through
+    /// `AnyCodableValue` until STR-152 removed it: every typed reply that rode
+    /// it was already gone — `VolumeStatusResponse` and the two snapshot
+    /// reports with wire v33 (STR-150), `VolumeInfoResponse` with v32
+    /// (STR-149) — because the facts they carried are desired/observed state
+    /// now, and the correlation that would have awaited one went with them.
+    /// A peer still sending the key must decode as an ordinary success rather
+    /// than failing, which is what keeps the removal compatible in both
+    /// directions and needing no wire-version bump.
+    @Test func successIgnoresLegacyDataField() throws {
+        let json = """
+            {"requestId":"r","timestamp":0,"message":"done","data":{"state":"Running"}}
+            """
+        let decoded = try decodeJSON(SuccessMessage.self, from: json)
+        #expect(decoded.requestId == "r")
+        #expect(decoded.message == "done")
     }
 
     @Test func errorRoundTrip() throws {

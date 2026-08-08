@@ -2,19 +2,230 @@ import Fluent
 import StratoShared
 import Vapor
 
-/// Answers the operations API for mutations that no longer have an operation
-/// row (ADR 0001 stage 4, STR-147).
+/// The kind of resource an asynchronous mutation acts on — the `resource_kind`
+/// discriminator on `ResourceEvent`, the key `ConvergingResource` and
+/// `SnapshotArtifactResource` project themselves under, and the discriminator
+/// the operations façade resolves an id against.
 ///
-/// Lifecycle mutations stopped writing `resource_operations`; what they write
-/// is a `resource_events` row and a desired-state change. Everything an
-/// operation used to report is recoverable from those two — the id and kind
-/// from the event, the verdict from the resource's `conditions` — so
-/// `GET /api/operations/{id}` and the per-resource lists keep answering for
-/// old clients while nothing new depends on the table.
+/// It was `ResourceOperation`'s column first (issue #412) and outlived that
+/// table (STR-152) because everything hung on it is about the *mutation*, not
+/// about the row: the kind's display noun, the artifact family it names, and
+/// the per-kind convergence budgets — which are the same figures the operation
+/// rows used, now stamped as `convergence_deadline` rather than compared
+/// against a row's age.
+enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
+    case virtualMachine = "virtual_machine"
+    case sandbox = "sandbox"
+    case volume = "volume"
+    // Snapshot artifacts (ADR 0001 stage 8, STR-150). Three kinds rather than
+    // one, because they are three tables with three quota paths and three IAM
+    // node types. What they share is a *shape*, and that is carried by the
+    // protocols on the models rather than by collapsing them into one
+    // discriminator.
+    case volumeSnapshot = "volume_snapshot"
+    case vmCheckpoint = "vm_checkpoint"
+    case sandboxSnapshot = "sandbox_snapshot"
+
+    /// Short noun for client-facing messages ("This VM no longer exists").
+    var displayName: String {
+        switch self {
+        case .virtualMachine:
+            return "VM"
+        case .sandbox:
+            return "sandbox"
+        case .volume:
+            return "volume"
+        case .volumeSnapshot:
+            return "volume snapshot"
+        case .vmCheckpoint:
+            return "checkpoint"
+        case .sandboxSnapshot:
+            return "sandbox snapshot"
+        }
+    }
+
+    /// The artifact family this kind names, or nil for a live resource.
+    var snapshotArtifactKind: SnapshotArtifactKind? {
+        switch self {
+        case .volumeSnapshot: return .volumeSnapshot
+        case .vmCheckpoint: return .vmCheckpoint
+        case .sandboxSnapshot: return .sandboxSnapshot
+        case .virtualMachine, .sandbox, .volume: return nil
+        }
+    }
+
+    /// How long a mutation of `kind` on this resource kind may run before the
+    /// stuck-convergence sweep declares it timed out — the figure
+    /// `extendConvergenceDeadline` stamps at accept time.
+    ///
+    /// These are the `ResourceOperation` completion budgets, unchanged. What
+    /// changed is what reads them: the row's `created_at` plus its budget was
+    /// the deadline, and now the deadline is a column, so a mutation's runway
+    /// survives without a row to hang it on.
+    func completionBudgetSeconds(for kind: VMOperationKind) -> TimeInterval {
+        switch self {
+        case .virtualMachine:
+            switch kind {
+            case .create:
+                // Image-based creates can download multi-gigabyte base images.
+                return 600
+            case .boot:
+                return 180
+            case .delete:
+                // Deletion runs two agent phases inside this one budget: a
+                // best-effort guest shutdown bounded by the shutdown budget,
+                // then the delete itself bounded by the remainder (see
+                // runVMDeletion).
+                return 300
+            case .shutdown, .reboot, .pause, .resume:
+                return 120
+            case .resize:
+                // Hot-add is a couple of QMP commands; the budget covers a
+                // sync round trip and the agent's next observed report, not
+                // the guest's own onlining (which nothing waits for).
+                return 120
+            case .snapshot, .restore:
+                // Full-VM checkpoint / restore (issue #564): QEMU writes or
+                // reads the whole guest RAM through a background job, so the
+                // cost scales with the memory grant at disk speed.
+                return 1800
+            case .snapshotDelete:
+                // Dropping a qcow2 internal snapshot rewrites metadata, not
+                // data.
+                return 120
+            case .snapshotExport:
+                // Unreachable for VMs: a checkpoint lives inside the VM's own
+                // disks, and moving one off-node is out of scope for v1
+                // (issue #564). The budget function stays total.
+                return 300
+            case .attach, .detach:
+                // Volume-only kinds (STR-148); unreachable for VMs. Total
+                // function, unreachable arm.
+                return 120
+            }
+        case .sandbox:
+            switch kind {
+            case .create, .boot:
+                // Both may pull a multi-gigabyte OCI image on a cold agent
+                // cache before the microVM can boot.
+                return 600
+            case .delete:
+                return 300
+            case .shutdown, .reboot, .pause, .resume, .resize:
+                // Pause/resume/resize are unreachable for sandboxes (no
+                // endpoint issues them) but the budget function stays total.
+                return 120
+            case .snapshot:
+                // Checkpoint copies the guest memory file plus a full rootfs
+                // on filesystems without reflink support (issue #426).
+                return 600
+            case .restore:
+                // A local restore is the same class of copy, but a cross-agent
+                // one stages the whole archive from object storage first
+                // (issue #428) — the budget has to cover the slower shape,
+                // since it is keyed by kind and both share `.restore`.
+                return 3600
+            case .snapshotExport:
+                // Export streams the whole archive (guest memory + rootfs)
+                // through the control plane into object storage (issue #428),
+                // so it is bounded by the network, not local disk.
+                return 3600
+            case .snapshotDelete:
+                return 120
+            case .attach, .detach:
+                // Unreachable for sandboxes (no endpoint issues them); the
+                // budget function stays total.
+                return 120
+            }
+        case .volume:
+            switch kind {
+            case .create:
+                // Covers the two slow create strategies: materializing a
+                // multi-gigabyte image, and `qemu-img convert`-ing a full
+                // clone of another volume.
+                return 900
+            case .delete:
+                return 300
+            case .resize:
+                // `qemu-img resize` grows metadata, not data; the budget
+                // covers a sync round trip and the agent's next report.
+                return 180
+            case .attach, .detach:
+                // A QMP hot-plug, or — for a powered-off guest — just the
+                // agent recording the attachment.
+                return 120
+            case .boot, .shutdown, .reboot, .pause, .resume,
+                .snapshot, .snapshotDelete, .restore, .snapshotExport:
+                // A volume has no run state, and its snapshot artifacts are
+                // their own resource kinds since STR-150. Total function,
+                // unreachable arms.
+                return 120
+            }
+
+        // Snapshot artifacts (STR-150). `create` is the capture and the only
+        // budget that differs meaningfully between the families; everything
+        // else is metadata work or unreachable.
+        case .volumeSnapshot:
+            switch kind {
+            case .create:
+                // A qcow2 overlay is a metadata write, but it is taken against
+                // a volume that may be many gigabytes and on a busy host.
+                return 300
+            case .delete:
+                return 120
+            case .boot, .shutdown, .reboot, .pause, .resume, .resize,
+                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach:
+                return 120
+            }
+
+        case .vmCheckpoint:
+            switch kind {
+            case .create:
+                // QEMU writes the whole guest RAM through a background job, so
+                // the cost scales with the memory grant at disk speed.
+                return 1800
+            case .delete:
+                // Dropping an internal snapshot rewrites metadata, not data.
+                return 120
+            case .boot, .shutdown, .reboot, .pause, .resume, .resize,
+                .snapshot, .snapshotDelete, .restore, .snapshotExport, .attach, .detach:
+                return 120
+            }
+
+        case .sandboxSnapshot:
+            switch kind {
+            case .create:
+                // The guest memory file plus, without reflink support, a full
+                // rootfs copy.
+                return 600
+            case .snapshotExport:
+                // The whole archive streams through the control plane into
+                // object storage, so this is bounded by the network rather than
+                // by local disk.
+                return 3600
+            case .delete:
+                return 120
+            case .boot, .shutdown, .reboot, .pause, .resume, .resize,
+                .snapshot, .snapshotDelete, .restore, .attach, .detach:
+                return 120
+            }
+        }
+    }
+}
+
+/// Answers the operations API for mutations that keep no operation row (ADR
+/// 0001 stage 4, STR-147; the row itself retired in stage 11, STR-152).
+///
+/// What a mutation writes is a `resource_events` row and a desired-state
+/// change. Everything an operation used to report is recoverable from those
+/// two — the id and kind from the event, the verdict from the resource's
+/// `conditions` — so `GET /api/operations/{id}` and the per-resource lists keep
+/// answering for clients that poll them, which is still how a **delete**'s
+/// outcome is read: its success is the resource's absence, which no resource
+/// can report about itself.
 ///
 /// This is a *view*, not a store: it holds no state, and every value it returns
-/// is derived at read time. When the last imperative operation kind converts
-/// (STR-151, ADR stage 8) the table and its coordinator go, and this stays.
+/// is derived at read time.
 enum OperationFacade {
 
     /// The mutation's outcome, synthesized from the resource it acted on.
@@ -150,15 +361,14 @@ enum OperationFacade {
         return completedAt >= requestedAt
     }
 
-    /// One resource's operation history, newest first: the mutations recorded
-    /// in `resource_events` merged with whatever operation rows the still
-    /// imperative verbs (VM reboot, the snapshot verbs) wrote.
+    /// One resource's mutation history, newest first — what the
+    /// `GET /<resource>/:id/operations` handlers return once their own
+    /// permission check has produced the id.
     ///
-    /// Merged rather than replaced, because both are real: a snapshot's row is
-    /// the only record of it, and a lifecycle mutation's event is the only
-    /// record of *that*. Deliberately over-fetches `limit` from each side
-    /// before the merge — the alternative is a `UNION` across two tables with
-    /// different shapes for a list that is capped at 100 rows.
+    /// One source now: `resource_events`. It used to merge in the operation
+    /// rows the still-imperative verbs wrote, and the merge went with them
+    /// (STR-152) rather than the events half, because every verb records an
+    /// event and none records a row.
     ///
     /// Every event here names the same resource, so the view the verdicts read
     /// is resolved once rather than per event: this is a list endpoint, and a
@@ -170,9 +380,6 @@ enum OperationFacade {
         limit: Int,
         on db: any Database
     ) async throws -> [OperationResponse] {
-        let operations = try await ResourceOperation.recent(
-            resourceKind: resourceKind, resourceID: resourceID, limit: limit, on: db)
-
         let events = try await ResourceEvent.query(on: db)
             .filter(\.$resourceKind == resourceKind)
             .filter(\.$resourceID == resourceID)
@@ -180,16 +387,54 @@ enum OperationFacade {
             .sort(\.$createdAt, .descending)
             .limit(limit)
             .all()
+        guard !events.isEmpty else { return [] }
 
-        var responses = operations.map { OperationResponse(from: $0) }
-        if !events.isEmpty {
-            let view = try await view(of: resourceKind, id: resourceID, on: db)
-            responses += events.map { response(for: $0, in: view) }
-        }
-        return
-            responses
-            .sorted { ($0.createdAt ?? .distantPast) > ($1.createdAt ?? .distantPast) }
-            .prefix(limit)
-            .map { $0 }
+        let view = try await view(of: resourceKind, id: resourceID, on: db)
+        return events.map { response(for: $0, in: view) }
+    }
+}
+
+// MARK: - Response DTO
+
+/// Wire shape of an operation. `vmId` predates the resource-kind
+/// generalization and is kept verbatim — it is what the frontend's operation
+/// polling decodes — even though for a sandbox operation it carries the
+/// sandbox's id; `resourceKind`/`resourceId` are the kind-aware fields new
+/// clients should read.
+///
+/// Since STR-152 there is exactly one source: `OperationFacade`'s synthesis
+/// over `resource_events` + the resource's `conditions`. The shape is unchanged
+/// from when a `resource_operations` row could also answer, which is the point
+/// — nothing about a client should have to notice which it was.
+struct OperationResponse: Content {
+    let id: UUID?
+    let vmId: UUID
+    let resourceKind: OperationResourceKind
+    let resourceId: UUID
+    let kind: VMOperationKind
+    let status: VMOperationStatus
+    let error: String?
+    let createdAt: Date?
+    let completedAt: Date?
+
+    init(
+        id: UUID?,
+        resourceKind: OperationResourceKind,
+        resourceID: UUID,
+        kind: VMOperationKind,
+        status: VMOperationStatus,
+        error: String?,
+        createdAt: Date?,
+        completedAt: Date?
+    ) {
+        self.id = id
+        self.vmId = resourceID
+        self.resourceKind = resourceKind
+        self.resourceId = resourceID
+        self.kind = kind
+        self.status = status
+        self.error = error
+        self.createdAt = createdAt
+        self.completedAt = completedAt
     }
 }

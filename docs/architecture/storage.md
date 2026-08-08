@@ -519,8 +519,8 @@ every transition so they cannot disagree (STR-129):
   volume outlives the VM and its data is intact on the agent. `volumes.vm_id`
   is `ON DELETE RESTRICT`, so a delete path that forgets fails loudly instead
   of leaving the row naming a device on a VM that no longer exists. The
-  stuck-operation sweep releases any such row it still finds, which is what
-  covers a replica still running an older build mid-rollout.
+  stranded-attachment sweep releases any such row it still finds, which is
+  what covers a replica still running an older build mid-rollout.
 
 ### Pools and replicas (data model)
 

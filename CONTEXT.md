@@ -4,76 +4,82 @@ Ubiquitous language for Strato's control plane. Terms here are the names we
 use in code, tests, docs, and review. Architecture-level maps live in
 `docs/architecture/`; this file pins the vocabulary those maps assume.
 
-## Resource operations
+## Resource mutations
 
-- **Resource operation** — one durable, asynchronous lifecycle mutation of a
-  VM or sandbox (create / start / stop / restart / pause / resume / delete /
-  resize / snapshot …), recorded as a `ResourceOperation` row. Mutation
-  endpoints return **202 Accepted** with the row; the client polls it to a
-  terminal state. The `resource_kind` discriminator (`virtual_machine` |
-  `sandbox`) keys the per-kind behavior — one enum, not a fork per resource.
+- **Resource mutation** — one durable, asynchronous lifecycle change to a VM,
+  sandbox or volume (create / start / stop / restart / pause / resume / delete /
+  resize / snapshot …). Mutation endpoints return **202 Accepted** with
+  `{resource, targetGeneration, mutationId}`; the client refetches the resource
+  and reads its **conditions**. The `resource_kind` discriminator
+  (`OperationResourceKind`) keys the per-kind behavior — one enum, not a fork
+  per resource.
 
-- **Begin** — the atomic first half of an operation: insert the `pending` row
-  and apply the resource's desired-state (or spec) change in **one**
-  transaction, rejecting a second concurrent mutation with **409 Conflict**
-  (the double-submit guard). `ResourceOperation.begin` is the deep primitive;
-  every operation kind, including `create`, goes through it.
+  It used to be a `ResourceOperation` row in a side-table, polled to a terminal
+  state. The row said nothing the resource did not already carry
+  (`observedGeneration` against `generation`), so it retired in ADR 0001 stage
+  11 (STR-152) along with its coordinator, its per-kind verdict paths and its
+  cluster-singleton sweep. What the row *did* uniquely carry — attribution —
+  moved to the resource event.
 
-- **Dispatch strategy** — how an operation reaches the agent after `begin`:
-  - *state sync* — the desired state is already written; nudge the owning
-    agent (or fail the operation if it is unplaced/offline). The success
-    verdict arrives later, from the observed-state applier.
+- **Accept** — the atomic first half of a mutation, `ResourceMutation.accept`:
+  lock the resource row, apply its desired-state (or spec) change, stamp the
+  **convergence deadline**, and append the **resource event**, all in one
+  transaction. There is deliberately no double-submit `409`: desired state is
+  level-triggered, so two overlapping writes leave the last one standing and
+  the row lock is what serializes them.
+
+- **Dispatch strategy** — how an accepted mutation reaches the agent:
+  - *state sync* — the desired state is already written; ring the agent's
+    doorbell (or degrade the resource now if it is unplaced/offline). Success
+    arrives later, from the observed-state applier.
   - *placement* — background scheduling + placement + first sync (`create`).
-    Records a failure verdict on error; success is deferred to the applier.
-  - *direct resolution* — resolve the operation locally without agent
-    teardown (the offline/unplaced delete; online deletes ride *state sync*):
-    run the removal work, recording the verdict only if the work reports it
-    finished — otherwise the row stays `pending` for whoever still owes
-    cleanup, with the stuck-operation sweep as the backstop.
+    Degrades the resource on error; success is deferred to the applier.
+  - *direct resolution* — resolve locally without agent teardown (the
+    offline/unplaced delete; online deletes ride *state sync*).
 
-- **Verdict** — the terminal outcome recorded on the operation row
-  (`succeeded` / `failed`). `recordVerdict` is the single choke point for the
-  **controller and sweep** verdict paths: it marks the row terminal *iff still
-  pending* (so the agent-response path and the stuck-operation sweep cannot
-  overwrite each other) and, on failure, runs resolve-after-verdict. (The
-  observed-state applier records its own success/convergence-failure verdicts
-  inline, because its failure resolution is convergence-specific.)
+- **Convergence deadline** — how long an accepted mutation has before it is
+  declared timed out, stamped as `max(existing, now + budget(kind))` so a short
+  mutation can never shorten a long one's runway. It replaced the operation
+  row's `created_at` plus its per-kind budget; the budget figures themselves
+  survive as `OperationResourceKind.completionBudgetSeconds(for:)`.
 
-- **Resolve-after-verdict** — realigning a resource with reality once its
-  operation failed: escalate a still-transitional (or never-created) resource
-  to `.error`, then `revertDesiredToObserved` so an unachieved intent (e.g. a
+- **Resolve-after-failure** — realigning a resource with reality once a
+  mutation failed: escalate a still-transitional (or never-created) resource to
+  `.error`, then `revertDesiredToObserved` so an unachieved intent (e.g. a
   failed delete's `.absent`) does not linger and replay destructively on a
-  later sync. Lives on the model as `resolveForStuckOperation(_:)`, shared by
-  `recordVerdict` and the sweep.
+  later sync. Lives on the model as `resolveForStuckOperation(_:)`, called by
+  `ResourceConvergence.recordFailure`.
 
-- **Stuck-operation sweep** — the cluster-singleton backstop that fails any
-  operation still `pending` past its per-kind completion budget (control-plane
-  restart, lost agent) and resolves the resource it left in flight.
-
-- **ResourceOperationCoordinator** — the deep module that owns the operation
-  lifecycle end to end: `begin` → dispatch (by strategy) → `recordVerdict`.
-  Both controllers and the sweep drive operations through its small interface
-  instead of re-spelling the begin/dispatch/verdict sequence per handler.
+- **Stuck-convergence sweep** — the backstop that marks a resource `degraded`
+  once its convergence deadline passes unconverged. Deliberately **not** a
+  cluster singleton: the write is idempotent and every replica computes the
+  same verdict, and the one non-idempotent effect (the completion webhook) is
+  claimed by a conditional `UPDATE` on the deadline column.
 
 - **Resource event** — one append-only `resource_events` row describing a
   mutation: the **actor** that asked for it, the resource it acted on (kind,
   id, and name snapshot), the mutation kind, the **target generation**, and
   the org/project it happened in. Written in the mutation's own transaction,
   never updated, never swept, no retention — the immutability enforced by a
-  trigger, not just by convention. It is the durable attribution record;
-  `resource_operations.user_id` is the transitional one, and mutations
-  dual-write both until the operations table retires (ADR 0001).
+  trigger, not just by convention. It is the durable attribution record, and
+  since STR-152 the only one.
 
 - **Actor** — who performed a mutation, as a *principal type plus id*
-  (`user` / `service_account` / `workload` / `system`) rather than the plain
-  user id an operation row carries. `system` is the control plane acting with
-  no principal behind it — the sandbox expiry sweep — and is the one actor
-  with no id, because it is not a row.
+  (`user` / `service_account` / `workload` / `system`). `system` is the control
+  plane acting with no principal behind it — the sandbox expiry sweep — and is
+  the one actor with no id, because it is not a row. (The operation row could
+  express neither: its `user_id` was a non-null *user* id, and the system actor
+  had to be spelled as a sentinel UUID matching no real user.)
+
+- **Operations façade** — `GET /api/operations/:id` and the per-resource
+  history lists, synthesized on read from `resource_events` plus the resource's
+  conditions (`OperationFacade`). Kept because a **delete**'s outcome is the one
+  a resource cannot report about itself.
 
 - **AgentDispatch** — the seam a mutation depends on to reach agents
   (`agentIsOnline`, `syncDesiredState`). Production adapter: `AgentService`.
-  Test adapter: an in-memory fake, so the lifecycle is testable without an agent
-  socket or an HTTP round-trip. `performOperationAwaitingResponse` — the
+  Test adapter: an in-memory fake, so the accept path is testable without an
+  agent socket or an HTTP round-trip. `performOperationAwaitingResponse` — the
   correlated-command half — went with the last verb that used it (STR-151).
 
 ## Desired state
@@ -99,8 +105,8 @@ use in code, tests, docs, and review. Architecture-level maps live in
   carry:
   *converged* / *targetGeneration* / *observedGeneration* / *phase* /
   *degraded*. Derived on read, never stored, and never written by a mutation —
-  it restates the reconciliation loop's own state, so refetching a resource
-  until `converged` is the alternative to polling its **resource operation**.
+  it restates the reconciliation loop's own state, and refetching a resource
+  until `converged` is how a client follows a mutation.
 - **Degraded** — the last convergence attempt that failed (its error and the
   generation that produced it), carried until something converges. Deliberately
   independent of `targetGeneration`: a degraded condition naming an older
@@ -153,30 +159,26 @@ use in code, tests, docs, and review. Architecture-level maps live in
 
 - **Replica** — one control-plane process. Each generates a fresh `replicaID`
   at startup; an agent's WebSocket lives on exactly one replica at a time.
-- **Socket route** — the `agent:{name}:replica` key naming the replica that
-  holds an agent's socket. Recorded on accept and refreshed by every heartbeat;
-  a crashed replica's claim expires by TTL.
-- **Nudge** — a fire-and-forget "your agent's desired state changed" message a
-  mutating replica sends to the socket-holding replica so it pushes a fresh
-  sync. A latency optimization only — the periodic sync is the backstop, so a
-  lost nudge is always safe.
-- **Cross-replica RPC** — the correlated request/reply forwarding for exchanges
-  that are *actions, not states* and so cannot ride the level-triggered sync.
-  Volumes left this list in STR-148, snapshot artifacts in STR-150, and the last
-  three — VM reboot, VM restore, sandbox restore — in STR-151, which counted
-  them instead. **Nothing sends on it now**: console and exec write straight to
-  the local socket, so the machinery is reachable only from itself and retires
-  in STR-152.
-- **ReplicaMessageBridge** — the deep module (`app.replicaBridge`) that owns
-  the whole cross-replica seam: route recording, the local-vs-forward routing
-  decision, nudge fan-out, RPC forwarding, and the subscription lifecycle. It
-  composes `CoordinationService` (the Valkey / in-memory `CoordinationStore`
-  adapters).
-- **ReplicaBridgeDelegate** — the narrow seam the bridge depends on for the two
-  operations that require the local socket: running a forwarded exchange over a
-  held socket, and turning a nudge into a local desired-state sync. Production
-  adapter: `AgentService`. Test adapter: an in-memory fake, so the bridge is
-  testable through its own interface without a real agent socket.
+- **Doorbell** — a contentless "this agent's desired state changed" broadcast on
+  the one fleet-wide `agent:doorbell` channel (STR-146). Every replica hears it
+  and asks itself whether it can act — it holds that agent's parked poll, or its
+  socket — and at most one can. A latency optimization only: the agent's own
+  unconditional re-fetch is the backstop, so a lost doorbell is always safe, and
+  over-ringing is free.
+- **ReplicaMessageBridge** — the module (`app.replicaBridge`) that owns the
+  cross-replica seam: the doorbell and the subscription lifecycle, composing
+  `CoordinationService` (the Valkey / in-memory `CoordinationStore` adapters).
+  It used to own two more things — a `agent:{name}:replica` **socket route**
+  naming the replica that held each agent's socket, and the correlated
+  **cross-replica RPC** forwarding that read it, for exchanges that were
+  *actions, not states*. Volumes left that list in STR-148, snapshot artifacts
+  in STR-150 and the last three (VM reboot, VM restore, sandbox restore) in
+  STR-151; with no sender left, both were deleted in STR-152.
+- **ReplicaBridgeDelegate** — the narrow seam the bridge depends on for the one
+  operation that requires local state: turning a doorbell into a local
+  desired-state sync. Production adapter: `AgentService`. Test adapter: an
+  in-memory fake, so the bridge is testable through its own interface without a
+  real agent socket.
 
 ## Volume attachment
 
