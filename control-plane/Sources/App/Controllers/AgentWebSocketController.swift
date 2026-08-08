@@ -373,11 +373,24 @@ struct AgentWebSocketController: RouteCollection {
                     }
                 }
 
-            // No arm for `.success`/`.error`: nothing correlates them any more
-            // (STR-152), and the agent stopped sending them with the same
-            // change. They travel control-plane → agent only, and an inbound
-            // one falls to the unknown-type warning below, which is what a
-            // frame nobody expects should do.
+            case .success, .error:
+                // Dropped, not correlated: the pending-request apparatus went
+                // in STR-152, and the agent stopped sending these with the same
+                // change. They are control-plane → agent frames now.
+                //
+                // An explicit arm rather than the `default:` below, because
+                // that one *replies* with an error. A pre-STR-152 agent still
+                // sends `error` from its console-connect failure path, so
+                // during a rolling upgrade every failed console open would cost
+                // a warning here and an error-level "control plane reported an
+                // error" on the agent — noise about a frame we deliberately
+                // ignore.
+                req.logger.debug(
+                    "Ignoring an uncorrelated response frame from an agent",
+                    metadata: [
+                        "agentName": .string(agentName),
+                        "type": .string(envelope.type.rawValue),
+                    ])
 
             case .observedState:
                 // Full observed-state report from a state-sync agent: updates

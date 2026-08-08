@@ -730,16 +730,38 @@ actor AgentService {
             metadata: ["agentId": .string(agentId), "agentKey": .string(agentKey)])
     }
 
-    /// Socket-close cleanup.
+    /// Socket-close cleanup. Only reached when this socket was still the
+    /// agent's current *local* connection — `removeConnection(ifCurrent:)` in
+    /// the close handler already drops a delayed close superseded by a
+    /// same-replica reconnect.
     ///
-    /// This used to consult the `agent:{name}:replica` routing key and skip the
-    /// offline mark when the agent had already reconnected to another replica.
-    /// The key existed for the cross-replica RPC bridge and went with it
-    /// (STR-152), so a close delayed past such a reconnect now writes `offline`
-    /// under a live connection — for at most one heartbeat, since the holding
-    /// replica's next frame writes `.online` back and the stale-agent sweep
-    /// skips anything with a live presence key. A ~20s stale badge is the whole
-    /// cost of not keeping a distributed directory fresh for one guard.
+    /// This used to consult the `agent:{name}:replica` routing key and also
+    /// skip the offline mark when the agent had reconnected to *another*
+    /// replica. The key existed for the cross-replica RPC bridge and went with
+    /// it (STR-152), so a close delayed past such a reconnect now writes
+    /// `offline` under a live connection until the holding replica's next
+    /// frame writes `.online` back — bounded by the agent's heartbeat interval,
+    /// about 20 seconds.
+    ///
+    /// **That window is not cosmetic**, and it is worth being precise about the
+    /// cost: `status == .online` is an admission gate, not just a badge.
+    /// `SnapshotArtifactMutation.requireCaptureCapableAgent` refuses a capture
+    /// with `409 Agent is offline`, and `selectVolumeAgent` and the scheduler's
+    /// `filterEligibleAgents` both skip the host. So a capture aimed at that
+    /// agent is *rejected* rather than delayed, and new placements route around
+    /// a healthy node.
+    ///
+    /// Presence is deliberately not used as a stand-in. `agent:{name}:presence`
+    /// is a single fleet-wide key with no owner attribution — this replica
+    /// refreshed it within the last half-TTL too — so "presence is live" cannot
+    /// distinguish another replica's claim from our own, and skipping the
+    /// offline mark whenever it is live would leave a genuinely dead agent
+    /// `online` for up to a full TTL on the single-replica deployments that are
+    /// the common case. That inverts the failure into the more damaging
+    /// direction: admitting placements onto a host that is gone, rather than
+    /// refusing them onto one that is live. Closing the window properly needs a
+    /// signal that says *which* connection is current, which is the directory
+    /// this change deleted.
     func removeAgent(_ agentKey: String) async {
         presenceRefreshedAt.removeValue(forKey: agentKey)
 

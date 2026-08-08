@@ -20,6 +20,13 @@ import SQLKit
 /// `EnforcePersistedEnumValues` installed on it, none of which anything else
 /// references.
 ///
+/// `vm_operations` is dropped alongside it, and is not redundant. The table was
+/// created under that name and renamed by `GeneralizeVMOperations` (issue
+/// #412); both migrations are deleted here, so a database old enough to have
+/// run the first but not the second would keep a `vm_operations` table that
+/// nothing left in the tree names. That ordering is unlikely to exist in the
+/// wild, but the cost of covering it is one statement.
+///
 /// `revert` is a no-op rather than a re-create: restoring an empty table with
 /// no writers and no readers would be theatre, and the rows are gone either
 /// way.
@@ -28,6 +35,8 @@ struct DropResourceOperations: AsyncMigration {
         let sql = try PostgresMigrationSQL.database(database)
         try await PostgresMigrationSQL.execute(
             "DROP TABLE IF EXISTS \"resource_operations\" CASCADE", on: sql)
+        try await PostgresMigrationSQL.execute(
+            "DROP TABLE IF EXISTS \"vm_operations\" CASCADE", on: sql)
     }
 
     func revert(on database: any Database) async throws {}

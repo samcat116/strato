@@ -77,7 +77,7 @@ struct MigrationRoundTripTests {
     /// migrations are around to take down. `DropResourceOperations` is the only
     /// thing that removes them, so it is worth asserting against a table shaped
     /// like the one it will actually meet rather than against nothing.
-    @Test("The drop migration removes a pre-upgrade operations table and its dependents")
+    @Test("The drop migration removes both pre-upgrade operations tables and their dependents")
     func dropMigrationRemovesPreUpgradeTable() async throws {
         try await withTestApp { app in
             let sql = try #require(app.db as? SQLDatabase)
@@ -115,10 +115,21 @@ struct MigrationRoundTripTests {
                 """
             ).run()
 
+            // A database old enough to have run `CreateVMOperation` but never
+            // `GeneralizeVMOperations` keeps the pre-rename table; both
+            // migrations are deleted, so this is the only thing left that names
+            // it.
+            try await sql.raw(
+                "CREATE TABLE vm_operations (id uuid PRIMARY KEY, vm_id uuid NOT NULL, status text NOT NULL)"
+            ).run()
+
             try await DropResourceOperations().prepare(on: app.db)
 
             await #expect(throws: (any Error).self) {
                 _ = try await sql.raw("SELECT id FROM resource_operations").all()
+            }
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT id FROM vm_operations").all()
             }
             let indexes = try await sql.raw(
                 "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() "

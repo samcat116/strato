@@ -666,6 +666,65 @@ final class SandboxTests {
         }
     }
 
+    /// A restore is not consumed by being superseded — the agent applies one
+    /// only when the workload is wanted running, so a stop makes it *wait*
+    /// (`Reconciliation.planWorkloadSteps`). The guard therefore has to key on
+    /// the newest `.restore`, not on the newest mutation: keying on the latter
+    /// would let a `.shutdown` issued after the restore hide it and admit a
+    /// fork the retired operation row refused.
+    @Test("A restore hidden behind a newer mutation still blocks a fork")
+    func createFromSnapshotBlockedByRestoreBehindNewerMutation() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let agentId = try await registerAgent(
+                app: app,
+                sandbox: source,
+                named: "superseded-restore-agent",
+                sandboxCapable: true)
+            let snapshot = SandboxSnapshot(
+                name: "superseded-restore-checkpoint",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.guestControlProtocolVersion =
+                SandboxGuestControlProtocol.currentVersion
+            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
+            try await snapshot.save(on: app.db)
+
+            let sourceID = try source.requireID()
+            let userID = try user.requireID()
+
+            // The restore is requested first...
+            source.requestRestore(snapshotID: snapshot.id!)
+            try await source.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .restore, resourceKind: .sandbox, resourceID: sourceID,
+                actor: .user(userID), on: app.db)
+
+            // ...then a stop lands on top of it, making `.shutdown` the newest
+            // recorded mutation while the restore is still unapplied.
+            source.setDesiredStatus(.stopped)
+            try await source.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .shutdown, resourceKind: .sandbox, resourceID: sourceID,
+                actor: .user(userID), on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "fork-behind-superseded-restore",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("being restored in place"))
+            }
+        }
+    }
+
     /// The other half of the restore guard: it has to *close*. The operation
     /// row it used to read closed when an RPC returned; the nonce closes when
     /// the agent reports the generation, which is the only signal that the
