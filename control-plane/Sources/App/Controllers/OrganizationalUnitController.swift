@@ -99,7 +99,7 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        let createRequest = try req.content.decode(CreateOrganizationalUnitRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateOrganizationalUnitRequest.self)
 
         // Verify user has admin access to organization
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
@@ -168,7 +168,7 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
-        let updateRequest = try req.content.decode(UpdateOrganizationalUnitRequest.self)
+        let updateRequest = try req.content.decodeValidated(UpdateOrganizationalUnitRequest.self)
 
         // Verify user has admin access
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
@@ -430,7 +430,7 @@ struct OrganizationalUnitController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
-        let createRequest = try req.content.decode(CreateOrganizationalUnitRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateOrganizationalUnitRequest.self)
 
         // Verify user has admin access to organization
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)

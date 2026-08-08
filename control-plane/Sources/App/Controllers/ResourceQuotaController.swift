@@ -189,7 +189,7 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid quota ID")
         }
 
-        let updateRequest = try req.content.decode(UpdateResourceQuotaRequest.self)
+        let updateRequest = try req.content.decodeValidated(UpdateResourceQuotaRequest.self)
 
         guard let quota = try await ResourceQuota.find(quotaID, on: req.db) else {
             throw Abort(.notFound, reason: "Resource quota not found")
@@ -354,7 +354,7 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization ID")
         }
 
-        let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
 
         // Verify user has admin access to organization
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
@@ -425,7 +425,7 @@ struct ResourceQuotaController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid organization or folder ID")
         }
 
-        let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
 
         // Verify user has admin access to organization
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
@@ -490,7 +490,7 @@ struct ResourceQuotaController: RouteCollection {
         let project = try await req.requireProject()
         let projectID = try project.requireID()
 
-        let createRequest = try req.content.decode(CreateResourceQuotaRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateResourceQuotaRequest.self)
 
         // Verify user has admin access to project
         try await OrganizationAccessService.requireProjectQuotaAdmin(project: project, on: req)

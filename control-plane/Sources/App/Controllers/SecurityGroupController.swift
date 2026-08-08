@@ -87,7 +87,7 @@ struct SecurityGroupController: RouteCollection {
     @Sendable
     func createGroup(req: Request) async throws -> SecurityGroupResponse {
         let user = try req.auth.require(User.self)
-        let request = try req.content.decode(CreateSecurityGroupRequest.self)
+        let request = try req.content.decodeValidated(CreateSecurityGroupRequest.self)
 
         // Same project resolution as networks/volumes/floating IPs.
         let projectId: UUID
@@ -115,10 +115,8 @@ struct SecurityGroupController: RouteCollection {
             throw Abort(.badRequest, reason: "Project \(projectId) does not exist")
         }
 
-        let name = request.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
-            throw Abort(.badRequest, reason: "Security group name must not be empty")
-        }
+        // Trimmed and bounded by `CreateSecurityGroupRequest.validate()`.
+        let name = request.name
         guard name != SecurityGroup.defaultGroupName else {
             throw Abort(.conflict, reason: "'\(SecurityGroup.defaultGroupName)' is reserved for the default group")
         }
@@ -183,16 +181,11 @@ struct SecurityGroupController: RouteCollection {
     @Sendable
     func updateGroup(req: Request) async throws -> SecurityGroupResponse {
         let group = try await fetchGroupWithPermission(req: req, permission: "update")
-        let request = try req.content.decode(UpdateSecurityGroupRequest.self)
+        let request = try req.content.decodeValidated(UpdateSecurityGroupRequest.self)
 
-        if let newName = request.name.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }),
-            newName != group.name
-        {
+        if let newName = request.name, newName != group.name {
             guard !group.isDefault else {
                 throw Abort(.conflict, reason: "The default security group cannot be renamed")
-            }
-            guard !newName.isEmpty else {
-                throw Abort(.badRequest, reason: "Security group name must not be empty")
             }
             guard newName != SecurityGroup.defaultGroupName else {
                 throw Abort(

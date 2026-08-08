@@ -107,7 +107,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func createVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let request = try req.content.decode(CreateVolumeRequest.self)
+        let request = try req.content.decodeValidated(CreateVolumeRequest.self)
 
         // Determine project
         let projectId: UUID
@@ -294,7 +294,7 @@ struct VolumeController: RouteCollection {
     func updateVolume(req: Request) async throws -> VolumeResponse {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "update")
-        let request = try req.content.decode(UpdateVolumeRequest.self)
+        let request = try req.content.decodeValidated(UpdateVolumeRequest.self)
 
         if let name = request.name {
             volume.name = name
@@ -737,7 +737,7 @@ struct VolumeController: RouteCollection {
     func createSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "snapshot")
-        let request = try req.content.decode(CreateSnapshotRequest.self)
+        let request = try req.content.decodeValidated(CreateSnapshotRequest.self)
 
         // Validate volume can be snapshotted. An attached volume gets its own
         // message: refusing it is a deliberate correctness guard (issue #747),
@@ -821,7 +821,7 @@ struct VolumeController: RouteCollection {
     func cloneVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let sourceVolume = try await fetchVolumeWithPermission(req: req, user: user, permission: "clone")
-        let request = try req.content.decode(CloneVolumeRequest.self)
+        let request = try req.content.decodeValidated(CloneVolumeRequest.self)
 
         // Cloning reads the source's bytes, which is why it keeps a
         // converged-and-detached requirement the other verbs dropped: copying a
