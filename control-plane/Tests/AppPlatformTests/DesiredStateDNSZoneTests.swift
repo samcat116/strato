@@ -285,6 +285,56 @@ final class DesiredStateDNSZoneTests {
         }
     }
 
+    @Test("Zones assembled together stay separate, each with only its own networks' addresses")
+    func batchedAssemblyKeepsZonesSeparate() async throws {
+        // The sync assembles every zone in one batch, so the grouping is the
+        // thing that can break: a VM multi-homed across two networks with
+        // different primary zones registers in both, and each zone must carry
+        // that zone's suffix and only the addresses its own networks allocated.
+        try await withDNSSyncApp { app, _, project in
+            let agentId = try await self.registerAgent(app: app, named: "batch-agent")
+            let builder = TestDataBuilder(db: app.db)
+            let front = try await builder.createNetwork(
+                name: "front", project: project, subnet: "10.68.0.0/24", gateway: "10.68.0.1")
+            let back = try await builder.createNetwork(
+                name: "back", project: project, subnet: "10.69.0.0/24", gateway: "10.69.0.1")
+            let frontZone = DNSZone(name: "front.internal", projectID: try project.requireID())
+            try await frontZone.save(on: app.db)
+            let backZone = DNSZone(name: "back.internal", projectID: try project.requireID())
+            try await backZone.save(on: app.db)
+            try await self.attachZone(app: app, zone: frontZone, to: front, primary: true)
+            try await self.attachZone(app: app, zone: backZone, to: back, primary: true)
+
+            let vm = try await self.placeVM(
+                app: app, project: project, named: "multi", hostname: "multi", onAgent: agentId,
+                network: front, ipv4: "10.68.0.5")
+            // A second NIC on the other network, so one VM lands in both zones.
+            let nic = VMNetworkInterface(
+                vmID: try vm.requireID(), logicalNetworkID: try back.requireID(),
+                macAddress: "00:0c:29:00:00:02", deviceName: "net1", orderIndex: 1)
+            try await nic.save(on: app.db)
+            try await VMInterfaceAddress(
+                interfaceID: try nic.requireID(), logicalNetworkID: try back.requireID(),
+                family: .ipv4, address: "10.69.0.9", prefixLength: 24, gateway: back.gateway
+            ).save(on: app.db)
+
+            let zones = try #require(try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones)
+            #expect(zones.count == 2)
+            let assembledFront = try #require(zones.first { $0.zoneName == "front.internal" })
+            let assembledBack = try #require(zones.first { $0.zoneName == "back.internal" })
+            #expect(
+                assembledFront.records.first { $0.type == "A" }.map { ($0.name, $0.values) } ?? ("", [])
+                    == ("multi.front.internal", ["10.68.0.5"]))
+            #expect(
+                assembledBack.records.first { $0.type == "A" }.map { ($0.name, $0.values) } ?? ("", [])
+                    == ("multi.back.internal", ["10.69.0.9"]))
+            // Each zone's PTR points at the name published in that zone.
+            #expect(
+                assembledFront.records.first { $0.type == "PTR" }?.values == ["multi.front.internal"])
+            #expect(assembledBack.records.first { $0.type == "PTR" }?.values == ["multi.back.internal"])
+        }
+    }
+
     @Test("Records marked for external publication only are not sent to agents")
     func externalViewRecordsAreWithheld() async throws {
         try await withDNSSyncApp { app, _, project in

@@ -491,23 +491,19 @@ struct DesiredStateAssembler {
         for attachment in attachments {
             networksByZone[attachment.$zone.id, default: []].append(attachment.$logicalNetwork.id)
         }
-        let zones = try await DNSZone.query(on: db)
-            .filter(\.$id ~~ Array(networksByZone.keys))
-            .all()
-
-        // One assembly per zone, and each is a handful of queries. Bounded by
-        // the number of zones attached to this site's networks rather than by
-        // anything that grows with the fleet, and it runs only for the one
-        // agent per site that is the authority — but it does run on every poll,
-        // so it is the first thing to batch if zone counts ever get large.
-        var entries: [DesiredDNSZone] = []
-        for zone in zones {
+        var names: [UUID: String] = [:]
+        for zone in try await DNSZone.query(on: db).filter(\.$id ~~ Array(networksByZone.keys)).all() {
             guard let zoneID = zone.id else { continue }
-            let assembled = try await DNSZoneAssembler.assemble(zone: zone, on: db)
-            entries.append(
-                DNSZoneAssembler.desiredZone(assembled, networkIDs: networksByZone[zoneID] ?? []))
+            names[zoneID] = zone.name
         }
-        return entries.sorted { $0.zoneId.uuidString < $1.zoneId.uuidString }
+
+        // Batched, not one assembly per zone: this runs on *every* poll of the
+        // authority agent, and each zone's derivation reads every NIC and VM on
+        // its networks. `assemble(zones:)` is a fixed number of queries however
+        // many zones a site's networks attach.
+        return try await DNSZoneAssembler.assemble(zones: names, on: db)
+            .map { DNSZoneAssembler.desiredZone($0, networkIDs: networksByZone[$0.zoneId] ?? []) }
+            .sorted { $0.zoneId.uuidString < $1.zoneId.uuidString }
     }
 
     /// Every snapshot artifact this agent holds, as desired entries (STR-150).

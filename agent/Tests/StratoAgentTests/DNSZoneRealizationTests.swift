@@ -85,6 +85,30 @@ struct DNSZoneRealizationTests {
         #expect(flattened.malformedNames == ["bad name.acme.internal", "broken.acme.internal"])
     }
 
+    @Test("A reverse name with more than one target reports what it could not publish")
+    func reportsTruncatedReverseTargets() {
+        // OVN's value for a reverse name is one name, not a list. Reachable
+        // both ways: several authored PTR rows union into one RRset, and two
+        // VMs on overlapping subnets derive a PTR at the same address.
+        let flattened = OVNDNSRecords.flatten([
+            record("5.0.0.10.in-addr.arpa", "PTR", ["a.acme.internal", "b.acme.internal"]),
+            record("6.0.0.10.in-addr.arpa", "PTR", ["c.acme.internal"]),
+        ])
+        #expect(flattened.records["5.0.0.10.in-addr.arpa"] == "a.acme.internal")
+        #expect(flattened.records["6.0.0.10.in-addr.arpa"] == "c.acme.internal")
+        #expect(flattened.truncatedNames == ["5.0.0.10.in-addr.arpa"])
+    }
+
+    @Test("Two records claiming one reverse name keep the first and report the clash")
+    func reportsCollidingReverseNames() {
+        let flattened = OVNDNSRecords.flatten([
+            record("5.0.0.10.in-addr.arpa", "PTR", ["a.acme.internal"]),
+            record("5.0.0.10.in-addr.arpa", "PTR", ["b.acme.internal"]),
+        ])
+        #expect(flattened.records["5.0.0.10.in-addr.arpa"] == "a.acme.internal")
+        #expect(flattened.truncatedNames == ["5.0.0.10.in-addr.arpa"])
+    }
+
     @Test("Flattening is order-independent, so a replayed sync writes identical records")
     func flatteningIsStable() {
         let records = [
@@ -99,10 +123,10 @@ struct DNSZoneRealizationTests {
 
     @Test("A zone plans one row attached to each of its networks' switches")
     func plansSwitchAttachments() {
-        let (plans, diagnostics) = DNSZoneReconciler.plan(zones: [
+        let plans = DNSZoneReconciler.plan(zones: [
             zone(networkIds: [otherNetworkID, networkID], records: [record("web.acme.internal", "A", ["10.0.0.5"])])
         ])
-        #expect(diagnostics.isEmpty)
+        #expect(plans[0].diagnostics.isEmpty)
         #expect(plans.count == 1)
         #expect(plans[0].switchNames == [switchName, otherSwitchName].sorted())
         #expect(plans[0].records == ["web.acme.internal": "10.0.0.5"])
@@ -110,20 +134,20 @@ struct DNSZoneRealizationTests {
 
     @Test("Unrealizable record types produce a diagnostic rather than a failed plan")
     func plansWithDiagnostics() {
-        let (plans, diagnostics) = DNSZoneReconciler.plan(zones: [
+        let plans = DNSZoneReconciler.plan(zones: [
             zone(records: [record("www.acme.internal", "CNAME", ["web.acme.internal"])])
         ])
         #expect(plans.count == 1)
         #expect(plans[0].records.isEmpty)
-        #expect(diagnostics.count == 1)
-        #expect(diagnostics[0].contains("CNAME"))
+        #expect(plans[0].diagnostics.count == 1)
+        #expect(plans[0].diagnostics[0].contains("CNAME"))
     }
 
     // MARK: - Writes
 
     @Test("A zone with no row yet is created and attached")
     func createsMissingZone() {
-        let (plans, _) = DNSZoneReconciler.plan(zones: [
+        let plans = DNSZoneReconciler.plan(zones: [
             zone(records: [record("web.acme.internal", "A", ["10.0.0.5"])])
         ])
         let writes = DNSZoneReconciler.writes(desired: plans, observed: [])
@@ -136,7 +160,7 @@ struct DNSZoneRealizationTests {
 
     @Test("An unchanged zone costs no OVSDB transaction at all")
     func skipsUnchangedZone() {
-        let (plans, _) = DNSZoneReconciler.plan(zones: [
+        let plans = DNSZoneReconciler.plan(zones: [
             zone(records: [record("web.acme.internal", "A", ["10.0.0.5"])])
         ])
         let observed = ObservedDNSZone(
@@ -145,9 +169,27 @@ struct DNSZoneRealizationTests {
         #expect(DNSZoneReconciler.writes(desired: plans, observed: [observed]).isEmpty)
     }
 
+    @Test("A converged zone carrying unrealizable records plans no write, so it stays quiet")
+    func convergedZoneWithDiagnosticsPlansNoWrite() {
+        // The diagnostic is logged per write, so this is what keeps a zone
+        // holding one TXT record from warning on every sync forever: it has
+        // something to say, and nothing to do.
+        let plans = DNSZoneReconciler.plan(zones: [
+            zone(records: [
+                record("web.acme.internal", "A", ["10.0.0.5"]),
+                record("acme.internal", "TXT", ["v=spf1 -all"]),
+            ])
+        ])
+        #expect(!plans[0].diagnostics.isEmpty)
+        let observed = ObservedDNSZone(
+            uuid: "row-1", zoneId: zoneID, recordsHash: "hash-1", zoneName: "acme.internal",
+            records: ["web.acme.internal": "10.0.0.5"], switchNames: [switchName])
+        #expect(DNSZoneReconciler.writes(desired: plans, observed: [observed]).isEmpty)
+    }
+
     @Test("A changed hash rewrites the row in place, keeping its attachments")
     func rewritesOnHashChange() {
-        let (plans, _) = DNSZoneReconciler.plan(zones: [
+        let plans = DNSZoneReconciler.plan(zones: [
             zone(records: [record("web.acme.internal", "A", ["10.0.0.6"])], hash: "hash-2")
         ])
         let observed = ObservedDNSZone(
@@ -163,7 +205,7 @@ struct DNSZoneRealizationTests {
 
     @Test("A row whose contents drifted under a matching stamp is still healed")
     func healsDriftedRecords() {
-        let (plans, _) = DNSZoneReconciler.plan(zones: [
+        let plans = DNSZoneReconciler.plan(zones: [
             zone(records: [record("web.acme.internal", "A", ["10.0.0.5"])])
         ])
         let observed = ObservedDNSZone(
@@ -172,11 +214,26 @@ struct DNSZoneRealizationTests {
         let writes = DNSZoneReconciler.writes(desired: plans, observed: [observed])
         #expect(writes.count == 1)
         #expect(writes[0].rewriteRecords)
+        // Flagged as a drift heal, so the same zone healing on every pass —
+        // which is what an OVSDB value that does not round-trip identically
+        // would look like — shows up in the logs instead of being silent.
+        #expect(writes[0].healsDrift)
+    }
+
+    @Test("A rewrite the stamp asked for is not reported as drift")
+    func stampDrivenRewriteIsNotDrift() {
+        let plans = DNSZoneReconciler.plan(zones: [
+            zone(records: [record("web.acme.internal", "A", ["10.0.0.6"])], hash: "hash-2")
+        ])
+        let observed = ObservedDNSZone(
+            uuid: "row-1", zoneId: zoneID, recordsHash: "hash-1", zoneName: "acme.internal",
+            records: ["web.acme.internal": "10.0.0.5"], switchNames: [switchName])
+        #expect(!DNSZoneReconciler.writes(desired: plans, observed: [observed])[0].healsDrift)
     }
 
     @Test("A row written before stamping is rewritten rather than trusted")
     func rewritesUnstampedRow() {
-        let (plans, _) = DNSZoneReconciler.plan(zones: [zone(records: [])])
+        let plans = DNSZoneReconciler.plan(zones: [zone(records: [])])
         let observed = ObservedDNSZone(
             uuid: "row-1", zoneId: zoneID, recordsHash: nil, zoneName: "acme.internal",
             records: [:], switchNames: [switchName])
@@ -185,7 +242,7 @@ struct DNSZoneRealizationTests {
 
     @Test("A newly attached network is attached without rewriting the records")
     func attachesNewNetworkOnly() {
-        let (plans, _) = DNSZoneReconciler.plan(zones: [
+        let plans = DNSZoneReconciler.plan(zones: [
             zone(
                 networkIds: [networkID, otherNetworkID],
                 records: [record("web.acme.internal", "A", ["10.0.0.5"])])
@@ -201,7 +258,7 @@ struct DNSZoneRealizationTests {
 
     @Test("A detached network's switch stops answering from the zone")
     func detachesRemovedNetwork() {
-        let (plans, _) = DNSZoneReconciler.plan(zones: [zone(networkIds: [networkID], records: [])])
+        let plans = DNSZoneReconciler.plan(zones: [zone(networkIds: [networkID], records: [])])
         let observed = ObservedDNSZone(
             uuid: "row-1", zoneId: zoneID, recordsHash: "hash-1", zoneName: "acme.internal",
             records: [:], switchNames: [switchName, otherSwitchName])
@@ -214,7 +271,7 @@ struct DNSZoneRealizationTests {
 
     @Test("A zone that no longer reaches this agent's networks has its row removed")
     func tearsDownUnwantedZone() {
-        let (plans, _) = DNSZoneReconciler.plan(zones: [])
+        let plans = DNSZoneReconciler.plan(zones: [])
         let observed = ObservedDNSZone(
             uuid: "row-1", zoneId: zoneID, recordsHash: "hash-1", zoneName: "acme.internal",
             records: [:], switchNames: [switchName])
@@ -223,7 +280,7 @@ struct DNSZoneRealizationTests {
 
     @Test("A duplicate row for one zone is torn down while the other converges")
     func tearsDownDuplicateRows() {
-        let (plans, _) = DNSZoneReconciler.plan(zones: [zone(records: [])])
+        let plans = DNSZoneReconciler.plan(zones: [zone(records: [])])
         let rows = [
             ObservedDNSZone(
                 uuid: "row-b", zoneId: zoneID, recordsHash: "hash-1", zoneName: "acme.internal",

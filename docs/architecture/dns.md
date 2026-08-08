@@ -234,16 +234,20 @@ resolver settings and the primary-zone pointer.
 
 ## Realization: the layers above this
 
-Four layers sit over the one record model. Only the model exists today.
+Four layers sit over the one record model; the first two exist today. The
+layers are **not** the roadmap's phases — there are four of these and six of
+those, because phase 2 was a dependency (`swift-ovn`'s `DNS` CRUD) that added no
+layer of its own. Each layer names the phase that built it:
 
-1. **Control plane owns zones and records.** (This document. Implemented.)
+1. **Control plane owns zones and records** (phase 1). This document.
+   Implemented.
 2. **OVN `DNS` table** for internal A/AAAA/PTR, answered in the datapath by
-   `ovn-controller`. No server process, no HA story, no failure domain.
-   (Implemented — see "Realizing a zone into OVN" below.)
+   `ovn-controller` (phase 3). No server process, no HA story, no failure
+   domain. Implemented — see "Realizing a zone into OVN" below.
 3. **Per-network link-local CoreDNS** for the full record vocabulary, external
-   forwarding, and isolated networks.
+   forwarding, and isolated networks (phase 4).
 4. **Control-plane resolver / external publication** for ops-facing inbound
-   resolution and public names.
+   resolution and public names (phases 5 and 6).
 
 Layers 2 and 3 compose without the guest knowing. OVN's `dns_lookup()`
 intercepts UDP/53 *regardless of destination IP* and spoofs a reply; misses and

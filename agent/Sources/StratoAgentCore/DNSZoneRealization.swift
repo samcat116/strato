@@ -95,6 +95,13 @@ public enum OVNDNSRecords {
         /// The control plane validates on write, so this is a row that predates
         /// the validation — worth a warning, not a refusal.
         public let malformedNames: [String]
+        /// Reverse names whose extra targets could not be published, because
+        /// OVN's value for a reverse name is one name rather than a list.
+        /// Reachable both ways — several authored `PTR` rows union into one
+        /// RRset, and two VMs may derive a PTR at one address across
+        /// overlapping subnets — so the truncation is reported rather than
+        /// only commented on.
+        public let truncatedNames: [String]
     }
 
     /// Flatten `records`, dropping what OVN cannot answer with.
@@ -115,6 +122,7 @@ public enum OVNDNSRecords {
         var reverse: [String: String] = [:]
         var unsupported: Set<String> = []
         var malformed: Set<String> = []
+        var truncated: Set<String> = []
 
         for record in records {
             let type = record.type.uppercased()
@@ -145,7 +153,13 @@ public enum OVNDNSRecords {
                 let targets = record.values.map { $0.lowercased() }.filter(DNSNameSyntax.isValidDomainName)
                 if targets.count != record.values.count { malformed.insert(record.name) }
                 guard let target = targets.first else { continue }
-                reverse[name] = target
+                // Two ways to lose a target here, and both are the operator's
+                // to know about: values this call dropped, and a name a
+                // previous record already claimed.
+                if targets.count > 1 || (reverse[name] != nil && reverse[name] != target) {
+                    truncated.insert(name)
+                }
+                reverse[name] = reverse[name] ?? target
             }
         }
 
@@ -162,7 +176,8 @@ public enum OVNDNSRecords {
         return Flattened(
             records: flattened,
             unsupportedTypes: unsupported.sorted(),
-            malformedNames: malformed.sorted())
+            malformedNames: malformed.sorted(),
+            truncatedNames: truncated.sorted())
     }
 }
 
@@ -173,25 +188,37 @@ public enum OVNDNSRecords {
 public struct DNSZonePlan: Equatable, Sendable {
     public let zoneId: UUID
     public let zoneName: String
-    /// The control plane's digest of the *whole* zone, including the records
+    /// The control plane's digest of every record it sent, including the ones
     /// this backend cannot express — so a zone whose only change was a TTL or a
     /// TXT record still restamps the row, and the stamp keeps meaning "written
-    /// from this version of the zone".
+    /// from this version of the zone". (What it does *not* cover is the
+    /// `.external`-view records the control plane withheld, which no agent ever
+    /// sees.)
     public let recordsHash: String
     /// The flattened OVN map.
     public let records: [String: String]
     /// The logical switches this row attaches to, sorted and deduplicated.
     public let switchNames: [String]
+    /// What this zone asked for that the OVN backend could not realize, in
+    /// operator-readable form.
+    ///
+    /// Carried on the *plan* rather than returned beside it so the caller can
+    /// log it exactly when it writes the zone. A diagnostic re-emitted on every
+    /// sync — and every sync assembles every zone — would undo the hash-skip's
+    /// whole point one layer up, and steady-state noise is what makes a real
+    /// diagnostic unreadable.
+    public let diagnostics: [String]
 
     public init(
         zoneId: UUID, zoneName: String, recordsHash: String, records: [String: String],
-        switchNames: [String]
+        switchNames: [String], diagnostics: [String] = []
     ) {
         self.zoneId = zoneId
         self.zoneName = zoneName
         self.recordsHash = recordsHash
         self.records = records
         self.switchNames = switchNames
+        self.diagnostics = diagnostics
     }
 
     public var externalIDs: [String: String] {
@@ -236,16 +263,29 @@ public struct DNSZoneWrite: Equatable, Sendable {
     /// when the stamp and the contents already match — the skip that keeps a
     /// zone's O(VMs) record map from being rewritten on every sync.
     public let rewriteRecords: Bool
+    /// Whether the rewrite is driven by the row's *contents* disagreeing with
+    /// the plan while its stamp matched — a hand-edited row, or an agent whose
+    /// flattening changed across an upgrade.
+    ///
+    /// Reported so the repair is visible rather than silent, because there is
+    /// one way for it to be permanent: if any value round-trips through OVSDB
+    /// non-identically (IPv6 compression, hex case, whitespace in the joined
+    /// address list), the stamp matches forever while the contents never do,
+    /// and the zone is rewritten on every sync. A drift heal is a one-off; a
+    /// heal logged on every pass is that bug, and this is what makes the
+    /// difference legible from the logs alone.
+    public let healsDrift: Bool
     public let attach: [String]
     public let detach: [String]
 
     public init(
-        plan: DNSZonePlan, existingUUID: String?, rewriteRecords: Bool, attach: [String],
-        detach: [String]
+        plan: DNSZonePlan, existingUUID: String?, rewriteRecords: Bool, healsDrift: Bool = false,
+        attach: [String], detach: [String]
     ) {
         self.plan = plan
         self.existingUUID = existingUUID
         self.rewriteRecords = rewriteRecords
+        self.healsDrift = healsDrift
         self.attach = attach
         self.detach = detach
     }
@@ -265,32 +305,36 @@ public enum DNSZoneReconciler {
     ///
     /// A zone attached to no network still yields a row: `DNS` is a root table,
     /// an unattached row answers nothing, and keeping it means an attach later
-    /// is one mutation rather than a create. Diagnostics for unrealizable
-    /// record types ride the result so the caller can log once per pass.
-    public static func plan(zones: [DesiredDNSZone]) -> (plans: [DNSZonePlan], diagnostics: [String]) {
-        var plans: [DNSZonePlan] = []
-        var diagnostics: [String] = []
-        for zone in zones.sorted(by: { $0.zoneId.uuidString < $1.zoneId.uuidString }) {
+    /// is one mutation rather than a create. Each plan carries its own
+    /// diagnostics, so the caller logs them for the zones it actually writes
+    /// rather than on every pass.
+    public static func plan(zones: [DesiredDNSZone]) -> [DNSZonePlan] {
+        zones.sorted(by: { $0.zoneId.uuidString < $1.zoneId.uuidString }).map { zone in
             let flattened = OVNDNSRecords.flatten(zone.records)
+            var diagnostics: [String] = []
             if !flattened.unsupportedTypes.isEmpty {
                 diagnostics.append(
-                    "zone '\(zone.zoneName)' contains \(flattened.unsupportedTypes.joined(separator: ", ")) "
-                        + "records, which the OVN resolver cannot answer; they are not realized")
+                    "\(flattened.unsupportedTypes.joined(separator: ", ")) records, which the OVN resolver "
+                        + "cannot answer")
             }
             if !flattened.malformedNames.isEmpty {
                 diagnostics.append(
-                    "zone '\(zone.zoneName)' contains records whose values are not valid for their type "
-                        + "(\(flattened.malformedNames.joined(separator: ", "))); they are not realized")
+                    "records whose values are not valid for their type "
+                        + "(\(flattened.malformedNames.joined(separator: ", ")))")
             }
-            plans.append(
-                DNSZonePlan(
-                    zoneId: zone.zoneId,
-                    zoneName: zone.zoneName,
-                    recordsHash: zone.recordsHash,
-                    records: flattened.records,
-                    switchNames: Set(zone.networkIds.map { OVNNaming.switchName(networkId: $0) }).sorted()))
+            if !flattened.truncatedNames.isEmpty {
+                diagnostics.append(
+                    "reverse names with more than one target, of which OVN publishes only the first "
+                        + "(\(flattened.truncatedNames.joined(separator: ", ")))")
+            }
+            return DNSZonePlan(
+                zoneId: zone.zoneId,
+                zoneName: zone.zoneName,
+                recordsHash: zone.recordsHash,
+                records: flattened.records,
+                switchNames: Set(zone.networkIds.map { OVNNaming.switchName(networkId: $0) }).sorted(),
+                diagnostics: diagnostics)
         }
-        return (plans, diagnostics)
     }
 
     /// What to do with each planned zone, given what the northbound database
@@ -314,13 +358,13 @@ public enum DNSZoneReconciler {
             // comparing the contents is what heals a row somebody hand-edited
             // or an agent whose flattening changed across an upgrade — neither
             // of which moves the control plane's digest.
-            let rewrite =
-                existing.recordsHash != plan.recordsHash || existing.records != plan.records
-                || existing.zoneName != plan.zoneName
+            let stampMoved = existing.recordsHash != plan.recordsHash
+            let contentsDiffer = existing.records != plan.records || existing.zoneName != plan.zoneName
             let write = DNSZoneWrite(
                 plan: plan,
                 existingUUID: existing.uuid,
-                rewriteRecords: rewrite,
+                rewriteRecords: stampMoved || contentsDiffer,
+                healsDrift: !stampMoved && contentsDiffer,
                 attach: plan.switchNames.filter { !existing.switchNames.contains($0) },
                 detach: existing.switchNames.subtracting(plan.switchNames).sorted())
             guard !write.isNoop else { continue }
@@ -372,14 +416,29 @@ extension DNSZoneReconciler {
         actuator: any NetworkActuator,
         logger: Logger
     ) async throws {
-        let (plans, diagnostics) = plan(zones: zones)
-        for diagnostic in diagnostics {
-            logger.warning("DNS record not realized: \(diagnostic)")
-        }
-
+        let plans = plan(zones: zones)
         let observed = try await actuator.observeDNSZones()
 
         for write in writes(desired: plans, observed: observed) {
+            // Logged per write rather than per pass: every sync assembles every
+            // zone, so a zone holding one TXT record would otherwise warn
+            // forever on the authority agent. Tied to the write, it fires when
+            // the zone changes — which is when an operator can act on it.
+            for diagnostic in write.plan.diagnostics where write.rewriteRecords {
+                logger.warning(
+                    "Part of a DNS zone is not realized",
+                    metadata: [
+                        "zone": .string(write.plan.zoneName),
+                        "unrealized": .string(diagnostic),
+                    ])
+            }
+            // A one-off heal is the feature; the same zone healing on every
+            // pass is the OVSDB round-trip bug this makes visible.
+            if write.healsDrift {
+                logger.info(
+                    "Rewriting a DNS zone whose row drifted from its stamp",
+                    metadata: ["zone": .string(write.plan.zoneName)])
+            }
             do {
                 try await actuator.ensureDNSZone(write)
             } catch {

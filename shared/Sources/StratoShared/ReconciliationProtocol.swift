@@ -964,9 +964,11 @@ public struct DesiredDNSZone: Codable, Sendable, Equatable {
     public let networkIds: [UUID]
     /// The zone's effective contents, derived ∪ authored, in a stable order.
     public let records: [DesiredDNSRecord]
-    /// A digest of `records`, computed by the control plane. The agent stamps
-    /// it on the realized row's `external_ids` and compares it on the next
-    /// sync, so an unchanged zone costs no OVSDB transaction: records are
+    /// A digest of the `records` carried here — which is the zone minus its
+    /// `.external`-view entries, since those are for publication elsewhere and
+    /// never reach an agent. Computed by the control plane. The agent stamps it
+    /// on the realized row's `external_ids` and compares it on the next sync,
+    /// so an unchanged zone costs no OVSDB transaction: records are
     /// O(VMs on the network) and ship on every sync, and rewriting the whole
     /// map every cycle is what level-triggering must not degenerate into.
     ///
