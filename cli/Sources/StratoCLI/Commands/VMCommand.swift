@@ -185,11 +185,9 @@ extension VMCommand {
     struct Reboot: ResourceActionCommand {
         static let configuration = CommandConfiguration(abstract: "Reboot a virtual machine.")
         static let resourceLabel = "VM"
-        // Still an imperative agent RPC with no generation to converge on, so it
-        // answers with a real operation record until STR-151 (reboot as an
-        // edge-nonce on desired state).
         static let action: ResourceAction = {
-            AcceptedMutation(try await $0.restartVM(path: .init(vmID: $1)).accepted.body.json)
+            AcceptedMutation(
+                id: try await $0.restartVM(path: .init(vmID: $1)).accepted.body.json.mutationId)
         }
         static let pastTense = "rebooted"
         @OptionGroup var global: GlobalOptions

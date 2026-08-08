@@ -111,6 +111,7 @@ struct SandboxReconciliationTests {
                 case .pause: vmPresence[item.id] = .managed(.paused)
                 case .shutdown: vmPresence[item.id] = .managed(.shutdown)
                 case .delete: vmPresence.removeValue(forKey: item.id)
+                case .reboot, .restore: vmPresence[item.id] = .managed(.running)
                 case .adopt, .resize, .attach, .detach, .export: break
                 }
             case .sandbox:
@@ -119,7 +120,8 @@ struct SandboxReconciliationTests {
                 case .boot: sandboxPresence[item.id] = .managed(.running)
                 case .shutdown: sandboxPresence[item.id] = .managed(.stopped)
                 case .delete: sandboxPresence.removeValue(forKey: item.id)
-                case .adopt, .pause, .resume, .resize, .attach, .detach, .export: break
+                case .restore: sandboxPresence[item.id] = .managed(.running)
+                case .adopt, .pause, .resume, .resize, .reboot, .attach, .detach, .export: break
                 }
             case .volume, .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot:
                 break  // this suite's actuator holds no volumes or artifacts

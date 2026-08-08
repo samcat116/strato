@@ -325,7 +325,7 @@ final class ReplicaRoutingAgentServiceTests {
 
             await #expect(throws: AgentServiceError.self) {
                 _ = try await app.agentService.sendMessageToAgentWithResponse(
-                    VMOperationMessage(type: .vmReboot, vmId: UUID().uuidString),
+                    ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"),
                     agentId: agentId,
                     timeout: .seconds(1)
                 )
@@ -345,7 +345,7 @@ final class ReplicaRoutingAgentServiceTests {
             }
 
             let envelope = try MessageEnvelope(
-                message: VMOperationMessage(type: .vmReboot, vmId: UUID().uuidString))
+                message: ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"))
             let request = ReplicaMessageBridge.AgentRPCRequest(
                 rpcId: "rpc-1",
                 replyChannel: replyChannel,
@@ -394,7 +394,7 @@ final class ReplicaRoutingAgentServiceTests {
             }
 
             let response = try await app.agentService.sendMessageToAgentWithResponse(
-                VMOperationMessage(type: .vmReboot, vmId: UUID().uuidString),
+                ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"),
                 agentId: agentId,
                 timeout: .seconds(5)
             )

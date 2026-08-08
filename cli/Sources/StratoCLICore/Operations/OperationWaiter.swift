@@ -12,13 +12,14 @@ extension ResourceOperation {
 
 /// What a `202` leaves the CLI to follow.
 ///
-/// Two shapes reach here (STR-147). The verbs still dispatched as imperative
-/// agent commands — VM restart, the snapshot verbs — answer with a
-/// `ResourceOperation`. The generation-backed lifecycle mutations answer with
-/// the resource and a `mutationId`. Both are followed the same way: the id is
-/// what `GET /api/operations/{id}` answers for, whether it names a real
-/// operation record or the mutation's audit record the server synthesizes one
-/// from.
+/// One shape now (STR-151): every mutation answers with its resource and a
+/// `mutationId`, and the id is what `GET /api/operations/{id}` answers for —
+/// synthesized from the mutation's audit record and the resource's conditions.
+/// The `ResourceOperation`-returning variant went with VM restart, the last
+/// verb dispatched as an imperative agent command.
+///
+/// The seed survives because the façade can still answer from a real row: an
+/// operation begun by a previous build and swept to a verdict after the upgrade.
 public struct AcceptedMutation: Sendable {
     public let id: String
     /// The operation as the mutation returned it, when it returned one. Lets

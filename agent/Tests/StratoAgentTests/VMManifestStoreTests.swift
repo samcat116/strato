@@ -86,6 +86,118 @@ struct VMManifestStoreTests {
         #expect(loaded.values.totalReservedDiskBytes == 21_474_836_480)
     }
 
+    // MARK: - vsock context IDs (STR-72)
+
+    /// The correctness claim of STR-72: a restarted agent has to come back
+    /// knowing which CIDs its running VMs hold, or it hands one of them to a
+    /// new VM and the two share a control channel.
+    @Test("vsock CIDs survive the manifest round-trip")
+    func vsockCIDRoundTrip() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = makeStore(dir: dir)
+
+        store.save([
+            "vm-a": VMManifestEntry(hypervisorType: .qemu, spec: makeSpec(), vsockCID: 7),
+            "vm-b": VMManifestEntry(hypervisorType: .firecracker, spec: makeSpec()),
+        ])
+
+        let loaded = store.load().loadedEntries
+        #expect(loaded["vm-a"]?.vsockCID == 7)
+        // Firecracker's vsock never touches the host namespace, so it takes no CID.
+        #expect(loaded["vm-b"]?.vsockCID == nil)
+    }
+
+    /// Entries written before the allocator existed carry no CID and must
+    /// decode rather than throw — a manifest full of pre-STR-72 VMs is the
+    /// normal state of every host being upgraded.
+    @Test("An entry without a vsock CID decodes with none")
+    func entryWithoutVsockCIDDecodes() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = makeStore(dir: dir)
+
+        store.save(["vm-a": VMManifestEntry(hypervisorType: .qemu, spec: makeSpec(cpus: 2), vsockCID: 7)])
+        var raw = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: store.path)))
+                as? [String: Any])
+        var entry = try #require(raw["vm-a"] as? [String: Any])
+        #expect(entry["vsockCID"] != nil)
+        entry.removeValue(forKey: "vsockCID")
+        raw["vm-a"] = entry
+        try JSONSerialization.data(withJSONObject: raw).write(to: URL(fileURLWithPath: store.path))
+
+        let loaded = store.load().loadedEntries
+        // Routable, not quarantined: a missing CID is an ordinary pre-STR-72
+        // entry, not an entry this build cannot read.
+        #expect(loaded.count == 1)
+        #expect(loaded["vm-a"]?.vsockCID == nil)
+        #expect(loaded["vm-a"]?.spec.cpus == 2)
+    }
+
+    /// A spec change must not cost the VM its CID: the entry is copied, not
+    /// rebuilt from `(hypervisorType, spec)`.
+    @Test("Re-specing an entry keeps its vsock CID")
+    func withSpecKeepsVsockCID() {
+        let entry = VMManifestEntry(hypervisorType: .qemu, spec: makeSpec(cpus: 2), vsockCID: 11)
+        let resized = entry.with(spec: makeSpec(cpus: 8))
+
+        #expect(resized.vsockCID == 11)
+        #expect(resized.spec.cpus == 8)
+        #expect(resized.hypervisorType == .qemu)
+        #expect(resized.kind == .vm)
+    }
+
+    /// The other field that made copying necessary (STR-151): the record of
+    /// what this host has already *done* to the workload. Losing it to a resize
+    /// or a volume attach would make the next sync read "no record" and quietly
+    /// discard a reboot or restore the user had asked for.
+    @Test("Re-specing an entry keeps its applied edge nonces")
+    func withSpecKeepsAppliedEdges() {
+        let entry = VMManifestEntry(
+            hypervisorType: .qemu, spec: makeSpec(cpus: 2),
+            appliedEdges: AppliedEdgeNonces(reboot: 3, restore: 1))
+        let resized = entry.with(spec: makeSpec(cpus: 8))
+
+        #expect(resized.appliedEdges == AppliedEdgeNonces(reboot: 3, restore: 1))
+        #expect(resized.spec.cpus == 8)
+    }
+
+    @Test("A sandbox entry keeps its spec and CID through a re-spec")
+    func withSpecKeepsSandboxShape() {
+        let sandboxSpec = SandboxSpec(image: "alpine:3", cpus: 2, memoryBytes: 2048)
+        let entry = VMManifestEntry(sandboxSpec: sandboxSpec)
+        let updated = entry.with(spec: makeSpec(cpus: 4))
+
+        #expect(updated.kind == .sandbox)
+        #expect(updated.sandboxSpec?.image == "alpine:3")
+        #expect(updated.vsockCID == nil)
+        #expect(updated.hypervisorType == .firecracker)
+    }
+
+    /// A quarantined entry's workload may still be running on its CID, and the
+    /// namespace is host-global, so the CID is salvaged for the same reason its
+    /// CPU and memory are.
+    @Test("A quarantined entry still surrenders its vsock CID")
+    func quarantinedEntrySalvagesVsockCID() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = makeStore(dir: dir)
+
+        store.save(["vm-future": VMManifestEntry(hypervisorType: .qemu, spec: makeSpec(cpus: 8), vsockCID: 42)])
+        var raw = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: store.path)))
+                as? [String: Any])
+        var future = try #require(raw["vm-future"] as? [String: Any])
+        future["hypervisorType"] = "libvirt"
+        raw["vm-future"] = future
+        try JSONSerialization.data(withJSONObject: raw).write(to: URL(fileURLWithPath: store.path))
+
+        let quarantined = try #require(store.load().loadedQuarantined["vm-future"])
+        #expect(quarantined.vsockCID == 42)
+        #expect(quarantined.cpus == 8)
+    }
+
     @Test("Reserved-disk total treats missing diskBytes and sandbox entries as zero")
     func totalReservedDiskTreatsMissingAsZero() {
         let withDisk = VMSpec(

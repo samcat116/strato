@@ -20,7 +20,7 @@ import { vmsApi } from "@/lib/api/vms";
 import { formatMemory } from "@/lib/format-bytes";
 import { useVMSnapshots } from "@/lib/hooks";
 import {
-  acceptedOperation,
+  acceptedMutation,
   acceptedSnapshotMutation,
   useMutationsStore,
 } from "@/lib/stores/mutations-store";
@@ -81,8 +81,15 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
     if (!restoring) return;
     setBusyId(restoring.id);
     try {
-      const operation = await vmsApi.restoreSnapshot(vm.id, restoring.id);
-      watch(acceptedOperation(operation, `${restoring.name} restore`));
+      // A restore acts on the VM, so it is watched as a VM mutation — the
+      // checkpoint itself does not change (backend STR-151).
+      watch(
+        acceptedMutation(await vmsApi.restoreSnapshot(vm.id, restoring.id), {
+          kind: "restore",
+          resourceKind: "virtual_machine",
+          resourceName: vm.name,
+        })
+      );
       toast.success(`Restoring “${restoring.name}”`);
       setRestoring(null);
     } catch (restoreError) {

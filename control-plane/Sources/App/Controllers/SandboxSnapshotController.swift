@@ -14,8 +14,11 @@ import Vapor
 /// layout and CPU template included, on a report that is re-sent every
 /// heartbeat rather than a reply that a dropped socket could lose.
 ///
-/// Restore is still imperative: loading a checkpoint back over a live microVM
-/// is an edge rather than a state, and converts to a nonce in STR-151.
+/// Restore followed in stage 9 (STR-151). Loading a checkpoint back over a live
+/// microVM really is an edge rather than a state, so it became one by being
+/// *counted*: `Sandbox.requestRestore` bumps a monotonic nonce naming the
+/// snapshot, and the agent applies it once against its own durable record.
+/// Nothing in this file awaits an agent response any more.
 extension SandboxController {
 
     // MARK: - Create
@@ -237,17 +240,42 @@ extension SandboxController {
         guard let agentId = sandbox.hypervisorId else {
             throw Abort(.conflict, reason: "Sandbox is not placed on any agent")
         }
-        do {
-            try await SandboxSnapshotService.requireCapableAgent(agentId, app: req.application)
-        } catch let error as SandboxSnapshotServiceError {
-            throw Abort(.conflict, reason: error.localizedDescription)
+        guard let targetAgent = await req.application.agentService.getAgentInfo(agentId) else {
+            throw Abort(.conflict, reason: "Sandbox's agent '\(agentId)' is unknown")
+        }
+        // Both signals, the issue #415 rule the capture path also follows: the
+        // wire version proves the agent applies the nonce, the capability proves
+        // a backend that can load a checkpoint is usable on that host.
+        //
+        // With `sandbox_restore` gone (STR-151) there is no fallback path, and a
+        // pre-v34 agent would ignore the nonce and report the bumped generation
+        // as converged — the API claiming a rewind that never happened. A host
+        // with no sandbox-snapshot backend fails later still, as a `degraded`
+        // condition an hour after admission. Both are refused here instead.
+        guard WireProtocol.supportsEdgeNonces(targetAgent.wireProtocolVersion ?? 0) else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(agentId)' is too old to apply restores from the desired-state sync "
+                    + "(wire protocol v\(WireProtocol.edgeNonceMinimumVersion) required). Upgrade the agent."
+            )
+        }
+        guard targetAgent.capabilities.contains(SnapshotArtifactKind.sandboxSnapshot.agentCapability)
+        else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(agentId)' cannot restore sandbox snapshots (capability "
+                    + "'\(SnapshotArtifactKind.sandboxSnapshot.agentCapability)' not advertised); "
+                    + "upgrade the agent.")
         }
         // Cross-agent restore (issue #428): when the sandbox no longer lives
         // on the agent that took the snapshot, the restore rides the exported
         // copy — which must exist, and the target must satisfy the recorded
         // compatibility constraints (Firecracker version, architecture, CPU
-        // template or identical CPU).
-        var transferArtifacts: [SandboxSnapshotArtifactDescriptor]?
+        // template or identical CPU). Only the *eligibility* is decided here;
+        // the descriptors themselves are resolved fresh at sync assembly, so a
+        // nonce that sits in the desired state never carries a stale locator.
         if let snapshotAgent = snapshot.agentId, snapshotAgent != agentId {
             guard snapshot.isExported else {
                 throw Abort(
@@ -256,27 +284,21 @@ extension SandboxController {
                         "Snapshot was taken on agent '\(snapshotAgent)' but the sandbox now lives on '\(agentId)'; export the snapshot first to enable cross-agent restore"
                 )
             }
-            guard let targetAgent = await req.application.agentService.getAgentInfo(agentId) else {
-                throw Abort(.conflict, reason: "Sandbox's agent '\(agentId)' is unknown")
-            }
             if let blocker = SandboxSnapshotCompatibility.restoreBlocker(
                 snapshot: snapshot, target: targetAgent)
             {
                 throw Abort(.conflict, reason: blocker)
             }
-            transferArtifacts = try snapshot.exportedArtifactDescriptors()
-            guard transferArtifacts != nil else {
+            guard (try snapshot.exportedArtifactDescriptors()) != nil else {
                 throw Abort(.conflict, reason: "Snapshot's exported copy is incomplete; re-export it")
             }
         }
 
-        // The restored guest resumes running; desired state must agree or
-        // the next sync would pause it right back.
-        let operation = try await beginOperation(
-            .restore, sandbox: sandbox, user: user,
-            settingDesiredStatus: .running,
-            on: req.db
-        ) { db in
+        let userID = try user.requireID()
+        let accepted = try await req.resourceMutation.accept(
+            .restore, on: sandbox, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable db in
             try await Self.lockSnapshotLineage([snapshotID], on: db)
             guard let current = try await SandboxSnapshot.find(snapshotID, on: db), current.canRestore
             else {
@@ -290,11 +312,11 @@ extension SandboxController {
                     .conflict,
                     reason: "Snapshot cannot be restored in place while live forks of it exist")
             }
+            // Bumps the restore nonce and sets desired `.running` — the restored
+            // guest resumes, so desired state has to agree or the next sync
+            // would stop it right back.
+            sandbox.requestRestore(snapshotID: snapshotID)
         }
-
-        Self.runSnapshotRestore(
-            operation, snapshotID: snapshotID, agentId: agentId,
-            artifacts: transferArtifacts, app: req.application)
 
         req.logger.info(
             "Sandbox restore accepted",
@@ -302,39 +324,7 @@ extension SandboxController {
                 "sandbox_id": .string(sandboxID.uuidString),
                 "snapshot_id": .string(snapshotID.uuidString),
             ])
-        return try operation.acceptedResponse()
-    }
-
-    /// Background half of `restoreSnapshot`. `artifacts` is non-nil for a
-    /// cross-agent restore: the target agent stages the exported archive from
-    /// object storage before loading it (issue #428).
-    private static func runSnapshotRestore(
-        _ operation: ResourceOperation,
-        snapshotID: UUID,
-        agentId: String,
-        artifacts: [SandboxSnapshotArtifactDescriptor]? = nil,
-        app: Application
-    ) {
-        guard let operationId = operation.id else { return }
-        let sandboxID = operation.resourceID
-
-        app.backgroundTasks.spawn {
-            do {
-                try await SandboxSnapshotService.requestRestore(
-                    sandboxId: sandboxID, snapshotId: snapshotID, agentId: agentId,
-                    artifacts: artifacts, app: app)
-                // The agent confirmed the guest answered post-restore; the
-                // periodic observed report re-confirms.
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .succeeded, error: nil,
-                    settingSandboxStatus: .running, app: app)
-            } catch {
-                await completeOperation(
-                    operationId, sandboxID: sandboxID, as: .failed,
-                    error: error.localizedDescription,
-                    settingSandboxStatus: nil, app: app)
-            }
-        }
+        return try await SandboxController.acceptedResponse(for: sandbox, accepted, on: req)
     }
 
     // MARK: - Shared

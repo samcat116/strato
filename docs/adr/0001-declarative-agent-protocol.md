@@ -4,8 +4,11 @@
 - **Progress**: stages 1 (conditions, STR-142), 2 (`resource_events`,
   STR-143), 3 (finalizers, STR-144), 4 (202 → `{resource, targetGeneration}`,
   STR-147), 5 (volumes declarative, STR-148), 6 (`agent_update` removal,
-  STR-145), 8 (snapshots and checkpoints declarative, STR-150), and 10 (pull
-  transport, STR-146) have landed; later stages pending.
+  STR-145), 7 (`volume_info` removal, STR-149), 8 (snapshots and checkpoints
+  declarative, STR-150), 9 (reboot/restore as edge-nonces, STR-151), and 10
+  (pull transport, STR-146) have landed. **Every durable-resource RPC has now
+  converted**; only stage 11 — deleting `ResourceOperation`, its sweep, and the
+  pending-request apparatus — remains.
 - **Date**: 2026-08-02
 - **Deciders**: Sam Schmitt
 - **Scope**: control-plane ↔ agent protocol, `ResourceOperation` machinery,
@@ -109,7 +112,7 @@ observed state. Concretely:
 | `volume_snapshot`, `volume_snapshot_delete`, `vm_checkpoint`, `vm_snapshot_delete`, `sandbox_snapshot_create/_delete` | Desired artifact entries; captured sizes/metadata return via observed state (**landed**, STR-150) |
 | `sandbox_snapshot_export` | A placement fact ("snapshot S exists on agent B"); the byte transfer beneath remains a transport concern (**landed**, STR-150) |
 | `agent_update` (imperative form) | Deleted; `DesiredAgentUpdate` (issue #434) already exists and is the proof this migration works |
-| `vm_reboot`, `vm_restore`, `sandbox_restore` | Edge-as-nonce: a monotonic `rebootGeneration` (and restore analog) on the desired entry; the agent persists last-applied in its manifest and acts when desired > applied |
+| `vm_reboot`, `vm_restore`, `sandbox_restore` | Edge-as-nonce: a monotonic `rebootGeneration` (and restore analog) on the desired entry; the agent persists last-applied in its manifest and acts when desired > applied (**landed**, STR-151) |
 | `volume_info` | Deleted; its fields were already on the observed report or in the control plane's own database (see the stage 7 amendment) |
 | `console_*`, `sandbox_exec_*`, `vm_log`, `sandbox_log` | **Stay imperative, permanently.** Live byte pipes with a human on the end; the uniformity that matters is Cedar authorization and addressing, not transport |
 
@@ -324,8 +327,12 @@ surviving process boundaries; coordination is load-bearing. After:
   `lastMutationKind` being maintained; a conservative single budget is the
   fallback if that proves fiddly.
 - **Coupling.** The side-table shrinks exactly as fast as RPCs convert, and
-  not faster; restore verdicts complete off responses until stage 9 lands. Sequencing below is chosen so every stage is
-  independently shippable and valuable.
+  not faster. *Settled in stage 9 (STR-151)*: with the last three verbs
+  converted, nothing constructs a `ResourceOperation` at all. The row-writing
+  half is gone; the verdict path and its sweep survive only to take rows written
+  by the *previous* build terminal across an upgrade, which is what stage 11
+  removes. Sequencing below is chosen so every stage is independently shippable
+  and valuable.
 
 ## Migration plan
 
@@ -451,6 +458,76 @@ agent is involved.
    artifact deleted out of band reports present until something tries to use it —
    which is affordable because every backend's deletion is idempotent.
 9. **Reboot/restore nonces** (3 messages).
+
+   *Amended in implementation (STR-151):* a hard cutover at wire v34, following
+   stages 5 and 8. `vm_reboot`, `vm_restore` and `sandbox_restore` are deleted
+   outright, and with them `VMOperationMessage`, the `awaitingResponse` dispatch
+   strategy, `AgentService.performVMOperationAwaitingResponse`, and both restore
+   RPC-and-verdict background halves. Nothing imperative is left on the wire but
+   live byte streams.
+
+   Where this stage differs from every other one is that the conversion is
+   **strictly better than what it replaces**, rather than a trade. A
+   fire-and-forget RPC whose socket dropped mid-flight lost the reboot silently;
+   a nonce survives the drop and converges on the next sync. That inverts the
+   usual gate argument too: the `supportsEdgeNonces` refusal does not protect the
+   *payload* from a destructive misreading of silence — a count of requests can
+   only ever mean "nothing was asked for" when absent — it protects the *user's
+   request* from being accepted into a field a pre-v34 agent ignores and then
+   reported as converged.
+
+   Four shapes are worth recording:
+
+   * **The nonce is a second counter, not a widening of `generation`.** They
+     answer different questions and have opposite idempotence. `generation`
+     guards ordering and is safe to re-apply — re-converging a state that already
+     holds does nothing — which is exactly why the agent's in-process
+     `lastApplied` may reset with the process for free. An edge re-applied is a
+     second disruption. So the edge gets its own counter and its own durable
+     record, and the ordinary `generation` bump rides alongside purely to carry
+     the mutation through the conditions block, the stuck-convergence sweep and
+     the webhook with no branch of its own.
+   * **Nonce durability is the correctness invariant, and "no record" is not
+     zero.** The applied nonces live in `VMManifestStore` beside the specs, and a
+     manifest entry with no record — one written by an older build, or a workload
+     this agent has never converged — is *adopted*: the desired nonces are
+     written down without being performed. Reading a missing record as zero is
+     precisely the failure the issue names, and it is not a small one: it would
+     have a re-registered agent replay every restore in a VM's history, rewinding
+     a live guest to a checkpoint from weeks ago.
+
+     Adoption has to be **eager** to be worth anything, which is subtler than it
+     looks and was got wrong first. Writing the record only when an item exists
+     to write it leaves an idle, converged VM with no record indefinitely — its
+     generation is not moving, so it produces no items — and the thing that
+     eventually moves that generation is the user's own restart request, which
+     the still-absent record then swallows while `conditions` report it
+     converged. So a managed workload with no record produces an empty-step item
+     on the very next sync purely to adopt, which costs one manifest write per
+     workload, once, and bounds the window to a single sync.
+   * **A reboot is consumed by being superseded; a restore is not.** A VM asked
+     to reboot and then asked to stop should end up stopped — not stopped and
+     then surprised by an ancient reboot the next time it starts — so the reboot
+     nonce is recorded on *every* convergence, including one that planned no work
+     at all. A boot supersedes a reboot for the same reason (a guest built from
+     scratch is at least as restarted).
+
+     A restore is the other way, from the same premise: it is about *state*, not
+     power. That is why a boot cannot supersede one — loading a checkpoint needs
+     a process to load it into, so `[.boot, .restore]` is the correct sequence
+     for a stopped VM and is what makes "restore after an agent restart" work
+     with no extra message — and, read the other way, why a *stop* cannot answer
+     one either. A restore the planner did not perform is left outstanding and
+     lands whenever the workload is next wanted running. Consuming it there would
+     silently discard a data-integrity request the API had already reported
+     converged.
+   * **Adoption defers edges by one sync.** An orphan's real state is unknown
+     until its runtime session is reconnected, so the planner emits no edge for
+     one and the reconciler records nothing for an item that adopted; the
+     workload is `.managed` by the next sync, which plans it properly. This is
+     the single place the stage is slower than the RPC it replaces, and it is the
+     trade the whole design is for — one sync interval of latency instead of a
+     rewind nobody asked for.
 10. **Pull transport + broadcast doorbell**; delete targeted nudges and the
     four-way sync-routing branch. The `agent:{name}:replica` routing key
     itself moves to stage 11: imperative RPC still reads it to forward an

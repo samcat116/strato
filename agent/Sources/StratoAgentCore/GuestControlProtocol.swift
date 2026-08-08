@@ -197,19 +197,29 @@ public enum GuestControlProtocol {
         /// wire). Warm launch treats this as best-effort; checkpoint fork
         /// re-identification uses a separate strict request.
         public let entropy: Data?
+        /// Hostname the restored-into sandbox should take (STR-101).
+        ///
+        /// A template guest booted under the template's own (absent) hostname,
+        /// so without this a warm-launched sandbox would keep it while a
+        /// cold-booted one got `strato-<id>` — an asymmetry decided by warm
+        /// cache state. Optional and additive: omitted when nil, and a guest
+        /// that predates it ignores the field.
+        public let hostname: String?
 
         public init(
             sandboxId: String,
             identityNonce: String,
             imageConfig: SandboxConfigDrive.ImageConfig,
             overrides: SandboxConfigDrive.ProcessOverrides,
-            entropy: Data?
+            entropy: Data?,
+            hostname: String? = nil
         ) {
             self.sandboxId = sandboxId
             self.identityNonce = identityNonce
             self.imageConfig = imageConfig
             self.overrides = overrides
             self.entropy = entropy
+            self.hostname = hostname
         }
     }
 
@@ -321,6 +331,7 @@ public enum GuestControlProtocol {
             let imageConfig: SandboxConfigDrive.ImageConfig
             let overrides: SandboxConfigDrive.ProcessOverrides
             let entropy: String?
+            let hostname: String?
 
             enum CodingKeys: String, CodingKey {
                 case type
@@ -329,6 +340,7 @@ public enum GuestControlProtocol {
                 case imageConfig = "image_config"
                 case overrides
                 case entropy
+                case hostname
             }
         }
 
@@ -378,7 +390,8 @@ public enum GuestControlProtocol {
                     identityNonce: request.identityNonce,
                     imageConfig: request.imageConfig,
                     overrides: request.overrides,
-                    entropy: request.entropy?.base64EncodedString())
+                    entropy: request.entropy?.base64EncodedString(),
+                    hostname: request.hostname)
                 return Self.terminatedLine(encoding: rawLaunch)
             case .ping:
                 raw = RawRequest(type: "ping")

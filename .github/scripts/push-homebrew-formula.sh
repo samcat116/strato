@@ -19,7 +19,11 @@ SOURCE_REF="${4:?missing <source-ref>}"
 : "${TAP_TOKEN:?TAP_TOKEN must be set}"
 
 FORMULA="$(cd "$(dirname "$FORMULA")" && pwd)/$(basename "$FORMULA")"
-WORKDIR="$(mktemp -d)"
+# Explicit template rather than a bare `mktemp -d`: the default template is a
+# GNU coreutils extension. Current macOS supplies one too — this script pushed
+# v0.1.1 to the tap from a Mac — but the release job runs on macos-latest now,
+# and the template is portable to both. (`-t prefix` is not: GNU rejects it.)
+WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/strato-tap.XXXXXX")"
 trap 'rm -rf "$WORKDIR"' EXIT
 
 # One attempt at the whole clone-to-push sequence. Run in a subshell so `cd`
@@ -38,6 +42,11 @@ attempt() (
     # A backport — tagging v1.1.4 after v1.2.0 already shipped — must not walk
     # the public install path backwards. The no-op check below cannot catch
     # that: the formula content genuinely differs. Compare versions instead.
+    #
+    # `sort -V` is not a GNU-ism to root out: BSD sort implements it, verified
+    # on macOS. And if it ever were missing, `set -o pipefail` is inherited
+    # here, so the assignment fails and the attempt fails with it — the guard
+    # breaks closed (job fails) rather than open (silent tap downgrade).
     if [ -f Formula/strato.rb ]; then
         current="$(sed -n 's/^  version "\(.*\)"$/\1/p' Formula/strato.rb)"
         newest="$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -1)"
