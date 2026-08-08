@@ -39,7 +39,12 @@ import NIOPosix
 public actor MetadataHTTPServer {
     private let group: any EventLoopGroup
     private let responder: MetadataResponder
-    private let hopLimit: Int
+    /// Held in the width `setsockopt` takes (`ChannelOptions.Types.SocketOption.Value`
+    /// is `CInt`), converted once here rather than at each of the two call
+    /// sites. Clamping, not truncating: the value arrives from `--hop-limit`,
+    /// and a nonsense one should reach the kernel as a nonsense one and be
+    /// refused, never wrap around into a plausible TTL.
+    private let hopLimit: CInt
     private let logger: Logger
     private var channels: [any Channel] = []
     /// Shared by every address this listener binds, so the cap is per *listener*
@@ -50,7 +55,7 @@ public actor MetadataHTTPServer {
     public init(group: any EventLoopGroup, responder: MetadataResponder, hopLimit: Int, logger: Logger) {
         self.group = group
         self.responder = responder
-        self.hopLimit = hopLimit
+        self.hopLimit = CInt(clamping: hopLimit)
         self.logger = logger
     }
 

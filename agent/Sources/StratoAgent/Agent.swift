@@ -650,8 +650,11 @@ actor Agent {
             // `.qemu` as unavailable to match (`HypervisorProbe.qemuReport`), so
             // nothing is ever scheduled onto it.
             logger.warning(
-                "No hypervisor on this platform: registering a MOCK QEMU backend. "
-                    + "This host cannot run VMs — the QEMU driver is libvirtd, which is Linux-only.")
+                "No hypervisor on this platform: registering a MOCK QEMU backend",
+                metadata: [
+                    "detail": .string(
+                        "this host cannot run VMs — the QEMU driver is libvirtd, which is Linux-only")
+                ])
             hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
             #endif
 

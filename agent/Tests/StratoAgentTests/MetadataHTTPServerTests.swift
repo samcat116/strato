@@ -274,9 +274,18 @@ enum RawHTTP {
     final class Connection {
         private let fd: Int32
 
+        /// `SOCK_STREAM` is a plain `Int32` in Darwin's headers and an
+        /// `__socket_type` enum in Glibc's, so the socket type has to be
+        /// spelled per platform rather than converted.
+        #if canImport(Glibc)
+        private static let stream = Int32(SOCK_STREAM.rawValue)
+        #else
+        private static let stream = SOCK_STREAM
+        #endif
+
         init(port: Int, host: String = "127.0.0.1") throws {
             let isV6 = host.contains(":")
-            fd = socket(isV6 ? AF_INET6 : AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+            fd = socket(isV6 ? AF_INET6 : AF_INET, Self.stream, 0)
             guard fd >= 0 else { throw ClientError(description: "socket: \(errno)") }
 
             // Bounded reads, so a bug here fails the test instead of hanging it.
