@@ -99,6 +99,28 @@ struct DesiredStateAssembler {
         // opinion", which is what keeps a rollback from sweeping live ports.
         let sendMetadataPort =
             agent.map { WireProtocol.supportsMetadataPort($0.wireProtocolVersion ?? 0) } ?? true
+        // Whether this agent can realize a sandbox NIC at all (STR-103), which
+        // is what decides if `SandboxSpec.network` goes on the wire to it.
+        //
+        // Defaults to *false* for an unknown agent id, unlike the version gates
+        // above: those ask "how new is this peer", where assuming current is
+        // the useful answer, while this asks "did a host prove it has OVN, the
+        // jailer, and a guest image that configures an interface". Absence of
+        // proof is not proof, and the cost of guessing wrong is a sandbox that
+        // never boots on that host again.
+        //
+        // Folded with `sendSecurityGroups` so this gate cannot be weaker than
+        // the scheduler's, which requires the same two signals
+        // (`supportsSandboxNetworking`). Without the version arm a
+        // capable-but-pre-v20 agent would be refused at placement and sent the
+        // NIC anyway here — and it would arrive with `securityGroupIds: nil`,
+        // because the membership map above is empty under a false
+        // `sendSecurityGroups`, so the port would come up *unfiltered* while
+        // the API reports its groups. Unreachable with a stock agent (anything
+        // advertising the capability is built at `currentVersion`), but the two
+        // gates disagreeing is the defect, not the reachability.
+        let sendSandboxNetwork = (agent?.sandboxNetworkingCapable ?? false) && sendSecurityGroups
+
         // The per-network resolver (STR-40). Nil for an agent that predates the
         // field — the `sendMetadataPort: false` posture — and otherwise whether
         // this agent's *site* can answer on the resolver address at all.
@@ -387,23 +409,41 @@ struct DesiredStateAssembler {
             }
             // The sandbox's single NIC spec (issue #416), built from its
             // eager-loaded interface + the interface's logical network (for
-            // DHCP/DNS config), reusing the networks index gathered above.
+            // DHCP/DNS config), reusing the networks index gathered above, and
+            // gated on this agent's advertised sandbox-networking capability
+            // (STR-103) rather than on a wire version — the guest image that
+            // has to configure the interface ships separately from the agent.
             //
-            // Still nil in every deployment: agents can realize a sandbox NIC
-            // end to end since STR-100/101, but
-            // `SandboxSpecBuilder.guestNetworkingSupported` is fleet-wide while
-            // the capability is per-agent, and STR-103 is what replaces it. The
-            // security-group ids are resolved and passed anyway (STR-102), so
-            // that flip is a one-line change rather than a new code path — and
-            // so a reader can see that a sandbox NIC, when it does reach the
-            // wire, arrives filtered rather than unmanaged.
+            // Placement already refuses to put a networked sandbox on a host
+            // without the capability, so a `nil` here means one of two things:
+            // a network-free sandbox, or a host that lost the capability under
+            // a sandbox already placed on it (a guest-image rollback, OVN down,
+            // the jailer deconfigured). The second is reported: the sandbox's
+            // `securityGroupsEnforced` reads false for exactly this reason,
+            // since a NIC that never reaches the wire has no port to filter.
             let interface = sandbox.networkInterfaces.first
             let networkSpec = SandboxSpecBuilder.networkSpec(
                 from: interface,
                 network: interface.flatMap { networksByID[$0.logicalNetworkID] },
                 securityGroupIds: interface?.id.flatMap { sandboxSecurityGroupsByInterface[$0] },
                 sendsMetadataPort: sendMetadataPort,
-                siteResolverCapable: siteResolverCapable)
+                siteResolverCapable: siteResolverCapable,
+                agentRealizesSandboxNICs: sendSandboxNetwork)
+            // Debug, not warning, despite being worth knowing: assembly runs on
+            // every sync for every agent, so during a fleet upgrade this is one
+            // line per networked sandbox per poll — thousands of them, all
+            // saying the same thing. The operator-facing signals are the ones
+            // that fire once: the agent's own warning at registration naming
+            // the specific blocker, and `securityGroupsEnforced` reading false
+            // on the sandbox itself.
+            if interface != nil && !sendSandboxNetwork {
+                app.logger.debug(
+                    "Withholding a sandbox's NIC: its host does not advertise sandbox networking",
+                    metadata: [
+                        "sandboxId": .string(sandboxId.uuidString),
+                        "agentId": .string(agentId),
+                    ])
+            }
             // The restore *edge* (STR-151), as distinct from the fork create
             // strategy above. Its artifacts follow the same rule for the same
             // reason: a sandbox that has moved off the agent that captured the
@@ -1218,14 +1258,13 @@ struct DesiredStateAssembler {
 
     /// The sandbox twin (STR-102), reading the sandbox NICs' own join table.
     ///
-    /// Its result is **discarded on every sync today**, and deliberately: the
-    /// only consumer is `SandboxSpecBuilder.networkSpec`, which returns nil
-    /// under a closed `guestNetworkingSupported`. That is one `IN` query per
-    /// sync per agent that hosts sandbox NICs (the `isEmpty` guard means agents
-    /// without them pay nothing), bought so the STR-103 flip is a one-line
-    /// change rather than a new code path — and so nobody has to prove, at
-    /// flip time, that a sandbox port comes up filtered. Named here so it is
-    /// not later rediscovered as a mystery and optimized into a gap.
+    /// Its result is discarded for an agent that does not advertise sandbox
+    /// networking, since the whole `NetworkSpec` is withheld from one
+    /// (STR-103). That is one `IN` query per sync per agent that hosts sandbox
+    /// NICs — the `isEmpty` guard means agents without them pay nothing — and
+    /// it is not worth a second condition to skip: the memberships are what
+    /// make a sandbox port come up filtered rather than unmanaged, so they must
+    /// be in hand the moment the capability does light up.
     ///
     /// Kept as a separate query and a separate dictionary rather than merged
     /// with the VM map: the two ids could only share a keyspace because they
@@ -1254,14 +1293,14 @@ struct DesiredStateAssembler {
     /// transitive closure over rule references so every `$pg_…` address-set
     /// match resolves against an existing port group.
     ///
-    /// The sandbox arm (STR-102) runs even though a sandbox's `NetworkSpec` —
-    /// and with it the per-NIC membership — is still withheld from the wire by
-    /// `SandboxSpecBuilder.guestNetworkingSupported`. That is the point: the
-    /// authority realizes a sandbox's port groups and ACLs *before* any sandbox
-    /// port exists, so STR-103's flip is not also the moment those groups are
-    /// first created, which would park every first sandbox create on
-    /// `DependencyPendingError`. A port group with no members matches nothing,
-    /// so realizing it early costs an OVN row and changes no traffic.
+    /// The sandbox arm (STR-102) runs regardless of whether the *receiving*
+    /// agent will be sent any sandbox `NetworkSpec` (STR-103). That is the
+    /// point: the authority realizes a sandbox's port groups and ACLs before
+    /// any sandbox port exists, so the moment a host gains the sandbox-networking
+    /// capability is not also the moment those groups are first created, which
+    /// would park every first sandbox create on `DependencyPendingError`. A
+    /// port group with no members matches nothing, so realizing it early costs
+    /// an OVN row and changes no traffic.
     private func desiredSecurityGroups(
         forVMs vms: [VM], sandboxes: [Sandbox], on db: any Database
     ) async throws -> [DesiredSecurityGroup] {

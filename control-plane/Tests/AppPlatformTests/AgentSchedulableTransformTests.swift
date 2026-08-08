@@ -106,6 +106,40 @@ struct AgentSchedulableTransformTests {
         #expect(byName["unknown-version"]?.supportsSandboxWorkloads == false)
     }
 
+    /// Sandbox *networking* (STR-103) is the same two-signal rule at a higher
+    /// version floor: v20 rather than v5, because a sandbox NIC that reaches a
+    /// pre-v20 agent joins no port group and comes up unfiltered while the API
+    /// reports its security groups.
+    @Test("sandbox networking requires the advertised capability and a v20+ protocol")
+    func testSandboxNetworkingSupport() throws {
+        // Runs sandboxes, cannot network them: unjailed, user-mode, or an old
+        // guest image. Schedulable for sandboxes, not for networked ones.
+        let runtimeOnly = makeAgent(id: UUID(), name: "runtime-only")
+        runtimeOnly.sandboxCapable = true
+        runtimeOnly.sandboxNetworkingCapable = false
+        runtimeOnly.wireProtocolVersion = WireProtocol.currentVersion
+
+        // Capability without the version that carries the NIC's groups.
+        let capableOldProtocol = makeAgent(id: UUID(), name: "net-old")
+        capableOldProtocol.sandboxCapable = true
+        capableOldProtocol.sandboxNetworkingCapable = true
+        capableOldProtocol.wireProtocolVersion = WireProtocol.securityGroupsMinimumVersion - 1
+
+        let capable = makeAgent(id: UUID(), name: "net-capable")
+        capable.sandboxCapable = true
+        capable.sandboxNetworkingCapable = true
+        capable.wireProtocolVersion = WireProtocol.currentVersion
+
+        let result = AgentService.schedulableAgents(
+            from: [runtimeOnly, capableOldProtocol, capable], runningVMCounts: [:])
+        let byName = Dictionary(uniqueKeysWithValues: result.map { ($0.name, $0) })
+
+        #expect(byName["runtime-only"]?.supportsSandboxNetworking == false)
+        #expect(byName["runtime-only"]?.supportsSandboxWorkloads == true)
+        #expect(byName["net-old"]?.supportsSandboxNetworking == false)
+        #expect(byName["net-capable"]?.supportsSandboxNetworking == true)
+    }
+
     /// vTPM follows the same two-signal rule as the sandbox runtime (issue
     /// #565): swtpm on the host proves the feature can be realized, and a v17+
     /// protocol proves `VMSpec.machine` reaches the agent at all. Either alone

@@ -36,12 +36,17 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     /// Stamping the newest version unconditionally would be a fleet-wide
     /// outage for no gain: the guest image is a separately distributed artifact
     /// (see `SandboxGuestImage`), so lagging an agent upgrade is the normal
-    /// rollout state, and until STR-103 flips `guestNetworkingSupported` every
-    /// document written is network-free. Stamping what the *content* requires
-    /// means a v1 guest keeps booting those, and the refusal fires precisely
-    /// when the drive carries a NIC the guest would otherwise ignore in
-    /// silence. The guest accepts any version in
+    /// rollout state, and most documents written are network-free either way.
+    /// Stamping what the *content* requires means a v1 guest keeps booting
+    /// those, and the refusal fires precisely when the drive carries a NIC the
+    /// guest would otherwise ignore in silence. The guest accepts any version in
     /// `baseSchemaVersion...schemaVersion` for the same reason.
+    ///
+    /// That refusal is the last line of defence, not the first: since STR-103
+    /// the guest image advertises the `network` capability in its `guest.json`,
+    /// the agent reports it at registration, and the control plane withholds
+    /// every sandbox NIC from a host whose guest cannot configure one. A drive
+    /// stamped v2 should therefore never reach a v1 guest at all.
     public static func requiredSchemaVersion(network: NetworkConfig?) -> UInt32 {
         network == nil ? baseSchemaVersion : schemaVersion
     }

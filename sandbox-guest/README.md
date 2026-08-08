@@ -12,10 +12,26 @@ container workload. Two artifacts per architecture:
   vsock control agent.
 
 A `guest.json` manifest describes them (versions, checksums, per-arch default
-boot args). Together they install into `sandbox_guest_image_path` (default
+boot args) and, at **manifest schema v2**, what this guest build can *do*:
+
+```json
+{ "schemaVersion": 2, "version": "...", "capabilities": ["network"], "artifacts": [...] }
+```
+
+Together they install into `sandbox_guest_image_path` (default
 `/var/lib/strato/sandbox/guest`); their presence is what lights up an agent's
-`sandbox_runtime` capability (see `StratoAgentCore/SandboxGuestImage.swift` and
+`sandbox_runtime` capability, and `capabilities` is what lights up
+`sandbox_networking` (STR-103). The two are separate because this image is
+distributed separately from the agent binary — an up-to-date agent paired with
+a guest that predates the config drive's `network` block would refuse every
+networked sandbox, so the control plane withholds their NICs instead. The agent
+reads manifest schema `1...2`, and a v1 manifest advertises nothing rather than
+failing (see `StratoAgentCore/SandboxGuestImage.swift` and
 `SandboxRuntimeProbe`).
+
+**Adding a capability**: name it in `build.sh`'s manifest *and* teach the agent
+probe to read it. Never advertise one the initramfs cannot actually serve — the
+list is the only evidence the host has.
 
 ## What the init does
 
@@ -88,6 +104,11 @@ serial console rather than booting a sandbox whose NIC it would silently
 ignore. Since the guest image is distributed separately from the agent, that is
 what keeps a lagging image from being a fleet-wide outage while still failing
 loudly at the point it matters.
+
+In practice that refusal should never fire: the manifest's `network`
+capability, advertised at every agent registration, means the control plane
+does not send a NIC to a host whose guest cannot configure one (STR-103). This
+is the last line of defence, not the first.
 
 ### Guest networking ([STR-101])
 

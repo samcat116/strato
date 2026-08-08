@@ -59,6 +59,38 @@ struct AgentMessageTests {
         #expect(decodedCapable.sandboxCapable == true)
     }
 
+    /// Sandbox *networking* (STR-103) is a second flag on the same contract,
+    /// and is deliberately independent of the first on the wire: a host that
+    /// runs sandboxes but cannot give them a NIC is a real state, and it is the
+    /// one an agent falls into when its separately-installed guest image lags.
+    @Test("Sandbox networking capability travels separately from the runtime one")
+    func agentRegisterSandboxNetworkingCapable() throws {
+        let runtimeOnly = AgentRegisterMessage(
+            agentId: "agent-1",
+            hostname: "hv-01.example",
+            version: "1.2.3",
+            capabilities: ["kvm"],
+            resources: Fixtures.resources,
+            sandboxCapable: true
+        )
+        let decodedRuntimeOnly = try throughEnvelope(runtimeOnly)
+        #expect(decodedRuntimeOnly.sandboxCapable == true)
+        // Absent, not false: an agent that predates the flag says nothing, and
+        // the control plane reads silence as "not capable".
+        #expect(decodedRuntimeOnly.sandboxNetworkingCapable == nil)
+
+        let networked = AgentRegisterMessage(
+            agentId: "agent-2",
+            hostname: "hv-02.example",
+            version: "1.2.3",
+            capabilities: ["kvm"],
+            resources: Fixtures.resources,
+            sandboxCapable: true,
+            sandboxNetworkingCapable: true
+        )
+        #expect(try throughEnvelope(networked).sandboxNetworkingCapable == true)
+    }
+
     /// The vTPM capability (issue #565) follows the `sandboxCapable` contract:
     /// absent from an agent that predates it, and absence means "not capable"
     /// rather than "unknown" — the scheduler must never place a Windows VM on

@@ -354,6 +354,11 @@ actor AgentService {
             agent.networkCapability = message.networkCapability?.rawValue
             agent.hostInfo = message.hostInfo ?? agent.hostInfo
             agent.sandboxCapable = message.sandboxCapable ?? false
+            // Re-read on every registration, like every other capability: a
+            // guest-image rollback or a jailer that stopped resolving must be
+            // able to take the flag back down, and the agent re-probes all
+            // three inputs each time it reconnects.
+            agent.sandboxNetworkingCapable = message.sandboxNetworkingCapable ?? false
             agent.tpmCapable = message.tpmCapable ?? false
             agent.resolverCapable = message.resolverCapable ?? false
             agent.updateResources(message.resources)
@@ -2447,9 +2452,22 @@ actor AgentService {
     /// architecture constraint until tag→digest resolution can read the
     /// image's platform (issue #414); forks inherit the snapshot's recorded
     /// architecture and pinned agent. Sandboxes reserve no disk.
+    ///
+    /// A sandbox that has a NIC adds three constraints the VM path derives
+    /// separately (STR-103): the sandbox-networking capability, overlay
+    /// networking, and — when its network is pinned to a site — that site. The
+    /// first is refused rather than degraded, because the alternative is a
+    /// sandbox that boots with no interface while the API keeps reporting the
+    /// address IPAM reserved for it.
     func createSandbox(sandbox: Sandbox, db: Database) async throws {
         var schedulableAgents = await schedulableAgentsFromDatabase()
         let sandboxId = sandbox.id?.uuidString ?? ""
+
+        // The NIC rows are written in the create transaction, before placement
+        // runs, so they are authoritative here — the same guarantee the VM
+        // path's `pinnedSiteID` relies on.
+        let nic = try await sandbox.$networkInterfaces.get(on: db)
+        let sandboxSiteID = try await pinnedSiteID(forNetworkIDs: nic.map(\.logicalNetworkID), on: db)
 
         var requiredArchitecture: CPUArchitecture?
         if let snapshotID = sandbox.restoredFromSnapshotId {
@@ -2540,8 +2558,14 @@ actor AgentService {
                     disk: 0,
                     hypervisorType: .firecracker,
                     architecture: requiredArchitecture,
-                    siteID: nil,
-                    requiresSandboxRuntime: true
+                    // Unlike a VM's plain NIC, which user-mode/SLIRP satisfies
+                    // with outbound NAT, a sandbox NIC has no user-mode form at
+                    // all — so unlike the VM path, presence really does imply
+                    // the overlay requirement.
+                    requiresInterVMNetworking: !nic.isEmpty,
+                    siteID: sandboxSiteID,
+                    requiresSandboxRuntime: true,
+                    requiresSandboxNetworking: !nic.isEmpty
                 ),
                 vmId: sandboxId,
                 from: schedulableAgents,
@@ -2626,7 +2650,15 @@ actor AgentService {
         let nics = try await VMNetworkInterface.query(on: db)
             .filter(\.$vm.$id == vmID)
             .all()
-        let networkIDs = Set(nics.map(\.logicalNetworkID))
+        return try await pinnedSiteID(forNetworkIDs: nics.map(\.logicalNetworkID), on: db)
+    }
+
+    /// The site a set of a workload's attached networks pins it to, or nil when
+    /// none of them is site-pinned. Shared by the VM and sandbox paths (STR-103)
+    /// — a sandbox carries at most one NIC, so the multi-site conflict can only
+    /// arise for a VM, but the rule is a property of the networks either way.
+    private func pinnedSiteID(forNetworkIDs ids: [UUID], on db: Database) async throws -> UUID? {
+        let networkIDs = Set(ids)
         guard !networkIDs.isEmpty else { return nil }
 
         let networks = try await LogicalNetwork.query(on: db)
@@ -2635,7 +2667,7 @@ actor AgentService {
         let siteIDs = Set(networks.compactMap { $0.$site.id })
         guard siteIDs.count <= 1 else {
             throw AgentServiceError.schedulingFailed(
-                "VM attaches networks pinned to different sites; no host can satisfy both")
+                "workload attaches networks pinned to different sites; no host can satisfy both")
         }
         return siteIDs.first
     }
@@ -2729,6 +2761,14 @@ actor AgentService {
                 // protocol proves desired sandbox entries actually reach it.
                 supportsSandboxWorkloads: agent.sandboxCapable
                     && WireProtocol.supportsSandboxSync(agent.wireProtocolVersion ?? 0),
+                // The NIC half (STR-103). Same two-signal rule, with the
+                // version arm set at v20 rather than v5: a sandbox NIC that
+                // reaches a pre-v20 agent joins no port group, so it would come
+                // up unfiltered while the API reports its security groups —
+                // exactly the divergence a sandbox is never allowed to have.
+                // (v20 implies v5, so the runtime arm above is not weakened.)
+                supportsSandboxNetworking: agent.sandboxNetworkingCapable
+                    && WireProtocol.supportsSecurityGroups(agent.wireProtocolVersion ?? 0),
                 // Same two-signal rule for vTPM (issue #565): swtpm on the host
                 // proves it can be realized, and a v17+ protocol proves the
                 // machine profile reaches the agent at all.

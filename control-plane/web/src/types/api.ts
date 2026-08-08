@@ -1275,8 +1275,15 @@ export interface Sandbox {
   /**
    * Whether the attached groups actually filter traffic. `undefined` means the
    * sandbox has no NIC, so there is nothing to judge — not a claim that they
-   * are unenforced. `false` for every networked sandbox today: sandbox guest
-   * networking is not enabled, so no port exists to join the groups.
+   * are unenforced. `false` when the sandbox's node cannot realize a sandbox
+   * NIC (backend STR-103) or its site authors no ACLs: either way no port
+   * exists to join the groups.
+   *
+   * `true` is a statement about the *node*, not about this sandbox's microVM.
+   * A sandbox created before its node could realize NICs keeps reading `true`
+   * after the node is upgraded while having no interface, because only
+   * recreating a sandbox attaches one — neither restart nor boot rebuilds the
+   * microVM. See `SecurityGroupService.sandboxEnforcement`.
    */
   securityGroupsEnforced?: boolean;
   /** Convergence state (backend STR-142) — the VM contract exactly. */
@@ -2055,9 +2062,9 @@ export interface CreateSecurityGroupRuleRequest {
 export interface AttachSecurityGroupRequest {
   vmId?: string;
   /**
-   * Attaching to a sandbox realizes the group's ACLs but not yet the
-   * membership: the sandbox has no OVN port to make a member until guest
-   * networking is enabled. See `Sandbox.securityGroupsEnforced`.
+   * Refused with a 409 when the sandbox is placed on a node that cannot
+   * realize a sandbox NIC: there would be no OVN port to make a member. An
+   * unplaced sandbox is always accepted. See `Sandbox.securityGroupsEnforced`.
    */
   sandboxId?: string;
   /** The NIC to attach to; defaults to the workload's first interface. */

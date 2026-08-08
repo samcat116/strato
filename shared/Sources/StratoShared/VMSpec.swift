@@ -327,10 +327,9 @@ public struct NetworkSpec: Codable, Sendable {
     /// invariant.
     ///
     /// VM and sandbox NICs carry membership on identical terms (STR-102);
-    /// nothing here distinguishes them. A sandbox's NIC does not reach the wire
-    /// at all yet — `SandboxSpecBuilder.guestNetworkingSupported` withholds the
-    /// whole `NetworkSpec` until STR-103 replaces it with a per-agent gate — so
-    /// a sandbox's membership is *authored* today but never *sent*.
+    /// nothing here distinguishes them. A sandbox's NIC reaches the wire only
+    /// on an agent that advertised `sandboxNetworkingCapable` (STR-103), so a
+    /// sandbox's membership is always *authored* but only sometimes *sent*.
     public let securityGroupIds: [UUID]?
     /// Whether this NIC's network publishes the instance metadata service.
     ///

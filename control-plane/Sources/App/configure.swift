@@ -812,8 +812,12 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddVolumeIOLimits())
     app.migrations.add(AddThrottleOperationKind())
 
+    // STR-103: per-agent sandbox-networking capability, the gate that lets a
+    // sandbox's NIC reach the wire at all.
+    app.migrations.add(AddSandboxNetworkingCapableToAgent())
+
     // Per-network DNS resolver (STR-40, roadmap #769 phase 4): the network's
-    // opt-out, and the per-agent signal that the site can actually answer on
+    // opt-in, and the per-agent signal that the site can actually answer on
     // the resolver address.
     app.migrations.add(AddResolverEnabledToLogicalNetwork())
     app.migrations.add(AddResolverCapableToAgent())
