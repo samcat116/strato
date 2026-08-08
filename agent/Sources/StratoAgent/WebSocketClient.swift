@@ -65,7 +65,11 @@ actor WebSocketClient {
 
     // WebSocket state managed via thread-safe wrapper to avoid EventLoop affinity issues
     private let wsHolder: LockedWebSocket
-    private var isConnected = false
+    // Readable so callers can skip work whose only possible outcome is a
+    // `notConnected` throw. Advisory, never a correctness gate: the socket can
+    // drop between the check and the send, which is why `sendMessage` still
+    // guards on it.
+    private(set) var isConnected = false
     private var heartbeatTask: Task<Void, Never>?
 
     // Ordered hand-off for inbound frames. `onText`/`onBinary` fire sequentially on the
@@ -424,6 +428,14 @@ enum WebSocketClientError: Error, LocalizedError, Sendable {
     case connectionFailed(String)
     case notConnected
     case encodingError(String)
+
+    /// Whether this is the "the socket is down" refusal, which callers whose
+    /// work the reconnect loop will re-drive report at `debug` rather than
+    /// `error`.
+    var isNotConnected: Bool {
+        if case .notConnected = self { return true }
+        return false
+    }
 
     var errorDescription: String? {
         switch self {

@@ -31,6 +31,8 @@ import StratoShared
 /// - a guest that powers itself off leaves the domain `SHUTOFF` and restarts
 ///   with `domainCreate`. There is no respawn-from-stored-configuration path
 ///   at all.
+/// - a guest that powers itself off is *announced* rather than discovered on
+///   the next sweep — see "Lifecycle events" below.
 /// - re-adoption is `connectListAllDomains` plus a state read. `AdoptedQEMUVM`
 ///   and the second deterministic QMP socket exist only because `QEMUManager`
 ///   cannot attach to a process it did not spawn; here orphan re-adoption stops
@@ -62,9 +64,20 @@ import StratoShared
 /// virtio-mem region the spec asked for; growing past either needs libvirt's
 /// own error, not bookkeeping here.
 ///
-/// ## Not here yet
+/// ## Lifecycle events
 ///
-/// Lifecycle events in place of status polling are STR-135.
+/// The driver holds a `withDomainEvents` subscription for as long as the agent
+/// wants one (STR-135), and every Strato domain transition it sees becomes a
+/// request for an observed-state report. Events are an **accelerant, not a
+/// source of truth**: the report they schedule re-reads the host exactly as the
+/// 20-second periodic one does, so a dropped event costs latency and nothing
+/// else. That is what lets the subscription buffer be bounded and
+/// `.dropOldest`, and it is why `getVMStatus` polling is untouched.
+///
+/// See `superviseLifecycleEvents` for the two consequences worth knowing before
+/// reading it: the connection is now dialed *proactively* rather than on first
+/// use, and `stopObservingLifecycle` is the first thing in this file that ever
+/// closes it.
 actor LibvirtService: HypervisorService {
     private let logger: Logger
     private let storage: (any StorageBackend)?
@@ -111,6 +124,23 @@ actor LibvirtService: HypervisorService {
     private var lastKnownVMIds: Cached<[String]>?
     private var lastKnownReservations: Cached<(vcpus: Int, memoryBytes: Int64)>?
 
+    /// The lifecycle subscription's hand-off to the agent (STR-135), created in
+    /// `init` so the stream exists before anyone attaches to it. `nonisolated`
+    /// so reading it costs no hop onto this actor, exactly like
+    /// `observesGuests`.
+    ///
+    /// Bounded, and bounded *again* on the libvirt side by
+    /// `lifecycleEventBuffer`. Both drops are safe for the same reason: what
+    /// travels here is a request to re-read the host, not the reading itself.
+    private nonisolated let lifecycleStream: AsyncStream<VMLifecycleChange>
+    private nonisolated let lifecycleContinuation: AsyncStream<VMLifecycleChange>.Continuation
+    nonisolated var lifecycleChanges: AsyncStream<VMLifecycleChange>? { lifecycleStream }
+
+    /// The supervisor holding the subscription, and the flag that tells it a
+    /// stream that just ended was our own doing rather than a dead daemon.
+    private var eventTask: Task<Void, Never>?
+    private var stoppingObservation = false
+
     /// An answer libvirtd gave, with when it gave it — the timestamp being the
     /// only thing that distinguishes a fresh reading from an indefinitely stale
     /// one at the point it is served.
@@ -140,6 +170,8 @@ actor LibvirtService: HypervisorService {
         self.firmware = firmware
         self.hasSwtpm = hasSwtpm
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
+        (self.lifecycleStream, self.lifecycleContinuation) = AsyncStream.makeStream(
+            of: VMLifecycleChange.self, bufferingPolicy: .bufferingNewest(64))
         logger.info("libvirt hypervisor service initialized", metadata: ["uri": .string(uri)])
     }
 
@@ -232,6 +264,241 @@ actor LibvirtService: HypervisorService {
         } catch {
             throw LibvirtFailure.hypervisorError(error, vmId: vmId, operation: operation)
         }
+    }
+
+    // MARK: - Lifecycle events
+
+    /// The libvirt-side buffer for the lifecycle subscription (STR-135).
+    ///
+    /// `.dropOldest` is not a preference. What comes out of this subscription
+    /// is a request to re-read the host, and a full re-reading answers every
+    /// request that preceded it — so the newest transitions are the only ones
+    /// that describe the present, and under this policy correctness never
+    /// depends on the number at all. `.dropNewest` inverts exactly that: a
+    /// burst would fill the buffer and then discard the transition that just
+    /// happened, leaving a guest's self-initiated power-off invisible until the
+    /// next periodic sync, which is the case this whole feature exists for.
+    private static let lifecycleEventBuffer: EventBufferPolicy = .dropOldest(256)
+
+    /// Backoff bounds for re-establishing the subscription, matching
+    /// `DesiredStatePoller` so a host whose daemon is down produces one
+    /// recognizable retry cadence rather than two. No jitter: every agent dials
+    /// its own local libvirtd, so there is no herd to spread.
+    private static let initialEventBackoff: Duration = .seconds(1)
+    private static let maximumEventBackoff: Duration = .seconds(30)
+
+    /// How often a continuing outage is escalated back to `warning`. One line
+    /// every ten attempts, which at the capped backoff is roughly one every
+    /// five minutes.
+    private static let outageReminderEvery = 10
+
+    func startObservingLifecycle() async {
+        guard eventTask == nil, !stoppingObservation else { return }
+        eventTask = Task { [weak self] in
+            await self?.superviseLifecycleEvents()
+        }
+    }
+
+    func stopObservingLifecycle() async {
+        stoppingObservation = true
+        eventTask?.cancel()
+        // Waited out rather than abandoned, so teardown does not race a dial
+        // that is about to install a connection nothing will ever close. The
+        // caller bounds this: a wedged daemon must not hold up shutdown.
+        await eventTask?.value
+        eventTask = nil
+        lifecycleContinuation.finish()
+    }
+
+    /// Closes the one connection this driver holds.
+    ///
+    /// The first and only place that happens — nothing did before, which was a
+    /// real (if quiet) leak on agent shutdown. It lives here rather than in
+    /// `stopObservingLifecycle` because the connection is not the
+    /// subscription's: every call path in this file shares it, and ending a
+    /// subscription is no reason to take it away from them.
+    ///
+    /// Cancel-then-close looks careless and is not. `stopObservingLifecycle`
+    /// has already cancelled the drain, so `withDomainEvents` unwound and ran
+    /// its own teardown: the local sink deregistration always lands, and only
+    /// the wire-level `connectDomainEventCallbackDeregisterAny` may be skipped
+    /// on an already-cancelled task. The `CONNECT_CLOSE` here finishes the job,
+    /// because the server-side registration is scoped to the connection and
+    /// dies with it. Racing a stop signal against the drain inside a task group
+    /// would buy one best-effort RPC on a path that drops the socket a
+    /// millisecond later; it is not worth the machinery.
+    ///
+    /// If the caller's budget abandons this, the connection stays open — which
+    /// is the very leak above, bounded to a process that is exiting anyway.
+    func shutdown() async {
+        guard let client else { return }
+        self.client = nil
+        try? await client.close()
+    }
+
+    /// Holds a lifecycle subscription for as long as the agent wants one,
+    /// re-establishing it across daemon restarts.
+    ///
+    /// This is the one place the driver dials libvirtd without being asked to
+    /// do work, which is a real change from the lazy connection the rest of the
+    /// file describes: on a libvirt node the agent now holds a connection from
+    /// start, even with no VMs on the host. That costs one Unix socket and a
+    /// five-second keepalive, and it cannot take the agent down — the loop only
+    /// logs, so a daemon that never comes up never reaches `Agent.start()` and
+    /// never fails a reconcile. The host preflight remains the place an
+    /// unreachable libvirtd is *reported*, which is why nothing here logs at
+    /// `error`.
+    private func superviseLifecycleEvents() async {
+        var backoff = Self.initialEventBackoff
+        // Attempts since the last subscription that *held*. A failed dial and a
+        // subscription that died in its first half-minute count the same,
+        // because to an operator they are the same thing: libvirtd is not
+        // currently able to tell this host what its guests are doing. Counting
+        // only the former would let a flapping daemon retry forever in silence.
+        var attempts = 0
+        var troubleStarted: ContinuousClock.Instant?
+
+        while !Task.isCancelled && !stoppingObservation {
+            do {
+                let client = try await connection()
+                if attempts > 0 {
+                    logger.info(
+                        "libvirt lifecycle subscription re-established",
+                        metadata: [
+                            "attempts": .stringConvertible(attempts),
+                            "outageSeconds": .stringConvertible(
+                                troubleStarted.map { (ContinuousClock.now - $0).components.seconds } ?? 0),
+                        ])
+                }
+                let subscribedAt = ContinuousClock.now
+
+                try await client.withDomainEvents(
+                    DomainLifecycleEvent.self, bufferPolicy: Self.lifecycleEventBuffer
+                ) { [lifecycleContinuation, logger] events in
+                    await Self.drain(events, into: lifecycleContinuation, logger: logger)
+                }
+
+                // The drain only returns when the event stream finished, and
+                // while we are still running nothing finishes it but the
+                // connection dying — the sink's own `finish` discards the error
+                // that says so, so this is inferred rather than read.
+                guard !Task.isCancelled && !stoppingObservation else { break }
+                invalidate(client)
+
+                // Health is measured in *duration held*, never in the
+                // registration merely succeeding: a connection that dies
+                // between the dial and the register makes this loop spin, and
+                // that is precisely the case the backoff is here to damp.
+                if ContinuousClock.now - subscribedAt >= Self.maximumEventBackoff {
+                    attempts = 0
+                    troubleStarted = nil
+                    backoff = Self.initialEventBackoff
+                } else {
+                    attempts += 1
+                    if troubleStarted == nil { troubleStarted = ContinuousClock.now }
+                    logShortLivedSubscription(attempt: attempts, since: troubleStarted)
+                }
+            } catch {
+                attempts += 1
+                if troubleStarted == nil { troubleStarted = ContinuousClock.now }
+                logSubscriptionFailure(error, attempt: attempts, since: troubleStarted)
+            }
+
+            guard !Task.isCancelled && !stoppingObservation else { break }
+            try? await Task.sleep(for: backoff)
+            backoff = min(backoff * 2, Self.maximumEventBackoff)
+        }
+    }
+
+    /// Yields every Strato domain transition into the agent's stream.
+    ///
+    /// `nonisolated static` on purpose. `withDomainEvents`'s body parameter is
+    /// not `@Sendable`, so a closure written inside this actor would be
+    /// *isolated to it*, and every resumption of the loop below would be a hop
+    /// onto the actor every RPC for every VM on this host passes through.
+    /// Actors do not block, so that is not a correctness problem — it is a cost
+    /// one, and the trap it opens is worse than the cost: calling `getVMStatus`
+    /// (or anything else through `call`) from in here would interleave a
+    /// round trip per event into that same queue, over the same connection the
+    /// events arrive on, turning an event storm into a status-query storm.
+    /// Keeping this free of the actor makes that mistake impossible to make by
+    /// accident.
+    private nonisolated static func drain(
+        _ events: LibvirtEvents<DomainLifecycleEvent>,
+        into continuation: AsyncStream<VMLifecycleChange>.Continuation,
+        logger: Logger
+    ) async {
+        // Yielded here, inside the scope, rather than before the call: the
+        // registration has already landed by the time this body runs, so
+        // nothing that happens between this re-reading and the subscription can
+        // fall in the gap. Yielding it outside would leave exactly that window
+        // unaccounted for, which is the window a libvirtd restart creates.
+        continuation.yield(.resynchronize(reason: "libvirt event subscription established"))
+
+        for await event in events {
+            // A co-tenant's domain churning on the same libvirtd is not this
+            // agent's business and must not drive its reports.
+            guard LibvirtDomain.isStratoDomainName(event.domain.name) else { continue }
+            continuation.yield(
+                .vm(
+                    id: event.domain.name,
+                    reason: LibvirtDomain.lifecycleEventLabel(forRawEvent: event.event)))
+        }
+        logger.debug("libvirt lifecycle event stream ended")
+    }
+
+    /// An attempt that failed before a subscription existed at all.
+    ///
+    /// Deliberately quiet after the first, via `remindOfOutage`.
+    private func logSubscriptionFailure(
+        _ error: any Error, attempt: Int, since troubleStarted: ContinuousClock.Instant?
+    ) {
+        if attempt == 1 {
+            logger.warning(
+                "libvirt lifecycle subscription failed; VM state will fall back to the periodic sync",
+                metadata: ["error": .string("\(error)")])
+        } else if !remindOfOutage(attempt: attempt, since: troubleStarted) {
+            logger.debug(
+                "libvirt lifecycle subscription retry failed",
+                metadata: [
+                    "attempt": .stringConvertible(attempt),
+                    "error": .string("\(error)"),
+                ])
+        }
+    }
+
+    /// A subscription that was established and then did not survive long
+    /// enough to be called healthy — a daemon that is up but restarting, or a
+    /// connection dying between the dial and the registration landing.
+    private func logShortLivedSubscription(attempt: Int, since troubleStarted: ContinuousClock.Instant?) {
+        if attempt == 1 {
+            logger.warning("libvirt lifecycle subscription dropped almost immediately; retrying")
+        } else if !remindOfOutage(attempt: attempt, since: troubleStarted) {
+            logger.debug(
+                "libvirt lifecycle subscription dropped again",
+                metadata: ["attempt": .stringConvertible(attempt)])
+        }
+    }
+
+    /// One operator-actionable line every `outageReminderEvery` attempts, which
+    /// at the capped backoff is roughly one every five minutes. Returns whether
+    /// it logged, so callers can fall back to `debug`.
+    ///
+    /// A host configured for libvirt whose daemon is not running retries
+    /// forever, so an unconditional line would be two a minute for the life of
+    /// the process. And never `error`: `LibvirtProbe`'s preflight already says
+    /// an unreachable libvirtd is a problem and says what to do about it, and a
+    /// second, more frequent voice repeating it devalues both.
+    private func remindOfOutage(attempt: Int, since troubleStarted: ContinuousClock.Instant?) -> Bool {
+        guard attempt % Self.outageReminderEvery == 0 else { return false }
+        let minutes = troubleStarted.map { (ContinuousClock.now - $0).components.seconds / 60 } ?? 0
+        logger.warning(
+            "libvirtd is not delivering lifecycle events; observed VM state on this host is only as fresh as the periodic sync",
+            metadata: [
+                "minutes": .stringConvertible(minutes),
+                "attempts": .stringConvertible(attempt),
+            ])
+        return true
     }
 
     // MARK: - Domain lookup

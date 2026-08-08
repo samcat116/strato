@@ -208,6 +208,13 @@ actor Agent {
     private nonisolated let sandboxLogLinesContinuation: AsyncStream<(String, String, String)>.Continuation
     private var sandboxExecPumpTask: Task<Void, Never>?
     private var sandboxLogPumpTask: Task<Void, Never>?
+    // Hypervisor lifecycle transitions (STR-135): one pump per backend that
+    // pushes them, all feeding a single trigger that turns bursts into
+    // observed-state reports. The trigger is what keeps a host-wide power cycle
+    // — stopped, started, resumed, per VM — from becoming one full report per
+    // event, and what guarantees two reports are never assembling at once.
+    private var lifecyclePumpTasks: [HypervisorType: Task<Void, Never>] = [:]
+    private var observedStateTrigger: CoalescingTrigger?
     // Set when a manifest write failed (disk full, permissions); the write is
     // retried on every heartbeat until it succeeds, so a transient failure only
     // leaves the on-disk manifest stale for a bounded window.
@@ -775,6 +782,12 @@ actor Agent {
             startSandboxPumps()
         }
 
+        // Hypervisor backends that push lifecycle transitions instead of only
+        // answering status queries (STR-135). Started here because the driver
+        // registry is complete by this point, and before registration because
+        // nothing is sent until there is an assigned agent id anyway.
+        await startLifecycleObservation()
+
         // The reconciler drives desired-state syncs onto the shared per-VM
         // lanes; all hypervisor side effects go through this agent (the
         // actuator), so it must exist before the message consumer starts.
@@ -950,6 +963,35 @@ actor Agent {
             await client.shutdown()
         }
         websocketClient = nil
+
+        // Stop the lifecycle pumps and their trigger before the backends they
+        // drain, so nothing is still asking for a report while the drivers are
+        // being torn down.
+        for task in lifecyclePumpTasks.values { task.cancel() }
+        lifecyclePumpTasks.removeAll()
+        await observedStateTrigger?.stop()
+        observedStateTrigger = nil
+
+        // Then the backends themselves. Budgeted because both steps talk to a
+        // hypervisor and a wedged daemon must not hold up shutdown, and budgeted
+        // **per backend** rather than over the sweep: one wedged driver would
+        // otherwise eat the budget its peers still need to release theirs.
+        // Abandoning is safe because the process is exiting.
+        for (type, service) in hypervisorServices {
+            do {
+                try await StageBudget.run(
+                    seconds: 5, stage: "hypervisor-shutdown", onTimeout: .abandon
+                ) {
+                    await service.stopObservingLifecycle()
+                    await service.shutdown()
+                }
+            } catch {
+                logger.warning(
+                    "Hypervisor shutdown exceeded its budget",
+                    metadata: ["hypervisor": .string(type.rawValue)])
+            }
+        }
+
         hypervisorServices.removeAll()
 
         // Close the console pty channels and release the event loops they run
@@ -3011,6 +3053,93 @@ extension Agent {
         }
     }
 
+    // MARK: - Hypervisor lifecycle events (STR-135)
+
+    /// Attach to every backend that pushes lifecycle transitions and start it.
+    /// Idempotent.
+    ///
+    /// Routed through the driver registry rather than a downcast to
+    /// `LibvirtService`, for the same reason `refreshGuestInfoCacheIfDue` is:
+    /// which backend a VM runs under is not this loop's business. A backend
+    /// with nothing to push (`QEMUService`, Firecracker, the mock, and every
+    /// backend on macOS) reports nil and is skipped before a task is spawned or
+    /// its subscription is ever started.
+    private func startLifecycleObservation() async {
+        if observedStateTrigger == nil {
+            observedStateTrigger = CoalescingTrigger(
+                interval: CoalescingTrigger.observedStateInterval, logger: logger
+            ) { [weak self] in
+                await self?.sendObservedStateReport()
+            }
+        }
+        for (type, service) in hypervisorServices {
+            guard lifecyclePumpTasks[type] == nil, let changes = service.lifecycleChanges else { continue }
+
+            // The slot is claimed *before* the first suspension, which is what
+            // makes the idempotence above real rather than incidental: the
+            // guard is read and written in one actor step, so two concurrent
+            // callers cannot both pass it and attach two iterators to one
+            // `AsyncStream`, which is single-consumer and would split the
+            // events arbitrarily between them. `LibvirtService.connecting`
+            // exists for the same reason one file over.
+            //
+            // Pumping before the subscription starts loses nothing: the stream
+            // is created in the driver's `init` and buffered, so anything
+            // yielded in the gap either way is held for whoever attaches.
+            lifecyclePumpTasks[type] = Task { [weak self] in
+                for await change in changes {
+                    await self?.handleLifecycleChange(change, from: type)
+                }
+            }
+            await service.startObservingLifecycle()
+            logger.info(
+                "Observing hypervisor lifecycle events",
+                metadata: ["hypervisor": .string(type.rawValue)])
+        }
+    }
+
+    /// Turn one pushed transition into a request for an observed-state report.
+    ///
+    /// The change itself is never applied to anything: the report the trigger
+    /// schedules re-reads every VM, which is what `ObservedStateReport`'s
+    /// full-list semantics require and what keeps events an accelerant rather
+    /// than a second, racing source of truth.
+    private func handleLifecycleChange(_ change: VMLifecycleChange, from type: HypervisorType) async {
+        // Same gate the heartbeat's report uses: a control plane that does not
+        // speak state sync must not be sent one. Before registration there is
+        // no agent id to send it under, and the post-registration baseline
+        // report covers whatever happened in the meantime.
+        guard controlPlaneSupportsStateSync, assignedAgentID != nil else { return }
+
+        // And not while the socket is down. `assignedAgentID` is set once at
+        // registration and never cleared, so it does not answer this on its
+        // own — without the second check a guest that flaps during a
+        // control-plane outage would drive a full O(VMs) re-reading of the host
+        // every coalescing window, for a report that can only throw
+        // `notConnected`. Reconnection re-registers, and registration sends the
+        // baseline report that covers the gap.
+        guard await websocketClient?.isConnected == true else { return }
+
+        switch change {
+        case .vm(let id, let reason):
+            logger.debug(
+                "Hypervisor reported a VM lifecycle transition",
+                metadata: [
+                    "hypervisor": .string(type.rawValue),
+                    "vmId": .string(id),
+                    "event": .string(reason),
+                ])
+        case .resynchronize(let reason):
+            logger.debug(
+                "Hypervisor asked for a full re-reading",
+                metadata: [
+                    "hypervisor": .string(type.rawValue),
+                    "reason": .string(reason),
+                ])
+        }
+        await observedStateTrigger?.signal()
+    }
+
     private func handleSandboxExecStart(_ message: SandboxExecStartMessage) async {
         logger.info(
             "Sandbox exec start request received",
@@ -4666,6 +4795,12 @@ extension Agent: ReconcileActuator {
 
         do {
             try await websocketClient?.sendMessage(report)
+        } catch let error as WebSocketClientError where error.isNotConnected {
+            // Not an error: the socket dropped, the reconnect loop owns that,
+            // and registration re-sends a baseline report. Logging it at
+            // `error` turned a control-plane outage into per-report noise on
+            // every agent — worst on the paths a guest can drive.
+            logger.debug("Skipped observed-state report: control-plane socket is down")
         } catch {
             logger.error("Failed to send observed-state report: \(error)")
         }

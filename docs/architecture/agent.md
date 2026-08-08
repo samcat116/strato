@@ -200,6 +200,25 @@ durable store rather than a process the agent has to remember:
   change with the driver, which is why `guestInfo`/`memoryStats` are
   `HypervisorService` requirements rather than one driver's methods.
 
+- **Transitions are announced, not discovered.** The driver holds a
+  `withDomainEvents` lifecycle subscription (STR-135) for as long as the agent
+  wants one, so a guest that powers itself off is reported in about a second
+  rather than at the next 20-second sweep. Events are an **accelerant, not a
+  source of truth**: what they carry is a request to re-read the host, and the
+  observed-state report they schedule is the same full re-reading the periodic
+  one performs. That is what makes the subscription buffer safe to bound and
+  drop from (`.dropOldest` — the newest transitions are the ones describing the
+  present, and a full re-reading answers every request that preceded it), and it
+  is why `getVMStatus` polling is untouched. The agent coalesces bursts into at
+  most two reports per 500 ms window, because a host-wide power cycle emits
+  stopped/started/resumed *per VM* and a report costs a round trip per VM.
+  Reconnection is the loop's own job: the subscription dies with its connection,
+  and the re-established one yields a resynchronize signal from *inside* the
+  subscription scope, so the window it was disconnected for cannot fall in a gap.
+  What this changes is **visibility latency, not repair latency**: a guest that
+  powers itself off is *reported* in about a second, but nothing here rings the
+  desired-state doorbell, so the reconciler still restarts it on its own cadence.
+
 #### The domain document is written once
 
 `createVM` defines a domain and nothing redefines it. That single fact shapes
@@ -242,7 +261,12 @@ only moved onto the modern job API in 10.9. `LibvirtProbe.minimumVersion` gates
 all rather than advertising a capture it cannot take. Unlike the QEMU path, a
 checkpoint delete works on a stopped VM.
 
-Still to come: lifecycle events in place of status polling (STR-135).
+With STR-134 and STR-135 in, a libvirt node is a full-capability QEMU node and
+nothing in its lifecycle path needs a raw monitor, so no domain it manages is
+ever tainted by `qemuDomainMonitorCommand`. What is left is removing the driver
+it replaces, along with the QMP sockets, the QGA transport and the swtpm
+supervision that only ever existed because the agent spawned QEMU itself
+(STR-136).
 
 ### Diagnosing a failed QEMU spawn
 
