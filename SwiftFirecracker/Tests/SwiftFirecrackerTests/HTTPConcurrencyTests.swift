@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import NIOPosix
 import Testing
 
 @testable import SwiftFirecracker
@@ -37,9 +38,12 @@ struct HTTPConcurrencyTests {
     /// fire-and-forget — the channel could outlive the test and the fake server
     /// it is talking to.
     private func withClient<T>(
-        socketPath: String, _ body: (UnixSocketHTTPClient) async throws -> T
+        socketPath: String,
+        requestTimeout: TimeInterval = UnixSocketHTTPClient.defaultRequestTimeout,
+        _ body: (UnixSocketHTTPClient) async throws -> T
     ) async throws -> T {
-        let client = UnixSocketHTTPClient(socketPath: socketPath, logger: Logger(label: "test"))
+        let client = UnixSocketHTTPClient(
+            socketPath: socketPath, logger: Logger(label: "test"), requestTimeout: requestTimeout)
         try await client.connect()
         do {
             let result = try await body(client)
@@ -144,13 +148,122 @@ struct HTTPConcurrencyTests {
         server.start()
         defer { server.stop() }
 
+        // Cleanup goes through `withClient` rather than a `defer` firing an
+        // unstructured `Task`: that task can outlive the test body — and the
+        // `defer` that removes the socket directory — which is harmless only for
+        // as long as teardown touches no filesystem.
+        try await withClient(socketPath: socketPath, requestTimeout: 0.5) { client in
+            await #expect(throws: FirecrackerError.self) {
+                _ = try await client.request(method: .GET, path: "/never-answered")
+            }
+        }
+    }
+
+    /// A timed-out round trip takes the channel down with it — necessarily, since
+    /// responses are paired in order. What it must not take down is the client:
+    /// before STR-194 the failure latched and nothing anywhere reconnected, so
+    /// one unanswered `PATCH /vm` left the agent unable to reach that microVM's
+    /// API for the rest of its life, and a still-running sandbox could only be
+    /// deleted.
+    @Test("a client survives a timed-out request and reconnects for the next one")
+    func clientReconnectsAfterATimedOutRequest() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let socketPath = "\(dir)/api.sock"
+
+        // Swallows the first request — the wedged-VMM case — and answers every
+        // one after it, which is what a VMM that was merely slow looks like.
+        let server = try EchoingAPIServer(socketPath: socketPath, silentRequests: 1)
+        server.start()
+        defer { server.stop() }
+
+        let response = try await withClient(socketPath: socketPath, requestTimeout: 0.5) { client in
+            await #expect(throws: FirecrackerError.self) {
+                _ = try await client.request(method: .PATCH, path: "/vm", body: Data("{}".utf8))
+            }
+            return try await client.request(method: .GET, path: "/after-timeout")
+        }
+
+        #expect(response.statusCode == 200)
+        #expect(
+            response.body.map { String(decoding: $0, as: UTF8.self) } == "{\"path\":\"/after-timeout\"}")
+    }
+
+    /// `disconnect()` must win against a redial that is already in flight. It
+    /// cannot close a channel that does not exist yet, so the redial has to be
+    /// the one that notices the teardown and undoes itself — otherwise the
+    /// client comes back up after a deliberate teardown, pointed at a socket
+    /// path that by then may belong to a different microVM.
+    ///
+    /// The window is opened deterministically rather than raced for: the client
+    /// runs on a single-threaded loop group, and occupying that one loop parks
+    /// the redial inside NIO's channel registration while leaving the actor free
+    /// for the `disconnect()` to land. Without the epoch check this ends with a
+    /// connected client and the final request *succeeding*, which is why the
+    /// server answers after the first swallowed request — a silent server would
+    /// make the wrong outcome throw a timeout and look like a pass.
+    @Test("a disconnect racing an in-flight redial still leaves the client down")
+    func disconnectBeatsAnInFlightRedial() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let socketPath = "\(dir)/api.sock"
+
+        let server = try EchoingAPIServer(socketPath: socketPath, silentRequests: 1)
+        server.start()
+        defer { server.stop() }
+
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         let client = UnixSocketHTTPClient(
-            socketPath: socketPath, logger: Logger(label: "test"), requestTimeout: 0.5)
+            socketPath: socketPath, logger: Logger(label: "test"), group: group,
+            requestTimeout: 0.3)
         try await client.connect()
-        defer { Task { await client.disconnect() } }
+
+        // Kills the channel, leaving the client redial-eligible. The loop must
+        // be free here — the request's deadline is scheduled on it.
+        _ = try? await client.request(method: .GET, path: "/wedged")
+
+        // Occupy the loop so the redial below parks in `withConnectedSocket`.
+        group.next().execute { Thread.sleep(forTimeInterval: 1.0) }
+
+        async let redialing: Void = {
+            _ = try? await client.request(method: .GET, path: "/racing-the-teardown")
+        }()
+        // Long enough for the redial to be created and suspended, short enough
+        // to stay well inside the loop's occupancy.
+        try await Task.sleep(for: .milliseconds(200))
+        await client.disconnect()
+        await redialing
+
+        var refused = false
+        do {
+            _ = try await client.request(method: .GET, path: "/after-teardown")
+        } catch FirecrackerError.notConnected {
+            refused = true
+        }
+        #expect(refused, "the client reconnected across an explicit disconnect")
+        try await group.shutdownGracefully()
+    }
+
+    /// The redial is for a channel that died under a request, not for one the
+    /// caller deliberately put down: after `disconnect()` the socket path may
+    /// already belong to a different microVM.
+    @Test("an explicit disconnect is not undone by the next request")
+    func explicitDisconnectIsNotUndone() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let socketPath = "\(dir)/api.sock"
+
+        let server = try EchoingAPIServer(socketPath: socketPath)
+        server.start()
+        defer { server.stop() }
+
+        let client = UnixSocketHTTPClient(socketPath: socketPath, logger: Logger(label: "test"))
+        try await client.connect()
+        _ = try await client.request(method: .GET, path: "/alive")
+        await client.disconnect()
 
         await #expect(throws: FirecrackerError.self) {
-            _ = try await client.request(method: .GET, path: "/never-answered")
+            _ = try await client.request(method: .GET, path: "/after-disconnect")
         }
     }
 }
@@ -167,11 +280,16 @@ private final class EchoingAPIServer: @unchecked Sendable {
     private let lock = NSLock()
     private var stopped = false
     private var connections: [Int32] = []
+    /// How many more requests to swallow before answering normally — a VMM that
+    /// is wedged for a while and then comes back, counted across connections so
+    /// a client that redials still sees the recovery.
+    private var silentRequestsRemaining: Int
 
-    init(socketPath: String, padBodyTo: Int? = nil, silent: Bool = false) throws {
+    init(socketPath: String, padBodyTo: Int? = nil, silent: Bool = false, silentRequests: Int = 0) throws {
         self.socketPath = socketPath
         self.padBodyTo = padBodyTo
         self.silent = silent
+        self.silentRequestsRemaining = silentRequests
 
         if FileManager.default.fileExists(atPath: socketPath) {
             try FileManager.default.removeItem(atPath: socketPath)
@@ -253,6 +371,15 @@ private final class EchoingAPIServer: @unchecked Sendable {
         return stopped
     }
 
+    /// Consumes one of the leading requests that go unanswered.
+    private func swallowRequest() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard silentRequestsRemaining > 0 else { return false }
+        silentRequestsRemaining -= 1
+        return true
+    }
+
     private func serveConnection(_ fd: Int32) {
         var buffer = Data()
         while !isStopped() {
@@ -276,7 +403,7 @@ private final class EchoingAPIServer: @unchecked Sendable {
                 usleep(useconds_t.random(in: 200...2000))
                 // `silent` models a VMM that accepts the connection and then
                 // wedges without ever answering.
-                if !silent { writeResponse(fd, path: path) }
+                if !silent && !swallowRequest() { writeResponse(fd, path: path) }
             }
         }
     }
