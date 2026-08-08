@@ -90,6 +90,24 @@ import Testing
         #expect(random.base.lo == 0)
     }
 
+    @Test func generatedULAAvoidsTheReservedServiceSpace() {
+        // A draw landing inside fd00:ec2::/32 is nudged into the neighbouring
+        // /32 rather than minting a subnet the API would refuse (STR-186).
+        let reserved = IPv6CIDR(NetworkResolverEndpoint.v6Space)!
+        for globalID: UInt64 in [0x00_0e_c2_00_00, 0x00_0e_c2_ff_ff, 0x00_0e_c2_12_34] {
+            let cidr = IPv6Address.makeULASubnet64(randomGlobalID: { globalID })
+            #expect(!reserved.overlaps(cidr), "\(cidr) must not overlap \(reserved)")
+            #expect(cidr.base.isUniqueLocal)
+            #expect(cidr.prefix == 64)
+        }
+        #expect(
+            IPv6Address.makeULASubnet64(randomGlobalID: { 0x00_0e_c2_12_34 }).description == "fd00:ec3:1234::/64")
+
+        // Neighbours of the reserved prefix are left alone.
+        #expect(IPv6Address.makeULASubnet64(randomGlobalID: { 0x00_0e_c1_00_00 }).description == "fd00:ec1::/64")
+        #expect(IPv6Address.makeULASubnet64(randomGlobalID: { 0x00_0e_c3_00_00 }).description == "fd00:ec3::/64")
+    }
+
     @Test func replacingInterfaceIDKeepsPrefix() {
         let base = IPv6Address("fd12:3456:789a::")!
         #expect(base.replacingInterfaceID(0x100).description == "fd12:3456:789a::100")

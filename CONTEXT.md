@@ -316,6 +316,15 @@ use in code, tests, docs, and review. Architecture-level maps live in
   security model. The **resolver** terminates in the **host** namespace, because
   it has to forward and that namespace has no egress.
 
+- **Service ULA space** — `fd00:ec2::/32`, the IPv6 range every link-local
+  service address is drawn from: instance metadata at `fd00:ec2::254`, and every
+  network's resolver from `fd00:ec2:1::/48`. Reserved *against tenants*, which is
+  the whole point of naming it: unlike its v4 counterpart it is ordinary ULA
+  space, indistinguishable from what a network's own subnet is drawn from, so a
+  tenant subnet overlapping it would inherit the service carve-outs — ACLs no
+  security-group rule can override — pointed at tenant addresses. A subnet an
+  operator types is rejected; a generated one is nudged clear.
+
 - **Resolver** — the DNS server a network's guests are pointed at, answering on
   a link-local pair of the network's own derived from its `resolver_index`. One
   CoreDNS process per *hypervisor*, with a server block per network. It serves

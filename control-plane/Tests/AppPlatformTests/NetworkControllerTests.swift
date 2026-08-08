@@ -228,6 +228,59 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("POST /api/networks rejects an IPv6 subnet overlapping the reserved service space (400)")
+    func createRejectsSubnet6OverlappingServiceSpace() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            // The whole documented /32, not just the /64 holding fd00:ec2::254:
+            // it also covers the per-network resolvers at fd00:ec2:1::<index>.
+            for subnet6 in ["fd00:ec2::/64", "fd00:ec2:1::/64", "fd00:ec2:ffff::/64", "FD00:0EC2:0:0::/64"] {
+                try await app.test(.POST, "/api/networks") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateNetworkRequest(
+                            name: "metadata-clash-net", subnet: "10.31.0.0/24", gateway: nil,
+                            subnet6: subnet6, projectId: project.id!))
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest, "subnet6 '\(subnet6)' should be rejected")
+                    // The JSON body escapes the CIDR's slashes, so match the prose.
+                    #expect(res.body.string.contains("reserved for Strato's own link-local services"))
+                }
+            }
+
+            // The neighbouring prefixes are ordinary tenant space.
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "metadata-neighbour-net", subnet: "10.32.0.0/24", gateway: nil,
+                        subnet6: "fd00:ec3::/64", projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
+    @Test("PUT /api/networks rejects an IPv6 subnet overlapping the reserved service space (400)")
+    func updateRejectsSubnet6OverlappingServiceSpace() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            let network = LogicalNetwork(
+                name: "metadata-update-net", subnet: "10.33.0.0/24", gateway: "10.33.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(subnet6: "fd00:ec2::/64"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("reserved for Strato's own link-local services"))
+            }
+
+            let reloaded = try await LogicalNetwork.find(network.id!, on: app.db)
+            #expect(reloaded?.subnet6 == nil)
+        }
+    }
+
     @Test("POST /api/networks rejects an IPv6 subnet overlapping a project sibling (409)")
     func createRejectsOverlappingSubnet6() async throws {
         try await withNetworkTestApp { app, user, project, token in

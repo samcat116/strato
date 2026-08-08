@@ -50,14 +50,20 @@ struct AddIPv6ToLogicalNetwork: AsyncMigration {
             // Validate here, where the failure is a clear startup error naming
             // the bad env var (same rationale as CreateLogicalNetwork). Same
             // rules as validateAddressing6: judge the masked network address,
-            // and reject non-routable prefixes including the unspecified ::/64.
+            // reject non-routable prefixes including the unspecified ::/64,
+            // and reject the space Strato's own link-local services are drawn
+            // from (STR-186) — an operator typing a tidy-looking
+            // `fd00:ec2::/64` here is the same vector as typing it at the API.
             guard let parsed = IPv6CIDR(configured), parsed.prefix == 64,
                 !parsed.networkAddress.isMulticast, !parsed.networkAddress.isLinkLocal,
-                !parsed.networkAddress.isLoopback, !parsed.networkAddress.isUnspecified
+                !parsed.networkAddress.isLoopback, !parsed.networkAddress.isUnspecified,
+                IPv6CIDR(NetworkResolverEndpoint.v6Space)?.overlaps(parsed) != true
             else {
                 throw Abort(
                     .internalServerError,
-                    reason: "STRATO_DEFAULT_NETWORK_SUBNET6 is not a usable IPv6 /64 CIDR: \(configured)")
+                    reason: "STRATO_DEFAULT_NETWORK_SUBNET6 is not a usable IPv6 /64 CIDR (it must not "
+                        + "overlap \(NetworkResolverEndpoint.v6Space), reserved for instance metadata "
+                        + "and the per-network DNS resolvers): \(configured)")
             }
             subnet6 = parsed
         } else {

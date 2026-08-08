@@ -249,10 +249,29 @@ public struct IPv6Address: CustomStringConvertible, Equatable, Hashable, Sendabl
     /// (subnet ID 0). Randomness is the point — it keeps prefixes
     /// collision-resistant if networks are ever peered — so a fixed prefix
     /// must never replace this. `randomGlobalID` is injectable for tests.
+    ///
+    /// Never lands inside `NetworkResolverEndpoint.v6Space`, the ULA space
+    /// Strato's own link-local services are drawn from (instance metadata and
+    /// the per-network resolvers). An operator who types such a subnet is
+    /// rejected at the API, so generating one — ~1 in 2^24 — would mint a
+    /// network that validation would refuse to touch again, publish a
+    /// localport inside tenant space, and turn the metadata security-group
+    /// carve-out into a non-overridable allow to a tenant address (STR-186).
+    /// A collision is *nudged* out of the way rather than redrawn: a redraw
+    /// loop would never terminate on an injected constant, and the
+    /// neighbouring prefix is just as good a ULA. Flipping the lowest bit the
+    /// reserved prefix covers is what moves it (valid while that prefix is
+    /// between /17 and /56, and `v6Space` is a /32).
     public static func makeULASubnet64(randomGlobalID: (() -> UInt64)? = nil) -> IPv6CIDR {
-        let globalID = (randomGlobalID?() ?? UInt64.random(in: 0...UInt64.max)) & 0xff_ffff_ffff
-        let hi: UInt64 = (0xfd << 56) | (globalID << 16)
-        return IPv6CIDR(base: IPv6Address(hi: hi, lo: 0), prefix: 64)
+        func subnet(globalID: UInt64) -> IPv6CIDR {
+            IPv6CIDR(base: IPv6Address(hi: (0xfd << 56) | ((globalID & 0xff_ffff_ffff) << 16), lo: 0), prefix: 64)
+        }
+        let globalID = randomGlobalID?() ?? UInt64.random(in: 0...UInt64.max)
+        let candidate = subnet(globalID: globalID)
+        guard let reserved = IPv6CIDR(NetworkResolverEndpoint.v6Space), reserved.overlaps(candidate) else {
+            return candidate
+        }
+        return subnet(globalID: globalID ^ (1 << UInt64(reserved.prefix - 16)))
     }
 }
 

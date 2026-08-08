@@ -708,13 +708,26 @@ nothing listened; with STR-56's listener answering it is real, and it is
 tracked as issue #1013 / STR-185. The reserved ACL space above 1003 is where
 such a deny would go.
 
-One collision to keep in mind while that is open: the v4 address is link-local
-and can never overlap a tenant subnet, but `fd00:ec2::254` is a ULA drawn from
-the same space as generated IPv6 subnets. A network whose subnet overlapped it
-would turn this into a non-overridable allow to a *tenant* address on TCP/80.
-The localport (STR-49) already collides in that scenario, so it isn't new —
-only newly un-counterable by policy. Issue #1014 tracks rejecting such subnets
-at network-create time.
+The v6 collision that made these carve-outs dangerous is closed by construction
+(STR-186). `fd00:ec2::254` is a ULA drawn from the same space as tenant IPv6
+subnets, and a network overlapping it would turn this into a non-overridable
+allow to a *tenant* address on TCP/80 — the localport (STR-49) already collides
+in that scenario, so it was not new, only newly un-counterable by policy. So
+**no tenant IPv6 subnet may overlap `NetworkResolverEndpoint.v6Space`**
+(`fd00:ec2::/32`): `validateAddressing6` rejects one an operator types (as does
+`STRATO_DEFAULT_NETWORK_SUBNET6`), and `makeULASubnet64` nudges a generated one
+— a ~1-in-2^24 draw — into the neighbouring prefix. The whole documented `/32`
+rather than the containing `/64`, because it is how the space is described
+everywhere else and it covers the per-network resolvers as well as metadata.
+The realistic vector was always the typed subnet, not the drawn one:
+`fd00:ec2::/64` is a plausible thing for someone to enter precisely because it
+looks tidy.
+
+The v4 side is *not* symmetric, and deliberately so: `169.254.0.0/16` is
+link-local (RFC 3927), so a tenant subnet drawn from it is a misconfiguration
+in its own right rather than a plausible allocation, and nothing rejects one
+today. An operator who insists on numbering a network out of link-local space
+inherits both carve-outs pointed at their own addresses.
 
 The step above 1002 buys nothing *today* — a security-group rule can only
 allow, so nothing at rule priority could contradict this one. It is there
