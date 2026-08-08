@@ -1,16 +1,19 @@
 import Foundation
+import Logging
 import StratoShared
 import Testing
 
 @testable import StratoAgentCore
 
-/// The two properties of the domain document that **only real libvirt can
-/// answer**, because neither is visible in the document the builder writes
-/// (STR-192):
+/// The properties of the domain document that **only real libvirt can answer**,
+/// because none is visible in the document the builder writes (STR-192,
+/// STR-188):
 ///
 /// 1. the *defined* domain has strictly more `pcie-root-port`s than devices
 ///    occupying one, by at least `spareHotplugPorts`;
-/// 2. a disk hot-plugs into that domain once it is running.
+/// 2. a disk hot-plugs into that domain once it is running;
+/// 3. the firmware the agent actually resolves on this host, with the varstore
+///    it actually writes, is a document libvirt accepts — and starts.
 ///
 /// The RELAX-NG check in `DomainXMLBuilderTests` cannot see either: the document
 /// that left every VM with zero free ports validated against the schema for as
@@ -160,7 +163,14 @@ struct DomainXMLLibvirtTests {
     /// while the varstore is qcow2 (STR-188), and the TPM, which needs swtpm
     /// installed. None is a PCI device: the framebuffer, disks, NICs and
     /// controllers all survive verbatim.
-    static func defineable(_ xml: String, name: String) -> String {
+    ///
+    /// The firmware substitution is what made this suite blind to STR-188 for
+    /// as long as that bug shipped: it turned the exact combination under
+    /// question into a different one before ever asking libvirt. It is still
+    /// right for the *PCI* properties, which is all these tests are about — but
+    /// `definesWithHostResolvedFirmware` now asks the firmware question
+    /// directly, with `substitutingFirmware: false`.
+    static func defineable(_ xml: String, name: String, substitutingFirmware: Bool = true) -> String {
         var document = xml
         for accelerated in ["<domain type='kvm'>", "<domain type='hvf'>"] {
             document = document.replacingOccurrences(of: accelerated, with: "<domain type='qemu'>")
@@ -174,7 +184,9 @@ struct DomainXMLLibvirtTests {
         // Autoselect is only replaced where this host has a pair to replace it
         // with; where it does not, the document goes over as written and a
         // define failure is the honest answer.
-        guard document.contains("<os firmware='efi'>"), let firmware = hostFirmware else {
+        guard substitutingFirmware, document.contains("<os firmware='efi'>"),
+            let firmware = hostFirmware
+        else {
             return document
         }
         document = document.replacingOccurrences(of: "<os firmware='efi'>", with: "<os>")
@@ -222,11 +234,11 @@ struct DomainXMLLibvirtTests {
     /// The firmware pair to substitute for autoselect, if this host has one.
     ///
     /// The varstore written beside it is `raw`, not the `qcow2` every Strato
-    /// document asks for: libvirt will not convert a raw template into a qcow2
-    /// varstore ("conversion of the nvram template to another target format is
-    /// not supported"), which is the same host gap STR-188 is about. The
-    /// varstore's format is not a PCI device either, so the substitution costs
-    /// this test nothing.
+    /// document asks for, and it is seeded from a `template` the real document
+    /// no longer names — both because this substitution has to produce a domain
+    /// that defines on any host without materializing anything first. Neither
+    /// is a PCI device, so it costs the tests here nothing;
+    /// `definesWithHostResolvedFirmware` is where the real form is checked.
     static let hostFirmware: (code: String, varsTemplate: String)? = {
         let candidates = [
             ("/usr/share/OVMF/OVMF_CODE_4M.fd", "/usr/share/OVMF/OVMF_VARS_4M.fd"),
@@ -323,6 +335,150 @@ struct DomainXMLLibvirtTests {
         }
 
         #expect(census.ports - census.occupied < DomainXMLBuilder.spareHotplugPorts)
+    }
+
+    // MARK: - Property 3: the firmware the agent really emits is acceptable
+
+    /// qemu-img, which materializes the varstore. Absent on a host with no QEMU
+    /// tools, which is a host that could not run a VM either.
+    private static let qemuImgIsAvailable = FileManager.default.isExecutableFile(
+        atPath: FileSystemStorageBackend.defaultQemuImgPath)
+
+    /// A scenario together with the firmware **this host's own resolver** names
+    /// for it — the pair `LibvirtService.createVM` would put in the document,
+    /// resolved on the machine running the test rather than assumed.
+    struct HostFirmwareCase: Sendable, CustomStringConvertible {
+        let scenario: DomainXMLBuilderTests.Scenario
+        let firmware: FirmwareSet
+        var description: String { scenario.name }
+    }
+
+    /// The disk-booting scenarios whose firmware this host can resolve.
+    ///
+    /// A host with no EDK2 at all contributes none, and neither does a Secure
+    /// Boot scenario on a host carrying no signed build — in both cases the
+    /// agent would fall back to autoselect, which is a different document and
+    /// has its own (conditional) fate. Dropping them is the same bargain
+    /// `defineableScenarios` makes for architectures this host cannot emulate.
+    static let hostResolvedScenarios: [HostFirmwareCase] = defineableScenarios.compactMap { scenario in
+        guard case .disk(let perVMPath) = scenario.input.spec.boot else { return nil }
+        guard
+            case .explicit(let firmware) = FirmwareResolver.domainFirmware(
+                secureBoot: scenario.input.spec.effectiveMachine.secureBoot,
+                perVMPath: perVMPath,
+                architecture: scenario.input.architecture)
+        else { return nil }
+        return HostFirmwareCase(scenario: scenario, firmware: firmware)
+    }
+
+    /// **The test STR-188 was missing.**
+    ///
+    /// Everything above hands libvirt a document with its firmware rewritten,
+    /// which is right for a PCI question and is exactly why four goldens could
+    /// fail to define on Ubuntu for as long as they did. This one substitutes
+    /// no firmware at all: it resolves the pair the way the agent does,
+    /// materializes the varstore the way the agent does, and defines the
+    /// resulting document verbatim.
+    ///
+    /// What it would have caught: `<os firmware='efi'>` paired with a qcow2
+    /// nvram, which libvirt refuses at define time on every host whose EDK2
+    /// descriptors declare a raw template — "Unable to find 'efi' firmware that
+    /// is compatible with the current configuration", a message that reads like
+    /// a missing OVMF package.
+    @Test(
+        "the document defines as written, with the firmware this host resolves",
+        .enabled(if: libvirtIsReachable, "no libvirt daemon at STRATO_LIBVIRT_TEST_URI"),
+        .enabled(if: qemuImgIsAvailable, "no qemu-img to materialize a varstore with"),
+        .enabled(if: !hostResolvedScenarios.isEmpty, "this host resolves no EDK2 firmware at all"),
+        arguments: hostResolvedScenarios)
+    func definesWithHostResolvedFirmware(_ testCase: HostFirmwareCase) async throws {
+        let name = "strato-test-firmware-\(testCase.scenario.name)"
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("strato-varstore-\(name)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // The VM directory moves to a path this test can write; nothing else
+        // about the scenario changes. The disks it names are not created — a
+        // define does not open them, and a start is not what this asks about.
+        var input = testCase.scenario.input
+        input.vmDirectory = directory.path
+        input.firmware = testCase.firmware
+        try await Self.materializeVarstore(testCase.firmware, in: directory.path)
+
+        let document = Self.defineable(
+            try DomainXMLBuilder.build(input), name: name, substitutingFirmware: false)
+        #expect(!document.contains("firmware='efi'"))
+        try Self.withDefinedDomain(name: name, document: document) { _ in }
+    }
+
+    /// The half of STR-188 that a define cannot see.
+    ///
+    /// Its table has a row that defines and does not start: a resolved pair
+    /// whose nvram names both a template and `format='qcow2'`, which libvirt
+    /// accepts and then refuses at start with "conversion of the nvram template
+    /// to another target format is not supported". The document this suite is
+    /// defending emits no template *because* of that, which only means anything
+    /// if the varstore is already on disk — so this boots one, on the same
+    /// opt-in as the hot-plug test below.
+    @Test(
+        "a domain whose varstore was materialized starts, template or no template",
+        .enabled(if: startsUEFIGuests, "STRATO_LIBVIRT_TEST_START is not set, or no pflash pair here"))
+    func startsFromAMaterializedVarstore() async throws {
+        let architecture = try #require(Self.hostArchitecture)
+        let firmware = try #require(Self.hostPflash)
+        let name = "strato-test-varstore-start"
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("strato-\(name)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // An empty disk, so the guest reaches the firmware's "no bootable
+        // device" and stays there. Getting that far is the assertion: it is
+        // past every way pflash and its varstore can refuse.
+        let disk = directory.appendingPathComponent("disk.raw")
+        FileManager.default.createFile(atPath: disk.path, contents: nil)
+        try FileHandle(forWritingTo: disk).truncate(atOffset: 1024 * 1024)
+        try await Self.materializeVarstore(firmware, in: directory.path)
+
+        let input = DomainXMLInput(
+            vmId: name, vmDirectory: directory.path,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1024 * 1024 * 1024, boot: .disk(firmware: nil),
+                console: ConsoleSpec(console: .socket, serial: .socket)),
+            disks: [ResolvedDisk(path: disk.path, format: .raw)],
+            networks: [], architecture: architecture,
+            accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
+            firmware: firmware)
+        let document = Self.defineable(
+            try DomainXMLBuilder.build(input), name: name, substitutingFirmware: false)
+
+        try Self.withDefinedDomain(name: name, document: document) { _ in
+            let started = try Self.run(["start", name])
+            #expect(started.status == 0, "the domain would not start: \(started.output)")
+        }
+    }
+
+    /// This host's own UEFI pair for its own architecture, when it has one.
+    static let hostPflash: FirmwareSet? = hostArchitecture.flatMap { architecture in
+        guard
+            case .explicit(let firmware) = FirmwareResolver.domainFirmware(
+                secureBoot: false, architecture: architecture),
+            case .pflash = firmware
+        else { return nil }
+        return firmware
+    }
+
+    private static let startsUEFIGuests =
+        libvirtIsReachable && qemuImgIsAvailable && hostPflash != nil
+        && ProcessInfo.processInfo.environment["STRATO_LIBVIRT_TEST_START"] == "1"
+
+    /// Writes the varstore the document promises is already there, exactly as
+    /// `LibvirtService.createVM` does.
+    private static func materializeVarstore(_ firmware: FirmwareSet, in vmDirectory: String) async throws {
+        guard case .pflash(_, let template) = firmware else { return }
+        try await UEFIVarstore(logger: Logger(label: "libvirt-test")).materialize(
+            at: VMDirectoryLayout.nvram(vmDirectory: vmDirectory), from: template)
     }
 
     // MARK: - Property 2: a disk hot-plugs into the running domain

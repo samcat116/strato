@@ -89,8 +89,8 @@ extension SecurityGroup: Content {}
 
 // MARK: - DTOs
 
-struct CreateSecurityGroupRequest: Content {
-    let name: String
+struct CreateSecurityGroupRequest: Content, ValidatedRequestBody {
+    var name: String
     let description: String?
     /// Defaults to the caller's default project when omitted, matching VM and
     /// network creation.
@@ -101,11 +101,21 @@ struct CreateSecurityGroupRequest: Content {
         self.description = description
         self.projectId = projectId
     }
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
-struct UpdateSecurityGroupRequest: Content {
-    let name: String?
+struct UpdateSecurityGroupRequest: Content, ValidatedRequestBody {
+    var name: String?
     let description: String?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
 struct CreateSecurityGroupRuleRequest: Content {

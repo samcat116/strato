@@ -194,15 +194,25 @@ extension OrganizationalUnit {
 
 // MARK: - DTOs
 
-struct CreateOrganizationalUnitRequest: Content {
-    let name: String
+struct CreateOrganizationalUnitRequest: Content, ValidatedRequestBody {
+    var name: String
     let description: String
     var parentOuId: UUID?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
-struct UpdateOrganizationalUnitRequest: Content {
-    let name: String?
+struct UpdateOrganizationalUnitRequest: Content, ValidatedRequestBody {
+    var name: String?
     let description: String?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
 struct OrganizationalUnitResponse: Content {

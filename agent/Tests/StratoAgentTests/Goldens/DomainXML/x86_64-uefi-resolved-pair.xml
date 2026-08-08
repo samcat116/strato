@@ -6,13 +6,12 @@
   <vcpu placement='static'>2</vcpu>
   <os>
     <type arch='x86_64' machine='q35'>hvm</type>
-    <loader readonly='yes' secure='yes' type='pflash'>/usr/share/OVMF/OVMF_CODE_4M.secboot.fd</loader>
+    <loader readonly='yes' type='pflash'>/usr/share/OVMF/OVMF_CODE_4M.fd</loader>
     <nvram format='qcow2'>/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/nvram.fd</nvram>
   </os>
   <features>
     <acpi/>
     <apic/>
-    <smm state='on'/>
   </features>
   <cpu mode='host-passthrough' check='none'/>
   <clock offset='utc'/>
@@ -25,11 +24,17 @@
       <source file='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/disk.qcow2'/>
       <target dev='vda' bus='virtio'/>
     </disk>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='raw'/>
+      <source file='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/cloud-init.iso'/>
+      <target dev='vdb' bus='virtio'/>
+      <readonly/>
+    </disk>
     <controller type='pci' index='0' model='pcie-root'/>
-    <controller type='pci' index='7' model='pcie-root-port'/>
     <controller type='pci' index='8' model='pcie-root-port'/>
     <controller type='pci' index='9' model='pcie-root-port'/>
     <controller type='pci' index='10' model='pcie-root-port'/>
+    <controller type='pci' index='11' model='pcie-root-port'/>
     <controller type='virtio-serial' index='0'/>
     <interface type='ethernet'>
       <mac address='52:54:00:12:34:56'/>

@@ -84,7 +84,10 @@ struct ProjectsAPIService: APIProtocol {
 
         try await OrganizationAccessService.requireProjectAction("project:update", project: project, on: req)
 
-        if let name = update.name {
+        if let requestedName = update.name {
+            // Normalized before the uniqueness query, not after: the saved value
+            // and the value compared against have to be the same string.
+            let name = try Validate.name(requestedName)
             try await Self.validateNameUniqueness(
                 name: name,
                 excludeProjectID: projectID,
@@ -99,7 +102,8 @@ struct ProjectsAPIService: APIProtocol {
             project.description = description
         }
 
-        if let environments = update.environments {
+        if let requestedEnvironments = update.environments {
+            let environments = try Self.normalizedEnvironments(requestedEnvironments)
             guard !environments.isEmpty else {
                 throw Abort(.badRequest, reason: "Project must have at least one environment")
             }
@@ -135,7 +139,8 @@ struct ProjectsAPIService: APIProtocol {
             project.environments = environments
         }
 
-        if let defaultEnvironment = update.defaultEnvironment {
+        if let requestedDefault = update.defaultEnvironment {
+            let defaultEnvironment = try Validate.name(requestedDefault, "defaultEnvironment")
             if !project.environments.contains(defaultEnvironment) {
                 throw Abort(.badRequest, reason: "Default environment must be in the environments list")
             }
@@ -276,8 +281,9 @@ struct ProjectsAPIService: APIProtocol {
 
         try await OrganizationAccessService.requireMember(organizationID: organizationID, on: req)
 
+        let name = try Validate.name(create.name)
         try await Self.validateNameUniqueness(
-            name: create.name,
+            name: name,
             excludeProjectID: nil,
             organizationID: organizationID,
             ouID: nil,
@@ -286,6 +292,7 @@ struct ProjectsAPIService: APIProtocol {
 
         let project = try await Self.createProject(
             create,
+            name: name,
             organizationID: organizationID,
             ouID: nil,
             on: req
@@ -340,8 +347,9 @@ struct ProjectsAPIService: APIProtocol {
             throw Abort(.badRequest, reason: "Folder does not belong to the specified organization")
         }
 
+        let name = try Validate.name(create.name)
         try await Self.validateNameUniqueness(
-            name: create.name,
+            name: name,
             excludeProjectID: nil,
             organizationID: nil,
             ouID: ouID,
@@ -350,6 +358,7 @@ struct ProjectsAPIService: APIProtocol {
 
         let project = try await Self.createProject(
             create,
+            name: name,
             organizationID: nil,
             ouID: ouID,
             on: req
@@ -635,6 +644,30 @@ struct ProjectsAPIService: APIProtocol {
                 .count())
     }
 
+    /// The caller's environment list, normalized the way `name` is: every label
+    /// trimmed and bounded, and duplicates collapsed with order preserved,
+    /// because the trim itself can create them (`["prod", "prod "]`).
+    ///
+    /// Normalized here rather than in `Project.validate()` so the
+    /// `environments.contains(defaultEnvironment)` guards compare the strings
+    /// that will actually be stored.
+    private static func normalizedEnvironments(_ environments: [String]) throws -> [String] {
+        try Validate.list(environments, "environments", max: Project.maxEnvironments)
+        var seen: Set<String> = []
+        return try environments.compactMap { environment in
+            let normalized = try Validate.name(environment, "environments")
+            return seen.insert(normalized).inserted ? normalized : nil
+        }
+    }
+
+    /// Refuses a project name already taken in the same scope.
+    ///
+    /// `name` must already be normalized (STR-195): the comparison is an exact
+    /// match, and `Project.validate()` trims before the row is saved, so
+    /// checking a raw value here would let `"Foo "` past a scope that already
+    /// holds `"Foo"` and then save it as `"Foo"` — two projects with the same
+    /// name, and no unique index to catch it. Every caller runs its input
+    /// through `Validate.name` first and hands the same string to the save.
     private static func validateNameUniqueness(
         name: String,
         excludeProjectID: UUID?,
@@ -662,19 +695,24 @@ struct ProjectsAPIService: APIProtocol {
 
     private static func createProject(
         _ create: Components.Schemas.CreateProjectRequest,
+        name: String,
         organizationID: UUID?,
         ouID: UUID?,
         on req: Request
     ) async throws -> Project {
-        let environments = create.environments ?? DeploymentEnvironment.defaults.map { $0.name }
-        let defaultEnvironment = create.defaultEnvironment ?? "development"
+        let environments = try Self.normalizedEnvironments(
+            create.environments ?? DeploymentEnvironment.defaults.map { $0.name })
+        let defaultEnvironment = try Validate.name(
+            create.defaultEnvironment ?? "development", "defaultEnvironment")
 
         if !environments.contains(defaultEnvironment) {
             throw Abort(.badRequest, reason: "Default environment must be in the environments list")
         }
 
         let project = Project(
-            name: create.name,
+            // Already normalized by the caller, which had to normalize before
+            // its uniqueness query — see `validateNameUniqueness`.
+            name: name,
             description: create.description,
             organizationID: organizationID,
             organizationalUnitID: ouID,

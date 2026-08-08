@@ -16,6 +16,12 @@ import Vapor
 final class LogicalNetwork: Model, @unchecked Sendable {
     static let schema = "logical_networks"
 
+    /// Hard cap on resolvers advertised over DHCP. Well above anything a
+    /// resolver stack reads (glibc's `resolv.conf` stops at three) and still
+    /// under what DHCP option 6 can carry — its length byte tops out at 63
+    /// IPv4 addresses, so a longer list could not be programmed anyway.
+    static let maxDNSServers = 32
+
     @ID(key: .id)
     var id: UUID?
 
@@ -262,8 +268,14 @@ extension LogicalNetwork: Content {}
 
 // MARK: - Request/Response DTOs
 
-struct CreateNetworkRequest: Content {
-    let name: String
+struct CreateNetworkRequest: Content, ValidatedRequestBody {
+    /// Bounded, not just non-empty (STR-195): this name leaves the database.
+    /// It rides `DesiredNetworkState.name` to the topology authority, which
+    /// writes it into OVN NB `DHCP_Options.external_ids` and then *reads it
+    /// back* to decide which DHCP rows this network owns
+    /// (`DHCPRowIdentity.isLegacyOwned`). An identity key in the datapath's
+    /// control database is not somewhere to put an unbounded string.
+    var name: String
     /// Subnet in CIDR notation; prefix must be within /8–/30.
     let subnet: String
     /// Defaults to the subnet's first host address when omitted.
@@ -326,11 +338,18 @@ struct CreateNetworkRequest: Content {
         self.resolverEnabled = resolverEnabled
         self.siteId = siteId
     }
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        // `dnsServers` entries are parsed as addresses by `validatedDNS`, so
+        // only their count is open-ended here.
+        try Validate.list(dnsServers, "dnsServers", max: LogicalNetwork.maxDNSServers)
+    }
 }
 
-struct UpdateNetworkRequest: Content {
+struct UpdateNetworkRequest: Content, ValidatedRequestBody {
     /// Rejected while any VM interface references the network.
-    let name: String?
+    var name: String?
     /// Rejected while any VM interface references the network.
     let subnet: String?
     /// May change anytime, but only affects future allocations.
@@ -390,6 +409,11 @@ struct UpdateNetworkRequest: Content {
         self.resolverEnabled = resolverEnabled
         self.primaryDnsZoneId = primaryDnsZoneId
         self.clearPrimaryDnsZone = clearPrimaryDnsZone
+    }
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.list(dnsServers, "dnsServers", max: LogicalNetwork.maxDNSServers)
     }
 }
 

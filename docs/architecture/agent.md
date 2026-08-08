@@ -195,8 +195,11 @@ libvirtd is a durable store rather than a process the agent has to remember:
   spawn.
 - **A guest that powers itself off** leaves the domain `SHUTOFF` and restarts
   with `domainCreate`; there is no respawn-from-stored-configuration path.
-- **libvirt owns swtpm and the UEFI varstore**, so the agent supervises neither
-  and there is no copy-if-absent NVRAM templating. The undefine on delete
+- **libvirt owns swtpm**, so the agent supervises none of it. The UEFI varstore
+  is the exception: libvirt will seed one from a template but will not convert
+  it, and Strato's has to be qcow2 for checkpoints, so `createVM` writes it with
+  `UEFIVarstore` before defining the domain and the document names a file with
+  no `template` (STR-188). The undefine on delete
   carries the `TPM` flag, because swtpm's per-domain state lives under
   `/var/lib/libvirt/swtpm/` rather than in the VM's own directory. Whether a
   vTPM is possible at all is libvirt's answer to give: the agent reads
@@ -290,7 +293,9 @@ Checkpoints are libvirt **system checkpoints** — `domainSnapshotCreateXML` /
 disks in place of a hand-computed block-node list. Two host preconditions make
 them work,
 and both are established elsewhere: the NVRAM varstore is qcow2 rather than raw
-(`DomainXMLBuilder`), and the host runs libvirt ≥ 11.5 — below which
+(`DomainXMLBuilder` declares it, `UEFIVarstore` writes it — libvirt cannot,
+since it refuses to convert a raw VARS template on the way, which is what
+STR-188 was), and the host runs libvirt ≥ 11.5 — below which
 `snapshot-create-as` refuses a pflash guest outright, since internal snapshots
 only moved onto the modern job API in 10.9. `LibvirtProbe.minimumVersion` gates
 `.qemu` on that floor, so a node too old to checkpoint stops advertising QEMU at
@@ -326,8 +331,8 @@ before issue #565.
 
 `StratoAgentCore/FirmwareResolver.swift` decides which EDK2 files a QEMU VM
 boots with. It prefers the **split CODE/VARS pair** every distribution
-actually ships, copying the VARS template into `nvram.fd` in the VM's own
-directory and attaching both as pflash drives. The pre-#565 agent passed a
+actually ships, converting the VARS template into a qcow2 `nvram.fd` in the
+VM's own directory and attaching both as pflash drives. The pre-#565 agent passed a
 single blob as `-bios`, which runs firmware with no writable variable store:
 UEFI boot entries the guest writes are silently discarded on the next
 respawn — a bug Linux guests hit too — and Secure Boot keys can never be
@@ -345,6 +350,22 @@ resolves, the create **fails** rather than falling back to an unsigned build,
 since booting without Secure Boot would quietly contradict what the API says
 the VM has. macOS hosts ship no signed EDK2 build, so Secure Boot is a
 Linux-hypervisor-node feature.
+
+**The domain names the pair; it does not ask libvirt to choose one.**
+`FirmwareResolver.domainFirmware` is the entry point `LibvirtService.createVM`
+uses, and it names an explicit `<loader>`/`<nvram>` pair whenever this host
+resolves one — which is every stock hypervisor node. `<os firmware='efi'>` is
+only the fallback for a host whose EDK2 build sits somewhere the candidate list
+has never heard of, because autoselection cannot be reconciled with a qcow2
+varstore: libvirt matches the requested format against its descriptors at
+*define* time, and every descriptor Debian and Ubuntu ship declares its nvram
+template `raw`. Asking for both failed every VM create on those hosts with
+"Unable to find 'efi' firmware that is compatible with the current
+configuration" — a message that reads like a missing OVMF package rather than
+the format collision it is (STR-188). Where the fallback is taken, the agent
+logs why, and the Secure Boot guarantee survives it: the autoselect document
+still carries `<feature name='secure-boot' enabled='yes'/>`, so libvirt refuses
+the define rather than handing back an unsigned firmware.
 
 **libvirt runs the vTPM.** The domain document carries
 `<tpm model='tpm-tis'><backend type='emulator' version='2.0'/></tpm>` and

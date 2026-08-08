@@ -58,6 +58,24 @@ public func configure(_ app: Application) async throws {
     // no credentials — that exemption is documented on `GuardedHTTPClient`).
     app.http.client.configuration.redirectConfiguration = .disallow
 
+    // The ceiling on any request body Vapor collects into memory before a
+    // handler sees it (STR-195). Vapor's default is 16 MB, which was the only
+    // size bound in the entire persist path — no column is length-limited, so
+    // 16 MB was the implicit contract of every endpoint, including `POST
+    // /api/vms`.
+    //
+    // 1 MiB is chosen against the largest legitimate collected body: a VM
+    // create carrying `CloudInitUserDataFormat.maxBytes` (64 KiB) of user data
+    // plus a 4 KiB `cmdline` and its metadata, with an order of magnitude of
+    // headroom for the JSON-heavy bodies (Cedar policy text, SCIM payloads)
+    // that have no single large field but many.
+    //
+    // The three routes that legitimately carry gigabytes — image upload, image
+    // artifact upload, and sandbox snapshot artifact transfer — are registered
+    // with `body: .stream` and are unaffected: a streaming route never
+    // collects, and each already enforces its own byte ceiling.
+    app.routes.defaultMaxBodySize = "1mb"
+
     // Request logging: one structured line per HTTP request (method/path/status/
     // duration). Registered first so it's the outermost middleware and times the
     // full request. Default on outside production; override with REQUEST_LOGGING.
@@ -816,8 +834,13 @@ public func configure(_ app: Application) async throws {
     // sandbox's NIC reach the wire at all.
     app.migrations.add(AddSandboxNetworkingCapableToAgent())
 
+    // STR-195: the storage-layer backstop under `Validate` — a length CHECK on
+    // every name and description column the API now bounds. Runs late so every
+    // table it constrains already exists in its final shape.
+    app.migrations.add(BoundResourceTextColumns())
+
     // Per-network DNS resolver (STR-40, roadmap #769 phase 4): the network's
-    // opt-in, and the per-agent signal that the site can actually answer on
+    // opt-out, and the per-agent signal that the site can actually answer on
     // the resolver address.
     app.migrations.add(AddResolverEnabledToLogicalNetwork())
     app.migrations.add(AddResolverCapableToAgent())
