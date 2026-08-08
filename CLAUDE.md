@@ -51,6 +51,7 @@ running services), and full-stack runs go through `deploy/compose`. See
 - `cd control-plane && swift run` — control plane. Needs Postgres/Valkey env vars pointed at reachable services; `deploy/compose` does **not** publish those ports, so this requires a `docker-compose.override.yml` that does.
 - `cd agent && swift run StratoAgent --config-file ./config.toml` — agent (TOML config; CLI args override config values; `control_plane_url` is required; key options: `qemu_socket_dir`, `log_level`, `network_mode` = `ovn`|`user`, `firecracker_binary_path`). Copy `config.toml.example` to start.
 - Agents authenticate only by SPIFFE/SPIRE X.509 SVID over mTLS. Enroll a node with `POST /api/agent-enrollments` (or **Agents → Add Agent** in the UI), which provisions it in SPIRE and returns a one-liner `bootstrapCommand`; the agent then dials its configured `control_plane_url` with `?name=<agent-name>` and no bearer credential.
+- Guest JWT-SVID issuance is default-off; `GUEST_IDENTITY_AUDIENCES` enables the placement-checked `POST /agent/vms/{vmID}/jwt-svid` route for named relying parties.
 - Authentication is always on: there is no development bypass. Local development registers a real WebAuthn passkey user (see `docs/development/local-development.md`).
 
 ### Deployment environments (the two supported paths)

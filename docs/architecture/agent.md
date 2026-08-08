@@ -102,6 +102,11 @@ default) funnels into `launchAgent`.
   The WebSocket is still dialed and still carries consoles, exec, log
   forwarding, heartbeats, and observed state. Only desired state moves.
 
+- **Guest identity minting is a second agent HTTP call** on the same SVID-mTLS
+  listener: `POST /agent/vms/{vmID}/jwt-svid`. Unlike desired-state polling it
+  is made on behalf of a guest, and the control plane verifies that VM is
+  currently placed on the authenticated agent before issuing a bearer token.
+
 ## Shutdown
 
 **VMs outlive the agent.** A SIGINT/SIGTERM runs `Agent.stop()` —

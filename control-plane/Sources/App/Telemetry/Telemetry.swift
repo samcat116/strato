@@ -272,4 +272,11 @@ enum Telemetry {
     static func recordDesiredStatePoll(outcome: String) {
         Counter(label: "strato_agent_poll_total", dimensions: [("outcome", outcome)]).increment()
     }
+
+    static func recordGuestIdentityMint(outcome: String) {
+        Counter(
+            label: "strato_guest_identity_mints_total",
+            dimensions: [("outcome", outcome)]
+        ).increment()
+    }
 }

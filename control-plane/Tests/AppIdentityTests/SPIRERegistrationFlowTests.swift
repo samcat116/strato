@@ -814,6 +814,8 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     private var failJoinToken = false
     private var failCreateEntry = false
     private var failEntryUpdates = false
+    private var failMintJWTSVID = false
+    private var mintedSPIFFEIDOverride: String?
     private var failDelete = false
     private var deleteInvalidArgument = false
     private var evictInvalidArgument = false
@@ -827,6 +829,8 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     func setFailJoinToken(_ fail: Bool) { failJoinToken = fail }
     func setFailCreateEntry(_ fail: Bool) { failCreateEntry = fail }
     func setFailDelete(_ fail: Bool) { failDelete = fail }
+    func setFailMintJWTSVID(_ fail: Bool) { failMintJWTSVID = fail }
+    func setMintedSPIFFEIDOverride(_ spiffeID: String?) { mintedSPIFFEIDOverride = spiffeID }
     func setEntries(_ entries: [SPIREEntry]) { self.entries = entries }
     func setAgents(_ agents: [SPIREAgent]) { self.agents = agents }
     func setFederationRelationships(_ relationships: [SPIREFederationRelationship]) {
@@ -913,11 +917,14 @@ actor FakeSPIREServerAPI: SPIREServerAPI {
     }
 
     func mintJWTSVID(spiffeID: String, audience: [String], ttlSeconds: Int32) async throws -> SPIREJWTSVID {
+        if failMintJWTSVID {
+            throw SPIREServerAPIError.unreachable("fake: SPIRE server down")
+        }
         mintedJWTSVIDs.append(
             MintJWTSVIDRequest(spiffeID: spiffeID, audience: audience, ttlSeconds: ttlSeconds))
         return SPIREJWTSVID(
             token: "fake-jwt-svid",
-            spiffeID: spiffeID,
+            spiffeID: mintedSPIFFEIDOverride ?? spiffeID,
             expiresAt: Date().addingTimeInterval(TimeInterval(ttlSeconds))
         )
     }

@@ -116,6 +116,10 @@ final class DesiredStateAssemblerTests {
     @Test("Instance metadata mirrors the VM row, its NICs, and its placement")
     func metadataMirrorsTheVMAndItsNICs() async throws {
         try await withAssemblerApp { app, org, project in
+            app.guestIdentityIssuanceConfig = GuestIdentityIssuanceConfig(
+                allowedAudiences: ["vault", "registry"],
+                defaultTTLSeconds: 300,
+                maximumTTLSeconds: 900)
             let site = Site(name: "dc-meta", organizationScope: .organization(try org.requireID()))
             try await site.save(on: app.db)
             let agentId = try await self.registerAgent(
@@ -175,14 +179,12 @@ final class DesiredStateAssemblerTests {
             #expect(metadata.userData == vm.userData)
             #expect(metadata.vendorData == nil)
             #expect(metadata.tags.isEmpty)
-            // The VM's own SPIFFE ID (STR-55): a name, published to the guest
-            // because it is not a credential. `audiences` and `ttlSeconds` stay
-            // empty — nothing mints tokens for a guest yet (STR-57), and an
-            // audience list published before an issuer exists promises what
-            // nothing keeps.
+            // The VM's own SPIFFE ID (STR-55), plus the effective STR-57 minting
+            // policy. The Set-backed allowlist must be sorted before it reaches
+            // the sync or identical config could churn the desired-state ETag.
             #expect(metadata.identity?.spiffeId == identity.spiffeID)
-            #expect(metadata.identity?.audiences == [])
-            #expect(metadata.identity?.ttlSeconds == nil)
+            #expect(metadata.identity?.audiences == ["registry", "vault"])
+            #expect(metadata.identity?.ttlSeconds == 900)
 
             #expect(metadata.nics.map(\.deviceName) == ["net0", "net1"])
             let net0 = metadata.nics[0]
@@ -394,7 +396,8 @@ final class DesiredStateAssemblerTests {
             from: vm, image: nil, volumes: [], resolvedInterfaces: resolved)
         let metadata = InstanceMetadata.build(
             vm: vm, vmId: vm.id!, resolvedInterfaces: resolved,
-            region: "dc-drop", availabilityZone: "drop-agent", instanceSPIFFEID: nil)
+            region: "dc-drop", availabilityZone: "drop-agent", instanceSPIFFEID: nil,
+            audiences: [], ttlSeconds: nil)
 
         #expect(metadata.nics.map(\.deviceName) == ["net0", "net2"])
         #expect(spec.networks.map(\.macAddress) == metadata.nics.map(\.macAddress))

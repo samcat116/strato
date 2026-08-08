@@ -190,6 +190,8 @@ struct DesiredStateAssembler {
             sendInstanceMetadata
             ? try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
             : [:]
+        let guestIdentityConfig = app.guestIdentityIssuanceConfig
+        let guestIdentityAudiences = Array(guestIdentityConfig.allowedAudiences).sorted()
 
         // Edge nonces (ADR 0001 stage 9, STR-151). Omitted for pre-v34 agents
         // following the v20 `securityGroups` pattern — they decode and discard
@@ -254,7 +256,9 @@ struct DesiredStateAssembler {
                 ? InstanceMetadata.build(
                     vm: vm, vmId: vmId, resolvedInterfaces: resolvedInterfaces,
                     region: region, availabilityZone: availabilityZone,
-                    instanceSPIFFEID: spiffeIDsByVM[vmId])
+                    instanceSPIFFEID: spiffeIDsByVM[vmId],
+                    audiences: guestIdentityAudiences,
+                    ttlSeconds: guestIdentityConfig.maximumTTLSeconds)
                 : nil
 
             // A zero nonce is "never asked for", and sending it would be a

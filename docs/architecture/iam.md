@@ -890,8 +890,14 @@ the control plane would accept identities from, else the platform domain — a
 never moves, so turning `SPIRE_ORG_TRUST_DOMAINS_ENABLED` on later leaves
 existing VMs on the platform domain until a migration re-issues them. The VM's
 SPIFFE ID is published to the guest through the instance metadata service:
-publishable precisely because it is a *name*, with no key, no token and nothing
-that expires. **Sandboxes are not covered yet** (STR-166).
+publishable precisely because it is a *name*. STR-57 now lets the hosting agent
+obtain a short-lived bearer credential naming that same principal through a
+placement-checked mTLS route. The invariant is unchanged: the token names the VM
+and grants nothing; ordinary bindings still decide authorization. Guest minting
+has its own explicit relying-party allowlist, `GUEST_IDENTITY_AUDIENCES`, so it
+does not accidentally inherit the API's `SPIFFE_JWT_AUDIENCE` and turn every
+guest into a bearer-token client of Strato. **Sandboxes are not covered yet**
+(STR-166).
 
 **Identity is not opt-in per VM.** The issue that specified this work asked for
 an opt-in switch, default off, on the reasoning that a VM with an identity lets
