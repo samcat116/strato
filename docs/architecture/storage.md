@@ -244,6 +244,43 @@ lacked: retry with a per-generation attempt cap, per-volume serial lanes, a
 same sync, and convergence that survives an agent restart because it is
 re-derived from the filesystem rather than remembered.
 
+**Resize is grow-only, and no longer detach-only** (STR-19). The old rule
+refused an attached volume outright, because the only path the agent had was
+`qemu-img resize` — which the image lock refuses on a file a running hypervisor
+holds open, so the guard was load-bearing rather than merely cautious. The API
+no longer pre-judges it: the desired size converges, and whether it is reached
+online or offline is the agent's call, since only the agent knows whether a
+process holds the image. A *shrink* stays refused at both ends — `400` from the
+endpoint, a permanent convergence failure at the agent — because truncating a
+guest's filesystem is not something a retry makes safe. That one grow-only rule
+is also what refuses an attached shrink; there is no separate guard.
+
+Two caveats belong to the caller rather than to the control plane. No agent has
+an online grow path yet, so growing a volume attached to a *running* guest is
+accepted and then degrades — the agent refuses it (see below). And growing the
+block device never grows what is on it: guest-side rescan and filesystem
+expansion (`resize2fs`, `xfs_growfs`, or the Windows equivalent) stay the
+user's job.
+
+Concretely, an attached grow is **refused by the agent**, once and permanently,
+rather than attempted. `volumeReconcileResize` looks up the volume's recorded
+attachment and grows the image only when the owning VM is confirmed
+`.shutdown`; anything else — running, paused, or a status the agent cannot read
+— is a permanent convergence failure naming the VM, so the control plane
+degrades the volume with something an operator can act on.
+
+The refusal is a check rather than a hope, and that distinction is the point.
+Left to itself, `qemu-img resize` on an open image is turned back by the image
+lock — but `locking=auto` gives up *quietly* wherever OFD locks do not work,
+NFS being the case to worry about, and on such a pool the resize would not fail:
+it would rewrite qcow2 metadata underneath a running guest. Deferring to the
+lock would make correctness a property of the filesystem. This is also what
+makes "the agent decides online vs offline" true rather than aspirational —
+until there is an online grow path, the agent's decision is *no*.
+
+A volume attached to a stopped VM does grow, which the old detach-only rule
+refused outright.
+
 Deletion is the same finalizer dance VMs use. A `DELETE` does not remove the
 row: it marks the volume absent, stamps `agent.absent`, and the row survives
 until the agent's full-list report *omits* the volume — which is the only thing
@@ -460,6 +497,40 @@ transactionally, and the interesting failure — a snapshot deleted out from
 under a fork that depends on it — is one the sandbox lineage guard already
 refuses (and which the sweep shares, so a clock is refused for exactly the
 reasons a human is). Time is enough to bound the leak.
+
+### I/O ceilings
+
+A volume carries an optional pair of absolute I/O ceilings — `iopsTotal` and
+`bpsTotal` — set at create or replaced through `POST /api/volumes/:id/io-limits`
+(STR-19). Quotas cap *capacity*; these cap *rate*, which is what stops one
+tenant's guest saturating a shared spindle for everyone else on the host.
+
+Total-only, deliberately. QEMU and libvirt can both express read/write splits,
+burst allowances and bucket sizes; none of them has a caller yet, and one knob
+per dimension is the version that can be explained in a UI. The wire type can
+grow optional members later without a version bump.
+
+The endpoint is a **full replacement**: an omitted field clears that cap, and an
+empty body removes both. Zero is refused with `400` rather than read as
+unlimited — QEMU spells unlimited as zero, so accepting it would make a typo
+indistinguishable from a deliberate removal, on the one setting where that
+difference is "this tenant is capped" versus "this tenant is not".
+
+The ceilings travel on `DesiredVolumeState.ioLimits` (wire v35) and come back on
+`ObservedVolumeState.ioLimits` as an **echo of what the agent actually applied**,
+recorded separately from what was requested. The echo exists because STR-19
+ships no capability gate: an agent that has never heard of ceilings drops the
+field and still advances its `observedGeneration`, so the generation pair alone
+would call an ignored mutation converged. Its nil rule is the load-bearing part
+— nil means *"this agent does not report applied limits"*, never *"the caps were
+removed"*, and an agent reporting an explicitly uncapped disk sends a
+present-but-empty value instead.
+
+**Nothing enforces these yet.** No agent applies ceilings, so `appliedIOLimits`
+is null for every volume and a set `ioLimits` alongside a null `appliedIOLimits`
+is the expected reading rather than a fault. Enforcement arrives with the
+agent-side work; the desired state, the API and the receiving end are what
+exists today.
 
 ### Volume placement across agents
 

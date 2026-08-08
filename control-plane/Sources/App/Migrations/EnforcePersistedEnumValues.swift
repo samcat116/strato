@@ -109,6 +109,13 @@ struct EnforcePersistedEnumValues: AsyncMigration {
             allowedValues: [
                 "create", "boot", "shutdown", "reboot", "pause", "resume", "delete", "resize",
                 "snapshot", "snapshot_delete", "restore", "snapshot_export", "attach", "detach",
+                // Volume I/O ceilings (STR-19). Like the snapshot artifact kinds
+                // above, this writes no operation row — the mutation is
+                // level-triggered — but the constraint is widened anyway,
+                // because `AddThrottleOperationKind` installs it from this list
+                // and `PersistedEnumConstraintTests` pins it against
+                // `VMOperationKind.allCases`.
+                "throttle",
             ]
         ),
         .init(

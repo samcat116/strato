@@ -824,6 +824,12 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddVMToWorkloadRegistration())
     app.migrations.add(BackfillVMWorkloadRegistrations())
 
+    // STR-19: absolute per-volume I/O ceilings — the requested pair and the
+    // agent's applied echo — plus the widened CHECK constraints for the
+    // `throttle` mutation the new endpoint records.
+    app.migrations.add(AddVolumeIOLimits())
+    app.migrations.add(AddThrottleOperationKind())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

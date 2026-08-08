@@ -38,6 +38,16 @@ final class Volume: Model, @unchecked Sendable {
     /// conversion would overflow `Int64`.
     static let maxSizeGB = 262_144
 
+    /// Upper bounds on a caller-requested I/O ceiling (STR-19). Sanity rails
+    /// rather than hardware limits: they exist so a typo cannot persist a value
+    /// no device could ever reach, which would read as a cap while behaving as
+    /// none.
+    ///
+    /// Zero is *not* accepted at the API boundary even though QEMU spells
+    /// "unlimited" that way — see `VolumeController.validateIOLimits`.
+    static let maxIOPSTotal: Int64 = 10_000_000
+    static let maxBPSTotal: Int64 = 1 << 40  // 1 TiB/s
+
     @ID(key: .id)
     var id: UUID?
 
@@ -144,6 +154,29 @@ final class Volume: Model, @unchecked Sendable {
     /// level-triggered desired entry has to do on every sync.
     @Field(key: "readonly")
     var readonly: Bool
+
+    // Absolute per-volume I/O ceilings (STR-19). The requested pair is desired
+    // state and travels on the sync; the applied pair is the agent's echo of
+    // what it actually put in place.
+    //
+    // Two pairs rather than one column plus a boolean, because STR-19 ships no
+    // wire capability gate: an agent that has never heard of ceilings drops the
+    // field and still advances `observed_generation`, so the generation pair
+    // alone would call an ignored mutation converged. NULL on the applied pair
+    // means *the agent said nothing* — never that the caps were cleared. It
+    // will read NULL for every row until the agent-side work lands.
+
+    @OptionalField(key: "iops_total")
+    var iopsTotal: Int64?
+
+    @OptionalField(key: "bps_total")
+    var bpsTotal: Int64?
+
+    @OptionalField(key: "applied_iops_total")
+    var appliedIOPSTotal: Int64?
+
+    @OptionalField(key: "applied_bps_total")
+    var appliedBPSTotal: Int64?
 
     // Source tracking (for clones/volumes created from images)
     @OptionalParent(key: "source_image_id")
@@ -319,9 +352,30 @@ extension Volume {
         return $vm.id != nil
     }
 
+    /// Resize is grow-only, and no longer detach-only (STR-19).
+    ///
+    /// The old rule refused an attached volume because the only path the agent
+    /// had was `qemu-img resize`, which the image lock refuses on a file a
+    /// running hypervisor holds open. Choosing between that and an online grow
+    /// is the *agent's* call — only it knows whether a process holds the image —
+    /// so the API stops pre-judging it and lets the desired size converge.
+    ///
+    /// What stays refused is a **shrink**, at both ends: the endpoint answers
+    /// `400` and the agent answers a permanent convergence failure, because
+    /// truncating a guest's filesystem is not something a retry makes safe.
+    /// That single grow-only rule is also what refuses an *attached* shrink, so
+    /// there is no separate guard for it.
+    ///
+    /// Two caveats that belong to the caller, not to this predicate. No agent
+    /// has an online grow path yet, so a volume attached to a *running* guest
+    /// is accepted here and then refused by the agent — which is the decision
+    /// working, not a gap: growing an image a live guest holds open would
+    /// corrupt it on any pool whose file locking is unreliable. A volume
+    /// attached to a stopped VM grows normally. And growing the block device
+    /// never grows what is on it: guest-side rescan and filesystem expansion
+    /// stay the user's job.
     var canResize: Bool {
-        // Can only resize when not attached (offline resize)
-        return $vm.id == nil && desiredStatus == .present
+        return desiredStatus == .present
     }
 
     /// Snapshots require a detached volume (issue #747). The filesystem
@@ -361,6 +415,31 @@ extension Volume {
     var canDelete: Bool {
         return $vm.id == nil
     }
+
+    /// The ceilings asked for, as the sync carries them. Normalized, so an
+    /// all-null pair travels as an absent field — see `VolumeIOLimits` for why
+    /// the desired side must and the observed side must not.
+    var ioLimits: VolumeIOLimits? {
+        .normalized(iopsTotal: iopsTotal, bpsTotal: bpsTotal)
+    }
+
+    /// The ceilings the owning agent last reported applied. Nil until the
+    /// agent-side work lands, for every volume.
+    ///
+    /// The wire distinguishes "said nothing" (nil) from "applied, and the
+    /// answer is uncapped" (present but empty); these two columns cannot, and
+    /// deliberately do not try. Both readings of a null pair answer the only
+    /// question a caller asks — *are my requested caps in effect?* — with "no",
+    /// so a third column to tell them apart would carry no decision.
+    ///
+    /// Where the distinction *is* load-bearing is one layer up, in
+    /// `ObservedStateApplier`: a nil echo must leave these columns alone rather
+    /// than clear them, or an agent that has never heard of ceilings has its
+    /// silence recorded as "the caps were removed".
+    var appliedIOLimits: VolumeIOLimits? {
+        guard appliedIOPSTotal != nil || appliedBPSTotal != nil else { return nil }
+        return VolumeIOLimits(iopsTotal: appliedIOPSTotal, bpsTotal: appliedBPSTotal)
+    }
 }
 
 // MARK: - Request/Response DTOs
@@ -373,6 +452,9 @@ struct CreateVolumeRequest: Content {
     let format: String?  // "qcow2" or "raw", defaults to qcow2
     let volumeType: String?  // "boot" or "data", defaults to data
     let sourceImageId: UUID?  // Create volume from image
+    /// Absolute I/O ceilings (STR-19). Omit for uncapped.
+    let iopsTotal: Int64?
+    let bpsTotal: Int64?
 }
 
 struct UpdateVolumeRequest: Content {
@@ -389,6 +471,19 @@ struct AttachVolumeRequest: Content {
 
 struct ResizeVolumeRequest: Content {
     let sizeGB: Int  // New size in GB (must be larger than current)
+}
+
+/// A **full replacement** of a volume's I/O ceilings (STR-19): omitting a field
+/// clears that cap.
+///
+/// Replacing rather than patching because Swift's synthesized decoding cannot
+/// tell an absent key from an explicit null, so a partial-update shape would
+/// have no way to express "remove this cap" at all — and an endpoint that
+/// silently cannot clear is worse than one that clears by omission, which at
+/// least does what it says.
+struct SetVolumeIOLimitsRequest: Content {
+    let iopsTotal: Int64?
+    let bpsTotal: Int64?
 }
 
 struct CloneVolumeRequest: Content {
@@ -419,6 +514,14 @@ struct VolumeResponse: Content {
     /// join the same 202-and-converge flow as VMs in STR-148, so this is what
     /// clients poll rather than the status string.
     let conditions: ResourceConditions
+    /// The I/O ceilings asked for (STR-19); null when uncapped.
+    let ioLimits: VolumeIOLimits?
+    /// The ceilings the owning agent reports it has actually applied. Null
+    /// means they are **not in effect** — either the agent has not reported, or
+    /// it reported no caps. No agent applies ceilings yet, so this is null for
+    /// every volume until the agent-side work lands; a non-null `ioLimits` with
+    /// a null `appliedIOLimits` is the expected reading, not a fault.
+    let appliedIOLimits: VolumeIOLimits?
     let sourceImageId: UUID?
     let sourceVolumeId: UUID?
     let createdById: UUID?
@@ -444,6 +547,8 @@ struct VolumeResponse: Content {
         self.bootOrder = volume.bootOrder
         self.readonly = volume.readonly
         self.conditions = volume.conditions
+        self.ioLimits = volume.ioLimits
+        self.appliedIOLimits = volume.appliedIOLimits
         self.sourceImageId = volume.$sourceImage.id
         self.sourceVolumeId = volume.$sourceVolume.id
         self.createdById = volume.$createdBy.id

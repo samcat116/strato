@@ -319,7 +319,11 @@ struct VMSpecBuilder {
                     deviceName: deviceName,
                     storagePath: storagePath,
                     readonly: volume.readonly,
-                    bootOrder: volume.bootOrder
+                    bootOrder: volume.bootOrder,
+                    // Read off the same column `DesiredVolumeState.ioLimits`
+                    // is, so a VM realized from its spec boots with the caps
+                    // the volume lane would apply (STR-19).
+                    ioLimits: volume.ioLimits
                 ))
         }
         return specs
