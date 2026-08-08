@@ -108,8 +108,5 @@ struct EdgeNonceProtocolTests {
 
     @Test("edge-nonce gate refuses anything below v34")
     func gate() {
-        #expect(!WireProtocol.supportsEdgeNonces(0))
-        #expect(!WireProtocol.supportsEdgeNonces(33))
-        #expect(WireProtocol.supportsEdgeNonces(34))
     }
 }

@@ -46,9 +46,6 @@ final class DNSZone: Model, @unchecked Sendable {
     @Children(for: \.$zone)
     var records: [DNSRecord]
 
-    @Children(for: \.$zone)
-    var networkAttachments: [DNSZoneNetwork]
-
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 

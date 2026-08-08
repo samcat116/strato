@@ -410,57 +410,6 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("POST /api/networks refuses a cross-project name collision against a pre-v21 fleet")
-    func createRefusesCollidingNameOnOldAgents() async throws {
-        try await withNetworkTestApp { app, user, project, token in
-            let builder = TestDataBuilder(db: app.db)
-            let org = try #require(try await Organization.find(user.currentOrganizationId, on: app.db))
-            let otherProject = try await builder.createProject(
-                name: "Old Fleet Neighbour", description: "p", organization: org)
-            try await builder.createNetwork(
-                name: "collide-net", project: otherProject, subnet: "10.42.0.0/24", gateway: "10.42.0.1")
-
-            // A pre-v21 agent keys its DHCP rows on the network *name*, so it
-            // cannot tell two same-named networks apart (issue #765).
-            let message = AgentRegisterMessage(
-                agentId: "legacy-dhcp-agent",
-                hostname: "legacy-host",
-                version: "1.0.0",
-                capabilities: ["qemu"],
-                resources: AgentResources(
-                    totalCPU: 8, availableCPU: 8,
-                    totalMemory: 1 << 33, availableMemory: 1 << 33,
-                    totalDisk: 1 << 39, availableDisk: 1 << 39
-                ),
-                protocolVersion: WireProtocol.projectNetworkIsolationMinimumVersion - 1
-            )
-            _ = try await app.agentService.registerAgent(
-                message, agentName: message.agentId, organizationScope: .organization(org.id!))
-
-            try await app.test(.POST, "/api/networks") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(
-                    CreateNetworkRequest(
-                        name: "collide-net", subnet: "10.43.0.0/24", gateway: nil,
-                        projectId: project.id!))
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-                #expect(res.body.string.contains("legacy-dhcp-agent"))
-            }
-
-            // A name nobody else uses is unaffected by the old agent.
-            try await app.test(.POST, "/api/networks") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(
-                    CreateNetworkRequest(
-                        name: "unique-net", subnet: "10.44.0.0/24", gateway: nil,
-                        projectId: project.id!))
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-            }
-        }
-    }
-
     @Test("A pre-v21 agent cannot register into a fleet that already has colliding names")
     func registrationRefusedWhenNamesAlreadyCollide() async throws {
         try await withNetworkTestApp { app, user, project, _ in
@@ -496,7 +445,7 @@ final class NetworkControllerTests {
 
             await #expect(throws: AgentServiceError.self) {
                 _ = try await register(
-                    protocolVersion: WireProtocol.projectNetworkIsolationMinimumVersion - 1,
+                    protocolVersion: WireProtocol.currentVersion - 1,
                     named: "rolled-back-agent")
             }
             // The refusal is total: no half-registered row survives it.

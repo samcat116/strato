@@ -223,7 +223,7 @@ recomputes its quota delta against the committed sizing under the same lock.
 `PUT /api/vms/:id` is the same shape once it touches sizing (issue #568).
 `cpu`/`memory` on a **running** VM are validated against the `maxCpu`/
 `maxMemory` ceilings the VM was started with (`422` naming the restart
-otherwise, including when its agent predates `supportsVMResize`), reserved
+otherwise), reserved
 against quota as a *delta*, then written with a generation bump — desired
 status unchanged, since a resize is a spec change, not a power-state change
 — and answered `202` with the VM and its new target generation. On a
@@ -243,8 +243,6 @@ field is doubly optional on the wire: omitting it leaves the current target
 alone, while an explicit `null` clears it. Bounds are `<= memory` (a balloon
 can only take memory away; growing a guest is `memory`) and a 128 MiB floor,
 the point where an over-aggressive target stops being reclaim and starts being
-an OOM. A running VM whose agent predates `supportsBalloonTarget` is a `422`
-with no restart remedy to offer, since the target only exists on a live guest.
 
 **Mutations settle from observed state, not from the HTTP request.** The
 answer lives on the resource, as a `conditions` block
@@ -349,11 +347,10 @@ against a record it keeps in its own durable manifest, and the generation bump
 carries the mutation through conditions, the stuck-convergence sweep and the
 webhook with no branch of its own.
 
-The gate moved with them. `WireProtocol.supportsEdgeNonces` refuses these three
-endpoints with `409` when the owning agent predates wire v34 — not to protect
-the payload (a count of requests cannot be misread when absent) but to protect
-the request: with no imperative frame left, a pre-v34 agent would ignore the
-field and report the bumped generation as converged, so the API would claim a
+The admission checks moved with them: the endpoints refuse with `409` when
+the VM is unplaced, its agent unknown, or a required backend capability is
+not advertised — the failure mode they defend against is a request that would
+otherwise be reported converged when nothing happened, since a
 restart that never happened.
 
 **The table itself is gone** (ADR stage 11, STR-152). With nothing constructing

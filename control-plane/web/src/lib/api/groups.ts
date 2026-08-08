@@ -13,10 +13,6 @@ export const groupsApi = {
     return api.get<Group[]>(`/api/organizations/${orgId}/groups`);
   },
 
-  get(orgId: string, groupId: string): Promise<Group> {
-    return api.get<Group>(`/api/organizations/${orgId}/groups/${groupId}`);
-  },
-
   create(orgId: string, data: CreateGroupRequest): Promise<Group> {
     return api.post<Group>(`/api/organizations/${orgId}/groups`, data);
   },

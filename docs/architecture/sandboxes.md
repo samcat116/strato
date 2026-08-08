@@ -130,15 +130,12 @@ later deleted.
 
 Sandbox sync is wire protocol **version 5** (`WireProtocol.swift`). The
 change is additive — absent `sandboxes` lists decode to `[]` — but carries the
-same asymmetric hazard as the v3 networks list:
+one deliberate asymmetry:
 
-- **Agent side**: a pre-v5 control plane omits the field entirely; the agent
-  must not read the decoded-empty list as "tear down all sandboxes". Sandbox
-  reconciliation is gated on `WireProtocol.supportsSandboxSync(senderVersion)`.
-- **Control-plane side**: the wire version is deliberately *not* the placement
-  signal. An agent built against v5 understands the fields but may predate the
-  sandbox runtime (#421), and would silently ignore desired entries and report
-  none back. Agents therefore advertise sandbox support explicitly at
+- **Placement keys on capability, not the wire.** An agent may understand the
+  fields while predating the sandbox runtime (#421), and would silently ignore
+  desired entries and report none back. Agents therefore advertise sandbox
+  support explicitly at
   registration (`AgentRegisterMessage.sandboxCapable`), and the scheduler keys
   eligibility on that flag plus the version (#415) — never on the version
   alone. Agent-side, the flag comes from `SandboxRuntimeProbe`: the build must
@@ -430,10 +427,7 @@ The agent bridges vsock streams to new **v8 stream messages** — correlated by
 `sessionId`, ordered by the WebSocket, never answered with `success`/`error`:
 `sandbox_exec_start/started/input/output/resize/exit/close/closed`. A
 `sandbox_exec_start` is answered by `started` on success or `closed` (with a
-reason) on failure. Like `agent_update` in v6 the gate is load-bearing on the
-send side — a pre-v8 agent cannot decode the envelope and never replies — so
-the control plane refuses exec for agents that registered with an older
-version (`WireProtocol.supportsSandboxExec`).
+reason) on failure.
 
 Per running sandbox the agent also keeps a long-lived log-follow task
 (reconnecting with backoff, resuming from the last seen sequence number),

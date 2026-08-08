@@ -534,40 +534,6 @@ final class SandboxSnapshotTests {
         }
     }
 
-    /// With `sandbox_restore` gone there is no fallback frame, and a pre-v34
-    /// agent fails *silently* — it ignores the nonce and reports the bumped
-    /// generation as converged, so the API would claim a rewind that never
-    /// happened. Refused at admission instead.
-    @Test("Restore is refused when the sandbox's agent predates edge nonces")
-    func restoreRefusesPreV34Agent() async throws {
-        try await withSnapshotTestApp { app, user, _, sandbox, token in
-            let agentId = try await placeOnCapableAgent(
-                app: app, sandbox: sandbox, status: .stopped,
-                wireProtocolVersion: WireProtocol.edgeNonceMinimumVersion - 1)
-            let snapshot = SandboxSnapshot(
-                name: "checkpoint",
-                sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
-                environment: sandbox.environment,
-                agentId: agentId,
-                createdByID: user.id!)
-            snapshot.status = .ready
-            try await snapshot.save(on: app.db)
-
-            try await app.test(
-                .POST,
-                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
-            ) { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-                #expect(res.body.string.contains("too old"))
-            }
-
-            #expect(try await Sandbox.find(sandbox.id, on: app.db)?.restoreGeneration == 0)
-        }
-    }
-
     /// Version and capability are two different questions (issue #415): a v34
     /// agent with no sandbox-snapshot backend reads the nonce and can do nothing
     /// with it, which would surface as a `degraded` condition an hour later
@@ -734,38 +700,6 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-            }
-        }
-    }
-
-    @Test("Export refuses an agent below wire v13")
-    func exportRefusesOldAgent() async throws {
-        try await withSnapshotTestApp { app, user, _, sandbox, token in
-            let agentId = try await registerMobilityAgent(
-                app: app, named: "old-export-agent",
-                protocolVersion: WireProtocol.sandboxSnapshotMobilityMinimumVersion - 1)
-            sandbox.hypervisorId = agentId
-            try await sandbox.save(on: app.db)
-            let snapshot = SandboxSnapshot(
-                name: "stuck-local",
-                sandboxID: sandbox.id!,
-                projectID: sandbox.$project.id,
-                environment: sandbox.environment,
-                agentId: agentId,
-                createdByID: user.id!)
-            snapshot.status = .ready
-            try await snapshot.save(on: app.db)
-
-            try await app.test(
-                .POST,
-                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/export"
-            ) { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-                // The snapshot-sync floor is the stricter of the two and is
-                // what refuses first; either way the caller is told to upgrade.
-                #expect(res.body.string.contains("Upgrade the agent"))
             }
         }
     }

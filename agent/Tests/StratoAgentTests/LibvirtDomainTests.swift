@@ -406,7 +406,6 @@ struct LibvirtDomainTests {
         // printing two identical numbers.
         #expect(stats.totalBytes == Int64(2 * 1024 * 1024 * 1024))
         #expect(stats.availableBytes == Int64(1536 * 1024 * 1024))
-        #expect(stats.freeBytes == Int64(512 * 1024 * 1024))
         #expect(stats.balloonActualBytes == Int64(2 * 1024 * 1024 * 1024))
     }
 
@@ -427,7 +426,6 @@ struct LibvirtDomainTests {
     func optionalStatsStayNil() throws {
         let stats = try #require(
             LibvirtMemoryStats.parse([stat(5, kib: 1024), stat(8, kib: 512)]))
-        #expect(stats.freeBytes == nil)
         #expect(stats.balloonActualBytes == nil)
     }
 
@@ -438,7 +436,7 @@ struct LibvirtDomainTests {
         // nothing.
         #expect(LibvirtMemoryStats.parse([stat(5, kib: .max), stat(8, kib: 512)]) == nil)
         let partial = LibvirtMemoryStats.parse([stat(5, kib: 1024), stat(8, kib: 512), stat(4, kib: .max)])
-        #expect(partial?.freeBytes == nil)
+        #expect(partial?.balloonActualBytes == nil)
     }
 
     // MARK: - Host reservations

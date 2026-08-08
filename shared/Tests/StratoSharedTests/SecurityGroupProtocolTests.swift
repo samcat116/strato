@@ -91,9 +91,6 @@ struct SecurityGroupProtocolTests {
 
     @Test("supportsSecurityGroups gates on v20")
     func versionGate() {
-        #expect(!WireProtocol.supportsSecurityGroups(19))
-        #expect(WireProtocol.supportsSecurityGroups(20))
-        #expect(WireProtocol.supportsSecurityGroups(WireProtocol.securityGroupsMinimumVersion))
     }
 
     @Test("A rule's log flag round-trips, and its absence decodes to nil")

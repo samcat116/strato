@@ -118,7 +118,7 @@ struct SnapshotReconciliationTests {
         let actuator = MockSnapshotActuator()
         let reconciler = Self.reconciler(actuator)
 
-        await reconciler.apply(Self.sync([Self.entry(id)]), includeSnapshots: true)
+        await reconciler.apply(Self.sync([Self.entry(id)]))
         await Task.yield()
         try? await Task.sleep(for: .milliseconds(50))
 
@@ -139,8 +139,8 @@ struct SnapshotReconciliationTests {
 
         // Same generation (drift correction) and a newer one both re-plan the
         // entry; neither may produce a capture.
-        await reconciler.apply(Self.sync([Self.entry(id, generation: 1)]), includeSnapshots: true)
-        await reconciler.apply(Self.sync([Self.entry(id, generation: 9)]), includeSnapshots: true)
+        await reconciler.apply(Self.sync([Self.entry(id, generation: 1)]))
+        await reconciler.apply(Self.sync([Self.entry(id, generation: 9)]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
@@ -159,16 +159,14 @@ struct SnapshotReconciliationTests {
         let reconciler = Self.reconciler(actuator)
 
         await reconciler.apply(
-            Self.sync([Self.entry(id, kind: .sandboxSnapshot, generation: 2, export: export)]),
-            includeSnapshots: true)
+            Self.sync([Self.entry(id, kind: .sandboxSnapshot, generation: 2, export: export)]))
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await actuator.performed.map(\.0) == [.export])
 
         // Re-driven at a newer generation: the artifact is already exported, so
         // the diff is empty and no archive is re-uploaded.
         await reconciler.apply(
-            Self.sync([Self.entry(id, kind: .sandboxSnapshot, generation: 3, export: export)]),
-            includeSnapshots: true)
+            Self.sync([Self.entry(id, kind: .sandboxSnapshot, generation: 3, export: export)]))
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await actuator.performed.map(\.0) == [.export])
     }
@@ -184,8 +182,7 @@ struct SnapshotReconciliationTests {
         let reconciler = Self.reconciler(actuator)
 
         await reconciler.apply(
-            Self.sync([Self.entry(id, kind: .sandboxSnapshot, generation: 4)]),
-            includeSnapshots: true)
+            Self.sync([Self.entry(id, kind: .sandboxSnapshot, generation: 4)]))
         try? await Task.sleep(for: .milliseconds(50))
         #expect(await actuator.performed.isEmpty)
     }
@@ -199,8 +196,7 @@ struct SnapshotReconciliationTests {
         let reconciler = Self.reconciler(actuator)
 
         await reconciler.apply(
-            Self.sync([Self.entry(id, kind: .volumeSnapshot, status: .absent, generation: 2)]),
-            includeSnapshots: true)
+            Self.sync([Self.entry(id, kind: .volumeSnapshot, status: .absent, generation: 2)]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.map(\.0) == [.delete])
@@ -215,7 +211,7 @@ struct SnapshotReconciliationTests {
         let actuator = MockSnapshotActuator(artifacts: [id.uuidString: Self.present(.vmCheckpoint)])
         let reconciler = Self.reconciler(actuator)
 
-        await reconciler.apply(Self.sync([]), includeSnapshots: true)
+        await reconciler.apply(Self.sync([]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
@@ -235,8 +231,7 @@ struct SnapshotReconciliationTests {
                 [],
                 tombstones: [
                     DesiredWorkloadTombstone(kind: .vmCheckpoint, workloadId: id, generation: 5)
-                ]),
-            includeSnapshots: true)
+                ]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.map(\.0) == [.delete])
@@ -255,7 +250,7 @@ struct SnapshotReconciliationTests {
         let actuator = MockSnapshotActuator(artifacts: [id.uuidString: Self.present(.vmCheckpoint)])
         let reconciler = Self.reconciler(actuator)
 
-        await reconciler.apply(Self.sync(nil), includeSnapshots: true)
+        await reconciler.apply(Self.sync(nil))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
@@ -273,7 +268,7 @@ struct SnapshotReconciliationTests {
         await actuator.setInventoryReadable(false)
         let reconciler = Self.reconciler(actuator)
 
-        await reconciler.apply(Self.sync([Self.entry(id)]), includeSnapshots: true)
+        await reconciler.apply(Self.sync([Self.entry(id)]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
@@ -285,7 +280,7 @@ struct SnapshotReconciliationTests {
         await actuator.setPresenceComplete(false)
         let reconciler = Self.reconciler(actuator)
 
-        await reconciler.apply(Self.sync([Self.entry(UUID())]), includeSnapshots: true)
+        await reconciler.apply(Self.sync([Self.entry(UUID())]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
@@ -338,8 +333,7 @@ struct SnapshotReconciliationTests {
                 Self.entry(volumeSnapshot, kind: .volumeSnapshot),
                 Self.entry(checkpoint, kind: .vmCheckpoint),
                 Self.entry(sandboxSnapshot, kind: .sandboxSnapshot),
-            ]),
-            includeSnapshots: true)
+            ]))
         try? await Task.sleep(for: .milliseconds(80))
 
         let captured = Set(await actuator.performed.filter { $0.0 == .create }.map(\.1))

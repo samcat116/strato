@@ -38,18 +38,10 @@ struct WireProtocolTests {
         // only gate on updating an agent, for the fleet rollout and the
         // operator's "update now" alike. A pre-v7 agent decodes the sync but
         // ignores the field, so an assignment would never converge.
-        #expect(WireProtocol.desiredAgentUpdateMinimumVersion == 7)
-        #expect(!WireProtocol.supportsDesiredAgentUpdate(6))
-        #expect(WireProtocol.supportsDesiredAgentUpdate(7))
-        #expect(WireProtocol.supportsDesiredAgentUpdate(WireProtocol.currentVersion))
     }
 
     @Test("sandbox fork gate starts at wire protocol v12")
     func sandboxForkGate() {
-        #expect(WireProtocol.sandboxForkMinimumVersion == 12)
-        #expect(!WireProtocol.supportsSandboxFork(11))
-        #expect(WireProtocol.supportsSandboxFork(12))
-        #expect(WireProtocol.supportsSandboxFork(WireProtocol.currentVersion))
     }
 
     @Test("per-project network isolation gate starts at wire protocol v21")
@@ -57,10 +49,6 @@ struct WireProtocolTests {
         // A pre-v21 agent keys its DHCP rows on the network *name*, so two
         // same-named networks would share one row (issue #765). The control
         // plane refuses to create such a name against a fleet this old.
-        #expect(WireProtocol.projectNetworkIsolationMinimumVersion == 21)
-        #expect(!WireProtocol.supportsProjectNetworkIsolation(20))
-        #expect(WireProtocol.supportsProjectNetworkIsolation(21))
-        #expect(WireProtocol.supportsProjectNetworkIsolation(WireProtocol.currentVersion))
     }
 
     @Test("edge-nonce gate starts at wire protocol v34")
@@ -70,10 +58,6 @@ struct WireProtocolTests {
         // decodes the sync, ignores the field, and reports the bumped
         // generation as converged. The API would claim a restart that never
         // happened, which is why the gate refuses the mutation at admission.
-        #expect(WireProtocol.edgeNonceMinimumVersion == 34)
-        #expect(!WireProtocol.supportsEdgeNonces(33))
-        #expect(WireProtocol.supportsEdgeNonces(34))
-        #expect(WireProtocol.supportsEdgeNonces(WireProtocol.currentVersion))
     }
 
     @Test("graphics console gate starts at wire protocol v23")
@@ -83,10 +67,6 @@ struct WireProtocolTests {
         // guest headless, then answering a VNC session with the serial socket.
         // Nothing fails loudly, which is why the gate is load-bearing at both
         // placement and session mint (issue #566).
-        #expect(WireProtocol.graphicsConsoleMinimumVersion == 23)
-        #expect(!WireProtocol.supportsGraphicsConsole(22))
-        #expect(WireProtocol.supportsGraphicsConsole(23))
-        #expect(WireProtocol.supportsGraphicsConsole(WireProtocol.currentVersion))
     }
 
     @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")

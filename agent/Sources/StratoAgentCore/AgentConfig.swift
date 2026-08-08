@@ -230,7 +230,6 @@ public struct OVNNorthboundTLSConfig: Codable, Sendable, Equatable {
 
 public struct AgentConfig: Codable {
     public let controlPlaneURL: String
-    public let qemuSocketDir: String?
     public let logLevel: String?
     public let networkMode: NetworkMode?
     public let ovnEncapIP: String?
@@ -339,13 +338,6 @@ public struct AgentConfig: Codable {
     /// control-plane database must not be able to empty a host, while a real
     /// drain can afford the flag.
     public let allowBulkTeardown: Bool?
-    /// Whether to fetch desired state from the control plane's long-poll
-    /// endpoint instead of waiting for pushed syncs (STR-146). Default true;
-    /// falls back to push mode automatically against a control plane too old
-    /// to serve the endpoint, so this only exists to pin an agent to the old
-    /// transport during a rollout. Nothing else about the agent changes — the
-    /// WebSocket still carries streams, heartbeats, and observed state.
-    public let desiredStatePull: Bool?
     /// How often the poller must fetch *without* `If-None-Match`, in seconds.
     /// Default 300. This is the correctness invariant of the pull transport,
     /// not a tuning knob: conditional requests are a bandwidth optimization,
@@ -365,9 +357,6 @@ public struct AgentConfig: Codable {
     /// and exists only for a topology that puts a router between guest and host,
     /// which Strato's does not.
     public let metadataResponseHopLimit: Int?
-
-    /// Whether this agent should drive itself by long-poll.
-    public var wantsDesiredStatePull: Bool { desiredStatePull ?? true }
 
     /// Whether this host answers guests' metadata requests.
     public var servesInstanceMetadata: Bool { metadataService ?? true }
@@ -395,7 +384,6 @@ public struct AgentConfig: Codable {
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
-        case qemuSocketDir = "qemu_socket_dir"
         case logLevel = "log_level"
         case networkMode = "network_mode"
         case ovnEncapIP = "ovn_encap_ip"
@@ -436,7 +424,6 @@ public struct AgentConfig: Codable {
         case reconcileTeardownMinimum = "reconcile_teardown_minimum"
         case reconcileTeardownPercent = "reconcile_teardown_percent"
         case allowBulkTeardown = "allow_bulk_teardown"
-        case desiredStatePull = "desired_state_pull"
         case desiredStateFullRefetchSeconds = "desired_state_full_refetch_seconds"
         case metadataService = "metadata_service"
         case metadataResponseHopLimit = "metadata_response_hop_limit"
@@ -444,7 +431,6 @@ public struct AgentConfig: Codable {
 
     public init(
         controlPlaneURL: String,
-        qemuSocketDir: String? = nil,
         logLevel: String? = nil,
         networkMode: NetworkMode? = nil,
         ovnEncapIP: String? = nil,
@@ -485,13 +471,11 @@ public struct AgentConfig: Codable {
         reconcileTeardownMinimum: Int? = nil,
         reconcileTeardownPercent: Int? = nil,
         allowBulkTeardown: Bool? = nil,
-        desiredStatePull: Bool? = nil,
         desiredStateFullRefetchSeconds: Int? = nil,
         metadataService: Bool? = nil,
         metadataResponseHopLimit: Int? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
-        self.qemuSocketDir = qemuSocketDir
         self.logLevel = logLevel
         self.networkMode = networkMode
         self.ovnEncapIP = ovnEncapIP
@@ -532,7 +516,6 @@ public struct AgentConfig: Codable {
         self.reconcileTeardownMinimum = reconcileTeardownMinimum
         self.reconcileTeardownPercent = reconcileTeardownPercent
         self.allowBulkTeardown = allowBulkTeardown
-        self.desiredStatePull = desiredStatePull
         self.desiredStateFullRefetchSeconds = desiredStateFullRefetchSeconds
         self.metadataService = metadataService
         self.metadataResponseHopLimit = metadataResponseHopLimit
@@ -578,7 +561,6 @@ public struct AgentConfig: Codable {
             throw AgentConfigError.missingRequiredField("control_plane_url")
         }
 
-        let qemuSocketDir = tomlData.string("qemu_socket_dir")
         let logLevel = tomlData.string("log_level")
         let networkModeString = tomlData.string("network_mode")
         let ovnEncapIP = tomlData.string("ovn_encap_ip")
@@ -647,8 +629,16 @@ public struct AgentConfig: Codable {
             ("qemu_driver", "the agent always drives QEMU through libvirtd now"),
             ("qemu_binary_path", "libvirt selects the emulator from its own capabilities"),
             ("swtpm_binary_path", "libvirt starts and supervises swtpm per domain"),
+            ("qemu_socket_dir", "libvirt owns each domain's sockets under its own state directory"),
         ] where tomlData.string(key) != nil {
             logger?.warning("\(key) is no longer used and will be ignored: \(note) (STR-136)")
+        }
+        // The pull transport became the only one at wire v38; the pin existed
+        // for the push-era rollout.
+        if tomlData.bool("desired_state_pull") != nil {
+            logger?.warning(
+                "desired_state_pull is no longer used and will be ignored: the long-poll is the only desired-state transport now"
+            )
         }
         let firmwarePathARM64 = tomlData.string("firmware_path_arm64")
         let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
@@ -714,7 +704,6 @@ public struct AgentConfig: Codable {
         let allowBulkTeardown = tomlData.bool("allow_bulk_teardown")
 
         // Desired-state transport (STR-146).
-        let desiredStatePull = tomlData.bool("desired_state_pull")
         let desiredStateFullRefetchSeconds = tomlData.int("desired_state_full_refetch_seconds")
         let metadataService = tomlData.bool("metadata_service")
         let metadataResponseHopLimit = tomlData.int("metadata_response_hop_limit")
@@ -926,7 +915,6 @@ public struct AgentConfig: Codable {
 
         return AgentConfig(
             controlPlaneURL: controlPlaneURL,
-            qemuSocketDir: qemuSocketDir,
             logLevel: logLevel,
             networkMode: networkMode,
             ovnEncapIP: ovnEncapIP,
@@ -967,7 +955,6 @@ public struct AgentConfig: Codable {
             reconcileTeardownMinimum: reconcileTeardownMinimum,
             reconcileTeardownPercent: reconcileTeardownPercent,
             allowBulkTeardown: allowBulkTeardown,
-            desiredStatePull: desiredStatePull,
             desiredStateFullRefetchSeconds: desiredStateFullRefetchSeconds,
             metadataService: metadataService,
             metadataResponseHopLimit: metadataResponseHopLimit
@@ -1038,7 +1025,6 @@ public struct AgentConfig: Codable {
         #endif
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
-            qemuSocketDir: defaultQemuSocketDir,
             logLevel: "info",
             networkMode: networkMode,
             enableHVF: enableHVF,
@@ -1054,16 +1040,6 @@ public struct AgentConfig: Codable {
         return "\(home)/Library/Application Support/strato/vms"
         #else
         return "/var/lib/strato/vms"
-        #endif
-    }
-
-    /// Default QEMU socket directory (platform-specific)
-    public static var defaultQemuSocketDir: String {
-        #if os(macOS)
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Application Support/strato/qemu-sockets"
-        #else
-        return "/var/run/qemu"
         #endif
     }
 
@@ -1175,7 +1151,6 @@ public struct AgentConfig: Codable {
 
 public enum AgentConfigError: Error, LocalizedError {
     case configFileNotFound(String)
-    case invalidTOMLFormat(String)
     case missingRequiredField(String)
     case invalidConfiguration(String)
 
@@ -1183,8 +1158,6 @@ public enum AgentConfigError: Error, LocalizedError {
         switch self {
         case .configFileNotFound(let path):
             return "Configuration file not found at path: \(path)"
-        case .invalidTOMLFormat(let details):
-            return "Invalid TOML format: \(details)"
         case .missingRequiredField(let field):
             return "Missing required configuration field: \(field)"
         case .invalidConfiguration(let message):

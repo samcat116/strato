@@ -1100,18 +1100,6 @@ export interface CreateVMRequest {
   securityGroupIds?: string[];
 }
 
-export interface UpdateVMRequest {
-  name?: string;
-  description?: string;
-  /**
-   * Operator balloon target in bytes (issue #567 phase 2). Omit to leave the
-   * current target alone; send `null` to clear it and give the guest its whole
-   * memory grant back. On a running VM this responds 202 with an Operation,
-   * not the VM.
-   */
-  balloonTarget?: number | null;
-}
-
 // Async VM operations: lifecycle mutations return 202 Accepted with an
 // Operation record, which the client polls until it reaches a terminal state.
 /// Mirrors `VMOperationKind` in shared/Sources/StratoShared/OperationModels.swift.
@@ -1441,11 +1429,6 @@ export interface CreateSandboxSnapshotRequest {
   ttlSeconds?: number;
 }
 
-export interface UpdateSandboxRequest {
-  name?: string;
-  ttlSeconds?: number;
-}
-
 // VM graphics console (backend issue #566): POST /api/vms/:id/console/vnc
 // mints a short-lived single-use session, then the browser attaches over a
 // WebSocket at `websocketPath` and hands that socket to noVNC. The two-step
@@ -1622,15 +1605,6 @@ export interface UpdateImageRequest {
   defaultCmdline?: string;
 }
 
-export interface ImageStatusResponse {
-  id: string;
-  status: ImageStatus;
-  downloadProgress?: number;
-  errorMessage?: string;
-  size?: number;
-  checksum?: string;
-}
-
 // Volume types
 export type VolumeStatus =
   | "creating"
@@ -1750,11 +1724,6 @@ export interface CreateVolumeRequest {
   sourceImageId?: string;
 }
 
-export interface UpdateVolumeRequest {
-  name?: string;
-  description?: string;
-}
-
 export interface AttachVolumeRequest {
   vmId: string;
   deviceName?: string;
@@ -1779,14 +1748,17 @@ export interface CreateVolumeSnapshotRequest {
 }
 
 // VM Log types
-export type VMLogLevel = "debug" | "info" | "warning" | "error";
-export type VMLogSource = "agent" | "qemu" | "control_plane";
+// Each union carries "unknown": the backend decodes unrecognized values
+// tolerantly into that case (a newer agent may emit vocabulary this build
+// doesn't know) and forwards it, so the UI must render it, not crash on it.
+export type VMLogLevel = "debug" | "info" | "warning" | "error" | "unknown";
+export type VMLogSource = "agent" | "control_plane" | "unknown";
 export type VMEventType =
   | "status_change"
   | "operation"
-  | "qemu_output"
   | "error"
-  | "info";
+  | "info"
+  | "unknown";
 
 export interface VMLogEntry {
   timestamp: string;

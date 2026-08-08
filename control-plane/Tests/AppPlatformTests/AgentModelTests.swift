@@ -238,40 +238,14 @@ struct AgentModelTests {
         #expect(agent.lastHeartbeat != nil)
     }
 
-    @Test("Agent.from derives hypervisors from legacy capability strings when no report is sent")
-    func testFromLegacyRegistrationDerivesHypervisorsFromCapabilities() {
-        // Message shaped like one from an agent that predates the structured
-        // report: hypervisor backends only appear as capability strings.
-        let message = AgentRegisterMessage(
-            agentId: "legacy-linux-agent",
-            hostname: "legacy-host",
-            version: "1.0.0",
-            capabilities: ["vm_management", "qemu", "kvm", "ovn_networking", "firecracker"],
-            resources: createTestAgentResources(),
-            hypervisorType: .qemu
-        )
-
-        let agent = Agent.from(registration: message, name: "legacy-linux-agent")
-
-        #expect(agent.architecture == nil)
-        #expect(agent.networkCapability == nil)
-        #expect(agent.hypervisors.count == 2)
-        #expect(agent.hypervisors.contains { $0.type == .qemu && $0.available && !$0.accelerated })
-        #expect(agent.hypervisors.contains { $0.type == .firecracker && $0.available })
-    }
-
-    @Test("Agent.from does not resurrect probe-failed backends from the hypervisorType scalar")
-    func testFromLegacyRegistrationRespectsFailedProbes() {
-        // An agent whose binary probes all failed advertises no hypervisor
-        // capability strings. The configured-default scalar must not put a
-        // backend back — the agent registers but stays unschedulable.
+    @Test("Agent.from stores no hypervisors when the registration reports none")
+    func testFromRegistrationWithoutProbeReportStaysUnschedulable() {
         let message = AgentRegisterMessage(
             agentId: "probeless-agent",
             hostname: "probeless-host",
             version: "1.0.0",
             capabilities: ["vm_management", "kvm", "user_networking"],
-            resources: createTestAgentResources(),
-            hypervisorType: .qemu
+            resources: createTestAgentResources()
         )
 
         let agent = Agent.from(registration: message, name: "probeless-agent")
@@ -297,7 +271,6 @@ struct AgentModelTests {
             version: "1.0.0",
             capabilities: ["vm_management", "qemu", "kvm"],
             resources: createTestAgentResources(),
-            hypervisorType: .qemu,
             architecture: .arm64,
             hypervisors: hypervisors,
             networkCapability: .overlay

@@ -276,38 +276,16 @@ struct SiteController: RouteCollection {
                     .badRequest,
                     reason: "Agent '\(agent.name)' is not a member of this site; assign it to the site first")
             }
-            // A designation the sync path won't honor is a silent outage:
-            // a pre-v4 agent is kept on legacy per-node scoping by assembly,
-            // and a non-overlay (user-mode/SLIRP) agent has no OVN network
-            // service to reconcile with — either way peers stay
-            // non-authoritative and the site's networks are realized nowhere.
-            guard WireProtocol.supportsSiteAuthority(agent.wireProtocolVersion ?? 0) else {
-                throw Abort(
-                    .badRequest,
-                    reason:
-                        "Agent '\(agent.name)' registered with a protocol too old for site topology authority; upgrade it first"
-                )
-            }
+            // A designation the sync path won't honor is a silent outage: a
+            // non-overlay (user-mode/SLIRP) agent has no OVN network service
+            // to reconcile with, so peers stay non-authoritative and the
+            // site's networks are realized nowhere.
             guard agent.supportsInterVMNetworking else {
                 throw Abort(
                     .badRequest,
                     reason:
                         "Agent '\(agent.name)' has no overlay (OVN) networking capability and cannot author site topology"
                 )
-            }
-            // A pre-v12 controller would decode syncs but ignore their
-            // `floatingIPs`, so every attached floating IP in the site would
-            // silently lose its NAT while the API kept reporting it attached
-            // (issue #344). Gate the designation, not just the attach path.
-            if !WireProtocol.supportsFloatingIPs(agent.wireProtocolVersion ?? 0) {
-                let attached = try await Self.attachedFloatingIPCount(inSite: site, on: req.db)
-                guard attached == 0 else {
-                    throw Abort(
-                        .badRequest,
-                        reason:
-                            "Agent '\(agent.name)' registered with a protocol too old for floating IPs, and this site has \(attached) attached floating IP(s); upgrade the agent or detach them first"
-                    )
-                }
             }
         }
 

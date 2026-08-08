@@ -110,18 +110,6 @@ struct VNCWebSocketController: RouteCollection {
             throw Abort(.conflict, reason: "VM has no assigned hypervisor")
         }
 
-        // Re-check the version here and not only at placement: an agent can be
-        // downgraded after its VMs were placed, and a pre-v23 agent answers a
-        // graphics connect with the *serial* socket — which noVNC would read as
-        // a malformed RFB handshake and hang on rather than report.
-        guard WireProtocol.supportsGraphicsConsole(agent.wireProtocolVersion ?? 0) else {
-            throw Abort(
-                .serviceUnavailable,
-                reason: "Agent '\(agent.name)' does not support the graphics console "
-                    + "(requires wire protocol v\(WireProtocol.graphicsConsoleMinimumVersion) or newer); "
-                    + "upgrade the agent on this hypervisor node")
-        }
-
         // Console traffic rides the agent's own WebSocket, which lives on
         // exactly one replica; there is no cross-replica byte-stream forwarding
         // (see docs/architecture/multi-replica.md). Fail here, where it is a

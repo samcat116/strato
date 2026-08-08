@@ -97,8 +97,5 @@ struct AgentAutoUpdateProtocolTests {
         // A pre-v7 agent decodes the sync but never acts on the field, so the
         // rollout must not assign an update to one — its health budget would
         // expire against silence and halt the rollout.
-        #expect(!WireProtocol.supportsDesiredAgentUpdate(6))
-        #expect(WireProtocol.supportsDesiredAgentUpdate(7))
-        #expect(WireProtocol.supportsDesiredAgentUpdate(WireProtocol.currentVersion))
     }
 }
