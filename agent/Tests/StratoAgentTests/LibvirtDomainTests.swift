@@ -430,10 +430,12 @@ struct LibvirtDomainTests {
     /// `state` is an `unsigned char`, which XDR sends as a whole four-byte word,
     /// and a client reading it as a length-prefixed byte string consumed the
     /// head of `maxMem` and shifted every field behind it. `reservedResources`
-    /// swallows that failure by design — it falls back to the last good answer,
-    /// and with no good answer ever recorded, to zero — so the host reported
-    /// nothing reserved and the scheduler kept placing onto it. Nothing about
-    /// that is visible above this line; a zero from a genuinely empty host and a
+    /// swallows that failure by design — it serves the last good answer — and
+    /// the last good answer is `(0, 0)`, recorded legitimately back when the
+    /// host had no Strato domains to sweep. So the first VM defined on a host
+    /// turned every later sweep into a stale read of that zero while the node
+    /// went on advertising its full capacity to the scheduler. Nothing about
+    /// that is visible above this line: a zero from a genuinely empty host and a
     /// zero from a decoder that has never once worked read identically.
     static let runningDomainInfoReply: [UInt8] = [
         0x00, 0x00, 0x00, 0x01,  // state: VIR_DOMAIN_RUNNING, one whole word
