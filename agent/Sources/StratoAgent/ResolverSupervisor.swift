@@ -22,7 +22,7 @@ import StratoShared
 /// problem. CoreDNS is that helper.
 ///
 /// The cost is real — a process per network with a local NIC, not per VM — and
-/// bounded by networks-per-chassis. ADR 0006 records why it is the trade taken.
+/// bounded by networks-per-chassis. ADR 0007 records why it is the trade taken.
 ///
 /// ## Why this is not part of the network reconcile's authority half
 ///

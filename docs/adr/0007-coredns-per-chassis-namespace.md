@@ -1,4 +1,4 @@
-# ADR 0006: The per-network resolver is a CoreDNS in the chassis namespace
+# ADR 0007: The per-network resolver is a CoreDNS in the chassis namespace
 
 - **Status**: Accepted with a known gap — landed STR-40, but see "The gap this
   decision opened" below, which may yet reverse it
@@ -6,8 +6,10 @@
 - **Deciders**: Sam Schmitt
 - **Scope**: where a network's DNS resolver runs on a hypervisor host, and what
   addresses it answers on
-- **Affects**: STR-40 (roadmap #769 phase 4), and STR-56, which inherits a
-  working per-namespace helper process instead of an open question
+- **Affects**: STR-40 (roadmap #769 phase 4). STR-56 landed the metadata
+  listener independently and in parallel; the two converged on the same
+  per-namespace helper-process shape without either inheriting it from the
+  other, which is itself evidence for the constraint ADR 0003 identified
 - **Does not affect**: what the resolver *serves*. Zones, records and their
   assembly are control-plane concerns settled in phase 1, and the OVN `DNS`
   table (phase 3) is untouched — it still front-ends this resolver and is what
@@ -58,7 +60,11 @@ Three things follow, and each is a cost the issue's design would not have paid:
   anticipated when it wrote that per-namespace listening "does not compose
   cheaply with a single-process Swift agent" and named a helper process per
   namespace as one of the two ways to pay for it. OpenStack runs an haproxy per
-  `ovnmeta-*` namespace for the same reason.
+  `ovnmeta-*` namespace for the same reason — and STR-56, deciding the same
+  question for the metadata listener at the same time, arrived at a forked
+  helper (`MetadataServerSupervisor`) independently. Two features reaching the
+  same shape from opposite directions is the strongest available evidence that
+  the constraint is real rather than an artifact of either design.
 - **The agent supervises a long-lived child**, which it had never done before —
   libvirt owns QEMU and swtpm, Firecracker is driven over its API socket, and
   the agent itself assumes an external supervisor. So `ProcessRunner` gained a

@@ -368,7 +368,7 @@ grounds. The namespace already solves both halves — attribution *and* reply
 routing to a tenant address three networks may share — so a distinct address per
 network would buy nothing and cost an allocation, a column, and a per-network
 security-group match instead of a constant one. The price paid instead is one
-CoreDNS process per network with a local NIC. [ADR 0006](../adr/0006-coredns-per-chassis-namespace.md)
+CoreDNS process per network with a local NIC. [ADR 0007](../adr/0007-coredns-per-chassis-namespace.md)
 records the trade.
 
 ### What the agent renders
@@ -456,7 +456,7 @@ issue's original shape the resolver sat in the **host** namespace, where
 forwarding is free: the hypervisor has its own egress, and using it is precisely
 what lets a guest on a network with no external access resolve a public name.
 Moving the resolver into the tenant namespace bought attribution and reply
-routing (see [ADR 0006](../adr/0006-coredns-per-chassis-namespace.md)) and gave
+routing (see [ADR 0007](../adr/0007-coredns-per-chassis-namespace.md)) and gave
 that up without noticing.
 
 Three ways out, none of them free:
@@ -464,7 +464,7 @@ Three ways out, none of them free:
 1. **A veth from each namespace to the host, with host-side NAT.** Restores the
    headline fix in full, including for isolated networks, because the egress is
    the *host's*. Costs the agent host firewall state, which it has never
-   managed, and re-opens the "L3 foot in every tenant network" question ADR 0006
+   managed, and re-opens the "L3 foot in every tenant network" question ADR 0007
    thought it had avoided.
 2. **An IPAM-allocated tenant address on the namespace interface**, routed via
    the network's gateway so SNAT matches. Small and entirely inside OVN, but it
@@ -473,7 +473,7 @@ Three ways out, none of them free:
    external access, i.e. not the case the phase exists for.
 3. **Move the resolver to the host namespace after all**, with a distinct
    link-local address per network as the issue proposed, plus the per-network
-   policy routing that reply routing then requires. Reverses ADR 0006.
+   policy routing that reply routing then requires. Reverses ADR 0007.
 
 Until one lands, a network with the resolver on resolves its own zones and
 REFUSEs everything else, which is why the column defaults off.
@@ -550,6 +550,6 @@ protects is the hypervisor rather than either service.
 - Addresses: `shared/Sources/StratoShared/NetworkResolverEndpoint.swift`
 - Chassis foot: `agent/Sources/StratoAgentCore/ChassisServicePlan.swift`, and
   [ADR 0003](../adr/0003-imds-chassis-namespace.md) /
-  [ADR 0006](../adr/0006-coredns-per-chassis-namespace.md)
+  [ADR 0007](../adr/0007-coredns-per-chassis-namespace.md)
 - Networking design (the L2/L3 substrate): [networking](./networking.md)
 - IAM vocabulary: [iam](./iam.md)

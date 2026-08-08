@@ -14,7 +14,7 @@ struct StratoAgent: AsyncParsableCommand {
         commandName: "strato-agent",
         abstract: "Strato hypervisor agent for managing VMs on QEMU",
         version: BuildInfo.displayVersion,
-        subcommands: [Run.self, SpiffeDelegatedProbe.self],
+        subcommands: [Run.self, SpiffeDelegatedProbe.self, MetadataServer.self],
         defaultSubcommand: Run.self
     )
 }
@@ -278,7 +278,9 @@ private func launchAgent(options: AgentOptions) async throws {
         spiffeConfig: config.spiffe,
         teardownGuard: config.teardownGuard,
         desiredStatePull: config.wantsDesiredStatePull,
-        desiredStateFullRefetchInterval: config.desiredStateFullRefetchInterval
+        desiredStateFullRefetchInterval: config.desiredStateFullRefetchInterval,
+        metadataServiceEnabled: config.servesInstanceMetadata,
+        metadataHopLimit: config.metadataHopLimit
     )
 
     // Install signal handlers so `systemctl stop`/Ctrl-C triggers a graceful

@@ -180,15 +180,23 @@ not have given it. Three details follow:
   interface. Aggregate across both services, because what it protects is the
   hypervisor.
 
-**The per-namespace listener cost has been paid, and the shape is a helper
-process.** This ADR argued that per-namespace listening "does not compose
-cheaply with a single-process Swift agent" and left STR-56 to choose between a
-helper process per namespace and a namespace-entering listener. STR-40 chose the
-former — one CoreDNS per namespace, which is what OpenStack runs an haproxy per
-`ovnmeta-*` namespace for — and built the supervision, adoption and backoff
-machinery around it. STR-56 inherits a working precedent rather than an open
-question.
+**The per-namespace listener cost has been paid twice, and both times the shape
+was a helper process.** This ADR argued that per-namespace listening "does not
+compose cheaply with a single-process Swift agent" and left STR-56 to choose
+between a helper process per namespace and a namespace-entering listener.
+STR-56 and STR-40 answered it independently and in parallel — the metadata
+listener with a forked `MetadataServerSupervisor`, the DNS resolver with one
+CoreDNS per namespace, each carrying its own supervision, adoption and backoff
+machinery. Neither inherited the choice from the other, which makes the
+agreement worth more than a precedent would have been: the constraint recorded
+here is real, not an artifact of whichever feature reached it first.
 
-[ADR 0006](./0006-coredns-per-chassis-namespace.md) records why the resolver
+The obvious follow-up is whether the two supervisors should become one. They
+converged on the same shape for the same reason but differ in what they
+supervise — a Strato subcommand whose protocol we own, versus a third-party
+binary configured through files on disk — so nothing here argues they must
+merge, only that a future reader should expect to find both and know why.
+
+[ADR 0006](./0007-coredns-per-chassis-namespace.md) records why the resolver
 reused this namespace instead of the single host-namespace listener its own
 issue proposed.

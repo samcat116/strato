@@ -45,7 +45,7 @@ import StratoShared
 /// this namespace instead of the single host-namespace listener its issue
 /// originally proposed: the destination address would have identified the
 /// network, but nothing would have routed a reply back to a guest whose
-/// `10.0.0.5` exists on three switches. See ADR 0006.
+/// `10.0.0.5` exists on three switches. See ADR 0007.
 ///
 /// ## On moving the interface into the namespace
 ///
@@ -85,7 +85,10 @@ public struct ChassisServicePlan: Sendable, Equatable {
     /// Namespace removal. Runs after `ovsDetach`, which destroys the device.
     public let teardown: [NetnsCommand]
 
-    /// The namespace holding a network's metadata interface on this chassis.
+    /// Where iproute2 keeps its named namespaces.
+    public static let netnsDirectory = "/var/run/netns"
+
+    /// The namespace holding a network's service interface on this chassis.
     /// Mirrors `SandboxJail`'s `strato-sbx-<id>`.
     public static func netnsName(networkId: UUID) -> String {
         "strato-md-\(networkId.uuidString.lowercased())"
@@ -95,7 +98,20 @@ public struct ChassisServicePlan: Sendable, Equatable {
     /// whole reason observation cannot key on the OVS row alone: `conf.db` is on
     /// disk and survives a reboot, this does not.
     public static func netnsPath(networkId: UUID) -> String {
-        "/var/run/netns/\(netnsName(networkId: networkId))"
+        "\(netnsDirectory)/\(netnsName(networkId: networkId))"
+    }
+
+    /// The network a namespace name belongs to, or nil when the name is not one
+    /// of ours.
+    ///
+    /// The inverse of `netnsName`, and the only way to learn which networks this
+    /// host was serving before the agent restarted: the namespaces outlive the
+    /// agent process (they are created by the chassis reconcile and cleared only
+    /// by a host reboot), while the desired-state list that named them does not.
+    public static func networkId(fromNetnsName name: String) -> UUID? {
+        let prefix = "strato-md-"
+        guard name.hasPrefix(prefix) else { return nil }
+        return UUID(uuidString: String(name.dropFirst(prefix.count)))
     }
 
     /// Builds the full setup-and-teardown plan for one network on this chassis.

@@ -499,6 +499,38 @@ struct DomainXMLBuilderTests {
         #expect(!xml.contains("model='pcie-root-port' index"))
     }
 
+    /// libvirt numbers un-indexed controllers from 0, and both machine types
+    /// the builder emits reserve PCI index 0 for the root complex — so a
+    /// document that declares ports without declaring the complex has its
+    /// first port land on 0 and is rejected outright (STR-189).
+    @Test("the PCI root complex is declared ahead of its ports", arguments: scenarios)
+    func declaresRootComplexBeforePorts(_ scenario: Scenario) throws {
+        let xml = try DomainXMLBuilder.build(scenario.input)
+        let root = try #require(
+            xml.range(of: "<controller type='pci' index='0' model='pcie-root'/>"))
+        let firstPort = try #require(
+            xml.range(of: "<controller type='pci' model='pcie-root-port'/>"))
+        #expect(root.lowerBound < firstPort.lowerBound)
+    }
+
+    /// The varstore is qcow2 on every firmware path, and that is load-bearing
+    /// rather than cosmetic: libvirt refuses an internal snapshot of a pflash
+    /// guest whose varstore is raw, so a raw one silently costs `checkpointVM`
+    /// — the capability the libvirt >= 11.5 floor exists for. STR-188 tracks
+    /// the fact that this cannot currently be satisfied by autoselection on a
+    /// host whose EDK2 descriptors are raw-only; whatever fixes it must keep
+    /// this property.
+    @Test("the varstore is qcow2 on every firmware path", arguments: scenarios)
+    func varstoreIsAlwaysQcow2(_ scenario: Scenario) throws {
+        let xml = try DomainXMLBuilder.build(scenario.input)
+        guard let nvram = xml.range(of: "<nvram") else { return }  // direct kernel / monolithic
+        // Attribute order differs between the branches (the `.pflash` one names
+        // `template` first), so match inside the element rather than on a
+        // prefix. `format=` appears nowhere else — disks spell it `type=`.
+        let element = xml[nvram.lowerBound...].prefix(while: { $0 != ">" })
+        #expect(element.contains("format='qcow2'"))
+    }
+
     /// Secure Boot's `secure='yes'` marks the varstore pflash SMM-only, and ARM
     /// has no SMM — libvirt rejects the pairing rather than ignoring it.
     @Test("the loader is only marked secure on x86")

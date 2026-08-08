@@ -21,7 +21,7 @@ import Foundation
 /// an overlapping tenant address. A distinct address per network would only be
 /// needed to recover that identity in a *shared* namespace; here it would buy
 /// nothing and cost an allocation, a column, and a per-network security-group
-/// match instead of a constant one. See ADR 0006.
+/// match instead of a constant one. See ADR 0007.
 public enum NetworkResolverEndpoint {
     /// The IPv4 endpoint, link-local per RFC 3927.
     public static let address = "169.254.169.253"
