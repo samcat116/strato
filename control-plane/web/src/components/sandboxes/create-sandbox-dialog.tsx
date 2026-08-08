@@ -424,9 +424,7 @@ export function CreateSandboxDialog({
                 </div>
                 <p className="text-xs text-muted-foreground">
                   Default group is used when none selected. An interface can
-                  attach up to {MAX_SECURITY_GROUPS_PER_NIC} groups. Sandbox
-                  guest networking is not enabled yet, so these are recorded
-                  and take effect when it is.
+                  attach up to {MAX_SECURITY_GROUPS_PER_NIC} groups.
                 </p>
               </div>
             )}

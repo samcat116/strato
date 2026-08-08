@@ -44,10 +44,12 @@ Most of the layered model below is implemented. What exists today:
 
 What genuinely remains missing (details in §Known gaps):
 
-- **Sandbox guest networking** is plumbed but off the wire: the jail attach
-  (STR-100), the guest's own configuration (STR-101) and security groups
-  (STR-102) have all landed, and what remains is the fleet-wide flag awaiting
-  its per-agent gate (STR-103).
+- **Networked-sandbox snapshots** (STR-104): a checkpoint carries no
+  Firecracker network device to remap, so restore and fork refuse a sandbox
+  that has a NIC. Everything else in sandbox networking is landed — the jail
+  attach (STR-100), the guest's own configuration (STR-101), security groups
+  (STR-102) and the per-agent capability gate that put the NIC on the wire
+  (STR-103).
 - **CP-hosted ingress** (§Phase 4) and **inter-site L3** (§Phase 5) are
   unbuilt.
 - **DNS realization**: zones are modeled control-plane-side, but guests still
@@ -426,7 +428,7 @@ programmed, so an image running its own client still gets a lease — the guest
 simply does not need one, which keeps a DHCP round trip off the cold-start path.
 This differs from the VM path, where cloud-init honours `dhcpEnabled` and omits
 static addressing; a sandbox has no cloud-init, and its address is known before
-it boots. Details in [sandboxes.md](./sandboxes.md#guest-networking-the-holding-pattern).
+it boots. Details in [sandboxes.md](./sandboxes.md#guest-networking).
 
 **Host requirements.** iproute2's `ip` *and* `tc`, plus the kernel's `sch_clsact`,
 `cls_matchall`, and `act_mirred` modules. Both binaries are invoked by absolute
@@ -446,11 +448,12 @@ the same way. Firecracker's only backend is a TAP opened by name, so the runtime
 refuses rather than skipping the device and booting a sandbox with no interface
 that the control plane still records as having one.
 
-**Not yet wired end to end.** `SandboxSpecBuilder.guestNetworkingSupported` is
-still `false`, so no sandbox `NetworkSpec` reaches an agent. The full holding
-pattern — what blocks the flag (STR-103) and the snapshot arm queued behind it
-(STR-104) — is tracked in
-[sandboxes.md](./sandboxes.md#guest-networking-the-holding-pattern).
+**Gated per agent, never fleet-wide.** A sandbox `NetworkSpec` reaches only a
+host that advertised `sandboxNetworkingCapable` at registration — OVN, the
+jailer, and a guest image that configures the interface (STR-103) — and a
+sandbox with a NIC only *places* on such a host. The reasoning, the probe, and
+the snapshot arm still queued behind it (STR-104) are in
+[sandboxes.md](./sandboxes.md#guest-networking).
 
 ## Security groups
 
@@ -498,19 +501,18 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
     and it means the first sandbox port to come up joins immediately rather
     than parking on `DependencyPendingError`.
   - **The per-NIC membership** rides inside the sandbox's `NetworkSpec`, which
-    `SandboxSpecBuilder.guestNetworkingSupported` still withholds entirely. So
-    an `sbx-` port joins no port group because there *is* no port, not because
-    the membership is missing. STR-103 flips that flag; when it does, a sandbox
-    port joins the drop group before its veth goes live, exactly as a VM's TAP
-    does — the ids are already assembled and passed.
+    reaches only a host advertising sandbox networking (STR-103). On such a
+    host the sandbox port joins the drop group before its veth goes live,
+    exactly as a VM's TAP does; on any other there is no `sbx-` port to be a
+    member of anything.
 
-  The agent-version gate is deliberately *not* applied to the sandbox path.
-  A sandbox needs two predicates to be filtered — a v20 host, and its NIC on
-  the wire — and the second is per-agent and does not exist yet, so enforcing
-  only the version half would refuse attaches that are still inert while
-  passing agents that cannot realize a sandbox NIC at all. STR-103 owns the
-  combined gate. `SandboxDetail.securityGroupsEnforced` reports the honest
-  answer meanwhile: `false` for every networked sandbox.
+  The attach gate is correspondingly two-part for a sandbox (STR-103): its
+  host must speak v20 *and* advertise sandbox networking, since only then does
+  the port exist to be filtered. Enforcing the version half alone — all that
+  existed before the capability did — would have refused attaches that were
+  still inert while passing a v20 agent that cannot realize a sandbox NIC at
+  all. `SandboxDetail.securityGroupsEnforced` reports the same answer the gate
+  does.
 
 ### Wire and rollout
 
@@ -651,9 +653,9 @@ the carve-out back off.
 ### Known limitations / follow-ups
 
 - Group-reference peers match only addresses OVN knows from LSP `addresses`.
-- Sandbox NIC membership is assembled and its groups are realized, but nothing
-  is a member of them until STR-103 puts the sandbox port on the wire (see the
-  model section above).
+- A sandbox's groups are realized on every topology authority, but its NIC is
+  only a member of them on a host that advertises sandbox networking (STR-103
+  — see the model section above).
 - Network-level stateless ACLs (NACLs, switch-attached) are a follow-up, as
   are ACL meters/stats — `log` is wired, `meter` is not, so a chatty logged
   rule has no rate limit.

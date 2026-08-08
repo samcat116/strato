@@ -42,6 +42,7 @@ struct SchedulerServiceTests {
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
         supportsSandboxWorkloads: Bool = false,
+        supportsSandboxNetworking: Bool = false,
         supportsVTPM: Bool = false,
         supportsMachineProfile: Bool = false,
         supportsGraphicsConsole: Bool = false
@@ -61,6 +62,7 @@ struct SchedulerServiceTests {
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
+            supportsSandboxNetworking: supportsSandboxNetworking,
             supportsVTPM: supportsVTPM,
             supportsMachineProfile: supportsMachineProfile,
             supportsGraphicsConsole: supportsGraphicsConsole
@@ -69,13 +71,16 @@ struct SchedulerServiceTests {
 
     /// Placement requirements for a sandbox workload: Firecracker plus the
     /// explicit sandbox-runtime capability, no disk.
-    func sandboxRequirements(cpu: Int = 1, memory: Int64 = 1000) -> VMPlacementRequirements {
+    func sandboxRequirements(
+        cpu: Int = 1, memory: Int64 = 1000, requiresSandboxNetworking: Bool = false
+    ) -> VMPlacementRequirements {
         VMPlacementRequirements(
             cpu: cpu,
             memory: memory,
             disk: 0,
             hypervisorType: .firecracker,
-            requiresSandboxRuntime: true
+            requiresSandboxRuntime: true,
+            requiresSandboxNetworking: requiresSandboxNetworking
         )
     }
 
@@ -612,6 +617,62 @@ struct SchedulerServiceTests {
             }
             #expect(eligibleAgents == 2)
             #expect(error.description.contains("sandbox runtime"))
+        }
+    }
+
+    @Test("A networked sandbox skips a sandbox-capable agent that cannot realize a NIC")
+    func testSandboxNetworkingConstraintNarrowsToCapableAgent() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            // Runs sandboxes and is far more attractive by utilization, but it
+            // is unjailed / user-mode / running an old guest image — the NIC
+            // would never exist.
+            createTestAgent(
+                id: "no-net", name: "no-net", availableCPU: 8,
+                supportedHypervisors: [.firecracker], supportsSandboxWorkloads: true),
+            createTestAgent(
+                id: "net-ready", name: "net-ready", availableCPU: 2,
+                supportedHypervisors: [.firecracker], supportsSandboxWorkloads: true,
+                supportsSandboxNetworking: true),
+        ]
+
+        let selectedId = try scheduler.selectAgent(
+            requirements: sandboxRequirements(requiresSandboxNetworking: true), from: agents)
+
+        #expect(selectedId == "net-ready")
+        // A network-free sandbox has no such constraint and takes the roomier host.
+        #expect(try scheduler.selectAgent(requirements: sandboxRequirements(), from: agents) == "no-net")
+    }
+
+    @Test("A networked sandbox fails with its own error when no agent can realize a NIC")
+    func testSandboxNetworkingConstraintFails() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+
+        let agents = [
+            createTestAgent(
+                id: "sb1", name: "sb1", supportedHypervisors: [.firecracker],
+                supportsSandboxWorkloads: true),
+            createTestAgent(
+                id: "sb2", name: "sb2", supportedHypervisors: [.firecracker],
+                supportsSandboxWorkloads: true),
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(
+                requirements: sandboxRequirements(requiresSandboxNetworking: true), from: agents)
+            Issue.record("Expected sandboxNetworkingUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .sandboxNetworkingUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected sandboxNetworkingUnsatisfied, got \(error)")
+                return
+            }
+            // Counted against the sandbox-capable pool, not the whole fleet:
+            // that is the set an operator would have to fix.
+            #expect(eligibleAgents == 2)
+            #expect(error.description.contains("sandbox a NIC"))
         }
     }
 

@@ -107,7 +107,8 @@ final class SecurityGroupControllerTests {
     /// agent, which is what lets the assembly tests below reach it (STR-102 —
     /// a sandbox's groups ride the sync even though its NIC spec does not).
     private func createSandboxWithNIC(
-        app: Application, org: Organization, project: Project, protocolVersion: Int? = nil
+        app: Application, org: Organization, project: Project, protocolVersion: Int? = nil,
+        sandboxNetworkingCapable: Bool = false
     ) async throws -> (Sandbox, SandboxNetworkInterface) {
         let builder = TestDataBuilder(db: app.db)
         let sandbox = try await builder.createSandbox(
@@ -129,7 +130,10 @@ final class SecurityGroupControllerTests {
                     totalMemory: 1 << 33, availableMemory: 1 << 33,
                     totalDisk: 1 << 39, availableDisk: 1 << 39
                 ),
-                protocolVersion: protocolVersion
+                networkCapability: sandboxNetworkingCapable ? .overlay : nil,
+                protocolVersion: protocolVersion,
+                sandboxCapable: sandboxNetworkingCapable,
+                sandboxNetworkingCapable: sandboxNetworkingCapable
             )
             let agentUUID = try await app.agentService.registerAgent(
                 message, agentName: message.agentId, organizationScope: .organization(org.id!))
@@ -1008,8 +1012,9 @@ final class SecurityGroupControllerTests {
             let first = try await self.createGroup(app: app, project: project, token: token, name: "sbx-a")
             let second = try await self.createGroup(app: app, project: project, token: token, name: "sbx-b")
 
-            // No agent-version gate on this path: an unplaced sandbox — and a
-            // placed one — attaches regardless, since nothing realizes it.
+            // An unplaced sandbox attaches regardless of any host gate: the
+            // project's default group is attached before scheduling, so the
+            // gate can only ask about a host that already exists (STR-103).
             try await app.test(.POST, "/api/security-groups/\(first.id)/attach") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
@@ -1078,15 +1083,16 @@ final class SecurityGroupControllerTests {
                 #expect(detail.securityGroupIds == [second.id])
                 // The per-NIC copy agrees, and is nil-vs-empty honest.
                 #expect(detail.networkInterfaces.first?.securityGroupIds == [second.id])
-                // Unplaced, but the verdict is false rather than nil: the
-                // sandbox has a NIC, and what makes the groups unenforced is
-                // guest networking being off, not the absence of a host.
-                #expect(detail.securityGroupsEnforced == false)
+                // Unplaced reads as unknown, not unenforced — the same
+                // distinction an unplaced VM gets. What the verdict turns on
+                // once there *is* a host is that host's sandbox-networking
+                // capability (STR-103).
+                #expect(detail.securityGroupsEnforced == nil)
             }
         }
     }
 
-    @Test("A sandbox NIC's groups ride the sync while its per-NIC spec does not")
+    @Test("A sandbox NIC's groups reach the authority, and its membership reaches its host")
     func sandboxGroupsReachTheAuthority() async throws {
         try await withSecurityGroupTestApp { app, _, org, project, token in
             let web = try await self.createGroup(app: app, project: project, token: token, name: "sbx-web")
@@ -1108,7 +1114,8 @@ final class SecurityGroupControllerTests {
             // this host with no groups and report nothing about the omission.
             let (sandbox, nic) = try await self.createSandboxWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion,
+                sandboxNetworkingCapable: true)
             try await SandboxInterfaceSecurityGroup(
                 interfaceID: nic.requireID(), securityGroupID: web.id
             ).save(on: app.db)
@@ -1118,10 +1125,11 @@ final class SecurityGroupControllerTests {
             let groups = try #require(message.securityGroups)
             #expect(Set(groups.map(\.id)) == [web.id, db_.id])
             #expect(message.vms.isEmpty)
-            // The other half is still withheld: no NIC spec, so nothing to
-            // carry per-NIC ids and no port to make a member (STR-103).
+            // Both halves reach a host that can realize the NIC (STR-103): the
+            // closure above, and the per-NIC membership inside the spec, so the
+            // port joins its groups before the veth goes live.
             #expect(message.sandboxes.count == 1)
-            #expect(message.sandboxes.first?.spec.network == nil)
+            #expect(message.sandboxes.first?.spec.network?.securityGroupIds == [web.id])
 
             // A pre-v20 agent gets neither half, exactly as on the VM path.
             let (oldSandbox, oldNIC) = try await self.createSandboxWithNIC(
@@ -1153,10 +1161,96 @@ final class SecurityGroupControllerTests {
         }
     }
 
-    /// The placement-keyed half of the enforcement verdict, exercised directly.
-    /// `sandboxEnforcement` short-circuits before reaching it while sandbox
-    /// guest networking is off, so this is what keeps the branch STR-103 will
-    /// switch on from being dead-lettered until then.
+    /// The capability arm of the sandbox verdict (STR-103), which is asked
+    /// before topology authority: on a host that cannot realize a sandbox NIC
+    /// there is no port for a port group to contain, whatever its version or
+    /// site says. `false`, not nil — the groups are attached and demonstrably
+    /// enforce nothing.
+    @Test("A sandbox's enforcement verdict follows its host's sandbox-networking capability")
+    func sandboxEnforcementFollowsNetworkingCapability() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let group = try await self.createGroup(
+                app: app, project: project, token: token, name: "sbx-enf")
+
+            let (incapable, incapableNIC) = try await self.createSandboxWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.currentVersion, sandboxNetworkingCapable: false)
+            try await SandboxInterfaceSecurityGroup(
+                interfaceID: incapableNIC.requireID(), securityGroupID: group.id
+            ).save(on: app.db)
+
+            let (capable, capableNIC) = try await self.createSandboxWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.currentVersion, sandboxNetworkingCapable: true)
+            try await SandboxInterfaceSecurityGroup(
+                interfaceID: capableNIC.requireID(), securityGroupID: group.id
+            ).save(on: app.db)
+
+            for (sandbox, expected) in [(incapable, false), (capable, true)] {
+                try await app.test(.GET, "/api/sandboxes/\(try sandbox.requireID())") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                } afterResponse: { res in
+                    let detail = try res.content.decode(SandboxDetailResponse.self)
+                    #expect(detail.securityGroupsEnforced == expected)
+                }
+            }
+
+            // The list endpoint answers identically, batched — the verdict now
+            // reads the host row, so a per-row call would be a query per
+            // sandbox (STR-103).
+            try await app.test(.GET, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let page = try res.content.decode(PagedResponse<SandboxDetailResponse>.self).items
+                let byID = Dictionary(uniqueKeysWithValues: page.map { ($0.id, $0) })
+                #expect(byID[try incapable.requireID()]?.securityGroupsEnforced == false)
+                #expect(byID[try capable.requireID()]?.securityGroupsEnforced == true)
+            }
+        }
+    }
+
+    @Test("Attaching a group to a sandbox on a host that cannot realize a NIC is refused")
+    func sandboxAttachRefusedOnIncapableHost() async throws {
+        try await withSecurityGroupTestApp { app, _, org, project, token in
+            let group = try await self.createGroup(
+                app: app, project: project, token: token, name: "sbx-attach")
+
+            let (incapable, _) = try await self.createSandboxWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.currentVersion, sandboxNetworkingCapable: false)
+            try await app.test(.POST, "/api/security-groups/\(group.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["sandboxId": try incapable.requireID().uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            let (capable, _) = try await self.createSandboxWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.currentVersion, sandboxNetworkingCapable: true)
+            try await app.test(.POST, "/api/security-groups/\(group.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["sandboxId": try capable.requireID().uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            // An unplaced sandbox always passes: the project's default group is
+            // attached in the create transaction, long before scheduling.
+            let (unplaced, _) = try await self.createSandboxWithNIC(
+                app: app, org: org, project: project, protocolVersion: nil)
+            try await app.test(.POST, "/api/security-groups/\(group.id)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(["sandboxId": try unplaced.requireID().uuidString])
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+        }
+    }
+
+    /// The placement-keyed half of the enforcement verdict, exercised directly:
+    /// the version arm, independent of the sandbox-networking capability that
+    /// `sandboxEnforcement` checks first.
     @Test("Realization by hypervisor id distinguishes a pre-v20 host from a current one")
     func realizationByHypervisorId() async throws {
         try await withSecurityGroupTestApp { app, _, org, project, _ in

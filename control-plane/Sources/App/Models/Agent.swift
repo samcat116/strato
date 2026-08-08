@@ -106,6 +106,21 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "sandbox_capable")
     var sandboxCapable: Bool
 
+    /// Whether the agent advertised that it can realize a **sandbox NIC** at
+    /// its last registration (STR-103): OVN networking, the jailer barrier, and
+    /// an installed guest image that brings the interface up from the config
+    /// drive. Strictly stronger than `sandboxCapable`, and separately reported
+    /// because the guest image is a separately distributed artifact — no wire
+    /// version and no other capability implies it.
+    ///
+    /// Read twice: the scheduler refuses to place a sandbox that has a NIC on a
+    /// host without it, and desired-state assembly withholds
+    /// `SandboxSpec.network` from such a host — which is what makes a mixed
+    /// fleet safe to upgrade, since every sandbox NIC ever allocated has been
+    /// waiting control-plane-side for this flag to exist.
+    @Field(key: "sandbox_networking_capable")
+    var sandboxNetworkingCapable: Bool
+
     /// Whether the agent advertised a usable `swtpm` at its last registration
     /// (issue #565), which is what lets it give a guest a TPM 2.0. The
     /// scheduler gates vTPM placement on this signal combined with a v17+ wire
@@ -239,6 +254,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         hypervisors: [HypervisorSupport] = [],
         networkCapability: NetworkCapability? = nil,
         sandboxCapable: Bool = false,
+        sandboxNetworkingCapable: Bool = false,
         tpmCapable: Bool = false,
         lastHeartbeat: Date? = nil
     ) {
@@ -259,6 +275,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.hypervisors = hypervisors
         self.networkCapability = networkCapability?.rawValue
         self.sandboxCapable = sandboxCapable
+        self.sandboxNetworkingCapable = sandboxNetworkingCapable
         self.tpmCapable = tpmCapable
         self.autoUpdate = false
         self.lastHeartbeat = lastHeartbeat
@@ -387,6 +404,7 @@ extension Agent {
             hypervisors: registration.effectiveHypervisors,
             networkCapability: registration.networkCapability,
             sandboxCapable: registration.sandboxCapable ?? false,
+            sandboxNetworkingCapable: registration.sandboxNetworkingCapable ?? false,
             tpmCapable: registration.tpmCapable ?? false,
             lastHeartbeat: Date()
         )
@@ -526,6 +544,10 @@ struct AgentResponse: Content {
     let hypervisors: [HypervisorSupport]
     let networkCapability: NetworkCapability?
     let sandboxCapable: Bool
+    /// Whether a sandbox on this host can have a NIC (STR-103) — it advertised
+    /// OVN, the jailer barrier, and a networking-capable guest image at its
+    /// last registration. Always false when `sandboxCapable` is.
+    let sandboxNetworkingCapable: Bool
     /// Whether this host can back a guest TPM 2.0 (issue #565) — it advertised
     /// a usable swtpm at its last registration.
     let tpmCapable: Bool
@@ -622,6 +644,7 @@ struct AgentResponse: Content {
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
         self.sandboxCapable = agent.sandboxCapable
+        self.sandboxNetworkingCapable = agent.sandboxNetworkingCapable
         self.tpmCapable = agent.tpmCapable
         self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id
