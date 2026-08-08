@@ -160,17 +160,34 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// - `<rng>`, `<pm>`, `<metadata>`, `<alias>`, and any `<qemu:commandline>`
 ///   passthrough.
 ///
-/// ## Spare PCIe root ports are emitted, and are load-bearing
+/// ## Spare PCIe root ports are emitted, and their indexes are the mechanism
 ///
-/// libvirt adds exactly one `pcie-root-port` per PCI device the document
-/// declares, so a domain built from only the devices a VM needs has **no free
-/// slot** and `virDomainAttachDeviceFlags` fails a disk hot-plug with "No more
-/// available PCI slots". A domain document is written once by `createVM` and
-/// never rewritten, so a VM that was defined without spares can never gain them
-/// — the ports have to be there from the start or hot-plug is impossible for
-/// that VM's whole life. `spareHotplugPorts` is therefore a hard ceiling on how
-/// many volumes a VM can be given after it is created (STR-134); issue #1026
-/// tracks removing that ceiling rather than only documenting it.
+/// libvirt adds a `pcie-root-port` per PCI device the document declares, so a
+/// domain built from only the devices a VM needs has **no free slot** and
+/// `virDomainAttachDeviceFlags` fails a disk hot-plug with "No more available
+/// PCI slots". A domain document is written once by `createVM` and never
+/// rewritten, so a VM that was defined without spares can never gain them — the
+/// ports have to be there from the start or hot-plug is impossible for that VM's
+/// whole life. `spareHotplugPorts` is therefore a hard ceiling on how many
+/// volumes a VM can be given after it is created (STR-134); issue #1026 tracks
+/// removing that ceiling rather than only documenting it.
+///
+/// **Declaring the ports is not enough; they have to be numbered.** An
+/// un-indexed `pcie-root-port` is numbered by libvirt out of the very range it
+/// was going to allocate for the domain's own devices, and then *used for one of
+/// them*: it pre-declares part of the allocation rather than adding to it. On
+/// libvirt 12.0.0, a domain of one disk, virtio-serial and a memballoon comes up
+/// with five ports and four occupied when it declares none, and with four ports
+/// and four occupied when it declares four un-indexed — un-indexed spares leave
+/// a domain with *fewer* free ports than declaring nothing at all, which is why
+/// every hot-plug failed with the ceiling nominally set to four (STR-192).
+///
+/// What works is an explicit index past everything libvirt will auto-assign,
+/// which is what `spareHotplugPortIndexes` computes. libvirt materializes every
+/// index below the highest one declared, so the top index *is* the port count
+/// and the devices fill in from the bottom; the spares are whatever is left over
+/// the top. They cost little: libvirt packs eight ports into one `pcie-root`
+/// slot as functions of a multifunction device.
 ///
 /// ## Known divergence from the QEMU command line
 ///
@@ -183,12 +200,34 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 public enum DomainXMLBuilder {
 
     /// How many empty `pcie-root-port`s every domain carries for later
-    /// hot-plug. Each costs a slot on `pcie-root` (of which q35 and `virt` have
-    /// 31) and a little guest address space, so this trades the ceiling
-    /// described above against the slots left for everything else; four is well
-    /// clear of the one or two volumes a VM typically gains after creation and
-    /// well short of crowding the root complex.
+    /// hot-plug. Each costs a little guest address space, so this trades the
+    /// ceiling described above against what the guest can still boot with; four
+    /// is well clear of the one or two volumes a VM typically gains after
+    /// creation and nowhere near the port count that stops a domain starting.
     static let spareHotplugPorts = 4
+
+    /// Ports the defined domain occupies for devices this document never
+    /// declared, added to the count below before the spares are numbered.
+    ///
+    /// One is measured: a q35 domain that declares no USB controller has a
+    /// `qemu-xhci` added for it, and that controller takes a root port like any
+    /// other PCI device — on libvirt 12.0.0 it is the entire difference between
+    /// `declaredPCIDeviceCount` and the ports a defined domain occupies, on
+    /// every golden. (The `virt` machine adds nothing.) The second is margin: a
+    /// libvirt version that auto-adds one device more than this one costs a
+    /// spare port rather than the whole mechanism.
+    static let implicitPortAllowance = 2
+
+    /// The highest port index the builder will number a spare with.
+    ///
+    /// There is no define-time limit to bump into — libvirt 12.0.0 defines a
+    /// domain declaring index 240 without complaint — but there is a *start*
+    /// one: each port reserves guest I/O and MMIO windows, and the same domain
+    /// at 240 ports fails to start while 60 starts fine. This is far above the
+    /// device count of any VM Strato places, so it never binds in practice; it
+    /// exists so that a pathological one loses its spare ports rather than its
+    /// ability to boot.
+    static let rootPortIndexCeiling = 32
 
     /// The domain document for `input`, ready for `virDomainDefineXML`.
     public static func build(_ input: DomainXMLInput) throws -> String {
@@ -473,11 +512,14 @@ public enum DomainXMLBuilder {
         // Empty PCIe root ports for later hot-plug. See the type's note: these
         // cannot be added to a domain after it is defined, and without them
         // every disk hot-plug fails on a full root complex.
-        for _ in 0..<spareHotplugPorts {
-            // No index and no address: libvirt assigns both, and pinning them
-            // here would only invite a collision with the ports it adds for the
-            // devices above.
-            devices.append(DomainXMLNode("controller", [("type", "pci"), ("model", "pcie-root-port")]))
+        for index in spareHotplugPortIndexes(input, hotplugBytes: hotplugBytes) {
+            // The index is the whole mechanism. Left off, libvirt numbers these
+            // from the range it was going to allocate for the devices above and
+            // then puts those devices in them, leaving nothing free; numbered
+            // past that range, they are ports nothing has claimed.
+            devices.append(
+                DomainXMLNode(
+                    "controller", [("type", "pci"), ("index", "\(index)"), ("model", "pcie-root-port")]))
         }
 
         // libvirt would add both controllers implicitly; declaring them pins
@@ -612,6 +654,50 @@ public enum DomainXMLBuilder {
                         DomainXMLNode("requested", [("unit", "KiB")], text: kib(requestedBytes)),
                     ])
             ])
+    }
+
+    /// How many PCI slots the devices this document declares will occupy.
+    ///
+    /// This is what the spare ports are numbered from, so it is deliberately an
+    /// **over-estimate rather than an exact count**: a device counted here that
+    /// libvirt turns out to place elsewhere costs one spare port, while a device
+    /// missed costs a *free* one — which is the failure the whole mechanism
+    /// exists to prevent. The framebuffer is the case in point, and is counted
+    /// on both architectures: q35 puts it on `pcie-root` at 00:01.0, `virt`
+    /// gives it a port of its own.
+    ///
+    /// Devices that take no PCI slot at all are excluded: `<serial>`,
+    /// `<console>` and `<channel>` ride the virtio-serial controller, the
+    /// `<input>` devices ride the USB one, `<graphics>` describes the
+    /// framebuffer rather than being a device, and `tpm-tis` is ISA (MMIO on
+    /// `virt`). Nothing here is a guess — every one was read off a `dumpxml` of
+    /// the goldens defined against libvirt 12.0.0.
+    static func declaredPCIDeviceCount(_ input: DomainXMLInput, hotplugBytes: Int64) -> Int {
+        let graphics = input.spec.console?.effectiveGraphics == .vnc
+        return input.disks.count
+            + (input.cloudInitISOPath == nil ? 0 : 1)
+            + input.networks.count
+            + 1  // virtio-serial
+            + (graphics ? 2 : 0)  // qemu-xhci, and the framebuffer
+            + 1  // memballoon
+            + (hotplugBytes > 0 ? 1 : 0)  // virtio-mem
+    }
+
+    /// The indexes the spare `pcie-root-port`s take: `spareHotplugPorts` of
+    /// them, starting one past every port the defined domain will occupy.
+    ///
+    /// Index 0 is `pcie-root` itself, declared just above them (STR-189), so the
+    /// first port a domain could have is 1 and the first *free* one is one past
+    /// the occupied count. Empty when even the first spare would sit above
+    /// `rootPortIndexCeiling`, and short of `spareHotplugPorts` where only some
+    /// of them fit — a VM that big has other problems, and losing spare ports is
+    /// a better failure than losing the boot.
+    static func spareHotplugPortIndexes(
+        _ input: DomainXMLInput, hotplugBytes: Int64
+    ) -> Range<Int> {
+        let first = declaredPCIDeviceCount(input, hotplugBytes: hotplugBytes) + implicitPortAllowance + 1
+        let end = min(first + spareHotplugPorts, rootPortIndexCeiling + 1)
+        return first..<max(first, end)
     }
 
     /// The `<boot order>` for each disk, or nil where none should be emitted.

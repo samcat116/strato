@@ -263,6 +263,16 @@ Two consequences follow:
   virtio-mem region the spec asked for. Growing past either is libvirt's error
   to report, not bookkeeping the agent keeps — which is why a process driver's
   spawn-sizing table has no counterpart here.
+
+  The spares carry **explicit indexes**, derived from the count of PCI devices
+  the document declares, and that is the whole mechanism rather than a detail
+  (STR-192). An un-indexed `pcie-root-port` is numbered by libvirt out of the
+  range it was going to allocate for the domain's own devices and then filled
+  with one of them, so it reserves nothing: before the indexes went in, every
+  golden defined with zero free ports and every disk hot-plug on a running VM
+  failed with "No more available PCI slots". libvirt materializes every index
+  below the highest one declared, so the top index is the port count and the
+  spares are what is left over the top.
 - **A volume names itself in the document.** Each volume-backed `<disk>` carries
   `<serial>vol-<uuid></serial>`, minted by `QEMUDiskIdentity`, so a detach
   resolves exactly that disk on a domain the agent keeps no model of (STR-129).

@@ -59,9 +59,11 @@ import StratoShared
 ///
 /// Its one remaining cost: **the hot-plug slots and the memory headroom a VM
 /// will ever have are fixed when it is created.** The document reserves
-/// `DomainXMLBuilder.spareHotplugPorts` empty PCIe root ports and whatever
-/// virtio-mem region the spec asked for; growing past either needs libvirt's
-/// own error, not bookkeeping here.
+/// `DomainXMLBuilder.spareHotplugPorts` empty PCIe root ports — numbered past
+/// every port the domain's own devices will occupy, which is what makes them
+/// reservations rather than decoration (STR-192) — and whatever virtio-mem
+/// region the spec asked for; growing past either needs libvirt's own error,
+/// not bookkeeping here.
 ///
 /// ## Lifecycle events
 ///

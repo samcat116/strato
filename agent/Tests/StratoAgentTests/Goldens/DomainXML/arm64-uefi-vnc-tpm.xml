@@ -34,10 +34,10 @@
       <readonly/>
     </disk>
     <controller type='pci' index='0' model='pcie-root'/>
-    <controller type='pci' model='pcie-root-port'/>
-    <controller type='pci' model='pcie-root-port'/>
-    <controller type='pci' model='pcie-root-port'/>
-    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' index='10' model='pcie-root-port'/>
+    <controller type='pci' index='11' model='pcie-root-port'/>
+    <controller type='pci' index='12' model='pcie-root-port'/>
+    <controller type='pci' index='13' model='pcie-root-port'/>
     <controller type='virtio-serial' index='0'/>
     <controller type='usb' index='0' model='qemu-xhci'/>
     <interface type='ethernet'>
