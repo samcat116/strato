@@ -625,6 +625,10 @@ final class InputSizeBoundTests {
                 try await LogicalNetwork.query(on: app.db).filter(\.$name == "default").first())
             let networkID = try network.requireID()
 
+            #expect(
+                try await self.postRecord(
+                    app, token, zone: zoneID, name: "web", type: .a, value: "10.9.0.1") == .ok)
+
             // Attached and primary: only then is the zone something an agent is
             // sent at all.
             try await app.test(.POST, "/api/dns-zones/\(zoneID)/networks") { req in
@@ -650,6 +654,7 @@ final class InputSizeBoundTests {
             let assembled = try await DNSZoneAssembler.assemble(zone: stored, on: app.db)
             let desired = DNSZoneAssembler.desiredZone(assembled, networkIDs: [networkID])
             #expect(desired.zoneName == "acme.internal")
+            #expect(!desired.records.isEmpty)
             #expect(desired.records.allSatisfy { $0.name.hasSuffix(".acme.internal") })
         }
     }
