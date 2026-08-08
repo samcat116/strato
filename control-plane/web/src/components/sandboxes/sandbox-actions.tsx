@@ -141,7 +141,11 @@ export function SandboxActions({
     sandbox.status === "Stopped" ||
     sandbox.status === "Exited" ||
     sandbox.status === "Error";
-  const canStop = sandbox.status === "Running";
+  // Mirrors Sandbox.canStop: `Error` means the agent could not confirm the
+  // sandbox, which is very often a guest that is still running. Without this
+  // the API accepts the stop but the UI offers no way to ask for it, leaving
+  // deletion as the only way out (STR-194).
+  const canStop = sandbox.status === "Running" || sandbox.status === "Error";
 
   return (
     <div className="flex items-center space-x-2">

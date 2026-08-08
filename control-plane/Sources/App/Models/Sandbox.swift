@@ -226,8 +226,14 @@ extension Sandbox {
         status == .stopped || status == .exited || status == .error
     }
 
+    /// `.error` is stoppable for the same reason it is startable, and the
+    /// asymmetry was a trap: a sandbox whose state could not be confirmed is
+    /// very often one whose guest is still running, and refusing the stop left
+    /// deletion as the only way out of it (STR-194). Desired state is
+    /// level-triggered, so a stop that reaches a guest which has in fact
+    /// already gone costs nothing.
     var canStop: Bool {
-        status == .running
+        status == .running || status == .error
     }
 
     /// When the lifetime budget runs out, or nil for a sandbox with no TTL.
