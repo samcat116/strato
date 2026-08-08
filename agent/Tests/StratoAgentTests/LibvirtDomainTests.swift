@@ -1,0 +1,322 @@
+import Foundation
+import Libvirt
+import StratoShared
+import Testing
+
+@testable import StratoAgentCore
+
+/// `LibvirtService` links a hypervisor SDK and therefore has no unit tests, so
+/// everything it can decide without a daemon is decided here — and asserted
+/// here. Each of these is silent when wrong: a mis-mapped domain state makes
+/// the reconciler act on a fiction, a wrong bit in the undefine mask leaks
+/// state for the life of the host, and an error translated into the wrong case
+/// turns a retryable timeout into a permanent failure (or the reverse).
+@Suite("libvirt domain vocabulary")
+struct LibvirtDomainTests {
+
+    // MARK: - Domain state
+
+    @Test("Every virDomainState maps to the status the reconciler plans from")
+    func mapsEveryState() {
+        let expected: [LibvirtDomain.State: VMStatus] = [
+            .noState: .unknown,
+            .running: .running,
+            // Blocked on I/O is still a live guest, not a stopped one.
+            .blocked: .running,
+            .paused: .paused,
+            .shuttingDown: .shutdown,
+            .shutoff: .shutdown,
+            .crashed: .error,
+            .pmSuspended: .paused,
+        ]
+        for state in LibvirtDomain.State.allCases {
+            #expect(state.vmStatus == expected[state], "state \(state)")
+        }
+        #expect(LibvirtDomain.State.allCases.count == expected.count)
+    }
+
+    /// `SHUTOFF` is what a freshly defined domain sits in, and the create
+    /// contract ends "exists, not running" — so this pairing is what lets a
+    /// define alone satisfy `ReconcileStep.create` with none of the QEMU
+    /// driver's `awaitingFirstStart` disambiguation.
+    @Test("A defined-but-never-started domain satisfies a shutdown desired state")
+    func freshlyDefinedDomainConverges() {
+        let status = LibvirtDomain.State.shutoff.vmStatus
+        #expect(DesiredVMStatus.shutdown.isSatisfied(by: status))
+        #expect(Reconciler.statusSteps(desired: .shutdown, observed: status).isEmpty)
+        #expect(Reconciler.statusSteps(desired: .running, observed: status) == [.boot])
+    }
+
+    @Test("An unrecognised state is unknown, never a guess")
+    func unknownStateIsNotGuessed() {
+        // The enum is append-only upstream, so a newer libvirt can report a
+        // value this build has never heard of.
+        #expect(LibvirtDomain.vmStatus(forRawState: 99) == .unknown)
+        #expect(LibvirtDomain.vmStatus(forRawState: -1) == .unknown)
+        #expect(LibvirtDomain.vmStatus(forRawState: 1) == .running)
+    }
+
+    @Test("Resource-holding is read the way a delete needs it: unknown and crashed both count")
+    func resourceHoldingStates() {
+        for state in [LibvirtDomain.State.running, .blocked, .paused, .pmSuspended, .shuttingDown, .crashed] {
+            #expect(state.holdsResources, "state \(state)")
+        }
+        for state in [LibvirtDomain.State.shutoff, .noState] {
+            #expect(!state.holdsResources, "state \(state)")
+        }
+        // The caller that asks is about to unlink a running guest's disk, so an
+        // unreadable state must not read as "safe to remove".
+        #expect(LibvirtDomain.holdsResources(rawState: 99))
+        // `crashed` counts even though the document's `<on_crash>destroy</>`
+        // means libvirt should never park a domain there: under `preserve` the
+        // QEMU process is still alive, and that must not become a cross-file
+        // dependency of "may I delete these disks".
+        #expect(LibvirtDomain.holdsResources(rawState: 6))
+    }
+
+    /// The two predicates are deliberately not each other's negation, and this
+    /// is the pairing that proves it: a boot must attempt the start on a state
+    /// it cannot read, while a delete must keep its hands off the disks of one.
+    @Test("Running-or-paused takes the opposite default, so an unreadable state never skips a boot")
+    func runningOrPausedStates() {
+        for state in [LibvirtDomain.State.running, .blocked, .paused, .pmSuspended, .shuttingDown] {
+            #expect(state.isRunningOrPaused, "state \(state)")
+        }
+        for state in [LibvirtDomain.State.shutoff, .crashed, .noState] {
+            #expect(!state.isRunningOrPaused, "state \(state)")
+        }
+        #expect(!LibvirtDomain.isRunningOrPaused(rawState: 99))
+        #expect(LibvirtDomain.holdsResources(rawState: 99) != LibvirtDomain.isRunningOrPaused(rawState: 99))
+    }
+
+    // MARK: - Flags
+
+    /// Pinned against `libvirt.h` rather than restated from the source: every
+    /// one of these is a bitmask the daemon interprets, and a wrong bit fails
+    /// silently rather than being rejected.
+    @Test("Flag constants match libvirt's own values")
+    func flagValues() {
+        // VIR_DOMAIN_NONE / VIR_DOMAIN_SHUTDOWN_DEFAULT.
+        #expect(LibvirtDomain.startFlags == 0)
+        #expect(LibvirtDomain.shutdownFlags == 0)
+        // VIR_DOMAIN_DESTROY_DEFAULT — SIGTERM, then SIGKILL. Asserting the
+        // value alone would be worthless here, since `GRACEFUL` (1) is the
+        // *weaker* behaviour despite the name: it is SIGTERM-only, and every
+        // destroy this driver issues is an escalation that has to be able to
+        // force. So the assertion is written as "not GRACEFUL".
+        #expect(LibvirtDomain.destroyFlags == 0)
+        #expect(LibvirtDomain.destroyFlags & 1 == 0, "VIR_DOMAIN_DESTROY_GRACEFUL cannot force a wedged guest down")
+        // VIR_CONNECT_LIST_DOMAINS with no filter: persistent and transient,
+        // running and not.
+        #expect(LibvirtDomain.listAllDomains == 0)
+    }
+
+    @Test("The undefine mask covers every piece of state that outlives the domain")
+    func undefineFlagsCoverEverything() {
+        let flags = LibvirtDomain.undefineFlags
+        // MANAGED_SAVE | SNAPSHOTS_METADATA | NVRAM | CHECKPOINTS_METADATA | TPM
+        #expect(flags == 1 | 2 | 4 | 16 | 32)
+
+        // Spelled out individually too, because the sum above would still pass
+        // with two bits swapped.
+        #expect(flags & 1 != 0, "VIR_DOMAIN_UNDEFINE_MANAGED_SAVE: libvirt refuses the undefine without it")
+        #expect(flags & 2 != 0, "VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA")
+        #expect(flags & 4 != 0, "VIR_DOMAIN_UNDEFINE_NVRAM")
+        #expect(flags & 16 != 0, "VIR_DOMAIN_UNDEFINE_CHECKPOINTS_METADATA")
+        // The one that is not redundant with removing the VM's directory:
+        // libvirt keeps swtpm state under /var/lib/libvirt/swtpm/<uuid>.
+        #expect(flags & 32 != 0, "VIR_DOMAIN_UNDEFINE_TPM: without it every TPM VM leaks its vTPM state")
+        // KEEP_NVRAM (8) and KEEP_TPM (64) are the *opposites* of what a delete
+        // wants and would each be rejected alongside their counterpart.
+        #expect(flags & 8 == 0, "VIR_DOMAIN_UNDEFINE_KEEP_NVRAM must not be set")
+        #expect(flags & 64 == 0, "VIR_DOMAIN_UNDEFINE_KEEP_TPM must not be set")
+    }
+
+    // MARK: - Domain naming
+
+    @Test("Only UUID-named domains are read as this agent's")
+    func stratoDomainNames() {
+        #expect(LibvirtDomain.isStratoDomainName("0F9EA1B2-3C4D-4E5F-8A9B-0C1D2E3F4A5B"))
+        #expect(LibvirtDomain.isStratoDomainName("0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b"))
+        // A co-tenant domain on the same libvirtd would otherwise be reported to
+        // the control plane as a Strato VM, and counted against this host's
+        // capacity.
+        #expect(!LibvirtDomain.isStratoDomainName("ubuntu-24.04"))
+        #expect(!LibvirtDomain.isStratoDomainName(""))
+        #expect(!LibvirtDomain.isStratoDomainName("win11"))
+    }
+
+    // MARK: - Failure classification
+
+    private func daemonError(_ code: LibvirtErrorCode, _ message: String = "boom") -> LibvirtError {
+        LibvirtError(code: code, domain: 10, message: message, level: .error)
+    }
+
+    @Test("A missing domain is distinguishable from every other daemon error")
+    func classifiesMissingDomain() {
+        #expect(LibvirtFailure.isDomainMissing(daemonError(.noDomain)))
+        #expect(!LibvirtFailure.isDomainMissing(daemonError(.operationInvalid)))
+        #expect(!LibvirtFailure.isDomainMissing(daemonError(.internalError)))
+        #expect(!LibvirtFailure.isDomainMissing(LibvirtClientError(.connectionClosed)))
+    }
+
+    @Test("A state-refused command is distinguishable, and only that code counts")
+    func classifiesOperationInvalid() {
+        #expect(LibvirtFailure.isOperationInvalid(daemonError(.operationInvalid, "domain is already running")))
+        #expect(!LibvirtFailure.isOperationInvalid(daemonError(.operationFailed)))
+        #expect(!LibvirtFailure.isOperationInvalid(daemonError(.noDomain)))
+    }
+
+    @Test("Only a dead channel drops the cached connection")
+    func classifiesConnectionLoss() {
+        for code in [
+            LibvirtClientError.Code.connectionClosed, .keepaliveTimeout, .notConnected, .protocolError,
+            .handshakeFailed,
+        ] {
+            #expect(LibvirtFailure.isConnectionLost(LibvirtClientError(code)), "code \(code)")
+        }
+        // A slow command says nothing about the channel, and tearing down a
+        // healthy connection over one would take every other VM on the host
+        // with it.
+        for code in [LibvirtClientError.Code.deadlineExceeded, .cancelled, .authenticationUnsupported] {
+            #expect(!LibvirtFailure.isConnectionLost(LibvirtClientError(code)), "code \(code)")
+        }
+        // A daemon error is the command failing, not the connection.
+        #expect(!LibvirtFailure.isConnectionLost(daemonError(.internalError)))
+    }
+
+    // MARK: - Error translation
+
+    @Test("A missing domain becomes vmNotFound, which the control plane reads specially")
+    func translatesMissingDomain() {
+        let error = LibvirtFailure.hypervisorError(daemonError(.noDomain), vmId: "vm-1", operation: "status")
+        guard case .vmNotFound(let vmId) = error else {
+            Issue.record("expected vmNotFound, got \(error)")
+            return
+        }
+        #expect(vmId == "vm-1")
+    }
+
+    @Test("Timeouts stay timeouts, whether the daemon or the client raised them")
+    func translatesTimeouts() {
+        for error in [
+            LibvirtFailure.hypervisorError(daemonError(.operationTimeout), vmId: "vm-1", operation: "boot"),
+            LibvirtFailure.hypervisorError(daemonError(.agentCommandTimeout), vmId: "vm-1", operation: "boot"),
+            LibvirtFailure.hypervisorError(
+                LibvirtClientError(.deadlineExceeded), vmId: "vm-1", operation: "boot"),
+            LibvirtFailure.hypervisorError(LibvirtClientError(.cancelled), vmId: "vm-1", operation: "boot"),
+        ] {
+            guard case .timeout = error else {
+                Issue.record("expected timeout, got \(error)")
+                continue
+            }
+        }
+    }
+
+    @Test("An unsupported operation is reported as such, not as a configuration fault")
+    func translatesUnsupported() {
+        for code in [
+            LibvirtErrorCode.noSupport, .operationUnsupported, .configUnsupported, .argumentUnsupported,
+        ] {
+            let error = LibvirtFailure.hypervisorError(daemonError(code), vmId: "vm-1", operation: "checkpoint")
+            guard case .notSupported = error else {
+                Issue.record("expected notSupported for \(code), got \(error)")
+                continue
+            }
+        }
+    }
+
+    /// The single most likely libvirt failure on a fresh node, and the one whose
+    /// generic message helps least: `/etc/libvirt/qemu.conf` not naming the
+    /// account the agent runs as.
+    @Test("A permission failure names the qemu.conf remedy")
+    func translatesAccessDenied() {
+        let error = LibvirtFailure.hypervisorError(
+            daemonError(.accessDenied, "permission denied"), vmId: "vm-1", operation: "define")
+        guard case .invalidConfiguration(let detail) = error else {
+            Issue.record("expected invalidConfiguration, got \(error)")
+            return
+        }
+        #expect(detail.contains("qemu.conf"))
+        #expect(detail.contains("qemu:///system"))
+    }
+
+    @Test("Anything else carries libvirt's own message, which is what reaches the UI")
+    func translationPreservesMessage() {
+        let error = LibvirtFailure.hypervisorError(
+            daemonError(.internalError, "unsupported configuration: unknown device 'virtio-mem'"),
+            vmId: "vm-1", operation: "define")
+        #expect(error.errorDescription?.contains("unknown device 'virtio-mem'") == true)
+        #expect(error.errorDescription?.contains("define") == true)
+    }
+
+    @Test("An already-typed hypervisor error passes through unchanged")
+    func translationIsIdempotent() {
+        let original = HypervisorServiceError.diskError("no file")
+        let error = LibvirtFailure.hypervisorError(original, vmId: "vm-1", operation: "create")
+        guard case .diskError(let detail) = error else {
+            Issue.record("expected diskError, got \(error)")
+            return
+        }
+        #expect(detail == "no file")
+    }
+
+    // MARK: - Memory statistics
+
+    private func stat(_ tag: Int32, kib: UInt64) -> DomainMemoryStat {
+        DomainMemoryStat(tag: tag, val: kib)
+    }
+
+    @Test("Balloon statistics are converted from KiB and mapped onto the reported fields")
+    func parsesMemoryStats() throws {
+        let stats = try #require(
+            LibvirtMemoryStats.parse([
+                stat(0, kib: 0),  // SWAP_IN, dropped
+                stat(4, kib: 512 * 1024),  // UNUSED -> freeBytes
+                stat(5, kib: 2 * 1024 * 1024),  // AVAILABLE -> totalBytes
+                stat(6, kib: 2 * 1024 * 1024),  // ACTUAL_BALLOON
+                stat(7, kib: 1024),  // RSS, dropped
+                stat(8, kib: 1536 * 1024),  // USABLE -> availableBytes
+            ]))
+
+        // Explicitly `Int64` on both sides: an untyped literal against an
+        // `Int64?` resolves through `AnyHashable`, where an `Int` and an `Int64`
+        // of the same value are not equal — the assertion then fails while
+        // printing two identical numbers.
+        #expect(stats.totalBytes == Int64(2 * 1024 * 1024 * 1024))
+        #expect(stats.availableBytes == Int64(1536 * 1024 * 1024))
+        #expect(stats.freeBytes == Int64(512 * 1024 * 1024))
+        #expect(stats.balloonActualBytes == Int64(2 * 1024 * 1024 * 1024))
+    }
+
+    /// Absence is how libvirt reports a stat the guest driver has not answered
+    /// — it omits the tag rather than sending QEMU's `-1` sentinel — so a guest
+    /// still booting produces nothing, and nothing must never read as zero.
+    @Test("Without the load-bearing pair there is nothing truthful to report")
+    func missingPairReportsNothing() {
+        #expect(LibvirtMemoryStats.parse([]) == nil)
+        // ACTUAL_BALLOON comes from QEMU rather than the guest, so it arrives
+        // long before the driver loads. On its own it is not usage.
+        #expect(LibvirtMemoryStats.parse([stat(6, kib: 2 * 1024 * 1024)]) == nil)
+        #expect(LibvirtMemoryStats.parse([stat(5, kib: 1024)]) == nil)
+        #expect(LibvirtMemoryStats.parse([stat(8, kib: 1024)]) == nil)
+    }
+
+    @Test("Optional stats are absent rather than zero when the guest omits them")
+    func optionalStatsStayNil() throws {
+        let stats = try #require(
+            LibvirtMemoryStats.parse([stat(5, kib: 1024), stat(8, kib: 512)]))
+        #expect(stats.freeBytes == nil)
+        #expect(stats.balloonActualBytes == nil)
+    }
+
+    @Test("A value that cannot be a byte count is dropped rather than wrapped")
+    func rejectsOverflowingStats() {
+        // libvirt types these as `unsigned long long`; a KiB figure this large
+        // is corrupt, and reporting it wrapped would be worse than reporting
+        // nothing.
+        #expect(LibvirtMemoryStats.parse([stat(5, kib: .max), stat(8, kib: 512)]) == nil)
+        let partial = LibvirtMemoryStats.parse([stat(5, kib: 1024), stat(8, kib: 512), stat(4, kib: .max)])
+        #expect(partial?.freeBytes == nil)
+    }
+}

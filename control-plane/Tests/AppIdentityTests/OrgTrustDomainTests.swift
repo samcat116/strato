@@ -52,20 +52,20 @@ final class OrgTrustDomainTests {
         #expect(upper == "org-3f2a91c04b7d4e5f.strato.local")
     }
 
-    /// Runs `body` with the per-org trust domain feature flag on. The flag is
-    /// read from the environment on each access, and the suite is `.serialized`,
-    /// so this is safe to toggle in-process.
-    private func withFeatureFlagOn<T>(_ body: () async throws -> T) async rethrows -> T {
-        let previous = ProcessInfo.processInfo.environment["SPIRE_ORG_TRUST_DOMAINS_ENABLED"]
-        setenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED", "true", 1)
-        defer {
-            if let previous {
-                setenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED", previous, 1)
-            } else {
-                unsetenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED")
-            }
-        }
-        return try await body()
+    /// Runs `body` with the per-org trust domain feature flag on.
+    ///
+    /// Through `EnvironmentFlag` rather than a bare `setenv`: the flag is read
+    /// from the live process environment on every access, and `.serialized`
+    /// orders tests within *this* suite while swift-testing runs suites in
+    /// parallel — so `GuestIdentityTests`, which drives the same variable, could
+    /// otherwise observe or clobber this one's window.
+    private func withFeatureFlagOn<T>(_ body: () async throws -> T) async throws -> T {
+        try await EnvironmentFlag.withValue("SPIRE_ORG_TRUST_DOMAINS_ENABLED", "true", body)
+    }
+
+    /// The off direction, which is the one that loses an unguarded race.
+    private func withFeatureFlagOff<T>(_ body: () async throws -> T) async throws -> T {
+        try await EnvironmentFlag.withValue("SPIRE_ORG_TRUST_DOMAINS_ENABLED", nil, body)
     }
 
     @Test("With the flag on, claim writes a pending row and teardown tombstones it")
@@ -198,13 +198,17 @@ final class OrgTrustDomainTests {
     @Test("Organization creation writes no trust domain while the flag is off")
     func creationIsDormant() async throws {
         try await withApp { app in
-            let orgID = UUID()
-            try await OrgTrustDomainProvisioning.claim(organizationID: orgID, on: app.db)
+            // Guarded in the off direction too, or a parallel suite holding the
+            // flag on would make this claim write the row it asserts is absent.
+            try await self.withFeatureFlagOff {
+                let orgID = UUID()
+                try await OrgTrustDomainProvisioning.claim(organizationID: orgID, on: app.db)
 
-            let count = try await OrgTrustDomain.query(on: app.db)
-                .filter(\.$organizationID == orgID)
-                .count()
-            #expect(count == 0)
+                let count = try await OrgTrustDomain.query(on: app.db)
+                    .filter(\.$organizationID == orgID)
+                    .count()
+                #expect(count == 0)
+            }
         }
     }
 

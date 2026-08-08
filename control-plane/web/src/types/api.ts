@@ -173,6 +173,14 @@ export interface VM {
    */
   securityGroupsEnforced?: boolean;
   /**
+   * The VM's SPIFFE instance identity — `spiffe://<trust-domain>/vm/<vm-id>`,
+   * the lookup key its workload registration is filed under. A name, never an
+   * authorization: what it may do comes from role bindings against that
+   * principal. `undefined` means the control plane predates the field, or an
+   * administrator revoked the registration — not that the VM has no identity.
+   */
+  spiffeId?: string;
+  /**
    * Graphics console (backend issue #566): whether the guest has a display
    * device whose framebuffer the Display tab can attach to. Fixed at creation
    * — the display lives in the hypervisor process's arguments, so an existing

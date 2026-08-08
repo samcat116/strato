@@ -815,6 +815,15 @@ public func configure(_ app: Application) async throws {
     // desired entry, retiring the last three durable-resource agent RPCs.
     app.migrations.add(AddEdgeNoncesToWorkloads())
 
+    // Per-VM instance identity (STR-55): every VM is a first-class IAM
+    // principal, named by a `workload_registrations` row filed under
+    // `spiffe://<trust-domain>/vm/<vm-id>`, linked by `vm_id` and
+    // cascade-deleted with the VM. The backfill follows the column so a VM that
+    // predates the feature holds the same identity a VM created after it does —
+    // instance identity is a property of being a VM, not of when it was made.
+    app.migrations.add(AddVMToWorkloadRegistration())
+    app.migrations.add(BackfillVMWorkloadRegistrations())
+
     // STR-19: absolute per-volume I/O ceilings — the requested pair and the
     // agent's applied echo — plus the widened CHECK constraints for the
     // `throttle` mutation the new endpoint records.

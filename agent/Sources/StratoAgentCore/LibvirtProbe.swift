@@ -20,16 +20,6 @@ public enum LibvirtProbe {
     /// The connection URI the agent manages VMs over.
     public static let systemURI = "qemu:///system"
 
-    /// Whether this agent build actually manages VMs through libvirt.
-    ///
-    /// False while the driver is still being written (issue #902): the host
-    /// checks below already run and report, but as advisories, because a host
-    /// without libvirt runs today's direct-QEMU driver perfectly well and must
-    /// not be told it is broken. Flipping this to true with the driver turns the
-    /// same checks into gating ones — same probe, same messages, now with
-    /// consequences.
-    public static let driverBuilt = false
-
     /// The oldest libvirt a hypervisor node may run.
     ///
     /// Internal snapshots of UEFI guests — how `checkpointVM` works — only

@@ -8,6 +8,22 @@ public enum NetworkMode: String, Codable {
     case user
 }
 
+/// How this node realizes a QEMU placement (issue #902).
+///
+/// **Not a `HypervisorType`.** `.qemu` on the wire keeps meaning "QEMU node":
+/// the control plane's capability gating, the scheduler and the wire protocol
+/// are untouched, and the agent alone decides which driver serves a placement.
+/// That is what lets a fleet roll over one node at a time.
+public enum QEMUDriver: String, Codable, Sendable, CaseIterable {
+    /// `QEMUService`: the agent spawns `qemu-system-*` itself and drives it
+    /// over QMP. The default, and what every node has run until now.
+    case process
+    /// `LibvirtService`: domains defined and driven through libvirtd at
+    /// `qemu:///system`. Linux only, and the host needs libvirt ≥ 11.5 — which
+    /// the host preflight makes a *gating* check on nodes that select it.
+    case libvirt
+}
+
 /// Simulation ("dummy agent") configuration. When enabled the agent registers
 /// and speaks the full control-plane protocol but drives a no-op hypervisor and
 /// no real networking/storage, reporting configurable fake host capacity. This
@@ -270,6 +286,10 @@ public struct AgentConfig: Codable {
     /// (on top of the idle-TTL eviction that cache always applies).
     public let sandboxImageCacheMaxSizeGB: Int?
     public let qemuBinaryPath: String?
+    /// Which QEMU driver this node runs (issue #902). Nil means
+    /// `QEMUDriver.process`, so an existing config keeps today's behaviour
+    /// exactly. Ignored on macOS, which has no libvirt.
+    public let qemuDriver: QEMUDriver?
     /// Legacy monolithic firmware images, attached with `-bios`. Still honored
     /// as the fallback when no split CODE/VARS pair resolves, so hosts that
     /// boot today keep booting — but such VMs have no persistent UEFI variable
@@ -395,6 +415,7 @@ public struct AgentConfig: Codable {
         case sandboxImageCacheDir = "sandbox_image_cache_dir"
         case sandboxImageCacheMaxSizeGB = "sandbox_image_cache_max_size_gb"
         case qemuBinaryPath = "qemu_binary_path"
+        case qemuDriver = "qemu_driver"
         case firmwarePathARM64 = "firmware_path_arm64"
         case firmwarePathX86_64 = "firmware_path_x86_64"
         case firmwareCodePath = "firmware_code_path"
@@ -443,6 +464,7 @@ public struct AgentConfig: Codable {
         sandboxImageCacheDir: String? = nil,
         sandboxImageCacheMaxSizeGB: Int? = nil,
         qemuBinaryPath: String? = nil,
+        qemuDriver: QEMUDriver? = nil,
         firmwarePathARM64: String? = nil,
         firmwarePathX86_64: String? = nil,
         firmwareCodePath: String? = nil,
@@ -489,6 +511,7 @@ public struct AgentConfig: Codable {
         self.sandboxImageCacheDir = sandboxImageCacheDir
         self.sandboxImageCacheMaxSizeGB = sandboxImageCacheMaxSizeGB
         self.qemuBinaryPath = qemuBinaryPath
+        self.qemuDriver = qemuDriver
         self.firmwarePathARM64 = firmwarePathARM64
         self.firmwarePathX86_64 = firmwarePathX86_64
         self.firmwareCodePath = firmwareCodePath
@@ -617,6 +640,20 @@ public struct AgentConfig: Codable {
         let imageCacheMaxSizeGB = try Self.positiveInt(tomlData, key: "image_cache_max_size_gb")
         let sandboxImageCacheMaxSizeGB = try Self.positiveInt(tomlData, key: "sandbox_image_cache_max_size_gb")
         let qemuBinaryPath = tomlData.string("qemu_binary_path")
+        // Which QEMU driver this node runs (issue #902). Validated here rather
+        // than defaulted, so a typo takes the node out of service loudly
+        // instead of quietly leaving it on the driver the operator was trying
+        // to move it off.
+        let qemuDriver: QEMUDriver?
+        if let driverString = tomlData.string("qemu_driver") {
+            guard let driver = QEMUDriver(rawValue: driverString) else {
+                throw AgentConfigError.invalidConfiguration(
+                    "qemu_driver must be 'process' or 'libvirt', got '\(driverString)'")
+            }
+            qemuDriver = driver
+        } else {
+            qemuDriver = nil
+        }
         let firmwarePathARM64 = tomlData.string("firmware_path_arm64")
         let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
         // Split EDK2 firmware (issue #565). CODE and VARS only mean anything as
@@ -854,11 +891,28 @@ public struct AgentConfig: Codable {
         if enableKVM == true {
             logger?.warning("enable_kvm is not supported on macOS, will be ignored")
         }
+        if qemuDriver == .libvirt {
+            // Warned rather than rejected: the macOS agent is a dev/test host,
+            // and refusing to start over a key that means nothing here would
+            // make a shared config file unusable across a mixed fleet.
+            logger?.warning("qemu_driver = \"libvirt\" is not supported on macOS, will be ignored")
+        }
         #elseif os(Linux)
         if enableHVF == true {
             logger?.warning("enable_hvf is only supported on macOS, will be ignored")
         }
         #endif
+
+        // libvirt selects the emulator from its own capabilities, so a domain
+        // never names one and `qemu_binary_path` has no effect. Said out loud
+        // because the startup banner echoes the path back either way, and an
+        // operator who pointed this node at a custom QEMU build would otherwise
+        // see it accepted and get a different binary.
+        if qemuDriver == .libvirt, let qemuBinaryPath {
+            logger?.warning(
+                "qemu_binary_path is ignored under qemu_driver = \"libvirt\"; libvirt selects the emulator itself",
+                metadata: ["qemuBinaryPath": .string(qemuBinaryPath)])
+        }
 
         return AgentConfig(
             controlPlaneURL: controlPlaneURL,
@@ -880,6 +934,7 @@ public struct AgentConfig: Codable {
             sandboxImageCacheDir: sandboxImageCacheDir,
             sandboxImageCacheMaxSizeGB: sandboxImageCacheMaxSizeGB,
             qemuBinaryPath: qemuBinaryPath,
+            qemuDriver: qemuDriver,
             firmwarePathARM64: firmwarePathARM64,
             firmwarePathX86_64: firmwarePathX86_64,
             firmwareCodePath: firmwareCodePath,

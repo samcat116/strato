@@ -349,6 +349,52 @@ struct AgentConfigTests {
         }
     }
 
+    @Test("Load qemu_driver")
+    func loadsQEMUDriver() throws {
+        try withTempDirectory { tempDirectory in
+            for (value, expected) in [("libvirt", QEMUDriver.libvirt), ("process", .process)] {
+                let configPath = tempDirectory.appendingPathComponent("config.toml").path
+                try """
+                control_plane_url = "ws://localhost:8080/agent/ws"
+                qemu_driver = "\(value)"
+                """.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+                #expect(try AgentConfig.load(from: configPath).qemuDriver == expected)
+            }
+        }
+    }
+
+    /// Nil, not `.process`: the resolution to a default belongs to the agent's
+    /// startup, and a config that stores one could not tell "unset" from
+    /// "explicitly the process driver" if that ever mattered.
+    @Test("qemu_driver defaults to nil when absent")
+    func qemuDriverDefaultsToNil() throws {
+        try withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
+                toFile: configPath, atomically: true, encoding: .utf8)
+
+            #expect(try AgentConfig.load(from: configPath).qemuDriver == nil)
+        }
+    }
+
+    /// A typo must take the node out of service loudly rather than quietly
+    /// leaving it on the driver the operator was trying to move it off.
+    @Test("A misspelled qemu_driver is rejected, never silently defaulted")
+    func invalidQEMUDriverRejected() throws {
+        try withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            qemu_driver = "libvirtd"
+            """.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            #expect(throws: AgentConfigError.self) {
+                try AgentConfig.load(from: configPath)
+            }
+        }
+    }
+
     @Test("A misspelled sandbox_jailer_mode is rejected, never silently weakened to auto")
     func invalidSandboxJailerModeRejected() throws {
         try withTempDirectory { tempDirectory in

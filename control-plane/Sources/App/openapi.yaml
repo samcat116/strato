@@ -5507,17 +5507,48 @@ paths:
       summary: List the workload registry
       description: >-
         Every registered SPIFFE identity — agents, service-account workloads,
-        and directly registered workloads. System administrators only.
+        and directly registered workloads, including the instance identity every
+        VM holds. System administrators only.
+
+
+        Paged, because the registry now grows with the fleet. Use `spiffeId` for
+        the exact-match lookup the create-conflict and backfill diagnostics point
+        at when a SPIFFE ID is already registered to another principal.
       tags: [Service Accounts]
+      parameters:
+        - name: kind
+          in: query
+          required: false
+          description: Restrict to one registration kind.
+          schema:
+            type: string
+            enum: [agent, service_account, workload]
+        - name: spiffeId
+          in: query
+          required: false
+          description: >-
+            Exact-match lookup of one SPIFFE URI. A SPIFFE ID is a lookup key,
+            so this is equality, never a prefix search.
+          schema:
+            type: string
+        - name: vmOwned
+          in: query
+          required: false
+          description: >-
+            `true` returns only VM instance identities (rows with a `vmId`),
+            `false` only registrations with no VM behind them.
+          schema:
+            type: boolean
+        - $ref: "#/components/parameters/ListLimitQuery"
+        - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
         "200":
-          description: The registry.
+          description: A page of the registry, ordered by SPIFFE ID.
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/WorkloadRegistration"
+                $ref: "#/components/schemas/WorkloadRegistrationListPage"
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
     post:
@@ -5556,6 +5587,13 @@ paths:
         System administrators only — the revocation lever for any registered
         identity. Deleting a directly registered workload deletes the
         principal, and its role bindings with it.
+
+
+        A VM's instance identity (a row with `vmId`) can be revoked here too,
+        and this is the only way to revoke one: identity is granted at VM
+        create and there is no re-enable, so the deletion is **one-way** — the
+        VM keeps running and stops being vended an identity, and nothing
+        re-creates the row.
       tags: [Service Accounts]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -9105,6 +9143,17 @@ components:
             author the ACLs at all; either way the attached groups filter
             nothing until an operator fixes it. Absent means the VM is
             unplaced, so there is no realizer to judge yet.
+        spiffeId:
+          type: string
+          description: >-
+            The VM's SPIFFE instance identity —
+            `spiffe://<trust-domain>/vm/<vm-id>`, the lookup key its workload
+            registration is filed under. A name, never an authorization: what
+            the identity may do comes from role bindings against that
+            principal, and a registration with none authorizes nothing. Absent
+            means either an older control plane that does not report the field,
+            or a registration an administrator revoked — never that the VM is
+            exempt.
         conditions:
           $ref: "#/components/schemas/ResourceConditions"
         createdAt:
@@ -12639,11 +12688,38 @@ components:
           description: >-
             For `workload` registrations, the organization the registration
             is scoped to (administrative scoping only — it grants nothing).
+        vmId:
+          type: string
+          format: uuid
+          description: >-
+            For a VM's instance-identity registration, the VM it names. The row
+            is created with the VM and cascade-deleted with it. Absent on every
+            agent and service-account registration.
         displayName:
           type: string
+          description: >-
+            Operator-facing label. For a VM's instance identity this is the VM's
+            **current** name, read from the VM rather than stored, so it cannot
+            show a name a rename has already invalidated.
         createdAt:
           type: string
           format: date-time
+
+    WorkloadRegistrationListPage:
+      type: object
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkloadRegistration"
+        total:
+          type: integer
+          description: Total matching items, ignoring `limit`/`offset`.
+        limit:
+          type: integer
+        offset:
+          type: integer
 
     CreateServiceAccountRegistrationRequest:
       type: object

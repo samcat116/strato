@@ -38,14 +38,63 @@ struct WorkloadRegistrationController: RouteCollection {
 
     // MARK: - Registry (system admin)
 
-    /// GET /api/workload-registrations — the full registry: agents, service
-    /// accounts, and directly registered workloads.
-    func list(req: Request) async throws -> [ServiceAccountController.WorkloadRegistrationResponse] {
+    /// GET /api/workload-registrations — the registry: agents, service
+    /// accounts, and directly registered workloads (including every VM's
+    /// instance identity).
+    ///
+    /// Paged and filterable, which it was not before STR-55 made it
+    /// fleet-sized. Both of this feature's remediation paths — the `409` a
+    /// create answers when a constraint could not be satisfied, and the
+    /// backfill's stranded-VM warning — send an operator here to look for a
+    /// squatted SPIFFE ID, so an unbounded listing of one row per VM would make
+    /// the diagnostics unusable exactly when they are needed. `spiffeId` turns
+    /// that lookup into an exact match; `kind` and `vmOwned` narrow the
+    /// inventory view.
+    func list(req: Request) async throws -> PagedResponse<
+        ServiceAccountController.WorkloadRegistrationResponse
+    > {
         _ = try await req.requireSystemAdmin()
-        return try await WorkloadRegistration.query(on: req.db)
-            .sort(\.$spiffeID)
-            .all()
-            .map(ServiceAccountController.WorkloadRegistrationResponse.init)
+        let paging = try ListPaging.decode(from: req)
+
+        var query = WorkloadRegistration.query(on: req.db)
+        if let rawKind = req.query[String.self, at: "kind"] {
+            guard let kind = WorkloadRegistrationKind(rawValue: rawKind) else {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "Invalid kind; must be one of: \(WorkloadRegistrationKind.allCases.map(\.rawValue).joined(separator: ", "))"
+                )
+            }
+            query = query.filter(\.$kind == kind)
+        }
+        // Exact match, not a prefix search: a SPIFFE ID is a lookup key, and
+        // the operator diagnosing a squat has the whole URI in hand.
+        if let spiffeID = req.query[String.self, at: "spiffeId"] {
+            query = query.filter(\.$spiffeID == spiffeID)
+        }
+        // `boolQuery`, not `query[Bool.self, at:]`: the latter reads a missing
+        // key as `false`, which would make an unfiltered listing quietly exclude
+        // every VM's identity — the majority of the table.
+        if let vmOwned = try req.boolQuery("vmOwned") {
+            query = vmOwned ? query.filter(\.$vm.$id != nil) : query.filter(\.$vm.$id == nil)
+        }
+
+        let rows = try await query.sort(\.$spiffeID).all()
+        // Only the requested page's labels are hydrated, so the extra query is
+        // bounded by `limit` rather than by the fleet.
+        let page = paging.page(rows)
+        let names = try await GuestIdentity.names(
+            forVMs: page.items.compactMap { $0.$vm.id }, on: req.db)
+
+        return PagedResponse(
+            items: try page.items.map {
+                try ServiceAccountController.WorkloadRegistrationResponse(
+                    $0, displayName: $0.$vm.id.flatMap { id in names[id] })
+            },
+            total: page.total,
+            limit: page.limit,
+            offset: page.offset
+        )
     }
 
     /// POST /api/workload-registrations — register a customer workload's
@@ -83,6 +132,15 @@ struct WorkloadRegistrationController: RouteCollection {
     /// DELETE /api/workload-registrations/:registrationID — the admin
     /// revocation lever, for any kind. Deleting a workload-kind row deletes
     /// the principal, so its bindings go with it (the offboarding rule).
+    ///
+    /// A VM's instance identity (STR-55) is deletable here on purpose, and this
+    /// is the only revocation lever there is: refusing VM-owned rows would mean
+    /// a compromised instance identity could not be revoked without deleting
+    /// the VM, trading a recoverable operational mistake for an unrecoverable
+    /// security one. It is a one-way door — identity is granted at VM create
+    /// and there is no re-enable — so the removal is logged loudly rather than
+    /// silently. Nothing re-creates the row on the next sync: a self-heal would
+    /// undo the only revocation lever on a delay nobody can predict.
     func delete(req: Request) async throws -> HTTPStatus {
         _ = try await req.requireSystemAdmin()
         guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
@@ -91,6 +149,15 @@ struct WorkloadRegistrationController: RouteCollection {
         guard let registration = try await WorkloadRegistration.find(registrationID, on: req.db) else {
             throw Abort(.notFound, reason: "Registration not found")
         }
+        if let vmID = registration.$vm.id {
+            req.logger.warning(
+                "Revoking a VM's instance identity; it cannot be reissued for this VM",
+                metadata: [
+                    "vm_id": .string(vmID.uuidString),
+                    "spiffe_id": .string(registration.spiffeID),
+                ])
+        }
+
         try await req.db.transaction { db in
             if registration.kind == .workload {
                 try await RoleBindingService.revokeAll(
