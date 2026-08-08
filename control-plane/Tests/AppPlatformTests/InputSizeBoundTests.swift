@@ -442,6 +442,218 @@ final class InputSizeBoundTests {
         }
     }
 
+    // MARK: - DNS (STR-198)
+
+    /// A syntactically valid domain name of exactly `DNSName.maxNameLength`
+    /// characters: three 63-character labels and a 61-character one, plus the
+    /// three dots between them. The ceiling has to be reachable by something
+    /// the *grammar* also accepts, or the at-limit half of these tests would
+    /// only ever prove that `normalizedZoneName` refuses gibberish.
+    private var maximalDNSName: String {
+        let labels = [63, 63, 63, 61].map { string($0) }
+        return labels.joined(separator: ".")
+    }
+
+    private func postZone(
+        _ app: Application, _ token: String, _ project: Project,
+        name: String, description: String? = nil
+    ) async throws -> HTTPStatus {
+        var status: HTTPStatus = .ok
+        try await app.test(.POST, "/api/dns-zones") { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            try req.content.encode(
+                CreateDNSZoneRequest(name: name, description: description, projectId: project.id))
+        } afterResponse: { res in
+            status = res.status
+        }
+        return status
+    }
+
+    private func postRecord(
+        _ app: Application, _ token: String, zone: UUID,
+        name: String?, type: DNSRecordType, value: String
+    ) async throws -> HTTPStatus {
+        var status: HTTPStatus = .ok
+        try await app.test(.POST, "/api/dns-zones/\(zone)/records") { req in
+            req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            try req.content.encode(CreateDNSRecordRequest(name: name, type: type, value: value))
+        } afterResponse: { res in
+            status = res.status
+        }
+        return status
+    }
+
+    /// The ceiling is `DNSName.maxNameLength`, not `Validate.nameLength`: RFC
+    /// 1035 permits 253 characters and `normalizedZoneName` has always accepted
+    /// them, so holding a zone to 128 would refuse names that work today. What
+    /// the DTO adds is that the bound is applied at decode rather than after a
+    /// megabyte of name has been lowercased and split into labels.
+    @Test("POST /api/dns-zones accepts a name at the DNS ceiling and refuses one past it")
+    func dnsZoneNameCeiling() async throws {
+        try await withApp { app, _, project, _, token in
+            let atLimit = self.maximalDNSName
+            #expect(atLimit.count == DNSName.maxNameLength)
+            #expect(try await self.postZone(app, token, project, name: atLimit) == .ok)
+
+            // One character past, still valid syntax otherwise — the extra
+            // character lands in the trailing 61-character label, so nothing
+            // but the total length can be what refuses it.
+            let overLimit = atLimit + "a"
+            #expect(overLimit.count == DNSName.maxNameLength + 1)
+            #expect(try await self.postZone(app, token, project, name: overLimit) == .badRequest)
+
+            // And the shape the bound is actually there for.
+            #expect(
+                try await self.postZone(app, token, project, name: self.string(100_000))
+                    == .badRequest)
+
+            let names = try await DNSZone.query(on: app.db).all().map(\.name)
+            #expect(names == [atLimit])
+        }
+    }
+
+    /// The field with no grammar and, before this, no bound at all.
+    @Test("POST /api/dns-zones accepts a description at the ceiling and refuses one past it")
+    func dnsZoneDescriptionCeiling() async throws {
+        try await withApp { app, _, project, _, token in
+            let status = try await self.postZone(
+                app, token, project, name: "described.internal",
+                description: self.string(Validate.textLength))
+            #expect(status == .ok)
+
+            let overLimit = try await self.postZone(
+                app, token, project, name: "over.internal",
+                description: self.string(Validate.textLength + 1))
+            #expect(overLimit == .badRequest)
+
+            let names = try await DNSZone.query(on: app.db).all().map(\.name)
+            #expect(names == ["described.internal"])
+        }
+    }
+
+    @Test("POST /api/dns-zones/:id/records bounds the owner name at the DNS ceiling")
+    func dnsRecordNameCeiling() async throws {
+        try await withApp { app, _, project, _, token in
+            #expect(try await self.postZone(app, token, project, name: "records.internal") == .ok)
+            let zoneID = try #require(
+                try await DNSZone.query(on: app.db).first()?.requireID())
+
+            let atLimit = self.maximalDNSName
+            #expect(
+                try await self.postRecord(
+                    app, token, zone: zoneID, name: atLimit, type: .a, value: "10.9.0.1") == .ok)
+            #expect(
+                try await self.postRecord(
+                    app, token, zone: zoneID, name: self.string(100_000), type: .a,
+                    value: "10.9.0.2") == .badRequest)
+
+            let stored = try await DNSRecord.query(on: app.db).all().map(\.name)
+            #expect(stored == [atLimit])
+        }
+    }
+
+    /// An empty owner name means the apex, the same as `@`. The record DTO
+    /// therefore bounds its name rather than requiring it non-empty — a
+    /// "required name" guard here would turn a documented spelling into a 400.
+    @Test("An empty record name still means the zone apex")
+    func dnsRecordEmptyNameIsApex() async throws {
+        try await withApp { app, _, project, _, token in
+            #expect(try await self.postZone(app, token, project, name: "apex.internal") == .ok)
+            let zoneID = try #require(try await DNSZone.query(on: app.db).first()?.requireID())
+
+            #expect(
+                try await self.postRecord(app, token, zone: zoneID, name: "", type: .a, value: "10.9.0.1")
+                    == .ok)
+            let record = try #require(try await DNSRecord.query(on: app.db).first())
+            #expect(record.name == DNSName.apex)
+        }
+    }
+
+    /// A record's value is bounded by its *type's* grammar, which is tighter
+    /// than any generic ceiling — 255 bytes for TXT. What this pins is that the
+    /// bound is on both write paths, not only on create: `value` is the one
+    /// field an update can change, so an update that skipped the check would
+    /// leave the create-side bound decorative.
+    @Test("A record's value is bounded on create and on update alike")
+    func dnsRecordValueCeiling() async throws {
+        try await withApp { app, _, project, _, token in
+            #expect(try await self.postZone(app, token, project, name: "txt.internal") == .ok)
+            let zoneID = try #require(try await DNSZone.query(on: app.db).first()?.requireID())
+
+            let atLimit = self.string(255)
+            #expect(
+                try await self.postRecord(
+                    app, token, zone: zoneID, name: "note", type: .txt, value: atLimit) == .ok)
+            #expect(
+                try await self.postRecord(
+                    app, token, zone: zoneID, name: "big", type: .txt, value: self.string(256))
+                    == .badRequest)
+            #expect(
+                try await self.postRecord(
+                    app, token, zone: zoneID, name: "huge", type: .txt,
+                    value: self.string(Validate.textLength + 1)) == .badRequest)
+
+            let record = try #require(try await DNSRecord.query(on: app.db).first())
+            for oversized in [self.string(256), self.string(Validate.textLength + 1)] {
+                try await app.test(.PUT, "/api/dns-zones/\(zoneID)/records/\(record.id!)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(UpdateDNSRecordRequest(value: oversized))
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest)
+                }
+            }
+
+            let reloaded = try #require(try await DNSRecord.find(record.id!, on: app.db))
+            #expect(reloaded.value == atLimit)
+        }
+    }
+
+    /// The regression this issue is about, in the shape STR-40 gave it: a zone
+    /// name is not a label in the database, it is realized. `DNSZoneAssembler`
+    /// renders it into every FQDN in the zone, the topology authority writes
+    /// those rows into the OVN `DNS` table referenced from
+    /// `Logical_Switch.dns_records`, and a per-network CoreDNS serves them.
+    /// A refused rename must leave the realized name exactly as it was — a
+    /// half-applied one would be a name in OVSDB nothing in the API can name.
+    @Test("An oversized zone name never reaches the zone an agent realizes")
+    func dnsZoneNameNeverReachesOVSDB() async throws {
+        try await withApp { app, _, project, _, token in
+            #expect(try await self.postZone(app, token, project, name: "acme.internal") == .ok)
+            let zone = try #require(try await DNSZone.query(on: app.db).first())
+            let zoneID = try zone.requireID()
+            let network = try #require(
+                try await LogicalNetwork.query(on: app.db).filter(\.$name == "default").first())
+            let networkID = try network.requireID()
+
+            // Attached and primary: only then is the zone something an agent is
+            // sent at all.
+            try await app.test(.POST, "/api/dns-zones/\(zoneID)/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachDNSZoneRequest(networkId: networkID, primary: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            try await app.test(.PUT, "/api/dns-zones/\(zoneID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    UpdateDNSZoneRequest(name: self.string(DNSName.maxNameLength + 1)))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let stored = try #require(try await DNSZone.find(zoneID, on: app.db))
+            #expect(stored.name == "acme.internal")
+
+            // The projection an agent receives, which is the last thing between
+            // the control plane and an OVSDB transaction.
+            let assembled = try await DNSZoneAssembler.assemble(zone: stored, on: app.db)
+            let desired = DNSZoneAssembler.desiredZone(assembled, networkIDs: [networkID])
+            #expect(desired.zoneName == "acme.internal")
+            #expect(desired.records.allSatisfy { $0.name.hasSuffix(".acme.internal") })
+        }
+    }
+
     // MARK: - Projects (the generated OpenAPI service)
 
     /// Projects don't decode a `ValidatedRequestBody` — the generated service
@@ -622,6 +834,24 @@ final class InputSizeBoundTests {
         }
     }
 
+    /// The DNS half of the backstop (STR-198). A separate migration, because
+    /// `BoundResourceTextColumns` has already run everywhere and Fluent will
+    /// not re-run it — so this asserts the *constraint*, which is the thing an
+    /// upgraded deployment either has or does not.
+    @Test("The database refuses an oversized zone name written straight to a model")
+    func databaseRefusesOversizedDNSZoneName() async throws {
+        try await withApp { app, user, project, _, _ in
+            let zone = DNSZone(
+                name: self.string(DNSName.maxNameLength + 1),
+                projectID: project.id!,
+                createdByID: user.id
+            )
+            await #expect(throws: (any Error).self) {
+                try await zone.save(on: app.db)
+            }
+        }
+    }
+
     @Test("Every bounded column carries its CHECK constraint after migration")
     func constraintsExist() async throws {
         try await withApp { app, _, _, _, _ in
@@ -633,8 +863,27 @@ final class InputSizeBoundTests {
                 "SELECT conname FROM pg_constraint WHERE contype = 'c' AND conname LIKE 'ck_%_length'"
             ).all()
             let present = Set(rows.compactMap { try? $0.decode(column: "conname", as: String.self) })
-            let expected = Set(BoundResourceTextColumns.columns.map(\.constraintName))
+            let expected = Set(
+                (BoundResourceTextColumns.columns + BoundDNSTextColumns.columns)
+                    .map(\.constraintName))
             #expect(expected.subtracting(present).isEmpty)
         }
+    }
+
+    /// The bound the API applies and the bound the column carries have to be
+    /// the same number, or a value the request boundary accepted turns a
+    /// caller's `200` into a `500` at `save`.
+    @Test("The DNS columns are bounded at the numbers the request boundary uses")
+    func dnsColumnLimitsMatchTheAPI() throws {
+        let limits = Dictionary(
+            uniqueKeysWithValues: BoundDNSTextColumns.columns.map {
+                ("\($0.table).\($0.column)", $0.limit)
+            })
+        #expect(limits["dns_zones.name"] == DNSName.maxNameLength)
+        #expect(limits["dns_records.name"] == DNSName.maxNameLength)
+        #expect(limits["dns_zones.description"] == Validate.textLength)
+        // Looser than any RDATA grammar on purpose: a backstop that refused
+        // something `DNSZoneService.validatedValue` accepts would be a 500.
+        #expect(limits["dns_records.value"] == Validate.textLength)
     }
 }

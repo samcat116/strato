@@ -850,6 +850,12 @@ public func configure(_ app: Application) async throws {
     // for, so a grow the agent has refused stops reading as one that landed.
     app.migrations.add(AddVolumeObservedSize())
 
+    // STR-198: the same backstop for the DNS model's text columns, which the
+    // STR-195 cut left out. A follow-on rather than four more entries in
+    // `BoundResourceTextColumns`, which has already run on every existing
+    // deployment — see `BoundDNSTextColumns`.
+    app.migrations.add(BoundDNSTextColumns())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.
