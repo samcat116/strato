@@ -68,6 +68,14 @@ let package = Package(
                 .product(name: "Toml", package: "swift-toml"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIOCore", package: "swift-nio"),
+                // The guest-facing instance metadata listener (STR-56) — the
+                // one HTTP *server* in the agent. All three are already in the
+                // resolved graph (NIOPosix via AsyncHTTPClient, NIOHTTP1 via
+                // StratoAgentSPIFFE, NIOConcurrencyHelpers via NIOPosix), so
+                // declaring them here does not move Package.resolved.
+                .product(name: "NIOPosix", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                .product(name: "NIOConcurrencyHelpers", package: "swift-nio"),
                 // Streams download bodies to disk off the cooperative pool.
                 // NonBlockingFileIO is deprecated in favor of this.
                 .product(name: "_NIOFileSystem", package: "swift-nio"),

@@ -349,9 +349,27 @@ public struct AgentConfig: Codable {
     /// Raising it trades convergence-of-last-resort latency for very little
     /// bandwidth; setting it very low mostly just wastes assemblies.
     public let desiredStateFullRefetchSeconds: Int?
+    /// Whether to serve instance metadata to guests on `169.254.169.254` /
+    /// `[fd00:ec2::254]` (STR-56). Default true. Turning it off leaves the
+    /// dataplane in place — the localport, the namespaces and the advertised
+    /// routes are all a *network* property (`metadataEnabled`) — and only stops
+    /// this host answering, which a guest sees as a refused connection.
+    public let metadataService: Bool?
+    /// IP TTL / hop limit on metadata responses. Default 1, which is what stops
+    /// a guest relaying metadata off-box: the address is one L2 hop away, so a
+    /// reply that crosses any router dies. Raising it is a deliberate weakening
+    /// and exists only for a topology that puts a router between guest and host,
+    /// which Strato's does not.
+    public let metadataResponseHopLimit: Int?
 
     /// Whether this agent should drive itself by long-poll.
     public var wantsDesiredStatePull: Bool { desiredStatePull ?? true }
+
+    /// Whether this host answers guests' metadata requests.
+    public var servesInstanceMetadata: Bool { metadataService ?? true }
+
+    /// The hop limit to apply to metadata responses.
+    public var metadataHopLimit: Int { metadataResponseHopLimit ?? 1 }
 
     /// The forced-unconditional-fetch interval, floored at one second so a
     /// zero or negative value in a config file cannot turn the loop into a
@@ -415,6 +433,8 @@ public struct AgentConfig: Codable {
         case allowBulkTeardown = "allow_bulk_teardown"
         case desiredStatePull = "desired_state_pull"
         case desiredStateFullRefetchSeconds = "desired_state_full_refetch_seconds"
+        case metadataService = "metadata_service"
+        case metadataResponseHopLimit = "metadata_response_hop_limit"
     }
 
     public init(
@@ -460,7 +480,9 @@ public struct AgentConfig: Codable {
         reconcileTeardownPercent: Int? = nil,
         allowBulkTeardown: Bool? = nil,
         desiredStatePull: Bool? = nil,
-        desiredStateFullRefetchSeconds: Int? = nil
+        desiredStateFullRefetchSeconds: Int? = nil,
+        metadataService: Bool? = nil,
+        metadataResponseHopLimit: Int? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
         self.qemuSocketDir = qemuSocketDir
@@ -505,6 +527,8 @@ public struct AgentConfig: Codable {
         self.allowBulkTeardown = allowBulkTeardown
         self.desiredStatePull = desiredStatePull
         self.desiredStateFullRefetchSeconds = desiredStateFullRefetchSeconds
+        self.metadataService = metadataService
+        self.metadataResponseHopLimit = metadataResponseHopLimit
     }
 
     /// The VM image cache budget in bytes (config stores whole GB).
@@ -685,6 +709,16 @@ public struct AgentConfig: Codable {
         // Desired-state transport (STR-146).
         let desiredStatePull = tomlData.bool("desired_state_pull")
         let desiredStateFullRefetchSeconds = tomlData.int("desired_state_full_refetch_seconds")
+        let metadataService = tomlData.bool("metadata_service")
+        let metadataResponseHopLimit = tomlData.int("metadata_response_hop_limit")
+        if let metadataResponseHopLimit, !(1...255).contains(metadataResponseHopLimit) {
+            // Validated rather than clamped, for `qemu_driver`'s reason: a hop
+            // limit outside the IP field's range is a mistake, and silently
+            // substituting a working value hides it until someone wonders why
+            // the setting did nothing.
+            throw AgentConfigError.invalidConfiguration(
+                "metadata_response_hop_limit must be between 1 and 255, got \(metadataResponseHopLimit)")
+        }
 
         // Validate and parse network mode
         let networkMode: NetworkMode?
@@ -904,7 +938,9 @@ public struct AgentConfig: Codable {
             reconcileTeardownPercent: reconcileTeardownPercent,
             allowBulkTeardown: allowBulkTeardown,
             desiredStatePull: desiredStatePull,
-            desiredStateFullRefetchSeconds: desiredStateFullRefetchSeconds
+            desiredStateFullRefetchSeconds: desiredStateFullRefetchSeconds,
+            metadataService: metadataService,
+            metadataResponseHopLimit: metadataResponseHopLimit
         )
     }
 

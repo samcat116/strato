@@ -18,13 +18,36 @@ private actor SubprocessRecorder {
     /// Results keyed by the qemu-img subcommand (first argument); unknown
     /// subcommands succeed with empty output.
     private var results: [String: ProcessResult] = [:]
+    /// When set, an `info` that does not force-share fails the way qemu-img
+    /// does against an image a running QEMU holds open (STR-193).
+    ///
+    /// Scoped to `info` on purpose, matching qemu-img 10.1: `create -b` opens
+    /// the backing file read-only and takes no conflicting lock, so a snapshot
+    /// overlay over a live volume needs no `-U` of its own — only the format
+    /// detection ahead of it does.
+    private var imageIsHeldByAnotherProcess = false
 
     func stub(subcommand: String, result: ProcessResult) {
         results[subcommand] = result
     }
 
+    /// Simulates a live hypervisor holding the image's write lock.
+    func holdImageLock() {
+        imageIsHeldByAnotherProcess = true
+    }
+
     func record(executable: URL, arguments: [String]) -> ProcessResult {
         invocations.append(Invocation(executable: executable.path, arguments: arguments))
+        if imageIsHeldByAnotherProcess, arguments.first == "info", !arguments.contains("-U") {
+            return ProcessResult(
+                terminationStatus: 1,
+                standardOutput: Data(),
+                standardError: Data(
+                    """
+                    qemu-img: Could not open 'volume.qcow2': Failed to get shared "write" lock
+                    Is another process using the image [volume.qcow2]?
+                    """.utf8))
+        }
         let result =
             results[arguments.first ?? ""]
             ?? ProcessResult(terminationStatus: 0, standardOutput: Data(), standardError: Data())
@@ -502,6 +525,72 @@ struct FileSystemStorageBackendTests {
         #expect(info.format == "qcow2")
         #expect(info.virtualSize == 555)
         #expect(!info.dirty)
+    }
+
+    /// A running QEMU holds a write lock on every image it has open, so an
+    /// unqualified `qemu-img info` against an attached volume fails outright.
+    /// Inspection is read-only, so it force-shares (STR-193).
+    @Test func volumeInfoReadsAnImageAnotherProcessHoldsOpen() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2", virtualSize: 555))
+        await recorder.holdImageLock()
+        let backend = makeBackend(root: root, recorder: recorder)
+
+        let info = try await backend.volumeInfo(volumePath: "\(root)/vol-1/volume.qcow2")
+
+        #expect(info.virtualSize == 555)
+        let query = try #require(await recorder.invocations.first { $0.arguments.first == "info" })
+        #expect(query.arguments == ["info", "-U", "--output=json", "\(root)/vol-1/volume.qcow2"])
+    }
+
+    /// `detectFormat` runs the same query, so the lock reached every caller of
+    /// the shared inspection helper, not just volume info. The overlay's own
+    /// `create -b` needs no `-U` — it opens the backing file read-only
+    /// (STR-193).
+    @Test func snapshotDetectsBackingFormatOfAnImageAnotherProcessHoldsOpen() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "raw"))
+        await recorder.holdImageLock()
+        let backend = makeBackend(root: root, recorder: recorder)
+
+        let volumePath = "\(root)/vol-1/volume.raw"
+        let snapshotPath = try await backend.createSnapshot(
+            volumeId: "vol-1", snapshotId: "snap-1", volumePath: volumePath)
+
+        #expect(snapshotPath == "\(root)/vol-1/snapshots/snap-1.qcow2")
+        let create = try #require(await recorder.invocations.first { $0.arguments.first == "create" })
+        #expect(create.arguments == ["create", "-f", "qcow2", "-b", volumePath, "-F", "raw", snapshotPath])
+    }
+
+    /// Force-share belongs on inspection alone. On a mutating invocation the
+    /// lock is the only thing between the agent and rewriting qcow2 metadata
+    /// underneath a live guest, so it must never be forced there (STR-193).
+    @Test func mutatingInvocationsNeverForceShare() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let recorder = SubprocessRecorder()
+        await recorder.stub(subcommand: "info", result: imageInfoJSON(format: "qcow2"))
+        let source = "\(root)/source.qcow2"
+        FileManager.default.createFile(atPath: source, contents: Data("image".utf8))
+        let backend = makeBackend(
+            root: root, recorder: recorder, imageSource: StaticImageSource(path: source))
+
+        _ = try await backend.createVolume(volumeId: "vol-1", sizeBytes: 42, format: .qcow2)
+        _ = try await backend.createVolumeFromImage(
+            volumeId: "vol-2", imageInfo: makeImageInfo(), format: .raw)
+        _ = try await backend.cloneVolume(
+            sourceVolumeId: "vol-1", sourcePath: "\(root)/vol-1/volume.qcow2", targetVolumeId: "vol-3")
+        _ = try await backend.createSnapshot(
+            volumeId: "vol-1", snapshotId: "snap-1", volumePath: "\(root)/vol-1/volume.qcow2")
+        try await backend.resizeVolume(volumePath: "\(root)/vol-1/volume.qcow2", newSizeBytes: 99)
+
+        let mutating = await recorder.invocations.filter { $0.arguments.first != "info" }
+        #expect(!mutating.isEmpty)
+        #expect(mutating.allSatisfy { !$0.arguments.contains("-U") })
     }
 }
 
