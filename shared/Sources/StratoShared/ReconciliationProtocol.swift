@@ -885,6 +885,19 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// The control plane withholds `true` unless *every* agent in the site
     /// reports `resolverCapable` — see `WireProtocol.supportsNetworkResolver`.
     public let resolverEnabled: Bool?
+    /// This network's own resolver addresses, v4 first (STR-40).
+    ///
+    /// **Distinct per network**, which is what lets every resolver on a host
+    /// share one namespace — the host's — and so forward upstream through the
+    /// hypervisor's own egress. A single well-known address could not: the
+    /// listener would have no way to tell which network asked, and the host no
+    /// way to route a reply back to a `10.0.0.5` that exists on three switches.
+    ///
+    /// Non-nil exactly when `resolverEnabled` is true. Two fields rather than
+    /// one derived from an index on the wire, because the agent should realize
+    /// what it was told rather than re-derive an allocation scheme the control
+    /// plane owns.
+    public let resolverAddresses: [String]?
     /// Monotonic per-network counter, bumped by the control plane on any change
     /// that alters realization (subnet, gateway, router membership, external
     /// access). Lets the agent reject replayed or reordered syncs. DHCP-only
@@ -913,6 +926,7 @@ public struct DesiredNetworkState: Codable, Sendable {
         leaseTime: Int? = nil,
         metadataEnabled: Bool? = nil,
         resolverEnabled: Bool? = nil,
+        resolverAddresses: [String]? = nil,
         generation: Int64,
         floatingIPs: [DesiredFloatingIP]? = nil
     ) {
@@ -930,6 +944,7 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.leaseTime = leaseTime
         self.metadataEnabled = metadataEnabled
         self.resolverEnabled = resolverEnabled
+        self.resolverAddresses = resolverAddresses
         self.generation = generation
         self.floatingIPs = floatingIPs
     }

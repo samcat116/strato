@@ -24,7 +24,7 @@ public enum OVNDHCPOptionsBuilder {
     public static func v4Options(
         gateway: String, dnsServers: [String], domainName: String?, leaseTime: Int?, subnet: String,
         metadataEnabled: Bool = false,
-        resolverEnabled: Bool = false
+        resolverAddresses: [String] = []
     ) -> [String: String] {
         var options: [String: String] = [
             "server_id": gateway,
@@ -32,21 +32,24 @@ public enum OVNDHCPOptionsBuilder {
             "lease_time": String(leaseTime ?? 3600),
             "router": gateway,
         ]
+        // The network's *own* resolver address, not a constant: every network
+        // has a distinct pair so they can all be served from the host namespace.
+        let resolverV4 = resolverAddresses.filter { IPv4Address($0) != nil }
         let cleanedDNS =
-            resolverEnabled
-            ? [NetworkResolverEndpoint.address]
-            : dnsServers
+            resolverV4.isEmpty
+            ? dnsServers
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { IPv4Address($0) != nil }
+            : resolverV4
         if !cleanedDNS.isEmpty {
             options["dns_server"] = "{\(cleanedDNS.joined(separator: ", "))}"
         }
         if let domainName = wellFormedDomain(domainName) {
             options["domain_name"] = "\"\(domainName)\""
         }
-        if metadataEnabled || resolverEnabled {
+        if metadataEnabled || !resolverV4.isEmpty {
             options["classless_static_route"] = classlessStaticRoute(
-                gateway: gateway, metadata: metadataEnabled, resolver: resolverEnabled)
+                gateway: gateway, metadata: metadataEnabled, resolver: resolverV4.first)
         }
         return options
     }
@@ -74,11 +77,11 @@ public enum OVNDHCPOptionsBuilder {
     /// accident; where they don't, a missing metadata route costs the guest
     /// IMDS, while a missing resolver route costs it *all* name resolution.
     static func classlessStaticRoute(
-        gateway: String, metadata: Bool = true, resolver: Bool = false
+        gateway: String, metadata: Bool = true, resolver: String? = nil
     ) -> String {
         var routes: [String] = []
         if metadata { routes.append("\(InstanceMetadataEndpoint.cidr),0.0.0.0") }
-        if resolver { routes.append("\(NetworkResolverEndpoint.cidr),0.0.0.0") }
+        if let resolver { routes.append("\(resolver)/32,0.0.0.0") }
         routes.append("0.0.0.0/0,\(gateway)")
         return "{\(routes.joined(separator: ", "))}"
     }
@@ -104,17 +107,18 @@ public enum OVNDHCPOptionsBuilder {
     /// becomes that resolver's upstreams, exactly as in `v4Options`.
     public static func v6Options(
         dnsServers: [String], domainName: String?, subnet6: String,
-        resolverEnabled: Bool = false
+        resolverAddresses: [String] = []
     ) -> [String: String] {
         var options: [String: String] = [
             "server_id": serverMAC(for: subnet6)
         ]
+        let resolverV6 = resolverAddresses.filter { IPv6Address($0) != nil }
         let v6DNS =
-            resolverEnabled
-            ? [NetworkResolverEndpoint.addressV6]
-            : dnsServers
+            resolverV6.isEmpty
+            ? dnsServers
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { IPv6Address($0) != nil }
+            : resolverV6
         if !v6DNS.isEmpty {
             options["dns_server"] = "{\(v6DNS.joined(separator: ", "))}"
         }

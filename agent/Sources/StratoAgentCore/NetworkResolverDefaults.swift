@@ -58,6 +58,9 @@ public enum NetworkResolverDefaults {
 /// resolver it must run, so the NIC specs are the only input it has.
 public struct ResolverNetworkConfig: Equatable, Sendable {
     public let networkId: UUID
+    /// This network's own resolver addresses, v4 first — what its guests are
+    /// pointed at, what the host binds, and what its routing rule keys on.
+    public let addresses: [String]
     /// What the resolver forwards misses to — the network's `dnsServers` under
     /// their post-STR-40 reading.
     public let upstreams: [String]
@@ -66,8 +69,9 @@ public struct ResolverNetworkConfig: Equatable, Sendable {
     /// list is what qualifies a bare name.
     public let searchDomain: String?
 
-    public init(networkId: UUID, upstreams: [String], searchDomain: String?) {
+    public init(networkId: UUID, addresses: [String], upstreams: [String], searchDomain: String?) {
         self.networkId = networkId
+        self.addresses = addresses
         self.upstreams = upstreams
         self.searchDomain = searchDomain
     }

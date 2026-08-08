@@ -54,9 +54,9 @@ What genuinely remains missing (details in §Known gaps):
   unbuilt.
 - **DNS**: realized in the datapath. The OVN `DNS` table answers A/AAAA/PTR
   (STR-39), and each network's link-local CoreDNS answers the full record
-  vocabulary (STR-40) — but **cannot forward upstream yet**, so it ships as an
-  opt-in. Inbound resolution from outside the overlay and external publication
-  are still open. See [dns](./dns.md) §The forwarding gap.
+  vocabulary and forwards the rest through the hypervisor's egress (STR-40).
+  Inbound resolution from outside the overlay and external publication are still
+  open. See [dns](./dns.md).
 
 ## Target deployment topology
 
@@ -172,25 +172,34 @@ metadata agent and ovn-kubernetes' management port both use it. OVN answers
 guest ARP and Neighbor Solicitation from the port's `addresses` field, which is
 why the addresses need not belong to the switch's subnets.
 
-Two services ride that one port, each with its own per-network opt-out:
+Two services ride localports, each with its own per-network opt-out — and they
+get **a port each**, because they terminate in different namespaces and a
+localport attaches to exactly one:
 
 - **Instance metadata** (`metadataEnabled`, STR-49) on `169.254.169.254` and
-  `fd00:ec2::254`, the two cloud-init's Ec2 datasource already probes.
-- **The network's DNS resolver** (`resolverEnabled`, STR-40) on
-  `169.254.169.253` and `fd00:ec2::253`, AWS's addresses for the same service.
-  See [dns](./dns.md) §Realizing a zone into CoreDNS.
+  `fd00:ec2::254`, the two cloud-init's Ec2 datasource already probes,
+  terminated in the network's chassis namespace.
+- **The network's DNS resolver** (`resolverEnabled`, STR-40) on a per-network
+  pair derived from an allocated index — `169.254.<hi>.<lo>` and
+  `fd00:ec2:1::<index>` — terminated in the **host** namespace, because a
+  resolver has to forward and a chassis namespace has no egress. See
+  [dns](./dns.md) §Where it runs and
+  [ADR 0008](../adr/0008-resolver-in-host-namespace.md).
 
-One port rather than two, because `addresses` is a set carrying one
-`"<mac> <ip>…"` entry and OVN's responder is driven per address off it: a second
-port would mean a second OVS internal interface, a second MAC, and a second
-observation lifetime, for nothing. The entry's address order is fixed
-(metadata v4, metadata v6, resolver v4, resolver v6, each present only when its
-service is on) because the drift check compares that one joined string.
+The two ports share a teardown set, but each is protected from teardown by *its
+own* service's silence, so a sync with no opinion about one does not reap the
+other's port. Within a port, `addresses` carries one `"<mac> <ip>…"` entry whose
+address order is fixed (v4 then v6) because the drift check compares that one
+joined string.
 
-The port's name keeps its historical `-metadata` suffix, and the OVS interface
-its `strato-role=metadata` marker. Renaming either would orphan the rows every
-live site already has, which is a fleet-wide localport outage bought for a
-cosmetic gain. `external_ids:strato-services` records which services a namespace
+The metadata port's name keeps its historical `-metadata` suffix, and its OVS
+interface the `strato-role=metadata` marker. Renaming either would orphan the
+rows every live site already has, which is a fleet-wide localport outage bought
+for a cosmetic gain. The resolver's port is `lsp-<uuid>-resolver` with
+`strato-role=resolver`, new in STR-40 and free to be named plainly.
+`external_ids:strato-resolver-addresses` records which addresses its interface
+was built for, so a re-indexed network re-realizes.
+`external_ids:strato-services` records which services a namespace
 was actually built for, so turning a resolver on re-realizes exactly the
 namespaces that need it rather than all of them or none.
 
@@ -230,15 +239,22 @@ and that shape is load-bearing rather than incidental:
   different too: the last local NIC leaving the network, not the network being
   deleted.
 
-The **resolver's CoreDNS is a third piece with the second one's ownership**: one
-process per network with a local NIC, launched into that namespace with
-`ip netns exec`, converged immediately after the namespace and likewise ahead of
-the authority guard. `setns(2)` is per-thread and does not compose with Swift's
-concurrency runtime, so a helper process per namespace is the shape ADR 0003
-anticipated. Guests may push at most `[resolver] rate_limit_pps` packets per
-second at the namespace interface — 1024 by default, AWS's ceiling for its
-link-local services — policed on ingress with `tc` and aggregate across both
-services, because what it protects is the hypervisor rather than either service.
+The **resolver has the same two halves with the same two owners** — its own
+localport authored by the site controller, its own OVS internal port realized on
+every host with a local NIC — but the second half stays in the **host**
+namespace, with a per-network routing table and an `ip rule` matching its source
+address so replies leave the right port. Its **CoreDNS is a third piece with the
+second one's ownership**: a *single* host-wide process binding one server block
+per network address pair, converged immediately after the ports and likewise
+ahead of the authority guard. Guests may push at most `[resolver] rate_limit_pps`
+packets per second at either interface — 1024 by default, AWS's ceiling for its
+link-local services — policed on ingress with `tc`, because what it protects is
+the hypervisor rather than either service.
+
+Because that foot is in the host namespace, forwarding is disabled on the
+interface for both families and `rp_filter` is set loose (strict would drop the
+guest queries the policy-routed table has no return route for). See
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md).
 
 **One namespace per network per chassis** (`strato-md-<network-uuid>`, mirroring
 OpenStack's `ovnmeta-<network>`). Not an isolation nicety — overlapping tenant
@@ -627,7 +643,7 @@ services, at priority **1003** — above every rule-derived allow. Six of them,
 because an OVN ACL match is per family *and* per protocol:
 
 - instance metadata (STR-54): `169.254.169.254:80` and `[fd00:ec2::254]:80`;
-- the network's DNS resolver (STR-40): `169.254.169.253` and `fd00:ec2::253`,
+- the network's DNS resolver (STR-40): `169.254.0.0/16` and `fd00:ec2::/32`,
   each on **both** udp/53 and tcp/53 — DNS falls back to TCP on truncation, and
   a resolver that answers only UDP breaks every response large enough to set TC
   in a way that reads as an intermittent network fault.
@@ -714,10 +730,12 @@ the carve-out back off.
 - Network-level stateless ACLs (NACLs, switch-attached) are a follow-up, as
   are ACL meters/stats — `log` is wired, `meter` is not, so a chatty logged
   rule has no rate limit.
-- The per-network resolver **cannot forward upstream** — its chassis namespace
-  has only link-local addresses and no egress the OVN router will SNAT — so
-  `resolverEnabled` ships as an opt-in and a network that turns it on resolves
-  only its own zones. See [dns](./dns.md) §The forwarding gap.
+- The per-network resolver puts one interface and one `ip rule` per network in
+  the **host** namespace. Forwarding off, loose `rp_filter` and a source-keyed
+  rule fence it (see [ADR 0008](../adr/0008-resolver-in-host-namespace.md)), but
+  it is a larger host-side surface than the chassis-namespace design it replaced.
+- Resolver indexes are allocated fleet-wide from ~65k addresses and are never
+  reused while a network holds one; exhaustion is a `409` on network create.
 - A mixed-version site whose network-controller agent predates
   `dropGroupRevision` 5 leaves the resolver carve-out off for every port in the
   site, including ports on hosts that already run a resolver. On a network whose

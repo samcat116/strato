@@ -59,7 +59,7 @@ struct NetworkOrchestrator: Sendable {
                     // already does — a SLIRP NIC therefore loses internal name
                     // resolution but keeps working DNS.
                     metadataEnabled: false,
-                    resolverEnabled: false
+                    resolverAddresses: []
                 )
             }
         }
@@ -86,7 +86,7 @@ struct NetworkOrchestrator: Sendable {
                 // `== true`: nil is a control plane with no opinion on the
                 // service, which advertises no route to it.
                 metadataEnabled: spec.metadataEnabled == true,
-                resolverEnabled: spec.resolverEnabled == true
+                resolverAddresses: spec.resolverEnabled == true ? (spec.resolverAddresses ?? []) : []
             )
 
             do {
@@ -116,8 +116,9 @@ struct NetworkOrchestrator: Sendable {
                 // NIC keeps working DNS and loses only internal names — which is
                 // the right trade, since SLIRP has no VM-to-VM reachability for
                 // those names to point at anyway.
-                let resolverRealized = spec.resolverEnabled == true && info.attachment.isTap
-                if spec.resolverEnabled == true && !resolverRealized {
+                let wantsResolver = spec.resolverEnabled == true && !(spec.resolverAddresses ?? []).isEmpty
+                let resolverRealized = wantsResolver && info.attachment.isTap
+                if wantsResolver && !resolverRealized {
                     logger.debug(
                         "NIC degraded to user-mode; the guest resolves through the network's upstream servers",
                         metadata: [
@@ -149,7 +150,7 @@ struct NetworkOrchestrator: Sendable {
                         // metadata addresses, so telling the guest to route to
                         // them would only give it a route into a black hole.
                         metadataEnabled: metadataRealized,
-                        resolverEnabled: resolverRealized
+                        resolverAddresses: resolverRealized ? (spec.resolverAddresses ?? []) : []
                     ))
             } catch {
                 logger.error(

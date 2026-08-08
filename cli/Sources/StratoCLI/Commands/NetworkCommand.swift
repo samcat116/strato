@@ -98,8 +98,8 @@ struct NetworkCommand: AsyncParsableCommand {
         @Option(
             name: .customLong("dns-server"), parsing: .singleValue,
             help: """
-                With --resolver, an upstream the built-in resolver forwards to; without it \
-                (the default), a resolver advertised to guests over DHCP. Repeat for several.
+                With --resolver (the default), an upstream the built-in resolver forwards to; \
+                without it, a resolver advertised to guests over DHCP. Repeat for several.
                 """)
         var dnsServers: [String] = []
 
@@ -116,10 +116,11 @@ struct NetworkCommand: AsyncParsableCommand {
         @Flag(
             name: .long, inversion: .prefixedNo,
             help: """
-                Give guests a built-in DNS resolver at a link-local address, serving this \
-                network's zones in full — including the CNAME, TXT and SRV records the datapath \
-                cannot express. Disabled by default: the resolver cannot yet forward to upstream \
-                servers, so enabling it trades external resolution for the internal vocabulary.
+                Give guests a built-in DNS resolver at a link-local address of the network's \
+                own, serving this network's zones in full — including the CNAME, TXT and SRV \
+                records the datapath cannot express — and forwarding the rest through the \
+                hypervisor's own egress. Enabled by default; --no-resolver hands guests the \
+                --dns-server list directly instead.
                 """)
         var resolver: Bool?
 
@@ -179,7 +180,7 @@ struct NetworkCommand: AsyncParsableCommand {
 
         @Flag(
             name: .long, inversion: .prefixedNo,
-            help: "Give guests a built-in DNS resolver at a link-local address.")
+            help: "Give guests a built-in DNS resolver at a link-local address of the network's own.")
         var resolver: Bool?
 
         func run() async throws {

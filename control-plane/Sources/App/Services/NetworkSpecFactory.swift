@@ -61,7 +61,8 @@ extension NetworkSpec {
             leaseTime: network.leaseTime,
             securityGroupIds: securityGroupIds,
             metadataEnabled: sendsMetadataPort ? network.metadataEnabled : nil,
-            resolverEnabled: siteResolverCapable.map { $0 && network.resolverEnabled }
+            resolverEnabled: siteResolverCapable.map { $0 && network.resolverEnabled },
+            resolverAddresses: network.resolverAddressesIfEnabled(siteCapable: siteResolverCapable)
         )
     }
 }

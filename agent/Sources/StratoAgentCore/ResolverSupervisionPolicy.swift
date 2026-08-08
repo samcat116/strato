@@ -9,40 +9,43 @@ import StratoShared
 /// directories of networks it no longer serves.
 public struct ResolverDirectoryLayout: Equatable, Sendable {
     public let root: String
-    public let networkId: UUID
 
-    public init(root: String, networkId: UUID) {
+    public init(root: String) {
         self.root = root
-        self.networkId = networkId
     }
 
-    /// Everything for one network. Named by id, never by the network's name:
-    /// names are unique only within a project, and two projects' networks would
-    /// otherwise share a directory.
-    public var directory: String { "\(root)/\(networkId.uuidString.lowercased())" }
-    public var corefilePath: String { "\(directory)/Corefile" }
-    public var zonesDirectory: String { "\(directory)/zones" }
+    /// One directory for the host, since one process serves every network. Zone
+    /// files are namespaced *inside* it by network id — see
+    /// `CoreDNSZoneRenderer.zoneFilePath` — because two networks may attach
+    /// zones with the same name and different contents.
+    public var directory: String { root }
+    public var corefilePath: String { "\(root)/Corefile" }
+    public var zonesDirectory: String { "\(root)/zones" }
     /// Where the supervisor records the pid it started, so a restarted agent
     /// adopts a running CoreDNS instead of starting a second one beside it.
-    public var pidFilePath: String { "\(directory)/coredns.pid" }
+    public var pidFilePath: String { "\(root)/coredns.pid" }
 }
 
-/// The desired resolver for one network, as the supervisor needs it.
+/// The host's rendered resolver configuration.
 public struct DesiredResolver: Equatable, Sendable {
-    public let networkId: UUID
-    /// The rendered Corefile and zone files, relative to the network's
-    /// directory.
+    /// The rendered Corefile and zone files, relative to the resolver root.
     public let files: [CoreDNSZoneRenderer.RenderedFile]
     /// Notes about records that could not be rendered, logged once per change
     /// rather than once per sync.
     public let diagnostics: [String]
 
+    /// Whether any network wants a resolver at all. Distinct from "no files":
+    /// a host serving nothing still renders a Corefile, and the difference
+    /// between that and a real one is what decides whether the process runs.
+    public let servesNothing: Bool
+
     public init(
-        networkId: UUID, files: [CoreDNSZoneRenderer.RenderedFile], diagnostics: [String] = []
+        files: [CoreDNSZoneRenderer.RenderedFile], diagnostics: [String] = [],
+        servesNothing: Bool = false
     ) {
-        self.networkId = networkId
         self.files = files
         self.diagnostics = diagnostics
+        self.servesNothing = servesNothing
     }
 
     /// A digest of the rendered configuration, used to decide whether anything
@@ -95,66 +98,57 @@ public struct ResolverRenderKey: Equatable, Sendable {
     }
 }
 
-/// One network's resolver, as its inputs rather than as rendered files.
+/// Everything this host's single resolver serves, as inputs rather than as
+/// rendered files.
 ///
-/// The supervisor renders from this only when `renderKey` has moved, which is
-/// what keeps an unchanged network from rebuilding every zone file on every
-/// sync.
+/// One request for the whole host rather than one per network, because there is
+/// one CoreDNS: it binds every network's addresses and keys each server block on
+/// the address the query arrived at. Rendering is skipped wholesale when
+/// `renderKey` has not moved.
 public struct ResolverRenderRequest: Sendable {
-    public let networkId: UUID
-    /// The zones attached to *this* network — the caller filters
-    /// `DesiredDNSZone.networkIds`, because a sync carries every zone this agent
-    /// has anything to do with and a namespace must never answer for a zone that
-    /// is not on its network.
-    public let zones: [DesiredDNSZone]
-    public let upstreams: [String]
-    public let searchDomain: String?
-    public let bindAddresses: [String]
+    public let networks: [CoreDNSZoneRenderer.Network]
 
-    public init(
-        networkId: UUID, zones: [DesiredDNSZone], upstreams: [String], searchDomain: String?,
-        bindAddresses: [String]
-    ) {
-        self.networkId = networkId
-        self.zones = zones
-        self.upstreams = upstreams
-        self.searchDomain = searchDomain
-        self.bindAddresses = bindAddresses
+    public init(networks: [CoreDNSZoneRenderer.Network]) {
+        self.networks = networks
     }
+
+    public var isEmpty: Bool { networks.isEmpty }
 
     public var renderKey: ResolverRenderKey {
         ResolverRenderKey(
-            zoneHashes: zones.map(\.recordsHash), upstreams: upstreams,
-            searchDomain: searchDomain, bindAddresses: bindAddresses)
+            zoneHashes: networks.flatMap { network in
+                // The network id is folded in beside each hash so two networks
+                // swapping zones is not the same key as neither changing.
+                network.zones.map { "\(network.networkId.uuidString):\($0.recordsHash)" }
+            },
+            upstreams: networks.flatMap { ["\($0.networkId.uuidString)"] + $0.upstreams },
+            searchDomain: networks.map { $0.searchDomain ?? "" }.joined(separator: ","),
+            bindAddresses: networks.flatMap(\.bindAddresses))
     }
 
-    /// The rendered configuration for this request.
+    /// The rendered configuration for the whole host.
     public func render() -> DesiredResolver {
-        let rendering = CoreDNSZoneRenderer.render(
-            zones: zones, upstreams: upstreams, searchDomain: searchDomain,
-            bindAddresses: bindAddresses)
+        let rendering = CoreDNSZoneRenderer.render(networks: networks)
         return DesiredResolver(
-            networkId: networkId, files: rendering.files, diagnostics: rendering.diagnostics)
+            files: rendering.files, diagnostics: rendering.diagnostics,
+            servesNothing: networks.isEmpty)
     }
 }
 
-/// What the supervisor knows about one network's resolver right now.
+/// What the supervisor knows about the host's resolver right now.
 public struct ObservedResolver: Equatable, Sendable {
-    public let networkId: UUID
-    /// The process the supervisor believes is serving this network, if any.
     public let pid: Int32?
     /// Whether that process is actually alive.
     public let running: Bool
-    /// The digest of the configuration last written for this network.
+    /// The digest of the configuration last written.
     public let configurationDigest: String?
     /// Consecutive unexpected exits since the last successful run.
     public let consecutiveFailures: Int
 
     public init(
-        networkId: UUID, pid: Int32? = nil, running: Bool = false,
-        configurationDigest: String? = nil, consecutiveFailures: Int = 0
+        pid: Int32? = nil, running: Bool = false, configurationDigest: String? = nil,
+        consecutiveFailures: Int = 0
     ) {
-        self.networkId = networkId
         self.pid = pid
         self.running = running
         self.configurationDigest = configurationDigest
@@ -166,11 +160,11 @@ public struct ObservedResolver: Equatable, Sendable {
 public enum ResolverAction: Equatable, Sendable {
     /// Write the rendered files. Always precedes a start, and stands alone when
     /// a running CoreDNS can pick the change up itself.
-    case writeConfiguration(networkId: UUID)
-    /// Start CoreDNS for this network.
-    case start(networkId: UUID)
-    /// Stop this network's CoreDNS and remove its directory.
-    case stop(networkId: UUID)
+    case writeConfiguration
+    /// Start the host's CoreDNS.
+    case start
+    /// Stop it and remove its directory.
+    case stop
 }
 
 /// The pure half of resolver supervision: what to do, given what is wanted and
@@ -252,49 +246,40 @@ public enum ResolverSupervisionPolicy {
     /// second of a restart is a second in which this network resolves nothing
     /// but what OVN can answer. A start is emitted only when nothing is running.
     public static func actions(
-        desired: [DesiredResolver]?, observed: [ObservedResolver]
+        desired: DesiredResolver?, observed: ObservedResolver
     ) -> [ResolverAction] {
         guard let desired else { return [] }
-        let byNetwork = Dictionary(
-            observed.map { ($0.networkId, $0) }, uniquingKeysWith: { first, _ in first })
+        // Nothing to serve: stop the process rather than leave it bound to
+        // addresses no network publishes any more.
+        guard !desired.servesNothing else {
+            return observed.running ? [.stop] : []
+        }
         var actions: [ResolverAction] = []
-
-        for resolver in desired.sorted(by: { $0.networkId.uuidString < $1.networkId.uuidString }) {
-            let current = byNetwork[resolver.networkId]
-            if current?.configurationDigest != resolver.configurationDigest {
-                actions.append(.writeConfiguration(networkId: resolver.networkId))
-            }
-            if current?.running != true {
-                actions.append(.start(networkId: resolver.networkId))
-            }
+        if observed.configurationDigest != desired.configurationDigest {
+            actions.append(.writeConfiguration)
         }
-
-        let wanted = Set(desired.map(\.networkId))
-        for resolver in observed.sorted(by: { $0.networkId.uuidString < $1.networkId.uuidString })
-        where !wanted.contains(resolver.networkId) {
-            actions.append(.stop(networkId: resolver.networkId))
-        }
+        if !observed.running { actions.append(.start) }
         return actions
     }
 
-    /// The addresses CoreDNS should `bind` in a namespace on this host.
+    /// Whether this host can bind the IPv6 half of a network's resolver pair.
     ///
-    /// The v6 ULA is included only when the kernel has IPv6 at all, because
     /// `bind` naming a non-existent address makes CoreDNS refuse to start — and
-    /// `ChassisServicePlan` establishes both families independently precisely so
-    /// an IPv6-less host keeps a working v4 service. `/proc/net/if_inet6` is the
-    /// kernel-wide switch, and its absence is exactly the condition under which
-    /// the namespace's `addr add` for the ULA failed.
-    public static func bindAddresses(
-        ipv6Available: Bool = FileManager.default.fileExists(atPath: "/proc/net/if_inet6")
-    ) -> [String] {
-        ipv6Available
-            ? NetworkResolverEndpoint.addresses
-            : [NetworkResolverEndpoint.address]
+    /// refuse for *every* network, now that one process serves them all, which
+    /// is the sharpest edge the single process introduces. `/proc/net/if_inet6`
+    /// is the kernel-wide switch, and its absence is exactly the condition under
+    /// which the interface's `addr add` for the ULA failed.
+    public static func supportsIPv6(
+        probe: Bool = FileManager.default.fileExists(atPath: "/proc/net/if_inet6")
+    ) -> Bool { probe }
+
+    /// The subset of a network's addresses this host can actually bind.
+    public static func bindable(_ addresses: [String], ipv6Available: Bool) -> [String] {
+        ipv6Available ? addresses : addresses.filter { IPv4Address($0) != nil }
     }
 
-    /// The zone files that should exist for one network, so the supervisor can
-    /// delete the ones left over from a zone that was renamed or detached.
+    /// The files that should exist, so the supervisor can delete the ones left
+    /// over from a zone that was renamed, detached, or whose network is gone.
     ///
     /// Stale zone files are not inert: the Corefile stops referencing a removed
     /// zone, but a file left on disk is a name an operator debugging the host

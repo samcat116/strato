@@ -821,6 +821,7 @@ public func configure(_ app: Application) async throws {
     // the resolver address.
     app.migrations.add(AddResolverEnabledToLogicalNetwork())
     app.migrations.add(AddResolverCapableToAgent())
+    app.migrations.add(AddResolverIndexToLogicalNetwork())
 
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that

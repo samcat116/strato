@@ -2,8 +2,8 @@ import Foundation
 import Logging
 import StratoAgentCore
 
-/// The host effects behind `ResolverSupervisor` (STR-40): files on disk, and a
-/// CoreDNS forked into a network's chassis namespace.
+/// The host effects behind `ResolverSupervisor` (STR-40): files on disk, and one
+/// CoreDNS in the *host* namespace serving every network on this hypervisor.
 ///
 /// Split from the supervisor so the lifecycle above it can be asserted without a
 /// namespace or a process, the shape `MetadataServerProcessSpawner` takes for
@@ -24,48 +24,75 @@ struct ResolverProcessHost: ResolverHosting {
     /// write, which costs it the zone until the next edit rather than until the
     /// write finishes.
     func writeConfiguration(_ resolver: DesiredResolver, root: String) throws {
-        let layout = ResolverDirectoryLayout(root: root, networkId: resolver.networkId)
-        try FileManager.default.createDirectory(
-            atPath: layout.zonesDirectory, withIntermediateDirectories: true)
+        let layout = ResolverDirectoryLayout(root: root)
         for file in resolver.files {
             let path = "\(layout.directory)/\(file.relativePath)"
+            try FileManager.default.createDirectory(
+                atPath: (path as NSString).deletingLastPathComponent,
+                withIntermediateDirectories: true)
             try Data(file.contents.utf8).write(to: URL(fileURLWithPath: path), options: .atomic)
         }
-        // Sweep zone files the rendering dropped — a zone renamed, detached, or
-        // deleted. The Corefile stops referencing them, so they are inert to
-        // CoreDNS, but a stale zone file on the host is a name an operator
-        // reading the directory will believe is still served.
+        // Sweep files the rendering dropped — a zone renamed or detached, or a
+        // whole network's directory once it stops wanting a resolver. The
+        // Corefile stops referencing them, so they are inert to CoreDNS, but a
+        // stale zone file on the host is a name an operator reading the
+        // directory will believe is still served.
         let expected = ResolverSupervisionPolicy.expectedRelativePaths(resolver)
-        let existing =
-            (try? FileManager.default.contentsOfDirectory(atPath: layout.zonesDirectory)) ?? []
-        for name in existing where !expected.contains("zones/\(name)") {
-            try? FileManager.default.removeItem(atPath: "\(layout.zonesDirectory)/\(name)")
+        for relative in existingRelativePaths(under: layout.zonesDirectory, root: layout.directory)
+        where !expected.contains(relative) {
+            try? FileManager.default.removeItem(atPath: "\(layout.directory)/\(relative)")
         }
+        pruneEmptyDirectories(under: layout.zonesDirectory)
     }
 
-    func removeConfiguration(networkId: UUID, root: String) {
-        let layout = ResolverDirectoryLayout(root: root, networkId: networkId)
-        try? FileManager.default.removeItem(atPath: layout.directory)
+    func removeConfiguration(root: String) {
+        try? FileManager.default.removeItem(atPath: ResolverDirectoryLayout(root: root).directory)
+    }
+
+    /// Every rendered file currently on disk, as paths relative to the resolver
+    /// root — the same shape `expectedRelativePaths` returns, so the two can be
+    /// differenced directly.
+    private func existingRelativePaths(under zones: String, root: String) -> [String] {
+        guard let walker = FileManager.default.enumerator(atPath: zones) else { return [] }
+        var found: [String] = []
+        for case let entry as String in walker {
+            let full = "\(zones)/\(entry)"
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: full, isDirectory: &isDirectory),
+                !isDirectory.boolValue
+            else { continue }
+            found.append(String(full.dropFirst(root.count + 1)))
+        }
+        return found
+    }
+
+    /// Removes per-network zone directories left empty by the sweep, so the
+    /// directory listing keeps matching what is served.
+    private func pruneEmptyDirectories(under zones: String) {
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: zones)) ?? []
+        for entry in entries {
+            let path = "\(zones)/\(entry)"
+            let contents = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+            if contents.isEmpty { try? FileManager.default.removeItem(atPath: path) }
+        }
     }
 
     // MARK: - Process
 
-    func spawn(networkId: UUID, root: String) throws -> any ResolverHandle {
-        let layout = ResolverDirectoryLayout(root: root, networkId: networkId)
-        // `ip netns exec` rather than entering the namespace ourselves: `setns`
-        // is per-thread and Swift concurrency moves continuations between
-        // threads.
+    func spawn(root: String) throws -> any ResolverHandle {
+        let layout = ResolverDirectoryLayout(root: root)
+        // No `ip netns exec`: the resolver runs in the *host* namespace, which
+        // is the whole point — forwarding upstream is then the hypervisor's own
+        // routing, which a chassis namespace could never provide.
+        //
         // The exit *time* is stamped from the termination handler, which is the
         // only place that knows it: the supervisor notices exits on its next
         // reconcile, which may be minutes later, and it judges a run by how long
         // it lasted rather than by how long ago it was noticed.
         let exit = ExitStamp()
         let spawned = try ProcessRunner.spawn(
-            executableURL: URL(fileURLWithPath: ipBinaryPath),
-            arguments: [
-                "netns", "exec", ChassisServicePlan.netnsName(networkId: networkId),
-                binaryPath, "-conf", "Corefile",
-            ],
+            executableURL: URL(fileURLWithPath: binaryPath),
+            arguments: ["-conf", "Corefile"],
             workingDirectory: layout.directory,
             logPath: "\(layout.directory)/coredns.log",
             onExit: { _ in exit.stamp() })
@@ -74,7 +101,7 @@ struct ResolverProcessHost: ResolverHosting {
         return SpawnedResolverHandle(process: spawned, exit: exit)
     }
 
-    /// Resolvers a previous agent process left running.
+    /// A resolver a previous agent process left running.
     ///
     /// A pid file whose process is gone — or has been recycled onto something
     /// else — is not adoptable, and its directory is removed rather than left
@@ -85,23 +112,20 @@ struct ResolverProcessHost: ResolverHosting {
     /// The `/proc/<pid>/cmdline` check is what makes pid recycling
     /// vanishingly unlikely to matter: a recycled pid running *this* agent's
     /// CoreDNS binary is a process that would be doing the right thing anyway.
-    func adoptable(root: String) -> [AdoptableResolver] {
-        let entries = (try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []
-        var found: [AdoptableResolver] = []
-        for entry in entries.sorted() {
-            guard let networkId = UUID(uuidString: entry) else { continue }
-            let layout = ResolverDirectoryLayout(root: root, networkId: networkId)
-            guard let raw = try? String(contentsOfFile: layout.pidFilePath, encoding: .utf8),
-                let pid = Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
-                ProcessRunner.isAlive(pid: pid),
-                commandLine(ofPID: pid).contains(binaryPath)
-            else {
-                try? FileManager.default.removeItem(atPath: layout.directory)
-                continue
-            }
-            found.append(AdoptableResolver(networkId: networkId, pid: pid))
+    func adoptable(root: String) -> AdoptableResolver? {
+        let layout = ResolverDirectoryLayout(root: root)
+        guard let raw = try? String(contentsOfFile: layout.pidFilePath, encoding: .utf8),
+            let pid = Int32(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+            ProcessRunner.isAlive(pid: pid),
+            commandLine(ofPID: pid).contains(binaryPath)
+        else {
+            // Nothing alive is serving. The directory is left for the reconcile
+            // to rewrite rather than removed: unlike the per-network layout it
+            // replaced, this one directory holds every network's zones, and the
+            // next pass rewrites all of them from desired state anyway.
+            return nil
         }
-        return found
+        return AdoptableResolver(pid: pid)
     }
 
     func isAlive(pid: Int32) -> Bool { ProcessRunner.isAlive(pid: pid) }

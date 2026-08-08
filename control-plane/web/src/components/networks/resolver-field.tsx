@@ -5,8 +5,8 @@
  *
  * A sibling of {@link MetadataField} rather than part of {@link DHCPFields},
  * for the same reason: the resolver is realized as an address on the network's
- * OVN localport and a CoreDNS on each hypervisor, not as a DHCP option, and it
- * is what the DHCP `dns_server` option *points at* rather than something DHCP
+ * own OVN localport and a CoreDNS on each hypervisor, not as a DHCP option, and
+ * it is what the DHCP `dns_server` option *points at* rather than something DHCP
  * carries.
  *
  * It does change what the DNS servers field beside it means, though, which is
@@ -35,16 +35,12 @@ export function ResolverField({
         Give guests a built-in DNS resolver
       </label>
       <p className="text-xs text-muted-foreground">
-        Guests resolve through 169.254.169.253 (and fd00:ec2::253 on dual-stack
-        networks), answered on their own hypervisor. It serves the DNS zones
-        attached to this network in full — including the CNAME, TXT and SRV
-        records the datapath cannot express.
-      </p>
-      <p className="text-xs text-muted-foreground">
-        <strong>Upstream forwarding is not implemented yet</strong>, so turning
-        this on trades external name resolution for the full internal record
-        vocabulary: guests will resolve this network&apos;s names and nothing
-        else. Leave it off unless that is the trade you want.
+        Guests resolve through a link-local address of this network&apos;s own,
+        answered on their own hypervisor. It serves the DNS zones attached to
+        this network in full — including the CNAME, TXT and SRV records the
+        datapath cannot express — and forwards everything else to the DNS
+        servers above, through the hypervisor. That last part is what lets
+        guests on a network without external access resolve public names.
       </p>
     </div>
   );

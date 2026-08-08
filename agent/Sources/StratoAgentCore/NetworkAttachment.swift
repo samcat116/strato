@@ -74,15 +74,14 @@ public struct ResolvedNetworkAttachment: Sendable {
     /// OVN `localport` terminating those addresses, so a route to them would
     /// lead nowhere.
     public let metadataEnabled: Bool
-    /// Whether this NIC's network publishes the per-network DNS resolver, and
-    /// therefore whether the guest should be pointed at
-    /// `NetworkResolverEndpoint` and given a route to it (STR-40). Gated on a
-    /// real TAP for `metadataEnabled`'s reason: under user-mode (SLIRP) there is
-    /// no `localport` terminating the address, and a guest told to resolve
-    /// through it would have no working DNS at all — a strictly worse outcome
-    /// than the missing metadata route, which is why the fallback hands it
-    /// `dnsServers` directly instead.
-    public let resolverEnabled: Bool
+    /// This NIC's network's own resolver addresses, v4 first, or empty when the
+    /// network has no resolver (STR-40). What the guest is pointed at, and what
+    /// it is given a route to. Emptied for a NIC realized as anything but a real
+    /// TAP, for `metadataEnabled`'s reason: under user-mode (SLIRP) there is no
+    /// `localport` terminating the address, and a guest told to resolve through
+    /// it would have no working DNS at all — strictly worse than the missing
+    /// metadata route, which is why the fallback hands it `dnsServers` instead.
+    public let resolverAddresses: [String]
 
     public init(
         network: String,
@@ -99,7 +98,7 @@ public struct ResolvedNetworkAttachment: Sendable {
         dnsServers: [String] = [],
         domainName: String? = nil,
         metadataEnabled: Bool = false,
-        resolverEnabled: Bool = false
+        resolverAddresses: [String] = []
     ) {
         self.network = network
         self.attachment = attachment
@@ -115,7 +114,7 @@ public struct ResolvedNetworkAttachment: Sendable {
         self.dnsServers = dnsServers
         self.domainName = domainName
         self.metadataEnabled = metadataEnabled
-        self.resolverEnabled = resolverEnabled
+        self.resolverAddresses = resolverAddresses
     }
 }
 

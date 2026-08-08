@@ -361,6 +361,11 @@ public struct NetworkSpec: Codable, Sendable {
     /// Nil ≙ a control plane that predates the field; the agent converges
     /// nothing rather than reading silence as "tear down".
     public let resolverEnabled: Bool?
+    /// This network's own resolver addresses, v4 first — distinct per network,
+    /// which is what lets the host serve every one of them from a single
+    /// namespace and forward through its own egress (STR-40). Non-nil exactly
+    /// when `resolverEnabled` is true.
+    public let resolverAddresses: [String]?
 
     public init(
         network: String,
@@ -379,7 +384,8 @@ public struct NetworkSpec: Codable, Sendable {
         leaseTime: Int? = nil,
         securityGroupIds: [UUID]? = nil,
         metadataEnabled: Bool? = nil,
-        resolverEnabled: Bool? = nil
+        resolverEnabled: Bool? = nil,
+        resolverAddresses: [String]? = nil
     ) {
         self.network = network
         self.networkId = networkId
@@ -398,13 +404,14 @@ public struct NetworkSpec: Codable, Sendable {
         self.securityGroupIds = securityGroupIds
         self.metadataEnabled = metadataEnabled
         self.resolverEnabled = resolverEnabled
+        self.resolverAddresses = resolverAddresses
     }
 
     private enum CodingKeys: String, CodingKey {
         case network, networkId, macAddress, ipAddress, netmask, gateway, mtu
         case ipv6Address, ipv6PrefixLength, gateway6
         case dhcpEnabled, dnsServers, domainName, leaseTime
-        case securityGroupIds, metadataEnabled, resolverEnabled
+        case securityGroupIds, metadataEnabled, resolverEnabled, resolverAddresses
     }
 
     /// Tolerates specs from an older control plane that predates the DHCP fields:
@@ -431,6 +438,8 @@ public struct NetworkSpec: Codable, Sendable {
         self.securityGroupIds = try container.decodeIfPresent([UUID].self, forKey: .securityGroupIds)
         self.metadataEnabled = try container.decodeIfPresent(Bool.self, forKey: .metadataEnabled)
         self.resolverEnabled = try container.decodeIfPresent(Bool.self, forKey: .resolverEnabled)
+        self.resolverAddresses = try container.decodeIfPresent(
+            [String].self, forKey: .resolverAddresses)
     }
 }
 

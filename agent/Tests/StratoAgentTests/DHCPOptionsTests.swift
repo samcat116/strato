@@ -238,15 +238,15 @@ struct DHCPOptionsResolverTests {
         // raw list.
         let options = OVNDHCPOptionsBuilder.v4Options(
             gateway: "10.0.0.1", dnsServers: ["1.1.1.1", "8.8.8.8"], domainName: nil, leaseTime: nil,
-            subnet: "10.0.0.0/24", resolverEnabled: true)
-        #expect(options["dns_server"] == "{169.254.169.253}")
+            subnet: "10.0.0.0/24", resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
+        #expect(options["dns_server"] == "{169.254.1.0}")
     }
 
     @Test("With the resolver off, the configured servers reach the guest unchanged")
     func resolverOffKeepsLegacyBehaviour() {
         let options = OVNDHCPOptionsBuilder.v4Options(
             gateway: "10.0.0.1", dnsServers: ["1.1.1.1", "8.8.8.8"], domainName: nil, leaseTime: nil,
-            subnet: "10.0.0.0/24", resolverEnabled: false)
+            subnet: "10.0.0.0/24", resolverAddresses: [])
         #expect(options["dns_server"] == "{1.1.1.1, 8.8.8.8}")
     }
 
@@ -254,12 +254,12 @@ struct DHCPOptionsResolverTests {
     func resolverReplacesDNSServerV6() {
         let on = OVNDHCPOptionsBuilder.v6Options(
             dnsServers: ["2606:4700:4700::1111"], domainName: nil, subnet6: "fd00::/64",
-            resolverEnabled: true)
-        #expect(on["dns_server"] == "{fd00:ec2::253}")
+            resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
+        #expect(on["dns_server"] == "{fd00:ec2:1::100}")
 
         let off = OVNDHCPOptionsBuilder.v6Options(
             dnsServers: ["2606:4700:4700::1111"], domainName: nil, subnet6: "fd00::/64",
-            resolverEnabled: false)
+            resolverAddresses: [])
         #expect(off["dns_server"] == "{2606:4700:4700::1111}")
     }
 
@@ -269,14 +269,16 @@ struct DHCPOptionsResolverTests {
         // accident, but that is not universal — and a missing resolver route
         // costs the guest all name resolution, not just IMDS.
         #expect(
-            OVNDHCPOptionsBuilder.classlessStaticRoute(gateway: "10.0.0.1", metadata: true, resolver: false)
+            OVNDHCPOptionsBuilder.classlessStaticRoute(gateway: "10.0.0.1", metadata: true, resolver: nil)
                 == "{169.254.169.254/32,0.0.0.0, 0.0.0.0/0,10.0.0.1}")
         #expect(
-            OVNDHCPOptionsBuilder.classlessStaticRoute(gateway: "10.0.0.1", metadata: false, resolver: true)
-                == "{169.254.169.253/32,0.0.0.0, 0.0.0.0/0,10.0.0.1}")
+            OVNDHCPOptionsBuilder.classlessStaticRoute(
+                gateway: "10.0.0.1", metadata: false, resolver: "169.254.1.0")
+                == "{169.254.1.0/32,0.0.0.0, 0.0.0.0/0,10.0.0.1}")
         #expect(
-            OVNDHCPOptionsBuilder.classlessStaticRoute(gateway: "10.0.0.1", metadata: true, resolver: true)
-                == "{169.254.169.254/32,0.0.0.0, 169.254.169.253/32,0.0.0.0, 0.0.0.0/0,10.0.0.1}")
+            OVNDHCPOptionsBuilder.classlessStaticRoute(
+                gateway: "10.0.0.1", metadata: true, resolver: "169.254.1.0")
+                == "{169.254.169.254/32,0.0.0.0, 169.254.1.0/32,0.0.0.0, 0.0.0.0/0,10.0.0.1}")
     }
 
     @Test("The default route is repeated in option 121 whichever services are on")
@@ -284,7 +286,9 @@ struct DHCPOptionsResolverTests {
         // RFC 3442 requires a client that understands option 121 to ignore
         // option 3 entirely, so omitting it would trade the guest's default
         // gateway for a link-local route.
-        for (metadata, resolver) in [(true, false), (false, true), (true, true)] {
+        for (metadata, resolver) in [(true, nil), (false, "169.254.1.0"), (true, "169.254.1.0")]
+            as [(Bool, String?)]
+        {
             let route = OVNDHCPOptionsBuilder.classlessStaticRoute(
                 gateway: "10.0.0.1", metadata: metadata, resolver: resolver)
             #expect(route.contains("0.0.0.0/0,10.0.0.1"))
@@ -295,8 +299,8 @@ struct DHCPOptionsResolverTests {
     func resolverAloneEmitsOption121() {
         let options = OVNDHCPOptionsBuilder.v4Options(
             gateway: "10.0.0.1", dnsServers: [], domainName: nil, leaseTime: nil,
-            subnet: "10.0.0.0/24", metadataEnabled: false, resolverEnabled: true)
-        #expect(options["classless_static_route"]?.contains("169.254.169.253/32") == true)
+            subnet: "10.0.0.0/24", metadataEnabled: false, resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
+        #expect(options["classless_static_route"]?.contains("169.254.1.0/32") == true)
         #expect(options["classless_static_route"]?.contains("169.254.169.254/32") == false)
     }
 
@@ -304,7 +308,7 @@ struct DHCPOptionsResolverTests {
     func neitherServiceOmitsOption121() {
         let options = OVNDHCPOptionsBuilder.v4Options(
             gateway: "10.0.0.1", dnsServers: [], domainName: nil, leaseTime: nil,
-            subnet: "10.0.0.0/24", metadataEnabled: false, resolverEnabled: false)
+            subnet: "10.0.0.0/24", metadataEnabled: false, resolverAddresses: [])
         #expect(options["classless_static_route"] == nil)
     }
 
@@ -315,7 +319,7 @@ struct DHCPOptionsResolverTests {
         // the guest it has no resolver at all.
         let options = OVNDHCPOptionsBuilder.v4Options(
             gateway: "10.0.0.1", dnsServers: [], domainName: nil, leaseTime: nil,
-            subnet: "10.0.0.0/24", resolverEnabled: true)
-        #expect(options["dns_server"] == "{169.254.169.253}")
+            subnet: "10.0.0.0/24", resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"])
+        #expect(options["dns_server"] == "{169.254.1.0}")
     }
 }

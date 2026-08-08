@@ -113,7 +113,8 @@ public enum SecurityGroupACLBuilder {
     /// deployments replace it on upgrade (the generation mechanism reused).
     /// 2: MLD carve-outs (STR-34). 3: MLD split by direction so guests cannot
     /// originate Queries. 4: instance metadata egress (STR-54). 5: per-network
-    /// resolver egress (STR-40).
+    /// resolver egress (STR-40). 6: the resolver carve-out widened from one
+    /// address to the link-local space, once each network got its own.
     ///
     /// "On upgrade" means the *authority's* upgrade: this group's ACLs are
     /// authored only by the site's network-controller agent, so a mixed-version
@@ -126,7 +127,7 @@ public enum SecurityGroupACLBuilder {
     /// `needsACLRewrite` returns false when the planned generation is older
     /// than the observed one, so a lagging authority leaves a revision-5 group
     /// alone instead of stripping the carve-out back off.
-    public static let dropGroupRevision: Int64 = 5
+    public static let dropGroupRevision: Int64 = 6
 
     /// Bumped whenever this builder's ACL *construction* changes — a fixed
     /// match syntax, a newly expressible rule shape — so upgraded agents
@@ -340,15 +341,21 @@ public enum SecurityGroupACLBuilder {
         let ids = [managedKey: managedValue]
         let port = NetworkResolverEndpoint.port
         var acls: [ACLSpec] = []
-        for (family, address) in [
-            ("ip4", NetworkResolverEndpoint.address), ("ip6", NetworkResolverEndpoint.addressV6),
+        // Matched on the whole link-local *space* rather than one address,
+        // because each network's resolver now has its own. A per-network match
+        // would mean a per-network port group — "a whole new object lifetime",
+        // as the metadata carve-out's doc comment puts it — for a rule that has
+        // to land on every managed port anyway. Both ranges are unroutable and
+        // hold nothing but Strato's own link-local services.
+        for (family, space) in [
+            ("ip4", NetworkResolverEndpoint.v4Space), ("ip6", NetworkResolverEndpoint.v6Space),
         ] {
             for proto in ["udp", "tcp"] {
                 acls.append(
                     ACLSpec(
                         direction: "from-lport", priority: metadataAllowPriority,
                         match:
-                            "inport == @\(pg) && \(family) && \(family).dst == \(address) "
+                            "inport == @\(pg) && \(family) && \(family).dst == \(space) "
                             + "&& \(proto) && \(proto).dst == \(port)",
                         action: "allow-related", externalIDs: ids))
             }

@@ -208,7 +208,7 @@ struct NetworkController: RouteCollection {
             leaseTime: request.leaseTime,
             externalAccess: request.externalAccess ?? true,
             metadataEnabled: request.metadataEnabled ?? true,
-            resolverEnabled: request.resolverEnabled ?? false,
+            resolverEnabled: request.resolverEnabled ?? true,
             siteID: request.siteId
         )
 
@@ -224,6 +224,12 @@ struct NetworkController: RouteCollection {
                 try await LogicalNetworkService.lockName(name, on: db)
                 try await Self.assertNameSafeForFleet(
                     name: name, projectId: projectId, siteId: request.siteId, on: db)
+                // Inside the same transaction as the row: the allocator's
+                // advisory lock is transaction-scoped, so allocating outside it
+                // would release the lock before the index it chose was durable.
+                if network.resolverEnabled {
+                    _ = try await ResolverAddressAllocator.ensureIndex(for: network, on: db)
+                }
                 try await network.save(on: db)
                 try await RoleBindingService.grant(
                     principalType: .user,
@@ -470,6 +476,14 @@ struct NetworkController: RouteCollection {
         if let resolverEnabled = request.resolverEnabled {
             network.resolverEnabled = resolverEnabled
         }
+        // Allocated on the way *on* and kept on the way off, so re-enabling never
+        // moves a live address — moving one would change what guests were told
+        // over DHCP and strand every lease until it renewed. Deferred to the
+        // save transaction below rather than done here: the allocator's advisory
+        // lock is transaction-scoped, so allocating on `req.db` would release it
+        // before the chosen index was durable and let two concurrent enables
+        // pick the same one.
+        let allocatesResolverIndex = network.resolverEnabled && network.resolverIndex == nil
 
         // The zone this network's VMs register into (issue #770). Only ever a
         // zone already attached to the network — attachment is what grants
@@ -506,6 +520,7 @@ struct NetworkController: RouteCollection {
 
         do {
             let pendingRename = renamedTo
+            let pendingResolverIndex = allocatesResolverIndex
             try await req.db.transaction { db in
                 // A rename into a cross-project collision needs the same
                 // in-transaction check under the same name lock as create.
@@ -513,6 +528,9 @@ struct NetworkController: RouteCollection {
                     try await LogicalNetworkService.lockName(renamedTo, on: db)
                     try await Self.assertNameSafeForFleet(
                         name: renamedTo, projectId: network.$project.id, siteId: network.$site.id, on: db)
+                }
+                if pendingResolverIndex {
+                    _ = try await ResolverAddressAllocator.ensureIndex(for: network, on: db)
                 }
                 try await network.save(on: db)
             }

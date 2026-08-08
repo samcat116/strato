@@ -750,7 +750,7 @@ struct CloudInitResolverConfigTests {
         ip6: String? = nil,
         dnsServers: [String] = ["1.1.1.1"],
         metadata: Bool = false,
-        resolver: Bool = false
+        resolver: [String] = []
     ) -> ResolvedNetworkAttachment {
         ResolvedNetworkAttachment(
             network: "default",
@@ -765,11 +765,11 @@ struct CloudInitResolverConfigTests {
             dhcpEnabled: false,
             dnsServers: dnsServers,
             metadataEnabled: metadata,
-            resolverEnabled: resolver)
+            resolverAddresses: resolver)
     }
 
     private func dhcpNIC(
-        ip6: String? = nil, metadata: Bool = false, resolver: Bool = false
+        ip6: String? = nil, metadata: Bool = false, resolver: [String] = []
     ) -> ResolvedNetworkAttachment {
         ResolvedNetworkAttachment(
             network: "default",
@@ -784,7 +784,7 @@ struct CloudInitResolverConfigTests {
             dhcpEnabled: true,
             dnsServers: ["1.1.1.1"],
             metadataEnabled: metadata,
-            resolverEnabled: resolver)
+            resolverAddresses: resolver)
     }
 
     @Test("A static resolver NIC is pointed at the resolver, not at the upstreams")
@@ -794,8 +794,10 @@ struct CloudInitResolverConfigTests {
         // internal while its DHCP neighbours on the same network resolved
         // everything.
         let yaml = try #require(
-            CloudInitProvisioner.networkConfigYAML(for: [staticNIC(dnsServers: ["1.1.1.1"], resolver: true)]))
-        #expect(yaml.contains("addresses: [169.254.169.253]"))
+            CloudInitProvisioner.networkConfigYAML(for: [
+                staticNIC(dnsServers: ["1.1.1.1"], resolver: ["169.254.1.0", "fd00:ec2:1::100"])
+            ]))
+        #expect(yaml.contains("addresses: [169.254.1.0]"))
         #expect(!yaml.contains("1.1.1.1"))
     }
 
@@ -804,18 +806,22 @@ struct CloudInitResolverConfigTests {
         // Without a global v6 address the guest has no valid source address for
         // a ULA destination, and an unreachable entry in resolv.conf costs every
         // lookup a timeout before the v4 fallback.
-        let v4Only = try #require(CloudInitProvisioner.networkConfigYAML(for: [staticNIC(resolver: true)]))
-        #expect(!v4Only.contains("fd00:ec2::253"))
+        let v4Only = try #require(
+            CloudInitProvisioner.networkConfigYAML(for: [staticNIC(resolver: ["169.254.1.0", "fd00:ec2:1::100"])]))
+        #expect(!v4Only.contains("fd00:ec2:1::100"))
 
         let dualStack = try #require(
-            CloudInitProvisioner.networkConfigYAML(for: [staticNIC(ip6: "fd00::5", resolver: true)]))
-        #expect(dualStack.contains("addresses: [169.254.169.253, fd00:ec2::253]"))
+            CloudInitProvisioner.networkConfigYAML(for: [
+                staticNIC(ip6: "fd00::5", resolver: ["169.254.1.0", "fd00:ec2:1::100"])
+            ]))
+        #expect(dualStack.contains("addresses: [169.254.1.0, fd00:ec2:1::100]"))
     }
 
     @Test("A static resolver NIC gets an on-link route to the resolver")
     func staticNICCarriesResolverRoute() throws {
-        let yaml = try #require(CloudInitProvisioner.networkConfigYAML(for: [staticNIC(resolver: true)]))
-        #expect(yaml.contains("- to: 169.254.169.253/32"))
+        let yaml = try #require(
+            CloudInitProvisioner.networkConfigYAML(for: [staticNIC(resolver: ["169.254.1.0", "fd00:ec2:1::100"])]))
+        #expect(yaml.contains("- to: 169.254.1.0/32"))
         #expect(yaml.contains("via: 0.0.0.0"))
     }
 
@@ -823,8 +829,9 @@ struct CloudInitResolverConfigTests {
     func dhcpNICLeavesV4ToOption121() throws {
         // Option 121 reaches every DHCP client on the network, not only the ones
         // booting from this seed.
-        let yaml = try #require(CloudInitProvisioner.networkConfigYAML(for: [dhcpNIC(resolver: true)]))
-        #expect(!yaml.contains("- to: 169.254.169.253/32"))
+        let yaml = try #require(
+            CloudInitProvisioner.networkConfigYAML(for: [dhcpNIC(resolver: ["169.254.1.0", "fd00:ec2:1::100"])]))
+        #expect(!yaml.contains("- to: 169.254.1.0/32"))
     }
 
     @Test("A dual-stack DHCP NIC gets the v6 resolver route, which DHCPv6 cannot carry")
@@ -833,8 +840,10 @@ struct CloudInitResolverConfigTests {
         // RFC 4191 advertises a route *via the advertising router*, which has no
         // path to a localport hanging off the switch.
         let yaml = try #require(
-            CloudInitProvisioner.networkConfigYAML(for: [dhcpNIC(ip6: "fd00::5", resolver: true)]))
-        #expect(yaml.contains("- to: fd00:ec2::253/128"))
+            CloudInitProvisioner.networkConfigYAML(for: [
+                dhcpNIC(ip6: "fd00::5", resolver: ["169.254.1.0", "fd00:ec2:1::100"])
+            ]))
+        #expect(yaml.contains("- to: fd00:ec2:1::100/128"))
         #expect(yaml.contains("via: \"::\""))
     }
 
@@ -842,14 +851,14 @@ struct CloudInitResolverConfigTests {
     func bothServicesRender() throws {
         let yaml = try #require(
             CloudInitProvisioner.networkConfigYAML(
-                for: [staticNIC(ip6: "fd00::5", metadata: true, resolver: true)]))
+                for: [staticNIC(ip6: "fd00::5", metadata: true, resolver: ["169.254.1.0", "fd00:ec2:1::100"])]))
         let metadataIndex = try #require(yaml.range(of: "169.254.169.254/32")).lowerBound
-        let resolverIndex = try #require(yaml.range(of: "169.254.169.253/32")).lowerBound
+        let resolverIndex = try #require(yaml.range(of: "169.254.1.0/32")).lowerBound
         // Metadata first, so a NIC that carries both renders the same bytes it
         // did before the resolver existed plus an appended pair.
         #expect(metadataIndex < resolverIndex)
         #expect(yaml.contains("fd00:ec2::254/128"))
-        #expect(yaml.contains("fd00:ec2::253/128"))
+        #expect(yaml.contains("fd00:ec2:1::100/128"))
     }
 
     @Test("Only one NIC per family carries the resolver route")
@@ -858,10 +867,10 @@ struct CloudInitResolverConfigTests {
         // resolves arbitrarily.
         let yaml = try #require(
             CloudInitProvisioner.networkConfigYAML(for: [
-                staticNIC(mac: "52:54:00:aa:bb:01", ip: "192.168.1.5", resolver: true),
-                staticNIC(mac: "52:54:00:aa:bb:02", ip: "192.168.1.6", resolver: true),
+                staticNIC(mac: "52:54:00:aa:bb:01", ip: "192.168.1.5", resolver: ["169.254.1.0", "fd00:ec2:1::100"]),
+                staticNIC(mac: "52:54:00:aa:bb:02", ip: "192.168.1.6", resolver: ["169.254.1.0", "fd00:ec2:1::100"]),
             ]))
-        #expect(yaml.components(separatedBy: "- to: 169.254.169.253/32").count - 1 == 1)
+        #expect(yaml.components(separatedBy: "- to: 169.254.1.0/32").count - 1 == 1)
     }
 
     @Test("The metadata and resolver claims are tracked independently")
@@ -870,18 +879,20 @@ struct CloudInitResolverConfigTests {
         // that discharges the resolver route.
         let yaml = try #require(
             CloudInitProvisioner.networkConfigYAML(for: [
-                staticNIC(mac: "52:54:00:aa:bb:01", ip: "192.168.1.5", metadata: true, resolver: false),
-                staticNIC(mac: "52:54:00:aa:bb:02", ip: "192.168.1.6", metadata: false, resolver: true),
+                staticNIC(mac: "52:54:00:aa:bb:01", ip: "192.168.1.5", metadata: true, resolver: []),
+                staticNIC(
+                    mac: "52:54:00:aa:bb:02", ip: "192.168.1.6", metadata: false,
+                    resolver: ["169.254.1.0", "fd00:ec2:1::100"]),
             ]))
         #expect(yaml.contains("- to: 169.254.169.254/32"))
-        #expect(yaml.contains("- to: 169.254.169.253/32"))
+        #expect(yaml.contains("- to: 169.254.1.0/32"))
     }
 
     @Test("A resolver-less NIC still gets the network's own servers")
     func resolverOffKeepsConfiguredServers() throws {
         let yaml = try #require(
-            CloudInitProvisioner.networkConfigYAML(for: [staticNIC(dnsServers: ["1.1.1.1"], resolver: false)]))
+            CloudInitProvisioner.networkConfigYAML(for: [staticNIC(dnsServers: ["1.1.1.1"], resolver: [])]))
         #expect(yaml.contains("addresses: [1.1.1.1]"))
-        #expect(!yaml.contains("169.254.169.253"))
+        #expect(!yaml.contains("169.254.1.0"))
     }
 }

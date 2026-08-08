@@ -616,8 +616,8 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("The resolver defaults off and toggles without bumping the generation")
-    func resolverEnabledDefaultsOffAndDoesNotBumpGeneration() async throws {
+    @Test("The resolver defaults on and toggles without bumping the generation")
+    func resolverEnabledDefaultsOnAndDoesNotBumpGeneration() async throws {
         try await withNetworkTestApp { app, user, project, token in
             var created: NetworkResponse?
             try await app.test(.POST, "/api/networks") { req in
@@ -628,28 +628,39 @@ final class NetworkControllerTests {
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 created = try res.content.decode(NetworkResponse.self)
-                // An opt-*in*, unlike the metadata service, and the reason is a
-                // limitation rather than a preference: the resolver cannot yet
-                // forward upstream, so enabling it trades external resolution
-                // for the full internal record vocabulary. That trade has to be
-                // the operator's rather than one an upgrade makes for them.
-                #expect(created?.resolverEnabled == false)
+                // An opt-*out*, like the metadata service. It forwards through
+                // the hypervisor's own egress (ADR 0008), so a network that had
+                // working resolvers keeps them and one that could not reach a
+                // public resolver at all starts being able to.
+                #expect(created?.resolverEnabled == true)
+                // Allocated on the create that turned it on, not lazily: an
+                // address the control plane has not committed to is one no agent
+                // may realize, so the sync would carry nil until something else
+                // wrote the row.
+                #expect(created?.resolverAddresses?.count == 2)
             }
             let networkID = try #require(created?.id)
             let startGeneration = try #require(
                 await LogicalNetwork.find(networkID, on: app.db)?.generation)
+            let allocated = try #require(
+                await LogicalNetwork.find(networkID, on: app.db)?.resolverIndex)
 
             try await app.test(.PUT, "/api/networks/\(networkID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(UpdateNetworkRequest(resolverEnabled: true))
+                try req.content.encode(UpdateNetworkRequest(resolverEnabled: false))
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let enabled = try res.content.decode(NetworkResponse.self)
-                #expect(enabled.resolverEnabled == true)
+                let disabled = try res.content.decode(NetworkResponse.self)
+                #expect(disabled.resolverEnabled == false)
+                // Still reported: the response says what the network *holds*,
+                // and the index is kept across a disable so re-enabling cannot
+                // move a live address. What goes off the wire to agents is
+                // `resolverAddressesIfEnabled`, which is a different question.
+                #expect(disabled.resolverAddresses?.count == 2)
             }
 
             let updated = try await LogicalNetwork.find(networkID, on: app.db)
-            #expect(updated?.resolverEnabled == true)
+            #expect(updated?.resolverEnabled == false)
             // No bump, for the metadata port's reason: the localport, the DHCP
             // row and the resolver process all converge level-triggered on every
             // network reconcile.
@@ -657,12 +668,76 @@ final class NetworkControllerTests {
 
             try await app.test(.PUT, "/api/networks/\(networkID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(UpdateNetworkRequest(resolverEnabled: false))
+                try req.content.encode(UpdateNetworkRequest(resolverEnabled: true))
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
-            let reDisabled = try await LogicalNetwork.find(networkID, on: app.db)
-            #expect(reDisabled?.resolverEnabled == false)
+            let reEnabled = try await LogicalNetwork.find(networkID, on: app.db)
+            #expect(reEnabled?.resolverEnabled == true)
+            // **The same index, not a fresh one.** Moving it would change what
+            // guests were told over DHCP and strand every lease until it
+            // renewed, so re-enabling reuses what the network already holds.
+            #expect(reEnabled?.resolverIndex == allocated)
+        }
+    }
+
+    @Test("Every network gets a resolver address of its own")
+    func resolverAddressesAreDistinctAcrossNetworks() async throws {
+        // The property the host-namespace design rests on (ADR 0008): the
+        // addresses are terminated in one shared namespace on any host running
+        // NICs on both networks, so two networks sharing a pair is not a
+        // cosmetic clash but two resolvers fighting over one bind address.
+        try await withNetworkTestApp { app, user, project, token in
+            var addresses: [[String]] = []
+            var indexes: [Int] = []
+            for (offset, name) in ["res-a", "res-b", "res-c"].enumerated() {
+                try await app.test(.POST, "/api/networks") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateNetworkRequest(
+                            name: name, subnet: "10.7\(offset).0.0/24", projectId: project.id!))
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                    let created = try res.content.decode(NetworkResponse.self)
+                    addresses.append(try #require(created.resolverAddresses))
+                    let row = try await LogicalNetwork.find(created.id, on: app.db)
+                    indexes.append(try #require(row?.resolverIndex))
+                }
+            }
+            #expect(Set(addresses.flatMap { $0 }).count == 6)
+            #expect(Set(indexes).count == 3)
+            // IPv4 first, then the v6 ULA — the order the agent reads them in.
+            for (pair, index) in zip(addresses, indexes) {
+                #expect(
+                    pair == [
+                        NetworkResolverEndpoint.address(forIndex: index),
+                        NetworkResolverEndpoint.addressV6(forIndex: index),
+                    ])
+                #expect(pair[0].hasPrefix("169.254."))
+                #expect(pair[1].hasPrefix("fd00:ec2:1::"))
+            }
+        }
+    }
+
+    @Test("A network that never had a resolver carries no address")
+    func disabledAtCreateAllocatesNothing() async throws {
+        // Allocation happens on the write that turns the flag on, so a network
+        // created with it off consumes nothing from a fleet-wide space.
+        try await withNetworkTestApp { app, user, project, token in
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "res-none", subnet: "10.68.0.0/24", projectId: project.id!,
+                        resolverEnabled: false))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let created = try res.content.decode(NetworkResponse.self)
+                #expect(created.resolverEnabled == false)
+                #expect(created.resolverAddresses == nil)
+                let row = try await LogicalNetwork.find(created.id, on: app.db)
+                #expect(row?.resolverIndex == nil)
+            }
         }
     }
 
@@ -985,5 +1060,28 @@ final class NetworkControllerTests {
                 #expect(cleared.domainName == nil)
             }
         }
+    }
+
+    @Test("The index scan is sequential and skips what it must not hand out")
+    func resolverIndexScan() {
+        // Pure, so it can assert the range's edges without 65k round trips.
+        #expect(ResolverAddressAllocator.firstFree(after: []) == NetworkResolverEndpoint.firstIndex)
+        #expect(
+            ResolverAddressAllocator.firstFree(after: [256, 257, 259]) == 258,
+            "lowest free, not next-after-highest — a disabled network's index is reusable")
+
+        // 169.254.169.254 is the metadata service's and falls inside the range;
+        // handing it out would point a network's guests at a namespace serving
+        // HTTP. 169.254.169.253 was the pre-STR-40 resolver constant.
+        let metadata = (169 << 8) | 254
+        let legacy = (169 << 8) | 253
+        // The two are adjacent, so a scan that reaches them skips both and lands
+        // past the metadata address.
+        let used = Set(NetworkResolverEndpoint.firstIndex..<legacy)
+        #expect(ResolverAddressAllocator.firstFree(after: used) == metadata + 1)
+
+        // Exhaustion is a real outcome, not an infinite scan.
+        let all = Set(NetworkResolverEndpoint.firstIndex...NetworkResolverEndpoint.lastIndex)
+        #expect(ResolverAddressAllocator.firstFree(after: all) == nil)
     }
 }

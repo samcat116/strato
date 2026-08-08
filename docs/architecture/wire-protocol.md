@@ -84,7 +84,7 @@ ad-hoc checks scattered through the code:
 | `supportsSnapshotSync` | 33 | Snapshot artifacts in the desired-state sync — and a **capture-admission** gate: an artifact has no placement decision to gate, so a capture requested against a pre-v33 agent is refused instead |
 | `supportsEdgeNonces` | 34 | Reboot and restore as monotonic nonces on the desired entry — and an **admission** gate: with the imperative frames gone, a pre-v34 agent would ignore the field and report the bumped generation as converged, so the API would claim a restart that never happened |
 | `supportsDNSZones` | 36 | `DesiredStateMessage.dnsZones` — the zones an agent realizes, into the OVN `DNS` table (topology authority) and into its networks' resolvers (any agent with a local NIC). A *field* gate only: a pre-v36 agent leaves names unresolved, which is visible and self-healing, so there is nothing to refuse at the API |
-| `supportsNetworkResolver` | 37 | `DesiredNetworkState.resolverEnabled`, `NetworkSpec.resolverEnabled`, `DesiredDNSRecord.ttl` — the per-network link-local resolver. A *field* gate; whether the host can actually serve one is the separate `AgentRegisterMessage.resolverCapable`, folded site-wide before the field is sent |
+| `supportsNetworkResolver` | 37 | `DesiredNetworkState.resolverEnabled`/`.resolverAddresses`, the same pair on `NetworkSpec`, and `DesiredDNSRecord.ttl` — the per-network link-local resolver. A *field* gate; whether the host can actually serve one is the separate `AgentRegisterMessage.resolverCapable`, folded site-wide before the field is sent |
 
 The v9 `supportsSandboxSnapshots` and v22 `supportsVMCheckpoint` gates were
 removed with the last frames they guarded (v33 and v34): every question either
@@ -378,9 +378,17 @@ The two `resolverEnabled` fields are the v27 metadata-port pair repeated
 exactly, and for the same reason: the network carrier authors the OVN
 `localport` and the DHCP row, while the per-NIC copy reaches the *chassis* half
 on agents that receive an empty `networks` list because they may not author
-topology. The resolver rides the **same localport and the same namespace** as
-instance metadata, so a network with both on publishes four addresses from one
-row.
+topology.
+
+Each carrier also gains `resolverAddresses`, non-nil exactly when the flag is
+true: **one distinct v4/v6 pair per network**, allocated from `169.254.0.0/16`
+and `fd00:ec2:1::/48`. That distinctness is the whole feature. A resolver in the
+network's own chassis namespace has only link-local addresses and no egress the
+OVN router will SNAT, so it answers for its zones and forwards nothing — the bug
+the phase was filed to fix. A pair per network puts every resolver in the *host*
+namespace, where forwarding is the hypervisor's own, while the destination
+address still identifies the network and a per-address routing rule returns the
+reply to the right switch. See ADR 0008.
 
 `ttl` is the field v36 deliberately left off — an OVN `DNS` row has nowhere to
 put one, so it would have been dead weight on every sync. A zone file writes one

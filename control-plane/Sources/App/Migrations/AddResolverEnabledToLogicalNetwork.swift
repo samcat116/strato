@@ -1,30 +1,29 @@
 import Fluent
 
 /// Adds the per-network DNS resolver switch (STR-40, roadmap #769 phase 4):
-/// whether the network gives its guests a resolver at `NetworkResolverEndpoint`,
-/// answered by a CoreDNS the agent runs in the network's chassis namespace.
+/// whether the network gives its guests a resolver at its own
+/// `NetworkResolverEndpoint` addresses, answered by the host-wide CoreDNS the
+/// agent runs in the host namespace (ADR 0008).
 ///
-/// **Defaults to false**, unlike every other network switch here, and the reason
-/// is a limitation rather than a preference: the resolver serves a network's
-/// zones in full but **cannot yet forward** to upstream servers. Its CoreDNS
-/// runs in the network's chassis namespace, whose only egress is an on-link
-/// route out the tenant switch with a link-local source — no SNAT rule matches
-/// it and no router has a route back to it. Reaching a public resolver needs a
-/// path out through the *host*, which is the piece STR-40 did not build.
-///
-/// So enabling this today trades external resolution for the full internal
-/// record vocabulary, and the trade has to be the operator's rather than one an
-/// upgrade makes for them. When upstream egress lands this becomes an opt-out
-/// like `metadata_enabled`, and the default flips in its own migration.
+/// **Defaults to true**, like `metadata_enabled`, and existing networks are
+/// carried in on that default rather than opted in one at a time. Two things
+/// make that safe. The resolver forwards through the *hypervisor's* egress, so a
+/// network whose `dns_servers` list already worked keeps working and a network
+/// that could not reach a public resolver at all starts being able to — the bug
+/// this phase was filed for. And the control plane withholds the flag entirely
+/// unless every agent in the site reports `resolverCapable`, so a site that
+/// cannot run CoreDNS is unaffected by the default until it can.
 ///
 /// The column's arrival redefines `dns_servers` for every network that turns it
 /// on: it stops being what the guest is told and becomes what the resolver
 /// forwards to. No data migration is needed for that — the existing values were
 /// already recursive resolvers, which is exactly what an upstream forwarder is.
+/// What guests are handed over DHCP does change at their next lease, from that
+/// list to the network's link-local resolver address.
 struct AddResolverEnabledToLogicalNetwork: AsyncMigration {
     func prepare(on database: Database) async throws {
         try await database.schema("logical_networks")
-            .field("resolver_enabled", .bool, .required, .sql(.default(false)))
+            .field("resolver_enabled", .bool, .required, .sql(.default(true)))
             .update()
     }
 

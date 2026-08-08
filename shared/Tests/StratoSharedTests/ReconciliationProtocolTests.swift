@@ -530,4 +530,67 @@ struct ReconciliationProtocolTests {
         // an agent that speaks one must speak the other.
         #expect(WireProtocol.networkResolverMinimumVersion >= WireProtocol.dnsZoneMinimumVersion)
     }
+
+    @Test("Each network's resolver addresses are distinct and derive from one index")
+    func resolverAddressesAreDistinctPerNetwork() {
+        // The property the whole design rests on: distinct addresses are what
+        // let every resolver on a host share the *host* namespace, which is what
+        // lets them forward at all.
+        let first = NetworkResolverEndpoint.firstIndex
+        #expect(NetworkResolverEndpoint.address(forIndex: first) == "169.254.1.0")
+        #expect(NetworkResolverEndpoint.address(forIndex: first + 1) == "169.254.1.1")
+        #expect(NetworkResolverEndpoint.address(forIndex: 512) == "169.254.2.0")
+        #expect(
+            NetworkResolverEndpoint.address(forIndex: NetworkResolverEndpoint.lastIndex)
+                == "169.254.254.255")
+        #expect(NetworkResolverEndpoint.addressV6(forIndex: first) == "fd00:ec2:1::100")
+        // Disjoint from the instance metadata ULA, while sharing the /32 the
+        // security-group carve-out matches.
+        #expect(!NetworkResolverEndpoint.addressV6(forIndex: first).hasPrefix("fd00:ec2::"))
+    }
+
+    @Test("The metadata address is never handed to a network")
+    func metadataAddressIsReserved() {
+        // 169.254.169.254 falls inside the allocatable range, so without the
+        // reservation a network would eventually be given the metadata address
+        // and its guests' DNS would arrive at a namespace serving HTTP.
+        let metadata = (169 << 8) | 254
+        #expect(NetworkResolverEndpoint.address(forIndex: metadata) == "169.254.169.254")
+        #expect(!NetworkResolverEndpoint.isValidIndex(metadata))
+        #expect(!NetworkResolverEndpoint.isValidIndex((169 << 8) | 253))
+        #expect(NetworkResolverEndpoint.isValidIndex(NetworkResolverEndpoint.firstIndex))
+        #expect(!NetworkResolverEndpoint.isValidIndex(NetworkResolverEndpoint.firstIndex - 1))
+        #expect(!NetworkResolverEndpoint.isValidIndex(NetworkResolverEndpoint.lastIndex + 1))
+    }
+
+    @Test("Routing tables are per network and clear of the reserved ids")
+    func routingTablesAreSafe() {
+        // 253/254/255 are `default`/`main`/`local`; colliding would silently
+        // merge a tenant network's routes into the host's own table.
+        #expect(
+            NetworkResolverEndpoint.routingTable(forIndex: NetworkResolverEndpoint.firstIndex) > 255)
+        #expect(
+            NetworkResolverEndpoint.routingTable(forIndex: 1)
+                != NetworkResolverEndpoint.routingTable(forIndex: 2))
+    }
+
+    @Test("The resolver addresses ride both carriers")
+    func resolverAddressesRoundTrip() throws {
+        let addresses = ["169.254.1.0", "fd00:ec2:1::100"]
+        let network = DesiredNetworkState(
+            networkId: UUID(), name: "default", subnet: "10.0.0.0/24", gateway: "10.0.0.1",
+            routerKey: "k", externalAccess: false, resolverEnabled: true,
+            resolverAddresses: addresses, generation: 1)
+        let decoded = try MessageEnvelope(message: DesiredStateMessage(vms: [], networks: [network]))
+            .decode(as: DesiredStateMessage.self)
+        #expect(decoded.networks.first?.resolverAddresses == addresses)
+
+        let spec = NetworkSpec(
+            network: "default", networkId: UUID(), resolverEnabled: true,
+            resolverAddresses: addresses)
+        let data = try WireProtocol.makeEncoder().encode(spec)
+        #expect(
+            try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data).resolverAddresses
+                == addresses)
+    }
 }

@@ -1,17 +1,15 @@
 import Foundation
 import StratoShared
 
-/// The chassis-local half of a network's link-local services: the OVS internal
-/// port that terminates the network's `localport` on *this* host, and the
-/// network namespace that holds it.
+/// The chassis-local half of a network's instance metadata service: the OVS
+/// internal port that terminates the network's metadata `localport` on *this*
+/// host, and the network namespace that holds it.
 ///
-/// Two services live here. Instance metadata (STR-49) answers on
-/// `InstanceMetadataEndpoint`, and the network's DNS resolver (STR-40) answers
-/// on `NetworkResolverEndpoint`. They share one namespace, one OVS internal
-/// port and one MAC, because they need exactly the same thing from the chassis
-/// — a foot inside the tenant network that can tell which network a request
-/// came from and route a reply back to an address another network may also be
-/// using.
+/// The resolver briefly shared this namespace and now has its own foot in the
+/// *host* namespace (`ResolverHostPortPlan`). The split is the whole of ADR
+/// 0008: metadata needs a namespace because the source address is its only
+/// identification mechanism, while a resolver needs egress it cannot have
+/// inside one.
 ///
 /// Pure by construction, like `SandboxNetnsAttachmentPlan` and for the same
 /// reason: `NetworkServiceLinux` lives in the executable target and cannot be
@@ -26,9 +24,8 @@ import StratoShared
 /// network controller. This half must exist on *every* chassis running a NIC on
 /// the network, including the agents that receive an empty `networks` list
 /// precisely because they may not author topology. So its input is the agent's
-/// own workload specs (`NetworkSpec.metadataEnabled` / `.resolverEnabled`), and
-/// its teardown trigger is the last local NIC leaving the network — not the
-/// network being deleted.
+/// own workload specs (`NetworkSpec.metadataEnabled`), and its teardown trigger
+/// is the last local NIC leaving the network — not the network being deleted.
 ///
 /// ## Why one namespace per network
 ///
@@ -40,12 +37,6 @@ import StratoShared
 /// the whole security model of an instance metadata service. Reply routing
 /// breaks on the same ambiguity. One namespace per network is also what
 /// OpenStack's `ovnmeta-<network>` namespaces do, for this reason.
-///
-/// The resolver inherits both properties for free, which is why STR-40 reuses
-/// this namespace instead of the single host-namespace listener its issue
-/// originally proposed: the destination address would have identified the
-/// network, but nothing would have routed a reply back to a guest whose
-/// `10.0.0.5` exists on three switches. See ADR 0007.
 ///
 /// ## On moving the interface into the namespace
 ///
@@ -118,19 +109,11 @@ public struct ChassisServicePlan: Sendable, Equatable {
     ///
     /// `ipBinaryPath` is injected rather than assumed so the plan stays testable
     /// and a service manager's stripped `PATH` can't break it.
-    /// `metadata` and `resolver` say which services this network publishes.
-    /// At least one is always true where this is called — a network wanting
-    /// neither has no chassis foot to build — but both are passed explicitly so
-    /// the addresses the namespace holds and the ones the OVN `localport`
-    /// advertises derive from the same two booleans.
-    ///
-    /// `ratePPS` caps the aggregate packet rate guests may push at these
-    /// services; 0 disables the policer. `tcBinaryPath` is only consulted when
-    /// it is non-zero.
+    /// `ratePPS` caps the packet rate guests may push at the metadata service;
+    /// 0 disables the policer. `tcBinaryPath` is only consulted when it is
+    /// non-zero.
     public static func plan(
         networkId: UUID,
-        metadata: Bool,
-        resolver: Bool,
         ipBinaryPath: String,
         tcBinaryPath: String,
         bridge: String,
@@ -177,55 +160,16 @@ public struct ChassisServicePlan: Sendable, Equatable {
         // construction — one set per namespace, one namespace per network per
         // chassis — so DAD buys nothing and costs each listener a startup race
         // on every agent restart.
-        if metadata {
-            setup.append(
-                ip(
-                    ["-n", namespace, "addr", "add", InstanceMetadataEndpoint.cidr, "dev", device],
-                    ["File exists"]))
-            setup.append(
-                ip(
-                    [
-                        "-n", namespace, "addr", "add", InstanceMetadataEndpoint.cidrV6, "dev", device,
-                        "nodad",
-                    ], ["File exists"]))
-        }
-        if resolver {
-            setup.append(
-                ip(
-                    ["-n", namespace, "addr", "add", NetworkResolverEndpoint.cidr, "dev", device],
-                    ["File exists"]))
-            setup.append(
-                ip(
-                    [
-                        "-n", namespace, "addr", "add", NetworkResolverEndpoint.cidrV6, "dev", device,
-                        "nodad",
-                    ], ["File exists"]))
-        }
-
-        // A service turned *off* has its addresses removed, not merely left
-        // unadvertised. Realization re-runs when the `strato-services` stamp
-        // changes, so without this the namespace keeps addresses for a service
-        // it no longer serves and then reports converged — exactly the drift
-        // `ObservedChassisServicePort`'s separate namespace probe exists to
-        // catch one layer up. Guests cannot reach them (the NB port stops
-        // advertising them, so nothing answers their ARP), but "harmless" and
-        // "honest" are different properties, and an operator reading `ip addr`
-        // in the namespace should see what it actually serves.
-        //
-        // Tolerated because the common path is a namespace that never had them.
-        let absent = ["Cannot assign requested address", "Cannot find device", "No such"]
-        if !metadata {
-            setup.append(
-                ip(["-n", namespace, "addr", "del", InstanceMetadataEndpoint.cidr, "dev", device], absent))
-            setup.append(
-                ip(["-n", namespace, "addr", "del", InstanceMetadataEndpoint.cidrV6, "dev", device], absent))
-        }
-        if !resolver {
-            setup.append(
-                ip(["-n", namespace, "addr", "del", NetworkResolverEndpoint.cidr, "dev", device], absent))
-            setup.append(
-                ip(["-n", namespace, "addr", "del", NetworkResolverEndpoint.cidrV6, "dev", device], absent))
-        }
+        setup.append(
+            ip(
+                ["-n", namespace, "addr", "add", InstanceMetadataEndpoint.cidr, "dev", device],
+                ["File exists"]))
+        setup.append(
+            ip(
+                [
+                    "-n", namespace, "addr", "add", InstanceMetadataEndpoint.cidrV6, "dev", device,
+                    "nodad",
+                ], ["File exists"]))
 
         // Replies go to the guest's tenant address, for which the namespace has
         // no route otherwise. A default route is unambiguous here because the
@@ -233,15 +177,8 @@ public struct ChassisServicePlan: Sendable, Equatable {
         // number of subnets on the switch without needing an IPAM allocation
         // from each (which is how OpenStack solves the same problem).
         //
-        // The preferred source is whichever service address actually exists —
-        // `ip route add ... src <addr>` is rejected outright when the address
-        // is not configured, so hardcoding the metadata one would fail the
-        // whole namespace build on a resolver-only network. It is only a
-        // *preference*: each listener binds its own address explicitly, so
-        // replies leave from the address the request arrived at regardless.
-        let preferredSource = metadata ? InstanceMetadataEndpoint.address : NetworkResolverEndpoint.address
-        let preferredSource6 =
-            metadata ? InstanceMetadataEndpoint.addressV6 : NetworkResolverEndpoint.addressV6
+        let preferredSource = InstanceMetadataEndpoint.address
+        let preferredSource6 = InstanceMetadataEndpoint.addressV6
         setup.append(
             ip(
                 [
@@ -330,8 +267,6 @@ public struct ChassisServicePlan: Sendable, Equatable {
                 "external_ids:\(ChassisServicePlan.managedKey)=\(ChassisServicePlan.managedValue)",
                 "external_ids:\(ChassisServicePlan.roleKey)=\(ChassisServicePlan.roleValue)",
                 "external_ids:\(ChassisServicePlan.networkIDKey)=\(networkId.uuidString.lowercased())",
-                "external_ids:\(ChassisServicePlan.servicesKey)="
-                    + ChassisServiceSet(metadata: metadata, resolver: resolver).externalIDValue,
             ],
             ovsVerify: [timeout, "get", "Interface", device, "ofport", "error"],
             namespaceSetup: namespaceSetup,
@@ -391,57 +326,7 @@ public struct ChassisServicePlan: Sendable, Equatable {
     /// Carries the network id so teardown can rederive the namespace to delete
     /// from an observed interface alone.
     public static let networkIDKey = "strato-network-id"
-    /// Which services the namespace behind this interface was built for.
-    ///
-    /// Stamped so the reconcile can tell "already realized" from "realized for
-    /// a different service set" without probing the namespace's addresses. The
-    /// OVS row is read for observation anyway, so comparing a marker on it is
-    /// free, whereas an `ip addr show` per network would be one more exec on
-    /// every sync — the same argument `DesiredDNSZone.recordsHash` makes.
-    public static let servicesKey = "strato-services"
 }
-
-/// Which of a network's link-local services this chassis publishes.
-public struct ChassisServiceSet: Equatable, Hashable, Sendable {
-    public let metadata: Bool
-    public let resolver: Bool
-
-    public init(metadata: Bool, resolver: Bool) {
-        self.metadata = metadata
-        self.resolver = resolver
-    }
-
-    /// Whether anything at all is wanted. A network wanting neither has no
-    /// chassis foot, which is the same state as never having had one.
-    public var isEmpty: Bool { !metadata && !resolver }
-
-    /// The `external_ids:strato-services` value, in a fixed order so the
-    /// stamp compares as a string.
-    public var externalIDValue: String {
-        ([metadata ? "metadata" : nil, resolver ? "resolver" : nil].compactMap { $0 })
-            .joined(separator: "+")
-    }
-
-    /// What an observed interface's stamp says it was built for.
-    ///
-    /// **A missing stamp is metadata-only, not "unknown".** Every interface
-    /// that predates STR-40 was built for metadata alone — the resolver did not
-    /// exist — so reading absence as metadata-only is a statement of fact
-    /// rather than a guess, and it is what makes an upgraded agent re-realize
-    /// exactly the namespaces whose networks want a resolver instead of all of
-    /// them. An unrecognized value is treated the same way and re-realized,
-    /// which is the safe direction: the plan is idempotent.
-    public static func parse(_ raw: String?) -> ChassisServiceSet {
-        guard let raw, !raw.isEmpty else { return ChassisServiceSet(metadata: true, resolver: false) }
-        let parts = Set(raw.split(separator: "+").map(String.init))
-        let known = parts.isSubset(of: ["metadata", "resolver"])
-        guard known else { return ChassisServiceSet(metadata: true, resolver: false) }
-        return ChassisServiceSet(
-            metadata: parts.contains("metadata"), resolver: parts.contains("resolver"))
-    }
-}
-
-// MARK: - Chassis-side reconciliation
 
 /// One chassis service interface this chassis owns, as observed on the host.
 public struct ObservedChassisServicePort: Equatable, Sendable {
@@ -460,27 +345,18 @@ public struct ObservedChassisServicePort: Equatable, Sendable {
     /// answered, which is strictly worse than the fast failure they get with no
     /// metadata port at all.
     public let namespacePresent: Bool
-    /// The service set this interface was built for, read off its
-    /// `external_ids` stamp — see `ChassisServicePlan.servicesKey`.
-    public let services: ChassisServiceSet
-
-    public init(
-        networkId: UUID, interfaceName: String, namespacePresent: Bool,
-        services: ChassisServiceSet = ChassisServiceSet(metadata: true, resolver: false)
-    ) {
+    public init(networkId: UUID, interfaceName: String, namespacePresent: Bool) {
         self.networkId = networkId
         self.interfaceName = interfaceName
         self.namespacePresent = namespacePresent
-        self.services = services
     }
 }
 
 /// One chassis-side side effect.
 public enum ChassisServiceAction: Equatable, Sendable {
-    /// Run the (idempotent) setup plan. Three causes, one action: the network
-    /// has no interface yet, it has one whose namespace went missing, or it has
-    /// one built for a different set of services than it now wants.
-    case realize(networkId: UUID, services: ChassisServiceSet)
+    /// Run the (idempotent) setup plan: either the network has no interface yet,
+    /// or it has one whose namespace went missing.
+    case realize(networkId: UUID)
     /// Remove the interface and its namespace. Carries the observed device name
     /// so teardown deletes what was found.
     case remove(networkId: UUID, interfaceName: String)
@@ -495,34 +371,27 @@ public enum ChassisServiceReconciler {
 
     /// The side effects that converge this chassis toward `desired`.
     ///
-    /// `desired` nil ≙ a control plane that predates both service flags: no
+    /// `desired` nil ≙ a control plane that predates `metadataEnabled`: no
     /// actions at all, so silence is never read as "tear every namespace down".
-    /// An empty (non-nil) map *is* an opinion and removes everything. A network
-    /// present with an empty service set is the same opinion for that one
-    /// network, so callers need not filter it out first.
+    /// An empty (non-nil) list *is* an opinion and removes everything.
     public static func actions(
-        desired: [UUID: ChassisServiceSet]?, observed: [ObservedChassisServicePort]
+        desired: [UUID]?, observed: [ObservedChassisServicePort]
     ) -> [ChassisServiceAction] {
         guard let desired else { return [] }
-        let wanted = desired.filter { !$0.value.isEmpty }
-        let byNetwork = Dictionary(observed.map { ($0.networkId, $0) }, uniquingKeysWith: { first, _ in first })
+        let wanted = Set(desired)
+        let byNetwork = Dictionary(
+            observed.map { ($0.networkId, $0) }, uniquingKeysWith: { first, _ in first })
 
         var actions: [ChassisServiceAction] = []
-        // Realize covers "never built", "built, but its namespace is gone", and
-        // "built for a different service set". The plan is idempotent, so one
-        // path serves all three and there is no repair-only branch to get subtly
-        // wrong. The last case is what makes turning a resolver on reach a
-        // network whose namespace already exists for metadata.
-        for networkId in wanted.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
-            guard let services = wanted[networkId] else { continue }
-            let port = byNetwork[networkId]
-            guard port?.namespacePresent == true, port?.services == services else {
-                actions.append(.realize(networkId: networkId, services: services))
-                continue
-            }
+        // Realize covers both "never built" and "built, but its namespace is
+        // gone". The plan is idempotent, so one path serves both and there is no
+        // repair-only branch to get subtly wrong.
+        for networkId in wanted.sorted(by: { $0.uuidString < $1.uuidString })
+        where byNetwork[networkId]?.namespacePresent != true {
+            actions.append(.realize(networkId: networkId))
         }
         for port in observed.sorted(by: { $0.networkId.uuidString < $1.networkId.uuidString })
-        where wanted[port.networkId] == nil {
+        where !wanted.contains(port.networkId) {
             actions.append(.remove(networkId: port.networkId, interfaceName: port.interfaceName))
         }
         return actions

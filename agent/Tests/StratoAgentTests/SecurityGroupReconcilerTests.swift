@@ -565,13 +565,16 @@ struct ResolverEgressACLTests {
         }
     }
 
-    @Test("Scoped to port 53 on the resolver addresses only")
+    @Test("Scoped to port 53 on the link-local resolver space")
     func scopedToTheService() {
         // The namespace terminates nothing else on those addresses, so a wider
         // hole would only widen what a guest may probe on its own chassis.
         #expect(acls.allSatisfy { $0.match.contains(".dst == 53") })
-        #expect(acls.filter { $0.match.contains("ip4.dst == 169.254.169.253") }.count == 2)
-        #expect(acls.filter { $0.match.contains("ip6.dst == fd00:ec2::253") }.count == 2)
+        // Matched on the whole link-local space, not one address: every network
+        // has its own now, and a per-network match would mean a per-network port
+        // group for a rule that lands on every managed port anyway.
+        #expect(acls.filter { $0.match.contains("ip4.dst == 169.254.0.0/16") }.count == 2)
+        #expect(acls.filter { $0.match.contains("ip6.dst == fd00:ec2::/32") }.count == 2)
     }
 
     @Test("Egress only, stateful, and above every rule-derived allow")
@@ -597,7 +600,7 @@ struct ResolverEgressACLTests {
         // Without the bump the carve-out would sit unapplied until some
         // unrelated rule edit happened to bump the group — which on a network
         // with a restrictive policy means DNS stays broken indefinitely.
-        #expect(SecurityGroupACLBuilder.dropGroupRevision == 5)
+        #expect(SecurityGroupACLBuilder.dropGroupRevision == 6)
     }
 
     @Test("The metadata carve-out is still there beside it")

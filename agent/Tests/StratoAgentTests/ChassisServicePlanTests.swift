@@ -15,13 +15,10 @@ struct ChassisServicePlanTests {
 
     private let networkId = UUID(uuidString: "3F2504E0-4F89-11D3-9A0C-0305E82C3301")!
 
-    private func plan(
-        metadata: Bool = true, resolver: Bool = false, ratePPS: Int = 0
-    ) -> ChassisServicePlan {
+    private func plan(ratePPS: Int = 0) -> ChassisServicePlan {
         ChassisServicePlan.plan(
-            networkId: networkId, metadata: metadata, resolver: resolver,
-            ipBinaryPath: "/sbin/ip", tcBinaryPath: "/sbin/tc", bridge: "br-int",
-            ovsTimeoutSeconds: 10, ratePPS: ratePPS)
+            networkId: networkId, ipBinaryPath: "/sbin/ip", tcBinaryPath: "/sbin/tc",
+            bridge: "br-int", ovsTimeoutSeconds: 10, ratePPS: ratePPS)
     }
 
     private func argv(_ commands: [NetnsCommand]) -> [String] {
@@ -57,27 +54,6 @@ struct ChassisServicePlanTests {
         #expect(attach.contains("external_ids:strato-network-id=\(networkId.uuidString.lowercased())"))
     }
 
-    @Test("The role marker stays `metadata` even when the port carries both services")
-    func roleMarkerIsStable() {
-        // It is an ownership marker on rows every live site already has.
-        // Changing it would make every existing interface unrecognized, so each
-        // agent would build a second one beside it and never reap the first.
-        let both = plan(metadata: true, resolver: true).ovsAttach.joined(separator: " ")
-        #expect(both.contains("external_ids:strato-role=metadata"))
-    }
-
-    @Test("The attach stamps which services the namespace was built for")
-    func attachStampsServiceSet() {
-        // The stamp is what lets a reconcile tell "already realized" from
-        // "realized for a different service set" without probing the namespace's
-        // addresses on every sync.
-        #expect(plan(metadata: true, resolver: false).ovsAttach.contains("external_ids:strato-services=metadata"))
-        #expect(plan(metadata: false, resolver: true).ovsAttach.contains("external_ids:strato-services=resolver"))
-        #expect(
-            plan(metadata: true, resolver: true).ovsAttach
-                .contains("external_ids:strato-services=metadata+resolver"))
-    }
-
     @Test("Setup creates the namespace first, then moves and addresses the device")
     func setupOrder() {
         let plan = plan()
@@ -93,80 +69,9 @@ struct ChassisServicePlanTests {
                 "/sbin/ip -n \(ns) link set dev lo up",
                 "/sbin/ip -n \(ns) addr add 169.254.169.254/32 dev \(device)",
                 "/sbin/ip -n \(ns) addr add fd00:ec2::254/128 dev \(device) nodad",
-                // The resolver is off here, so its addresses are removed rather
-                // than left configured on an interface that no longer serves it.
-                "/sbin/ip -n \(ns) addr del 169.254.169.253/32 dev \(device)",
-                "/sbin/ip -n \(ns) addr del fd00:ec2::253/128 dev \(device)",
                 "/sbin/ip -n \(ns) route add default dev \(device) src 169.254.169.254",
                 "/sbin/ip -n \(ns) -6 route add default dev \(device) src fd00:ec2::254",
             ])
-    }
-
-    @Test("A resolver-enabled network also gets the resolver addresses")
-    func resolverAddressesAreAdded() {
-        let plan = plan(metadata: true, resolver: true)
-        let lines = argv(plan.interfaceSetup)
-        #expect(lines.contains { $0.contains("addr add 169.254.169.253/32") })
-        #expect(lines.contains { $0.contains("addr add fd00:ec2::253/128") && $0.hasSuffix("nodad") })
-    }
-
-    @Test("A metadata-only network gets no resolver addresses, and vice versa")
-    func servicesAreIndependent() {
-        // `addr add` specifically: the disabled service's addresses do appear in
-        // the plan, as deletes — see `disabledServiceAddressesAreRemoved`.
-        func added(_ lines: [String]) -> [String] { lines.filter { $0.contains("addr add") } }
-
-        let metadataOnly = added(argv(plan(metadata: true, resolver: false).interfaceSetup))
-        #expect(!metadataOnly.contains { $0.contains("169.254.169.253") })
-        #expect(!metadataOnly.contains { $0.contains("fd00:ec2::253") })
-
-        let resolverOnly = added(argv(plan(metadata: false, resolver: true).interfaceSetup))
-        #expect(!resolverOnly.contains { $0.contains("169.254.169.254") })
-        #expect(!resolverOnly.contains { $0.contains("fd00:ec2::254") })
-    }
-
-    @Test("A service turned off has its addresses removed, not just unadvertised")
-    func disabledServiceAddressesAreRemoved() {
-        // Realization re-runs when the service stamp changes, so without the
-        // deletes the namespace keeps addresses for a service it no longer
-        // serves and then reports converged — the drift the separate namespace
-        // probe exists to catch one layer up.
-        let resolverOnly = argv(plan(metadata: false, resolver: true).interfaceSetup)
-        #expect(resolverOnly.contains { $0.contains("addr del 169.254.169.254/32") })
-        #expect(resolverOnly.contains { $0.contains("addr del fd00:ec2::254/128") })
-
-        let metadataOnly = argv(plan(metadata: true, resolver: false).interfaceSetup)
-        #expect(metadataOnly.contains { $0.contains("addr del 169.254.169.253/32") })
-        #expect(metadataOnly.contains { $0.contains("addr del fd00:ec2::253/128") })
-    }
-
-    @Test("A service that is on is never deleted in the same pass that adds it")
-    func enabledServiceIsNotDeleted() {
-        let both = argv(plan(metadata: true, resolver: true).interfaceSetup)
-        #expect(!both.contains { $0.contains("addr del") })
-    }
-
-    @Test("The address deletes tolerate a namespace that never had them")
-    func addressDeletesAreTolerant() {
-        // The common path by far: a namespace built for one service has never
-        // held the other's addresses, and `ip addr del` fails on an address that
-        // is not there. Untolerated, that would roll the whole namespace back.
-        let deletes = plan(metadata: true, resolver: false).interfaceSetup
-            .filter { $0.arguments.contains("del") }
-        #expect(!deletes.isEmpty)
-        for command in deletes {
-            #expect(command.tolerates("RTNETLINK answers: Cannot assign requested address"))
-        }
-    }
-
-    @Test("The default route's preferred source is an address that actually exists")
-    func preferredSourceFollowsTheEnabledService() {
-        // `ip route add ... src <addr>` is rejected outright when the address is
-        // not configured, so hardcoding the metadata one would fail the whole
-        // namespace build on a resolver-only network.
-        let lines = argv(plan(metadata: false, resolver: true).interfaceSetup)
-        #expect(lines.contains { $0.contains("route add default") && $0.hasSuffix("src 169.254.169.253") })
-        #expect(lines.contains { $0.contains("-6 route add default") && $0.hasSuffix("src fd00:ec2::253") })
     }
 
     @Test("The namespace is created before the OVS attach the executor runs between")
@@ -190,16 +95,14 @@ struct ChassisServicePlanTests {
                 "/sbin/ip -n \(plan.netnsName) link set dev \(plan.interfaceName) address \(expected)"))
     }
 
-    @Test("Every IPv6 address is added with nodad")
+    @Test("The IPv6 address is added with nodad")
     func ipv6SkipsDuplicateAddressDetection() throws {
         // DAD leaves the address tentative for ~1s, during which bind() fails
         // with EADDRNOTAVAIL — a startup race on every agent restart, for a
         // duplicate that cannot happen (one set per namespace).
-        let setup = plan(metadata: true, resolver: true).interfaceSetup
-        for cidr in [InstanceMetadataEndpoint.cidrV6, NetworkResolverEndpoint.cidrV6] {
-            let command = try #require(setup.first { $0.arguments.contains(cidr) })
-            #expect(command.arguments.last == "nodad")
-        }
+        let command = try #require(
+            plan().interfaceSetup.first { $0.arguments.contains(InstanceMetadataEndpoint.cidrV6) })
+        #expect(command.arguments.last == "nodad")
     }
 
     @Test("Each family gets its own default route out the device")
@@ -216,7 +119,7 @@ struct ChassisServicePlanTests {
     func ratePolicerIsOptional() {
         #expect(!argv(plan(ratePPS: 0).interfaceSetup).contains { $0.contains("/sbin/tc") })
 
-        let policed = argv(plan(metadata: true, resolver: true, ratePPS: 1024).interfaceSetup)
+        let policed = argv(plan(ratePPS: 1024).interfaceSetup)
         let device = plan().interfaceName
         let ns = plan().netnsName
         #expect(policed.contains("/sbin/tc -n \(ns) qdisc add dev \(device) handle ffff: ingress"))
@@ -255,7 +158,7 @@ struct ChassisServicePlanTests {
     @Test("Setup is idempotent: every command that can re-run tolerates its own success")
     func setupIsIdempotent() {
         // A retried pass, or an agent restart, re-runs the whole sequence.
-        let plan = plan(metadata: true, resolver: true, ratePPS: 1024)
+        let plan = plan(ratePPS: 1024)
         for command in plan.namespaceSetup + plan.interfaceSetup
         where command.arguments.contains("add") {
             #expect(!command.tolerated.isEmpty, "\(command.arguments) would fail on a second pass")
@@ -297,8 +200,8 @@ struct ChassisServicePlanTests {
         // One namespace per network per chassis is what makes the caller
         // identifiable when two networks use overlapping subnets.
         let other = ChassisServicePlan.plan(
-            networkId: UUID(), metadata: true, resolver: false, ipBinaryPath: "/sbin/ip",
-            tcBinaryPath: "/sbin/tc", bridge: "br-int", ovsTimeoutSeconds: 10, ratePPS: 0)
+            networkId: UUID(), ipBinaryPath: "/sbin/ip", tcBinaryPath: "/sbin/tc",
+            bridge: "br-int", ovsTimeoutSeconds: 10, ratePPS: 0)
         #expect(other.netnsName != plan().netnsName)
         #expect(other.interfaceName != plan().interfaceName)
     }
@@ -311,49 +214,6 @@ struct ChassisServicePlanTests {
     }
 }
 
-/// The service-set stamp, which is what makes turning a service on reach a
-/// namespace that already exists for the other one.
-@Suite("Chassis Service Set")
-struct ChassisServiceSetTests {
-
-    @Test("The external-id value is stable and ordered")
-    func externalIDValueIsCanonical() {
-        #expect(ChassisServiceSet(metadata: true, resolver: false).externalIDValue == "metadata")
-        #expect(ChassisServiceSet(metadata: false, resolver: true).externalIDValue == "resolver")
-        #expect(ChassisServiceSet(metadata: true, resolver: true).externalIDValue == "metadata+resolver")
-        #expect(ChassisServiceSet(metadata: false, resolver: false).externalIDValue == "")
-    }
-
-    @Test("A missing stamp reads as metadata-only, which is a fact rather than a guess")
-    func absentStampIsLegacyMetadata() {
-        // Every interface built before STR-40 was built for metadata alone; the
-        // resolver did not exist. Reading absence this way is what makes an
-        // upgraded agent re-realize exactly the namespaces whose networks want a
-        // resolver, rather than all of them.
-        #expect(ChassisServiceSet.parse(nil) == ChassisServiceSet(metadata: true, resolver: false))
-        #expect(ChassisServiceSet.parse("") == ChassisServiceSet(metadata: true, resolver: false))
-    }
-
-    @Test("An unrecognized stamp is treated as legacy and re-realized")
-    func unknownStampIsLegacy() {
-        // The safe direction: the plan is idempotent, so a needless realize
-        // costs a pass, while trusting a value we cannot read costs a namespace
-        // that never converges.
-        #expect(ChassisServiceSet.parse("imds+quic") == ChassisServiceSet(metadata: true, resolver: false))
-    }
-
-    @Test("A stamp round-trips")
-    func roundTrips() {
-        for set in [
-            ChassisServiceSet(metadata: true, resolver: false),
-            ChassisServiceSet(metadata: false, resolver: true),
-            ChassisServiceSet(metadata: true, resolver: true),
-        ] {
-            #expect(ChassisServiceSet.parse(set.externalIDValue) == set)
-        }
-    }
-}
-
 /// The chassis *diff* — the half that deletes namespaces, and the half a live
 /// deployment gets wrong in ways that are invisible to the OVSDB rows.
 @Suite("Chassis Service Reconciler")
@@ -362,29 +222,24 @@ struct ChassisServiceReconcilerTests {
     private let a = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
     private let b = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!
 
-    private let metadataOnly = ChassisServiceSet(metadata: true, resolver: false)
-    private let both = ChassisServiceSet(metadata: true, resolver: true)
-
     private func observed(
-        _ networkId: UUID, namespacePresent: Bool = true, interfaceName: String = "mdpaaaa00000000",
-        services: ChassisServiceSet? = nil
+        _ networkId: UUID, namespacePresent: Bool = true, interfaceName: String = "mdpaaaa00000000"
     ) -> ObservedChassisServicePort {
         ObservedChassisServicePort(
-            networkId: networkId, interfaceName: interfaceName, namespacePresent: namespacePresent,
-            services: services ?? metadataOnly)
+            networkId: networkId, interfaceName: interfaceName, namespacePresent: namespacePresent)
     }
 
     @Test("A network with no interface is realized")
     func realizesMissingNetwork() {
         #expect(
-            ChassisServiceReconciler.actions(desired: [a: metadataOnly], observed: [])
-                == [.realize(networkId: a, services: metadataOnly)])
+            ChassisServiceReconciler.actions(desired: [a], observed: [])
+                == [.realize(networkId: a)])
     }
 
     @Test("A fully realized network needs no action")
     func convergedNeedsNothing() {
         #expect(
-            ChassisServiceReconciler.actions(desired: [a: metadataOnly], observed: [observed(a)]).isEmpty)
+            ChassisServiceReconciler.actions(desired: [a], observed: [observed(a)]).isEmpty)
     }
 
     @Test("An interface whose namespace is gone is realized again")
@@ -398,46 +253,15 @@ struct ChassisServiceReconcilerTests {
         // would never rebuild this.
         #expect(
             ChassisServiceReconciler.actions(
-                desired: [a: metadataOnly], observed: [observed(a, namespacePresent: false)])
-                == [.realize(networkId: a, services: metadataOnly)])
-    }
-
-    @Test("Turning a service on re-realizes a namespace that already exists")
-    func serviceSetChangeRebuilds() {
-        // Without this, enabling the resolver on a network whose namespace was
-        // built for metadata would converge to "nothing to do" and the resolver
-        // address would never be added — a network whose guests are handed an
-        // address nothing on the host holds.
-        #expect(
-            ChassisServiceReconciler.actions(
-                desired: [a: both], observed: [observed(a, services: metadataOnly)])
-                == [.realize(networkId: a, services: both)])
-    }
-
-    @Test("Turning a service off re-realizes too, rather than leaving the address published")
-    func serviceSetShrinkRebuilds() {
-        #expect(
-            ChassisServiceReconciler.actions(
-                desired: [a: metadataOnly], observed: [observed(a, services: both)])
-                == [.realize(networkId: a, services: metadataOnly)])
-    }
-
-    @Test("A network wanting no service at all is removed, not realized empty")
-    func emptyServiceSetIsRemoval() {
-        // "No port" and "a port with nothing on it" are the same state, so the
-        // caller need not filter an empty set out before calling.
-        #expect(
-            ChassisServiceReconciler.actions(
-                desired: [a: ChassisServiceSet(metadata: false, resolver: false)],
-                observed: [observed(a)])
-                == [.remove(networkId: a, interfaceName: "mdpaaaa00000000")])
+                desired: [a], observed: [observed(a, namespacePresent: false)])
+                == [.realize(networkId: a)])
     }
 
     @Test("A network no longer wanted is removed, by its observed device name")
     func removesUnwanted() {
         #expect(
             ChassisServiceReconciler.actions(
-                desired: [:], observed: [observed(b, interfaceName: "mdpbbbb11111111")])
+                desired: [], observed: [observed(b, interfaceName: "mdpbbbb11111111")])
                 == [.remove(networkId: b, interfaceName: "mdpbbbb11111111")])
     }
 
@@ -447,19 +271,19 @@ struct ChassisServiceReconcilerTests {
         // that as "remove" would tear down every namespace on the fleet on a
         // rollback. An empty *non-nil* map is an opinion and does remove.
         #expect(ChassisServiceReconciler.actions(desired: nil, observed: [observed(a)]).isEmpty)
-        #expect(!ChassisServiceReconciler.actions(desired: [:], observed: [observed(a)]).isEmpty)
+        #expect(!ChassisServiceReconciler.actions(desired: [], observed: [observed(a)]).isEmpty)
     }
 
     @Test("Realizations are ordered before removals, and both are deterministic")
     func actionsAreOrderedAndDeterministic() {
         let actions = ChassisServiceReconciler.actions(
-            desired: [b: metadataOnly, a: metadataOnly],
+            desired: [b, a],
             observed: [observed(b, namespacePresent: false, interfaceName: "mdpb")])
         // Sorted by id, so a replayed sync produces an identical action list.
         #expect(
             actions == [
-                .realize(networkId: a, services: metadataOnly),
-                .realize(networkId: b, services: metadataOnly),
+                .realize(networkId: a),
+                .realize(networkId: b),
             ])
     }
 
@@ -467,15 +291,15 @@ struct ChassisServiceReconcilerTests {
     func mixedPass() {
         let stale = UUID(uuidString: "CCCCCCCC-0000-0000-0000-000000000003")!
         let actions = ChassisServiceReconciler.actions(
-            desired: [a: metadataOnly, b: both],
+            desired: [a, b],
             observed: [
                 observed(a, namespacePresent: false, interfaceName: "mdpa"),
                 observed(stale, interfaceName: "mdpc"),
             ])
         #expect(
             actions == [
-                .realize(networkId: a, services: metadataOnly),
-                .realize(networkId: b, services: both),
+                .realize(networkId: a),
+                .realize(networkId: b),
                 .remove(networkId: stale, interfaceName: "mdpc"),
             ])
     }
