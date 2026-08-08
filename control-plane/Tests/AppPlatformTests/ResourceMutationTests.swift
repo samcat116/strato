@@ -291,4 +291,84 @@ final class ResourceMutationTests {
             await app.backgroundTasks.drain(timeout: .seconds(10))
         }
     }
+
+    // MARK: - Failures that leave nothing to abandon (STR-191)
+
+    /// The state the ambiguity lived in, and which nothing else constructs.
+    ///
+    /// Every other `recordFailure` path goes through a `resolveForStuckOperation`
+    /// that bumps the generation, so `failedGeneration` ends one *behind*
+    /// `generation` and the two conditions cannot collide. A VM already sitting
+    /// at its desired status has nothing to abandon — `revertDesiredToObserved`
+    /// returns false — so the failure stays pinned to the current generation
+    /// until a new mutation moves the target.
+    @Test("a failure with nothing to revert stays pinned to the current generation")
+    func failureWithNothingToRevertPins() async throws {
+        try await withVM { app, vm in
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.observedGeneration = vm.generation
+            try await vm.save(on: app.db)
+            let generation = vm.generation
+
+            let recorded = try await ResourceConvergence.recordFailure(
+                vm, mutation: .resize, reason: "resize failed: no space left on device",
+                telemetryReason: "convergence_failed", on: app.db)
+            #expect(recorded)
+            #expect(vm.generation == generation)  // nothing was abandoned
+            #expect(vm.failedGeneration == generation)
+            #expect(!vm.conditions.converged)
+            #expect(vm.conditions.degraded?.sinceGeneration == generation)
+
+            // Idempotent: the agent restates the same error on every heartbeat.
+            let again = try await ResourceConvergence.recordFailure(
+                vm, mutation: .resize, reason: "resize failed: no space left on device",
+                telemetryReason: "convergence_failed", on: app.db)
+            #expect(!again)
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+        }
+    }
+
+    /// The user's escape hatch from the state above: any new mutation moves the
+    /// target past the failure, so `converged` is decided by the generation
+    /// clause again and the stale `degraded` reads as superseded.
+    @Test("a new mutation moves the target past a pinned failure")
+    func newMutationClearsTheAmbiguity() async throws {
+        try await withVM { app, vm in
+            let fake = FakeAgentDispatch(online: true)
+            vm.hypervisorId = "agent-1"
+            vm.setDesiredStatus(.running)
+            vm.setStatus(.running)
+            vm.observedGeneration = vm.generation
+            vm.lastError = "resize failed: no space left on device"
+            vm.failedGeneration = vm.generation
+            try await vm.save(on: app.db)
+            let vmID = try vm.requireID()
+            let failedAt = vm.generation
+
+            let accepted = try await self.mutation(app, fake).accept(
+                .shutdown, on: vm, actor: .user(UUID()), dispatch: .stateSync, on: app.db, app: app
+            ) { _ in vm.setDesiredStatus(.shutdown) }
+            #expect(accepted.targetGeneration > failedAt)
+
+            var reloaded = try #require(try await VM.find(vmID, on: app.db))
+            // Not converged, but on the generation clause now — the failure is
+            // one a newer mutation is already retrying past.
+            #expect(!reloaded.conditions.converged)
+            #expect(reloaded.conditions.degraded?.sinceGeneration == failedAt)
+
+            reloaded.setStatus(.shutdown)
+            reloaded.observedGeneration = reloaded.generation
+            reloaded.lastError = nil
+            reloaded.failedGeneration = nil
+            try await reloaded.save(on: app.db)
+
+            reloaded = try #require(try await VM.find(vmID, on: app.db))
+            #expect(reloaded.conditions.converged)
+            #expect(reloaded.conditions.degraded == nil)
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+        }
+    }
 }

@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { volumesApi } from "@/lib/api/volumes";
+import { volumeBytesAtRest } from "@/lib/volume-guards";
 import { toast } from "sonner";
 import {
   acceptedMutation,
@@ -104,14 +105,16 @@ export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) 
   // (backend STR-148) — a volume mid-convergence is still attachable, because
   // the agent sequences the two steps itself.
   const attached = !!volume.vmId;
-  const converged = volume.conditions.converged;
   const canAttach = !attached;
   const canDetach = attached;
   const canResize = !attached;
   // Snapshot and clone both read the volume's bytes, so they additionally need
-  // it settled: copying a volume mid-create yields a torn image.
-  const canSnapshot = !attached && converged;
-  const canClone = !attached && converged;
+  // it settled: copying a volume mid-create yields a torn image. `bytesAtRest`
+  // rather than `conditions.converged` — see the helper for why the two parted
+  // company (backend STR-191).
+  const atRest = volumeBytesAtRest(volume);
+  const canSnapshot = !attached && atRest;
+  const canClone = !attached && atRest;
   const canDelete = !attached;
 
   const closeDialog = () => setOpenDialog(null);

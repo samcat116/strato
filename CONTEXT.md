@@ -106,11 +106,15 @@ use in code, tests, docs, and review. Architecture-level maps live in
   *converged* / *targetGeneration* / *observedGeneration* / *phase* /
   *degraded*. Derived on read, never stored, and never written by a mutation —
   it restates the reconciliation loop's own state, and refetching a resource
-  until `converged` is how a client follows a mutation.
+  until `converged` is how a client follows a mutation. *Converged* and
+  *degraded* are mutually exclusive at the target generation, so a client
+  always has exactly one verdict.
 - **Degraded** — the last convergence attempt that failed (its error and the
   generation that produced it), carried until something converges. Deliberately
   independent of `targetGeneration`: a degraded condition naming an older
-  generation is a failure a newer mutation is already retrying.
+  generation is a failure a newer mutation is already retrying, and it stands
+  alongside a converged resource. Naming the *current* generation is the other
+  case: that is the verdict, and `converged` is false beside it.
 
 ## Deletion
 

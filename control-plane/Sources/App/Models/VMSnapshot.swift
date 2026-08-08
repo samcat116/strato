@@ -197,17 +197,6 @@ extension VMSnapshot: SnapshotArtifactResource {
         ($project.id, environment)
     }
 
-    var conditions: ResourceConditions {
-        ResourceConditions(
-            targetGeneration: generation,
-            observedGeneration: observedGeneration,
-            desiredSatisfied: isPresentOnAgent,
-            phase: convergencePhase,
-            lastError: errorMessage,
-            failedGeneration: failedGeneration
-        )
-    }
-
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VMSnapshot] {
         try await VMSnapshot.query(on: db).filter(\.$convergenceDeadline <= now).all()
     }

@@ -320,16 +320,26 @@ extension Volume {
         generation += 1
     }
 
-    /// True once the owning agent has confirmed the current generation and
-    /// what it reports satisfies the desired state.
+    /// The agent has confirmed the current generation and the volume is sitting
+    /// at a resting status — nothing is mid-write, so its bytes can be read.
     ///
-    /// The status clause is the volume's analogue of
-    /// `DesiredVMStatus.isSatisfied(by:)`: `observedGeneration >= generation`
-    /// on its own would call a volume converged whose file had been deleted out
-    /// of band, since nothing would have bumped the generation to notice.
-    var isConverged: Bool {
-        desiredStatus == .present && observedGeneration >= generation
-            && (status == .available || status == .attached)
+    /// This is what `isConverged` was before STR-191, and it is deliberately
+    /// *not* `isConverged` any more: that predicate now also excludes a failure
+    /// recorded at the current generation, which is the wrong question for the
+    /// verbs below. `applyObservedVolumeState` derives `.creating` for absent
+    /// bytes and `.error` for absent bytes with an error, so a torn or
+    /// half-written volume can never reach a resting status — the status clause
+    /// alone already says everything a reader needs.
+    ///
+    /// **This is the predicate a future relaxation may move; `desiredSatisfied`
+    /// is not.** They are the same question today, and stating that by
+    /// delegation rather than by repeating the clauses is the point: a
+    /// live-snapshot path (issue #747) relaxing what the *reading verbs* accept
+    /// has to break this delegation to do it, which is a visible edit here
+    /// rather than a silent loosening of what every volume in the fleet reports
+    /// as converged.
+    var bytesAtRest: Bool {
+        observedGeneration >= generation && desiredSatisfied
     }
 
     /// Whether this volume is on its way out — a `DELETE` has been accepted and
@@ -388,7 +398,7 @@ extension Volume {
     /// real live-snapshot path (QMP `blockdev-snapshot-sync` plus the layer
     /// bookkeeping it implies) exists.
     var canSnapshot: Bool {
-        return $vm.id == nil && desiredStatus == .present && isConverged
+        return $vm.id == nil && desiredStatus == .present && bytesAtRest
     }
 
     /// Cloning is `qemu-img convert` of the volume's file, so it has the same
@@ -396,13 +406,22 @@ extension Volume {
     /// torn image. Its own property rather than a reuse of `canSnapshot`, so
     /// the two rules can move independently — a live-snapshot path (issue #747)
     /// would relax one without relaxing the other.
-    /// Cloning and snapshotting both read the source's bytes, so both keep an
-    /// `isConverged` requirement even though the other guards dropped theirs.
+    /// Cloning and snapshotting both read the source's bytes, so both keep a
+    /// `bytesAtRest` requirement even though the other guards dropped theirs.
     /// This is the one place a mutex is genuinely load-bearing rather than
     /// incidental: copying a volume whose create is still writing it yields a
     /// torn image, and unlike a resize it cannot be re-driven into correctness.
+    ///
+    /// `bytesAtRest` rather than `isConverged` (STR-191). A resize that fails
+    /// leaves `failedGeneration == generation` with nothing to clear it —
+    /// `resolveForStuckOperation` bumps the generation only for a failed attach
+    /// — so gating on convergence would make such a volume permanently
+    /// un-snapshottable and un-clonable with no escape the user could find. It
+    /// would also be answering the wrong question: a failed *change* does not
+    /// tear the bytes, and a copy of the pre-resize volume is a perfectly good
+    /// point-in-time copy.
     var canClone: Bool {
-        return $vm.id == nil && desiredStatus == .present && isConverged
+        return $vm.id == nil && desiredStatus == .present && bytesAtRest
     }
 
     /// A volume is deletable unless it is attached to a VM (detach it first).

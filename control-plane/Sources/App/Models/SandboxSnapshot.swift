@@ -275,22 +275,6 @@ extension SandboxSnapshot: SnapshotArtifactResource {
         ($project.id, environment)
     }
 
-    /// An export is part of what this artifact's desired state asks for, so it
-    /// is part of whether that state is satisfied — otherwise a client would
-    /// see `converged` the moment the capture landed and have no way to wait
-    /// for the copy it asked for in the same request. `isConverged` reads the
-    /// same `exportSatisfied` so the two cannot disagree.
-    var conditions: ResourceConditions {
-        ResourceConditions(
-            targetGeneration: generation,
-            observedGeneration: observedGeneration,
-            desiredSatisfied: isPresentOnAgent && exportSatisfied,
-            phase: convergencePhase,
-            lastError: errorMessage,
-            failedGeneration: failedGeneration
-        )
-    }
-
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [SandboxSnapshot] {
         try await SandboxSnapshot.query(on: db).filter(\.$convergenceDeadline <= now).all()
     }

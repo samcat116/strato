@@ -14,6 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
+import { volumeBytesAtRest } from "@/lib/volume-guards";
 import {
   acceptedSnapshotMutation,
   useMutationsStore,
@@ -49,10 +50,10 @@ export function CreateSnapshotDialog({
 
   // Detached volumes only: a snapshot of a volume a guest is still writing
   // would not be point-in-time (issue #747), so the backend refuses it. It
-  // additionally requires the volume settled (backend STR-148) — snapshotting
-  // one mid-create would copy a half-written file.
+  // additionally requires the volume's bytes settled (backend STR-148) —
+  // snapshotting one mid-create would copy a half-written file.
   const candidateVolumes = (volumes ?? []).filter(
-    (v) => v.id && !v.vmId && v.conditions.converged
+    (v) => v.id && !v.vmId && volumeBytesAtRest(v)
   );
 
   const handleSubmit = async (e: React.FormEvent) => {

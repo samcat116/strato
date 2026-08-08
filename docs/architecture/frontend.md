@@ -91,7 +91,17 @@ alike — so they poll `operationsApi.get(mutationId)` instead.
 
 `degraded` is matched by generation, not presence: a failure can stand against
 an older generation while a newer mutation is in flight, and reporting that as
-*this* mutation's failure would be wrong.
+*this* mutation's failure would be wrong. A failure matching the generation is
+that mutation's verdict, and the resource reads `converged: false` beside it —
+the watcher checks `degraded` first anyway, which is what kept it right while
+the two could both hold (STR-191).
+
+Volume Snapshot and Clone are the one place the UI must *not* gate on
+`conditions.converged`. Both mirror the backend's guards, and the backend asks
+`Volume.bytesAtRest` there — "nothing is mid-write" rather than "the last change
+landed" — because nothing clears a failed resize's generation, so gating on
+convergence would grey the two verbs out permanently. `lib/volume-guards.ts`
+holds that mirror.
 
 **Client state — Zustand.** Exactly one store:
 `lib/stores/mutations-store.ts` (the watched-mutations map above, plus a

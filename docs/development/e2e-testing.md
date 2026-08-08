@@ -122,6 +122,11 @@ To wait for one, refetch the resource and read its `conditions`:
 - **done** ⇔ `converged`, at or past the `targetGeneration` you were handed
 - **failed** ⇔ `degraded.sinceGeneration == targetGeneration`
 
+Exactly one of the two ever holds: a failure recorded at the target generation
+makes `converged` false (STR-191). A `degraded` naming an *older* generation is
+a failure a newer mutation is already retrying, and it can stand alongside a
+converged resource — which is why the comparison is by generation, not presence.
+
 Prefer that over `status` alone. VMs are still created in `Created` rather than
 running, so start them explicitly with `POST /api/vms/{id}/start`.
 

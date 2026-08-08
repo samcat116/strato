@@ -442,6 +442,21 @@ public enum LibvirtFailure {
         (error as? LibvirtError)?.code == .operationInvalid
     }
 
+    /// libvirt's answer when a hot-plug has nowhere to put the device: "No more
+    /// available PCI slots".
+    ///
+    /// Matched on the **message**, which nothing makes a contract, because
+    /// libvirt reports it as a bare `VIR_ERR_INTERNAL_ERROR` — the code it
+    /// shares with dozens of unrelated failures, so the code cannot tell them
+    /// apart. That is only acceptable because of how narrowly this is used: the
+    /// caller rewrites the error's *text* and changes nothing else, so a libvirt
+    /// release that rewords this costs an explanation, never a behaviour. Do not
+    /// let a control-flow decision hang off it.
+    public static func isPCISlotsExhausted(_ error: any Error) -> Bool {
+        guard let message = (error as? LibvirtError)?.message else { return false }
+        return message.lowercased().contains("no more available pci slots")
+    }
+
     /// Whether the *connection* is what failed, rather than the command.
     ///
     /// `LibvirtClient` never reconnects by design — once the channel is gone

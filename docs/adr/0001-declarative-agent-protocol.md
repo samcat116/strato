@@ -199,6 +199,13 @@ maintaining that derivation by hand in a side-table:
 - API resources expose a **conditions block** (converged / targetGeneration
   / observedGeneration / phase / degraded), computed in the DTO from
   existing columns.
+- The two derivations above **overlap**, and the overlap resolves in favour
+  of failed (STR-191): `converged` also requires
+  `failedGeneration ≠ generation`. They read as independent, but an agent
+  advances `observedGeneration` per *work item* and plans more than one item
+  per generation — a boot converges and stamps the number, then a
+  drift-correcting resize planned at the same number fails — so both could
+  hold at once and leave a client with no verdict.
 - Mutation endpoints keep returning **202**, with body
   `{resource, targetGeneration}`. Clients poll the resource, not an
   operation.

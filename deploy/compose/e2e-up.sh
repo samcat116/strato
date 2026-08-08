@@ -465,6 +465,7 @@ cat <<EOF
 
   Then POST /api/vms/<id>/start. Lifecycle mutations are level-triggered, so
   wait by refetching GET /api/vms/<id> until conditions.converged is at or past
-  the targetGeneration you were handed (delete is the exception — poll
-  GET /api/operations/<mutationId>). Tear down with ./e2e-up.sh --down.
+  the targetGeneration you were handed, or conditions.degraded names it — the
+  two are mutually exclusive, so exactly one answers (delete is the exception —
+  poll GET /api/operations/<mutationId>). Tear down with ./e2e-up.sh --down.
 EOF
