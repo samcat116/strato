@@ -76,11 +76,28 @@ public struct MetadataChassisPlan: Sendable, Equatable {
         "strato-md-\(networkId.uuidString.lowercased())"
     }
 
+    /// Where iproute2 keeps its named namespaces.
+    public static let netnsDirectory = "/var/run/netns"
+
     /// Where iproute2 keeps that namespace's handle. On tmpfs — which is the
     /// whole reason observation cannot key on the OVS row alone: `conf.db` is on
     /// disk and survives a reboot, this does not.
     public static func netnsPath(networkId: UUID) -> String {
-        "/var/run/netns/\(netnsName(networkId: networkId))"
+        "\(netnsDirectory)/\(netnsName(networkId: networkId))"
+    }
+
+    /// The network a namespace name belongs to, or nil when the name is not one
+    /// of ours.
+    ///
+    /// The inverse of `netnsName`, and the only way to learn which networks this
+    /// host was serving metadata on before the agent restarted: the namespaces
+    /// outlive the agent process (they are created by the chassis reconcile and
+    /// cleared only by a host reboot), while the desired-state list that named
+    /// them does not.
+    public static func networkId(fromNetnsName name: String) -> UUID? {
+        let prefix = "strato-md-"
+        guard name.hasPrefix(prefix) else { return nil }
+        return UUID(uuidString: String(name.dropFirst(prefix.count)))
     }
 
     /// Builds the full setup-and-teardown plan for one network on this chassis.

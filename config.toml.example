@@ -247,6 +247,34 @@ log_level = "info"
 # Optional - defaults to 300
 # desired_state_full_refetch_seconds = 300
 
+# Instance metadata service (Linux, network_mode = "ovn" only)
+#
+# The agent answers guests on 169.254.169.254 and [fd00:ec2::254], serving each
+# VM what the last desired-state sync said about it. One listener per network,
+# inside that network's strato-md-<network> namespace, so a guest can only ever
+# read the instance its own source address belongs to.
+#
+# Access is IMDSv2-style and mandatory: a guest PUTs /latest/api/token with an
+# X-aws-ec2-metadata-token-ttl-seconds header and presents the returned token on
+# every read. There is no unauthenticated mode, because a request-forging bug
+# inside a guest can reach the address but cannot set a request header on a PUT.
+#
+# Turning this off stops this host answering; it does not remove the addresses,
+# the routes or the namespaces, which are a property of the network
+# (metadata_enabled on the logical network) rather than of this agent.
+# Optional - defaults to true
+# metadata_service = true
+
+# IP TTL / hop limit on metadata responses.
+#
+# 1 is what stops a guest relaying metadata off-box: the metadata address is one
+# L2 hop away, so a reply that crosses any router is dropped before it can reach
+# another machine. Raise it only for a topology that puts a router between the
+# guest and its host — Strato's does not — and understand that doing so is what
+# makes a compromised guest able to proxy its neighbours' credentials.
+# Optional - defaults to 1
+# metadata_response_hop_limit = 1
+
 # OVN chassis bootstrap (Linux, network_mode = "ovn" only)
 #
 # ovn-controller only works once the local Open vSwitch carries the chassis
