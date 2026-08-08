@@ -21,7 +21,14 @@ import Testing
 /// Every test here is **skipped rather than failed** where libvirt is absent,
 /// the same bargain `validatesAgainstLibvirtSchema` makes: CI is a compile check
 /// that never runs tests, so these are for a dev box, a hypervisor node, or the
-/// manual `Full Test Suite` workflow.
+/// manual `Full Test Suite` workflow. That bargain extends to what the host can
+/// *emulate* — a scenario whose architecture this libvirt has no emulator for is
+/// dropped from `defineableScenarios` rather than failed, since `virsh define`
+/// refuses it outright and the developer cannot act on it. Firmware paths need
+/// no such care: libvirt resolves a `<loader>` at start, not at define, and
+/// defines a domain naming one that does not exist without complaint (checked on
+/// 12.0.0), so the two goldens that hardcode Fedora-shaped paths are safe
+/// everywhere.
 ///
 ///     STRATO_LIBVIRT_TEST_URI=qemu:///system \
 ///       swift test --package-path agent --filter DomainXMLLibvirtTests
@@ -57,7 +64,47 @@ struct DomainXMLLibvirtTests {
     }()
 
     private static let startsGuests =
-        libvirtIsReachable && ProcessInfo.processInfo.environment["STRATO_LIBVIRT_TEST_START"] == "1"
+        libvirtIsReachable && hostBootROM != nil
+        && ProcessInfo.processInfo.environment["STRATO_LIBVIRT_TEST_START"] == "1"
+
+    /// What this host's libvirt says about itself, read once.
+    private static let capabilities: String = (try? run(["capabilities"]))?.output ?? ""
+
+    /// The guest architectures this host can emulate.
+    ///
+    /// A scenario for an architecture missing from this set is not a document
+    /// problem: `virsh define` refuses it outright with "unsupported
+    /// configuration: No emulator found for arch 'aarch64'" on any host without
+    /// `qemu-system-aarch64`, which is most x86 hypervisor nodes. Failing there
+    /// would make the suite red for a host fact — and a suite that is red on a
+    /// dev box for a reason the dev cannot act on is a suite that gets ignored,
+    /// which for a change CI never tests is the worst outcome available.
+    static let emulatableArchitectures: Set<CPUArchitecture> = {
+        Set(
+            CPUArchitecture.allCases.filter {
+                capabilities.contains("<arch name='\(libvirtArchName($0))'>")
+            })
+    }()
+
+    /// The host's own architecture, from `<host><cpu><arch>`.
+    static let hostArchitecture: CPUArchitecture? = {
+        guard let start = capabilities.range(of: "<arch>"),
+            let end = capabilities.range(of: "</arch>", range: start.upperBound..<capabilities.endIndex)
+        else { return nil }
+        let name = String(capabilities[start.upperBound..<end.lowerBound])
+        return CPUArchitecture.allCases.first { libvirtArchName($0) == name }
+    }()
+
+    /// libvirt's spelling, which is not the wire enum's: arm64 is `aarch64`.
+    private static func libvirtArchName(_ architecture: CPUArchitecture) -> String {
+        architecture == .arm64 ? "aarch64" : "x86_64"
+    }
+
+    /// The scenarios this host can define at all. `someScenariosAreDefineable`
+    /// is what stops a broken capabilities parse from quietly emptying it.
+    static let defineableScenarios = DomainXMLBuilderTests.scenarios.filter {
+        emulatableArchitectures.contains($0.input.architecture)
+    }
 
     @discardableResult
     private static func run(_ arguments: [String]) throws -> (status: Int32, output: String) {
@@ -78,23 +125,29 @@ struct DomainXMLLibvirtTests {
 
     // MARK: - Counting what libvirt decided
 
-    /// The ports a defined domain has, and the ones something sits in.
+    /// The ports a defined domain has, and how many devices sit in one.
     ///
     /// Every device libvirt put in a root port carries an `<address type='pci'>`
     /// naming that port's bus; bus `0x00` is `pcie-root` itself, where the
     /// machine's integrated devices (q35's SATA and LPC, the primary
     /// framebuffer) live without consuming a port.
+    ///
+    /// **Devices, not distinct buses.** The two agree on every domain libvirt
+    /// actually produces — it gives each device its own port — but they differ
+    /// if it ever packs two into one, and then counting devices *understates*
+    /// the free ports while counting buses overstates them. The assertion here
+    /// is `free >= spareHotplugPorts`, so the metric's error has to point at
+    /// failing the test rather than passing it.
     static func portCensus(_ dumped: String) -> (ports: Int, occupied: Int) {
         let ports = dumped.components(separatedBy: "model='pcie-root-port'").count - 1
-        var buses: Set<String> = []
+        var occupied = 0
         for element in dumped.components(separatedBy: "<address type='pci'").dropFirst() {
             guard let start = element.range(of: "bus='"),
                 let end = element[start.upperBound...].firstIndex(of: "'")
             else { continue }
-            let bus = String(element[start.upperBound..<end])
-            if bus != "0x00" { buses.insert(bus) }
+            if element[start.upperBound..<end] != "0x00" { occupied += 1 }
         }
-        return (ports, buses.count)
+        return (ports, occupied)
     }
 
     /// Makes a golden defineable on whatever host is running the test, without
@@ -185,27 +238,52 @@ struct DomainXMLLibvirtTests {
         }
     }()
 
-    /// A single-blob firmware for the domain the hot-plug test boots.
+    /// A single-blob firmware for the domain the hot-plug test boots, for this
+    /// host's own architecture.
     ///
     /// `.monolithic` rather than the pair above, because a guest that only has
     /// to reach "no bootable device" and stay there needs no writable UEFI
     /// varstore — and skipping it skips every way a varstore can fail to be
-    /// created on a host this test knows nothing about. SeaBIOS first: it ships
-    /// with QEMU itself, so it is present wherever a domain can start at all.
-    static let hostBootROM: String? = [
-        "/usr/share/qemu/bios-256k.bin",
-        "/usr/share/seabios/bios-256k.bin",
-        "/usr/share/qemu/bios.bin",
-        "/usr/share/ovmf/OVMF.fd",
-        "/usr/share/edk2/ovmf/OVMF.fd",
-    ].first { FileManager.default.fileExists(atPath: $0) }
+    /// created on a host this test knows nothing about. On x86 that can be
+    /// SeaBIOS, which ships with QEMU itself; `virt` has no BIOS and needs EDK2.
+    static let hostBootROM: String? = hostArchitecture.flatMap { architecture in
+        let candidates: [String]
+        switch architecture {
+        case .x86_64:
+            candidates = [
+                "/usr/share/qemu/bios-256k.bin", "/usr/share/seabios/bios-256k.bin",
+                "/usr/share/qemu/bios.bin", "/usr/share/ovmf/OVMF.fd", "/usr/share/edk2/ovmf/OVMF.fd",
+            ]
+        case .arm64:
+            candidates = [
+                "/usr/share/AAVMF/AAVMF_CODE.fd", "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
+                "/usr/share/edk2/aarch64/QEMU_EFI.fd",
+            ]
+        }
+        return candidates.first { FileManager.default.fileExists(atPath: $0) }
+    }
 
     // MARK: - Property 1: the defined domain has ports nothing occupies
+
+    /// Dropping a scenario this host cannot emulate is deliberate; dropping
+    /// *every* scenario is a broken capabilities parse quietly turning the whole
+    /// suite into a no-op, which would look exactly like passing.
+    @Test(
+        "this host can define at least the scenarios matching its own architecture",
+        .enabled(if: libvirtIsReachable, "no libvirt daemon at STRATO_LIBVIRT_TEST_URI"))
+    func someScenariosAreDefineable() throws {
+        let architecture = try #require(
+            Self.hostArchitecture, "libvirt reported no host architecture:\n\(Self.capabilities)")
+        #expect(Self.emulatableArchitectures.contains(architecture))
+        #expect(
+            !Self.defineableScenarios.isEmpty,
+            "no scenario matched \(Self.emulatableArchitectures), so nothing below tested anything")
+    }
 
     @Test(
         "the defined domain keeps its spare root ports free",
         .enabled(if: libvirtIsReachable, "no libvirt daemon at STRATO_LIBVIRT_TEST_URI"),
-        arguments: DomainXMLBuilderTests.scenarios)
+        arguments: defineableScenarios)
     func definedDomainHasFreePorts(_ scenario: DomainXMLBuilderTests.Scenario) throws {
         let name = "strato-test-\(scenario.name)"
         let document = Self.defineable(try DomainXMLBuilder.build(scenario.input), name: name)
@@ -231,7 +309,7 @@ struct DomainXMLLibvirtTests {
     @Test(
         "un-indexed spare ports reserve nothing, which is the regression",
         .enabled(if: libvirtIsReachable, "no libvirt daemon at STRATO_LIBVIRT_TEST_URI"),
-        arguments: DomainXMLBuilderTests.scenarios)
+        arguments: defineableScenarios)
     func unindexedPortsReserveNothing(_ scenario: DomainXMLBuilderTests.Scenario) throws {
         let name = "strato-test-unindexed-\(scenario.name)"
         var document = Self.defineable(try DomainXMLBuilder.build(scenario.input), name: name)
@@ -264,7 +342,11 @@ struct DomainXMLLibvirtTests {
         "a disk hot-plugs into a running domain, and cannot without indexed spares",
         .enabled(if: startsGuests, "STRATO_LIBVIRT_TEST_START is not set"))
     func liveAttachFindsAFreePort() throws {
-        let bootROM = try #require(Self.hostBootROM, "no firmware image on this host")
+        // Both derived from the host rather than assumed, so the one test that
+        // reproduces the reported failure runs on a hypervisor node of either
+        // architecture. `startsGuests` already required the ROM.
+        let bootROM = try #require(Self.hostBootROM)
+        let architecture = try #require(Self.hostArchitecture)
         let directory = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("strato-hotplug-\(ProcessInfo.processInfo.processIdentifier)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -283,7 +365,7 @@ struct DomainXMLLibvirtTests {
                 cpus: 1, memoryBytes: 1024 * 1024 * 1024, boot: .disk(firmware: nil),
                 console: ConsoleSpec(console: .socket, serial: .socket)),
             disks: [ResolvedDisk(path: disk.path, format: .raw)],
-            networks: [], architecture: .x86_64,
+            networks: [], architecture: architecture,
             accelerator: FileManager.default.fileExists(atPath: "/dev/kvm") ? .kvm : .tcg,
             firmware: .monolithic(path: bootROM))
         let fragment = DomainDeviceXML.hotplugDisk(
@@ -336,6 +418,11 @@ struct DomainXMLLibvirtTests {
         try document.write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
 
+        // Destroy before undefining, both here and on the way out: a previous
+        // run killed mid-test leaves a *running* domain, which `undefine`
+        // refuses — and the next run then fails to define over it for a reason
+        // that has nothing to do with the document.
+        _ = try? run(["destroy", name])
         _ = try? run(["undefine", "--nvram", name])
         let defined = try run(["define", file.path])
         guard defined.status == 0 else {

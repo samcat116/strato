@@ -169,8 +169,12 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// rewritten, so a VM that was defined without spares can never gain them — the
 /// ports have to be there from the start or hot-plug is impossible for that VM's
 /// whole life. `spareHotplugPorts` is therefore a hard ceiling on how many
-/// volumes a VM can be given after it is created (STR-134); issue #1026 tracks
-/// removing that ceiling rather than only documenting it.
+/// volumes a VM can be given **while it is running** (STR-134); issue #1026
+/// tracks removing that ceiling rather than only documenting it. An attach to a
+/// *stopped* VM is not bounded by it and never was: that one carries
+/// `AFFECT_CONFIG` alone, and libvirt grows the bus in the persistent definition
+/// itself, adding a port for the disk (measured on 12.0.0, on a domain whose
+/// every port was occupied).
 ///
 /// **Declaring the ports is not enough; they have to be numbered.** An
 /// un-indexed `pcie-root-port` is numbered by libvirt out of the very range it
@@ -204,7 +208,7 @@ public enum DomainXMLBuilder {
     /// ceiling described above against what the guest can still boot with; four
     /// is well clear of the one or two volumes a VM typically gains after
     /// creation and nowhere near the port count that stops a domain starting.
-    static let spareHotplugPorts = 4
+    public static let spareHotplugPorts = 4
 
     /// Ports the defined domain occupies for devices this document never
     /// declared, added to the count below before the spares are numbered.
@@ -698,6 +702,22 @@ public enum DomainXMLBuilder {
         let first = declaredPCIDeviceCount(input, hotplugBytes: hotplugBytes) + implicitPortAllowance + 1
         let end = min(first + spareHotplugPorts, rootPortIndexCeiling + 1)
         return first..<max(first, end)
+    }
+
+    /// How many spare ports the document for `input` will actually carry —
+    /// `spareHotplugPorts` in every ordinary case, fewer where the VM's own
+    /// devices reach the ceiling.
+    ///
+    /// Exposed so the driver can *say so at define time*. A shortfall here is
+    /// permanent for that VM and its only other symptom is the bare "No more
+    /// available PCI slots" this whole mechanism exists to prevent — which,
+    /// unremarked, is indistinguishable from the bug (STR-192).
+    public static func reservedHotplugPortCount(_ input: DomainXMLInput) -> Int {
+        spareHotplugPortIndexes(
+            input,
+            hotplugBytes: MemoryHotplugPlan.alignedHotplugBytes(
+                spec: input.spec, architecture: input.architecture)
+        ).count
     }
 
     /// The `<boot order>` for each disk, or nil where none should be emitted.

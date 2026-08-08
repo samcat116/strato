@@ -273,6 +273,11 @@ Two consequences follow:
   failed with "No more available PCI slots". libvirt materializes every index
   below the highest one declared, so the top index is the port count and the
   spares are what is left over the top.
+
+  The ceiling binds **live** attaches only. An attach to a stopped VM goes to
+  the persistent definition with `AFFECT_CONFIG` alone, and libvirt grows the
+  bus there itself — so a VM out of spare ports can still be given volumes by
+  stopping it, which is what `attachDisk`'s error says when it runs out.
 - **A volume names itself in the document.** Each volume-backed `<disk>` carries
   `<serial>vol-<uuid></serial>`, minted by `QEMUDiskIdentity`, so a detach
   resolves exactly that disk on a domain the agent keeps no model of (STR-129).
