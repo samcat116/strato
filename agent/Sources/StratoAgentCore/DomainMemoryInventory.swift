@@ -22,14 +22,39 @@ import FoundationXML
 /// the record, so this is a query — which is also why a VM defined by an older
 /// spec resizes correctly against the headroom it really has instead of the
 /// headroom its newest spec asks for.
+///
+/// ## Why the boot size is derived rather than read
+///
+/// `<currentMemory>` looks like the boot size and is not one. libvirt formats
+/// it from `def->mem.cur_balloon`, and in the **live** definition — which is
+/// what `virDomainGetXMLDesc` returns for a running domain — that is the
+/// current balloon allocation, which `virDomainSetMemory` moves. The driver
+/// calls exactly that at the end of every resize, so reading the floor from
+/// `<currentMemory>` is right on a VM's first resize and wrong on every one
+/// after it: a second grow would compute its delta from the size the first one
+/// left, and shrink the device it meant to grow.
+///
+/// `<memory>` and the memory devices' `<target><size>` are the quantities that
+/// do not move. libvirt formats `<memory>` from `virDomainDefGetMemoryTotal` —
+/// initial memory plus every memory device's *size* (never its `<requested>`) —
+/// so the difference is the initial memory by construction, under ballooning
+/// and under hot-plug alike.
 public struct DomainMemoryLayout: Sendable, Equatable {
-    /// `<currentMemory>` — what the guest boots with.
-    public let bootBytes: Int64
-    /// `<memory>` — boot plus every memory device.
+    /// `<memory>` — the initial memory plus every memory device.
     public let maximumBytes: Int64
+    /// The sum of every `<memory model=…>` device's `<target><size>`.
+    ///
+    /// Every device, not just the virtio-mem one: Strato defines no others, but
+    /// a domain that acquired a DIMM some other way would otherwise have its
+    /// boot size under-reported by that DIMM's size, and a resize would compute
+    /// its delta from a floor that is too high.
+    public let memoryDeviceBytes: Int64
     /// The `<memory model='virtio-mem'>` device, absent for a VM defined with
     /// no hot-plug headroom.
     public let virtioMem: VirtioMem?
+
+    /// What the guest boots with — the floor a virtio-mem resize works up from.
+    public var bootBytes: Int64 { maximumBytes - memoryDeviceBytes }
 
     public struct VirtioMem: Sendable, Equatable {
         /// `<target><size>` — the whole hot-pluggable region.
@@ -47,9 +72,9 @@ public struct DomainMemoryLayout: Sendable, Equatable {
         }
     }
 
-    public init(bootBytes: Int64, maximumBytes: Int64, virtioMem: VirtioMem?) {
-        self.bootBytes = bootBytes
+    public init(maximumBytes: Int64, memoryDeviceBytes: Int64, virtioMem: VirtioMem?) {
         self.maximumBytes = maximumBytes
+        self.memoryDeviceBytes = memoryDeviceBytes
         self.virtioMem = virtioMem
     }
 
@@ -88,11 +113,12 @@ public enum DomainMemoryInventory {
             throw DomainInventoryError.unparseable(
                 parser.parserError?.localizedDescription ?? "the domain document could not be parsed")
         }
-        guard let boot = delegate.currentMemory ?? delegate.memory, let maximum = delegate.memory else {
+        guard let maximum = delegate.memory else {
             throw DomainInventoryError.unparseable("the domain document declares no memory size")
         }
         return DomainMemoryLayout(
-            bootBytes: boot, maximumBytes: maximum, virtioMem: delegate.virtioMem)
+            maximumBytes: maximum, memoryDeviceBytes: delegate.memoryDeviceBytes,
+            virtioMem: delegate.virtioMem)
     }
 
     /// A libvirt memory value in its declared unit, as bytes.
@@ -122,21 +148,27 @@ public enum DomainMemoryInventory {
     }
 }
 
-/// Collects the domain's memory elements and its virtio-mem device.
+/// Collects the domain's total memory and its memory devices.
 ///
 /// Scoped by parent throughout: `<memory>` means the domain's total when it
 /// hangs off `<domain>` and a memory *device* when it hangs off `<devices>`,
 /// and `<size>` appears under half a dozen unrelated elements.
+///
+/// `<currentMemory>` is deliberately not collected — see `DomainMemoryLayout`
+/// for why it is not the boot size.
 private final class MemoryCollector: NSObject, XMLParserDelegate {
     private(set) var memory: Int64?
-    private(set) var currentMemory: Int64?
+    private(set) var memoryDeviceBytes: Int64 = 0
     private(set) var virtioMem: DomainMemoryLayout.VirtioMem?
 
     private var path: [String] = []
     private var text: String?
     private var unit: String?
-    /// Set while inside `<devices><memory model='virtio-mem'>`.
-    private var inVirtioMem = false
+    /// Set while inside any `<devices><memory model=…>`, and separately for the
+    /// virtio-mem one: every device counts toward the boot-size derivation,
+    /// while only virtio-mem is a device a resize can drive.
+    private var inMemoryDevice = false
+    private var isVirtioMem = false
     private var deviceSize: Int64?
     private var deviceBlock: Int64?
     private var deviceRequested: Int64?
@@ -148,18 +180,19 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
         defer { path.append(elementName) }
 
         if elementName == "memory", path.last == "devices" {
-            inVirtioMem = attributes["model"] == "virtio-mem"
+            inMemoryDevice = true
+            isVirtioMem = attributes["model"] == "virtio-mem"
             deviceSize = nil
             deviceBlock = nil
             deviceRequested = nil
             return
         }
         switch (path.last, elementName) {
-        case ("domain", "memory"), ("domain", "currentMemory"):
+        case ("domain", "memory"):
             text = ""
             unit = attributes["unit"]
         case ("target", "size"), ("target", "block"), ("target", "requested"):
-            guard inVirtioMem else { return }
+            guard inMemoryDevice else { return }
             text = ""
             unit = attributes["unit"]
         default:
@@ -179,11 +212,15 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
         path.removeLast()
 
         if elementName == "memory", path.last == "devices" {
-            if inVirtioMem, let size = deviceSize, let block = deviceBlock, block > 0 {
-                virtioMem = DomainMemoryLayout.VirtioMem(
-                    sizeBytes: size, blockBytes: block, requestedBytes: deviceRequested ?? 0)
+            if let size = deviceSize {
+                memoryDeviceBytes += size
+                if isVirtioMem, let block = deviceBlock, block > 0 {
+                    virtioMem = DomainMemoryLayout.VirtioMem(
+                        sizeBytes: size, blockBytes: block, requestedBytes: deviceRequested ?? 0)
+                }
             }
-            inVirtioMem = false
+            inMemoryDevice = false
+            isVirtioMem = false
             return
         }
 
@@ -195,10 +232,9 @@ private final class MemoryCollector: NSObject, XMLParserDelegate {
 
         switch elementName {
         case "memory" where path.last == "domain": memory = value
-        case "currentMemory": currentMemory = value
-        case "size" where inVirtioMem: deviceSize = value
-        case "block" where inVirtioMem: deviceBlock = value
-        case "requested" where inVirtioMem: deviceRequested = value
+        case "size" where inMemoryDevice: deviceSize = value
+        case "block" where inMemoryDevice: deviceBlock = value
+        case "requested" where inMemoryDevice: deviceRequested = value
         default: break
         }
     }

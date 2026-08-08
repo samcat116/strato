@@ -504,9 +504,11 @@ written once when the VM is created and never rewritten:
   domain reserves four empty PCIe root ports for later disk hot-plug, and
   whatever virtio-mem headroom the VM's size range asked for. Attaching a fifth
   volume, or growing a VM past the maximum memory it was created with, fails
-  with libvirt's own error; recreating the VM is the remedy. VMs created before
-  a node moved to the libvirt driver are unaffected — they are redefined when
-  this node next creates them.
+  with libvirt's own error; recreating the VM is the remedy, and
+  [issue #1026](https://github.com/samcat116/strato/issues/1026) tracks removing
+  the limit rather than documenting it. VMs created before a node moved to the
+  libvirt driver are unaffected — they are redefined when this node next creates
+  them.
 - **A resize the guest cannot take online lands at its next boot.** vCPU
   removal is never attempted on a live guest, and a VM with no memory headroom
   cannot be resized in place; both are written into the domain definition

@@ -1252,15 +1252,23 @@ actor LibvirtService: HypervisorService {
         _ dom: Domain, vmId: String, spec: VMSpec, currentCPUs: Int, live: Bool
     ) async throws {
         guard spec.cpus != currentCPUs else { return }
-        let growing = spec.cpus > currentCPUs && live
-        let flags = growing ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
+        // Direction and liveness are separate facts and are kept separate.
+        // Only a *grow* on a *live* domain is applied online — guest support
+        // for vCPU unplug is unreliable, so a shrink is never attempted there —
+        // but folding the two into one flag would then have this report a grow
+        // on a stopped domain as a shrink, in exactly the situation an operator
+        // is reading the log.
+        let growing = spec.cpus > currentCPUs
+        let online = growing && live
+        let flags = online ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
         try await call("libvirt-resize-cpus", vmId: vmId) { client, deadline in
             try await client.domainSetVCPUSFlags(
                 dom: dom, nvcpus: UInt32(clamping: spec.cpus), flags: flags, deadline: deadline)
         }
         logger.info(
-            growing
-                ? "Hot-added vCPUs" : "vCPU shrink written to the domain definition; it lands at the next boot",
+            online
+                ? "Hot-added vCPUs"
+                : "vCPU \(growing ? "grow" : "shrink") written to the domain definition; it lands at the next boot",
             metadata: [
                 "vmId": .string(vmId), "from": .stringConvertible(currentCPUs),
                 "to": .stringConvertible(spec.cpus),
@@ -1288,6 +1296,23 @@ actor LibvirtService: HypervisorService {
             try await client.domainUpdateDeviceFlags(
                 dom: dom, xml: xml, flags: flags, deadline: deadline)
         }
+
+        // The plugged region is only half of what the next boot reads. libvirt
+        // starts a domain at its initial memory, plugs the device's persisted
+        // `<requested>` in on top, and then — because `cur_balloon` differs
+        // from the total — drives the balloon to the persisted
+        // `<currentMemory>`, which for a VM defined with headroom is still its
+        // *boot* size. Without this write a VM grown to 6 GiB comes back from a
+        // power cycle with 6 GiB plugged and the balloon squeezing it to 2, and
+        // the reconciler sees the spec it recorded as already applied.
+        //
+        // This is not the hazard `applyBalloonTarget` refuses below. There,
+        // `<currentMemory>` *is* the boot size, because a VM with no memory
+        // device has nowhere else to put one; here the boot size lives in
+        // `<memory>` minus the device, so writing the allocation cannot change
+        // what the VM boots with.
+        try await setDefinedAllocation(dom, vmId: vmId, bytes: spec.memoryBytes)
+
         logger.info(
             "Requested virtio-mem resize",
             metadata: [
@@ -1296,38 +1321,46 @@ actor LibvirtService: HypervisorService {
             ])
     }
 
+    /// Writes the domain's persistent allocation (`<currentMemory>`, libvirt's
+    /// `cur_balloon`) without touching its ceiling.
+    private func setDefinedAllocation(_ dom: Domain, vmId: String, bytes: Int64) async throws {
+        try await call("libvirt-resize-allocation", vmId: vmId) { client, deadline in
+            try await client.domainSetMemoryFlags(
+                dom: dom, memory: UInt64(clamping: (bytes + 1023) / 1024),
+                flags: LibvirtDomain.affectConfig, deadline: deadline)
+        }
+    }
+
     /// Writes a new memory size into the domain definition only.
     ///
-    /// Reached exactly for a VM defined with no hot-plug headroom, whose
-    /// `<memory>` and `<currentMemory>` are therefore the same number and have
-    /// to move together. The order is the load-bearing part: libvirt validates
-    /// the pair on every write and refuses a current size above the maximum, so
-    /// the ceiling goes up first when growing and comes down last when
-    /// shrinking. Doing it the other way round fails a request that is
-    /// perfectly valid as a whole, with a message about a bound the caller
-    /// never asked to cross.
+    /// Reached exactly for a VM defined with no hot-plug headroom, where the
+    /// ceiling and the allocation are the same number — `bootBytes` derives
+    /// from `<memory>` minus the memory devices, and there are none — so both
+    /// have to move. The order is the load-bearing part: libvirt validates the
+    /// pair on every write and refuses an allocation above the ceiling, so the
+    /// ceiling goes up first when growing and comes down last when shrinking.
+    /// The other way round fails a request that is perfectly valid as a whole,
+    /// with a message about a bound the caller never asked to cross.
     private func setDefinedMemory(
         _ dom: Domain, vmId: String, bytes: Int64, layout: DomainMemoryLayout
     ) async throws {
-        guard bytes != layout.bootBytes || bytes != layout.maximumBytes else { return }
-        let kib = UInt64(clamping: (bytes + 1023) / 1024)
+        guard bytes != layout.maximumBytes else { return }
 
-        func set(_ stage: String, maximum: Bool) async throws {
-            let flags =
-                maximum
-                ? LibvirtDomain.affectConfig | LibvirtDomain.affectMaximum : LibvirtDomain.affectConfig
-            try await call(stage, vmId: vmId) { client, deadline in
+        func setMaximum() async throws {
+            try await call("libvirt-resize-max-memory", vmId: vmId) { client, deadline in
                 try await client.domainSetMemoryFlags(
-                    dom: dom, memory: kib, flags: flags, deadline: deadline)
+                    dom: dom, memory: UInt64(clamping: (bytes + 1023) / 1024),
+                    flags: LibvirtDomain.affectConfig | LibvirtDomain.affectMaximum,
+                    deadline: deadline)
             }
         }
 
         if bytes > layout.maximumBytes {
-            try await set("libvirt-resize-max-memory", maximum: true)
-            try await set("libvirt-resize-memory", maximum: false)
+            try await setMaximum()
+            try await setDefinedAllocation(dom, vmId: vmId, bytes: bytes)
         } else {
-            try await set("libvirt-resize-memory", maximum: false)
-            try await set("libvirt-resize-max-memory", maximum: true)
+            try await setDefinedAllocation(dom, vmId: vmId, bytes: bytes)
+            try await setMaximum()
         }
         logger.info(
             "Memory resize written to the domain definition; it lands at the next boot",
@@ -1343,15 +1376,20 @@ actor LibvirtService: HypervisorService {
     /// Never fatal to the caller, matching `QEMUService.applyBalloonTarget`: a
     /// guest that ignores the request is not a convergence failure the agent
     /// can act on, and a VM created before the balloon device existed has
-    /// nothing to drive. Live only — `<currentMemory>` in the definition is the
-    /// boot size, and writing a balloon target there would quietly change what
-    /// the VM boots with.
+    /// nothing to drive. Live only, and for a VM with no memory device that is
+    /// load-bearing: there `<currentMemory>` in the definition *is* the boot
+    /// size — `<memory>` minus no devices — so writing a balloon target to it
+    /// would quietly change what the VM boots with. (A VM with headroom keeps
+    /// its boot size in `<memory>` minus the device instead, which is why
+    /// `resizeMemory` can persist that VM's allocation without the same risk.)
     ///
-    /// Clamped to the domain's own maximum as well as to the spec's size: where
-    /// a resize could only be written to the definition, the guest is still at
-    /// its old size until it reboots, and asking the balloon for the new one
-    /// would fail every resize with a warning about a bound the operator did
-    /// not set.
+    /// Clamped to `layout.maximumBytes`, which is the ceiling as the **live**
+    /// domain has it: `layout` is read before the resize, and the only thing
+    /// that could have moved the ceiling since is `setDefinedMemory`, which
+    /// writes `CONFIG` alone and so cannot have raised the live one. Asking the
+    /// balloon for a size the running guest cannot hold would fail every resize
+    /// of a no-headroom VM with a warning about a bound the operator did not
+    /// set — so the pre-resize reading is the correct one here, not a stale one.
     private func applyBalloonTarget(
         _ dom: Domain, vmId: String, spec: VMSpec, layout: DomainMemoryLayout
     ) async {

@@ -213,6 +213,43 @@ struct DomainDiskInventoryTests {
                 """)
     }
 
+    /// Every attribute of a detach fragment is echoed from what libvirt
+    /// reported, never asserted. Strato writes only file-backed virtio disks,
+    /// so asserting `type='file'`/`device='disk'`/`bus='virtio'` holds today —
+    /// and stops holding the moment a disk of another shape reaches a domain,
+    /// with libvirt matching nothing (or the wrong device) rather than failing
+    /// legibly.
+    @Test("a detach describes the disk's real shape, not the common one")
+    func detachFragmentIsDerived() throws {
+        let xml = """
+            <domain type='kvm'>
+              <name>vm</name>
+              <devices>
+                <disk type='block' device='lun'>
+                  <driver name='qemu' type='raw'/>
+                  <source dev='/dev/sdb'/>
+                  <target dev='sda' bus='scsi'/>
+                  <serial>vol-\(Self.dataVolumeId)</serial>
+                </disk>
+              </devices>
+            </domain>
+            """
+        let disks = try DomainDiskInventory.disks(inDomainXML: xml)
+        let disk = try #require(DomainDiskInventory.disk(forVolume: Self.dataVolumeId, in: disks))
+
+        #expect(disk.type == "block")
+        #expect(disk.device == "lun")
+        #expect(disk.bus == "scsi")
+        #expect(
+            DomainDeviceXML.detachDisk(disk) == """
+                <disk type='block' device='lun'>
+                  <driver name='qemu' type='raw'/>
+                  <target dev='sda' bus='scsi'/>
+                </disk>
+
+                """)
+    }
+
     /// Paths reach here from the control plane, and this is the first place one
     /// lands somewhere `&` is structural.
     @Test("a hostile path still produces a parseable fragment")

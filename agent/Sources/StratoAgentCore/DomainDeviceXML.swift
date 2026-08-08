@@ -34,18 +34,25 @@ public enum DomainDeviceXML {
 
     /// The `<disk>` identifying an already-attached disk, for a hot-unplug.
     ///
-    /// libvirt resolves a disk detach by `<target dev>`; the source and driver
-    /// are echoed back from what the domain already said so the fragment parses
-    /// as the same kind of disk rather than as a bare stub.
+    /// libvirt resolves a disk detach by `<target dev>`, but it parses the
+    /// whole fragment first — so every attribute here is **echoed back from
+    /// what libvirt reported**, never asserted. Every disk this driver writes is
+    /// a file-backed virtio disk, so hardcoding `type='file'`, `device='disk'`
+    /// and `bus='virtio'` would hold today and stop holding the moment a
+    /// `type='block'` volume or another bus reaches a domain — and the failure
+    /// would be libvirt matching nothing, or the wrong device, rather than a
+    /// legible error. Deriving the fragment is the rule this whole type states;
+    /// this is the one place it was not being followed.
     public static func detachDisk(_ disk: DomainDisk) -> String {
-        var node = DomainXMLNode("disk", [("type", "file"), ("device", "disk")])
+        var node = DomainXMLNode(
+            "disk", [("type", disk.type ?? "file"), ("device", disk.device ?? "disk")])
         if let driverType = disk.driverType {
             node.append(DomainXMLNode("driver", [("name", "qemu"), ("type", driverType)]))
         }
         if let sourceFile = disk.sourceFile {
             node.append(DomainXMLNode("source", [("file", sourceFile)]))
         }
-        node.append(DomainXMLNode("target", [("dev", disk.target), ("bus", "virtio")]))
+        node.append(DomainXMLNode("target", [("dev", disk.target), ("bus", disk.bus)]))
         return node.render()
     }
 

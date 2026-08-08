@@ -85,10 +85,47 @@ struct DomainMemoryInventoryTests {
         #expect(layout.virtioMem == nil)
     }
 
+    /// **The invariant the whole resize path rests on.**
+    ///
+    /// `<currentMemory>` looks like the boot size and is not one: libvirt
+    /// formats it from `cur_balloon`, which in the live definition is the
+    /// current balloon allocation — and `applyBalloonTarget` moves exactly that
+    /// at the end of every resize. So the second resize of a VM would read a
+    /// floor the first one left behind, compute its delta from it, and shrink
+    /// the device it meant to grow. The document below is what libvirtd hands
+    /// back for a VM already grown to 6 GiB, and the floor must still be 2.
+    @Test("a domain whose balloon has moved still resizes from its boot size")
+    func bootSizeSurvivesBallooning() throws {
+        let grown = """
+                  <memory model='virtio-mem'>
+                    <target>
+                      <size unit='KiB'>6291456</size>
+                      <node>0</node>
+                      <block unit='KiB'>2048</block>
+                      <requested unit='KiB'>4194304</requested>
+                      <current unit='KiB'>4194304</current>
+                    </target>
+                  </memory>
+            """
+        // `<currentMemory>` has followed the balloon up to 6 GiB; `<memory>`
+        // and the device's `<size>` have not moved, because neither can.
+        let layout = try DomainMemoryInventory.memoryLayout(
+            inDomainXML: Self.domain(grown, currentKiB: 6_291_456))
+
+        #expect(layout.bootBytes == 2 * Self.gib)
+        // The grow that would have been a shrink: 8 GiB is the whole device on
+        // top of a 2 GiB floor, never 2 GiB on top of a 6 GiB one.
+        #expect(layout.requestedBytes(forTotal: 8 * Self.gib) == 6 * Self.gib)
+        // And the shrink that would have unplugged everything.
+        #expect(layout.requestedBytes(forTotal: 4 * Self.gib) == 2 * Self.gib)
+    }
+
     /// A memory device that is not virtio-mem (a plain DIMM) is not one this
     /// resize can drive, and claiming it would send an update fragment that
-    /// matches nothing.
-    @Test("only a virtio-mem device counts")
+    /// matches nothing. It still counts toward the boot-size derivation,
+    /// though — `<memory>` includes it, so ignoring it entirely would put the
+    /// floor a DIMM's worth too high.
+    @Test("only a virtio-mem device is driven, but every device is subtracted")
     func ignoresOtherMemoryDevices() throws {
         let dimm = """
                   <memory model='dimm'>
@@ -98,7 +135,14 @@ struct DomainMemoryInventoryTests {
                     </target>
                   </memory>
             """
-        #expect(try DomainMemoryInventory.memoryLayout(inDomainXML: Self.domain(dimm)).virtioMem == nil)
+        let onlyDIMM = try DomainMemoryInventory.memoryLayout(inDomainXML: Self.domain(dimm))
+        #expect(onlyDIMM.virtioMem == nil)
+        #expect(onlyDIMM.bootBytes == 7 * Self.gib)
+
+        let both = try DomainMemoryInventory.memoryLayout(
+            inDomainXML: Self.domain(dimm + "\n" + Self.virtioMemDevice))
+        #expect(both.virtioMem?.sizeBytes == 6 * Self.gib)
+        #expect(both.bootBytes == 1 * Self.gib)
     }
 
     @Test("a document with no memory at all is an error")

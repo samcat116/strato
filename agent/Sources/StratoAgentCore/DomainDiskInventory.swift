@@ -13,16 +13,27 @@ public struct DomainDisk: Sendable, Equatable {
     /// `<target dev='…'>` — the guest device name, and the identifier libvirt
     /// matches a detach against.
     public let target: String
+    /// `<target bus='…'>` — virtio for every disk this driver writes.
+    public let bus: String?
+    /// `<disk type='…'>` — `file` for every disk this driver writes.
+    public let type: String?
+    /// `<disk device='…'>` — `disk`, as opposed to `cdrom` or `lun`.
+    public let device: String?
     /// `<source file='…'>`, absent for a disk with no source (an empty cdrom).
     public let sourceFile: String?
     /// `<serial>` — for a Strato volume, `QEMUDiskIdentity.deviceID`.
     public let serial: String?
-    /// `<driver type='…'>`, echoed back on a detach fragment so it parses as
-    /// the same kind of disk libvirt already has.
+    /// `<driver type='…'>` — the image format.
     public let driverType: String?
 
-    public init(target: String, sourceFile: String? = nil, serial: String? = nil, driverType: String? = nil) {
+    public init(
+        target: String, bus: String? = nil, type: String? = nil, device: String? = nil,
+        sourceFile: String? = nil, serial: String? = nil, driverType: String? = nil
+    ) {
         self.target = target
+        self.bus = bus
+        self.type = type
+        self.device = device
         self.sourceFile = sourceFile
         self.serial = serial
         self.driverType = driverType
@@ -124,6 +135,9 @@ private final class DiskCollector: NSObject, XMLParserDelegate {
     /// Ancestors of the element being parsed, innermost last.
     private var path: [String] = []
     private var target: String?
+    private var bus: String?
+    private var type: String?
+    private var device: String?
     private var sourceFile: String?
     private var serial: String?
     private var driverType: String?
@@ -142,6 +156,9 @@ private final class DiskCollector: NSObject, XMLParserDelegate {
         if elementName == "disk", path.last == "devices" {
             inDisk = true
             target = nil
+            bus = nil
+            type = attributes["type"]
+            device = attributes["device"]
             sourceFile = nil
             serial = nil
             driverType = nil
@@ -149,7 +166,9 @@ private final class DiskCollector: NSObject, XMLParserDelegate {
         }
         guard inDisk, path.last == "disk" else { return }
         switch elementName {
-        case "target": target = attributes["dev"]
+        case "target":
+            target = attributes["dev"]
+            bus = attributes["bus"]
         case "source": sourceFile = attributes["file"]
         case "driver": driverType = attributes["type"]
         case "serial": serialText = ""
@@ -181,7 +200,8 @@ private final class DiskCollector: NSObject, XMLParserDelegate {
         if let target {
             disks.append(
                 DomainDisk(
-                    target: target, sourceFile: sourceFile, serial: serial, driverType: driverType))
+                    target: target, bus: bus, type: type, device: device, sourceFile: sourceFile,
+                    serial: serial, driverType: driverType))
         }
     }
 }

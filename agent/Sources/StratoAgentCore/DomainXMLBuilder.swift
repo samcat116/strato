@@ -169,7 +169,8 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// never rewritten, so a VM that was defined without spares can never gain them
 /// — the ports have to be there from the start or hot-plug is impossible for
 /// that VM's whole life. `spareHotplugPorts` is therefore a hard ceiling on how
-/// many volumes a VM can be given after it is created (STR-134).
+/// many volumes a VM can be given after it is created (STR-134); issue #1026
+/// tracks removing that ceiling rather than only documenting it.
 ///
 /// ## Known divergence from the QEMU command line
 ///
@@ -632,7 +633,7 @@ public enum DomainXMLBuilder {
     }
 
     /// One `<disk>`. Shared by the create-time document and by the hot-plug
-    /// fragment (`DomainDiskInventory.hotplugDiskXML`), so a disk a VM was
+    /// fragment (`DomainDeviceXML.hotplugDisk`), so a disk a VM was
     /// created with and one plugged in later are described identically —
     /// including the serial a detach resolves by.
     static func diskNode(
