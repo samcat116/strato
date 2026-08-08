@@ -3912,7 +3912,7 @@ extension Agent: ReconcileActuator {
         case .create:
             try await reconcileCreate(item)
         case .boot:
-            try await reconcileService(for: item.vmId).bootVM(vmId: item.vmId)
+            try await reconcileBoot(item)
         case .pause:
             try await reconcileService(for: item.vmId).pauseVM(vmId: item.vmId)
         case .resume:
@@ -3936,6 +3936,50 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.invalidConfiguration(
                 "step \(step) is not applicable to a \(item.kind.rawValue) workload")
         }
+    }
+
+    /// Starts a VM, first giving its backend the chance to widen whatever stored
+    /// configuration the boot is about to read (STR-187).
+    ///
+    /// This is where "a VM's hot-plug slots and memory headroom are fixed at
+    /// create time" stops being true of the libvirt driver. A boot is the one
+    /// moment a stopped VM's configuration can be rewritten safely — nothing is
+    /// holding a port, a memory region or a vCPU — and it is also the moment the
+    /// remedy those ceilings name ("stop and start the VM") has to actually take
+    /// effect for the advice to be worth giving.
+    ///
+    /// Two steps in the same item make the widening pointless, and both are
+    /// skipped rather than spent. A `.create` built the configuration from the
+    /// very spec below moments ago, so there is nothing to find. A `.restore`
+    /// runs *after* the boot (`Reconciliation.edgeSteps` plans edges after the
+    /// status steps) and converges through `virDomainRevertToSnapshot`, which
+    /// replaces the definition with the one recorded in the checkpoint — so the
+    /// widening would be defined, immediately overwritten, and paid for again on
+    /// every boot forever. A VM being restored keeps the ceilings its checkpoint
+    /// was captured with; "stop and start it to widen" holds for its *next*
+    /// boot, the one with no restore outstanding.
+    ///
+    /// A widening that *fails* is logged rather than thrown — the backend
+    /// contract says best effort, because a VM that comes up with the ceiling it
+    /// already had is the status quo, while a VM that does not come up is a
+    /// regression.
+    private func reconcileBoot(_ item: ReconcileWorkItem) async throws {
+        let service = try reconcileService(for: item.vmId)
+        if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
+            do {
+                try await service.redefineVM(vmId: item.vmId, spec: spec)
+            } catch {
+                logger.warning(
+                    """
+                    Could not widen this VM's stored configuration before booting it; it starts with the \
+                    hot-plug slots and size ceilings it already had
+                    """,
+                    metadata: [
+                        "vmId": .string(item.vmId), "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+        try await service.bootVM(vmId: item.vmId)
     }
 
     /// Load a checkpoint back into an existing VM (STR-151).

@@ -94,6 +94,25 @@ public struct DomainMemoryLayout: Sendable, Equatable {
         let aligned = delta - (delta % virtioMem.blockBytes)
         return min(aligned, virtioMem.sizeBytes)
     }
+
+    /// How much of `targetBytes` this domain cannot deliver, or nil when it can
+    /// deliver all of it.
+    ///
+    /// The companion to the clamp above, and the reason it needs one. Every
+    /// bound in `requestedBytes(forTotal:)` is right — QEMU refuses a
+    /// `<requested>` above the device's size outright — but they make a target
+    /// beyond the ceiling *indistinguishable from one at it*: the resize plugs
+    /// the whole region, reports success, and leaves the VM short with nothing
+    /// anywhere saying so, while the control plane reads the generation as
+    /// converged. So the shortfall is a separate question, asked separately
+    /// (STR-187).
+    ///
+    /// Lives here rather than in the driver because it is arithmetic over this
+    /// type and a `VMSpec`, and the driver has no tests — the same reason
+    /// `DomainXMLBuilder` is in this target.
+    public func shortfall(forTotal targetBytes: Int64) -> Int64? {
+        targetBytes > maximumBytes ? targetBytes - maximumBytes : nil
+    }
 }
 
 /// Reads `DomainMemoryLayout` out of `virDomainGetXMLDesc`.
