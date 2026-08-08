@@ -552,7 +552,12 @@ struct DesiredStateAssembler {
                     sizeBytes: volume.size,
                     format: volume.format.rawValue,
                     source: source,
-                    attachment: attachment))
+                    attachment: attachment,
+                    // Emitted whether or not the volume is attached: a ceiling
+                    // is a property of the volume, latent while it is detached
+                    // and realized by the attach. `Volume.ioLimits` normalizes,
+                    // so an uncapped volume omits the field entirely.
+                    ioLimits: volume.ioLimits))
         }
         return entries
     }

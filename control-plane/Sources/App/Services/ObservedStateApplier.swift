@@ -1106,6 +1106,28 @@ struct ObservedStateApplier {
                 volumeID: volumeID, agentId: agentId, datasetPath: observed.storagePath, on: db)
         }
 
+        // The applied I/O ceilings (STR-19) — an echo, not a derivation, and
+        // recorded before the converging early-return for the same reason the
+        // storage path is: it is a fact about the volume, not a verdict on the
+        // mutation.
+        //
+        // Written *only* when the agent said something. Nil here means "this
+        // agent does not report applied limits" — which is every agent until
+        // the agent-side work lands — and writing that through would record an
+        // agent's silence as "the caps were removed". An agent reporting an
+        // explicitly uncapped disk sends a present-but-empty value instead, and
+        // that one does clear the columns.
+        if let applied = observed.ioLimits {
+            if volume.appliedIopsTotal != applied.iopsTotal {
+                volume.appliedIopsTotal = applied.iopsTotal
+                changed = true
+            }
+            if volume.appliedBpsTotal != applied.bpsTotal {
+                volume.appliedBpsTotal = applied.bpsTotal
+                changed = true
+            }
+        }
+
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {
             if changed {

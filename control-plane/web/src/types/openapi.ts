@@ -953,8 +953,40 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Resize a volume */
+        /**
+         * Grow a volume
+         * @description Grows a volume to a new size. Grow-only: a smaller size is rejected with `400`, because truncating a disk image destroys whatever the guest had written past the new end. Accepted for **attached and detached volumes alike** — choosing whether to grow the image online or offline is the owning agent's decision, since only it knows whether a hypervisor holds the image open.
+         *
+         *     Growing the block device does **not** grow the filesystem on it. Expand the guest filesystem yourself afterwards (`resize2fs`, `xfs_growfs`, or the Windows equivalent); some guests also need a device rescan before they notice the new capacity.
+         *
+         *     No agent implements an online grow path yet, so growing an *attached* volume is accepted and then stays unconverged — reported as a degraded condition — until the agent-side work lands. Asynchronous either way: refetch the volume until its `conditions` converge.
+         */
         post: operations["resizeVolume"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/volumes/{volumeId}/io-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The volume's id. */
+                volumeId: components["parameters"]["VolumeID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Replace a volume's I/O limits
+         * @description Replaces the volume's absolute I/O ceilings. This is a **full replacement**: a field you omit clears that cap. Zero is rejected with `400` rather than treated as unlimited, so a typo cannot be mistaken for a deliberate removal — omit the field instead.
+         *
+         *     No agent enforces ceilings yet. Until the agent-side work lands the request is a recorded intent rather than an enforced limit, and the volume's `appliedIOLimits` stays null. Asynchronous: refetch the volume until its `conditions` converge.
+         */
+        post: operations["setVolumeIOLimits"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5200,7 +5232,7 @@ export interface components {
          * @description The lifecycle mutation an operation performs.
          * @enum {string}
          */
-        OperationKind: "create" | "boot" | "shutdown" | "reboot" | "pause" | "resume" | "delete" | "resize" | "snapshot" | "snapshot_delete" | "restore" | "snapshot_export";
+        OperationKind: "create" | "boot" | "shutdown" | "reboot" | "pause" | "resume" | "delete" | "resize" | "snapshot" | "snapshot_delete" | "restore" | "snapshot_export" | "attach" | "detach" | "throttle";
         /**
          * @description The state of an operation. `pending` is the only non-terminal value.
          * @enum {string}
@@ -5724,6 +5756,16 @@ export interface components {
             volumeType?: components["schemas"]["VolumeType"];
             /** Format: uuid */
             sourceImageId?: string;
+            /**
+             * Format: int64
+             * @description Total (read + write) IOPS ceiling. Omit for uncapped; zero is rejected. Not enforced by any agent yet.
+             */
+            iopsTotal?: number;
+            /**
+             * Format: int64
+             * @description Total (read + write) throughput ceiling in bytes per second. Omit for uncapped; zero is rejected. Not enforced by any agent yet.
+             */
+            bpsTotal?: number;
         };
         UpdateVolumeRequest: {
             name?: string;
@@ -5740,6 +5782,32 @@ export interface components {
         };
         ResizeVolumeRequest: {
             sizeGB: number;
+        };
+        /** @description A full replacement of a volume's I/O ceilings: any field omitted here clears that cap. An empty object removes both. Zero is rejected rather than read as unlimited, so there is exactly one way to say uncapped. */
+        SetVolumeIOLimitsRequest: {
+            /**
+             * Format: int64
+             * @description Total (read + write) IOPS ceiling. Omit to remove the cap.
+             */
+            iopsTotal?: number;
+            /**
+             * Format: int64
+             * @description Total (read + write) throughput ceiling in bytes per second. Omit to remove the cap.
+             */
+            bpsTotal?: number;
+        };
+        /** @description Absolute per-volume I/O ceilings. A null member means uncapped in that dimension. */
+        VolumeIOLimits: {
+            /**
+             * Format: int64
+             * @description Total (read + write) IOPS ceiling, or null for uncapped.
+             */
+            iopsTotal?: number | null;
+            /**
+             * Format: int64
+             * @description Total (read + write) throughput ceiling in bytes per second, or null for uncapped.
+             */
+            bpsTotal?: number | null;
         };
         CloneVolumeRequest: {
             name: string;
@@ -5777,6 +5845,10 @@ export interface components {
             /** @description Whether the attachment presents the volume read-only. */
             readonly: boolean;
             conditions: components["schemas"]["ResourceConditions"];
+            /** @description The I/O ceilings requested for this volume, or null when uncapped. */
+            ioLimits?: components["schemas"]["VolumeIOLimits"];
+            /** @description The ceilings the owning agent reports it has actually applied. Null means they are **not in effect** — either the agent has not reported any, or it reported none. No agent applies ceilings yet, so this is null for every volume; a non-null `ioLimits` alongside a null `appliedIOLimits` is the expected reading, not a fault. */
+            appliedIOLimits?: components["schemas"]["VolumeIOLimits"];
             /** Format: uuid */
             sourceImageId?: string;
             /** Format: uuid */
@@ -10710,6 +10782,30 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ResizeVolumeRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["AcceptedVolumeMutation"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    setVolumeIOLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The volume's id. */
+                volumeId: components["parameters"]["VolumeID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetVolumeIOLimitsRequest"];
             };
         };
         responses: {

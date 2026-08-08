@@ -450,6 +450,29 @@ agent is involved.
    costs a subprocess per artifact per report. It inherits the same caveat — an
    artifact deleted out of band reports present until something tries to use it —
    which is affordable because every backend's deletion is idempotent.
+
+   *Extended by STR-19 (wire v34).* Volumes gain absolute I/O ceilings —
+   `ioLimits` on `DesiredVolumeState` and `VolumeSpec`, echoed back on
+   `ObservedVolumeState`. Two things about it are firsts worth recording,
+   because both look like oversights and neither is.
+
+   It ships **no capability gate**, the first bump since v23 that does not. The
+   temptation was to add one for the behavioural half — resize now accepts an
+   *attached* volume, where it used to answer `409` — but a gate there would
+   make the control plane's answer depend on which agent happened to hold the
+   volume, so the same request would be legal today and illegal after a
+   migration. An unconverged volume with a legible error is the better failure:
+   loud, destroying nothing, self-healing on upgrade.
+
+   It also ships **without an agent implementation**, so the ceilings are
+   recorded intent rather than enforcement until the agent-side work lands.
+   That is what makes the *observed echo* load-bearing rather than decorative:
+   an agent that drops `ioLimits` still advances its `observedGeneration`, so
+   the generation pair alone would call an ignored mutation converged. The echo
+   is the only signal that distinguishes "capped" from "ignored", and its nil
+   rule inverts the desired side's — nil observed means "no opinion", never "the
+   caps were cleared", while an all-nil *desired* value must normalize to absent
+   or a planner re-plans it forever. Two rules, opposite directions, one type.
 9. **Reboot/restore nonces** (3 messages).
 10. **Pull transport + broadcast doorbell**; delete targeted nudges and the
     four-way sync-routing branch. The `agent:{name}:replica` routing key

@@ -2,6 +2,7 @@ import Testing
 import Vapor
 import Fluent
 import VaporTesting
+import StratoShared
 import AppTestSupport
 @testable import App
 
@@ -19,6 +20,14 @@ final class VolumeSizeValidationTests {
     /// Boots a configured test app with a non-admin user, org, and project.
     private func withVolumeTestApp(
         _ test: (Application, User, Project, String) async throws -> Void
+    ) async throws {
+        try await withVolumeTestApp { app, _, user, project, token in
+            try await test(app, user, project, token)
+        }
+    }
+
+    private func withVolumeTestApp(
+        _ test: (Application, TestDataBuilder, User, Project, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
 
@@ -45,7 +54,7 @@ final class VolumeSizeValidationTests {
             )
             let token = try await user.generateAPIKey(on: app.db)
 
-            try await test(app, user, project, token)
+            try await test(app, builder, user, project, token)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -62,7 +71,9 @@ final class VolumeSizeValidationTests {
             sizeGB: sizeGB,
             format: "qcow2",
             volumeType: "data",
-            sourceImageId: nil
+            sourceImageId: nil,
+            iopsTotal: nil,
+            bpsTotal: nil
         )
     }
 
@@ -167,6 +178,112 @@ final class VolumeSizeValidationTests {
             let reloaded = try await Volume.find(volume.id!, on: app.db)
             #expect(reloaded?.size == 10.gbToBytes!)
             #expect(reloaded?.status == .available)
+        }
+    }
+
+    // MARK: - Attachment is no longer a reason to refuse (STR-19)
+
+    private func registerAgent(app: Application, named name: String) async throws -> String {
+        let message = AgentRegisterMessage(
+            agentId: name,
+            hostname: "\(name).test",
+            version: "1.0.0",
+            capabilities: ["qemu"],
+            resources: AgentResources(
+                totalCPU: 16, availableCPU: 16,
+                totalMemory: 1 << 34, availableMemory: 1 << 34,
+                totalDisk: 1 << 40, availableDisk: 1 << 40
+            ),
+            protocolVersion: WireProtocol.currentVersion
+        )
+        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        let uuid = try await app.agentService.registerAgent(
+            message, agentName: name, organizationScope: orgID.map { .organization($0) })
+        return uuid.uuidString
+    }
+
+    /// The behavioural inversion STR-19 is for: this same request used to
+    /// answer `409 "Detach it first."`
+    ///
+    /// It is accepted rather than performed. No agent has an online grow path
+    /// yet, so the volume will sit unconverged until the agent-side work lands —
+    /// which is the deliberate trade for not gating the request on whichever
+    /// agent happens to hold the volume.
+    @Test("POST /api/volumes/:id/resize grows an attached volume")
+    func resizeAcceptsAnAttachedVolume() async throws {
+        try await withVolumeTestApp { app, builder, user, project, token in
+            let agentId = try await self.registerAgent(app: app, named: "resize-agent")
+            let vm = try await builder.createVM(name: "resize-vm", project: project)
+            let volume = try await self.makeAvailableVolume(
+                app: app, user: user, project: project, sizeGB: 10)
+            volume.hypervisorId = agentId
+            volume.$vm.id = try vm.requireID()
+            volume.deviceName = "disk1"
+            volume.status = .attached
+            try await volume.save(on: app.db)
+            let generationBefore = volume.generation
+
+            try await app.test(.POST, "/api/volumes/\(volume.id!)/resize") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ResizeVolumeRequest(sizeGB: 20))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let reloaded = try #require(try await Volume.find(volume.id!, on: app.db))
+            #expect(reloaded.size == 20.gbToBytes!)
+            #expect(reloaded.generation == generationBefore + 1)
+            // Accepted, not done: the agent has not seen the new generation.
+            #expect(reloaded.conditions.converged == false)
+        }
+    }
+
+    /// Shrinking stays refused whether or not the volume is attached — one
+    /// grow-only rule, not a separate attached-shrink guard.
+    @Test("POST /api/volumes/:id/resize still refuses to shrink an attached volume")
+    func resizeRefusesAnAttachedShrink() async throws {
+        try await withVolumeTestApp { app, builder, user, project, token in
+            let agentId = try await self.registerAgent(app: app, named: "shrink-agent")
+            let vm = try await builder.createVM(name: "shrink-vm", project: project)
+            let volume = try await self.makeAvailableVolume(
+                app: app, user: user, project: project, sizeGB: 10)
+            volume.hypervisorId = agentId
+            volume.$vm.id = try vm.requireID()
+            volume.deviceName = "disk1"
+            volume.status = .attached
+            try await volume.save(on: app.db)
+
+            try await app.test(.POST, "/api/volumes/\(volume.id!)/resize") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ResizeVolumeRequest(sizeGB: 5))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let reloaded = try await Volume.find(volume.id!, on: app.db)
+            #expect(reloaded?.size == 10.gbToBytes!)
+        }
+    }
+
+    /// What `canResize` refuses now that attachment does not: a volume with no
+    /// size left to converge on.
+    @Test("POST /api/volumes/:id/resize refuses a terminating volume")
+    func resizeRefusesATerminatingVolume() async throws {
+        try await withVolumeTestApp { app, user, project, token in
+            let volume = try await self.makeAvailableVolume(
+                app: app, user: user, project: project, sizeGB: 10)
+            volume.desiredStatus = .absent
+            try await volume.save(on: app.db)
+
+            try await app.test(.POST, "/api/volumes/\(volume.id!)/resize") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(ResizeVolumeRequest(sizeGB: 20))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            let reloaded = try await Volume.find(volume.id!, on: app.db)
+            #expect(reloaded?.size == 10.gbToBytes!)
         }
     }
 }

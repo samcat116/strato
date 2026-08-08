@@ -205,6 +205,52 @@ public struct DesiredVolumeSource: Codable, Sendable {
     }
 }
 
+/// Absolute per-volume I/O ceilings (STR-19).
+///
+/// Total-only, deliberately. QEMU and libvirt can both express read/write
+/// splits, burst allowances and bucket sizes; none of them has a caller here
+/// yet, and one knob per dimension is the version that can be explained in a
+/// UI. Optional members can be added later without a version bump.
+///
+/// **The all-nil value and `nil` are two spellings of one fact, and the two
+/// sides of the wire resolve that ambiguity in opposite directions.** Get this
+/// backwards and the bug is invisible until a mixed-version fleet:
+///
+/// - On a **desired** entry, always normalize: an all-nil value must travel as
+///   an absent field, or an agent comparing present-but-empty against nil
+///   re-plans a throttle that is already applied, forever. `normalized(_:_:)`
+///   is the single door every desired producer goes through.
+/// - On an **observed** entry, never normalize. Nil there means *"this agent
+///   does not report applied limits"*; a present-but-empty value means
+///   *"applied, and the answer is uncapped"*. Collapse the two and an agent
+///   that has never heard of ceilings has its silence read as a deliberate
+///   clear — which, with no capability gate on this feature, is the one
+///   misreading that matters.
+public struct VolumeIOLimits: Codable, Sendable, Equatable {
+    /// Total (read + write) IOPS ceiling. Nil means uncapped in that dimension.
+    public let iopsTotal: Int64?
+    /// Total (read + write) throughput ceiling in bytes per second. Nil means
+    /// uncapped in that dimension.
+    public let bpsTotal: Int64?
+
+    /// Whether this carries no cap at all. Equal *in effect* to nil, but not
+    /// `==` to it, which is exactly why `normalized(_:_:)` exists.
+    public var isEmpty: Bool { iopsTotal == nil && bpsTotal == nil }
+
+    public init(iopsTotal: Int64? = nil, bpsTotal: Int64? = nil) {
+        self.iopsTotal = iopsTotal
+        self.bpsTotal = bpsTotal
+    }
+
+    /// Nil for an all-nil pair, so "uncapped" has exactly one spelling on the
+    /// desired side. Every desired producer builds through this rather than
+    /// calling the initializer directly.
+    public static func normalized(iopsTotal: Int64?, bpsTotal: Int64?) -> VolumeIOLimits? {
+        guard iopsTotal != nil || bpsTotal != nil else { return nil }
+        return VolumeIOLimits(iopsTotal: iopsTotal, bpsTotal: bpsTotal)
+    }
+}
+
 /// Where a volume should be plugged in. Nil on the desired entry means
 /// "detached"; a value means the agent should have this volume presented to
 /// `vmId` as `deviceName`.
@@ -260,6 +306,15 @@ public struct DesiredVolumeState: Codable, Sendable {
     public let source: DesiredVolumeSource?
     /// Nil means the volume should be detached.
     public let attachment: DesiredVolumeAttachment?
+    /// Absolute I/O ceilings for this volume (STR-19). Nil means uncapped, and
+    /// is what every volume created before this field existed means.
+    ///
+    /// Emitted whether or not the volume is attached: a ceiling is a property
+    /// of the volume, latent while it is detached and realized by the attach.
+    /// Always built through `VolumeIOLimits.normalized(iopsTotal:bpsTotal:)`,
+    /// so an all-nil pair travels as an absent field — see the type's note on
+    /// why the desired and observed sides normalize in opposite directions.
+    public let ioLimits: VolumeIOLimits?
 
     public init(
         volumeId: UUID,
@@ -268,7 +323,8 @@ public struct DesiredVolumeState: Codable, Sendable {
         sizeBytes: Int64,
         format: String,
         source: DesiredVolumeSource? = nil,
-        attachment: DesiredVolumeAttachment? = nil
+        attachment: DesiredVolumeAttachment? = nil,
+        ioLimits: VolumeIOLimits? = nil
     ) {
         self.volumeId = volumeId
         self.desiredStatus = desiredStatus
@@ -277,6 +333,7 @@ public struct DesiredVolumeState: Codable, Sendable {
         self.format = format
         self.source = source
         self.attachment = attachment
+        self.ioLimits = ioLimits
     }
 }
 
@@ -913,6 +970,21 @@ public struct ObservedVolumeState: Codable, Sendable {
     /// The generation whose convergence produced `lastError` (see
     /// `ObservedVMState.failedGeneration` for why the control plane needs it).
     public let failedGeneration: Int64?
+    /// The I/O ceilings this agent has actually applied (STR-19) — an *echo*,
+    /// not a derivation, and the only thing that distinguishes "capped" from
+    /// "ignored".
+    ///
+    /// STR-19 ships no capability gate, so an agent that has never heard of
+    /// ceilings drops `DesiredVolumeState.ioLimits` on the floor and still
+    /// advances `observedGeneration`. The generation pair alone would call that
+    /// mutation converged. This field is what makes the disagreement visible.
+    ///
+    /// Nil means **this agent does not report applied limits** — which is every
+    /// agent until the online-throttling work lands. It must never be written
+    /// through as a clear. "Applied, and the answer is uncapped" is spelled
+    /// `VolumeIOLimits(iopsTotal: nil, bpsTotal: nil)`: present but empty. So
+    /// unlike the desired side, this one is deliberately *not* normalized.
+    public let ioLimits: VolumeIOLimits?
 
     public init(
         volumeId: UUID,
@@ -924,7 +996,8 @@ public struct ObservedVolumeState: Codable, Sendable {
         observedGeneration: Int64,
         convergencePhase: String? = nil,
         lastError: String? = nil,
-        failedGeneration: Int64? = nil
+        failedGeneration: Int64? = nil,
+        ioLimits: VolumeIOLimits? = nil
     ) {
         self.volumeId = volumeId
         self.present = present
@@ -936,6 +1009,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         self.convergencePhase = convergencePhase
         self.lastError = lastError
         self.failedGeneration = failedGeneration
+        self.ioLimits = ioLimits
     }
 }
 

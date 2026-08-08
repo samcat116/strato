@@ -28,6 +28,7 @@ const verbs: Record<OperationKind, { succeeded: string; infinitive: string }> = 
   snapshot_export: { succeeded: "Snapshot exported", infinitive: "export the snapshot of" },
   attach: { succeeded: "Attached", infinitive: "attach" },
   detach: { succeeded: "Detached", infinitive: "detach" },
+  throttle: { succeeded: "I/O limits set", infinitive: "set the I/O limits of" },
 };
 
 // The list query key to refresh when a mutation settles, so a create/delete/

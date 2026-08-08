@@ -30,6 +30,12 @@ public enum VMOperationKind: String, Codable, CaseIterable, Sendable {
     // made the volume", and an audit trail that conflated them would be a lie.
     case attach
     case detach
+    /// A change to a volume's absolute I/O ceilings (STR-19). Its own kind for
+    /// the same reason `attach`/`detach` are: an audit trail that answered
+    /// "resize" when someone halved a tenant's throughput cap would be a lie,
+    /// and the two changes move nothing in common — one moves bytes, the other
+    /// moves a policy number.
+    case throttle
 }
 
 /// Terminal-or-not state of an asynchronous VM operation. `pending` is the only

@@ -243,19 +243,28 @@ public struct VolumeSpec: Codable, Sendable {
     public let readonly: Bool
     /// Explicit boot order; volumes are sent pre-sorted, this is informational.
     public let bootOrder: Int?
+    /// Absolute I/O ceilings for this disk (STR-19), so a VM realized from its
+    /// own spec boots with the same caps the volume lane would apply.
+    ///
+    /// This list and `DesiredVolumeState` are two projections of one fact, and
+    /// reading a property off only one of them is how they start to disagree —
+    /// the same reason the attachment itself appears in both.
+    public let ioLimits: VolumeIOLimits?
 
     public init(
         volumeId: UUID? = nil,
         deviceName: VolumeDeviceName,
         storagePath: String? = nil,
         readonly: Bool = false,
-        bootOrder: Int? = nil
+        bootOrder: Int? = nil,
+        ioLimits: VolumeIOLimits? = nil
     ) {
         self.volumeId = volumeId
         self.deviceName = deviceName
         self.storagePath = storagePath
         self.readonly = readonly
         self.bootOrder = bootOrder
+        self.ioLimits = ioLimits
     }
 }
 

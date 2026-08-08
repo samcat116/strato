@@ -68,7 +68,9 @@ final class VolumeAuthorizationTests {
             sizeGB: 10,
             format: "qcow2",
             volumeType: "boot",
-            sourceImageId: image.id!
+            sourceImageId: image.id!,
+            iopsTotal: nil,
+            bpsTotal: nil
         )
     }
 

@@ -1134,7 +1134,11 @@ export type OperationKind =
   // into create/delete because "who plugged this volume into that VM" is a
   // different question from "who made the volume".
   | "attach"
-  | "detach";
+  | "detach"
+  // Per-volume I/O ceilings (backend STR-19). Its own kind for the same reason:
+  // an audit trail that said "resize" when someone halved a throughput cap
+  // would be a lie.
+  | "throttle";
 
 export type OperationStatus = "pending" | "succeeded" | "failed";
 
@@ -1570,6 +1574,15 @@ export type VolumeFormat = "qcow2" | "raw";
 
 export type VolumeType = "boot" | "data";
 
+/**
+ * Absolute per-volume I/O ceilings (backend STR-19). A null member means
+ * uncapped in that dimension.
+ */
+export interface VolumeIOLimits {
+  iopsTotal?: number | null;
+  bpsTotal?: number | null;
+}
+
 export interface Volume {
   id?: string;
   name: string;
@@ -1593,6 +1606,16 @@ export interface Volume {
    * one finished, not the `status` string, which lags a generation behind.
    */
   conditions: ResourceConditions;
+  /** The I/O ceilings requested for this volume; null when uncapped. */
+  ioLimits?: VolumeIOLimits | null;
+  /**
+   * The ceilings the owning agent reports it has actually applied. Null means
+   * they are *not in effect* — either the agent has not reported any, or it
+   * reported none. No agent applies ceilings yet, so this is null for every
+   * volume; a set `ioLimits` alongside a null `appliedIOLimits` is the expected
+   * reading, not a fault.
+   */
+  appliedIOLimits?: VolumeIOLimits | null;
   sourceImageId?: string;
   sourceVolumeId?: string;
   createdById?: string;
