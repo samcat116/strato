@@ -14,23 +14,6 @@ export function useVolumes(projectId?: string) {
   });
 }
 
-export function useVolume(id: string) {
-  return useQuery({
-    queryKey: ["volumes", id],
-    queryFn: () => volumesApi.get(id),
-    enabled: !!id,
-  });
-}
-
-export function useVolumeSnapshots(volumeId: string) {
-  return useQuery({
-    queryKey: ["volumes", volumeId, "snapshots"],
-    queryFn: () => volumesApi.listSnapshots(volumeId),
-    enabled: !!volumeId,
-    refetchInterval: 5000,
-  });
-}
-
 /**
  * Aggregates snapshots across many volumes. The backend only exposes
  * per-volume snapshot listing, so the global snapshots page fans out one

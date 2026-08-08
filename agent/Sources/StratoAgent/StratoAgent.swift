@@ -27,7 +27,10 @@ struct AgentOptions: ParsableArguments {
     @Option(name: .long, help: "Agent ID (defaults to hostname)")
     var agentID: String?
 
-    @Option(name: .long, help: "QEMU socket directory path (overrides config file)")
+    // Retired with the process QEMU driver (STR-136): libvirt owns each
+    // domain's sockets. Still accepted so deployed unit files and wrappers
+    // that pass it keep starting; warned about in launchAgent.
+    @Option(name: .long, help: .hidden)
     var qemuSocketDir: String?
 
     @Option(name: .long, help: "Log level (overrides config file)")
@@ -104,7 +107,10 @@ private func launchAgent(options: AgentOptions) async throws {
     }
 
     // Override config values with command-line arguments if provided
-    let finalQemuSocketDir = options.qemuSocketDir ?? config.qemuSocketDir ?? AgentConfig.defaultQemuSocketDir
+    if options.qemuSocketDir != nil {
+        logger.warning(
+            "--qemu-socket-dir is no longer used and will be ignored: libvirt owns each domain's sockets (STR-136)")
+    }
     let finalLogLevel = options.logLevel ?? config.logLevel ?? "info"
     let finalAgentID = options.agentID ?? ProcessInfo.processInfo.hostName
 
@@ -198,7 +204,6 @@ private func launchAgent(options: AgentOptions) async throws {
         metadata: [
             "agentID": .string(finalAgentID),
             "webSocketURL": .string(finalWebSocketURL),
-            "qemuSocketDir": .string(finalQemuSocketDir),
             "vmStoragePath": .string(finalVMStoragePath),
             "volumeStoragePath": .string(finalVolumeStoragePath),
             "imageCacheDir": .string(config.imageCacheDir ?? ImageCacheService.defaultCachePath),
@@ -247,7 +252,6 @@ private func launchAgent(options: AgentOptions) async throws {
     let agent = Agent(
         agentID: finalAgentID,
         webSocketURL: finalWebSocketURL,
-        qemuSocketDir: finalQemuSocketDir,
         networkMode: config.networkMode,
         ovnChassisConfig: config.ovnChassisConfig,
         ovnUplink: config.ovnUplink,

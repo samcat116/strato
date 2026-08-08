@@ -507,9 +507,12 @@ public struct ErrorMessage: WebSocketMessage {
 
     /// Well-known values for `code`.
     public enum ErrorCode {
-        /// The presented registration/reconnect token was rejected (invalid,
-        /// expired, or already used). Retrying with the same token can never
-        /// succeed.
+        /// The agent's credential/enrollment was rejected permanently (today:
+        /// an enrollment with no organization scope). Named for the bearer
+        /// tokens that predated SVID-only auth (wire v11) — the string
+        /// survives because deployed agents key their "stop reconnecting and
+        /// exit" behavior on it. Retrying can never succeed without operator
+        /// action.
         public static let invalidToken = "invalid_token"
 
         /// The agent's wire protocol version predates desired-state sync,

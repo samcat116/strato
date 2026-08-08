@@ -42,11 +42,6 @@ struct HierarchyTreeBuilder {
         )
     }
 
-    /// Computes aggregate counts and resource utilization for an organization.
-    static func hierarchyStats(organizationID: UUID, on db: Database) async throws -> HierarchyStats {
-        stats(for: try await HierarchySnapshot.load(organizationID: organizationID, on: db))
-    }
-
     /// Aggregate counts and resource utilization over an already-loaded snapshot.
     static func stats(for snapshot: HierarchySnapshot) -> HierarchyStats {
         HierarchyStats(

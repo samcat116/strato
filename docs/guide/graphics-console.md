@@ -85,9 +85,9 @@ authenticated session (or an API key with the `write` scope) and the
 looked up. A console session is minted single-use, expires in 60 seconds if
 unused, and is bound to the VM and the user it was minted for.
 
-This is the same trust model as the QMP and serial sockets that sit beside it in
-the VM's directory: the socket's file mode and Strato's own authorization are
-the boundary, not a shared secret.
+This is the same trust model as the console and serial sockets that sit beside
+it in the VM's directory: the socket's file mode and Strato's own authorization
+are the boundary, not a shared secret.
 
 ## Limitations
 

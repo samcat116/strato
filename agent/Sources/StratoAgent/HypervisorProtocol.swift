@@ -276,15 +276,6 @@ public protocol HypervisorService: Actor, Sendable {
     /// Guest memory usage from the VM's balloon device (issue #567), on the
     /// same terms as `guestInfo`: nil means "no stats", never "no memory used".
     func memoryStats(vmId: String) async -> VMMemoryStats?
-
-    /// Replaces the volume list this backend will rebuild the VM's disk set
-    /// from at its next spawn (STR-148).
-    ///
-    /// Hot-plug alone does not survive a power cycle: the backend respawns from
-    /// the configuration the VM was created with, which a later `attachDisk`
-    /// never touched. This is what keeps that configuration in step with the
-    /// agent's durable attachment record.
-    func updateRecordedVolumes(vmId: String, volumes: [VolumeSpec]) async
 }
 
 // MARK: - Default Implementations
@@ -334,10 +325,6 @@ public extension HypervisorService {
     /// backend may not attach at all.
     func memoryStats(vmId: String) async -> VMMemoryStats? { nil }
 
-    /// Backends that rebuild a VM from its spec on every spawn (rather than
-    /// from a stored configuration) need nothing here: the manifest they are
-    /// handed at create time already carries the recorded volumes.
-    func updateRecordedVolumes(vmId: String, volumes: [VolumeSpec]) async {}
     /// Backends must opt in to full-VM checkpoints (issue #564). Without an
     /// explicit implementation the control plane's capability gate keeps the
     /// request away in the first place; this default is the belt-and-braces

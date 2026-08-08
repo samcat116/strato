@@ -102,14 +102,13 @@ actor PolicySetVersionCache {
 
     private let logger: Logger
     private var version: Int = 0
-    /// Called on every observed version change, with the new version.
-    /// Edge-triggered: silent while the version holds still.
-    private var onChange: [@Sendable (Int) async -> Void] = []
     /// Called after every successful re-read with the latest version, changed
     /// or not. Level-triggered: this is what the compiled-policy-set cache
     /// (#480) hangs off, so a rebuild that *failed* is retried at the next
-    /// tick — an edge-only listener would never hear about the same version
-    /// twice and a transient failure would stick until the next policy write.
+    /// tick — an edge-triggered listener would never hear about the same
+    /// version twice and a transient failure would stick until the next
+    /// policy write. (An edge-triggered `onVersionChange` used to exist
+    /// alongside this; it was rejected for exactly that reason and deleted.)
     private var onRefresh: [@Sendable (Int) async -> Void] = []
 
     init(logger: Logger) {
@@ -120,11 +119,6 @@ actor PolicySetVersionCache {
     /// on the request path (decision logging) must never block on the database
     /// to stamp a version.
     var currentVersion: Int { version }
-
-    /// Register a listener fired whenever the observed version changes.
-    func onVersionChange(_ handler: @escaping @Sendable (Int) async -> Void) {
-        onChange.append(handler)
-    }
 
     /// Register a listener fired on every successful refresh, with the latest
     /// version. Listeners must be cheap when nothing changed — this fires on
@@ -144,9 +138,6 @@ actor PolicySetVersionCache {
                 logger.info(
                     "Policy set version changed",
                     metadata: ["from": .stringConvertible(previous), "to": .stringConvertible(latest)])
-                for handler in onChange {
-                    await handler(latest)
-                }
             }
             for handler in onRefresh {
                 await handler(latest)

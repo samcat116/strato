@@ -1,32 +1,7 @@
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { quotasApi } from "@/lib/api/quotas";
 import { ApiError } from "@/lib/api/client";
 import type { CreateQuotaRequest, UpdateQuotaRequest } from "@/types/api";
-
-export function useOrganizationQuotas(organizationId: string | undefined) {
-  return useQuery({
-    queryKey: ["quotas", "organization", organizationId],
-    queryFn: () =>
-      organizationId
-        ? quotasApi.listForOrganization(organizationId)
-        : Promise.resolve([]),
-    enabled: !!organizationId,
-  });
-}
-
-export function useProjectQuotas(projectId: string | undefined) {
-  return useQuery({
-    queryKey: ["quotas", "project", projectId],
-    queryFn: () =>
-      projectId ? quotasApi.listForProject(projectId) : Promise.resolve([]),
-    enabled: !!projectId,
-  });
-}
-
-export function useInvalidateQuotas() {
-  const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: ["quotas"] });
-}
 
 // A quota can be created at one of three scopes; the mutation resolves the
 // right endpoint from the target descriptor.

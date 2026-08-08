@@ -18,7 +18,7 @@ let package = Package(
         ),
     ],
     dependencies: [
-        // Foundation only - minimal dependencies for shared code
+        // SPIFFEVerification only — StratoShared itself is Foundation-only.
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         // SPIFFEVerification only (StratoShared itself stays dependency-light).
         // 2.37.1+ leads its default TLS group list with X25519MLKEM768, giving
@@ -32,10 +32,6 @@ let package = Package(
     targets: [
         .target(
             name: "StratoShared",
-            dependencies: [
-                .product(name: "NIOCore", package: "swift-nio"),
-                .product(name: "NIOWebSocket", package: "swift-nio"),
-            ],
             swiftSettings: [
                 .enableUpcomingFeature("InferIsolatedConformances"),
                 .enableUpcomingFeature("NonisolatedNonsendingByDefault"),

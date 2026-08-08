@@ -443,7 +443,7 @@ final class DesiredStateReconciliationTests {
                 fromAgentKey: agentKey("recon-agent")
             )
 
-            #expect(await app.coordination.activeReservations(agentId: agentId) == .zero)
+            #expect(await app.coordination.activeReservations(agentIds: [agentId])[agentId] == .zero)
         }
     }
 

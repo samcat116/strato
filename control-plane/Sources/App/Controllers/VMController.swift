@@ -5,24 +5,6 @@ import Vapor
 import StratoShared
 
 struct VMController: RouteCollection {
-    private static func defaultVMStoragePath() -> String {
-        if let override = Environment.get("VM_STORAGE_DIR"), !override.isEmpty {
-            return override
-        }
-        #if os(macOS)
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Application Support/strato/vms"
-        #else
-        return "/var/lib/strato/vms"
-        #endif
-    }
-
-    private static func socketPath(for vmID: UUID, filename: String) -> String {
-        let base = defaultVMStoragePath()
-        let vmDir = (base as NSString).appendingPathComponent(vmID.uuidString)
-        return (vmDir as NSString).appendingPathComponent(filename)
-    }
-
     /// Validates caller-supplied cloud-init user data: bounded in size and
     /// starting with a header cloud-init actually dispatches on — a payload
     /// without one (say, a script missing its shebang) would be silently
@@ -556,10 +538,6 @@ struct VMController: RouteCollection {
 
                     // Image-based paths - disk will be created by agent from cached image
                     vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
-
-                    // Set up console sockets to align with agent VM storage path
-                    vm.consoleSocket = Self.socketPath(for: vmID, filename: "console.sock")
-                    vm.serialSocket = Self.socketPath(for: vmID, filename: "serial.sock")
 
                     // Desired state for a fresh VM: exists but not running. The bump
                     // to generation 1 distinguishes "never confirmed by any agent"

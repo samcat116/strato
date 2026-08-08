@@ -2823,15 +2823,6 @@ actor AgentService {
 
     // MARK: - Message Sending
 
-    /// Encode and push an envelope over a locally held socket.
-    private func sendEnvelope(_ envelope: MessageEnvelope, toLocalAgent agentKey: String) throws {
-        guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
-            throw AgentServiceError.agentNotFound(agentKey)
-        }
-        let data = try WireProtocol.makeEncoder().encode(envelope)
-        websocket.send(data)
-    }
-
     // There is no request/response path here any more (ADR 0001 stage 11,
     // STR-152). `sendMessageToAgentWithResponse` and the continuation
     // bookkeeping behind it — pending map, per-request timeout tasks,

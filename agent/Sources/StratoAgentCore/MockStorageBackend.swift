@@ -227,12 +227,6 @@ public actor MockStorageBackend: StorageBackend {
         return result
     }
 
-    /// The virtual size recorded for a volume, so the mock actuator can answer
-    /// resize convergence without a `qemu-img info`.
-    public func recordedSize(volumeId: String) -> Int64? {
-        volumes[volumeId]?.sizeBytes
-    }
-
     public func volumeInfo(volumePath: String) async throws -> VolumeInfoResult {
         guard let volume = volumes.first(where: { $0.value.path == volumePath })?.value else {
             throw StorageBackendError.volumeNotFound(volumePath)

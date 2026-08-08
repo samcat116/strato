@@ -43,9 +43,6 @@ final class Project: Model, @unchecked Sendable {
     @Children(for: \.$project)
     var vms: [VM]
 
-    @Children(for: \.$project)
-    var resourceQuotas: [ResourceQuota]
-
     init() {}
 
     init(
@@ -283,16 +280,4 @@ struct ProjectStatsResponse: Content {
 struct TransferProjectRequest: Content {
     let organizationId: UUID?
     let organizationalUnitId: UUID?
-}
-
-struct ProjectPathComponent: Content {
-    let id: UUID
-    let name: String
-    let type: String  // "organization", "organizational_unit", "project"
-}
-
-struct ProjectPathResponse: Content {
-    let projectId: UUID
-    let path: String
-    let components: [ProjectPathComponent]
 }

@@ -34,15 +34,4 @@ export const auditEventsApi = {
   list(filters: AuditEventFilters = {}): Promise<AuditEventListResponse> {
     return api.get<AuditEventListResponse>("/api/audit-events", toParams(filters));
   },
-
-  // Organization admins: events scoped to one organization.
-  listForOrganization(
-    organizationID: string,
-    filters: AuditEventFilters = {}
-  ): Promise<AuditEventListResponse> {
-    return api.get<AuditEventListResponse>(
-      `/api/organizations/${organizationID}/audit-events`,
-      toParams(filters)
-    );
-  },
 };

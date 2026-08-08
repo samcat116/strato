@@ -34,8 +34,6 @@ struct VMSpecBuilderTests {
         sharedMemory: Bool = false,
         diskPath: String? = "/var/lib/strato/disks/test.qcow2",
         readonlyDisk: Bool = false,
-        consoleSocket: String? = "/var/run/console.sock",
-        serialSocket: String? = "/var/run/serial.sock",
         consoleMode: ConsoleMode = .pty,
         serialMode: ConsoleMode = .pty,
         kernelPath: String? = nil,
@@ -58,8 +56,6 @@ struct VMSpecBuilderTests {
         vm.sharedMemory = sharedMemory
         vm.diskPath = diskPath
         vm.readonlyDisk = readonlyDisk
-        vm.consoleSocket = consoleSocket
-        vm.serialSocket = serialSocket
         vm.consoleMode = consoleMode
         vm.serialMode = serialMode
         vm.kernelPath = kernelPath

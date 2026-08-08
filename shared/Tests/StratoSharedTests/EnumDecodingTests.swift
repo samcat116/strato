@@ -125,14 +125,6 @@ struct EnumDecodingTests {
         #expect(VMEventType.unknown.rawValue == "unknown")
     }
 
-    @Test func networkEnumsRoundTrip() throws {
-        for status in NetworkPortStatus.allCases {
-            #expect(try roundTrip([status]) == [status])
-        }
-        for status in NetworkStatus.allCases {
-            #expect(try roundTrip([status]) == [status])
-        }
-    }
 }
 
 @Suite("HypervisorCapabilities")

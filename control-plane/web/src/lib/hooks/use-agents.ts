@@ -38,28 +38,6 @@ export function useAgent(id: string) {
   });
 }
 
-export function useAgentEnrollments() {
-  const { currentOrg, isLoading: orgLoading } = useOrganization();
-  const organizationId = currentOrg?.id;
-
-  return useQuery({
-    queryKey: ["agent-enrollments", { orgId: organizationId ?? null }],
-    queryFn: () => agentsApi.listEnrollments(organizationId),
-    enabled: !orgLoading,
-  });
-}
-
-export function useRevokeAgentEnrollment() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (enrollmentId: string) =>
-      agentsApi.revokeEnrollment(enrollmentId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["agent-enrollments"] });
-    },
-  });
-}
-
 // Assigns an agent self-update. The request resolves as soon as the assignment
 // is durable (202) — the download, install and restart happen afterwards, and
 // show up as `updateDesiredVersion` on the refetched agent.

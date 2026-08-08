@@ -325,17 +325,6 @@ public struct ReconcileWorkItem: Sendable {
         return nil
     }
 
-    /// The edge nonces this item's desired entry asks for (STR-151), which a
-    /// completed item has by definition applied — whether by performing the
-    /// edge or by superseding it.
-    public var desiredEdges: DesiredEdges {
-        switch target {
-        case .vm(let entry): return entry.edges
-        case .sandbox(let entry): return entry.edges
-        case .volume, .snapshot, .tombstone: return .none
-        }
-    }
-
     /// Whether this item is a confirmed teardown of a workload with no
     /// control-plane row. These are the only items the blast-radius guard
     /// counts, and the only ones exempt from the attempt cap.
@@ -344,16 +333,13 @@ public struct ReconcileWorkItem: Sendable {
         return false
     }
 
-    /// Every serial lane this item must hold while it runs. VM items share
-    /// their lane with the imperative per-VM message handlers (the bare vmId),
-    /// so the two modes can never interleave operations on one VM; sandbox and
-    /// volume items get their own namespaces ("sandbox/" and "volume/" cannot
-    /// collide with a UUID string).
+    /// Every serial lane this item must hold while it runs. VM items key on
+    /// the bare vmId, so two items can never interleave operations on one VM;
+    /// sandbox and volume items get their own namespaces ("sandbox/" and
+    /// "volume/" cannot collide with a UUID string).
     ///
     /// A volume item that carries an attachment also holds the *VM's* lane,
-    /// because realizing it drives that VM's hypervisor session. This is the
-    /// same two-lane guarantee `MessageEnvelope.serializationKeys` gave the
-    /// imperative `volume_attach` frame, carried over rather than reinvented.
+    /// because realizing it drives that VM's hypervisor session.
     ///
     /// A snapshot item holds its own lane plus its **parent's**, for the same
     /// reason (STR-150): capturing a checkpoint pauses the guest and drives the

@@ -44,8 +44,8 @@ struct OperationCommand: AsyncParsableCommand {
             try await runHandlingCLIErrors {
                 let environment = try CLIEnvironment.resolve(global)
                 let client = environment.makeClient()
-                let operation = try await client.getOperation(path: .init(operationID: id)).ok.body.json
-                let final = try await OperationWaiter(timeout: timeout).wait(for: operation, client: client)
+                let final = try await OperationWaiter(timeout: timeout)
+                    .wait(for: AcceptedMutation(id: id), client: client)
                 try printOperation(final, format: global.output)
             }
         }

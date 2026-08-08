@@ -20,12 +20,16 @@ Compose deployment operators use.
 
 Platform notes for running VMs:
 
-- **Linux**: KVM (`/dev/kvm`), `qemu-system-x86_64`, `qemu-utils`, and for
-  real networking `ovn-host` / `openvswitch-switch` (hypervisors run only the
-  chassis side — see `deploy/ovn-central/`)
-- **macOS**: macOS 14+, `brew install qemu`, Xcode Command Line Tools.
-  Networking is QEMU user-mode only (outbound NAT, no VM-to-VM), so macOS is
-  suitable for development but not production.
+- **Linux**: KVM (`/dev/kvm`), libvirt ≥ 11.5 (`libvirt-daemon-system`,
+  `libvirt-clients` — the agent drives QEMU through libvirtd at
+  `qemu:///system`, plus `swtpm`/`swtpm-tools` for TPM-backed guests),
+  `qemu-utils`, and for real networking `ovn-host` / `openvswitch-switch`
+  (hypervisors run only the chassis side — see `deploy/ovn-central/`)
+- **macOS**: macOS 14+, Xcode Command Line Tools, `brew install qemu` for
+  `qemu-img` (without libvirt the agent registers a mock QEMU driver and
+  reports the backend unavailable). Networking is QEMU user-mode only
+  (outbound NAT, no VM-to-VM), so macOS is suitable for development but not
+  production.
 
 ## Build and test
 
@@ -198,7 +202,7 @@ swift run --package-path agent StratoAgent --config-file ./config.toml
 ```
 
 CLI arguments override config-file values. `control_plane_url` is required;
-other common options are `qemu_socket_dir`, `log_level`, `network_mode`
+other common options are `log_level`, `network_mode`
 (`ovn` or `user`), and `firecracker_binary_path`. See
 [Deploying agents](/deployment/agents) for the full reference.
 

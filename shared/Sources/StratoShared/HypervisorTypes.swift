@@ -11,39 +11,16 @@ import Foundation
 /// driver on macOS) would be a new case here with its own `HypervisorService`
 /// conformance, not a variation of `.qemu`.
 ///
-/// Adding a case means: the data tables in this file (`isAvailable`,
-/// `displayName`, `description`, `HypervisorCapabilities.capabilities(for:)`
-/// — all compiler-enforced), a probe report in `HypervisorProbe.probeAll`,
-/// and one driver registration in `Agent.start()`.
+/// Adding a case means: the data tables in this file (`displayName`,
+/// `HypervisorCapabilities.capabilities(for:)` — all compiler-enforced), a
+/// probe report in `HypervisorProbe.probeAll`, and one driver registration in
+/// `Agent.start()`.
 public enum HypervisorType: String, Codable, CaseIterable, Sendable {
     /// QEMU with KVM (Linux) or HVF (macOS) acceleration
     case qemu = "qemu"
 
     /// Amazon Firecracker microVM (Linux only)
     case firecracker = "firecracker"
-
-    /// Default hypervisor for the platform
-    public static var platformDefault: HypervisorType {
-        #if os(Linux)
-        return .qemu  // Default to QEMU, user can explicitly choose Firecracker
-        #else
-        return .qemu  // Firecracker not available on non-Linux platforms
-        #endif
-    }
-
-    /// Whether this hypervisor is available on the current platform
-    public var isAvailable: Bool {
-        switch self {
-        case .qemu:
-            return true  // QEMU is available on all platforms
-        case .firecracker:
-            #if os(Linux)
-            return true
-            #else
-            return false
-            #endif
-        }
-    }
 
     /// Human-readable display name
     public var displayName: String {
@@ -55,15 +32,6 @@ public enum HypervisorType: String, Codable, CaseIterable, Sendable {
         }
     }
 
-    /// Description of the hypervisor
-    public var description: String {
-        switch self {
-        case .qemu:
-            return "Full-featured virtual machine monitor with broad hardware support"
-        case .firecracker:
-            return "Lightweight microVM optimized for fast startup and minimal overhead"
-        }
-    }
 }
 
 /// Networking capability of an agent host, as reported at registration.

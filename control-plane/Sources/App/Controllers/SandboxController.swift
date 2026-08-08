@@ -171,7 +171,6 @@ struct SandboxController: RouteCollection {
     }
 
     func listOperations(req: Request) async throws -> [OperationResponse] {
-        _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
         let sandboxID = try sandbox.requireID()
 

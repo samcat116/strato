@@ -281,8 +281,7 @@ struct VolumeController: RouteCollection {
     /// GET /api/volumes/:volumeId
     @Sendable
     func getVolume(req: Request) async throws -> VolumeResponse {
-        let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "read")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "read")
         return VolumeResponse(from: volume)
     }
 
@@ -292,8 +291,7 @@ struct VolumeController: RouteCollection {
     /// PUT /api/volumes/:volumeId
     @Sendable
     func updateVolume(req: Request) async throws -> VolumeResponse {
-        let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "update")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "update")
         let request = try req.content.decodeValidated(UpdateVolumeRequest.self)
 
         if let name = request.name {
@@ -322,7 +320,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func deleteVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "delete")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "delete")
 
         // Only an attached volume is undeletable. Every other state is fair
         // game: deletion is level-triggered now and the agent's teardown is
@@ -406,7 +404,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func attachVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "attach")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "attach")
         let request = try req.content.decode(AttachVolumeRequest.self)
 
         guard volume.canAttach else {
@@ -529,7 +527,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func detachVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "detach")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "detach")
 
         guard volume.canDetach, let vmId = volume.$vm.id else {
             throw Abort(.conflict, reason: "Volume is not attached to any VM")
@@ -580,7 +578,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func resizeVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "resize")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "resize")
         let request = try req.content.decode(ResizeVolumeRequest.self)
 
         // Grow-only, but no longer detach-only (STR-19). Whether an attached
@@ -685,7 +683,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func setIOLimits(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "update")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "update")
         let request = try req.content.decode(SetVolumeIOLimitsRequest.self)
 
         guard volume.desiredStatus == .present else {
@@ -736,7 +734,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func createSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "snapshot")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "snapshot")
         let request = try req.content.decodeValidated(CreateSnapshotRequest.self)
 
         // Validate volume can be snapshotted. An attached volume gets its own
@@ -820,7 +818,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func cloneVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let sourceVolume = try await fetchVolumeWithPermission(req: req, user: user, permission: "clone")
+        let sourceVolume = try await fetchVolumeWithPermission(req: req, permission: "clone")
         let request = try req.content.decodeValidated(CloneVolumeRequest.self)
 
         // Cloning reads the source's bytes, which is why it keeps a
@@ -917,8 +915,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func listSnapshots(req: Request) async throws -> PagedResponse<SnapshotResponse> {
         let paging = try ListPaging.decode(from: req)
-        let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "read")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "read")
 
         let snapshots = try await VolumeSnapshot.query(on: req.db)
             .filter(\.$volume.$id == volume.id!)
@@ -940,7 +937,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func deleteSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, user: user, permission: "read")
+        let volume = try await fetchVolumeWithPermission(req: req, permission: "read")
 
         guard let snapshotIdString = req.parameters.get("snapshotId"),
             let snapshotId = UUID(uuidString: snapshotIdString)
@@ -1023,24 +1020,13 @@ struct VolumeController: RouteCollection {
         }
     }
 
-    /// Fetch a volume and check permission
-    private func fetchVolumeWithPermission(req: Request, user: User, permission: String) async throws -> Volume {
-        guard let volumeIdString = req.parameters.get("volumeId"),
-            let volumeId = UUID(uuidString: volumeIdString)
-        else {
+    /// Fetch a volume and check permission, mirroring
+    /// `fetchVMWithPermission`/`fetchSandboxWithPermission`.
+    private func fetchVolumeWithPermission(req: Request, permission: String) async throws -> Volume {
+        guard let volumeId = req.parameters.get("volumeId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid volume ID")
         }
 
-        guard let volume = try await Volume.find(volumeId, on: req.db) else {
-            throw Abort(.notFound, reason: "Volume not found")
-        }
-
-        let hasPermission = try await req.can(permission, on: "volume", id: volumeId.uuidString)
-
-        guard hasPermission else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this volume")
-        }
-
-        return volume
+        return try await req.authorizedVolume(volumeId, permission: permission)
     }
 }

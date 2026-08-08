@@ -230,7 +230,6 @@ public struct OVNNorthboundTLSConfig: Codable, Sendable, Equatable {
 
 public struct AgentConfig: Codable {
     public let controlPlaneURL: String
-    public let qemuSocketDir: String?
     public let logLevel: String?
     public let networkMode: NetworkMode?
     public let ovnEncapIP: String?
@@ -391,7 +390,6 @@ public struct AgentConfig: Codable {
 
     enum CodingKeys: String, CodingKey {
         case controlPlaneURL = "control_plane_url"
-        case qemuSocketDir = "qemu_socket_dir"
         case logLevel = "log_level"
         case networkMode = "network_mode"
         case ovnEncapIP = "ovn_encap_ip"
@@ -439,7 +437,6 @@ public struct AgentConfig: Codable {
 
     public init(
         controlPlaneURL: String,
-        qemuSocketDir: String? = nil,
         logLevel: String? = nil,
         networkMode: NetworkMode? = nil,
         ovnEncapIP: String? = nil,
@@ -485,7 +482,6 @@ public struct AgentConfig: Codable {
         metadataResponseHopLimit: Int? = nil
     ) {
         self.controlPlaneURL = controlPlaneURL
-        self.qemuSocketDir = qemuSocketDir
         self.logLevel = logLevel
         self.networkMode = networkMode
         self.ovnEncapIP = ovnEncapIP
@@ -571,7 +567,6 @@ public struct AgentConfig: Codable {
             throw AgentConfigError.missingRequiredField("control_plane_url")
         }
 
-        let qemuSocketDir = tomlData.string("qemu_socket_dir")
         let logLevel = tomlData.string("log_level")
         let networkModeString = tomlData.string("network_mode")
         let ovnEncapIP = tomlData.string("ovn_encap_ip")
@@ -640,6 +635,7 @@ public struct AgentConfig: Codable {
             ("qemu_driver", "the agent always drives QEMU through libvirtd now"),
             ("qemu_binary_path", "libvirt selects the emulator from its own capabilities"),
             ("swtpm_binary_path", "libvirt starts and supervises swtpm per domain"),
+            ("qemu_socket_dir", "libvirt owns each domain's sockets under its own state directory"),
         ] where tomlData.string(key) != nil {
             logger?.warning("\(key) is no longer used and will be ignored: \(note) (STR-136)")
         }
@@ -897,7 +893,6 @@ public struct AgentConfig: Codable {
 
         return AgentConfig(
             controlPlaneURL: controlPlaneURL,
-            qemuSocketDir: qemuSocketDir,
             logLevel: logLevel,
             networkMode: networkMode,
             ovnEncapIP: ovnEncapIP,
@@ -1008,7 +1003,6 @@ public struct AgentConfig: Codable {
         #endif
         return AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
-            qemuSocketDir: defaultQemuSocketDir,
             logLevel: "info",
             networkMode: networkMode,
             enableHVF: enableHVF,
@@ -1024,16 +1018,6 @@ public struct AgentConfig: Codable {
         return "\(home)/Library/Application Support/strato/vms"
         #else
         return "/var/lib/strato/vms"
-        #endif
-    }
-
-    /// Default QEMU socket directory (platform-specific)
-    public static var defaultQemuSocketDir: String {
-        #if os(macOS)
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        return "\(home)/Library/Application Support/strato/qemu-sockets"
-        #else
-        return "/var/run/qemu"
         #endif
     }
 
@@ -1145,7 +1129,6 @@ public struct AgentConfig: Codable {
 
 public enum AgentConfigError: Error, LocalizedError {
     case configFileNotFound(String)
-    case invalidTOMLFormat(String)
     case missingRequiredField(String)
     case invalidConfiguration(String)
 
@@ -1153,8 +1136,6 @@ public enum AgentConfigError: Error, LocalizedError {
         switch self {
         case .configFileNotFound(let path):
             return "Configuration file not found at path: \(path)"
-        case .invalidTOMLFormat(let details):
-            return "Invalid TOML format: \(details)"
         case .missingRequiredField(let field):
             return "Missing required configuration field: \(field)"
         case .invalidConfiguration(let message):

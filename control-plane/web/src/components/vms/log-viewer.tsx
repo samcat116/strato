@@ -217,8 +217,12 @@ export function LogViewer({ vmId, className }: LogViewerProps) {
                 {logs.map((log, idx) => {
                   const level = getLogLevel(log);
                   const eventType = getEventType(log);
-                  const levelConfig = LOG_LEVEL_CONFIG[level];
-                  const eventTypeClass = EVENT_TYPE_CONFIG[eventType];
+                  // Labels come from Loki as arbitrary strings; an agent newer
+                  // than this build can emit values outside the unions (the
+                  // backend decodes those tolerantly as `unknown`), so fall
+                  // back rather than crash on an unrecognized level.
+                  const levelConfig = LOG_LEVEL_CONFIG[level] ?? LOG_LEVEL_CONFIG.info;
+                  const eventTypeClass = EVENT_TYPE_CONFIG[eventType] ?? EVENT_TYPE_CONFIG.info;
 
                   return (
                     <tr

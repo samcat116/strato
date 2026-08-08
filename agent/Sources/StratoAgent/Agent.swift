@@ -27,7 +27,6 @@ enum AgentError: Error, LocalizedError {
     /// reconnect fired while an earlier attempt was still parked). Fails the stale
     /// attempt so it doesn't leak its awaiter.
     case registrationSuperseded
-    case notRegistered
     case spiffeConfigurationError(String)
 
     var errorDescription: String? {
@@ -40,8 +39,6 @@ enum AgentError: Error, LocalizedError {
             return "Registration failed (control plane error): \(reason)"
         case .registrationSuperseded:
             return "Registration attempt was superseded by a newer attempt"
-        case .notRegistered:
-            return "Agent is not registered with control plane"
         case .spiffeConfigurationError(let message):
             return "SPIFFE configuration error: \(message)"
         }
@@ -54,7 +51,6 @@ actor Agent {
     // The URL to dial. It carries no credential — the agent authenticates with
     // its SPIFFE X.509 SVID over mTLS — only the agent's `name`.
     private let webSocketURL: String
-    private let qemuSocketDir: String
     private let logger: Logger
 
     /// The HTTP(S) base of the control plane, derived from the dialed
@@ -110,9 +106,8 @@ actor Agent {
     private var messageConsumerTask: Task<Void, Never>?
 
     // Reconciliation phase 2 (issue #260): converges hypervisor reality toward
-    // the control plane's desired-state syncs. Work items run on the same
-    // per-VM lanes as imperative messages, so the two modes can never
-    // interleave operations on one VM.
+    // the control plane's desired-state syncs. Work items run on per-VM serial
+    // lanes, so two items can never interleave operations on one VM.
     private var reconciler: Reconciler?
     // What this host's link-local metadata service serves its guests (STR-52),
     // written by the reconciler from each sync's `DesiredVMState.metadata`.
@@ -375,7 +370,6 @@ actor Agent {
     init(
         agentID: String,
         webSocketURL: String,
-        qemuSocketDir: String,
         networkMode: NetworkMode?,
         ovnChassisConfig: OVNChassisConfig = OVNChassisConfig(),
         ovnUplink: OVNUplinkConfig? = nil,
@@ -411,7 +405,6 @@ actor Agent {
     ) {
         self.initialAgentID = agentID
         self.webSocketURL = webSocketURL
-        self.qemuSocketDir = qemuSocketDir
         self.networkMode = networkMode
         self.ovnChassisConfig = ovnChassisConfig
         self.ovnUplink = ovnUplink
@@ -2285,13 +2278,7 @@ actor Agent {
     /// Reservations for `type` from the durable manifest, which carries every
     /// managed VM's sizing — authoritative, not a guess.
     private func manifestReservations(for type: HypervisorType) -> (vcpus: Int, memoryBytes: Int64) {
-        var vcpus = 0
-        var memoryBytes: Int64 = 0
-        for entry in managedVMs.values where entry.hypervisorType == type {
-            vcpus += entry.spec.cpus
-            memoryBytes += entry.spec.memoryBytes
-        }
-        return (vcpus, memoryBytes)
+        managedVMs.values.lazy.filter { $0.hypervisorType == type }.map(\.spec).reservedResources
     }
 
     /// Query a hypervisor for reporting purposes under a short budget,
@@ -3439,12 +3426,11 @@ extension Agent {
 
 // MARK: - Reconciliation (issue #260)
 
-/// Runtime side effects for the reconcile loop. VM items mirror the imperative
-/// handlers (same manifest bookkeeping, same driver-registry routing) minus
-/// the per-request response messaging: convergence outcomes are reported via
-/// `ObservedStateReport` instead of success/error envelopes. Sandbox items
-/// route to the sandbox runtime seam (issue #417; the driver itself is issue
-/// #421) with the same manifest contract.
+/// Runtime side effects for the reconcile loop. VM items do the manifest
+/// bookkeeping and route through the driver registry; convergence outcomes
+/// are reported via `ObservedStateReport` rather than per-request replies.
+/// Sandbox items route to the sandbox runtime seam (issue #417; the driver
+/// itself is issue #421) with the same manifest contract.
 extension Agent: ReconcileActuator {
     /// Whether the presence snapshots below account for this host at all. False
     /// while the manifest is unreadable: the maps are empty because the agent
@@ -4296,9 +4282,12 @@ extension Agent: ReconcileActuator {
             bootOrder: attachment.bootOrder)
         await recordVolumeAttachment(spec, onVM: vmId, entry: entry)
 
-        // A VM with no live hypervisor session (shut down, or an orphan not yet
-        // re-adopted) needs no QMP at all: the record *is* the realization,
-        // because the spawn path rebuilds its disk set from the manifest.
+        // A VM with no hypervisor-side record yet (not created on this host,
+        // or an orphan not yet re-adopted) needs no device call at all: the
+        // record *is* the realization, because createVM builds the domain's
+        // disk set from the manifest. (A defined-but-stopped libvirt domain
+        // does not take this path — hasLiveSession resolves the domain and
+        // attachDisk lands in its persistent definition.)
         guard let service = getHypervisorServiceForVM(vmId: vmId), await service.hasLiveSession(vmId: vmId) else {
             logger.info(
                 "Recorded volume attachment for a VM with no live session; it lands at its next boot",
@@ -4334,15 +4323,12 @@ extension Agent: ReconcileActuator {
             orphanedVMs[vmId] = updated
         }
         persistManifest()
-        if let service = getHypervisorServiceForVM(vmId: vmId) {
-            await service.updateRecordedVolumes(vmId: vmId, volumes: remaining)
-        }
     }
 
-    /// Writes an attachment into the VM's manifest entry and into the driver's
-    /// stored spawn configuration, so it survives both a guest power cycle
-    /// (which respawns from that configuration) and an agent restart (which
-    /// reloads the manifest).
+    /// Writes an attachment into the VM's manifest entry, so it survives an
+    /// agent restart (which reloads the manifest). The hypervisor's own record
+    /// needs no parallel write: libvirt attaches with `affectLiveAndConfig`,
+    /// so the domain definition already carries it across a power cycle.
     private func recordVolumeAttachment(_ spec: VolumeSpec, onVM vmId: String, entry: VMManifestEntry) async {
         var volumes = entry.spec.volumes.filter { $0.volumeId != spec.volumeId }
         volumes.append(spec)
@@ -4361,9 +4347,6 @@ extension Agent: ReconcileActuator {
             orphanedVMs[vmId] = updated
         }
         persistManifest()
-        if let service = getHypervisorServiceForVM(vmId: vmId) {
-            await service.updateRecordedVolumes(vmId: vmId, volumes: volumes)
-        }
     }
 
     private func reconcileService(for vmId: String) throws -> any HypervisorService {
@@ -4402,9 +4385,8 @@ extension Agent: ReconcileActuator {
         let lease = try vsockCIDs.lease(
             for: item.vmId, needsHostCID: desired.hypervisorType.usesHostVsockNamespace)
 
-        // Same contract as the imperative path: the orchestrator realizes the
-        // VM's NICs on this host before the driver runs, and rolls them back
-        // if the driver never created the VM.
+        // The orchestrator realizes the VM's NICs on this host before the
+        // driver runs, and rolls them back if the driver never created the VM.
         let attachments: [ResolvedNetworkAttachment]
         do {
             attachments = try await networkOrchestrator.prepareAttachments(
