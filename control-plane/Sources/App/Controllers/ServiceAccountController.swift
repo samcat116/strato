@@ -61,6 +61,9 @@ struct ServiceAccountController: RouteCollection {
         let agentName: String?
         let serviceAccountId: UUID?
         let organizationId: UUID?
+        /// For a VM's instance-identity registration (STR-55), the VM it names.
+        /// Nil on every agent and service-account row.
+        let vmId: UUID?
         let displayName: String?
         let createdAt: Date?
 
@@ -71,6 +74,7 @@ struct ServiceAccountController: RouteCollection {
             self.agentName = row.agentName
             self.serviceAccountId = row.$serviceAccount.id
             self.organizationId = row.$organization.id
+            self.vmId = row.$vm.id
             self.displayName = row.displayName
             self.createdAt = row.createdAt
         }

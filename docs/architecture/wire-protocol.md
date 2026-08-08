@@ -152,7 +152,8 @@ what keeps that unreachable.
 
 Version 26 adds instance metadata (STR-48): an optional
 `DesiredVMState.metadata` carrying `InstanceMetadata` — hostname, placement,
-NICs, SSH keys, user and vendor data, tags, and a phase-3 `IdentityPolicy` —
+NICs, SSH keys, user and vendor data, tags, and an `IdentityPolicy` naming the
+VM's SPIFFE instance identity —
 which the agent serves to the guest from the link-local metadata address
 (169.254.169.254) instead of baking it into a boot-time seed ISO. Putting it on
 the sync is the whole point of the design: the metadata store inherits
@@ -592,7 +593,11 @@ The rest of the package is vocabulary used on both sides:
   ids, hostname, environment, `region`/`availabilityZone` placement keys,
   `MetadataNIC` entries (device name, MAC, network, address + prefix per
   family, gateway, MTU, DNS), SSH keys, `userData`/`vendorData`, tags, and an
-  optional `IdentityPolicy` for phase-3 SPIFFE instance identity. It rides
+  optional `IdentityPolicy`. Since STR-55 that policy carries the VM's SPIFFE
+  instance identity — `spiffe://<trust-domain>/vm/<vm-id>` and nothing else:
+  no key, no token, no audiences, no TTL. It clears the publication boundary
+  below precisely because it is a *name*; the audiences and lifetime an issuer
+  would need arrive with the minting endpoint (STR-57). It rides
   `DesiredVMState` rather than a boot-time seed ISO so metadata is mutable and
   converges like everything else. Treat it as a **publication boundary**: any
   process in the guest that can reach the link-local address reads every field,

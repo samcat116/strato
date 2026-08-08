@@ -171,6 +171,57 @@ struct ResourceBindingCleanupTests {
         }
     }
 
+    @Test("Revoking for a deleted VM clears the grants its instance identity held")
+    func revokesVMInstanceIdentityGrants() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "identitycleanup", email: "identitycleanup@example.com")
+            let org = try await builder.createOrganization(name: "Identity Cleanup Org")
+            let orgID = try org.requireID()
+            let project = try await builder.createProject(
+                name: "Identity Cleanup Project", description: "identity cleanup", organization: org)
+            let projectID = try project.requireID()
+            let vm = try await builder.createVM(name: "identified-vm", project: project)
+            let vmID = try vm.requireID()
+
+            // The VM's own principal (STR-55), holding a grant somewhere the
+            // VM's delete does not reach — this is the row the `vm_id` cascade
+            // would strand.
+            let identity = try await GuestIdentity.register(
+                vmID: vmID, organizationID: orgID, displayName: vm.name, createdBy: user.id,
+                on: app.db)
+            let identityID = try identity.requireID()
+
+            // A workload principal with no VM behind it, standing in for every
+            // registration the sweep must not touch.
+            let bystander = WorkloadRegistration(
+                spiffeID: "spiffe://strato.local/sa/bystander", kind: .workload,
+                organizationID: orgID)
+            try await bystander.save(on: app.db)
+            let bystanderID = try bystander.requireID()
+
+            for principalID in [identityID, bystanderID] {
+                try await RoleBindingService.grant(
+                    principalType: .workload, principalID: principalID, role: .viewer,
+                    nodeType: .project, nodeID: projectID, createdBy: user.id!, on: app.db)
+            }
+
+            try await ResourceBindingCleanup.revokeBindings(forDeletedVM: vmID, on: app.db)
+
+            func count(_ principalID: UUID) async throws -> Int {
+                try await RoleBinding.query(on: app.db)
+                    .filter(\.$principalType == IAMPrincipalType.workload.rawValue)
+                    .filter(\.$principalID == principalID)
+                    .count()
+            }
+            let identityBindings = try await count(identityID)
+            let bystanderBindings = try await count(bystanderID)
+            #expect(identityBindings == 0)
+            #expect(bystanderBindings == 1)
+        }
+    }
+
     @Test("Revoking for a deleted project clears every node that cascades away with it")
     func revokesProjectAndCascadingChildren() async throws {
         try await withTestApp { app in

@@ -5497,6 +5497,13 @@ paths:
         System administrators only — the revocation lever for any registered
         identity. Deleting a directly registered workload deletes the
         principal, and its role bindings with it.
+
+
+        A VM's instance identity (a row with `vmId`) can be revoked here too,
+        and this is the only way to revoke one: identity is granted at VM
+        create and there is no re-enable, so the deletion is **one-way** — the
+        VM keeps running and stops being vended an identity, and nothing
+        re-creates the row.
       tags: [Service Accounts]
       responses:
         "204": { $ref: "#/components/responses/NoContent" }
@@ -9043,6 +9050,17 @@ components:
             author the ACLs at all; either way the attached groups filter
             nothing until an operator fixes it. Absent means the VM is
             unplaced, so there is no realizer to judge yet.
+        spiffeId:
+          type: string
+          description: >-
+            The VM's SPIFFE instance identity —
+            `spiffe://<trust-domain>/vm/<vm-id>`, the lookup key its workload
+            registration is filed under. A name, never an authorization: what
+            the identity may do comes from role bindings against that
+            principal, and a registration with none authorizes nothing. Absent
+            means either an older control plane that does not report the field,
+            or a registration an administrator revoked — never that the VM is
+            exempt.
         conditions:
           $ref: "#/components/schemas/ResourceConditions"
         createdAt:
@@ -12514,6 +12532,13 @@ components:
           description: >-
             For `workload` registrations, the organization the registration
             is scoped to (administrative scoping only — it grants nothing).
+        vmId:
+          type: string
+          format: uuid
+          description: >-
+            For a VM's instance-identity registration, the VM it names. The row
+            is created with the VM and cascade-deleted with it. Absent on every
+            agent and service-account registration.
         displayName:
           type: string
         createdAt:

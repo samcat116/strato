@@ -3789,6 +3789,8 @@ export interface paths {
         /**
          * Delete a workload registration
          * @description System administrators only — the revocation lever for any registered identity. Deleting a directly registered workload deletes the principal, and its role bindings with it.
+         *
+         *     A VM's instance identity (a row with `vmId`) can be revoked here too, and this is the only way to revoke one: identity is granted at VM create and there is no re-enable, so the deletion is **one-way** — the VM keeps running and stops being vended an identity, and nothing re-creates the row.
          */
         delete: operations["deleteWorkloadRegistration"];
         options?: never;
@@ -5360,6 +5362,8 @@ export interface components {
             guestMemoryBalloonActualBytes?: number;
             /** @description Whether this VM's attached security groups are actually being enforced. False means a realizing agent — the host, or its site's network controller — registered with a protocol too old for security groups, or the site has no usable network controller to author the ACLs at all; either way the attached groups filter nothing until an operator fixes it. Absent means the VM is unplaced, so there is no realizer to judge yet. */
             securityGroupsEnforced?: boolean;
+            /** @description The VM's SPIFFE instance identity — `spiffe://<trust-domain>/vm/<vm-id>`, the lookup key its workload registration is filed under. A name, never an authorization: what the identity may do comes from role bindings against that principal, and a registration with none authorizes nothing. Absent means either an older control plane that does not report the field, or a registration an administrator revoked — never that the VM is exempt. */
+            spiffeId?: string;
             conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
@@ -7165,6 +7169,11 @@ export interface components {
              * @description For `workload` registrations, the organization the registration is scoped to (administrative scoping only — it grants nothing).
              */
             organizationId?: string;
+            /**
+             * Format: uuid
+             * @description For a VM's instance-identity registration, the VM it names. The row is created with the VM and cascade-deleted with it. Absent on every agent and service-account registration.
+             */
+            vmId?: string;
             displayName?: string;
             /** Format: date-time */
             createdAt?: string;

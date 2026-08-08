@@ -811,6 +811,15 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddConvergenceToSnapshots())
     app.migrations.add(AddSnapshotOperationKinds())
 
+    // Per-VM instance identity (STR-55): every VM is a first-class IAM
+    // principal, named by a `workload_registrations` row filed under
+    // `spiffe://<trust-domain>/vm/<vm-id>`, linked by `vm_id` and
+    // cascade-deleted with the VM. The backfill follows the column so a VM that
+    // predates the feature holds the same identity a VM created after it does —
+    // instance identity is a property of being a VM, not of when it was made.
+    app.migrations.add(AddVMToWorkloadRegistration())
+    app.migrations.add(BackfillVMWorkloadRegistrations())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

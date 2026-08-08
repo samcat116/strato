@@ -153,9 +153,15 @@ struct VMController: RouteCollection {
         // per-row realizer walk would be three queries per VM.
         let enforcement = try await SecurityGroupService.enforcementByVM(allVMs, on: req.db)
 
+        // …and for the same reason again: the page's instance identities
+        // (STR-55) in one query rather than one per row.
+        let spiffeIDs = try await GuestIdentity.spiffeIDs(
+            forVMs: allVMs.compactMap(\.id), on: req.db)
+
         return allVMs.compactMap { vm in
             guard let id = vm.id, readable.contains(IAMNode(type: .virtualMachine, id: id)) else { return nil }
-            return VMDetailResponse(from: vm, securityGroupsEnforced: enforcement[id])
+            return VMDetailResponse(
+                from: vm, securityGroupsEnforced: enforcement[id], spiffeId: spiffeIDs[id])
         }
     }
 
@@ -186,7 +192,8 @@ struct VMController: RouteCollection {
 
         return try await VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db))
+            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db),
+            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
     }
 
     func create(req: Request) async throws -> Response {
@@ -603,11 +610,18 @@ struct VMController: RouteCollection {
                     // than resolved: this transaction is the longest-held one
                     // in the system, and every field of it is already in
                     // memory.
+                    //
+                    // Resolved once and shared with the instance identity
+                    // below, so the attribution record and the identity are
+                    // scoped to the same organization by construction rather
+                    // than by two lookups that could disagree.
+                    let rootOrganizationID = try await project.getRootOrganizationId(on: db)
+
                     let event = try await ResourceEvent.record(
                         .create, resourceKind: .virtualMachine, resourceID: vmID,
                         actor: .user(userID),
                         scope: ResourceEvent.Scope(
-                            organizationID: try await project.getRootOrganizationId(on: db),
+                            organizationID: rootOrganizationID,
                             projectID: projectId,
                             resourceName: vm.name,
                             generation: vm.generation),
@@ -626,6 +640,38 @@ struct VMController: RouteCollection {
                         on: db
                     )
 
+                    // The VM's instance identity (STR-55): one registry row per
+                    // VM, naming `spiffe://<trust-domain>/vm/<vm-id>`, written
+                    // in this transaction and cascade-deleted with the VM row.
+                    //
+                    // Unconditional, for every VM, and deliberately *not*
+                    // opt-in: a registration carries no grants of its own, so
+                    // until an operator writes a role binding against it the
+                    // principal authenticates and authorizes nothing. A per-VM
+                    // switch would be a second lock on a door the authorization
+                    // model already holds shut.
+                    //
+                    // `displayName` is the VM's name — an operator-facing label
+                    // for the registry listing, refreshed by nothing. The id in
+                    // the SPIFFE path is the identity; a rename must never move
+                    // one (docs/architecture/guest-identity.md, "UUIDs, never
+                    // names"). A project belonging to no organization still
+                    // gets a row, scoped to nothing, on the platform domain.
+                    //
+                    // A `spiffe_id` collision — an administrator having
+                    // hand-registered this VM's URI while `/vm/` is still
+                    // unreserved (STR-165) — is a constraint failure, which the
+                    // retry wrapper answers by redrawing the VM's id and
+                    // therefore its identity, exactly as it answers an IPAM
+                    // address race.
+                    try await GuestIdentity.register(
+                        vmID: vmID,
+                        organizationID: rootOrganizationID,
+                        displayName: vm.name,
+                        createdBy: userID,
+                        on: db
+                    )
+
                     return ResourceMutation.Accepted(
                         mutationID: try event.requireID(), targetGeneration: vm.generation)
                 }
@@ -634,6 +680,22 @@ struct VMController: RouteCollection {
             // The chosen network's subnet is full; the whole transaction rolled
             // back, so no VM was created.
             throw Abort(.conflict, reason: error.errorDescription ?? "No free IP addresses in the selected network")
+        } catch let error as any DatabaseError where error.isConstraintFailure {
+            // Every attempt lost the same unique index. In practice that is
+            // either a saturated network the IPAM retry could not walk past, or
+            // a pre-registered `spiffe://<td>/vm/<uuid>` that the id redraw
+            // should have escaped — both conflicts, not server faults, and both
+            // rolled back whole.
+            req.logger.warning(
+                "VM create exhausted its retries on a constraint failure",
+                metadata: ["error": .string(String(describing: error))])
+            throw Abort(
+                .conflict,
+                reason: """
+                    Could not create the VM: a uniqueness constraint could not be satisfied. \
+                    Retry; if it persists, check GET /api/workload-registrations for a \
+                    registration squatting this VM's SPIFFE ID.
+                    """)
         }
 
         let vmID = try vm.requireID()
@@ -957,7 +1019,13 @@ struct VMController: RouteCollection {
         return try await VMDetailResponse(
             from: vm,
             securityGroupsEnforced: resolvingEnforcement
-                ? SecurityGroupService.enforcement(for: vm, on: req.db) : nil)
+                ? SecurityGroupService.enforcement(for: vm, on: req.db) : nil,
+            // Deliberately not behind `resolvingEnforcement`: that flag exists
+            // because the enforcement walk costs its own queries and answers
+            // nothing for a VM being torn down. This is one indexed point
+            // lookup, and a client polling a delete still wants to know which
+            // identity is going away.
+            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
     }
 
     /// The `202` body every accepted VM lifecycle mutation answers with
@@ -1110,7 +1178,8 @@ struct VMController: RouteCollection {
         }
         return try await VMDetailResponse(
             from: vm,
-            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db))
+            securityGroupsEnforced: SecurityGroupService.enforcement(for: vm, on: req.db),
+            spiffeId: GuestIdentity.spiffeID(forVM: vm.requireID(), on: req.db))
     }
 
     func start(req: Request) async throws -> Response {

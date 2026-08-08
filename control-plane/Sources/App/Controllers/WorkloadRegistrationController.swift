@@ -83,6 +83,15 @@ struct WorkloadRegistrationController: RouteCollection {
     /// DELETE /api/workload-registrations/:registrationID — the admin
     /// revocation lever, for any kind. Deleting a workload-kind row deletes
     /// the principal, so its bindings go with it (the offboarding rule).
+    ///
+    /// A VM's instance identity (STR-55) is deletable here on purpose, and this
+    /// is the only revocation lever there is: refusing VM-owned rows would mean
+    /// a compromised instance identity could not be revoked without deleting
+    /// the VM, trading a recoverable operational mistake for an unrecoverable
+    /// security one. It is a one-way door — identity is granted at VM create
+    /// and there is no re-enable — so the removal is logged loudly rather than
+    /// silently. Nothing re-creates the row on the next sync: a self-heal would
+    /// undo the only revocation lever on a delay nobody can predict.
     func delete(req: Request) async throws -> HTTPStatus {
         _ = try await req.requireSystemAdmin()
         guard let registrationID = req.parameters.get("registrationID", as: UUID.self) else {
@@ -91,6 +100,15 @@ struct WorkloadRegistrationController: RouteCollection {
         guard let registration = try await WorkloadRegistration.find(registrationID, on: req.db) else {
             throw Abort(.notFound, reason: "Registration not found")
         }
+        if let vmID = registration.$vm.id {
+            req.logger.warning(
+                "Revoking a VM's instance identity; it cannot be reissued for this VM",
+                metadata: [
+                    "vm_id": .string(vmID.uuidString),
+                    "spiffe_id": .string(registration.spiffeID),
+                ])
+        }
+
         try await req.db.transaction { db in
             if registration.kind == .workload {
                 try await RoleBindingService.revokeAll(

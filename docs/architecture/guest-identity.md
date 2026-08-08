@@ -1,11 +1,14 @@
 # Guest Identity (Proposal)
 
-**Status: design proposal.** The node-side attestation mechanism has been proven
-against a real SPIRE 1.9.6 server and agent with a spike
-(`strato-agent spiffe-delegated-probe` — see
-[What the spike proved](#what-the-spike-proved)); nothing else here is
-implemented. Issue [#496](https://github.com/samcat116/strato/issues/496)
-(STR-16) is the umbrella.
+**Status: design proposal, with one piece shipped.** The node-side attestation
+mechanism has been proven against a real SPIRE 1.9.6 server and agent with a
+spike (`strato-agent spiffe-delegated-probe` — see
+[What the spike proved](#what-the-spike-proved)). The **principal half for VMs**
+is implemented: STR-55 gives every VM a `workload_registrations` row under
+`spiffe://<trust-domain>/vm/<vm-id>` and publishes that ID through the instance
+metadata service. Nothing else here is implemented — in particular no SVID is
+issued to any guest yet, and sandboxes have no registration (STR-166). Issue
+[#496](https://github.com/samcat116/strato/issues/496) (STR-16) is the umbrella.
 
 ## What this is
 
@@ -33,9 +36,16 @@ authorization.** A guest SVID grants nothing in Strato. It is a lookup key and
 nothing else — what a workload may do comes from `role_bindings` against a
 registered principal, which is what
 [#789](https://github.com/samcat116/strato/issues/789) (per-VM
-`WorkloadRegistration`) and [#492](https://github.com/samcat116/strato/issues/492)
-are for. Those are independent of this document: this one produces identities;
-those make them principals.
+`WorkloadRegistration`, shipped as STR-55) and
+[#492](https://github.com/samcat116/strato/issues/492) are for. Those are
+independent of this document: this one produces identities; those make them
+principals.
+
+That independence is why per-VM registration could ship ahead of everything else
+here, and unconditionally: a VM is a principal from the moment it is created, and
+it holds nothing until an operator binds a role to it. See
+[iam](./iam.md#guest-identities-issue-496) for why the opt-in switch #789
+originally specified was not built.
 
 The corollary is a non-goal. No role, scope, project, or claim is ever encoded
 into a guest's SPIFFE ID or into the SVID's extensions. The path carries a UUID
@@ -180,7 +190,7 @@ plugin — is what vouched for the workload.
 | `spiffe://<td>/node/<name>` | a hypervisor node (join-token attestation) | existing |
 | `spiffe://<td>/agent/<name>` | the strato-agent workload on that node | existing, reserved |
 | `spiffe://<td>/control-plane` | the control plane | existing |
-| `spiffe://<org-td>/vm/<vm-uuid>` | **a guest VM** | to reserve |
+| `spiffe://<org-td>/vm/<vm-uuid>` | **a guest VM** | minted by STR-55; namespace reservation still outstanding (STR-165) |
 | `spiffe://<org-td>/sandbox/<sandbox-uuid>` | **a guest sandbox** | to reserve |
 
 `<org-td>` is the same domain as the hosting node's `<td>` — see
@@ -188,6 +198,14 @@ plugin — is what vouched for the workload.
 
 `/vm/` is fixed by [#789](https://github.com/samcat116/strato/issues/789) and
 adopted verbatim rather than re-litigated. `/sandbox/` is its twin.
+
+**The UUID is lowercased** (`GuestIdentity.path(forVM:)`). The spelling is
+load-bearing rather than cosmetic: the URI is matched by exact string on the way
+back in — `WorkloadRegistry.resolve` filters `spiffe_id` for equality, and the
+JWT-SVID authenticator hands it a token's `sub` verbatim — so two spellings of
+one identity is a lookup key that misses. Lowercase also matches every other
+UUID-derived identifier in the codebase (Cedar entity ids, OVN names) and the
+already-lowercased trust domain, so the URI is not half-and-half.
 
 Two prefixes rather than a shared `/instance/`: the kind is already a
 first-class discriminator everywhere else — `resource_kind` on operations
@@ -208,9 +226,29 @@ platform CA that also signs Strato's own infrastructure. When
 domain — that is a **degraded** mode, not an equivalent one, and the feature
 should say so rather than quietly cross-signing tenants under one root.
 
+STR-55's `GuestIdentity.trustDomain(forOrganization:on:)` implements exactly
+that rule, and mirrors `DatabaseOrgTrustDomainSource`'s acceptance predicate
+(flag on, `phase = active`, cached bundle) deliberately: that source decides
+which domains the control plane will *accept* identities from, so a VM minted
+into a domain it rejects would hold an identity its own control plane refuses.
+The two must move together.
+
+**The choice is frozen at create.** The URI is composed once, when the
+registration row is written, and never moves — a SPIFFE ID that can be re-pointed
+is the same lie a mutable name would be. Turning
+`SPIRE_ORG_TRUST_DOMAINS_ENABLED` on later therefore leaves a fleet split between
+platform-domain (degraded) VMs and org-domain ones, with no re-issue path. A
+later migration can rewrite `spiffe_id` while the row is still the only artifact;
+once SVIDs are actually issued under these names, it cannot.
+
 Both prefixes must be reserved in `WorkloadRegistry.validateRegistrable` exactly
 as `/agent/` is today, so a system administrator cannot hand-register a URI that
-a VM will later be minted into.
+a VM will later be minted into. **That reservation has not landed** (STR-165).
+Until it does, the `spiffe_id` unique index is the guard, and a squatted URI is
+answered by the VM create path's retry redrawing the VM's id. Note that the
+minting path deliberately does *not* route through `validateRegistrable` — its
+contract is validating a URI supplied to a registration API — so reserving the
+prefix will not break VM creation.
 
 ## Selectors, and the subset hazard
 
@@ -339,10 +377,14 @@ Why that is nonetheless acceptable here:
   directory, never bind-mounted into a container and never reachable from a
   Firecracker jail (`SandboxJailPlan` must not gain a path to it).
 - **Off by default.** The admin socket and `authorized_delegates` ship behind an
-  explicit installer opt-in, mirroring #789's "opt-in per VM, default off" one
-  layer down. Enabling identity for a VM means anything inside it can act as that
-  principal; enabling the delegate grant means every guest on a node *could*, if
-  the agent were compromised. Both are operator decisions.
+  explicit installer opt-in. This stands on its own merits and no longer mirrors
+  anything at the VM layer: #789 originally specified "opt-in per VM, default
+  off", but per-VM registration shipped unconditional (STR-55), because a
+  registration with no role bindings authorizes nothing and the switch would have
+  been a second lock on a door the authorization model already holds shut.
+  Granting the delegate is a different question with a different answer —
+  it is a *node*-level trust change, and it means every guest on that node could
+  be issued an SVID if the agent were compromised. That is an operator decision.
 
 ## Rejected alternatives
 
@@ -435,8 +477,11 @@ third — *"a VM is not a local process, so there are no selectors to attest
 against"* — is the one the spike disproves: delegated selectors are not
 validated against attestor plugins, so a synthetic selector type is fine.
 
-#789 remains exactly as filed: this document produces the identity, #789 makes it
-a principal, and they can land in either order.
+#789 landed first, as STR-55, which is exactly what "either order" meant: this
+document produces the identity, #789 makes it a principal, and a VM is a
+principal today whose SVID does not exist yet. The one thing #789 shipped
+differently from its filing is the opt-in switch, which was dropped — see
+[iam](./iam.md#guest-identities-issue-496).
 
 ## What the spike proved
 
@@ -593,10 +638,15 @@ produced.
 
 Filed under [#496](https://github.com/samcat116/strato/issues/496):
 
+0. ~~Per-VM `WorkloadRegistration` lifecycle (#789).~~ **Done** — STR-55.
 1. Enable the SPIRE agent admin socket behind an opt-in installer flag
    (`deploy/agent/install.sh`, `deploy/compose/spiffe/`, Helm).
-2. Reserve `/vm/` and `/sandbox/` in `WorkloadRegistry.validateRegistrable`.
-3. Per-sandbox `WorkloadRegistration` lifecycle — the sandbox twin of #789.
+2. Reserve `/vm/` and `/sandbox/` in `WorkloadRegistry.validateRegistrable`
+   (STR-165). Outstanding, and now load-bearing: every VM holds a `/vm/` URI, so
+   until this lands the `spiffe_id` unique index is the only thing keeping a
+   hand-registered row out of the namespace.
+3. Per-sandbox `WorkloadRegistration` lifecycle (STR-166) — the sandbox twin of
+   #789, and the reason VMs and sandboxes are asymmetric today.
 4. Guest SPIRE entry lifecycle parented to the hosting node, including
    re-parenting on placement change.
 5. Agent: per-guest delegated-identity subscription manager — passing

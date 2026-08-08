@@ -124,6 +124,16 @@ struct DesiredStateAssembler {
         let region = site?.name
         let availabilityZone = agent?.name
 
+        // The VMs' instance identities (STR-55), resolved in one query for the
+        // whole sync — mirroring `securityGroupsByInterface` above, and for the
+        // same reason: this runs for every agent on every sync, so a per-VM
+        // lookup would be a fleet-wide load multiplier. Skipped entirely for an
+        // agent that will not be sent metadata at all.
+        let spiffeIDsByVM =
+            sendInstanceMetadata
+            ? try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
+            : [:]
+
         var entries: [DesiredVMState] = []
         for vm in vms {
             guard let vmId = vm.id else { continue }
@@ -178,7 +188,8 @@ struct DesiredStateAssembler {
                 sendInstanceMetadata
                 ? InstanceMetadata.build(
                     vm: vm, vmId: vmId, resolvedInterfaces: resolvedInterfaces,
-                    region: region, availabilityZone: availabilityZone)
+                    region: region, availabilityZone: availabilityZone,
+                    instanceSPIFFEID: spiffeIDsByVM[vmId])
                 : nil
 
             entries.append(
