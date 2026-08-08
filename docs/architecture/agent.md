@@ -195,9 +195,28 @@ durable store rather than a process the agent has to remember:
   either way, which is why `guestInfo`/`memoryStats` are `HypervisorService`
   requirements rather than one driver's methods.
 
+- **Transitions are announced, not discovered.** The driver holds a
+  `withDomainEvents` lifecycle subscription (STR-135) for as long as the agent
+  wants one, so a guest that powers itself off is reported in about a second
+  rather than at the next 20-second sweep. Events are an **accelerant, not a
+  source of truth**: what they carry is a request to re-read the host, and the
+  observed-state report they schedule is the same full re-reading the periodic
+  one performs. That is what makes the subscription buffer safe to bound and
+  drop from (`.dropOldest` — the newest transitions are the ones describing the
+  present, and a full re-reading answers every request that preceded it), and it
+  is why `getVMStatus` polling is untouched. The agent coalesces bursts into at
+  most two reports per 500 ms window, because a host-wide power cycle emits
+  stopped/started/resumed *per VM* and a report costs a round trip per VM.
+  Reconnection is the loop's own job: the subscription dies with its connection,
+  and the re-established one yields a resynchronize signal from *inside* the
+  subscription scope, so the window it was disconnected for cannot fall in a gap.
+  What this changes is **visibility latency, not repair latency**: a guest that
+  powers itself off is *reported* in about a second, but nothing here rings the
+  desired-state doorbell, so the reconciler still restarts it on its own cadence.
+
 Not yet implemented, and refused rather than silently skipped: disk hot-plug,
-online resize and VM checkpoints (STR-134), and lifecycle events in place of
-status polling (STR-135). Two of those refusals are load-bearing:
+online resize and VM checkpoints (STR-134). Two of those refusals are
+load-bearing:
 
 - **A volume can only reach a VM at create time.** The domain document is
   written once by `createVM`, so an attach against an existing VM is refused

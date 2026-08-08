@@ -219,6 +219,47 @@ public protocol HypervisorService: Actor, Sendable {
     /// would queue behind the very work this exists to avoid.
     nonisolated var observesGuests: Bool { get }
 
+    /// Transitions this backend pushes as they happen, or nil for a backend
+    /// that can only be polled (STR-135).
+    ///
+    /// An accelerant, never a source of truth: what arrives here schedules an
+    /// observed-state report, and that report re-reads the host exactly as the
+    /// periodic one does. So a backend is free to drop events under load, and
+    /// the agent is free to coalesce them — the 20-second sync remains the
+    /// correctness backstop either way.
+    ///
+    /// `nonisolated` for the same reason as `observesGuests`: it is a property
+    /// of the backend, not of its state, and the agent attaches to it once at
+    /// start. Nil rather than an empty stream so "this backend has nothing to
+    /// say" is distinguishable at the point the pump is created, and no task is
+    /// spawned for a backend that would never yield.
+    nonisolated var lifecycleChanges: AsyncStream<VMLifecycleChange>? { get }
+
+    /// Begin pushing into `lifecycleChanges`. Idempotent, and never throws: a
+    /// backend that cannot reach its hypervisor right now retries on its own,
+    /// because a subscription failing is not a reason to fail agent startup.
+    func startObservingLifecycle() async
+
+    /// Stop, releasing whatever the backend registered with its hypervisor and
+    /// finishing the stream. Called from `Agent.stop()`, which is the only
+    /// scope in which a subscription could otherwise outlive its purpose.
+    ///
+    /// Scoped to the subscription and nothing else — a backend that wants to
+    /// release a connection has `shutdown()` for that, so this stays safe to
+    /// call for its stated purpose alone.
+    func stopObservingLifecycle() async
+
+    /// Release whatever this backend holds open, because the agent is going
+    /// away.
+    ///
+    /// Separate from `stopObservingLifecycle` because they are different
+    /// questions with different scopes: one ends a subscription, this ends the
+    /// backend. A driver whose connection is durable — `LibvirtService` holds
+    /// one shared RPC connection every call path uses — has no other hook to
+    /// close it on, and closing it from the subscription's teardown would make
+    /// "stop observing" quietly mean "stop everything".
+    func shutdown() async
+
     /// What the guest agent reports about itself — hostname and configured
     /// interfaces (issue #563).
     ///
@@ -271,6 +312,19 @@ public extension HypervisorService {
     /// Backends opt in to guest observation, and the default agrees with the
     /// two defaults below: a backend that reports nothing is not asked.
     nonisolated var observesGuests: Bool { false }
+
+    /// Backends opt in to pushing lifecycle transitions. Nil is not a
+    /// degradation: it is how every backend behaved before STR-135, and the
+    /// periodic sync it falls back to is the same backstop the opted-in ones
+    /// still rely on.
+    nonisolated var lifecycleChanges: AsyncStream<VMLifecycleChange>? { nil }
+    func startObservingLifecycle() async {}
+    func stopObservingLifecycle() async {}
+
+    /// Backends whose resources are per-VM rather than per-driver — every one
+    /// but `LibvirtService` today — have nothing to release when the agent
+    /// exits.
+    func shutdown() async {}
 
     /// Backends with no guest-agent channel (Firecracker, the mock) report
     /// nothing rather than an error: guest observation is informational, and
