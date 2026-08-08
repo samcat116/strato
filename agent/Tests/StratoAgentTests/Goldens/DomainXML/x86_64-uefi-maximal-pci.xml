@@ -1,22 +1,28 @@
 <domain type='kvm'>
   <name>0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b</name>
   <uuid>0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b</uuid>
-  <memory unit='KiB'>4194304</memory>
+  <maxMemory slots='1' unit='KiB'>8388608</maxMemory>
+  <memory unit='KiB'>8388608</memory>
   <currentMemory unit='KiB'>4194304</currentMemory>
-  <vcpu placement='static'>4</vcpu>
+  <vcpu placement='static' current='4'>8</vcpu>
   <os firmware='efi'>
-    <type arch='aarch64' machine='virt'>hvm</type>
+    <type arch='x86_64' machine='q35'>hvm</type>
     <firmware>
-      <feature enabled='no' name='enrolled-keys'/>
-      <feature enabled='no' name='secure-boot'/>
+      <feature enabled='yes' name='enrolled-keys'/>
+      <feature enabled='yes' name='secure-boot'/>
     </firmware>
     <nvram format='qcow2'>/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/nvram.fd</nvram>
   </os>
   <features>
     <acpi/>
-    <gic version='3'/>
+    <apic/>
+    <smm state='on'/>
   </features>
-  <cpu mode='host-passthrough' check='none'/>
+  <cpu mode='host-passthrough' check='none'>
+    <numa>
+      <cell id='0' cpus='0-7' memory='4194304' unit='KiB'/>
+    </numa>
+  </cpu>
   <clock offset='utc'/>
   <on_poweroff>destroy</on_poweroff>
   <on_reboot>restart</on_reboot>
@@ -28,21 +34,44 @@
       <target dev='vda' bus='virtio'/>
     </disk>
     <disk type='file' device='disk'>
+      <driver name='qemu' type='qcow2'/>
+      <source file='/var/lib/strato/volumes/data.qcow2'/>
+      <target dev='vdb' bus='virtio'/>
+      <serial>vol-6b1c0a5e-7d2f-4a83-9e10-5c4b3a2d1f00</serial>
+    </disk>
+    <disk type='file' device='disk'>
+      <driver name='qemu' type='raw'/>
+      <source file='/var/lib/strato/volumes/reference.raw'/>
+      <target dev='vdc' bus='virtio'/>
+      <readonly/>
+      <serial>vol-9f3d7c21-4b6a-4e05-8d92-1a0b7c5e3d44</serial>
+    </disk>
+    <disk type='file' device='disk'>
       <driver name='qemu' type='raw'/>
       <source file='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/cloud-init.iso'/>
-      <target dev='vdb' bus='virtio'/>
+      <target dev='vdd' bus='virtio'/>
       <readonly/>
     </disk>
     <controller type='pci' index='0' model='pcie-root'/>
-    <controller type='pci' index='9' model='pcie-root-port'/>
-    <controller type='pci' index='10' model='pcie-root-port'/>
-    <controller type='pci' index='11' model='pcie-root-port'/>
-    <controller type='pci' index='12' model='pcie-root-port'/>
+    <controller type='pci' index='14' model='pcie-root-port'/>
+    <controller type='pci' index='15' model='pcie-root-port'/>
+    <controller type='pci' index='16' model='pcie-root-port'/>
+    <controller type='pci' index='17' model='pcie-root-port'/>
     <controller type='virtio-serial' index='0'/>
     <controller type='usb' index='0' model='qemu-xhci'/>
     <interface type='ethernet'>
       <mac address='52:54:00:12:34:56'/>
       <target dev='tap0f9ea1b23c4d' managed='no'/>
+      <model type='virtio'/>
+    </interface>
+    <interface type='ethernet'>
+      <mac address='52:54:00:ab:cd:ef'/>
+      <target dev='tap0f9ea1b23c4e' managed='no'/>
+      <model type='virtio'/>
+      <mtu size='9000'/>
+    </interface>
+    <interface type='ethernet'>
+      <target dev='tap0f9ea1b23c4f' managed='no'/>
       <model type='virtio'/>
     </interface>
     <serial type='unix'>
@@ -61,7 +90,7 @@
       <listen type='socket' socket='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/vnc.sock'/>
     </graphics>
     <video>
-      <model type='virtio' heads='1'/>
+      <model type='vga' heads='1'/>
     </video>
     <input type='tablet' bus='usb'/>
     <input type='keyboard' bus='usb'/>
@@ -69,5 +98,13 @@
       <backend type='emulator' version='2.0'/>
     </tpm>
     <memballoon model='virtio' freePageReporting='on'/>
+    <memory model='virtio-mem'>
+      <target>
+        <size unit='KiB'>4194304</size>
+        <node>0</node>
+        <block unit='KiB'>2048</block>
+        <requested unit='KiB'>0</requested>
+      </target>
+    </memory>
   </devices>
 </domain>

@@ -63,6 +63,16 @@ struct DomainXMLNode: Equatable {
         children.append(child)
     }
 
+    /// The value of `name`, or nil where the element does not carry it.
+    func attribute(_ name: String) -> String? {
+        attributes.first { $0.name == name }?.value
+    }
+
+    /// The first child element named `name`, or nil where there is none.
+    func child(_ name: String) -> DomainXMLNode? {
+        children.first { $0.name == name }
+    }
+
     /// Renders the element and its descendants.
     ///
     /// The shape deliberately matches `virsh dumpxml`'s: no XML declaration

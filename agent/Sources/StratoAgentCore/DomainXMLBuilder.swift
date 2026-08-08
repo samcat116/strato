@@ -160,7 +160,7 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// - `<rng>`, `<pm>`, `<metadata>`, `<alias>`, and any `<qemu:commandline>`
 ///   passthrough.
 ///
-/// ## Spare PCIe root ports are emitted, and are load-bearing
+/// ## Spare PCIe root ports are emitted, at explicit indexes
 ///
 /// libvirt adds exactly one `pcie-root-port` per PCI device the document
 /// declares, so a domain built from only the devices a VM needs has **no free
@@ -172,6 +172,27 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// many volumes a VM can be given after it is created (STR-134); issue #1026
 /// tracks removing that ceiling rather than only documenting it.
 ///
+/// **The index is what reserves the port.** Declaring a port without one does
+/// not add capacity on top of what libvirt was going to allocate — libvirt
+/// numbers it into the auto-assigned range and then puts one of the domain's
+/// own devices in it, so the ceiling above was zero for as long as the spares
+/// were un-indexed (STR-192). Measured on libvirt 12.0.0, against a domain
+/// whose devices need five ports:
+///
+/// | declaration | resulting root ports | free |
+/// | -- | -- | -- |
+/// | none | 5 | 0 |
+/// | four un-indexed | 4 | 0 |
+/// | four at indexes 9–12 | 12 | 7 |
+///
+/// The last row is the mechanism this builder uses, and it also shows why the
+/// count only has to be an upper bound: libvirt grows the bus set to reach the
+/// highest index declared, filling the gap (6–8 there) with further *empty*
+/// ports. So `portedDeviceCount` erring high costs a few unused ports, while
+/// erring low costs reserved ones — and the free total is
+/// `highest index − ports libvirt assigns to devices`, never fewer than
+/// `spareHotplugPorts`.
+///
 /// ## Known divergence from the QEMU command line
 ///
 /// The balloon is emitted with free-page **reporting**, where the QEMU path
@@ -182,12 +203,14 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// wanted in the first place.
 public enum DomainXMLBuilder {
 
-    /// How many empty `pcie-root-port`s every domain carries for later
-    /// hot-plug. Each costs a slot on `pcie-root` (of which q35 and `virt` have
-    /// 31) and a little guest address space, so this trades the ceiling
-    /// described above against the slots left for everything else; four is well
-    /// clear of the one or two volumes a VM typically gains after creation and
-    /// well short of crowding the root complex.
+    /// How many empty `pcie-root-port`s every domain is guaranteed to carry for
+    /// later hot-plug — a *minimum*, since the gap fill described above can
+    /// leave more. Each costs a slot on `pcie-root` (of which q35 and `virt`
+    /// have 31, and where libvirt groups ports eight to a slot) and a little
+    /// guest address space, so this trades the ceiling described above against
+    /// the slots left for everything else; four is well clear of the one or two
+    /// volumes a VM typically gains after creation and well short of crowding
+    /// the root complex.
     static let spareHotplugPorts = 4
 
     /// The domain document for `input`, ready for `virDomainDefineXML`.
@@ -433,7 +456,10 @@ public enum DomainXMLBuilder {
     private static func devicesNode(
         _ input: DomainXMLInput, machine: MachineProfile, hotplugBytes: Int64
     ) throws -> DomainXMLNode {
-        var devices = DomainXMLNode("devices")
+        // Assembled as a list rather than straight into the element because the
+        // PCI controllers are numbered from how many PCI devices the rest of
+        // the list holds, and they are declared in the middle of it.
+        var devices: [DomainXMLNode] = []
         let graphics = input.spec.console?.effectiveGraphics == .vnc
 
         if let emulatorPath = input.emulatorPath {
@@ -462,23 +488,10 @@ public enum DomainXMLBuilder {
                     bootOrder: nil, volumeId: nil))
         }
 
-        // The root complex itself, declared before any port hangs off it. Both
-        // machine types the builder emits (q35, virt) reserve PCI controller
-        // index 0 for `pcie-root`, and libvirt numbers un-indexed controllers
-        // from 0 — so without this the first spare port below claims index 0
-        // and the whole document is rejected. libvirt's implicit-controller
-        // pass would add this, but it runs after the validation that rejects.
-        devices.append(DomainXMLNode("controller", [("type", "pci"), ("index", "0"), ("model", "pcie-root")]))
-
-        // Empty PCIe root ports for later hot-plug. See the type's note: these
-        // cannot be added to a domain after it is defined, and without them
-        // every disk hot-plug fails on a full root complex.
-        for _ in 0..<spareHotplugPorts {
-            // No index and no address: libvirt assigns both, and pinning them
-            // here would only invite a collision with the ports it adds for the
-            // devices above.
-            devices.append(DomainXMLNode("controller", [("type", "pci"), ("model", "pcie-root-port")]))
-        }
+        // Where the root complex and its spare ports go. They are numbered from
+        // the PCI devices the whole list holds, which is not known until it is
+        // complete, so they are spliced in at the end of this function.
+        let pciControllerPosition = devices.count
 
         // libvirt would add both controllers implicitly; declaring them pins
         // index 0 and keeps the document stable across libvirt versions that
@@ -582,7 +595,108 @@ public enum DomainXMLBuilder {
                     requestedBytes: 0))
         }
 
-        return devices
+        devices.insert(contentsOf: pciControllerNodes(devices), at: pciControllerPosition)
+        return DomainXMLNode("devices", children: devices)
+    }
+
+    // MARK: - PCIe root ports
+
+    /// The `pcie-root` complex and the spare `pcie-root-port`s that hang off
+    /// it, numbered past the ports libvirt will assign to `devices`.
+    ///
+    /// The root complex is declared because both machine types the builder
+    /// emits (q35, `virt`) reserve PCI controller index 0 for it, and libvirt's
+    /// implicit-controller pass — which would add it — runs *after* the
+    /// validation that rejects a document whose ports collide with it
+    /// (STR-189).
+    ///
+    /// The spares are declared at explicit indexes for the reason the type's
+    /// note gives: only an index above the auto-assigned range reserves
+    /// anything (STR-192).
+    static func pciControllerNodes(_ devices: [DomainXMLNode]) -> [DomainXMLNode] {
+        var nodes = [
+            DomainXMLNode("controller", [("type", "pci"), ("index", "0"), ("model", "pcie-root")])
+        ]
+        // Buses 1...`portedDeviceCount` are what libvirt needs for the devices
+        // themselves, so the first spare sits one past them.
+        let firstSpare = portedDeviceCount(devices) + 1
+        for index in firstSpare..<(firstSpare + spareHotplugPorts) {
+            nodes.append(
+                DomainXMLNode(
+                    "controller", [("type", "pci"), ("index", "\(index)"), ("model", "pcie-root-port")]))
+        }
+        return nodes
+    }
+
+    /// An upper bound on how many `pcie-root-port`s libvirt will assign to
+    /// `devices` — one per PCI endpoint among them, plus the controllers it
+    /// adds that this document does not declare.
+    ///
+    /// Deliberately derived from the emitted elements rather than from
+    /// `DomainXMLInput`: a device added to the document later is then counted by
+    /// the code that has to count it, instead of silently eating a spare port.
+    ///
+    /// **An upper bound, not an estimate.** Over-counting is nearly free — the
+    /// gap fill described on the type turns an excess of *k* into
+    /// `spareHotplugPorts + k` empty ports rather than a rejected document —
+    /// while under-counting silently erodes the reservation this whole
+    /// mechanism exists to make. Which devices a given libvirt adds implicitly
+    /// is a property of that libvirt and its QEMU, not of this document, so the
+    /// two terms below are both deliberately generous: the USB controller is
+    /// counted on every architecture though only q35 gets one, and a further
+    /// port covers whatever else an implicit-device pass this builder does not
+    /// model reaches for.
+    static func portedDeviceCount(_ devices: [DomainXMLNode]) -> Int {
+        var count = devices.filter(needsRootPort).count
+        // libvirt adds a USB controller to any domain that declares none, and
+        // its default model on the machine types here (`qemu-xhci`) is a PCIe
+        // endpoint that takes a port of its own.
+        let declaresUSB = devices.contains {
+            $0.name == "controller" && $0.attribute("type") == "usb"
+        }
+        if !declaresUSB {
+            count += 1
+        }
+        return count + implicitDeviceAllowance
+    }
+
+    /// Ports held back for PCI devices libvirt adds that `needsRootPort` does
+    /// not know about. One, because the implicit-device pass is small and every
+    /// device it is known to add is already counted; not zero, because the pass
+    /// differs by libvirt and QEMU version and this builder cannot see it.
+    private static let implicitDeviceAllowance = 1
+
+    /// Whether libvirt will hang `node` off a `pcie-root-port` of its own.
+    private static func needsRootPort(_ node: DomainXMLNode) -> Bool {
+        switch node.name {
+        case "disk":
+            // A virtio disk is a PCI endpoint; one on ide/sata/usb rides a
+            // controller instead. Every disk this builder writes is virtio, so
+            // this reads the element rather than assuming it.
+            return node.child("target")?.attribute("bus") == "virtio"
+        case "interface":
+            return true
+        case "memory":
+            // virtio-mem is `virtio-mem-pci` on both machine types.
+            return true
+        case "controller":
+            switch node.attribute("type") {
+            // `pcie-root` and its ports are the bus, not something on it; the
+            // SATA controller q35 integrates sits directly on the root complex.
+            case "pci", "sata", "ide": return false
+            default: return true
+            }
+        case "video":
+            // `<model type='none'/>` is the absence of the device.
+            return node.child("model")?.attribute("type") != "none"
+        case "memballoon":
+            return node.attribute("model") != "none"
+        default:
+            // `<serial>`, `<console>` and `<channel>` ride the virtio-serial
+            // controller counted above; `<input>` rides USB; `<tpm model='tpm-tis'>`
+            // is on the ISA/MMIO bus; `<graphics>` is not a device at all.
+            return false
+        }
     }
 
     /// The `<memory model='virtio-mem'>` device.

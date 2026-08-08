@@ -40,6 +40,16 @@ import FoundationXML
 /// equivalents; and an arm64 Secure Boot domain can only be defined where an
 /// AAVMF `.secboot` build is installed, which no golden therefore pins.
 ///
+/// **Not re-validated against libvirt:** the `index` STR-192 put on every spare
+/// `pcie-root-port`, and the ninth scenario (`x86_64-uefi-maximal-pci`) added
+/// with it — the host that fix was written on had no libvirt at all. The
+/// attribute is `<controller>`'s own and the shape is what libvirt itself
+/// dumps, so the schema is not the risk; what is unproven here is the *number*,
+/// which only a defined domain's `dumpxml` can settle. `reservesHotplugPorts`
+/// asserts the relationship rather than the number for that reason, and
+/// property 2 of issue #1036 — that `attach-device` of a disk succeeds against
+/// a freshly defined domain — still needs the e2e suite (issue #1031's gap).
+///
 /// To rewrite the goldens after an intentional change:
 ///
 ///     STRATO_UPDATE_GOLDENS=1 swift test --package-path agent --filter DomainXMLBuilderTests
@@ -122,6 +132,27 @@ struct DomainXMLBuilderTests {
                     cpus: 4, memoryBytes: 4 * 1024 * 1024 * 1024,
                     machine: MachineProfile(secureBoot: true, tpm: true), graphics: .vnc),
                 networks: [jumboNIC, unaddressedNIC])),
+        // The most PCI devices the builder can produce, which is the shape the
+        // spare root ports have to be numbered past: three disks plus the
+        // cloud-init ISO, three NICs, a graphics console (xHCI controller and
+        // video), TPM, and the virtio-mem device hot-add headroom brings.
+        Scenario(
+            name: "x86_64-uefi-maximal-pci",
+            input: input(
+                spec: spec(
+                    cpus: 4, maxCpus: 8, memoryBytes: 4 * 1024 * 1024 * 1024,
+                    maxMemoryBytes: 8 * 1024 * 1024 * 1024,
+                    machine: MachineProfile(secureBoot: true, tpm: true), graphics: .vnc),
+                disks: [
+                    bootDisk,
+                    ResolvedDisk(
+                        path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2,
+                        volumeId: dataVolumeId),
+                    ResolvedDisk(
+                        path: "/var/lib/strato/volumes/reference.raw", format: .raw, readonly: true,
+                        volumeId: referenceVolumeId),
+                ],
+                networks: [primaryNIC, jumboNIC, unaddressedNIC])),
         // Hot-add headroom, which is the one shape that grows a NUMA topology.
         Scenario(
             name: "x86_64-uefi-headroom",
@@ -489,14 +520,68 @@ struct DomainXMLBuilderTests {
     /// so a domain that reserves none has nowhere to hot-plug a disk — and a
     /// domain document is written once, so a VM defined without spares can
     /// never gain them.
+    ///
+    /// The reservation is the *index*, not the element: a port declared without
+    /// one is numbered into the auto-assigned range and then filled with one of
+    /// the domain's own devices, which is how `spareHotplugPorts` reserved
+    /// nothing at all until STR-192. So this counts the document's PCI devices
+    /// independently of the builder and asserts the property that survives
+    /// libvirt's addressing pass — libvirt grows the bus set to the highest
+    /// index declared, so `highest − devices` ports are left empty.
     @Test("every domain reserves empty PCIe root ports for hot-plug", arguments: scenarios)
     func reservesHotplugPorts(_ scenario: Scenario) throws {
         let xml = try DomainXMLBuilder.build(scenario.input)
-        let ports = xml.components(separatedBy: "<controller type='pci' model='pcie-root-port'/>")
-        #expect(ports.count == DomainXMLBuilder.spareHotplugPorts + 1)
-        // No index or address: libvirt assigns both, and pinning them here
-        // would collide with the ports it adds for the devices above.
-        #expect(!xml.contains("model='pcie-root-port' index"))
+        let spares = Self.rootPortIndexes(xml)
+        #expect(spares.count == DomainXMLBuilder.spareHotplugPorts)
+        // Never un-indexed, and never index 0 — which belongs to `pcie-root`.
+        #expect(!xml.contains("<controller type='pci' model='pcie-root-port'/>"))
+        let lowest = try #require(spares.min())
+        let highest = try #require(spares.max())
+        #expect(lowest > 0)
+        // Contiguous, so the document does not depend on the gap fill to
+        // produce the ports it names.
+        #expect(spares == Array(lowest...highest))
+
+        let devices = Self.pciDeviceCount(xml)
+        #expect(highest - devices >= DomainXMLBuilder.spareHotplugPorts)
+        // Property 1 from issue #1036: strictly more root ports than PCI
+        // devices, which is what "a disk can still be plugged in" reduces to.
+        #expect(lowest > devices)
+    }
+
+    /// The `index='N'` of every `pcie-root-port` the document declares.
+    private static func rootPortIndexes(_ xml: String) -> [Int] {
+        xml.components(separatedBy: "\n").compactMap { line in
+            guard line.contains("model='pcie-root-port'") else { return nil }
+            guard let start = line.range(of: "index='"),
+                let end = line[start.upperBound...].firstIndex(of: "'")
+            else { return nil }
+            return Int(line[start.upperBound..<end])
+        }
+    }
+
+    /// How many PCI endpoints `xml` declares — counted off the rendered
+    /// document rather than through the builder's own classifier, so this is a
+    /// check on the result and not on the code agreeing with itself.
+    ///
+    /// libvirt gives each of these a `pcie-root-port` of its own. The last term
+    /// is the USB controller libvirt adds to a domain that declares none; it is
+    /// `qemu-xhci` on these machine types, which is a PCIe endpoint too.
+    private static func pciDeviceCount(_ xml: String) -> Int {
+        func occurrences(_ needle: String) -> Int {
+            xml.components(separatedBy: needle).count - 1
+        }
+        let usbControllers = occurrences("<controller type='usb'")
+        return
+            // Only disks carry `bus=`; a NIC's virtio-ness is a `<model type>`.
+            occurrences("bus='virtio'")
+            + occurrences("<interface ")
+            + occurrences("<controller type='virtio-serial'")
+            + usbControllers
+            + occurrences("<memory model='virtio-mem'>")
+            + (xml.contains("<memballoon model='virtio'") ? 1 : 0)
+            + (xml.contains("<model type='none'/>") ? 0 : 1)  // <video>
+            + (usbControllers == 0 ? 1 : 0)
     }
 
     /// libvirt numbers un-indexed controllers from 0, and both machine types
@@ -508,8 +593,7 @@ struct DomainXMLBuilderTests {
         let xml = try DomainXMLBuilder.build(scenario.input)
         let root = try #require(
             xml.range(of: "<controller type='pci' index='0' model='pcie-root'/>"))
-        let firstPort = try #require(
-            xml.range(of: "<controller type='pci' model='pcie-root-port'/>"))
+        let firstPort = try #require(xml.range(of: "model='pcie-root-port'"))
         #expect(root.lowerBound < firstPort.lowerBound)
     }
 

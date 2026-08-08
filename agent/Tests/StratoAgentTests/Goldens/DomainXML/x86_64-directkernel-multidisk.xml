@@ -41,10 +41,10 @@
       <serial>vol-9f3d7c21-4b6a-4e05-8d92-1a0b7c5e3d44</serial>
     </disk>
     <controller type='pci' index='0' model='pcie-root'/>
-    <controller type='pci' model='pcie-root-port'/>
-    <controller type='pci' model='pcie-root-port'/>
-    <controller type='pci' model='pcie-root-port'/>
-    <controller type='pci' model='pcie-root-port'/>
+    <controller type='pci' index='8' model='pcie-root-port'/>
+    <controller type='pci' index='9' model='pcie-root-port'/>
+    <controller type='pci' index='10' model='pcie-root-port'/>
+    <controller type='pci' index='11' model='pcie-root-port'/>
     <controller type='virtio-serial' index='0'/>
     <serial type='unix'>
       <source mode='bind' path='/var/lib/strato/vms/0f9ea1b2-3c4d-4e5f-8a9b-0c1d2e3f4a5b/serial.sock'/>

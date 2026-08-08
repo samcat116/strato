@@ -22,7 +22,7 @@ public enum DomainDeviceXML {
     /// order the create-time document already gave the boot disk.
     ///
     /// No `<address>` either — libvirt picks a free PCIe root port, of which
-    /// the document reserves `DomainXMLBuilder.spareHotplugPorts`.
+    /// the document reserves at least `DomainXMLBuilder.spareHotplugPorts`.
     public static func hotplugDisk(
         path: String, format: DiskFormat, target: String, readonly: Bool, volumeId: String
     ) -> String {

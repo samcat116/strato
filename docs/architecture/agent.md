@@ -257,12 +257,20 @@ alone rather than left for a boot that would not pick it up.
 Two consequences follow:
 
 - **A VM's hot-plug slots and memory headroom are fixed when it is created.**
-  The document reserves `DomainXMLBuilder.spareHotplugPorts` empty
+  The document reserves at least `DomainXMLBuilder.spareHotplugPorts` empty
   `pcie-root-port`s (libvirt adds one port per PCI device present at define
   time, so a domain that reserves none has nowhere to plug a disk) and whatever
   virtio-mem region the spec asked for. Growing past either is libvirt's error
   to report, not bookkeeping the agent keeps — which is why a process driver's
   spawn-sizing table has no counterpart here.
+
+  The reservation is made by **numbering** those ports past the range libvirt
+  auto-assigns, which the builder derives from the PCI devices it emitted. A
+  port declared without an index reserves nothing: libvirt numbers it into that
+  range and fills it with one of the domain's own devices, which left the real
+  ceiling at zero until STR-192. Declaring a high index is safe in the other
+  direction because libvirt grows the bus set to reach it, filling the gap with
+  further empty ports.
 - **A volume names itself in the document.** Each volume-backed `<disk>` carries
   `<serial>vol-<uuid></serial>`, minted by `QEMUDiskIdentity`, so a detach
   resolves exactly that disk on a domain the agent keeps no model of (STR-129).
