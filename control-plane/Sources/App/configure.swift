@@ -857,6 +857,12 @@ public func configure(_ app: Application) async throws {
 
     try await app.autoMigrate()
 
+    // STR-186 prevents new tenant IPv6 subnets from overlapping the ULA space
+    // used by metadata and per-network resolvers. Existing rows cannot be
+    // renumbered safely in place, so name every collision at each startup until
+    // its operator remediates it.
+    try await NetworkServiceSpaceAudit.warnAboutCollidingNetworks(on: app.db, logger: app.logger)
+
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
     // curated registry. Runs every startup so registry changes land with the
     // deploy that carries them.

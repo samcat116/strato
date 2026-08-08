@@ -90,6 +90,43 @@ import Testing
         #expect(random.base.lo == 0)
     }
 
+    @Test func generatedULAAvoidsTheReservedServiceSpace() {
+        // A draw landing inside fd00:ec2::/32 is nudged into the neighbouring
+        // /32 rather than minting a subnet the API would refuse (STR-186).
+        let reserved = NetworkResolverEndpoint.v6SpaceCIDR
+        for globalID: UInt64 in [0x00_0e_c2_00_00, 0x00_0e_c2_ff_ff, 0x00_0e_c2_12_34] {
+            let cidr = IPv6Address.makeULASubnet64(randomGlobalID: { globalID })
+            #expect(!reserved.overlaps(cidr), "\(cidr) must not overlap \(reserved)")
+            #expect(cidr.base.isUniqueLocal)
+            #expect(cidr.prefix == 64)
+        }
+        #expect(
+            IPv6Address.makeULASubnet64(randomGlobalID: { 0x00_0e_c2_12_34 }).description == "fd00:ec3:1234::/64")
+
+        // Neighbours of the reserved prefix are left alone.
+        #expect(IPv6Address.makeULASubnet64(randomGlobalID: { 0x00_0e_c1_00_00 }).description == "fd00:ec1::/64")
+        #expect(IPv6Address.makeULASubnet64(randomGlobalID: { 0x00_0e_c3_00_00 }).description == "fd00:ec3::/64")
+    }
+
+    @Test func generatedULANudgeTracksTheReservedPrefixLength() {
+        let globalID: UInt64 = 0x00_0e_c2_12_34
+
+        // At /24 the lowest covered global-ID bit is bit 24. The old
+        // `prefix - 16` calculation flipped bit 8, outside the reservation,
+        // and returned a subnet that still overlapped it.
+        let reserved24 = IPv6CIDR("fd00:e00::/24")!
+        let nudged24 = IPv6Address.makeULASubnet64(globalID: globalID, avoiding: reserved24)
+        #expect(!reserved24.overlaps(nudged24))
+        #expect(nudged24.description == "fd00:fc2:1234::/64")
+
+        // At /56 the nudge clamps to the lowest global-ID bit. The old shift
+        // reached bit 40, which the generator masks away, so nothing moved.
+        let reserved56 = IPv6CIDR("fd00:ec2:1234::/56")!
+        let nudged56 = IPv6Address.makeULASubnet64(globalID: globalID, avoiding: reserved56)
+        #expect(!reserved56.overlaps(nudged56))
+        #expect(nudged56.description == "fd00:ec2:1235::/64")
+    }
+
     @Test func replacingInterfaceIDKeepsPrefix() {
         let base = IPv6Address("fd12:3456:789a::")!
         #expect(base.replacingInterfaceID(0x100).description == "fd12:3456:789a::100")

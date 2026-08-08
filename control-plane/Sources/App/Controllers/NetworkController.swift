@@ -707,6 +707,23 @@ struct NetworkController: RouteCollection {
                 reason: "Invalid IPv6 subnet '\(subnet6)': multicast, link-local, loopback, and "
                     + "unspecified prefixes are not routable tenant networks")
         }
+        // The v4 metadata address is link-local and can never collide with a
+        // tenant subnet; its v6 counterpart is a ULA drawn from the same space
+        // tenant subnets are (STR-186). A network overlapping it would publish
+        // the service localport inside its own address space and — worse —
+        // inherit the metadata and resolver security-group carve-outs, which
+        // sit above every rule-derived ACL, as non-overridable allows to a
+        // *tenant* address. Reject the whole documented `/32` rather than the
+        // containing /64: it is how the space is described everywhere else,
+        // and it covers the per-network resolvers as well.
+        if NetworkResolverEndpoint.v6SpaceCIDR.overlaps(cidr) {
+            throw Abort(
+                .badRequest,
+                reason: "IPv6 subnet '\(trimmed)' overlaps \(NetworkResolverEndpoint.v6Space), which is "
+                    + "reserved for Strato's own link-local services (instance metadata at "
+                    + "\(InstanceMetadataEndpoint.addressV6) and the per-network DNS resolvers); "
+                    + "choose a different ULA prefix, or omit subnet6 to have one generated")
+        }
 
         let resolvedGateway: IPv6Address
         if let gateway6, let trimmedGateway = gateway6.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
