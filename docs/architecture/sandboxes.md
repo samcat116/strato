@@ -495,7 +495,13 @@ resume, or stay paused for **checkpoint-and-stop** (`mode: stop` — exactly
 the paused state a control-plane stop produces, so the sandbox converges to
 `stopped`). A `checkpointing` guard makes concurrent lifecycle calls
 (boot/stop/exec) fail transient and keeps status polls off the drained vsock
-channel. Jailed sandboxes stage the snapshot files inside the chroot (the
+channel. A pause that *reports* failure is not a pause that did not happen:
+Firecracker waits on its vCPUs for its own 30s budget before answering, so the
+request can be abandoned host-side while the guest goes on to stop. The failure
+path therefore re-reads the instance state and resumes a guest it finds paused,
+rather than assuming one it never stopped (STR-194).
+
+Jailed sandboxes stage the snapshot files inside the chroot (the
 jailed VMM writes them) and the runtime moves them out to the host-owned
 archive at `<sandbox storage>/<id>/snapshots/<snapshotId>/` — agent-owned
 paths beside the sandbox (the volume-snapshot precedent), removed with it.
