@@ -261,6 +261,21 @@ then sits degraded until the agent-side work lands. And growing the block
 device never grows what is on it: guest-side rescan and filesystem expansion
 (`resize2fs`, `xfs_growfs`, or the Windows equivalent) stay the user's job.
 
+Concretely, what an attached grow does today is run `qemu-img resize` against a
+file a live hypervisor holds open. That fails on the image lock, and the
+failure is *bounded*, not a loop: `Reconciler.maxAttemptsPerGeneration` stops
+re-driving after three attempts at one generation, and only a new generation —
+another resize request — re-arms it. So the cost is three failed subprocesses
+and a degraded volume, not a subprocess on every periodic sync.
+
+That bound is the retry budget, though, not a safety guarantee. The lock is
+what makes the failure safe rather than destructive, and `locking=auto` gives
+up quietly on filesystems that cannot support OFD locks (NFS being the case to
+worry about) — on such a pool the resize would rewrite qcow2 metadata under a
+running guest instead of refusing. The agent-side work that adds an online grow
+path is also where that decision belongs, and it should refuse rather than rely
+on the lock.
+
 Deletion is the same finalizer dance VMs use. A `DELETE` does not remove the
 row: it marks the volume absent, stamps `agent.absent`, and the row survives
 until the agent's full-list report *omits* the volume — which is the only thing

@@ -990,7 +990,11 @@ export interface paths {
          * Replace a volume's I/O limits
          * @description Replaces the volume's absolute I/O ceilings. This is a **full replacement**: a field you omit clears that cap. Zero is rejected with `400` rather than treated as unlimited, so a typo cannot be mistaken for a deliberate removal — omit the field instead.
          *
-         *     No agent enforces ceilings yet. Until the agent-side work lands the request is a recorded intent rather than an enforced limit, and the volume's `appliedIOLimits` stays null. Asynchronous: refetch the volume until its `conditions` converge.
+         *     **`conditions` converging does not mean the caps are in effect.** For every other volume mutation, convergence is the outcome; for this one it only means the owning agent accepted the sync carrying the request. An agent with no throttling support plans no work, reports the new generation, and converges — so a client that polls `conditions` alone will record an unenforced cap as applied.
+         *
+         *     The applied signal is `appliedIOLimits` on the volume. Compare it against `ioLimits`: equal means the ceilings are in force, and a set `ioLimits` with `appliedIOLimits` omitted means they are not.
+         *
+         *     No agent enforces ceilings yet, so today `appliedIOLimits` is always absent and every request is a recorded intent rather than an enforced limit.
          */
         post: operations["setVolumeIOLimits"];
         delete?: never;
@@ -5857,9 +5861,13 @@ export interface components {
             /** @description Whether the attachment presents the volume read-only. */
             readonly: boolean;
             conditions: components["schemas"]["ResourceConditions"];
-            /** @description The I/O ceilings requested for this volume, or null when uncapped. */
+            /** @description The I/O ceilings requested for this volume. **Omitted entirely** when the volume is uncapped — the key is absent, not null, so test for presence rather than comparing against null. */
             ioLimits?: components["schemas"]["VolumeIOLimits"];
-            /** @description The ceilings the owning agent reports it has actually applied. Null means they are **not in effect** — either the agent has not reported any, or it reported none. No agent applies ceilings yet, so this is null for every volume; a non-null `ioLimits` alongside a null `appliedIOLimits` is the expected reading, not a fault. */
+            /**
+             * @description The ceilings the owning agent reports it has actually applied, and the only signal that a cap is in force — `conditions` converging says the sync was accepted, not that the ceilings took effect. Compare against `ioLimits`: equal means in force.
+             *
+             *     **Omitted** (again absent, not null) means they are *not* in effect, either because the agent has not reported any or because it reported none. No agent applies ceilings yet, so this key is absent on every volume; a set `ioLimits` alongside an absent `appliedIOLimits` is the expected reading today, not a fault.
+             */
             appliedIOLimits?: components["schemas"]["VolumeIOLimits"];
             /** Format: uuid */
             sourceImageId?: string;

@@ -480,6 +480,13 @@ agent is involved.
    rule inverts the desired side's — nil observed means "no opinion", never "the
    caps were cleared", while an all-nil *desired* value must normalize to absent
    or a planner re-plans it forever. Two rules, opposite directions, one type.
+
+   One piece of it is already scheduled for removal. `AddThrottleOperationKind`
+   widens two `CHECK` constraints, and only the `resource_events` half carries
+   weight — the `throttle` mutation is level-triggered and writes no
+   `resource_operations` row at all. That half exists solely because
+   `PersistedEnumConstraintTests` pins the constraint against
+   `VMOperationKind.allCases`, so it goes with the table in stage 11.
 9. **Reboot/restore nonces** (3 messages).
 
    *Amended in implementation (STR-151):* a hard cutover at wire v34, following

@@ -173,10 +173,10 @@ final class Volume: Model, @unchecked Sendable {
     var bpsTotal: Int64?
 
     @OptionalField(key: "applied_iops_total")
-    var appliedIopsTotal: Int64?
+    var appliedIOPSTotal: Int64?
 
     @OptionalField(key: "applied_bps_total")
-    var appliedBpsTotal: Int64?
+    var appliedBPSTotal: Int64?
 
     // Source tracking (for clones/volumes created from images)
     @OptionalParent(key: "source_image_id")
@@ -434,8 +434,8 @@ extension Volume {
     /// than clear them, or an agent that has never heard of ceilings has its
     /// silence recorded as "the caps were removed".
     var appliedIOLimits: VolumeIOLimits? {
-        guard appliedIopsTotal != nil || appliedBpsTotal != nil else { return nil }
-        return VolumeIOLimits(iopsTotal: appliedIopsTotal, bpsTotal: appliedBpsTotal)
+        guard appliedIOPSTotal != nil || appliedBPSTotal != nil else { return nil }
+        return VolumeIOLimits(iopsTotal: appliedIOPSTotal, bpsTotal: appliedBPSTotal)
     }
 }
 

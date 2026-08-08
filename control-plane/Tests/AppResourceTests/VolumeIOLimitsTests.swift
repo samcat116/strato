@@ -87,8 +87,8 @@ final class VolumeIOLimitsTests {
         agentId: String?,
         iopsTotal: Int64? = nil,
         bpsTotal: Int64? = nil,
-        appliedIopsTotal: Int64? = nil,
-        appliedBpsTotal: Int64? = nil,
+        appliedIOPSTotal: Int64? = nil,
+        appliedBPSTotal: Int64? = nil,
         generation: Int64 = 1,
         observedGeneration: Int64 = 1
     ) async throws -> Volume {
@@ -110,8 +110,8 @@ final class VolumeIOLimitsTests {
         volume.observedGeneration = observedGeneration
         volume.iopsTotal = iopsTotal
         volume.bpsTotal = bpsTotal
-        volume.appliedIopsTotal = appliedIopsTotal
-        volume.appliedBpsTotal = appliedBpsTotal
+        volume.appliedIOPSTotal = appliedIOPSTotal
+        volume.appliedBPSTotal = appliedBPSTotal
         try await app.db.transaction { db in
             try await volume.save(on: db)
             try await RoleBindingService.grant(
@@ -138,6 +138,80 @@ final class VolumeIOLimitsTests {
             ),
             volumes: volumes
         )
+    }
+
+    private func createBody(project: Project, iopsTotal: Int64?, bpsTotal: Int64?) -> CreateVolumeRequest {
+        CreateVolumeRequest(
+            name: "io-limit-create",
+            description: "volume created with ceilings",
+            projectId: project.id!,
+            sizeGB: 10,
+            format: "qcow2",
+            volumeType: "data",
+            sourceImageId: nil,
+            iopsTotal: iopsTotal,
+            bpsTotal: bpsTotal
+        )
+    }
+
+    // MARK: - The create path
+
+    /// `validateIOLimits` has two call sites; this is the one whose comment
+    /// claims "a volume never exists uncapped even briefly", so the ceilings
+    /// have to be on the row the insert produces rather than applied by a
+    /// follow-up mutation.
+    @Test("Creating a volume with ceilings persists them on the inserted row")
+    func createPersistsCeilings() async throws {
+        try await withVolumeApp { app, _, project, token in
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    self.createBody(project: project, iopsTotal: 500, bpsTotal: 1 << 20))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            // Placement runs on a detached task that touches app.db; wait for it
+            // to settle (no agents connected → degraded) so it cannot race
+            // application shutdown during teardown.
+            var placed: Volume?
+            for _ in 0..<100 {
+                placed = try await Volume.query(on: app.db).first()
+                if placed?.conditions.degraded != nil { break }
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            let stored = try #require(placed)
+            #expect(stored.iopsTotal == 500)
+            #expect(stored.bpsTotal == 1 << 20)
+            #expect(stored.ioLimits?.iopsTotal == 500)
+            // Requested at create is still only requested: nothing has applied it.
+            #expect(stored.appliedIOLimits == nil)
+        }
+    }
+
+    @Test(
+        "Creating a volume with out-of-range ceilings is rejected with 400",
+        arguments: [
+            (Int64(0), Int64?.none),
+            (Volume.maxIOPSTotal + 1, Int64?.none),
+            (Int64?.none, Int64(0)) as (Int64?, Int64?),
+            (Int64?.none, Volume.maxBPSTotal + 1) as (Int64?, Int64?),
+        ] as [(Int64?, Int64?)]
+    )
+    func createRejectsOutOfRangeCeilings(iops: Int64?, bps: Int64?) async throws {
+        try await withVolumeApp { app, _, project, token in
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    self.createBody(project: project, iopsTotal: iops, bpsTotal: bps))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // Rejected before the insert: no row, not a row with the caps dropped.
+            let count = try await Volume.query(on: app.db).count()
+            #expect(count == 0)
+        }
     }
 
     // MARK: - The endpoint
@@ -319,7 +393,7 @@ final class VolumeIOLimitsTests {
             let agentId = try await self.registerAgent(app: app, named: "io-silent-agent")
             let volume = try await self.makeVolume(
                 app: app, user: user, project: project, agentId: agentId,
-                iopsTotal: 500, appliedIopsTotal: 500,
+                iopsTotal: 500, appliedIOPSTotal: 500,
                 generation: 2, observedGeneration: 1)
 
             _ = try await app.observedStateApplier.apply(
@@ -336,7 +410,7 @@ final class VolumeIOLimitsTests {
                     ]))
 
             let stored = try #require(try await Volume.find(volume.id!, on: app.db))
-            #expect(stored.appliedIopsTotal == 500)
+            #expect(stored.appliedIOPSTotal == 500)
             // And the volume still converges by generation: an agent that
             // cannot apply ceilings is not a degraded volume, it is a volume
             // whose ceilings are not in effect.
@@ -353,7 +427,7 @@ final class VolumeIOLimitsTests {
             let agentId = try await self.registerAgent(app: app, named: "io-uncapped-agent")
             let volume = try await self.makeVolume(
                 app: app, user: user, project: project, agentId: agentId,
-                appliedIopsTotal: 500, appliedBpsTotal: 1 << 20,
+                appliedIOPSTotal: 500, appliedBPSTotal: 1 << 20,
                 generation: 2, observedGeneration: 1)
 
             _ = try await app.observedStateApplier.apply(
@@ -370,8 +444,8 @@ final class VolumeIOLimitsTests {
                     ]))
 
             let stored = try #require(try await Volume.find(volume.id!, on: app.db))
-            #expect(stored.appliedIopsTotal == nil)
-            #expect(stored.appliedBpsTotal == nil)
+            #expect(stored.appliedIOPSTotal == nil)
+            #expect(stored.appliedBPSTotal == nil)
         }
     }
 

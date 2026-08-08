@@ -1118,12 +1118,12 @@ struct ObservedStateApplier {
         // explicitly uncapped disk sends a present-but-empty value instead, and
         // that one does clear the columns.
         if let applied = observed.ioLimits {
-            if volume.appliedIopsTotal != applied.iopsTotal {
-                volume.appliedIopsTotal = applied.iopsTotal
+            if volume.appliedIOPSTotal != applied.iopsTotal {
+                volume.appliedIOPSTotal = applied.iopsTotal
                 changed = true
             }
-            if volume.appliedBpsTotal != applied.bpsTotal {
-                volume.appliedBpsTotal = applied.bpsTotal
+            if volume.appliedBPSTotal != applied.bpsTotal {
+                volume.appliedBPSTotal = applied.bpsTotal
                 changed = true
             }
         }
