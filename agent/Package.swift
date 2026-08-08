@@ -61,7 +61,14 @@ let package = Package(
         // and `unsigned char` were decoded as byte strings rather than as the
         // four-byte scalars they are, so `domainGetInfo` never decoded at all —
         // host reservations read zero and every resize failed.
-        .package(url: "https://github.com/samcat116/swift-libvirt.git", from: "0.1.1"),
+        //
+        // `.upToNextMinor` rather than `from:`, which SwiftPM reads as
+        // `.upToNextMajor` with no special case for `0.x` — so `from: "0.1.1"`
+        // would let a `swift package update` take `0.2.0` unattended, from the
+        // very upstream whose pre-1.0 decoding just changed shape under us. A
+        // minor bump here should be somebody's decision.
+        .package(
+            url: "https://github.com/samcat116/swift-libvirt.git", .upToNextMinor(from: "0.1.1")),
     ],
     targets: [
         // Core library with testable code (no native-library dependencies)
