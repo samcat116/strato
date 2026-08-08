@@ -1240,7 +1240,7 @@ actor Agent {
             // `sandboxNICPlacement` short-circuits to the host namespace and the
             // orchestrator is a no-op — so the promise of "no real side effects"
             // holds.
-            sandboxProbe = SandboxRuntimeProbe.Report(capable: true, networkingCapable: true)
+            sandboxProbe = SandboxRuntimeProbe.Report(capable: true, networkingUnavailabilityReason: nil)
         } else {
             sandboxProbe = SandboxRuntimeProbe.probe(
                 firecracker: hypervisors.first { $0.type == .firecracker },

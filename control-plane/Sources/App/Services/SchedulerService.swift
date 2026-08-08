@@ -591,7 +591,7 @@ final class SchedulerService: @unchecked Sendable {
         // explicitly at registration (Firecracker/KVM usable plus the guest
         // base image on disk) — hypervisor support alone doesn't prove it,
         // and neither does the wire protocol version (issue #415).
-        var runtimeCapable: [SchedulableAgent]
+        let runtimeCapable: [SchedulableAgent]
         if requirements.requiresSandboxRuntime {
             runtimeCapable = hypervisorCapable.filter { $0.supportsSandboxWorkloads }
             guard !runtimeCapable.isEmpty else {
@@ -607,12 +607,14 @@ final class SchedulerService: @unchecked Sendable {
         // degraded, unlike every other network constraint here — a sandbox
         // placed without its NIC boots unreachable while the API still shows
         // the address IPAM allocated, and nothing later notices.
+        let sandboxNetworkCapable: [SchedulableAgent]
         if requirements.requiresSandboxNetworking {
-            let networkingCapable = runtimeCapable.filter { $0.supportsSandboxNetworking }
-            guard !networkingCapable.isEmpty else {
+            sandboxNetworkCapable = runtimeCapable.filter { $0.supportsSandboxNetworking }
+            guard !sandboxNetworkCapable.isEmpty else {
                 throw SchedulerError.sandboxNetworkingUnsatisfied(eligibleAgents: runtimeCapable.count)
             }
-            runtimeCapable = networkingCapable
+        } else {
+            sandboxNetworkCapable = runtimeCapable
         }
 
         // Secure Boot and vTPM both ride `VMSpec.machine`, which only a v17+
@@ -620,7 +622,7 @@ final class SchedulerService: @unchecked Sendable {
         // categorical, and both fail *silently* on an agent that can't serve
         // them — the guest simply boots without the feature — so placement is
         // refused rather than degraded (issue #565).
-        var machineCapable = runtimeCapable
+        var machineCapable = sandboxNetworkCapable
         if requirements.requiresVTPM || requirements.requiresSecureBoot {
             let profileCapable = machineCapable.filter { $0.supportsMachineProfile }
             guard !profileCapable.isEmpty else {

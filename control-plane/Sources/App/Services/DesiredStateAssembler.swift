@@ -108,7 +108,18 @@ struct DesiredStateAssembler {
         // jailer, and a guest image that configures an interface". Absence of
         // proof is not proof, and the cost of guessing wrong is a sandbox that
         // never boots on that host again.
-        let sendSandboxNetwork = agent?.sandboxNetworkingCapable ?? false
+        //
+        // Folded with `sendSecurityGroups` so this gate cannot be weaker than
+        // the scheduler's, which requires the same two signals
+        // (`supportsSandboxNetworking`). Without the version arm a
+        // capable-but-pre-v20 agent would be refused at placement and sent the
+        // NIC anyway here — and it would arrive with `securityGroupIds: nil`,
+        // because the membership map above is empty under a false
+        // `sendSecurityGroups`, so the port would come up *unfiltered* while
+        // the API reports its groups. Unreachable with a stock agent (anything
+        // advertising the capability is built at `currentVersion`), but the two
+        // gates disagreeing is the defect, not the reachability.
+        let sendSandboxNetwork = (agent?.sandboxNetworkingCapable ?? false) && sendSecurityGroups
         let securityGroupsByInterface: [UUID: [UUID]]
         let sandboxSecurityGroupsByInterface: [UUID: [UUID]]
         if sendSecurityGroups {

@@ -1349,6 +1349,37 @@ final class SandboxTests {
         }
     }
 
+    /// The assembler's gate must not be weaker than the scheduler's, which
+    /// folds the capability with a v20+ protocol. A capable-but-pre-v20 agent
+    /// is refused at placement; if assembly sent it the NIC anyway the spec
+    /// would arrive with `securityGroupIds: nil` — the membership map is empty
+    /// below v20 — and the port would come up *unfiltered* while the API
+    /// reports its groups. Unreachable with a stock agent, since anything
+    /// advertising the capability is built at `currentVersion`; the two gates
+    /// disagreeing is what this pins.
+    @Test("the assembly withholds the NIC from a capable agent that predates security groups")
+    func assemblyWithholdsNICFromPreV20CapableAgent() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            let agentId = try await self.registerAgent(
+                app: app, sandbox: sandbox, sandboxCapable: true, sandboxNetworkingCapable: true,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion - 1)
+
+            let nic = SandboxNetworkInterface(
+                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: "00:0c:29:ab:cd:dd")
+            try await nic.save(on: app.db)
+            try await SandboxInterfaceAddress(
+                interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
+                address: "192.168.1.10", prefixLength: 24, gateway: network.gateway
+            ).save(on: app.db)
+
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let entry = try #require(message.sandboxes.first)
+            #expect(entry.spec.network == nil)
+        }
+    }
+
     @Test("A freshly created sandbox converges with the NIC its create reserved")
     func createdSandboxWireSpecCarriesItsNetwork() async throws {
         try await withSandboxTestApp { app, _, project, _, token in

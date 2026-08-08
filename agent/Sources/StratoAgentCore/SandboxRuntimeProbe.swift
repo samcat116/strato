@@ -50,25 +50,34 @@ public enum SandboxRuntimeProbe {
         public let capable: Bool
         /// Why the runtime is unavailable, when it is.
         public let unavailabilityReason: String?
+        /// Why sandbox networking is unavailable, or nil when it is available.
+        ///
+        /// Not defaulted in the initializer, unlike `unavailabilityReason`:
+        /// this is the *only* place an operator ever learns that a host runs
+        /// sandboxes but silently cannot network them, so every construction
+        /// site has to answer the question rather than fall through to a nil
+        /// that reads as "fine".
+        public let networkingUnavailabilityReason: String?
+
         /// Whether a sandbox on this host can have a NIC (STR-103). Strictly
         /// stronger than ``capable`` — every network-free prerequisite plus
         /// OVN, the jailer, and a guest image that configures an interface.
-        public let networkingCapable: Bool
-        /// Why sandbox networking is unavailable, when it is. Always populated
-        /// when ``networkingCapable`` is false, because this is the only place
-        /// an operator ever learns that a host runs sandboxes but silently
-        /// cannot network them.
-        public let networkingUnavailabilityReason: String?
+        ///
+        /// Derived rather than stored so "withheld" and "here is why" cannot
+        /// drift apart: there is no way to construct a report that refuses the
+        /// NIC without naming what would restore it. (``capable`` keeps the
+        /// looser stored pair it has had since issue #415 — its reason is a
+        /// convenience, not the sole surface, since a host with no sandbox
+        /// capability is visible as such in the fleet view.)
+        public var networkingCapable: Bool { networkingUnavailabilityReason == nil }
 
         public init(
             capable: Bool,
             unavailabilityReason: String? = nil,
-            networkingCapable: Bool = false,
-            networkingUnavailabilityReason: String? = nil
+            networkingUnavailabilityReason: String?
         ) {
             self.capable = capable
             self.unavailabilityReason = unavailabilityReason
-            self.networkingCapable = networkingCapable
             self.networkingUnavailabilityReason = networkingUnavailabilityReason
         }
 
@@ -79,7 +88,6 @@ public enum SandboxRuntimeProbe {
         static func unavailable(_ reason: String) -> Report {
             Report(
                 capable: false, unavailabilityReason: reason,
-                networkingCapable: false,
                 networkingUnavailabilityReason: "the sandbox runtime is unavailable: \(reason)")
         }
     }
@@ -138,13 +146,11 @@ public enum SandboxRuntimeProbe {
         guard fileManager.fileExists(atPath: guestImagePath) else {
             return .unavailable("sandbox guest base image not present at \(guestImagePath)")
         }
-        let networkingBlocker = networkingUnavailability(
-            guestImagePath: guestImagePath, jailsNewSandboxes: jailsNewSandboxes,
-            networkCapability: networkCapability, fileManager: fileManager)
         return Report(
             capable: true,
-            networkingCapable: networkingBlocker == nil,
-            networkingUnavailabilityReason: networkingBlocker)
+            networkingUnavailabilityReason: networkingUnavailability(
+                guestImagePath: guestImagePath, jailsNewSandboxes: jailsNewSandboxes,
+                networkCapability: networkCapability, fileManager: fileManager))
     }
 
     /// Why this host cannot give a sandbox a NIC, or nil when it can.

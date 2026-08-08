@@ -871,19 +871,42 @@ ride inside the `NetworkSpec`, so they arrive with it: the port joins the drop
 group before the veth goes live, the same ordering guarantee a VM's TAP gets,
 because the agent's port-create path is shared.
 
-`SandboxDetail.securityGroupsEnforced` reports the honest state: `null` with no
-NIC to judge, `false` on a host that cannot realize one (no port exists to
-filter) or an unauthored site, `true` otherwise. Attaching a group to a sandbox
-on a non-capable host is refused with a `409` for the same reason. Details in
+`SandboxDetail.securityGroupsEnforced` reports `null` with no NIC to judge,
+`false` on a host that cannot realize one (no port exists to filter) or an
+unauthored site, `true` otherwise. Attaching a group to a sandbox on a
+non-capable host is refused with a `409` for the same reason. Details in
 [Security groups](./networking.md#security-groups).
 
-One arm is still queued:
+**`true` is a statement about the host, not about the microVM**, and that
+approximation is exact for a VM but not for a sandbox. A VM's OVN port already
+exists, so the topology authority updates its port-group membership out of
+band. A sandbox's port is created *with the sandbox*: `bootSandbox` starts or
+resumes the existing microVM rather than re-provisioning it, and
+`sandboxStatusSteps` plans nothing for `.running`/`.running` — so neither a boot
+nor `POST .../restart` (a desired-running generation bump) attaches a NIC that
+was absent at create. Only delete-and-recreate does. A sandbox created on a host
+before that host advertised sandbox networking therefore reads `true` once the
+host is upgraded while having no interface. The population is every networked
+sandbox predating STR-103, and it ages out with sandbox TTL and the retention
+sweep.
+
+An exact per-sandbox verdict needs an observed NIC signal, and the ordering
+matters: `ObservedSandboxState` carries no such field, and the obvious source —
+`FirecrackerSandboxRuntime.Managed.networkAttachments` — is in-memory and is
+*not* recovered by `adoptSandbox`, so reporting it today would read `false` for
+every correctly-networked sandbox after an agent restart. Recovering the
+attachment at adoption comes first; the wire field and the verdict fold are
+cheap after that.
+
+Two arms are still queued:
 
 - **Snapshots of networked sandboxes** (STR-104): current checkpoints
   contain no Firecracker network device to remap, so restore and fork
   refuse networked sandboxes until STR-104 passes Firecracker
   `network_overrides` on load and reconfigures the guest interface/DHCP
   lease before health succeeds.
+- **Recovering a sandbox's NIC at adoption**, and the observed signal it
+  unlocks — see the enforcement caveat above.
 
 ## Quotas, TTL, and expiry
 

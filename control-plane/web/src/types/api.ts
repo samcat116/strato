@@ -1278,6 +1278,12 @@ export interface Sandbox {
    * are unenforced. `false` when the sandbox's node cannot realize a sandbox
    * NIC (backend STR-103) or its site authors no ACLs: either way no port
    * exists to join the groups.
+   *
+   * `true` is a statement about the *node*, not about this sandbox's microVM.
+   * A sandbox created before its node could realize NICs keeps reading `true`
+   * after the node is upgraded while having no interface, because only
+   * recreating a sandbox attaches one — neither restart nor boot rebuilds the
+   * microVM. See `SecurityGroupService.sandboxEnforcement`.
    */
   securityGroupsEnforced?: boolean;
   /** Convergence state (backend STR-142) — the VM contract exactly. */

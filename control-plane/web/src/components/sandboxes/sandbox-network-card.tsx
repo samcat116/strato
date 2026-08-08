@@ -59,7 +59,9 @@ export function SandboxNetworkCard({ sandbox }: { sandbox: Sandbox }) {
               this is an address reservation and the groups below filter
               nothing. The node needs OVN networking, the sandbox jailer, and a
               guest image new enough to configure the interface. The
-              memberships are recorded and take effect once it does.
+              memberships are recorded and apply to sandboxes created after it
+              does — an existing sandbox has to be recreated to get an
+              interface, since neither a restart nor a boot rebuilds it.
             </span>
           </div>
         )}

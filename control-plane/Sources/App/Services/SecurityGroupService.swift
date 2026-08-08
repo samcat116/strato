@@ -369,6 +369,33 @@ enum SecurityGroupService {
     /// site authority can change that. `false`, not nil — the groups are
     /// attached and demonstrably enforce nothing, which is the same answer an
     /// unauthored site gets.
+    ///
+    /// ## What `true` claims, and the one case where it over-claims
+    ///
+    /// This is a **host-capability** verdict, not a per-sandbox realization
+    /// one. For a VM the two coincide, because a VM's OVN port already exists
+    /// and the topology authority updates its port-group membership out of
+    /// band. A sandbox's port is created *with the sandbox* and only then:
+    /// `bootSandbox` starts or resumes the existing microVM rather than
+    /// re-provisioning it, and `sandboxStatusSteps` plans nothing at all for
+    /// `.running`/`.running`, so neither a boot nor `POST .../restart` (a
+    /// desired-running generation bump) attaches a NIC that was absent at
+    /// create. Only delete-and-recreate does.
+    ///
+    /// So a sandbox created on a host *before* that host advertised sandbox
+    /// networking reads `true` here once the host is upgraded, while its
+    /// microVM still has no interface. That population is every networked
+    /// sandbox predating STR-103, bounded by sandbox lifetime (TTL and the
+    /// retention sweep), and it shrinks to nothing as they age out.
+    ///
+    /// It is not fixed here because the honest signal is not cheap:
+    /// `ObservedSandboxState` carries no NIC field, and the obvious source for
+    /// one — `FirecrackerSandboxRuntime.Managed.networkAttachments` — is
+    /// in-memory and *not* recovered by `adoptSandbox`, so reporting it would
+    /// read `false` for every correctly-networked sandbox after an agent
+    /// restart. That is a worse lie than this one, in the direction that
+    /// matters more. Closing it properly means recovering the attachment at
+    /// adoption first; see `docs/architecture/sandboxes.md`.
     static func sandboxEnforcement(for sandbox: Sandbox, on db: Database) async throws -> Bool? {
         // No interface, nothing to filter. Nil is "unknown", not "unenforced" —
         // the same distinction an unplaced VM gets.
