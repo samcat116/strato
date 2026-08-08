@@ -56,7 +56,12 @@ let package = Package(
         // protocol over NIO rather than linking libvirt's C library, so it has
         // no system dependency, and its `.macOS(.v15)` floor matches this
         // package's exactly. Only the *registration* is platform-gated.
-        .package(url: "https://github.com/samcat116/swift-libvirt.git", from: "0.1.0"),
+        //
+        // 0.1.1 is a floor, not a preference (STR-190): before it, XDR `char`
+        // and `unsigned char` were decoded as byte strings rather than as the
+        // four-byte scalars they are, so `domainGetInfo` never decoded at all —
+        // host reservations read zero and every resize failed.
+        .package(url: "https://github.com/samcat116/swift-libvirt.git", from: "0.1.1"),
     ],
     targets: [
         // Core library with testable code (no native-library dependencies)

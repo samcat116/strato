@@ -329,6 +329,25 @@ public enum LibvirtDomain {
     public static func isStratoDomainName(_ name: String) -> Bool {
         UUID(uuidString: name) != nil
     }
+
+    // MARK: - Host reservations
+
+    /// What one domain takes out of the host, read from `virDomainGetInfo`.
+    ///
+    /// `maxMem` rather than the live `memory` figure, and in KiB, which is the
+    /// unit libvirt reports it in — the conversion is the whole reason this is
+    /// a function and not a field read, since getting it wrong understates the
+    /// host by a factor of 1024 and the scheduler believes it.
+    ///
+    /// Lives here rather than at the call site because the sum of these across
+    /// a host is what the scheduler places against, and a wrong answer is
+    /// indistinguishable from a right one at a glance: an idle-looking host is
+    /// exactly what an over-reporting *or* under-reporting node looks like.
+    public static func reservation(from info: DomainGetInfoRet) -> (
+        vcpus: Int, memoryBytes: Int64
+    ) {
+        (vcpus: Int(info.nrVirtCpu), memoryBytes: Int64(clamping: info.maxMem) * 1024)
+    }
 }
 
 // MARK: - Error classification

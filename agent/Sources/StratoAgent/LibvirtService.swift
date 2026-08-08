@@ -946,12 +946,12 @@ actor LibvirtService: HypervisorService {
                 // already share one absolute deadline, so serializing them turns
                 // a host's domain count into `N x RTT` inside a budget sized for
                 // a single query — on a busy host, reliably unfinishable.
-                return try await withThrowingTaskGroup(of: (Int, Int64).self) { group in
+                return try await withThrowingTaskGroup(of: (vcpus: Int, memoryBytes: Int64).self) {
+                    group in
                     for dom in domains {
                         group.addTask {
                             let info = try await client.domainGetInfo(dom: dom, deadline: deadline)
-                            // `maxMem`, in KiB.
-                            return (Int(info.nrVirtCpu), Int64(clamping: info.maxMem) * 1024)
+                            return LibvirtDomain.reservation(from: info)
                         }
                     }
                     var vcpus = 0
