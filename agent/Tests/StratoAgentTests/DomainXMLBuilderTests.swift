@@ -20,13 +20,13 @@ import FoundationXML
 /// Every golden here has been checked against real libvirt, not just against
 /// this builder:
 ///
-/// - all eight validate against the RELAX-NG schema of both libvirt 11.5.0 (the
-///   version floor) and 12.6.0 — re-checked against both after STR-134 added
+/// - all nine validate against the RELAX-NG schema of libvirt 11.5.0 (the
+///   version floor), 12.0.0 and 12.6.0 — re-checked after STR-134 added
 ///   `<serial>` and the spare `pcie-root-port`s, together with the hot-plug and
 ///   detach fragments `DomainDeviceXML` sends (asserted in
 ///   `DomainDiskInventoryTests`, validated by splicing them into this
 ///   scenario's `<devices>`);
-/// - all eight are accepted by `virsh define --validate` on libvirt 11.6.0,
+/// - all nine are accepted by `virsh define --validate` on libvirt 11.6.0,
 ///   which runs libvirt's own parser and the QEMU driver's checks on top of the
 ///   schema — that is what caught `<acpi/>` being invalid on aarch64 without
 ///   UEFI (`acpiRequiresUEFIOnArm64`);
@@ -34,6 +34,12 @@ import FoundationXML
 ///   `console.sock`, `qga.sock` and `vnc.sock` at exactly these paths, seeded
 ///   the varstore from the autoselected Secure Boot firmware, and reported
 ///   through the balloon.
+///
+/// The schema is not the last word, and `DomainXMLLibvirtTests` beside this file
+/// is where the rest of it lives: the document that left every VM with zero free
+/// PCIe root ports validated cleanly for as long as it shipped (STR-192). What a
+/// *defined* domain looks like is a question only a running libvirt answers, so
+/// those tests define these same scenarios and count.
 ///
 /// Two gaps remain, both environmental: the validating host had no `/dev/kvm`,
 /// so `type='kvm'`/`mode='host-passthrough'` were substituted for their TCG
@@ -171,6 +177,28 @@ struct DomainXMLBuilderTests {
                 spec: spec(), cloudInitISOPath: nil,
                 firmware: .monolithic(path: "/usr/share/qemu/edk2-x86_64-code.fd"),
                 emulatorPath: "/usr/bin/qemu-system-x86_64")),
+        // The most PCI devices this builder can put in one document: three
+        // disks and a cloud-init ISO, three NICs, the graphics console's xHCI
+        // controller and framebuffer, and a virtio-mem device. The spare root
+        // ports are numbered from that count, so this is the scenario where a
+        // base derived wrong shows up first (STR-192).
+        Scenario(
+            name: "x86_64-max-devices",
+            input: input(
+                spec: spec(
+                    cpus: 8, maxCpus: 16, memoryBytes: 8 * 1024 * 1024 * 1024,
+                    maxMemoryBytes: 16 * 1024 * 1024 * 1024,
+                    machine: MachineProfile(secureBoot: true, tpm: true), graphics: .vnc),
+                disks: [
+                    ResolvedDisk(path: "\(vmDirectory)/disk.qcow2", format: .qcow2, bootOrder: 0),
+                    ResolvedDisk(
+                        path: "/var/lib/strato/volumes/data.qcow2", format: .qcow2,
+                        volumeId: dataVolumeId),
+                    ResolvedDisk(
+                        path: "/var/lib/strato/volumes/reference.raw", format: .raw, readonly: true,
+                        volumeId: referenceVolumeId),
+                ],
+                networks: [primaryNIC, jumboNIC, unaddressedNIC])),
         // arm64 UEFI: GIC instead of APIC, never SMM, and virtio rather than
         // VGA for the framebuffer. Secure Boot is deliberately off — an
         // aarch64 Secure Boot domain can only be defined on a host carrying an
@@ -485,18 +513,59 @@ struct DomainXMLBuilderTests {
         #expect(xml.contains(QEMUDiskIdentity.deviceID(volumeId: volumeId)))
     }
 
-    /// libvirt adds one `pcie-root-port` per PCI device the document declares,
-    /// so a domain that reserves none has nowhere to hot-plug a disk — and a
-    /// domain document is written once, so a VM defined without spares can
+    /// libvirt allocates a `pcie-root-port` per PCI device the document
+    /// declares, so a domain that reserves none has nowhere to hot-plug a disk —
+    /// and a domain document is written once, so a VM defined without spares can
     /// never gain them.
-    @Test("every domain reserves empty PCIe root ports for hot-plug", arguments: scenarios)
+    ///
+    /// The **indexes** are the mechanism rather than decoration (STR-192): an
+    /// un-indexed spare is numbered by libvirt out of the very range it was
+    /// going to allocate for the devices above it, and then filled with one of
+    /// them. That form left every VM with zero free ports while claiming four,
+    /// so the assertion this test used to make — that no port carries an index —
+    /// was the bug, written down as an expectation.
+    @Test(
+        "every domain reserves empty PCIe root ports past the devices it declares",
+        arguments: scenarios)
     func reservesHotplugPorts(_ scenario: Scenario) throws {
         let xml = try DomainXMLBuilder.build(scenario.input)
-        let ports = xml.components(separatedBy: "<controller type='pci' model='pcie-root-port'/>")
-        #expect(ports.count == DomainXMLBuilder.spareHotplugPorts + 1)
-        // No index or address: libvirt assigns both, and pinning them here
-        // would collide with the ports it adds for the devices above.
-        #expect(!xml.contains("model='pcie-root-port' index"))
+        let indexes = Self.spareIndexes(scenario.input)
+
+        #expect(indexes.count == DomainXMLBuilder.spareHotplugPorts)
+        // Strictly past every port the defined domain will occupy — index 0
+        // being the root complex, the first port is 1, so a first spare above
+        // the device count is a spare no device can be given.
+        #expect(indexes.lowerBound > Self.declaredPCIDevices(scenario.input))
+        for index in indexes {
+            #expect(xml.contains("<controller type='pci' index='\(index)' model='pcie-root-port'/>"))
+        }
+        // And nothing un-indexed, which is the form that reserves nothing.
+        #expect(!xml.contains("<controller type='pci' model='pcie-root-port'/>"))
+        #expect(
+            xml.components(separatedBy: "model='pcie-root-port'").count
+                == DomainXMLBuilder.spareHotplugPorts + 1)
+    }
+
+    /// Each root port reserves guest I/O and MMIO windows, and a domain with
+    /// enough of them stops starting rather than failing to define — libvirt
+    /// 12.0.0 defines a domain declaring index 240 happily and then cannot boot
+    /// it. A VM whose own devices reach that far therefore loses its spare
+    /// ports rather than its boot.
+    @Test("spare ports stop at the root-port ceiling rather than crowding it")
+    func spareHotplugPortsAreCapped() {
+        func spares(disks: Int) -> Int {
+            Self.spareIndexes(
+                Self.input(
+                    spec: Self.spec(),
+                    disks: (0..<disks).map { ResolvedDisk(path: "/d\($0).qcow2", format: .qcow2) })
+            ).count
+        }
+        // Four devices besides the disks (cloud-init ISO, NIC, virtio-serial,
+        // memballoon) plus the allowance, so 22 disks put the last spare exactly
+        // on the ceiling and every further disk costs one.
+        #expect(spares(disks: 22) == DomainXMLBuilder.spareHotplugPorts)
+        #expect(spares(disks: 24) == 2)
+        #expect(spares(disks: 26) == 0)
     }
 
     /// libvirt numbers un-indexed controllers from 0, and both machine types
@@ -508,9 +577,23 @@ struct DomainXMLBuilderTests {
         let xml = try DomainXMLBuilder.build(scenario.input)
         let root = try #require(
             xml.range(of: "<controller type='pci' index='0' model='pcie-root'/>"))
-        let firstPort = try #require(
-            xml.range(of: "<controller type='pci' model='pcie-root-port'/>"))
+        let firstPort = try #require(xml.range(of: "model='pcie-root-port'"))
         #expect(root.lowerBound < firstPort.lowerBound)
+    }
+
+    /// Both derivations need the aligned headroom the builder computes, which
+    /// no caller of theirs has to hand.
+    static func spareIndexes(_ input: DomainXMLInput) -> Range<Int> {
+        DomainXMLBuilder.spareHotplugPortIndexes(input, hotplugBytes: hotplugBytes(input))
+    }
+
+    static func declaredPCIDevices(_ input: DomainXMLInput) -> Int {
+        DomainXMLBuilder.declaredPCIDeviceCount(input, hotplugBytes: hotplugBytes(input))
+    }
+
+    private static func hotplugBytes(_ input: DomainXMLInput) -> Int64 {
+        MemoryHotplugPlan.alignedHotplugBytes(
+            spec: input.spec, architecture: input.architecture)
     }
 
     /// The varstore is qcow2 on every firmware path, and that is load-bearing

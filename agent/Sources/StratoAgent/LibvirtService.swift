@@ -59,9 +59,11 @@ import StratoShared
 ///
 /// Its one remaining cost: **the hot-plug slots and the memory headroom a VM
 /// will ever have are fixed when it is created.** The document reserves
-/// `DomainXMLBuilder.spareHotplugPorts` empty PCIe root ports and whatever
-/// virtio-mem region the spec asked for; growing past either needs libvirt's
-/// own error, not bookkeeping here.
+/// `DomainXMLBuilder.spareHotplugPorts` empty PCIe root ports — numbered past
+/// every port the domain's own devices will occupy, which is what makes them
+/// reservations rather than decoration (STR-192) — and whatever virtio-mem
+/// region the spec asked for; growing past either needs libvirt's own error,
+/// not bookkeeping here.
 ///
 /// ## Lifecycle events
 ///
@@ -601,17 +603,40 @@ actor LibvirtService: HypervisorService {
                 cloudInitISOPath = isoPath
             }
 
-            let xml = try DomainXMLBuilder.build(
-                DomainXMLInput(
-                    vmId: vmId,
-                    vmDirectory: vmDirectory,
-                    spec: spec,
-                    disks: disks,
-                    cloudInitISOPath: cloudInitISOPath,
-                    networks: networkAttachments,
-                    architecture: .current,
-                    accelerator: accelerator,
-                    firmware: try resolveFirmware(spec: spec, machine: machine)))
+            let input = DomainXMLInput(
+                vmId: vmId,
+                vmDirectory: vmDirectory,
+                spec: spec,
+                disks: disks,
+                cloudInitISOPath: cloudInitISOPath,
+                networks: networkAttachments,
+                architecture: .current,
+                accelerator: accelerator,
+                firmware: try resolveFirmware(spec: spec, machine: machine))
+            let xml = try DomainXMLBuilder.build(input)
+
+            // A VM with enough devices of its own to reach the root-port ceiling
+            // gets fewer spare ports than the builder would like to give it, and
+            // possibly none. That is decided here and never again — the document
+            // is written once — so the one moment it can be said out loud is
+            // this one. Left unsaid, its only other symptom is the bare "No more
+            // available PCI slots" on some later attach, which is
+            // indistinguishable from the bug STR-192 fixed.
+            let spares = DomainXMLBuilder.reservedHotplugPortCount(input)
+            if spares < DomainXMLBuilder.spareHotplugPorts {
+                logger.warning(
+                    "VM has fewer spare PCIe root ports than usual; its hot-plug capacity is fixed here",
+                    metadata: [
+                        "vmId": .string(vmId),
+                        "sparePorts": .stringConvertible(spares),
+                        "usualSparePorts": .stringConvertible(DomainXMLBuilder.spareHotplugPorts),
+                        "detail": .string(
+                            "this VM declares enough PCI devices (\(disks.count) disks, "
+                                + "\(networkAttachments.count) NICs) to crowd the root complex, so it can accept "
+                                + "at most \(spares) hot-plugged device(s) for its whole life; attach further "
+                                + "volumes with the VM stopped"),
+                    ])
+            }
 
             // Not `domainCreateXML`: that defines *and starts* a transient
             // domain, which would boot every fresh VM once (the next periodic
@@ -1153,9 +1178,23 @@ actor LibvirtService: HypervisorService {
                     "deviceName": .string(deviceName), "target": .string(target),
                     "volumePath": .string(volumePath), "readonly": .stringConvertible(readonly),
                 ])
-            try await call("libvirt-attach-disk", vmId: vmId) { client, deadline in
-                try await client.domainAttachDeviceFlags(
-                    dom: dom, xml: xml, flags: flags, deadline: deadline)
+            do {
+                try await call("libvirt-attach-disk", vmId: vmId) { client, deadline in
+                    try await client.domainAttachDeviceFlags(
+                        dom: dom, xml: xml, flags: flags, deadline: deadline)
+                }
+            } catch let error where LibvirtFailure.isPCISlotsExhausted(error) {
+                // libvirt's own text is accurate and completely unactionable:
+                // it names a full root complex without saying that the complex
+                // was sized when the domain was defined and cannot be resized,
+                // so the natural response — retry, or free something — is
+                // wasted. Every VM defined before STR-192 is in exactly this
+                // state, so this is the fleet's error until those are recreated.
+                throw HypervisorServiceError.invalidConfiguration(
+                    "VM \(vmId) has no free PCIe root port to attach volume \(volumeId) into. A domain's ports "
+                        + "are fixed when it is defined and cannot be added to a VM that already exists, so this "
+                        + "will not succeed on retry: attach the volume with the VM stopped, or recreate the VM "
+                        + "(issue #1026). VMs created before STR-192 reserved no usable spare ports at all.")
             }
             logger.info(
                 "Disk attached",
