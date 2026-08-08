@@ -15,14 +15,6 @@ private actor SleepCounter {
 struct OperationWaiterTests {
     private static let operationID = "6f9619ff-8b86-4d01-b42d-00cf4fc964ff"
 
-    private func operation(
-        status: Components.Schemas.OperationStatus, error: String? = nil
-    ) -> ResourceOperation {
-        .init(
-            id: Self.operationID, vmId: Self.operationID, resourceKind: .virtualMachine,
-            resourceId: Self.operationID, kind: .boot, status: status, error: error)
-    }
-
     private static func json(status: String, error: String? = nil) -> String {
         let errorField = error.map { ", \"error\": \"\($0)\"" } ?? ""
         return """
@@ -49,7 +41,7 @@ struct OperationWaiterTests {
             let waiter = OperationWaiter(pollInterval: 0, timeout: 60, sleeper: { _ in })
 
             let final = try await waiter.wait(
-                for: operation(status: .pending),
+                for: AcceptedMutation(id: Self.operationID),
                 client: try client(transport: transport, directory: directory))
             #expect(final.succeeded)
             #expect(transport.recordedRequests.count == 2)
@@ -67,7 +59,7 @@ struct OperationWaiterTests {
 
             do {
                 try await waiter.wait(
-                    for: operation(status: .pending),
+                    for: AcceptedMutation(id: Self.operationID),
                     client: try client(transport: transport, directory: directory))
                 Issue.record("Expected operationFailed")
             } catch let error as CLIError {
@@ -78,25 +70,6 @@ struct OperationWaiterTests {
                 #expect(kind == "boot")
                 #expect(message == "no capacity")
             }
-        }
-    }
-
-    /// A terminal operation handed to the waiter used to short-circuit the
-    /// first poll. It cannot any more: STR-152 dropped the operation table, so
-    /// the façade synthesizes every answer at read time and the value the
-    /// caller is holding is a snapshot, not the row. One read, always.
-    @Test("An already-terminal operation is still re-read from the server")
-    func testTerminalIsStillPolled() async throws {
-        try await withTemporaryDirectoryAsync { directory in
-            let transport = MockTransport(responses: [
-                .init(statusCode: 200, json: Self.json(status: "succeeded"))
-            ])
-            let waiter = OperationWaiter(pollInterval: 0, timeout: 60, sleeper: { _ in })
-            let final = try await waiter.wait(
-                for: operation(status: .succeeded),
-                client: try client(transport: transport, directory: directory))
-            #expect(final.succeeded)
-            #expect(transport.recordedRequests.count == 1)
         }
     }
 
@@ -131,7 +104,7 @@ struct OperationWaiterTests {
             let waiter = OperationWaiter(pollInterval: 0, timeout: 0, sleeper: { _ in })
             await #expect(throws: CLIError.self) {
                 try await waiter.wait(
-                    for: operation(status: .pending),
+                    for: AcceptedMutation(id: Self.operationID),
                     client: try client(transport: transport, directory: directory))
             }
         }

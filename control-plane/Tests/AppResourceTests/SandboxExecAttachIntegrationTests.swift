@@ -115,7 +115,7 @@ struct SandboxExecAttachIntegrationTests {
             // Agent reports the spawn; the browser sees the ready frame.
             agent.send(
                 text: try encodeEnvelope(
-                    SandboxExecStartedMessage(sandboxId: sandboxId, sessionId: session.sessionId)))
+                    SandboxExecStartedMessage(sessionId: session.sessionId)))
             let ready = try await browser.nextControlFrame()
             #expect(ready.type == "ready")
 
@@ -123,7 +123,7 @@ struct SandboxExecAttachIntegrationTests {
             agent.send(
                 text: try encodeEnvelope(
                     SandboxExecOutputMessage(
-                        sessionId: session.sessionId, stream: "stdout", rawData: Data("hello\n".utf8))))
+                        sessionId: session.sessionId, rawData: Data("hello\n".utf8))))
             let output = try await browser.nextFrame()
             #expect(output == .binary(Data("hello\n".utf8)))
 

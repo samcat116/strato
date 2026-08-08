@@ -226,6 +226,16 @@ extension Sequence where Element == VMManifestEntry {
     }
 }
 
+extension Sequence where Element == VMSpec {
+    /// Total vCPUs and memory committed across these specs — the
+    /// reserved-resource figures the scheduler subtracts from host capacity.
+    /// One definition shared by every driver's `reservedResources()` and the
+    /// agent's manifest fallback, so the summation cannot drift between them.
+    public var reservedResources: (vcpus: Int, memoryBytes: Int64) {
+        reduce((0, Int64(0))) { ($0.0 + $1.cpus, $0.1 + $1.memoryBytes) }
+    }
+}
+
 /// Persists the set of workloads (VMs and sandboxes) an agent is managing —
 /// across all backends — to disk so that, after an agent restart, the agent can
 /// route operations to the right backend and keep orphaned workloads' resources
@@ -233,8 +243,8 @@ extension Sequence where Element == VMManifestEntry {
 ///
 /// On restart, previously-managed VMs are loaded from this manifest as orphans,
 /// and the reconciler re-adopts them when the backend supports it (the `.adopt`
-/// step in `Reconciliation.swift`): QEMU reconnects to the still-running process
-/// via its deterministic per-VM QMP socket path, and Firecracker reconnects to
+/// step in `Reconciliation.swift`): QEMU domains are looked up in libvirtd,
+/// which owns them and survives the agent, and Firecracker reconnects to
 /// its deterministic per-VM API socket (issue #433). Backends without adoption
 /// support — e.g. the Mock hypervisor, which keeps the throwing `adoptVM`
 /// default in `HypervisorProtocol.swift` — and VMs created before deterministic

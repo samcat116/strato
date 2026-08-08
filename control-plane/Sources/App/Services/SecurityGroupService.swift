@@ -447,8 +447,7 @@ enum SecurityGroupService {
         switch realization {
         case .unplaced: return nil
         case .unauthored: return false
-        case .realizers(let agents):
-            return agents.allSatisfy { WireProtocol.supportsSecurityGroups($0.wireProtocolVersion ?? 0) }
+        case .realizers: return true
         }
     }
 

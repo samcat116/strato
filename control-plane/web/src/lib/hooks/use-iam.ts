@@ -2,7 +2,6 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { iamApi } from "@/lib/api/iam";
 import { ApiError } from "@/lib/api/client";
 import type {
-  IAMNode,
   IAMPolicyCreateRequest,
   IAMPolicyUpdateRequest,
   IAMPolicyValidateRequest,
@@ -68,20 +67,6 @@ export function useDeleteRole(ownerType: IAMRoleOwnerType, ownerId: string) {
 export function useValidateRole() {
   return useMutation({
     mutationFn: (data: IAMRoleValidateRequest) => iamApi.validateRole(data),
-  });
-}
-
-/** The roles bindable on a tree node — platform defaults plus everything owned
- *  along the node's ancestor chain. `node` may be null while it resolves. */
-export function useBindableRoles(node: IAMNode | null | undefined) {
-  return useQuery({
-    queryKey: ["iam-bindable-roles", node?.type, node?.id],
-    queryFn: () =>
-      node
-        ? iamApi.listBindableRoles(node.type, node.id)
-        : Promise.reject(new Error("no node")),
-    enabled: !!node?.id,
-    select: (data) => data.roles,
   });
 }
 

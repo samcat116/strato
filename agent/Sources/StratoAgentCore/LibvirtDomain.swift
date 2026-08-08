@@ -249,19 +249,16 @@ public enum LibvirtDomain {
     /// `virDomainDeviceModifyFlags.VIR_DOMAIN_AFFECT_LIVE | _CONFIG` — apply to
     /// the running guest *and* to the persistent definition.
     ///
-    /// Both bits, always, and the `CONFIG` half is the load-bearing one. The
-    /// QEMU driver can get away with a live-only hot-plug because it respawns a
-    /// VM from a stored configuration the agent keeps in step
-    /// (`updateRecordedVolumes`); here the domain document *is* that
-    /// configuration and the only thing that rewrites it — `redefineVM` — adds
-    /// spare capacity without touching a device (STR-187), so a device attached
-    /// live and not written to the definition is silently gone at the guest's
-    /// next power cycle, with the control plane still showing the volume
-    /// attached.
+    /// Both bits, always, and the `CONFIG` half is the load-bearing one: the
+    /// domain document *is* the stored configuration, and the only thing that
+    /// rewrites it — `redefineVM` — adds spare capacity without touching a
+    /// device (STR-187), so a device attached live and not written to the
+    /// definition is silently gone at the guest's next power cycle, with the
+    /// control plane still showing the volume attached.
     ///
-    /// The same reasoning covers a resize: what the QEMU path defers "to the
-    /// next boot" only happens at all if the next boot reads it, and here the
-    /// next boot reads the definition.
+    /// The same reasoning covers a resize: a change deferred "to the next
+    /// boot" only happens at all if the next boot reads it, and here the next
+    /// boot reads the definition.
     public static let affectLiveAndConfig: UInt32 =
         (1 << 0)  // VIR_DOMAIN_AFFECT_LIVE
         | (1 << 1)  // VIR_DOMAIN_AFFECT_CONFIG
@@ -592,7 +589,6 @@ public enum LibvirtMemoryStats {
         return VMMemoryStats(
             totalBytes: total,
             availableBytes: available,
-            freeBytes: bytes(byTag[Tag.unused.rawValue]),
             balloonActualBytes: bytes(byTag[Tag.actualBalloon.rawValue]))
     }
 

@@ -14,11 +14,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { volumeBytesAtRest } from "@/lib/volume-guards";
-import {
-  acceptedSnapshotMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
 import { toast } from "sonner";
 import type { Volume } from "@/types/api";
 
@@ -42,8 +39,7 @@ export function CreateSnapshotDialog({
   onOpenChange,
   onSuccess,
 }: CreateSnapshotDialogProps) {
-  const watch = useMutationsStore((state) => state.watch);
-  const [isLoading, setIsLoading] = useState(false);
+  const { isLoading, run } = useAcceptedMutation();
   const [volumeId, setVolumeId] = useState(volume?.id ?? "");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -71,32 +67,28 @@ export function CreateSnapshotDialog({
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const accepted = await volumesApi.snapshot(targetId, {
-        name: trimmedName,
-        description: description.trim() || undefined,
-      });
-      watch(
-        acceptedSnapshotMutation(accepted, {
-          kind: "create",
-          resourceKind: "volume_snapshot",
-          resourceName: trimmedName,
-        })
-      );
-      toast.success(`Snapshot "${trimmedName}" is being created`);
-      onOpenChange(false);
-      onSuccess?.();
-      setName("");
-      setDescription("");
-      if (!volume) setVolumeId("");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to create snapshot"
-      );
-    } finally {
-      setIsLoading(false);
-    }
+    await run({
+      request: () =>
+        volumesApi.snapshot(targetId, {
+          name: trimmedName,
+          description: description.trim() || undefined,
+        }),
+      watch: {
+        snapshot: true,
+        kind: "create",
+        resourceKind: "volume_snapshot",
+        resourceName: trimmedName,
+      },
+      errorMessage: "Failed to create snapshot",
+      successMessage: `Snapshot "${trimmedName}" is being created`,
+      onSuccess: () => {
+        onOpenChange(false);
+        onSuccess?.();
+        setName("");
+        setDescription("");
+        if (!volume) setVolumeId("");
+      },
+    });
   };
 
   return (

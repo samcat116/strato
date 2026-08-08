@@ -17,12 +17,6 @@
 # query parameter; no credential ever travels in the URL.
 control_plane_url = "wss://localhost:8080/agent/ws"
 
-# Directory where QEMU will create domain sockets for VM communication
-# Optional - platform-specific defaults:
-#   macOS: ~/Library/Application Support/strato/qemu-sockets
-#   Linux: /var/run/qemu
-# qemu_socket_dir = "/var/run/qemu"
-
 # Logging level: trace, debug, info, notice, warning, error, critical
 # Optional - defaults to "info" if not specified
 log_level = "info"
@@ -230,12 +224,6 @@ log_level = "info"
 # that serves image downloads) rather than waiting for the control plane to push
 # it. The WebSocket is still dialed and still carries consoles, exec, log
 # forwarding, heartbeats, and observed state — only desired state moves.
-#
-# Set this to false to pin the agent to pushed syncs. It falls back to pushes
-# automatically against a control plane too old to serve the endpoint, so this
-# only exists to hold an agent back during a rollout.
-# Optional - defaults to true
-# desired_state_pull = true
 
 # How often the agent must fetch without an If-None-Match validator, in seconds.
 #
@@ -408,11 +396,6 @@ log_level = "info"
 # vrf_name = "ovnvrf"                 # VRF the advertised routes land in
 # maintain_vrf = true                 # let ovn-controller create the VRF netdev
 # routing_protocols = ["BGP"]         # protocol traffic punted to host FRR
-
-# Additional configuration options can be added here as needed
-# Examples:
-# heartbeat_interval = 30
-# max_vms = 10
 
 # SPIFFE/SPIRE Configuration — REQUIRED
 #

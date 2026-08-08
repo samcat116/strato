@@ -197,8 +197,7 @@ struct DesiredStatePollerTests {
                 resources: AgentResources(
                     totalCPU: 1, availableCPU: 1,
                     totalMemory: 1 << 30, availableMemory: 1 << 30,
-                    totalDisk: 1 << 34, availableDisk: 1 << 34),
-                runningVMs: []))
+                    totalDisk: 1 << 34, availableDisk: 1 << 34)))
         let body = try WireProtocol.makeEncoder().encode(envelope)
         let cp = FakeControlPlane(
             responses: [

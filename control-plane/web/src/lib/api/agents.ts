@@ -5,7 +5,6 @@ import type {
   AdoptWorkloadsResult,
   Agent,
   AgentEnrollment,
-  AgentEnrollmentListItem,
   AgentUpdateResult,
   CreateAgentEnrollmentRequest,
   Page,
@@ -24,14 +23,6 @@ export const agentsApi = {
 
   get(id: string): Promise<Agent> {
     return api.get<Agent>(`/api/agents/${id}`);
-  },
-
-  deregister(id: string): Promise<void> {
-    return api.delete(`/api/agents/${id}`);
-  },
-
-  forceOffline(id: string): Promise<void> {
-    return api.post(`/api/agents/${id}/actions/force-offline`);
   },
 
   // Assigns the target version as desired state and returns 202 immediately
@@ -61,20 +52,7 @@ export const agentsApi = {
   },
 
   // SPIFFE/SPIRE enrollments — the only agent enrollment path.
-  listEnrollments(organizationId?: string): Promise<AgentEnrollmentListItem[]> {
-    return api
-      .get<Page<AgentEnrollmentListItem>>("/api/agent-enrollments", {
-        limit: LIST_PAGE_LIMIT,
-        ...(organizationId ? { organization_id: organizationId } : {}),
-      })
-      .then((page) => page.items);
-  },
-
   createEnrollment(data: CreateAgentEnrollmentRequest): Promise<AgentEnrollment> {
     return api.post<AgentEnrollment>("/api/agent-enrollments", data);
-  },
-
-  revokeEnrollment(enrollmentId: string): Promise<void> {
-    return api.delete(`/api/agent-enrollments/${enrollmentId}`);
   },
 };

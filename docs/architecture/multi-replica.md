@@ -83,17 +83,6 @@ mutation path has to answer.
   that with a full payload. Doorbells and ETags are latency and bandwidth; the
   unconditional re-fetch is the correctness invariant.
 
-### Dual mode during the transition
-
-Both transports coexist per agent, not per fleet. An agent declares
-`pullsDesiredState` at registration; the control plane suppresses pushes only
-when that flag, the wire version (≥ 29), and its own
-`AGENT_DESIRED_STATE_PULL_ENABLED` kill switch all agree. Any disagreement
-leaves the agent on pushed syncs, which is the safe direction — a redundant
-push wastes an assembly, a wrongly suppressed one strands a host. Push-mode
-agents keep the periodic sync timer (dirty agents every ~60s, a forced pass
-every 10 minutes) as their backstop.
-
 ### Side effects stay on the serving replica
 
 Sync assembly is not side-effect free: it records image-download grants

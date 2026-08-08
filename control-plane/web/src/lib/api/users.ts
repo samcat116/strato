@@ -29,10 +29,6 @@ export const usersApi = {
       .then((page) => page.items);
   },
 
-  get(id: string): Promise<User> {
-    return api.get<User>(`/api/users/${id}`);
-  },
-
   update(id: string, data: UpdateUserRequest): Promise<User> {
     return api.put<User>(`/api/users/${id}`, data);
   },

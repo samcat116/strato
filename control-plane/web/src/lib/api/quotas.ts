@@ -5,50 +5,15 @@ import type {
   ResourceQuota,
   CreateQuotaRequest,
   UpdateQuotaRequest,
-  Page,
 } from "@/types/api";
-import { LIST_PAGE_LIMIT } from "@/types/api";
 
 export const quotasApi = {
-  // List all quotas the user can access, optionally filtered by level
-  list(level?: "organization" | "organizational_unit" | "project"): Promise<
-    ResourceQuota[]
-  > {
-    return api
-      .get<Page<ResourceQuota>>("/api/quotas", {
-        limit: LIST_PAGE_LIMIT,
-        ...(level ? { level } : {}),
-      })
-      .then((page) => page.items);
-  },
-
-  get(quotaId: string): Promise<ResourceQuota> {
-    return api.get<ResourceQuota>(`/api/quotas/${quotaId}`);
-  },
-
   update(quotaId: string, data: UpdateQuotaRequest): Promise<ResourceQuota> {
     return api.put<ResourceQuota>(`/api/quotas/${quotaId}`, data);
   },
 
   delete(quotaId: string): Promise<void> {
     return api.delete(`/api/quotas/${quotaId}`);
-  },
-
-  // Scoped listing
-  listForOrganization(organizationId: string): Promise<ResourceQuota[]> {
-    return api.get<ResourceQuota[]>(
-      `/api/organizations/${organizationId}/quotas`
-    );
-  },
-
-  listForFolder(organizationId: string, ouId: string): Promise<ResourceQuota[]> {
-    return api.get<ResourceQuota[]>(
-      `/api/organizations/${organizationId}/ous/${ouId}/quotas`
-    );
-  },
-
-  listForProject(projectId: string): Promise<ResourceQuota[]> {
-    return api.get<ResourceQuota[]>(`/api/projects/${projectId}/quotas`);
   },
 
   // Scoped creation

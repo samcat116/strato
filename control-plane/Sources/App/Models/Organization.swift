@@ -31,13 +31,7 @@ final class Organization: Model, @unchecked Sendable {
     var projects: [Project]
 
     @Children(for: \.$organization)
-    var resourceQuotas: [ResourceQuota]
-
-    @Children(for: \.$organization)
     var groups: [Group]
-
-    @Children(for: \.$organization)
-    var oidcProviders: [OIDCProvider]
 
     init() {}
 
@@ -178,18 +172,6 @@ extension Organization {
             .all(\.$id)
             .compactMap { $0 }
         return try await Project.all(inOrganization: organizationID, folders: folderIDs, on: db)
-    }
-
-    /// Get all VMs in this organization (across all projects)
-    func getAllVMs(on db: Database) async throws -> [VM] {
-        let projectIDs = try await getAllProjects(on: db).compactMap { $0.id }
-        guard !projectIDs.isEmpty else { return [] }
-        return try await VM.query(on: db).filter(\.$project.$id ~~ projectIDs).all()
-    }
-
-    /// Get resource usage across the organization
-    func getResourceUsage(on db: Database) async throws -> ResourceUsageResponse {
-        HierarchySnapshot.resourceUsage(of: try await getAllVMs(on: db))
     }
 
 }

@@ -116,31 +116,4 @@ struct VolumeAgentSelectionTests {
         #expect(VolumeService.selectVolumeAgent(from: agents, memberAgentIds: [])?.name == "any")
     }
 
-    /// The one placement gate in this file that refuses rather than degrades
-    /// (STR-148). With the imperative volume frames gone there is no fallback
-    /// path, so a volume placed on a pre-v31 agent could never be created — and
-    /// could only be deleted by force-clearing its finalizer.
-    @Test("skips an agent too old to speak volume sync")
-    func testSkipsPreVolumeSyncAgent() throws {
-        let agents = [
-            makeAgent(
-                id: "old", hypervisors: [hypervisor(.qemu)],
-                wireProtocolVersion: WireProtocol.volumeSyncMinimumVersion - 1),
-            makeAgent(
-                id: "new", hypervisors: [hypervisor(.qemu)],
-                wireProtocolVersion: WireProtocol.volumeSyncMinimumVersion),
-        ]
-
-        let selected = try #require(VolumeService.selectVolumeAgent(from: agents))
-        #expect(selected.name == "new")
-    }
-
-    @Test("an agent that never reported a wire version is not eligible")
-    func testUnknownWireVersionIsIneligible() {
-        let agents = [
-            makeAgent(id: "unknown", hypervisors: [hypervisor(.qemu)], wireProtocolVersion: nil)
-        ]
-
-        #expect(VolumeService.selectVolumeAgent(from: agents) == nil)
-    }
 }

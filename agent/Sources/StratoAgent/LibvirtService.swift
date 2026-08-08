@@ -53,12 +53,11 @@ import StratoShared
 /// than the spec. That single fact shapes hot-plug, resize and everything else
 /// that mutates a VM in place (STR-134): every such change is sent with
 /// `LibvirtDomain.affectLiveAndConfig`, so it lands on the running guest *and*
-/// in the persistent definition. The QEMU driver can leave the definition alone
-/// because it respawns a VM from a stored configuration the agent keeps in step
-/// (`updateRecordedVolumes`) and because everything it "defers to the next
-/// boot" is re-read from the spec at that boot. Neither is true here, so a
-/// live-only change is a change that silently un-happens at the guest's next
-/// power cycle.
+/// in the persistent definition. The deleted process-QEMU driver could leave
+/// its definition alone because it respawned a VM from a stored configuration
+/// the agent kept in step; that is not true here — the next boot reads
+/// libvirt's definition — so a live-only change is a change that silently
+/// un-happens at the guest's next power cycle.
 ///
 /// It used to follow from that that **the hot-plug slots and size ceilings a VM
 /// will ever have are fixed when it is created** — the document reserves

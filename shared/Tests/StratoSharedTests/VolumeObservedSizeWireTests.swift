@@ -58,7 +58,7 @@ struct VolumeObservedSizeWireTests {
 
     @Test func areportedSizeSurvivesTheRoundTrip() throws {
         let observed = ObservedVolumeState(
-            volumeId: UUID(), present: true, storagePath: "/v/volume.qcow2", format: "qcow2",
+            volumeId: UUID(), present: true, storagePath: "/v/volume.qcow2",
             sizeBytes: 1 << 30, observedGeneration: 4)
         #expect(try encodedKeys(observed).contains("sizeBytes"))
         #expect(try roundTrip(observed).sizeBytes == 1 << 30)

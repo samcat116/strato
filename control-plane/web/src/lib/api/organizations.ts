@@ -31,10 +31,6 @@ export const organizationsApi = {
     return api.put<Organization>(`/api/organizations/${id}`, data);
   },
 
-  delete(id: string): Promise<void> {
-    return api.delete(`/api/organizations/${id}`);
-  },
-
   switch(id: string): Promise<void> {
     return api.post(`/api/organizations/${id}/switch`);
   },
