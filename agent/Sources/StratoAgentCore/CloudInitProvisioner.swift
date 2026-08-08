@@ -614,14 +614,16 @@ public struct CloudInitProvisioner {
                 // it — and only a NIC with a v6 address can, since a route
                 // needs a source address of the same family.
                 if nic.metadataEnabled { metadataV4RouteClaimed = true }
-                if nic.resolverEnabled { resolverV4RouteClaimed = true }
+                if !nic.resolverAddresses.isEmpty { resolverV4RouteClaimed = true }
                 let dhcpMetadataV6 = nic.metadataEnabled && hasIPv6 && !metadataV6RouteClaimed
-                let dhcpResolverV6 = nic.resolverEnabled && hasIPv6 && !resolverV6RouteClaimed
+                let dhcpResolverV6 =
+                    hasIPv6 && !resolverV6RouteClaimed
+                    ? nic.resolverAddresses.first(where: { IPv6Address($0) != nil }) : nil
                 metadataV6RouteClaimed = metadataV6RouteClaimed || dhcpMetadataV6
-                resolverV6RouteClaimed = resolverV6RouteClaimed || dhcpResolverV6
+                resolverV6RouteClaimed = resolverV6RouteClaimed || (dhcpResolverV6 != nil)
                 section += linkLocalRoutesBlock(
                     metadataIPv4: false, metadataIPv6: dhcpMetadataV6,
-                    resolverIPv4: false, resolverIPv6: dhcpResolverV6)
+                    resolverIPv4: nil, resolverIPv6: dhcpResolverV6)
                 sections.append(section)
                 continue
             }
@@ -667,10 +669,15 @@ public struct CloudInitProvisioner {
             // source address for a ULA destination, and an unreachable entry in
             // `resolv.conf` costs every lookup a timeout before the v4 fallback.
             let dns: [String]
-            if nic.resolverEnabled {
-                dns =
-                    [NetworkResolverEndpoint.address]
-                    + (hasIPv6 ? [NetworkResolverEndpoint.addressV6] : [])
+            if !nic.resolverAddresses.isEmpty {
+                // The network's own pair, filtered to families this NIC can
+                // actually source from: without a global v6 address the guest
+                // has no valid source for a ULA destination, and an unreachable
+                // entry in `resolv.conf` costs every lookup a timeout before the
+                // v4 fallback.
+                dns = nic.resolverAddresses.filter { address in
+                    IPv4Address(address) != nil || (hasIPv6 && IPv6Address(address) != nil)
+                }
             } else {
                 dns =
                     nic.dnsServers
@@ -700,13 +707,17 @@ public struct CloudInitProvisioner {
             // it actually renders, so a v4-only NIC leaves v6 to a later one.
             let staticMetadataV4 = nic.metadataEnabled && !metadataV4RouteClaimed
             let staticMetadataV6 = nic.metadataEnabled && hasIPv6 && !metadataV6RouteClaimed
-            let staticResolverV4 = nic.resolverEnabled && !resolverV4RouteClaimed
-            let staticResolverV6 = nic.resolverEnabled && hasIPv6 && !resolverV6RouteClaimed
+            let staticResolverV4 =
+                resolverV4RouteClaimed
+                ? nil : nic.resolverAddresses.first(where: { IPv4Address($0) != nil })
+            let staticResolverV6 =
+                (hasIPv6 && !resolverV6RouteClaimed)
+                ? nic.resolverAddresses.first(where: { IPv6Address($0) != nil }) : nil
             if nic.metadataEnabled {
                 metadataV4RouteClaimed = true
                 metadataV6RouteClaimed = metadataV6RouteClaimed || hasIPv6
             }
-            if nic.resolverEnabled {
+            if !nic.resolverAddresses.isEmpty {
                 resolverV4RouteClaimed = true
                 resolverV6RouteClaimed = resolverV6RouteClaimed || hasIPv6
             }
@@ -771,7 +782,7 @@ public struct CloudInitProvisioner {
     /// an `onlink` flag that cloud-init's v2 conversion drops, so a no-op on
     /// those two renderers is the best available outcome.
     static func linkLocalRoutesBlock(
-        metadataIPv4: Bool, metadataIPv6: Bool, resolverIPv4: Bool, resolverIPv6: Bool
+        metadataIPv4: Bool, metadataIPv6: Bool, resolverIPv4: String?, resolverIPv6: String?
     ) -> String {
         var block = ""
         // Metadata first, so a NIC that carries both renders the same bytes it
@@ -779,8 +790,8 @@ public struct CloudInitProvisioner {
         // seed rather than a reordered one.
         if metadataIPv4 { block += ipv4Route(to: InstanceMetadataEndpoint.cidr) }
         if metadataIPv6 { block += ipv6Route(to: InstanceMetadataEndpoint.cidrV6) }
-        if resolverIPv4 { block += ipv4Route(to: NetworkResolverEndpoint.cidr) }
-        if resolverIPv6 { block += ipv6Route(to: NetworkResolverEndpoint.cidrV6) }
+        if let resolverIPv4 { block += ipv4Route(to: "\(resolverIPv4)/32") }
+        if let resolverIPv6 { block += ipv6Route(to: "\(resolverIPv6)/128") }
         return block.isEmpty ? "" : "\n    routes:" + block
     }
 

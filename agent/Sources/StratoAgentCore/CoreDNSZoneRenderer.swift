@@ -75,17 +75,67 @@ public enum CoreDNSZoneRenderer {
     /// everything else, which is a fast, legible failure. Synthesizing a public
     /// default instead would put a tenant's queries somewhere the operator never
     /// chose.
-    /// `bindAddresses` are the resolver addresses this namespace actually
-    /// holds. Passed in rather than assumed because CoreDNS refuses to start
-    /// when `bind` names an address that does not exist: hardcoding the v6 ULA
-    /// would take the whole resolver down on an IPv6-disabled host, where the
-    /// namespace's `addr add` for it failed and the v4 service is working fine.
-    public static func render(
-        zones: [DesiredDNSZone],
-        upstreams: [String],
-        searchDomain: String?,
-        bindAddresses: [String] = NetworkResolverEndpoint.addresses
-    ) -> Rendering {
+    /// One network's inputs to the host-wide rendering.
+    public struct Network: Sendable, Equatable {
+        public let networkId: UUID
+        /// This network's own resolver addresses, which is what its server
+        /// blocks `bind` and therefore what tells CoreDNS which network a query
+        /// arrived for. Distinct per network — that distinctness is what lets
+        /// one process in the host namespace serve them all.
+        public let bindAddresses: [String]
+        public let zones: [DesiredDNSZone]
+        public let upstreams: [String]
+        public let searchDomain: String?
+
+        public init(
+            networkId: UUID, bindAddresses: [String], zones: [DesiredDNSZone], upstreams: [String],
+            searchDomain: String?
+        ) {
+            self.networkId = networkId
+            self.bindAddresses = bindAddresses
+            self.zones = zones
+            self.upstreams = upstreams
+            self.searchDomain = searchDomain
+        }
+    }
+
+    /// Renders the whole host's resolver configuration: one Corefile covering
+    /// every network, and one zone file per network per origin.
+    ///
+    /// **One process, not one per network**, which is what moving to the host
+    /// namespace buys. CoreDNS keys a server block on its zone *and* its bind
+    /// addresses, so two networks can both serve `corp.example.com` with
+    /// different contents from the same process — verified against 1.12.0
+    /// before this was built on. The addresses being distinct per network is
+    /// what makes that work, and is the same property that lets the host route
+    /// each reply back to the right switch.
+    ///
+    /// Zone files are namespaced by network for exactly that reason: two
+    /// networks may hold the same zone name with different records, so a flat
+    /// `zones/<origin>.zone` would have one silently overwrite the other.
+    public static func render(networks: [Network]) -> Rendering {
+        var diagnostics: [String] = []
+        var files: [RenderedFile] = []
+        var blocks: [String] = []
+
+        for network in networks.sorted(by: { $0.networkId.uuidString < $1.networkId.uuidString }) {
+            let (networkFiles, origins, networkDiagnostics) = renderZones(for: network)
+            files.append(contentsOf: networkFiles)
+            diagnostics.append(contentsOf: networkDiagnostics)
+            blocks.append(contentsOf: serverBlocks(for: network, origins: origins))
+        }
+
+        files.insert(
+            RenderedFile(relativePath: "Corefile", contents: blocks.joined(separator: "\n\n") + "\n"),
+            at: 0)
+        return Rendering(files: files, diagnostics: diagnostics)
+    }
+
+    /// The zone files for one network, plus the origins its server blocks
+    /// should reference.
+    private static func renderZones(
+        for network: Network
+    ) -> (files: [RenderedFile], origins: [String], diagnostics: [String]) {
         var diagnostics: [String] = []
 
         // Everything is bucketed by **origin**, not by zone, and one file is
@@ -104,7 +154,7 @@ public enum CoreDNSZoneRenderer {
         var recordsByOrigin: [String: [DesiredDNSRecord]] = [:]
         var labelForOrigin: [String: String] = [:]
 
-        for zone in zones.sorted(by: { $0.zoneName < $1.zoneName }) {
+        for zone in network.zones.sorted(by: { $0.zoneName < $1.zoneName }) {
             let origin = normalizedOrigin(zone.zoneName)
             guard DNSNameSyntax.isValidDomainName(zone.zoneName) else {
                 diagnostics.append("zone '\(zone.zoneName)' has an invalid name; skipped")
@@ -153,45 +203,38 @@ public enum CoreDNSZoneRenderer {
             diagnostics.append(contentsOf: zoneDiagnostics)
             files.append(
                 RenderedFile(
-                    relativePath: "zones/\(zoneFileName(forOrigin: origin))", contents: body))
+                    relativePath: zoneFilePath(networkId: network.networkId, origin: origin),
+                    contents: body))
         }
-
-        files.insert(
-            RenderedFile(
-                relativePath: "Corefile",
-                contents: corefile(
-                    origins: origins, upstreams: upstreams, searchDomain: searchDomain,
-                    bindAddresses: bindAddresses)),
-            at: 0)
-        return Rendering(files: files, diagnostics: diagnostics)
+        return (files, origins, diagnostics)
     }
 
     // MARK: - Corefile
 
-    /// The Corefile: one `file`-backed server block per zone, then a catch-all.
+    /// One network's server blocks: one per zone it serves, plus a catch-all
+    /// that forwards everything else.
     ///
-    /// `bind` restricts every listener to the resolver's own addresses. The
-    /// namespace holds the metadata addresses too, and a CoreDNS listening on
-    /// the wildcard would answer on `169.254.169.254:53` as well — an address
-    /// whose contract is HTTP metadata, on a port nothing advertises there.
+    /// `bind` is what scopes each block to its network. Without it every block
+    /// would answer on every address in the host namespace, and a guest on one
+    /// network would resolve another's private names — the failure the distinct
+    /// addresses exist to prevent.
     ///
     /// The `file` plugin's own `reload` is what makes a record edit cost no
     /// process restart, and the server-level `reload` does the same for an
-    /// upstream-list edit. Both matter because a restart is a window in which
-    /// the network has no resolver — and the whole reason this backend is safe
-    /// to run without HA is that such windows stay short and degrade to
-    /// "internal names still resolve" rather than to nothing.
-    static func corefile(
-        origins: [String], upstreams: [String], searchDomain: String?, bindAddresses: [String]
-    ) -> String {
+    /// upstream-list edit. Both matter more now than they did with a process per
+    /// network: a restart here is a gap for *every* network on the host, which
+    /// is the cost of the single process and the reason nothing routine causes
+    /// one.
+    static func serverBlocks(for network: Network, origins: [String]) -> [String] {
+        guard !network.bindAddresses.isEmpty else { return [] }
+        let bind = "\n    bind \(network.bindAddresses.joined(separator: " "))"
         var blocks: [String] = []
-        let bind = bindAddresses.isEmpty ? "" : "\n    bind \(bindAddresses.joined(separator: " "))"
 
         for origin in origins.sorted() {
             blocks.append(
                 """
                 \(origin):\(NetworkResolverEndpoint.port) {\(bind)
-                    file zones/\(zoneFileName(forOrigin: origin)) {
+                    file \(zoneFilePath(networkId: network.networkId, origin: origin)) {
                         reload 10s
                     }
                     errors
@@ -199,19 +242,24 @@ public enum CoreDNSZoneRenderer {
                 """)
         }
 
-        // The catch-all. Everything that is not one of our zones lands here:
-        // guest lookups of public names, and reverse lookups outside the
-        // prefixes we author.
+        // The catch-all. Everything that is not one of this network's zones
+        // lands here: guest lookups of public names, and reverse lookups outside
+        // the prefixes it authors. This is the block the whole move to the host
+        // namespace was for — `forward` here reaches the upstreams through the
+        // *hypervisor's* routing, which is what a resolver inside the network's
+        // own namespace could never do.
         var root = """
             .:\(NetworkResolverEndpoint.port) {\(bind)
                 errors
                 cache 30
                 reload 10s
             """
-        if !upstreams.isEmpty {
-            root += "\n    forward . \(upstreams.joined(separator: " "))"
+        if !network.upstreams.isEmpty {
+            root += "\n    forward . \(network.upstreams.joined(separator: " "))"
         }
-        if let searchDomain, DNSNameSyntax.isValidDomainName(searchDomain) {
+        if let searchDomain = network.searchDomain,
+            DNSNameSyntax.isValidDomainName(searchDomain)
+        {
             // Not a resolution mechanism — the guest's own `search` list does
             // that — but recorded so the file explains itself to an operator
             // reading it on the host, which is the only place it is ever read.
@@ -219,8 +267,7 @@ public enum CoreDNSZoneRenderer {
         }
         root += "\n}"
         blocks.append(root)
-
-        return blocks.joined(separator: "\n\n") + "\n"
+        return blocks
     }
 
     // MARK: - Zone files
@@ -361,11 +408,16 @@ public enum CoreDNSZoneRenderer {
         name.hasSuffix(".") ? name : name + "."
     }
 
-    /// The file a zone's records are written to. Derived from the origin so a
-    /// zone renamed in the control plane lands in a new file and the old one is
-    /// swept, rather than two zones racing for one path.
-    static func zoneFileName(forOrigin origin: String) -> String {
-        "\(origin).zone"
+    /// The file a zone's records are written to, under its network's own
+    /// directory.
+    ///
+    /// Namespaced by network because two networks may attach zones with the same
+    /// name and different contents — the whole point of a per-network resolver —
+    /// so a flat path would have one silently overwrite the other. Derived from
+    /// the origin within that, so a zone renamed in the control plane lands in a
+    /// new file and the old one is swept rather than two racing for one path.
+    static func zoneFilePath(networkId: UUID, origin: String) -> String {
+        "zones/\(networkId.uuidString.lowercased())/\(origin).zone"
     }
 
     /// The reverse zone a `PTR` owner name belongs to.

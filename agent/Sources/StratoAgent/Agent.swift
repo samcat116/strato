@@ -2533,10 +2533,14 @@ extension Agent {
                             resolverNetworks = nil
                         } else {
                             var byNetwork: [UUID: ResolverNetworkConfig] = [:]
-                            for spec in specs where spec.resolverEnabled == true {
+                            for spec in specs
+                            where spec.resolverEnabled == true
+                                && !(spec.resolverAddresses ?? []).isEmpty
+                            {
                                 guard byNetwork[spec.networkId] == nil else { continue }
                                 byNetwork[spec.networkId] = ResolverNetworkConfig(
                                     networkId: spec.networkId,
+                                    addresses: spec.resolverAddresses ?? [],
                                     upstreams: spec.dnsServers,
                                     searchDomain: spec.domainName)
                             }

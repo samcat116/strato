@@ -308,23 +308,31 @@ use in code, tests, docs, and review. Architecture-level maps live in
 ## Networking
 
 - **Chassis service foot** — the per-network pair of things every hypervisor
-  builds for the link-local services its guests use: one OVN `localport` on the
+  builds for a link-local service its guests use: one OVN `localport` on the
   network's logical switch (authored by the site's topology authority) and one
-  network namespace, `strato-md-<network-uuid>`, terminating it on this host
-  (built by every agent running a NIC on that network). Two services share it:
-  instance metadata and the network's DNS **resolver**. Not "the metadata
-  namespace" any more, though the OVN and OVS names still say `metadata` — those
-  are ownership markers on rows every live site already has, and renaming them
-  would orphan every one of them.
+  local termination of it (built by every agent running a NIC on that network).
+  Two services have one each. **Instance metadata** terminates in a network
+  namespace, `strato-md-<network-uuid>`, because source-IP attribution is its
+  security model. The **resolver** terminates in the **host** namespace, because
+  it has to forward and that namespace has no egress.
 
 - **Resolver** — the DNS server a network's guests are pointed at, answering on
-  a link-local address inside the chassis service foot. One CoreDNS process per
-  network per hypervisor. It serves the zones attached to the network in full —
-  including the CNAME/TXT/SRV records the OVN `DNS` table cannot express — and
-  **forwards** everything else. Enabling it is a **site-wide** decision, not a
-  per-host one: guests are pointed at the address by one DHCP row while the
-  process answering runs per chassis, so one host that cannot serve one
+  a link-local pair of the network's own derived from its `resolver_index`. One
+  CoreDNS process per *hypervisor*, with a server block per network. It serves
+  the zones attached to each network in full — including the CNAME/TXT/SRV
+  records the OVN `DNS` table cannot express — and **forwards** everything else
+  through the hypervisor's own egress, which is what lets a guest on a network
+  with no external access resolve a public name. Enabling it is a **site-wide**
+  decision, not a per-host one: guests are pointed at the address by one DHCP row
+  while the process answering runs per host, so one host that cannot serve one
   withholds the feature from every network in its site.
+
+- **Resolver index** — the single fleet-wide integer a network is allocated, from
+  which both of its resolver addresses and its host routing-table id are derived.
+  Fleet-wide rather than per host because a network's index cannot depend on
+  where its VMs are placed; sequential rather than hashed because ~65k addresses
+  collide under hashing at a few hundred networks. Never moved once assigned —
+  moving one would strand every DHCP lease that carries it.
 
 - **Upstream forwarder** — where a network's resolver sends the names it does
   not serve itself. This is what `LogicalNetwork.dnsServers` means on a network

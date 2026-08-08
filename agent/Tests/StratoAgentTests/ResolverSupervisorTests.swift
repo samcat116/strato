@@ -19,10 +19,24 @@ struct ResolverSupervisorTests {
     private let a = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
     private let b = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!
 
-    private func request(_ networkId: UUID, upstreams: [String] = ["1.1.1.1"]) -> ResolverRenderRequest {
+    private func request(
+        _ networkIds: [UUID] = [], upstreams: [String] = ["1.1.1.1"]
+    ) -> ResolverRenderRequest {
         ResolverRenderRequest(
-            networkId: networkId, zones: [], upstreams: upstreams, searchDomain: nil,
-            bindAddresses: [NetworkResolverEndpoint.address])
+            networks: networkIds.enumerated().map { index, id in
+                CoreDNSZoneRenderer.Network(
+                    networkId: id, bindAddresses: ["169.254.1.\(index)"], zones: [],
+                    upstreams: upstreams, searchDomain: nil)
+            })
+    }
+
+    /// A one-network request carrying `zone`.
+    private func zoned(_ zone: DesiredDNSZone) -> ResolverRenderRequest {
+        ResolverRenderRequest(networks: [
+            CoreDNSZoneRenderer.Network(
+                networkId: a, bindAddresses: ["169.254.1.0"], zones: [zone],
+                upstreams: ["1.1.1.1"], searchDomain: nil)
+        ])
     }
 
     private func supervisor(
@@ -40,34 +54,34 @@ struct ResolverSupervisorTests {
     func startsFromNothing() async {
         let host = FakeResolverHost()
         let supervisor = supervisor(host: host)
-        await supervisor.reconcile([request(a)])
+        await supervisor.reconcile(request([a]))
 
-        #expect(await host.written() == [a])
-        #expect(await host.spawned() == [a])
-        #expect(await supervisor.servedNetworks() == [a])
+        #expect(await host.written() == 1)
+        #expect(await host.spawned() == 1)
+        #expect(await supervisor.isServing())
     }
 
     @Test("A converged network is left alone on the next sync")
     func convergedIsIdempotent() async {
         let host = FakeResolverHost()
         let supervisor = supervisor(host: host)
-        await supervisor.reconcile([request(a)])
-        await supervisor.reconcile([request(a)])
+        await supervisor.reconcile(request([a]))
+        await supervisor.reconcile(request([a]))
 
-        #expect(await host.spawned() == [a], "a running resolver must not be restarted")
-        #expect(await host.written() == [a], "unchanged configuration must not be rewritten")
+        #expect(await host.spawned() == 1, "a running resolver must not be restarted")
+        #expect(await host.written() == 1, "unchanged configuration must not be rewritten")
     }
 
     @Test("A network no longer wanted is stopped and its directory removed")
     func unwantedIsStopped() async {
         let host = FakeResolverHost()
         let supervisor = supervisor(host: host)
-        await supervisor.reconcile([request(a)])
-        await supervisor.reconcile([])
+        await supervisor.reconcile(request([a]))
+        await supervisor.reconcile(request([]))
 
-        #expect(await host.terminatedHandles() == [a])
-        #expect(await host.removed() == [a])
-        #expect(await supervisor.servedNetworks().isEmpty)
+        #expect(await host.terminatedHandles() == 1)
+        #expect(await host.removed() == 1)
+        #expect(await !supervisor.isServing())
     }
 
     @Test("A nil request list stops nothing")
@@ -76,25 +90,25 @@ struct ResolverSupervisorTests {
         // describe this host must not take DNS away from every network on it.
         let host = FakeResolverHost()
         let supervisor = supervisor(host: host)
-        await supervisor.reconcile([request(a)])
+        await supervisor.reconcile(request([a]))
         await supervisor.reconcile(nil)
 
-        #expect(await host.terminatedHandles().isEmpty)
-        #expect(await supervisor.servedNetworks() == [a])
+        #expect(await host.terminatedHandles() == 0)
+        #expect(await supervisor.isServing())
     }
 
     @Test("A failed write blocks the start rather than running against a half-written Corefile")
     func failedWriteBlocksStart() async {
         let host = FakeResolverHost()
-        await host.failWrites(for: [a])
+        await host.failWrites(true)
         let supervisor = supervisor(host: host)
-        await supervisor.reconcile([request(a)])
+        await supervisor.reconcile(request([a]))
 
-        #expect(await host.spawned().isEmpty)
+        #expect(await host.spawned() == 0)
         // And it retries: the digest was left unset, so the next pass rewrites.
-        await host.failWrites(for: [])
-        await supervisor.reconcile([request(a)])
-        #expect(await host.spawned() == [a])
+        await host.failWrites(false)
+        await supervisor.reconcile(request([a]))
+        #expect(await host.spawned() == 1)
     }
 
     // MARK: - The failure counter
@@ -118,13 +132,13 @@ struct ResolverSupervisorTests {
         // it is what a Corefile CoreDNS refuses to parse looks like.
         for _ in 0..<8 {
             clock.advance(by: 300)
-            await supervisor.reconcile([request(a)])
-            host.killLatest(networkId: a)
+            await supervisor.reconcile(request([a]))
+            host.kill()
         }
         clock.advance(by: 300)
-        await supervisor.reconcile([request(a)])
+        await supervisor.reconcile(request([a]))
 
-        let failures = await supervisor.failures(for: a)
+        let failures = await supervisor.failures()
         #expect(
             failures >= ResolverSupervisionPolicy.crashLoopThreshold,
             "the backoff must escalate on repeated instant deaths; got \(failures)")
@@ -139,21 +153,21 @@ struct ResolverSupervisorTests {
         let supervisor = supervisor(host: host, clock: clock)
 
         // One instant death: the counter goes to 1.
-        await supervisor.reconcile([request(a)])
-        host.killLatest(networkId: a)
+        await supervisor.reconcile(request([a]))
+        host.kill()
         clock.advance(by: 300)
-        await supervisor.reconcile([request(a)])
-        #expect(await supervisor.failures(for: a) == 1)
+        await supervisor.reconcile(request([a]))
+        #expect(await supervisor.failures() == 1)
 
         // Then a replacement that runs a healthy stretch before exiting.
         clock.advance(by: 300)
-        await supervisor.reconcile([request(a)])
+        await supervisor.reconcile(request([a]))
         clock.advance(by: ResolverSupervisionPolicy.healthyRuntimeSeconds + 1)
-        host.killLatest(networkId: a)
+        host.kill()
         clock.advance(by: 300)
-        await supervisor.reconcile([request(a)])
+        await supervisor.reconcile(request([a]))
         // Cleared by the healthy run, then incremented by this exit: 1, not 2.
-        #expect(await supervisor.failures(for: a) == 1)
+        #expect(await supervisor.failures() == 1)
     }
 
     @Test("Backoff suppresses a restart until its window passes")
@@ -162,16 +176,16 @@ struct ResolverSupervisorTests {
         let clock = TestClock()
         let supervisor = supervisor(host: host, clock: clock)
 
-        await supervisor.reconcile([request(a)])
-        host.killLatest(networkId: a)
+        await supervisor.reconcile(request([a]))
+        host.kill()
         // The reconcile that notices the exit also imposes the window, so it
         // must not restart in the same pass.
-        await supervisor.reconcile([request(a)])
-        #expect(await host.spawned() == [a], "restart must wait for the backoff window")
+        await supervisor.reconcile(request([a]))
+        #expect(await host.spawned() == 1, "restart must wait for the backoff window")
 
         clock.advance(by: 300)
-        await supervisor.reconcile([request(a)])
-        #expect(await host.spawned() == [a, a])
+        await supervisor.reconcile(request([a]))
+        #expect(await host.spawned() == 2)
     }
 
     // MARK: - Adoption
@@ -181,37 +195,37 @@ struct ResolverSupervisorTests {
         // Starting a second CoreDNS into the same namespace would fail to bind
         // :53 and crash-loop beside a perfectly healthy one.
         let host = FakeResolverHost()
-        await host.setAdoptable([AdoptableResolver(networkId: a, pid: 4242)])
+        await host.setAdoptable(AdoptableResolver(pid: 4242))
         let supervisor = supervisor(host: host)
 
-        await supervisor.reconcile([request(a)])
-        #expect(await host.spawned().isEmpty, "an adopted resolver must not be respawned")
+        await supervisor.reconcile(request([a]))
+        #expect(await host.spawned() == 0, "an adopted resolver must not be respawned")
         // Its configuration is rewritten, because what the previous agent wrote
         // is not known to match current desired state.
-        #expect(await host.written() == [a])
+        #expect(await host.written() == 1)
     }
 
     @Test("Stopping an adopted resolver signals it by pid")
     func adoptedIsStoppedByPID() async {
         let host = FakeResolverHost()
-        await host.setAdoptable([AdoptableResolver(networkId: a, pid: 4242)])
+        await host.setAdoptable(AdoptableResolver(pid: 4242))
         let supervisor = supervisor(host: host)
 
-        await supervisor.reconcile([request(a)])
-        await supervisor.reconcile([])
+        await supervisor.reconcile(request([a]))
+        await supervisor.reconcile(request([]))
         #expect(await host.terminatedPIDs() == [4242])
-        #expect(await host.removed() == [a])
+        #expect(await host.removed() == 1)
     }
 
     @Test("An adopted pid that has since died is restarted")
     func deadAdoptedIsRestarted() async {
         let host = FakeResolverHost()
-        await host.setAdoptable([AdoptableResolver(networkId: a, pid: 4242)])
+        await host.setAdoptable(AdoptableResolver(pid: 4242))
         await host.setDead(pids: [4242])
         let supervisor = supervisor(host: host)
 
-        await supervisor.reconcile([request(a)])
-        #expect(await host.spawned() == [a])
+        await supervisor.reconcile(request([a]))
+        #expect(await host.spawned() == 1)
     }
 
     // MARK: - Rendering
@@ -227,13 +241,11 @@ struct ResolverSupervisorTests {
             zoneId: UUID(), zoneName: "corp.example.com", networkIds: [a],
             records: [DesiredDNSRecord(name: "vm.corp.example.com", type: "A", values: ["10.0.0.5"])],
             recordsHash: "hash-one")
-        let request = ResolverRenderRequest(
-            networkId: a, zones: [zone], upstreams: ["1.1.1.1"], searchDomain: nil,
-            bindAddresses: [NetworkResolverEndpoint.address])
+        let request = zoned(zone)
 
-        await supervisor.reconcile([request])
-        await supervisor.reconcile([request])
-        #expect(await host.written() == [a], "an unchanged rendering must not be rewritten")
+        await supervisor.reconcile(request)
+        await supervisor.reconcile(request)
+        #expect(await host.written() == 1, "an unchanged rendering must not be rewritten")
     }
 
     @Test("A record edit is re-rendered and written through")
@@ -248,13 +260,11 @@ struct ResolverSupervisorTests {
                     DesiredDNSRecord(name: "vm.corp.example.com", type: "A", values: [address])
                 ],
                 recordsHash: hash)
-            return ResolverRenderRequest(
-                networkId: a, zones: [zone], upstreams: ["1.1.1.1"], searchDomain: nil,
-                bindAddresses: [NetworkResolverEndpoint.address])
+            return zoned(zone)
         }
-        await supervisor.reconcile([request(address: "10.0.0.5", hash: "one")])
-        await supervisor.reconcile([request(address: "10.0.0.6", hash: "two")])
-        #expect(await host.written() == [a, a])
+        await supervisor.reconcile(request(address: "10.0.0.5", hash: "one"))
+        await supervisor.reconcile(request(address: "10.0.0.6", hash: "two"))
+        #expect(await host.written() == 2)
     }
 
     @Test("A moved hash whose records render identically costs a render but no write")
@@ -274,22 +284,20 @@ struct ResolverSupervisorTests {
                     DesiredDNSRecord(name: "vm.corp.example.com", type: "A", values: ["10.0.0.5"])
                 ],
                 recordsHash: hash)
-            return ResolverRenderRequest(
-                networkId: a, zones: [zone], upstreams: ["1.1.1.1"], searchDomain: nil,
-                bindAddresses: [NetworkResolverEndpoint.address])
+            return zoned(zone)
         }
-        await supervisor.reconcile([request(hash: "one")])
-        await supervisor.reconcile([request(hash: "two")])
-        #expect(await host.written() == [a])
+        await supervisor.reconcile(request(hash: "one"))
+        await supervisor.reconcile(request(hash: "two"))
+        #expect(await host.written() == 1)
     }
 
     @Test("An upstream change moves the key even with identical zones")
     func renderFollowsUpstreams() async {
         let host = FakeResolverHost()
         let supervisor = supervisor(host: host)
-        await supervisor.reconcile([request(a, upstreams: ["1.1.1.1"])])
-        await supervisor.reconcile([request(a, upstreams: ["9.9.9.9"])])
-        #expect(await host.written() == [a, a])
+        await supervisor.reconcile(request([a], upstreams: ["1.1.1.1"]))
+        await supervisor.reconcile(request([a], upstreams: ["9.9.9.9"]))
+        #expect(await host.written() == 2)
     }
 
     // MARK: - Shutdown
@@ -300,11 +308,11 @@ struct ResolverSupervisorTests {
         // converges.
         let host = FakeResolverHost()
         let supervisor = supervisor(host: host)
-        await supervisor.reconcile([request(a), request(b)])
+        await supervisor.reconcile(request([a, b]))
         await supervisor.shutdown()
 
-        #expect(await Set(host.terminatedHandles()) == [a, b])
-        #expect(await supervisor.servedNetworks().isEmpty)
+        #expect(await host.terminatedHandles() == 1)
+        #expect(await !supervisor.isServing())
     }
 }
 
@@ -330,13 +338,12 @@ private final class TestClock: @unchecked Sendable {
 }
 
 private struct FakeHandle: ResolverHandle {
-    let networkId: UUID
     let processIdentifier: Int32
     let host: FakeResolverHost
 
-    var isRunning: Bool { host.isRunning(networkId: networkId) }
-    var exitedAt: Date? { host.exitedAt(networkId: networkId) }
-    func terminate() async { host.terminateHandle(networkId: networkId) }
+    var isRunning: Bool { host.processIsRunning() }
+    var exitedAt: Date? { host.processExitedAt() }
+    func terminate() async { host.terminateHandle() }
 }
 
 private struct WriteRefused: Error {}
@@ -350,20 +357,21 @@ private struct WriteRefused: Error {}
 private final class FakeResolverHost: ResolverHosting, @unchecked Sendable {
     private let lock = NSLock()
 
-    private var writes: [UUID] = []
-    private var spawns: [UUID] = []
-    private var removals: [UUID] = []
-    private var terminatedByHandle: [UUID] = []
+    private var writes = 0
+    private var spawns = 0
+    private var removals = 0
+    private var terminatedByHandle = 0
     private var terminatedByPID: [Int32] = []
-    private var adoptableResolvers: [AdoptableResolver] = []
+    private var adoptableResolver: AdoptableResolver?
     private var deadPIDs: Set<Int32> = []
-    private var refusedWrites: Set<UUID> = []
-    private var running: [UUID: Bool] = [:]
-    private var exits: [UUID: Date] = [:]
+    private var refuseWrites = false
+    private var running = false
+    private var exitedAt: Date?
+    private var nextPID: Int32 = 1000
+
     /// The clock the supervisor reads, so a killed child's exit is stamped at
     /// the instant the test says it died rather than when it is noticed.
     var clock: TestClock?
-    private var nextPID: Int32 = 1000
 
     private func withLock<T>(_ body: () -> T) -> T {
         lock.lock()
@@ -373,64 +381,60 @@ private final class FakeResolverHost: ResolverHosting, @unchecked Sendable {
 
     // MARK: Observations
 
-    func written() -> [UUID] { withLock { writes } }
-    func spawned() -> [UUID] { withLock { spawns } }
-    func removed() -> [UUID] { withLock { removals } }
-    func terminatedHandles() -> [UUID] { withLock { terminatedByHandle } }
+    func written() -> Int { withLock { writes } }
+    func spawned() -> Int { withLock { spawns } }
+    func removed() -> Int { withLock { removals } }
+    func terminatedHandles() -> Int { withLock { terminatedByHandle } }
     func terminatedPIDs() -> [Int32] { withLock { terminatedByPID } }
 
     // MARK: Arrangement
 
-    func failWrites(for networks: Set<UUID>) { withLock { refusedWrites = networks } }
-    func setAdoptable(_ resolvers: [AdoptableResolver]) { withLock { adoptableResolvers = resolvers } }
+    func failWrites(_ refuse: Bool) { withLock { refuseWrites = refuse } }
+    func setAdoptable(_ resolver: AdoptableResolver?) { withLock { adoptableResolver = resolver } }
     func setDead(pids: Set<Int32>) { withLock { deadPIDs = pids } }
 
-    /// Kill the child most recently spawned for `networkId`, the way a CoreDNS
-    /// that refuses its Corefile dies: cleanly forked, then gone a moment later.
-    /// The supervisor notices on its next reconcile.
-    func killLatest(networkId: UUID) {
+    /// Kill the child, the way a CoreDNS that refuses its Corefile dies:
+    /// cleanly forked, then gone a moment later. The supervisor notices on its
+    /// next reconcile.
+    func kill() {
         let at = clock?.now ?? Date()
         withLock {
-            running[networkId] = false
-            exits[networkId] = at
+            running = false
+            exitedAt = at
         }
     }
 
-    func exitedAt(networkId: UUID) -> Date? { withLock { exits[networkId] } }
+    func processIsRunning() -> Bool { withLock { running } }
+    func processExitedAt() -> Date? { withLock { exitedAt } }
 
-    func isRunning(networkId: UUID) -> Bool { withLock { running[networkId] ?? false } }
-
-    func terminateHandle(networkId: UUID) {
+    func terminateHandle() {
         withLock {
-            running[networkId] = false
-            terminatedByHandle.append(networkId)
+            running = false
+            terminatedByHandle += 1
         }
     }
 
     // MARK: ResolverHosting
 
     func writeConfiguration(_ resolver: DesiredResolver, root: String) throws {
-        let refused = withLock { refusedWrites.contains(resolver.networkId) }
-        if refused { throw WriteRefused() }
-        withLock { writes.append(resolver.networkId) }
+        if withLock({ refuseWrites }) { throw WriteRefused() }
+        withLock { writes += 1 }
     }
 
-    func removeConfiguration(networkId: UUID, root: String) {
-        withLock { removals.append(networkId) }
-    }
+    func removeConfiguration(root: String) { withLock { removals += 1 } }
 
-    func spawn(networkId: UUID, root: String) throws -> any ResolverHandle {
+    func spawn(root: String) throws -> any ResolverHandle {
         let pid: Int32 = withLock {
             nextPID += 1
-            spawns.append(networkId)
-            running[networkId] = true
-            exits[networkId] = nil
+            spawns += 1
+            running = true
+            exitedAt = nil
             return nextPID
         }
-        return FakeHandle(networkId: networkId, processIdentifier: pid, host: self)
+        return FakeHandle(processIdentifier: pid, host: self)
     }
 
-    func adoptable(root: String) -> [AdoptableResolver] { withLock { adoptableResolvers } }
+    func adoptable(root: String) -> AdoptableResolver? { withLock { adoptableResolver } }
 
     func isAlive(pid: Int32) -> Bool { withLock { !deadPIDs.contains(pid) } }
 

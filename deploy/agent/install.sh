@@ -430,8 +430,9 @@ install_coredns() {
   # version worth pinning to, and the agent invokes it by absolute path, so it
   # is downloaded like spire-agent and alloy rather than apt-installed.
   #
-  # Only relevant in OVN mode: the resolver terminates on a localport inside a
-  # per-network namespace, neither of which exists under user-mode networking.
+  # Only relevant in OVN mode: the resolver terminates on a per-network OVN
+  # localport, which does not exist under user-mode networking. One process
+  # serves every network on the host, in the host namespace (ADR 0008).
   if [ "$NETWORK_MODE" != "ovn" ]; then
     return 0
   fi

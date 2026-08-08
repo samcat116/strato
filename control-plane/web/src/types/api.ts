@@ -1959,6 +1959,7 @@ export interface Network {
    */
   metadataEnabled: boolean;
   resolverEnabled: boolean;
+  resolverAddresses?: string[];
   createdAt?: string;
   updatedAt?: string;
 }

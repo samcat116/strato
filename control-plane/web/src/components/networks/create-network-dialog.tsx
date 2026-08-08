@@ -52,7 +52,7 @@ export function CreateNetworkDialog({
   const [ipv6Enabled, setIpv6Enabled] = useState(true);
   const [dhcp, setDhcp] = useState<DhcpFormState>(emptyDhcpForm);
   const [metadataEnabled, setMetadataEnabled] = useState(true);
-  const [resolverEnabled, setResolverEnabled] = useState(false);
+  const [resolverEnabled, setResolverEnabled] = useState(true);
 
   // The network is created in the project selected in the header switcher.
   const { currentProject } = useProjectContext();

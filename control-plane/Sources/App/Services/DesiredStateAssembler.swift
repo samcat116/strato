@@ -326,6 +326,8 @@ struct DesiredStateAssembler {
                     leaseTime: network.leaseTime,
                     metadataEnabled: sendMetadataPort ? network.metadataEnabled : nil,
                     resolverEnabled: siteResolverCapable.map { $0 && network.resolverEnabled },
+                    resolverAddresses: network.resolverAddressesIfEnabled(
+                        siteCapable: siteResolverCapable),
                     generation: Int64(network.generation),
                     floatingIPs: floatingIPsByNetwork[networkId]
                 )

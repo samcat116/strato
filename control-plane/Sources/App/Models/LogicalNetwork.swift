@@ -1,4 +1,5 @@
 import Fluent
+import StratoShared
 import Vapor
 
 /// A logical network VMs attach to, and the unit of IPAM ownership: the control
@@ -107,6 +108,19 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @Field(key: "resolver_enabled")
     var resolverEnabled: Bool
 
+    /// The index this network's two link-local resolver addresses derive from
+    /// (`NetworkResolverEndpoint`), allocated fleet-wide by
+    /// `ResolverAddressAllocator`.
+    ///
+    /// Nil until the resolver is first enabled, and **kept** if it is later
+    /// disabled: the addresses live in the host namespace where every network's
+    /// resolver shares one namespace, so reusing an index while some agent still
+    /// has the old interface configured would put two networks on one address.
+    /// Holding it costs one number out of 65k and makes re-enabling free of any
+    /// guest-visible change.
+    @OptionalField(key: "resolver_index")
+    var resolverIndex: Int?
+
     /// Monotonic counter bumped whenever a change alters how agents realize the
     /// network's L3 (subnet, gateway, or external access). Sent to agents as the
     /// `DesiredNetworkState.generation` so replayed/reordered syncs can't roll
@@ -164,7 +178,8 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         leaseTime: Int? = nil,
         externalAccess: Bool = true,
         metadataEnabled: Bool = true,
-        resolverEnabled: Bool = false,
+        resolverEnabled: Bool = true,
+        resolverIndex: Int? = nil,
         generation: Int = 1,
         siteID: UUID? = nil
     ) {
@@ -184,7 +199,23 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.externalAccess = externalAccess
         self.metadataEnabled = metadataEnabled
         self.resolverEnabled = resolverEnabled
+        self.resolverIndex = resolverIndex
         self.generation = generation
+    }
+
+    /// The addresses to put on the wire for this network's resolver, or nil when
+    /// it is off, has never been allocated one, or the receiver has no opinion.
+    ///
+    /// Nil and "enabled but unallocated" are deliberately the same answer: an
+    /// address the control plane has not committed to is one no agent should
+    /// realize, and the allocation happens on the write that turns the flag on,
+    /// so the pair is missing only for a row that predates this feature.
+    func resolverAddressesIfEnabled(siteCapable: Bool?) -> [String]? {
+        guard siteCapable == true, resolverEnabled, let index = resolverIndex else { return nil }
+        return [
+            NetworkResolverEndpoint.address(forIndex: index),
+            NetworkResolverEndpoint.addressV6(forIndex: index),
+        ]
     }
 
     /// The identity of the logical router this network attaches to on agents.
@@ -263,9 +294,8 @@ struct CreateNetworkRequest: Content {
     /// guests. Defaults true — an opt-out, not an opt-in.
     let metadataEnabled: Bool?
     /// Whether the network gives its guests a built-in DNS resolver, serving the
-    /// zones attached to it in full. Defaults false: the resolver cannot yet
-    /// forward to upstream servers, so turning it on trades external resolution
-    /// for the internal record vocabulary.
+    /// zones attached to it in full and forwarding the rest through the
+    /// hypervisor's egress. Defaults true — an opt-out, like `metadataEnabled`.
     let resolverEnabled: Bool?
     /// Site to pin the network to; its VMs then only place on that site's
     /// agents, where the shared OVN deployment spans it across nodes.
@@ -379,6 +409,11 @@ struct NetworkResponse: Content {
     let externalAccess: Bool
     let metadataEnabled: Bool
     let resolverEnabled: Bool
+    /// The addresses this network's guests resolve through, v4 first. Nil when
+    /// the resolver has never been enabled. Exposed rather than the index behind
+    /// them because these are what an operator compares against a guest's
+    /// `resolv.conf`.
+    let resolverAddresses: [String]?
     let siteId: UUID?
     /// The zone this network's VMs auto-register into, if any (issue #770).
     let primaryDnsZoneId: UUID?
@@ -401,6 +436,12 @@ struct NetworkResponse: Content {
         self.externalAccess = network.externalAccess
         self.metadataEnabled = network.metadataEnabled
         self.resolverEnabled = network.resolverEnabled
+        self.resolverAddresses = network.resolverIndex.map {
+            [
+                NetworkResolverEndpoint.address(forIndex: $0),
+                NetworkResolverEndpoint.addressV6(forIndex: $0),
+            ]
+        }
         self.siteId = network.$site.id
         self.primaryDnsZoneId = network.$primaryDNSZone.id
         self.createdAt = network.createdAt

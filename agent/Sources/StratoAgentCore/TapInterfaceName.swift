@@ -84,3 +84,11 @@ private func interfaceName(prefix: String, workloadId: String, nicIndex: Int) ->
     let hex = String(format: "%012x", hash & 0xffff_ffff_ffff)
     return prefix + hex
 }
+
+/// The host-namespace OVS internal interface terminating one network's resolver
+/// localport (STR-40). `rsv` keeps it distinguishable at a glance from the
+/// metadata foot's `mdp` and from VM TAPs, which matters more here because this
+/// one is in the *host's* `ip link` output rather than tucked in a namespace.
+public func resolverHostInterfaceName(networkId: String) -> String {
+    interfaceName(prefix: "rsv", workloadId: networkId, nicIndex: 0)
+}

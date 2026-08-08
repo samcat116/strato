@@ -1185,7 +1185,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
                 networkId: config.networkId, networkName: config.networkName, subnet: subnet,
                 gateway: gateway,
                 dnsServers: config.dnsServers, domainName: config.domainName, leaseTime: config.leaseTime,
-                metadataEnabled: config.metadataEnabled, resolverEnabled: config.resolverEnabled)
+                metadataEnabled: config.metadataEnabled, resolverAddresses: config.resolverAddresses)
         } else {
             logger.warning(
                 "DHCP enabled but subnet/gateway unknown; using static guest config",
@@ -1198,7 +1198,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             v6 = try await ensureDHCPOptions6(
                 networkId: config.networkId, networkName: config.networkName, subnet6: subnet6,
                 dnsServers: config.dnsServers, domainName: config.domainName,
-                resolverEnabled: config.resolverEnabled)
+                resolverAddresses: config.resolverAddresses)
         } else {
             v6 = nil
         }
@@ -1271,14 +1271,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     private func ensureDHCPOptions(
         networkId: UUID, networkName: String, subnet: String, gateway: String,
         dnsServers: [String], domainName: String?, leaseTime: Int?, metadataEnabled: Bool,
-        resolverEnabled: Bool
+        resolverAddresses: [String]
     ) async throws -> String? {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         let options = OVNDHCPOptionsBuilder.v4Options(
             gateway: gateway, dnsServers: dnsServers, domainName: domainName, leaseTime: leaseTime,
-            subnet: subnet, metadataEnabled: metadataEnabled, resolverEnabled: resolverEnabled)
+            subnet: subnet, metadataEnabled: metadataEnabled, resolverAddresses: resolverAddresses)
         let externalIDs = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: networkName)
         let dhcp = OVNDHCPOptions(cidr: subnet, options: options, external_ids: externalIDs)
 
@@ -1304,14 +1304,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// (see `OVNDHCPOptionsBuilder.v6Options`).
     private func ensureDHCPOptions6(
         networkId: UUID, networkName: String, subnet6: String, dnsServers: [String],
-        domainName: String?, resolverEnabled: Bool
+        domainName: String?, resolverAddresses: [String]
     ) async throws -> String? {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
         let options = OVNDHCPOptionsBuilder.v6Options(
             dnsServers: dnsServers, domainName: domainName, subnet6: subnet6,
-            resolverEnabled: resolverEnabled)
+            resolverAddresses: resolverAddresses)
         let externalIDs = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: networkName)
         let dhcp = OVNDHCPOptions(cidr: subnet6, options: options, external_ids: externalIDs)
 
@@ -1364,9 +1364,7 @@ extension NetworkServiceLinux {
         // non-controller agent gets an empty `networks` list by design, yet its
         // guests need those addresses materialized locally just the same, so the
         // input is its own workloads' NIC specs.
-        let chassisServices = Self.chassisServiceSets(
-            metadataNetworks: metadataNetworks, resolverNetworks: resolverNetworks?.map(\.networkId))
-        await reconcileChassisServicePorts(chassisServices)
+        await reconcileChassisServicePorts(metadataNetworks)
 
         // The resolver processes themselves, converged here for the chassis
         // ports' reason and immediately after them: the namespace has to exist
@@ -1492,40 +1490,6 @@ extension NetworkServiceLinux {
     /// Observation keys off external-ids rather than the `mdp` name prefix, so
     /// an operator's own internal ports on `br-int` are never candidates for
     /// removal.
-    /// Folds the two per-NIC service opt-outs into one desired map.
-    ///
-    /// Nil only when *both* are nil, i.e. a control plane that has an opinion
-    /// about neither service. One nil and one list is an opinion about the whole
-    /// foot: an older control plane that speaks metadata but not the resolver is
-    /// saying "metadata on these networks, resolver nowhere", and building a
-    /// namespace whose resolver addresses nothing points at would be the worse
-    /// reading.
-    static func chassisServiceSets(metadataNetworks: [UUID]?, resolverNetworks: [UUID]?)
-        -> [UUID: ChassisServiceSet]?
-    {
-        guard metadataNetworks != nil || resolverNetworks != nil else { return nil }
-        let metadata = Set(metadataNetworks ?? [])
-        let resolver = Set(resolverNetworks ?? [])
-        var sets: [UUID: ChassisServiceSet] = [:]
-        for networkId in metadata.union(resolver) {
-            sets[networkId] = ChassisServiceSet(
-                metadata: metadata.contains(networkId), resolver: resolver.contains(networkId))
-        }
-        return sets
-    }
-
-    /// Converge this host's per-network resolvers (STR-40).
-    ///
-    /// Nil ≙ a control plane with no opinion about resolvers: nothing is
-    /// started and, critically, nothing running is stopped.
-    ///
-    /// A network gets the zones attached to *it*, filtered out of the
-    /// fleet-wide `dnsZones` list — a sync carries every zone this agent has
-    /// anything to do with, and a namespace must never answer for a zone that
-    /// is not on its network. A nil `dnsZones` beside a non-nil
-    /// `resolverNetworks` cannot happen from a real control plane (v37 implies
-    /// v36) but renders as "no zones, forward everything", which is the honest
-    /// reading of a sender that named resolvers and no names for them.
     private func reconcileResolvers(
         _ resolverNetworks: [ResolverNetworkConfig]?, dnsZones: [DesiredDNSZone]?
     ) async {
@@ -1539,24 +1503,156 @@ extension NetworkServiceLinux {
             }
             return
         }
+
+        // The host-namespace foot for each network, converged before the
+        // process: CoreDNS binds these addresses, and `bind` naming one that
+        // does not exist makes it refuse to start — for every network at once,
+        // now that one process serves them all.
+        await reconcileResolverHostPorts(resolverNetworks)
+
         let zones = dnsZones ?? []
-        let bindAddresses = ResolverSupervisionPolicy.bindAddresses()
-        // Inputs, not output: the supervisor renders only the networks whose
-        // inputs moved, which matters because a zone's records span every VM on
-        // every attached network fleet-wide and this runs on every sync.
-        let requests = resolverNetworks.map { network in
-            ResolverRenderRequest(
+        let ipv6 = ResolverSupervisionPolicy.supportsIPv6()
+        let networks = resolverNetworks.map { network in
+            CoreDNSZoneRenderer.Network(
                 networkId: network.networkId,
+                bindAddresses: ResolverSupervisionPolicy.bindable(
+                    network.addresses, ipv6Available: ipv6),
                 zones: zones.filter { $0.networkIds.contains(network.networkId) },
                 upstreams: network.upstreams,
-                searchDomain: network.searchDomain,
-                bindAddresses: bindAddresses)
+                searchDomain: network.searchDomain)
         }
-        await resolverSupervisor.reconcile(requests)
+        await resolverSupervisor.reconcile(ResolverRenderRequest(networks: networks))
         #endif
     }
 
-    private func reconcileChassisServicePorts(_ desired: [UUID: ChassisServiceSet]?) async {
+    /// Converge the host-namespace interface that terminates each network's
+    /// resolver localport, plus its policy routing.
+    private func reconcileResolverHostPorts(_ desired: [ResolverNetworkConfig]) async {
+        #if os(Linux)
+        guard let ovsManager, let ipBinaryPath else { return }
+        let observed: [ObservedResolverHostPort]
+        do {
+            observed = try await observedResolverHostPorts(ovsManager)
+        } catch {
+            logger.error(
+                "Could not read resolver host ports; skipping this pass",
+                metadata: ["error": .string(error.localizedDescription)])
+            return
+        }
+        let wanted = Dictionary(
+            desired.map { ($0.networkId, $0) }, uniquingKeysWith: { first, _ in first })
+
+        for action in ResolverHostPortReconciler.actions(
+            desired: wanted.mapValues(\.addresses), observed: observed)
+        {
+            switch action {
+            case .realize(let networkId, let addresses):
+                await attemptResolverHostPortSetup(
+                    networkId: networkId, addresses: addresses, ipBinaryPath: ipBinaryPath)
+            case .remove(let networkId, let interfaceName, let addresses):
+                await removeResolverHostPort(
+                    networkId: networkId, interfaceName: interfaceName, addresses: addresses,
+                    ipBinaryPath: ipBinaryPath)
+            }
+        }
+        #endif
+    }
+
+    #if os(Linux)
+    private func observedResolverHostPorts(_ ovsManager: OVSManager) async throws
+        -> [ObservedResolverHostPort]
+    {
+        var found: [ObservedResolverHostPort] = []
+        for interface in try await ovsManager.getInterfaces() {
+            guard let ids = interface.external_ids,
+                ids[ChassisServicePlan.managedKey] == ChassisServicePlan.managedValue,
+                ids[ChassisServicePlan.roleKey] == ResolverHostPortPlan.roleValue,
+                let raw = ids[ChassisServicePlan.networkIDKey],
+                let networkId = UUID(uuidString: raw)
+            else { continue }
+            found.append(
+                ObservedResolverHostPort(
+                    networkId: networkId,
+                    interfaceName: interface.name,
+                    addresses: ResolverHostPortPlan.parseAddresses(
+                        ids[ResolverHostPortPlan.addressesKey])))
+        }
+        return found
+    }
+
+    private func attemptResolverHostPortSetup(
+        networkId: UUID, addresses: [String], ipBinaryPath: String
+    ) async {
+        let plan = ResolverHostPortPlan.plan(
+            networkId: networkId, addresses: addresses, ipBinaryPath: ipBinaryPath,
+            bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
+        do {
+            try run("ovs-vsctl", plan.ovsAttach)
+            _ = try await verifyOVSBinding(
+                verify: plan.ovsVerify, device: plan.interfaceName, portName: plan.logicalPortName,
+                stage: "attach")
+            for command in plan.setup {
+                try await runNetnsCommand(command)
+            }
+            logger.info(
+                "Realized resolver host port",
+                metadata: [
+                    "networkId": .string(networkId.uuidString),
+                    "interface": .string(plan.interfaceName),
+                    "addresses": .string(addresses.joined(separator: ",")),
+                ])
+        } catch {
+            logger.error(
+                "Failed to realize resolver host port",
+                metadata: [
+                    "networkId": .string(networkId.uuidString),
+                    "error": .string(error.localizedDescription),
+                ])
+            // Roll back so the next pass observes an honest "not built". A
+            // half-built foot is worse here than elsewhere: CoreDNS binds these
+            // addresses, so one that exists without its routing answers queries
+            // whose replies go nowhere.
+            await removeResolverHostPort(
+                networkId: networkId, interfaceName: plan.interfaceName, addresses: addresses,
+                ipBinaryPath: ipBinaryPath, quiet: true)
+        }
+    }
+
+    private func removeResolverHostPort(
+        networkId: UUID, interfaceName: String, addresses: [String], ipBinaryPath: String,
+        quiet: Bool = false
+    ) async {
+        let removal = ResolverHostPortPlan.teardownPlan(
+            networkId: networkId, interfaceName: interfaceName, addresses: addresses,
+            ipBinaryPath: ipBinaryPath, bridge: Self.ovnIntegrationBridge,
+            ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds)
+        // Rules first: they outlive the interface, which the OVS detach
+        // destroys. Removing the device first would strand every rule that named
+        // its address, and those accumulate in the host's policy table.
+        for command in removal.commands {
+            try? await runNetnsCommand(command)
+        }
+        do {
+            try run("ovs-vsctl", removal.ovsDetach)
+        } catch {
+            if !quiet {
+                logger.warning(
+                    "Failed to remove resolver host port",
+                    metadata: [
+                        "networkId": .string(networkId.uuidString),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+            return
+        }
+        if !quiet {
+            logger.info(
+                "Removed resolver host port", metadata: ["networkId": .string(networkId.uuidString)])
+        }
+    }
+    #endif
+
+    private func reconcileChassisServicePorts(_ desired: [UUID]?) async {
         #if os(Linux)
         guard let desired else { return }
         guard let ovsManager else { return }
@@ -1576,8 +1672,8 @@ extension NetworkServiceLinux {
 
         for action in ChassisServiceReconciler.actions(desired: desired, observed: observed) {
             switch action {
-            case .realize(let networkId, let services):
-                await attemptChassisServiceSetup(networkId: networkId, services: services)
+            case .realize(let networkId):
+                await attemptChassisServiceSetup(networkId: networkId)
             case .remove(let networkId, let interfaceName):
                 await removeChassisServicePort(networkId: networkId, interfaceName: interfaceName)
             }
@@ -1609,8 +1705,7 @@ extension NetworkServiceLinux {
                     networkId: networkId,
                     interfaceName: interface.name,
                     namespacePresent: FileManager.default.fileExists(
-                        atPath: ChassisServicePlan.netnsPath(networkId: networkId)),
-                    services: ChassisServiceSet.parse(ids[ChassisServicePlan.servicesKey])))
+                        atPath: ChassisServicePlan.netnsPath(networkId: networkId))))
         }
         return found
     }
@@ -1623,7 +1718,7 @@ extension NetworkServiceLinux {
     /// syncs are independent. That needs no retry logic — `ovn-controller`
     /// simply leaves the port unbound until the row appears, and the next
     /// periodic sync re-verifies.
-    private func attemptChassisServiceSetup(networkId: UUID, services: ChassisServiceSet) async {
+    private func attemptChassisServiceSetup(networkId: UUID) async {
         guard let ipBinaryPath else {
             let message =
                 "Link-local services need the iproute2 `ip` tool, which was not found on this host; "
@@ -1641,7 +1736,7 @@ extension NetworkServiceLinux {
         // reports the tool as absent.
         let ratePPS = tcBinaryPath == nil ? 0 : chassisServiceRatePPS
         let plan = ChassisServicePlan.plan(
-            networkId: networkId, metadata: services.metadata, resolver: services.resolver,
+            networkId: networkId,
             ipBinaryPath: ipBinaryPath, tcBinaryPath: tcBinaryPath ?? "tc",
             bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds,
             ratePPS: ratePPS)
@@ -1671,7 +1766,6 @@ extension NetworkServiceLinux {
                 "Realized chassis service namespace",
                 metadata: [
                     "networkId": .string(networkId.uuidString),
-                    "services": .string(services.externalIDValue),
                     "netns": .string(plan.netnsName),
                     "interface": .string(plan.interfaceName),
                     "port": .string(plan.logicalPortName),
@@ -1781,13 +1875,15 @@ extension NetworkServiceLinux {
                     // pointed at the configured servers rather than at an
                     // address that may terminate nothing.
                     metadataEnabled: network.metadataEnabled == true,
-                    resolverEnabled: network.resolverEnabled == true)
+                    resolverAddresses: network.resolverEnabled == true
+                        ? (network.resolverAddresses ?? []) : [])
             }
             if let subnet6 = network.subnet6 {
                 _ = try await ensureDHCPOptions6(
                     networkId: network.networkId, networkName: network.name, subnet6: subnet6,
                     dnsServers: network.dnsServers ?? [], domainName: network.domainName,
-                    resolverEnabled: network.resolverEnabled == true)
+                    resolverAddresses: network.resolverEnabled == true
+                        ? (network.resolverAddresses ?? []) : [])
             }
         } catch {
             logger.error(

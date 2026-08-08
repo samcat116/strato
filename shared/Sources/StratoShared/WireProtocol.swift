@@ -729,9 +729,19 @@ public enum WireProtocol {
     /// the *chassis* half on agents that receive an empty `networks` list
     /// because they may not author topology. Nil ≙ "the sender has no opinion",
     /// never "off" — an agent converges nothing rather than reading silence as
-    /// teardown. The resolver rides the *same* `localport` and the same
-    /// `strato-md-<network>` namespace instance metadata already publishes, so
-    /// a network with both enabled has one port carrying four addresses.
+    /// teardown.
+    ///
+    /// Each carrier also gains `resolverAddresses`, non-nil exactly when the
+    /// flag is true: **one distinct v4/v6 pair per network**, allocated by the
+    /// control plane from `169.254.0.0/16` and `fd00:ec2:1::/48`. That
+    /// distinctness is what the whole feature rests on. A resolver terminated in
+    /// the network's own chassis namespace has only link-local addresses and no
+    /// egress the OVN router will SNAT, so it can answer for the zones it holds
+    /// and forward nothing — the bug STR-40 was filed to fix. A pair per network
+    /// puts every resolver in the *host* namespace, where forwarding is the
+    /// hypervisor's own, while the destination address still says which network
+    /// asked and a per-address routing rule sends the reply back to the right
+    /// switch. See ADR 0008.
     ///
     /// **`dnsServers` is redefined rather than replaced.** On a network with
     /// `resolverEnabled`, the DHCP `dns_server` option becomes

@@ -155,10 +155,10 @@ struct VMNetworkConfig: Sendable {
     /// plane predates the field — the row simply keeps today's options, which
     /// is what a sender with no opinion should get.
     let metadataEnabled: Bool
-    /// Whether this NIC's network publishes the per-network DNS resolver
-    /// (STR-40). Decides what the OVN `DHCP_Options` row hands the guest as
-    /// `dns_server`, and whether the row advertises a route to the resolver.
-    let resolverEnabled: Bool
+    /// This NIC's network's own resolver addresses, or empty when it has no
+    /// resolver (STR-40). Decides what the OVN `DHCP_Options` row hands the
+    /// guest as `dns_server`, and what route the row advertises to reach it.
+    let resolverAddresses: [String]
 
     init(
         networkName: String, networkId: UUID, macAddress: String? = nil, ipAddress: String? = nil,
@@ -166,7 +166,7 @@ struct VMNetworkConfig: Sendable {
         gateway6: String? = nil, subnet6: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
         domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil, mtu: Int? = nil,
         metadataEnabled: Bool = false,
-        resolverEnabled: Bool = false
+        resolverAddresses: [String] = []
     ) {
         self.networkName = networkName
         self.networkId = networkId
@@ -185,7 +185,7 @@ struct VMNetworkConfig: Sendable {
         self.securityGroupIds = securityGroupIds
         self.mtu = mtu
         self.metadataEnabled = metadataEnabled
-        self.resolverEnabled = resolverEnabled
+        self.resolverAddresses = resolverAddresses
     }
 }
 

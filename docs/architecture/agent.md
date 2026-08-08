@@ -899,53 +899,60 @@ DNS resolver (wire v37, STR-40) — and its input is the agent's own workload
 specs (`NetworkSpec.metadataEnabled` / `.resolverEnabled`), not the `networks`
 list: it must exist on every chassis running a NIC on the network, including
 sited non-controller agents, which receive an empty `networks` list by design.
-An `external_ids:strato-services` stamp records which services the namespace was
-built for, so turning one on re-realizes exactly the namespaces that need it. An
-`ip`-invoked `tc` ingress policer caps the aggregate packet rate guests may push
-at the interface, aggregate across both services because what it protects is the
-hypervisor rather than either one.
+An `ip`-invoked `tc` ingress policer caps the packet rate guests may push at the
+interface, because what it protects is the hypervisor rather than the service.
 
-The `NetworkReconciler` converges the OVN `localport` itself from
+The resolver has the same two halves, but its second one lands in the **host**
+namespace on a port of its own (§Per-network resolver) — a resolver has to
+forward and a chassis namespace has no egress, which is
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md). Metadata stays here
+because source-IP attribution is its security model and it needs no egress at
+all.
+
+The `NetworkReconciler` converges both OVN `localport`s from
 `DesiredNetworkState`'s two flags on authoritative agents, and
-`serviceLocalPortProtection(for:)` shields existing ports from teardown when the
-sync has an opinion about *neither* service (a pre-v27 control plane's silence
-must not delete live ports; a pre-v37 one's silence about the resolver alone
-must not stop `metadataEnabled: false` from working).
+`serviceLocalPortProtection(for:)` shields each existing port from teardown when
+the sync has no opinion about *its* service (a pre-v27 control plane's silence
+must not delete live metadata ports; a pre-v37 one's silence about the resolver
+must not stop `metadataEnabled: false` from working, nor reap a resolver port it
+has never heard of).
 
-Both services now have a listener in the namespace, and they take opposite
-shapes for the same constraint: the metadata server below is a helper process
-the agent forks per namespace (STR-56), and the resolver is a CoreDNS it forks
-per namespace (§Per-network resolver). `setns(2)` is per-thread and does not
-compose with Swift concurrency, which is what makes a helper process the answer
-in both cases — the cost ADR 0003 deferred, now paid twice.
-
-One interaction between them is worth knowing. The restart path starts metadata
-listeners from the namespaces it finds in `/var/run/netns`, because those
-outlive the agent while the sync that named them does not. Since STR-40 a
-namespace can exist for a network with the resolver on and metadata *off*, so
-that scan can start a listener for a network that does not want one. It fails to
-bind — the namespace holds no metadata address on such a network — and the first
-sync stops it, which is the same level-triggered correction the stale-namespace
-case already relies on; the cost is a few failed spawns in the log after a
-restart, not a service on a network that opted out. See
+The metadata listener is a helper process the agent forks per namespace
+(STR-56), because `setns(2)` is per-thread and does not compose with Swift
+concurrency — the cost ADR 0003 deferred. The resolver needed no such helper once
+it left the namespace: one CoreDNS serves every network on the host. See
 [ADR 0003](../adr/0003-imds-chassis-namespace.md),
-[ADR 0007](../adr/0007-coredns-per-chassis-namespace.md) and
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md) and
 [networking](./networking.md).
 
 ### Per-network resolver
 
-`StratoAgent/ResolverSupervisor.swift` runs one CoreDNS per resolver-enabled
-network this host has a NIC on, launched into that network's chassis namespace
-with `ip netns exec` (STR-40). A helper process per namespace rather than a
-listener inside the agent, because `setns(2)` is per-thread and does not compose
-with Swift's concurrency runtime — the cost ADR 0003 named and left to its first
-consumer.
+`StratoAgent/ResolverSupervisor.swift` runs **one** CoreDNS for the whole host,
+in the host network namespace, with one server block per resolver-enabled network
+this host has a NIC on, bound to that network's own address pair (STR-40). One
+process rather than one per network because the addresses are distinct — which is
+what moving out of the chassis namespace forced, and what
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md) records. That a single
+CoreDNS will serve the same zone name from different bind addresses with
+different contents was verified empirically before the design relied on it.
+
+`StratoAgentCore/ResolverHostPortPlan.swift` is the foot: pure `NetnsCommand`
+plans that attach the OVS internal port, assign the addresses, and install the
+per-network policy routing (`ip rule from <resolver-address> lookup 20000+index`)
+that gets replies back out the right port — the one job the namespace used to do
+for free. Rules are deleted before being added so a re-reconcile cannot stack
+duplicates, and torn down before the OVS detach so one never outlives its port.
+Forwarding is disabled on the interface for both families and `rp_filter` is
+loose; all three are asserted in tests rather than left to review.
 
 The supervisor takes its host effects through an injected `ResolverHosting`, the
 shape `MetadataServerSupervisor` uses for the same reason: adoption, the
 stop/reconcile race, and whether the failure counter actually escalates are
 lifecycle questions that cannot be asked of an actor that forks processes
-directly. `StratoAgent/ResolverProcessHost.swift` is the real one.
+directly. `StratoAgent/ResolverProcessHost.swift` is the real one. It supervises
+a single process, so a Corefile a new network makes CoreDNS refuse takes every
+network's resolver with it — bounded by OVN still answering A/AAAA/PTR first, and
+by the renderer refusing to emit a record it cannot render safely.
 
 The decisions live in two pure types the tests can reach:
 `StratoAgentCore/CoreDNSZoneRenderer.swift` produces the `Corefile` and zone
@@ -960,7 +967,8 @@ files at all, which matters because a zone's records span every VM on every
 attached network fleet-wide, so the render's cost grows with the cluster rather
 than with this host. `DesiredResolver.configurationDigest` then decides whether
 to *write* them, so a hash that moved without changing what this backend emits
-reaches neither the disk nor CoreDNS's file watch.
+reaches neither the disk nor CoreDNS's file watch. Both keys cover every network
+at once, because there is one configuration.
 
 **The failure counter is cleared by a run, not by a spawn.** Every failure the
 backoff exists for — a Corefile CoreDNS refuses to parse, `:53` already held by
@@ -969,16 +977,20 @@ spawn would pin the delay at its first step and the crash-loop threshold would
 never be reached. Exits are noticed on the next reconcile rather than from a
 callback, which keeps the accounting deterministic, so the handle carries the
 *moment* it exited: measuring to when it was noticed would make a child that died
-instantly look like one that ran for a five-minute sync interval. Every path under `<config_dir>/<network-uuid>/` is derived
-from the network id, the `VMDirectoryLayout` convention, which is what lets a
-restarted agent rederive them all — and reap directories for networks it no
-longer serves.
+instantly look like one that ran for a five-minute sync interval. Zone files live
+under `<config_dir>/zones/<network-uuid>/` — namespaced by network because two
+networks may hold a zone of the same name with different contents — derived from
+the network id per the `VMDirectoryLayout` convention, which is what lets a
+restarted agent rederive them all and reap directories for networks it no longer
+serves.
 
 A record edit costs no restart: files are written atomically, the `file` plugin
-watches them, and the Corefile carries `reload`. A restarted agent **adopts** a
-CoreDNS its predecessor started rather than replacing it, verified by pid
-liveness plus a `/proc/<pid>/cmdline` check, because killing it would cost the
-network its resolver for a process start for nothing.
+watches them, and the Corefile carries `reload`. Adding or removing a *network*
+does not either, for the same reason — the server blocks live in the watched
+Corefile. A restarted agent **adopts** a CoreDNS its predecessor started rather
+than replacing it, verified by pid liveness plus a `/proc/<pid>/cmdline` check,
+because killing it would cost every network on the host its resolver for a
+process start for nothing.
 
 The host reports whether it can run one at all as
 `AgentRegisterMessage.resolverCapable`, and the control plane folds that across

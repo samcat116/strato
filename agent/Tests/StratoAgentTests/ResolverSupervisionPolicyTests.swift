@@ -15,11 +15,8 @@ struct ResolverSupervisionPolicyTests {
     private let a = UUID(uuidString: "AAAAAAAA-0000-0000-0000-000000000001")!
     private let b = UUID(uuidString: "BBBBBBBB-0000-0000-0000-000000000002")!
 
-    private func desired(
-        _ networkId: UUID, corefile: String = "corefile-v1"
-    ) -> DesiredResolver {
+    private func desired(corefile: String = "corefile-v1") -> DesiredResolver {
         DesiredResolver(
-            networkId: networkId,
             files: [CoreDNSZoneRenderer.RenderedFile(relativePath: "Corefile", contents: corefile)])
     }
 
@@ -30,41 +27,39 @@ struct ResolverSupervisionPolicyTests {
         // The `VMDirectoryLayout` convention: a restarted agent rederives all of
         // them with no retained state, which is also what lets it reap the
         // directories of networks it no longer serves.
-        let layout = ResolverDirectoryLayout(root: "/var/lib/strato/resolver", networkId: a)
-        let id = a.uuidString.lowercased()
-        #expect(layout.directory == "/var/lib/strato/resolver/\(id)")
-        #expect(layout.corefilePath == "/var/lib/strato/resolver/\(id)/Corefile")
-        #expect(layout.zonesDirectory == "/var/lib/strato/resolver/\(id)/zones")
-        #expect(layout.pidFilePath == "/var/lib/strato/resolver/\(id)/coredns.pid")
+        let layout = ResolverDirectoryLayout(root: "/var/lib/strato/resolver")
+        #expect(layout.directory == "/var/lib/strato/resolver")
+        #expect(layout.corefilePath == "/var/lib/strato/resolver/Corefile")
+        #expect(layout.zonesDirectory == "/var/lib/strato/resolver/zones")
+        #expect(layout.pidFilePath == "/var/lib/strato/resolver/coredns.pid")
     }
 
-    @Test("Directories are named by id, not by the network's name")
-    func layoutUsesIDs() {
-        // Names are unique only within a project, so two projects' networks
-        // would otherwise share a directory.
-        let one = ResolverDirectoryLayout(root: "/r", networkId: a)
-        let two = ResolverDirectoryLayout(root: "/r", networkId: b)
-        #expect(one.directory != two.directory)
+    @Test("Zone files are namespaced per network inside the one directory")
+    func zoneFilesAreNamespaced() {
+        // One process, one directory — but two networks may attach zones with
+        // the same name and different contents, so a flat path would have one
+        // silently overwrite the other.
+        #expect(
+            CoreDNSZoneRenderer.zoneFilePath(networkId: a, origin: "corp.example.com")
+                != CoreDNSZoneRenderer.zoneFilePath(networkId: b, origin: "corp.example.com"))
     }
 
     // MARK: - Digest
 
     @Test("The configuration digest tracks contents and paths, and nothing else")
     func digestIsContentAddressed() {
-        #expect(desired(a).configurationDigest == desired(b).configurationDigest)
-        #expect(desired(a).configurationDigest != desired(a, corefile: "corefile-v2").configurationDigest)
+        #expect(desired().configurationDigest == desired().configurationDigest)
+        #expect(desired().configurationDigest != desired(corefile: "corefile-v2").configurationDigest)
     }
 
     @Test("The digest is order-insensitive, so a reordered render is not a rewrite")
     func digestIgnoresFileOrder() {
         let one = DesiredResolver(
-            networkId: a,
             files: [
                 .init(relativePath: "Corefile", contents: "c"),
                 .init(relativePath: "zones/x.zone", contents: "z"),
             ])
         let two = DesiredResolver(
-            networkId: a,
             files: [
                 .init(relativePath: "zones/x.zone", contents: "z"),
                 .init(relativePath: "Corefile", contents: "c"),
@@ -77,77 +72,67 @@ struct ResolverSupervisionPolicyTests {
         // Path and contents are separated so `("a", "bc")` and `("ab", "c")`
         // cannot hash equal — the one failure mode a change detector must not
         // have.
-        let one = DesiredResolver(networkId: a, files: [.init(relativePath: "a", contents: "bc")])
-        let two = DesiredResolver(networkId: a, files: [.init(relativePath: "ab", contents: "c")])
+        let one = DesiredResolver(files: [.init(relativePath: "a", contents: "bc")])
+        let two = DesiredResolver(files: [.init(relativePath: "ab", contents: "c")])
         #expect(one.configurationDigest != two.configurationDigest)
     }
 
     // MARK: - Actions
 
-    @Test("A network with nothing running is written and started")
+    @Test("Nothing running is written and started")
     func startsFromNothing() {
         #expect(
-            ResolverSupervisionPolicy.actions(desired: [desired(a)], observed: [])
-                == [.writeConfiguration(networkId: a), .start(networkId: a)])
+            ResolverSupervisionPolicy.actions(desired: desired(), observed: ObservedResolver())
+                == [.writeConfiguration, .start])
     }
 
     @Test("A running resolver with matching configuration needs nothing")
     func convergedNeedsNothing() {
         let observed = ObservedResolver(
-            networkId: a, pid: 42, running: true, configurationDigest: desired(a).configurationDigest)
-        #expect(ResolverSupervisionPolicy.actions(desired: [desired(a)], observed: [observed]).isEmpty)
+            pid: 42, running: true, configurationDigest: desired().configurationDigest)
+        #expect(ResolverSupervisionPolicy.actions(desired: desired(), observed: observed).isEmpty)
     }
 
     @Test("A configuration change writes but does NOT restart")
     func configChangeDoesNotRestart() {
-        // The rendered Corefile carries `reload` and the `file` plugin watches
-        // its zone files, so a running process picks up a record edit within
-        // seconds. Every second of a restart is a second in which this network
-        // resolves only what OVN can answer.
+        // The Corefile carries `reload` and the `file` plugin watches its zone
+        // files, so a running process picks up an edit within seconds — and a
+        // restart here is a gap for *every* network on the host, not one.
         let observed = ObservedResolver(
-            networkId: a, pid: 42, running: true,
-            configurationDigest: desired(a, corefile: "stale").configurationDigest)
+            pid: 42, running: true,
+            configurationDigest: desired(corefile: "stale").configurationDigest)
         #expect(
-            ResolverSupervisionPolicy.actions(desired: [desired(a)], observed: [observed])
-                == [.writeConfiguration(networkId: a)])
+            ResolverSupervisionPolicy.actions(desired: desired(), observed: observed)
+                == [.writeConfiguration])
     }
 
     @Test("A dead resolver is restarted without rewriting matching configuration")
     func deadProcessIsRestarted() {
         let observed = ObservedResolver(
-            networkId: a, pid: nil, running: false, configurationDigest: desired(a).configurationDigest)
+            running: false, configurationDigest: desired().configurationDigest)
         #expect(
-            ResolverSupervisionPolicy.actions(desired: [desired(a)], observed: [observed])
-                == [.start(networkId: a)])
+            ResolverSupervisionPolicy.actions(desired: desired(), observed: observed) == [.start])
     }
 
-    @Test("A resolver whose network is gone is stopped")
-    func unwantedIsStopped() {
-        let observed = ObservedResolver(networkId: b, pid: 7, running: true, configurationDigest: "x")
+    @Test("A host serving no networks stops the process")
+    func servingNothingStops() {
+        // Distinct from "no files": a host serving nothing still renders a
+        // Corefile, and the difference is what decides whether it runs.
+        let nothing = DesiredResolver(
+            files: [.init(relativePath: "Corefile", contents: "")], servesNothing: true)
+        let observed = ObservedResolver(pid: 7, running: true, configurationDigest: "x")
+        #expect(ResolverSupervisionPolicy.actions(desired: nothing, observed: observed) == [.stop])
+        // And nothing to stop is nothing to do.
         #expect(
-            ResolverSupervisionPolicy.actions(desired: [], observed: [observed])
-                == [.stop(networkId: b)])
+            ResolverSupervisionPolicy.actions(desired: nothing, observed: ObservedResolver()).isEmpty)
     }
 
-    @Test("A nil desired list is silence, not an instruction to stop everything")
+    @Test("A nil desired is silence, not an instruction to stop")
     func nilDesiredStopsNothing() {
-        // The contract every level-triggered list in the agent carries, and the
-        // one that matters most here: a control plane rolled back below v37 must
-        // not take DNS away from every network on the host on its way past.
-        let observed = ObservedResolver(networkId: a, pid: 1, running: true, configurationDigest: "x")
-        #expect(ResolverSupervisionPolicy.actions(desired: nil, observed: [observed]).isEmpty)
-        #expect(!ResolverSupervisionPolicy.actions(desired: [], observed: [observed]).isEmpty)
-    }
-
-    @Test("Actions are deterministic across a replayed sync")
-    func actionsAreOrdered() {
-        let actions = ResolverSupervisionPolicy.actions(
-            desired: [desired(b), desired(a)], observed: [])
-        #expect(
-            actions == [
-                .writeConfiguration(networkId: a), .start(networkId: a),
-                .writeConfiguration(networkId: b), .start(networkId: b),
-            ])
+        // The contract that matters most here: a control plane that cannot
+        // describe this host must not take DNS away from every network on it.
+        let observed = ObservedResolver(pid: 1, running: true, configurationDigest: "x")
+        #expect(ResolverSupervisionPolicy.actions(desired: nil, observed: observed).isEmpty)
     }
 
     // MARK: - Backoff
@@ -192,17 +177,13 @@ struct ResolverSupervisionPolicyTests {
 
     // MARK: - Bind addresses
 
-    @Test("The v6 bind is withheld on a kernel without IPv6")
+    @Test("The v6 half is withheld on a kernel without IPv6")
     func bindSkipsIPv6WhenUnavailable() {
-        // `bind` naming a non-existent address makes CoreDNS refuse to start,
-        // and `ChassisServicePlan` establishes both families independently
-        // precisely so an IPv6-less host keeps a working v4 service.
-        #expect(
-            ResolverSupervisionPolicy.bindAddresses(ipv6Available: true)
-                == [NetworkResolverEndpoint.address, NetworkResolverEndpoint.addressV6])
-        #expect(
-            ResolverSupervisionPolicy.bindAddresses(ipv6Available: false)
-                == [NetworkResolverEndpoint.address])
+        // `bind` naming a non-existent address makes CoreDNS refuse to start —
+        // and now for every network at once, since one process serves them all.
+        let pair = ["169.254.1.0", "fd00:ec2:1::100"]
+        #expect(ResolverSupervisionPolicy.bindable(pair, ipv6Available: true) == pair)
+        #expect(ResolverSupervisionPolicy.bindable(pair, ipv6Available: false) == ["169.254.1.0"])
     }
 
     // MARK: - Sweeping
@@ -213,7 +194,6 @@ struct ResolverSupervisionPolicyTests {
         // references. Inert to CoreDNS, but an operator reading the directory
         // will believe the name is still served.
         let resolver = DesiredResolver(
-            networkId: a,
             files: [
                 .init(relativePath: "Corefile", contents: "c"),
                 .init(relativePath: "zones/one.zone", contents: "z"),

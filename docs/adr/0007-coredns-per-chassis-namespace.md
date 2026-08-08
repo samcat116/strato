@@ -1,7 +1,10 @@
 # ADR 0007: The per-network resolver is a CoreDNS in the chassis namespace
 
-- **Status**: Accepted with a known gap — landed STR-40, but see "The gap this
-  decision opened" below, which may yet reverse it
+- **Status**: **Superseded by ADR 0008** (2026-08-08, same day, before either
+  shipped). The gap recorded below did reverse it: the resolver moved to the
+  host namespace to get egress. Kept because its reasoning about *why the
+  namespace is the right home for a per-network listener* is still correct, and
+  is still why instance metadata lives in one
 - **Date**: 2026-08-08
 - **Deciders**: Sam Schmitt
 - **Scope**: where a network's DNS resolver runs on a hypervisor host, and what
@@ -189,3 +192,14 @@ What this decision *does* deliver as it stands is the full record vocabulary —
 CNAME, TXT and SRV, which the OVN `DNS` table cannot express — served from a
 namespace that correctly attributes and routes. That is real, and it is why
 `resolver_enabled` ships as an opt-in rather than being reverted.
+
+## Amendment (2026-08-08, STR-40): superseded
+
+ADR 0008 reverses this, taking the third of the three ways out. The resolver
+moves to the host namespace on a second `localport` with per-network addresses
+and policy routing; instance metadata stays here, for the attribution reason this
+ADR and ADR 0003 both give.
+
+Read this one for what a chassis namespace gives a listener and what it costs.
+Read ADR 0008 for why DNS specifically could not pay that cost, and why the same
+argument does not touch metadata.
