@@ -1442,8 +1442,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             do {
                 try await managed.manager.pause()
             } catch {
-                // The guest is still running; put the drained log follow
-                // back before surfacing the failure.
+                // A pause that reports failure is not the same as a pause that
+                // did not happen: Firecracker waits on its vCPUs for its own
+                // `RECV_TIMEOUT_SEC` before answering, so the request can be
+                // abandoned host-side while the guest goes on to stop. Ask the
+                // VMM what actually happened instead of assuming (STR-194),
+                // then put the drained log follow back and surface the failure.
+                await resumeAfterFailedPause(managed: managed, sandboxId: sandboxId)
                 startLogFollow(sandboxId: sandboxId)
                 throw error
             }
@@ -1840,6 +1845,32 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             budgetBytes: max(0, warmCacheBudgetBytes - warmBytes),
             incomingBytes: incomingBytes,
             logger: logger)
+    }
+
+    /// Undo a pause whose request failed but whose effect landed anyway.
+    ///
+    /// Entirely best effort, and deliberately silent about everything except
+    /// the case it exists for: the caller is already throwing the error that
+    /// matters, and a guest this cannot reach is a guest the next status poll
+    /// will report on. What it must not do is leave a workload the operator
+    /// never asked to stop wedged at a pause nothing will lift.
+    private func resumeAfterFailedPause(managed: Managed, sandboxId: String) async {
+        guard let info = try? await managed.manager.getInstanceInfo(), info.state == .paused else {
+            return
+        }
+        logger.warning(
+            "Sandbox pause reported failure but the guest is paused; resuming it",
+            metadata: ["sandboxId": .string(sandboxId)])
+        do {
+            try await managed.manager.resume()
+        } catch {
+            logger.error(
+                "Could not resume a sandbox left paused by a failed checkpoint",
+                metadata: [
+                    "sandboxId": .string(sandboxId),
+                    "error": .string(error.localizedDescription),
+                ])
+        }
     }
 
     /// Write a paused microVM's memory + vmstate to the given host paths.

@@ -153,6 +153,62 @@ struct HTTPConcurrencyTests {
             _ = try await client.request(method: .GET, path: "/never-answered")
         }
     }
+
+    /// A timed-out round trip takes the channel down with it — necessarily, since
+    /// responses are paired in order. What it must not take down is the client:
+    /// before STR-194 the failure latched and nothing anywhere reconnected, so
+    /// one unanswered `PATCH /vm` left the agent unable to reach that microVM's
+    /// API for the rest of its life, and a still-running sandbox could only be
+    /// deleted.
+    @Test("a client survives a timed-out request and reconnects for the next one")
+    func clientReconnectsAfterATimedOutRequest() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let socketPath = "\(dir)/api.sock"
+
+        // Swallows the first request — the wedged-VMM case — and answers every
+        // one after it, which is what a VMM that was merely slow looks like.
+        let server = try EchoingAPIServer(socketPath: socketPath, silentRequests: 1)
+        server.start()
+        defer { server.stop() }
+
+        let client = UnixSocketHTTPClient(
+            socketPath: socketPath, logger: Logger(label: "test"), requestTimeout: 0.5)
+        try await client.connect()
+        defer { Task { await client.disconnect() } }
+
+        await #expect(throws: FirecrackerError.self) {
+            _ = try await client.request(method: .PATCH, path: "/vm", body: Data("{}".utf8))
+        }
+
+        let response = try await client.request(method: .GET, path: "/after-timeout")
+        #expect(response.statusCode == 200)
+        #expect(
+            response.body.map { String(decoding: $0, as: UTF8.self) } == "{\"path\":\"/after-timeout\"}")
+    }
+
+    /// The redial is for a channel that died under a request, not for one the
+    /// caller deliberately put down: after `disconnect()` the socket path may
+    /// already belong to a different microVM.
+    @Test("an explicit disconnect is not undone by the next request")
+    func explicitDisconnectIsNotUndone() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let socketPath = "\(dir)/api.sock"
+
+        let server = try EchoingAPIServer(socketPath: socketPath)
+        server.start()
+        defer { server.stop() }
+
+        let client = UnixSocketHTTPClient(socketPath: socketPath, logger: Logger(label: "test"))
+        try await client.connect()
+        _ = try await client.request(method: .GET, path: "/alive")
+        await client.disconnect()
+
+        await #expect(throws: FirecrackerError.self) {
+            _ = try await client.request(method: .GET, path: "/after-disconnect")
+        }
+    }
 }
 
 /// Stand-in Firecracker API server that echoes each request's path, so
@@ -167,11 +223,16 @@ private final class EchoingAPIServer: @unchecked Sendable {
     private let lock = NSLock()
     private var stopped = false
     private var connections: [Int32] = []
+    /// How many more requests to swallow before answering normally — a VMM that
+    /// is wedged for a while and then comes back, counted across connections so
+    /// a client that redials still sees the recovery.
+    private var silentRequestsRemaining: Int
 
-    init(socketPath: String, padBodyTo: Int? = nil, silent: Bool = false) throws {
+    init(socketPath: String, padBodyTo: Int? = nil, silent: Bool = false, silentRequests: Int = 0) throws {
         self.socketPath = socketPath
         self.padBodyTo = padBodyTo
         self.silent = silent
+        self.silentRequestsRemaining = silentRequests
 
         if FileManager.default.fileExists(atPath: socketPath) {
             try FileManager.default.removeItem(atPath: socketPath)
@@ -253,6 +314,15 @@ private final class EchoingAPIServer: @unchecked Sendable {
         return stopped
     }
 
+    /// Consumes one of the leading requests that go unanswered.
+    private func swallowRequest() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard silentRequestsRemaining > 0 else { return false }
+        silentRequestsRemaining -= 1
+        return true
+    }
+
     private func serveConnection(_ fd: Int32) {
         var buffer = Data()
         while !isStopped() {
@@ -276,7 +346,7 @@ private final class EchoingAPIServer: @unchecked Sendable {
                 usleep(useconds_t.random(in: 200...2000))
                 // `silent` models a VMM that accepts the connection and then
                 // wedges without ever answering.
-                if !silent { writeResponse(fd, path: path) }
+                if !silent && !swallowRequest() { writeResponse(fd, path: path) }
             }
         }
     }
