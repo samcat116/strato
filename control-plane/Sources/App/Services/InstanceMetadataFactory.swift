@@ -24,18 +24,32 @@ extension InstanceMetadata {
     /// reads all of it) carried on a sync that must stay valid however long it
     /// takes to arrive.
     ///
-    /// `vendorData`, `tags`, and `identity` are passed explicitly at their
-    /// empty values rather than defaulted, because each is a decision about
-    /// what the platform publishes to guests: Strato has no provisioning
-    /// document of its own yet, no VM tag storage exists, and no VM may be
-    /// vended a SPIFFE identity until phase 3. When tags land, that is the one
+    /// `vendorData` and `tags` are passed explicitly at their empty values
+    /// rather than defaulted, because each is a decision about what the
+    /// platform publishes to guests: Strato has no provisioning document of its
+    /// own yet, and no VM tag storage exists. When tags land, that is the one
     /// line here that changes.
+    ///
+    /// `instanceSPIFFEID` is the VM's own instance identity (STR-55) —
+    /// `spiffe://<trust-domain>/vm/<vm-id>`, the key its `workload_registrations`
+    /// row is filed under. **Passed in, never looked up here**, for the reason
+    /// above: the caller resolves the whole sync's worth in one query. It is a
+    /// *name*, not a credential — no key, no token, nothing that expires —
+    /// which is exactly what makes it publishable across this boundary at all;
+    /// `docs/architecture/guest-identity.md` rejects the metadata service as a
+    /// carrier of SVIDs for the same reason it endorses it as a carrier of the
+    /// ID. `audiences` and `ttlSeconds` stay at their empty values: nothing
+    /// mints tokens for a guest yet, and an audience list published before an
+    /// issuer exists would be a promise with no keeper (STR-57). Nil means the
+    /// VM has no registration — one an administrator revoked — and nothing is
+    /// vended.
     static func build(
         vm: VM,
         vmId: UUID,
         resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         region: String?,
-        availabilityZone: String?
+        availabilityZone: String?,
+        instanceSPIFFEID: String?
     ) -> InstanceMetadata {
         InstanceMetadata(
             instanceId: vmId,
@@ -65,7 +79,7 @@ extension InstanceMetadata {
             userData: vm.userData,
             vendorData: nil,
             tags: [:],
-            identity: nil
+            identity: instanceSPIFFEID.map { IdentityPolicy(spiffeId: $0) }
         )
     }
 }

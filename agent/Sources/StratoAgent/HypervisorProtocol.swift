@@ -206,6 +206,37 @@ public protocol HypervisorService: Actor, Sendable {
     /// the recorded volumes.
     func hasLiveSession(vmId: String) async -> Bool
 
+    /// Whether this backend has any guest-observation channel at all.
+    ///
+    /// A pure short-circuit for the slow-poll loop, which has to establish that
+    /// a VM is *running* before probing it — and that costs a status round trip
+    /// per VM. Spending one every 30 seconds on a backend that can only answer
+    /// nil is waste that scales with the host's VM count, so a backend which
+    /// implements neither method below says so once instead.
+    ///
+    /// `nonisolated` because it is a property of the backend, not of its state:
+    /// hopping onto a driver's actor to ask whether it is worth talking to
+    /// would queue behind the very work this exists to avoid.
+    nonisolated var observesGuests: Bool { get }
+
+    /// What the guest agent reports about itself — hostname and configured
+    /// interfaces (issue #563).
+    ///
+    /// A backend requirement rather than a concrete driver's method because the
+    /// guest-agent channel is a property of the *guest*, not of who launched
+    /// it: QEMU-under-libvirt exposes the same `org.qemu.guest_agent.0` channel
+    /// QEMU-under-the-agent does. Reading it through an `as? QEMUService`
+    /// downcast made the whole observation invisible to any other backend.
+    ///
+    /// Nil is the normal "no usable channel" answer — a VM this backend does
+    /// not manage, one with no agent socket, or a guest that did not respond
+    /// within its budget — never an error, since nothing converges on it.
+    func guestInfo(vmId: String) async -> GuestInfo?
+
+    /// Guest memory usage from the VM's balloon device (issue #567), on the
+    /// same terms as `guestInfo`: nil means "no stats", never "no memory used".
+    func memoryStats(vmId: String) async -> VMMemoryStats?
+
     /// Replaces the volume list this backend will rebuild the VM's disk set
     /// from at its next spawn (STR-148).
     ///
@@ -236,6 +267,19 @@ public extension HypervisorService {
     /// Backends that cannot hot-plug report no live session, so the volume
     /// reconciler records the attachment and lets the next boot realize it.
     func hasLiveSession(vmId: String) async -> Bool { false }
+
+    /// Backends opt in to guest observation, and the default agrees with the
+    /// two defaults below: a backend that reports nothing is not asked.
+    nonisolated var observesGuests: Bool { false }
+
+    /// Backends with no guest-agent channel (Firecracker, the mock) report
+    /// nothing rather than an error: guest observation is informational, and
+    /// nothing keys convergence or scheduling on it.
+    func guestInfo(vmId: String) async -> GuestInfo? { nil }
+
+    /// Likewise for balloon statistics, which need a virtio-balloon device the
+    /// backend may not attach at all.
+    func memoryStats(vmId: String) async -> VMMemoryStats? { nil }
 
     /// Backends that rebuild a VM from its spec on every spawn (rather than
     /// from a stored configuration) need nothing here: the manifest they are

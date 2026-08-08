@@ -795,6 +795,15 @@ public func configure(_ app: Application) async throws {
     // desired entry, retiring the last three durable-resource agent RPCs.
     app.migrations.add(AddEdgeNoncesToWorkloads())
 
+    // Per-VM instance identity (STR-55): every VM is a first-class IAM
+    // principal, named by a `workload_registrations` row filed under
+    // `spiffe://<trust-domain>/vm/<vm-id>`, linked by `vm_id` and
+    // cascade-deleted with the VM. The backfill follows the column so a VM that
+    // predates the feature holds the same identity a VM created after it does —
+    // instance identity is a property of being a VM, not of when it was made.
+    app.migrations.add(AddVMToWorkloadRegistration())
+    app.migrations.add(BackfillVMWorkloadRegistrations())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.

@@ -63,12 +63,18 @@ enum ResourceBindingCleanup {
     /// no more owner than the bindings on a vanished node, and each one's own
     /// delete endpoint sweeps them for exactly that reason.
     static let cascadingPrincipals: [IAMNodeType: [IAMPrincipalType]] = [
+        // A VM's instance-identity registration (STR-55) cascades on
+        // `workload_registrations.vm_id`, and that row *is* a principal — so
+        // deleting a VM strands every grant its identity holds unless the sweep
+        // below runs first.
+        .virtualMachine: [.workload],
         .project: [.serviceAccount],
-        // `workload_registrations` cascades on `service_account_id` as well as
-        // on `organization_id`, so a project reaches the table through its
-        // accounts. Only `kind == .workload` rows are principals in their own
-        // right, and those never carry a service account — but the sweep is
-        // written to the foreign key rather than to that invariant.
+        // `workload_registrations` cascades on `service_account_id` and
+        // `vm_id` as well as on `organization_id`, so a project reaches the
+        // table through its accounts. Only `kind == .workload` rows are
+        // principals in their own right, and those never carry a service
+        // account — but the sweep is written to the foreign key rather than to
+        // that invariant.
         .serviceAccount: [.workload],
         .organization: [.group, .workload],
     ]
@@ -82,6 +88,17 @@ enum ResourceBindingCleanup {
             .filter(\.$vm.$id == vmID)
             .all(\.$id)
         try await RoleBindingService.revokeAll(nodeType: .vmSnapshot, nodeIDs: snapshotIDs, on: db)
+
+        // The VM's instance-identity registration (STR-55) cascades away with
+        // the VM row, and the grants that principal *holds* are orphaned by the
+        // cascade exactly as a service account's are by a project delete. Read
+        // before the delete, for the same reason the checkpoints above are.
+        let registrationIDs = try await WorkloadRegistration.query(on: db)
+            .filter(\.$vm.$id == vmID)
+            .all(\.$id)
+        try await RoleBindingService.revokeAll(
+            principalType: .workload, principalIDs: registrationIDs, on: db)
+
         try await RoleBindingService.revokeAll(nodeType: .virtualMachine, nodeID: vmID, on: db)
     }
 

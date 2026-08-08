@@ -160,6 +160,10 @@ struct MigrationRoundTripTests {
                 + AddConvergenceToSnapshots.agentIndexes.map {
                     (name: $0.index, definition: "\($0.table) (agent_id)")
                 }
+                // The VM-owned registrations' partial unique index (STR-55):
+                // one identity per VM, and the lookup the sync assembly makes
+                // once per poll.
+                + AddVMToWorkloadRegistration.indexes
             for index in expected {
                 let exists = present.contains(index.name)
                 #expect(exists, "missing index \(index.name)")
@@ -210,6 +214,74 @@ struct MigrationRoundTripTests {
             #expect(orphanedVMBindings == 0)
             #expect(orphanedSnapshotBindings == 0)
             #expect(untouchedVolumeBindings == 1)
+        }
+    }
+
+    @Test("The instance-identity backfill reaches every VM, twice over, and undoes itself")
+    func vmWorkloadRegistrationBackfill() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Backfill Org")
+            let orgID = try org.requireID()
+
+            // Both legs of the org walk: a project owned directly by the
+            // organization, and one owned by a folder that is. `COALESCE` over
+            // the two nullable columns is `Project.getRootOrganizationId` in
+            // SQL, and a join that got either leg wrong would leave one of
+            // these scoped to nothing.
+            let directProject = try await builder.createProject(
+                name: "Backfill Direct", description: "d", organization: org)
+            let folder = try await builder.createOU(
+                name: "Backfill Folder", description: "d", organization: org)
+            let folderProject = try await builder.createProject(
+                name: "Backfill Folder Project", description: "d", ou: folder)
+
+            // `createVM` writes the row directly, so these VMs are genuinely
+            // missing an identity — exactly the state a VM created before
+            // STR-55 is in.
+            let directVM = try await builder.createVM(name: "backfill-direct", project: directProject)
+            let folderVM = try await builder.createVM(name: "backfill-folder", project: folderProject)
+            let directVMID = try directVM.requireID()
+            let folderVMID = try folderVM.requireID()
+
+            func rows(forVM vmID: UUID) async throws -> [WorkloadRegistration] {
+                try await WorkloadRegistration.query(on: app.db).filter(\.$vm.$id == vmID).all()
+            }
+
+            #expect(try await rows(forVM: directVMID).isEmpty)
+
+            try await BackfillVMWorkloadRegistrations().prepare(on: app.db)
+
+            for (vmID, name) in [(directVMID, "backfill-direct"), (folderVMID, "backfill-folder")] {
+                let found = try await rows(forVM: vmID)
+                #expect(found.count == 1, "\(name)")
+                let row = try #require(found.first)
+                #expect(row.kind == .workload)
+                // No stored label, matching `GuestIdentity.register`: the
+                // registry hydrates it from the VM.
+                #expect(row.displayName == nil)
+                // The organization is reached through the project either way.
+                #expect(row.$organization.id == orgID, "\(name)")
+                #expect(
+                    row.spiffeID
+                        == GuestIdentity.spiffeID(
+                            forVM: vmID, trustDomain: PlatformTrustDomain.current),
+                    "\(name)")
+            }
+
+            // Idempotent: `migrationsRoundTrip` re-applies the whole set, and a
+            // second insert would trip the `spiffe_id` unique index.
+            try await BackfillVMWorkloadRegistrations().prepare(on: app.db)
+            #expect(try await rows(forVM: directVMID).count == 1)
+            #expect(try await rows(forVM: folderVMID).count == 1)
+
+            // Not a no-op: the migration above this one drops `vm_id`, so a
+            // surviving row would keep squatting its `spiffe_id` while naming
+            // nothing, and the re-applied backfill would skip that VM forever.
+            try await BackfillVMWorkloadRegistrations().revert(on: app.db)
+            let remaining = try await WorkloadRegistration.query(on: app.db).all()
+                .filter { $0.$vm.id != nil }
+            #expect(remaining.isEmpty)
         }
     }
 }

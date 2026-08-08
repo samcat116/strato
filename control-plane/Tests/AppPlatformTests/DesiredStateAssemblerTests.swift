@@ -129,6 +129,12 @@ final class DesiredStateAssemblerTests {
             vm.userData = "#cloud-config\nruncmd: [echo hi]\n"
             try await vm.save(on: app.db)
 
+            // The VM's instance identity (STR-55). Registered explicitly
+            // because `placeVM` builds the row directly rather than going
+            // through the create endpoint that would register it.
+            let identity = try await GuestIdentity.register(
+                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.db)
+
             // Two networks with different DHCP/DNS config, so a per-NIC field
             // taken from the wrong network row would show up.
             let front = LogicalNetwork(
@@ -169,8 +175,14 @@ final class DesiredStateAssemblerTests {
             #expect(metadata.userData == vm.userData)
             #expect(metadata.vendorData == nil)
             #expect(metadata.tags.isEmpty)
-            // Phase 3: no VM may be vended a SPIFFE identity yet.
-            #expect(metadata.identity == nil)
+            // The VM's own SPIFFE ID (STR-55): a name, published to the guest
+            // because it is not a credential. `audiences` and `ttlSeconds` stay
+            // empty — nothing mints tokens for a guest yet (STR-57), and an
+            // audience list published before an issuer exists promises what
+            // nothing keeps.
+            #expect(metadata.identity?.spiffeId == identity.spiffeID)
+            #expect(metadata.identity?.audiences == [])
+            #expect(metadata.identity?.ttlSeconds == nil)
 
             #expect(metadata.nics.map(\.deviceName) == ["net0", "net1"])
             let net0 = metadata.nics[0]
@@ -202,6 +214,22 @@ final class DesiredStateAssemblerTests {
             // The metadata NIC order is the spec's NIC order — a guest matches
             // by MAC, but an operator reading both sees one list.
             #expect(entry.spec.networks.map(\.macAddress) == metadata.nics.map(\.macAddress))
+        }
+    }
+
+    @Test("A VM whose registration was revoked is vended no identity")
+    func revokedIdentityIsNotVended() async throws {
+        try await withAssemblerApp { app, _, project in
+            let agentId = try await self.registerAgent(app: app, named: "revoked-agent")
+            let vm = try await self.placeVM(
+                app: app, project: project, named: "revoked-identity-vm", onAgent: agentId)
+
+            // No registration row — the shape an administrator's revocation
+            // leaves behind. Nil is the whole answer: the guest is told nothing
+            // rather than told an identity nothing will honour.
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let metadata = try #require(sync.vms.first { $0.vmId == vm.id }?.metadata)
+            #expect(metadata.identity == nil)
         }
     }
 
@@ -366,7 +394,7 @@ final class DesiredStateAssemblerTests {
             from: vm, image: nil, volumes: [], resolvedInterfaces: resolved)
         let metadata = InstanceMetadata.build(
             vm: vm, vmId: vm.id!, resolvedInterfaces: resolved,
-            region: "dc-drop", availabilityZone: "drop-agent")
+            region: "dc-drop", availabilityZone: "drop-agent", instanceSPIFFEID: nil)
 
         #expect(metadata.nics.map(\.deviceName) == ["net0", "net2"])
         #expect(spec.networks.map(\.macAddress) == metadata.nics.map(\.macAddress))
@@ -401,6 +429,12 @@ final class DesiredStateAssemblerTests {
                         app: app, project: project, named: "scale-vm-\(index)", onAgent: agentId)
                     vm.hostname = "scale-\(index)"
                     try await vm.save(on: app.db)
+                    // Registered so the identity lookup measures the loaded
+                    // path: a per-VM query hidden behind an always-empty table
+                    // would never show up in the counts below.
+                    try await GuestIdentity.register(
+                        vmID: try vm.requireID(), organizationID: try org.requireID(),
+                        createdBy: nil, on: app.db)
                     for nic in 0..<2 {
                         try await self.attachNIC(
                             app: app, vm: vm, network: network, deviceName: "net\(nic)",
@@ -416,9 +450,11 @@ final class DesiredStateAssemblerTests {
                 defer { app.fluent.history.stop() }
                 let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
                 #expect(sync.vms.count == expected)
-                // Every VM carries metadata for both its NICs; a scaling test
-                // that measured an empty assembly would prove nothing.
+                // Every VM carries metadata for both its NICs and its own
+                // identity; a scaling test that measured an empty assembly
+                // would prove nothing.
                 #expect(sync.vms.allSatisfy { ($0.metadata?.nics.count ?? 0) == 2 })
+                #expect(sync.vms.allSatisfy { $0.metadata?.identity != nil })
                 return app.fluent.history.queries.count
             }
 

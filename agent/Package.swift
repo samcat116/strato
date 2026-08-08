@@ -51,6 +51,13 @@ let package = Package(
         .package(
             url: "https://github.com/samcat116/swift-ovn.git",
             revision: "e53651361eb3bd7e9a0de1f08e3ad9fd13f3341a"),
+        // swift-libvirt: the RPC client `LibvirtService` drives VMs through
+        // (issue #902). Unlike SwiftOVN and SwiftFirecracker this needs no
+        // `.when(platforms:)` condition anywhere — it speaks libvirt's wire
+        // protocol over NIO rather than linking libvirt's C library, so it has
+        // no system dependency, and its `.macOS(.v15)` floor matches this
+        // package's exactly. Only the *registration* is platform-gated.
+        .package(url: "https://github.com/samcat116/swift-libvirt.git", from: "0.1.0"),
     ],
     targets: [
         // Core library with testable code (no SwiftQEMU dependency)
@@ -71,6 +78,14 @@ let package = Package(
                 .product(name: "_NIOFileSystem", package: "swift-nio"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
+                // The libvirt driver's *pure* layer lives here — domain-state
+                // mapping, error translation, memory-stat parsing — for the
+                // reason DomainXMLBuilder gives: the driver itself links a
+                // hypervisor SDK and has no unit tests, so anything that can be
+                // decided without a daemon is decided (and asserted) in here.
+                // Linking the SDK in the core target costs nothing, since
+                // swift-libvirt is pure Swift with no system dependency.
+                .product(name: "Libvirt", package: "swift-libvirt"),
             ],
             path: "Sources/StratoAgentCore",
             swiftSettings: swiftSettings
@@ -114,6 +129,8 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 // SwiftQEMU: both Linux (KVM) and macOS (HVF).
                 .product(name: "SwiftQEMU", package: "swift-qemu"),
+                // libvirt RPC client backing `LibvirtService` (issue #902).
+                .product(name: "Libvirt", package: "swift-libvirt"),
                 // Linux-only backends. Declared here for every host so the package graph
                 // stays identical, but only linked and compiled on Linux. Source imports
                 // are guarded with `#if os(Linux)`.
@@ -145,6 +162,9 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
                 .product(name: "WebSocketKit", package: "websocket-kit"),
+                // Constructing the daemon errors and stat payloads the libvirt
+                // translation layer is asserted against.
+                .product(name: "Libvirt", package: "swift-libvirt"),
             ],
             // Golden documents are read from the source tree via #filePath, not
             // from a resource bundle, so SwiftPM should leave them alone.

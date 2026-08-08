@@ -277,3 +277,26 @@ use in code, tests, docs, and review. Architecture-level maps live in
   into) and, read the other way, why a stop cannot answer one either. An
   unperformed restore is **deferred**: left outstanding, and applied as
   `[.boot, .restore]` whenever the workload is next wanted running.
+
+## Identity
+
+- **Instance identity** — the SPIFFE ID a VM is registered under,
+  `spiffe://<trust-domain>/vm/<vm-id>` with the id lowercased (STR-55). One
+  `workload_registrations` row per VM (`kind = workload`, linked by `vm_id`),
+  written in the VM's create transaction and cascade-deleted with it, and
+  published to the guest through the instance metadata service. The row stores no
+  label: an operator-facing name for it is the VM's current one, read through
+  `vm_id` rather than copied and left to decay. It **names** the
+  VM as an IAM principal; it grants nothing — a registration with no role
+  bindings authenticates and authorizes nothing, which is why every VM has one
+  rather than it being opt-in. Revocable only by deleting the row, and that is
+  one-way: nothing re-creates it.
+
+- **Trust domain** — the authority half of a SPIFFE ID. The **platform** trust
+  domain (`SPIRE_TRUST_DOMAIN`, default `strato.local`) owns the control plane
+  and every agent; an **organization** trust domain (`org-<16 hex>.<platform>`,
+  an `org_trust_domains` row) owns that org's guests once per-org trust domains
+  are enabled and its SPIRE instance is `active` with a cached bundle. Falling
+  back to the platform domain is **degraded**, not equivalent — it cross-signs
+  tenants under one root. A guest's domain is chosen once, when its registration
+  is written, and the URI never moves.

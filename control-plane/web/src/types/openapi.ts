@@ -3764,7 +3764,9 @@ export interface paths {
         };
         /**
          * List the workload registry
-         * @description Every registered SPIFFE identity — agents, service-account workloads, and directly registered workloads. System administrators only.
+         * @description Every registered SPIFFE identity — agents, service-account workloads, and directly registered workloads, including the instance identity every VM holds. System administrators only.
+         *
+         *     Paged, because the registry now grows with the fleet. Use `spiffeId` for the exact-match lookup the create-conflict and backfill diagnostics point at when a SPIFFE ID is already registered to another principal.
          */
         get: operations["listWorkloadRegistrations"];
         put?: never;
@@ -3795,6 +3797,8 @@ export interface paths {
         /**
          * Delete a workload registration
          * @description System administrators only — the revocation lever for any registered identity. Deleting a directly registered workload deletes the principal, and its role bindings with it.
+         *
+         *     A VM's instance identity (a row with `vmId`) can be revoked here too, and this is the only way to revoke one: identity is granted at VM create and there is no re-enable, so the deletion is **one-way** — the VM keeps running and stops being vended an identity, and nothing re-creates the row.
          */
         delete: operations["deleteWorkloadRegistration"];
         options?: never;
@@ -5366,6 +5370,8 @@ export interface components {
             guestMemoryBalloonActualBytes?: number;
             /** @description Whether this VM's attached security groups are actually being enforced. False means a realizing agent — the host, or its site's network controller — registered with a protocol too old for security groups, or the site has no usable network controller to author the ACLs at all; either way the attached groups filter nothing until an operator fixes it. Absent means the VM is unplaced, so there is no realizer to judge yet. */
             securityGroupsEnforced?: boolean;
+            /** @description The VM's SPIFFE instance identity — `spiffe://<trust-domain>/vm/<vm-id>`, the lookup key its workload registration is filed under. A name, never an authorization: what the identity may do comes from role bindings against that principal, and a registration with none authorizes nothing. Absent means either an older control plane that does not report the field, or a registration an administrator revoked — never that the VM is exempt. */
+            spiffeId?: string;
             conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
@@ -7171,9 +7177,22 @@ export interface components {
              * @description For `workload` registrations, the organization the registration is scoped to (administrative scoping only — it grants nothing).
              */
             organizationId?: string;
+            /**
+             * Format: uuid
+             * @description For a VM's instance-identity registration, the VM it names. The row is created with the VM and cascade-deleted with it. Absent on every agent and service-account registration.
+             */
+            vmId?: string;
+            /** @description Operator-facing label. For a VM's instance identity this is the VM's **current** name, read from the VM rather than stored, so it cannot show a name a rename has already invalidated. */
             displayName?: string;
             /** Format: date-time */
             createdAt?: string;
+        };
+        WorkloadRegistrationListPage: {
+            items: components["schemas"]["WorkloadRegistration"][];
+            /** @description Total matching items, ignoring `limit`/`offset`. */
+            total: number;
+            limit: number;
+            offset: number;
         };
         CreateServiceAccountRegistrationRequest: {
             /** @description A SPIFFE URI (`spiffe://<trust-domain>/<path>`). */
@@ -15766,22 +15785,34 @@ export interface operations {
     };
     listWorkloadRegistrations: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Restrict to one registration kind. */
+                kind?: "agent" | "service_account" | "workload";
+                /** @description Exact-match lookup of one SPIFFE URI. A SPIFFE ID is a lookup key, so this is equality, never a prefix search. */
+                spiffeId?: string;
+                /** @description `true` returns only VM instance identities (rows with a `vmId`), `false` only registrations with no VM behind them. */
+                vmOwned?: boolean;
+                /** @description Maximum number of items to return per page (1–500). */
+                limit?: components["parameters"]["ListLimitQuery"];
+                /** @description Number of items to skip before the page starts. */
+                offset?: components["parameters"]["ListOffsetQuery"];
+            };
             header?: never;
             path?: never;
             cookie?: never;
         };
         requestBody?: never;
         responses: {
-            /** @description The registry. */
+            /** @description A page of the registry, ordered by SPIFFE ID. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkloadRegistration"][];
+                    "application/json": components["schemas"]["WorkloadRegistrationListPage"];
                 };
             };
+            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
         };

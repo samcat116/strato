@@ -29,6 +29,9 @@ actor QEMUService: HypervisorService {
     // HypervisorService protocol requirement
     public let hypervisorType: HypervisorType = .qemu
 
+    // Every VM spawned here gets a qga channel and a balloon device.
+    nonisolated let observesGuests = true
+
     // Handles are `QEMUManager` for VMs spawned by this process and
     // `AdoptedQEMUVM` for orphans re-adopted over their deterministic QMP
     // socket after an agent restart (see AdoptedQEMUVM.swift).
