@@ -139,10 +139,16 @@ enum Validate {
 
     // MARK: - SSH public keys
 
-    /// Key types an `authorized_keys` entry may name. These are *key* types,
-    /// not signature algorithms: an RSA key is `ssh-rsa` on this line even when
-    /// it will be used with `rsa-sha2-512`, which is why those names are absent.
-    private static let sshKeyTypes: Set<String> = [
+    /// Key types an `authorized_keys` entry may name — the plain keys, plus the
+    /// `-cert-v01@openssh.com` certificate form of each, which is what a
+    /// CA-based fleet actually installs. A certificate blob opens with its own
+    /// algorithm name, so the embedded-name cross-check below works unchanged.
+    ///
+    /// These are *key* types, not signature algorithms: an RSA key is `ssh-rsa`
+    /// on this line even when it will be used with `rsa-sha2-512`, which is why
+    /// those names are absent. `ssh-dss` is absent because modern OpenSSH
+    /// refuses it by default.
+    private static let sshBaseKeyTypes = [
         "ssh-ed25519",
         "ssh-rsa",
         "ecdsa-sha2-nistp256",
@@ -151,6 +157,18 @@ enum Validate {
         "sk-ssh-ed25519@openssh.com",
         "sk-ecdsa-sha2-nistp256@openssh.com",
     ]
+
+    private static let sshKeyTypes = Set(
+        sshBaseKeyTypes + sshBaseKeyTypes.map(certificateType(for:)))
+
+    /// OpenSSH's certificate spelling of a key type: the `@openssh.com` suffix
+    /// moves to the end, so `sk-ssh-ed25519@openssh.com` becomes
+    /// `sk-ssh-ed25519-cert-v01@openssh.com`, not `…@openssh.com-cert-v01`.
+    private static func certificateType(for keyType: String) -> String {
+        let domain = "@openssh.com"
+        guard keyType.hasSuffix(domain) else { return keyType + "-cert-v01" + domain }
+        return String(keyType.dropLast(domain.count)) + "-cert-v01" + domain
+    }
 
     /// An SSH public key in `authorized_keys` form: `<type> <base64 blob>
     /// [comment]`, one line, with the algorithm name inside the blob matching
@@ -171,14 +189,22 @@ enum Validate {
         guard length(trimmed) <= textLength else {
             throw Abort(.badRequest, reason: "'\(field)' must be \(textLength) characters or fewer")
         }
-        guard !trimmed.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7f }) else {
+        // Tab is a legal field separator in `authorized_keys`, so it is the one
+        // control character allowed through; everything else — a newline above
+        // all — would make this more than the single entry it claims to be.
+        guard
+            !trimmed.unicodeScalars.contains(where: {
+                ($0.value < 0x20 && $0.value != 0x09) || $0.value == 0x7f
+            })
+        else {
             throw Abort(
                 .badRequest,
                 reason: "'\(field)' must be one line of printable characters: an authorized_keys "
                     + "entry holds exactly one key")
         }
 
-        let fields = trimmed.split(separator: " ", omittingEmptySubsequences: true)
+        // Split on any whitespace, as OpenSSH does, rather than on spaces alone.
+        let fields = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" })
         guard fields.count >= 2 else {
             throw Abort(.badRequest, reason: "'\(field)' must look like '<type> <base64 key> [comment]'")
         }
@@ -187,14 +213,20 @@ enum Validate {
             throw Abort(
                 .badRequest,
                 reason: "'\(field)' has unsupported key type '\(type)'; expected one of "
-                    + sshKeyTypes.sorted().joined(separator: ", "))
+                    + sshBaseKeyTypes.sorted().joined(separator: ", ")
+                    + ", or the matching '-cert-v01@openssh.com' certificate form")
         }
         guard let blob = Data(base64Encoded: String(fields[1])), embeddedSSHKeyType(blob) == type else {
             throw Abort(
                 .badRequest,
                 reason: "'\(field)' is not a valid \(type) key: the base64 blob must carry the same algorithm name")
         }
-        return trimmed
+        // Stored space-separated even when it arrived tab-separated: the agent's
+        // sink strips control characters, so a tab would be *deleted* rather
+        // than preserved, welding the type onto the blob in the guest's
+        // authorized_keys. Accepting the tab and canonicalizing it is the only
+        // way both halves agree on where the fields end.
+        return trimmed.replacingOccurrences(of: "\t", with: " ")
     }
 
     /// The algorithm name an OpenSSH public-key blob opens with: a big-endian

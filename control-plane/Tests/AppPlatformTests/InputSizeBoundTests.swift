@@ -152,10 +152,55 @@ final class InputSizeBoundTests {
         #expect(error?.status == .badRequest)
     }
 
+    /// OpenSSH treats any whitespace as a field separator. A tab is accepted
+    /// and then *canonicalized to a space*, because the agent's sink strips
+    /// control characters — a stored tab would be deleted there, welding the
+    /// type onto the blob in the guest's `authorized_keys`.
+    @Test("A tab-separated key is accepted and stored space-separated")
+    func sshKeyAcceptsTabSeparator() throws {
+        let tabbed = Self.validSSHKey.replacingOccurrences(of: " ", with: "\t")
+        #expect(try Validate.sshPublicKey(tabbed) == Self.validSSHKey)
+    }
+
+    /// CA-based fleets install certificates, not bare keys. The blob opens with
+    /// its own algorithm name, so the cross-check works unchanged.
+    @Test("Certificate key types are accepted")
+    func sshKeyAcceptsCertificateTypes() throws {
+        let type = "ssh-ed25519-cert-v01@openssh.com"
+        // A blob whose length-prefixed algorithm name is the certificate type.
+        var blob = Data()
+        let name = Array(type.utf8)
+        blob.append(contentsOf: [
+            UInt8((name.count >> 24) & 0xff), UInt8((name.count >> 16) & 0xff),
+            UInt8((name.count >> 8) & 0xff), UInt8(name.count & 0xff),
+        ])
+        blob.append(contentsOf: name)
+        blob.append(contentsOf: [UInt8](repeating: 0, count: 32))
+
+        let line = "\(type) \(blob.base64EncodedString()) admin@ca"
+        #expect(try Validate.sshPublicKey(line) == line)
+    }
+
+    @Test("The unsupported-type message names the certificate forms it accepts")
+    func sshKeyErrorMentionsCertificateForms() throws {
+        let error = #expect(throws: Abort.self) {
+            try Validate.sshPublicKey("ssh-dss AAAAB3NzaC1kc3M=")
+        }
+        #expect(error?.reason.contains("-cert-v01@openssh.com") == true)
+    }
+
     // MARK: - Endpoints
 
     private func withApp(
         _ test: (Application, User, Project, Image, String) async throws -> Void
+    ) async throws {
+        try await withApp { app, user, _, project, image, token in
+            try await test(app, user, project, image, token)
+        }
+    }
+
+    private func withApp(
+        _ test: (Application, User, Organization, Project, Image, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
         do {
@@ -167,6 +212,9 @@ final class InputSizeBoundTests {
                 username: "bounduser", email: "bound@example.com")
             let org = try await builder.createOrganization(name: "Bound Org")
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
+            try await RoleBindingService.grant(
+                principalType: .user, principalID: user.id!, role: .admin,
+                nodeType: .organization, nodeID: org.id!, createdBy: nil, on: app.db)
             user.currentOrganizationId = org.id
             try await user.save(on: app.db)
 
@@ -176,7 +224,7 @@ final class InputSizeBoundTests {
             let image = try await builder.createImage(project: project, uploadedBy: user)
             let token = try await user.generateAPIKey(on: app.db)
 
-            try await test(app, user, project, image, token)
+            try await test(app, user, org, project, image, token)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -391,6 +439,162 @@ final class InputSizeBoundTests {
             #expect(oversizedDescription == .badRequest)
             let volumeCount = try await Volume.query(on: app.db).count()
             #expect(volumeCount == 0)
+        }
+    }
+
+    // MARK: - Projects (the generated OpenAPI service)
+
+    /// Projects don't decode a `ValidatedRequestBody` — the generated service
+    /// hands `Project.validate()` a model — so their bounds need their own
+    /// coverage.
+    @Test("POST /api/organizations/:id/projects refuses an oversized name")
+    func projectNameCeiling() async throws {
+        try await withApp { app, _, org, _, _, token in
+            try await app.test(.POST, "/api/organizations/\(org.id!)/projects") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateProjectRequest(
+                        name: self.string(Validate.nameLength + 1),
+                        description: "over the ceiling",
+                        organizationalUnitId: nil,
+                        defaultEnvironment: "development",
+                        environments: ["development"]))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    /// The uniqueness check is an exact-match query, and `Project.validate()`
+    /// trims before the save. Checking the raw value would let `"Foo "` past a
+    /// scope already holding `"Foo"` and then store it as `"Foo"` — two projects
+    /// with one name, and no unique index to catch it.
+    @Test("A project name differing only by whitespace cannot duplicate an existing one")
+    func projectNameUniquenessSurvivesTrimming() async throws {
+        try await withApp { app, _, org, _, _, token in
+            func create(_ name: String) async throws -> HTTPStatus {
+                var status: HTTPStatus = .ok
+                try await app.test(.POST, "/api/organizations/\(org.id!)/projects") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateProjectRequest(
+                            name: name,
+                            description: "d",
+                            organizationalUnitId: nil,
+                            defaultEnvironment: "development",
+                            environments: ["development"]))
+                } afterResponse: { res in
+                    status = res.status
+                }
+                return status
+            }
+
+            #expect(try await create("Duplicate Me") == .ok)
+            #expect(try await create("Duplicate Me ") == .conflict)
+            #expect(try await create("  Duplicate Me") == .conflict)
+
+            let named = try await Project.query(on: app.db)
+                .filter(\.$name == "Duplicate Me")
+                .count()
+            #expect(named == 1)
+        }
+    }
+
+    @Test("A project name is stored trimmed, so a later exact-match lookup finds it")
+    func projectNameIsStoredTrimmed() async throws {
+        try await withApp { app, _, org, _, _, token in
+            try await app.test(.POST, "/api/organizations/\(org.id!)/projects") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateProjectRequest(
+                        name: "  Padded Project  ",
+                        description: "d",
+                        organizationalUnitId: nil,
+                        defaultEnvironment: " development ",
+                        environments: [" development ", "staging"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let created = try res.content.decode(ProjectResponse.self)
+                #expect(created.name == "Padded Project")
+                // The default has to match a member of the list *after* both
+                // are normalized, or the project is born inconsistent.
+                #expect(created.defaultEnvironment == "development")
+                #expect(created.environments == ["development", "staging"])
+            }
+        }
+    }
+
+    // MARK: - The request body ceiling
+
+    /// `defaultMaxBodySize` is the one change here a client can hit without
+    /// sending an oversized *field*, so it gets its own test.
+    ///
+    /// Driven through a real server rather than the in-memory tester: body
+    /// collection is the HTTP server's job, so `.inMemory` hands the handler
+    /// the whole body regardless of the limit — a naive version of this test
+    /// passes for the wrong reason, reporting the field's `400` instead of the
+    /// transport's `413`.
+    @Test("A request body past the global ceiling is refused before any handler sees it")
+    func oversizedBodyIsRefused() async throws {
+        try await withApp { app, _, project, image, token in
+            // Comfortably past 1 MiB, and far below Vapor's old 16 MB default.
+            let payload = self.string(2 * 1024 * 1024)
+            try await app.testing(method: .running(port: 0)).test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "huge-body", imageId: image.id, projectId: project.id,
+                        description: payload))
+            } afterResponse: { res in
+                #expect(res.status == .payloadTooLarge)
+            }
+
+            let vmCount = try await VM.query(on: app.db).count()
+            #expect(vmCount == 0)
+        }
+    }
+
+    /// The value itself, pinned separately from the behaviour above: it is a
+    /// deployment-visible contract, and the test that exercises it end-to-end
+    /// needs a live server, so this is the cheap one that always runs.
+    @Test("The configured body ceiling is 1 MiB")
+    func bodyCeilingIsConfigured() async throws {
+        try await withApp { app, _, _, _, _ in
+            #expect(app.routes.defaultMaxBodySize.value == 1024 * 1024)
+        }
+    }
+
+    // MARK: - The migration's pre-scan
+
+    /// `assertRowsFit` exists so an operator gets the offending rows named
+    /// rather than a bare constraint violation. Exercised by dropping one
+    /// column's constraint, writing a row that no longer fits, and re-running
+    /// the migration.
+    @Test("The migration refuses to bound a column whose existing rows do not fit")
+    func migrationRefusesOversizedExistingRows() async throws {
+        try await withApp { app, _, _, _, _ in
+            guard let sql = app.db as? any SQLDatabase else {
+                Issue.record("Control-plane tests run against Postgres")
+                return
+            }
+
+            try await sql.raw(
+                "ALTER TABLE \"organizations\" DROP CONSTRAINT \"ck_organizations_name_length\""
+            ).run()
+            let oversized = self.string(Validate.nameLength + 40)
+            let organization = Organization(name: "placeholder", description: "d")
+            try await organization.save(on: app.db)
+            try await sql.raw(
+                "UPDATE \"organizations\" SET \"name\" = \(bind: oversized) WHERE \"id\" = \(bind: organization.id!)"
+            ).run()
+
+            let error = await #expect(throws: BoundResourceTextColumnsError.self) {
+                try await BoundResourceTextColumns().prepare(on: app.db)
+            }
+            let described = String(describing: try #require(error))
+            #expect(described.contains("organizations.name"))
+            #expect(described.contains(organization.id!.uuidString))
+            #expect(described.contains("\(Validate.nameLength + 40) characters"))
         }
     }
 

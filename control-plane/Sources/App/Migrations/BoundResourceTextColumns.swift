@@ -17,12 +17,28 @@ import SQLKit
 /// counts too (Unicode scalars) — measuring in bytes here would refuse strings
 /// the API accepted.
 ///
+/// Added `NOT VALID` and then validated in a second statement. A plain `ADD
+/// CONSTRAINT … CHECK` validates immediately while holding `ACCESS EXCLUSIVE`,
+/// so each of these columns would block every read and write to its table for
+/// the length of a full scan — twenty-five times over, across `vms` and
+/// `volumes` among others, during a rolling deploy. `NOT VALID` takes that
+/// lock only for the catalog write; `VALIDATE CONSTRAINT` does the scan under
+/// `SHARE UPDATE EXCLUSIVE`, which ordinary traffic does not contend with. The
+/// end state is identical: a validated constraint enforced for every row.
+///
 /// Existing rows are confirmed, not assumed. Each column is scanned first, and
 /// a row over the bound aborts the migration with the table, column, row id and
 /// length rather than surfacing as a bare constraint violation — the operator
 /// has to decide what a too-long name should become, and truncating user-authored
 /// text on their behalf is not this migration's call. In practice nothing in a
 /// real deployment is close: these are names people typed.
+///
+/// That pre-scan is advisory, not a guarantee: a row written between it and
+/// `VALIDATE CONSTRAINT` still surfaces as the bare violation the scan exists
+/// to pre-empt. Closing the window would mean locking the table for the whole
+/// migration, which is the cost this arrangement is avoiding — and the API has
+/// enforced the same bound since before this migration runs, so the only writer
+/// that could lose the race is one bypassing it.
 struct BoundResourceTextColumns: AsyncMigration {
 
     /// One bounded column.
@@ -73,7 +89,14 @@ struct BoundResourceTextColumns: AsyncMigration {
             try await PostgresMigrationSQL.execute(
                 """
                 ALTER TABLE \(Self.quoted(column.table)) ADD CONSTRAINT \(Self.quoted(column.constraintName)) \
-                CHECK (char_length(\(Self.quoted(column.column))) <= \(column.limit))
+                CHECK (char_length(\(Self.quoted(column.column))) <= \(column.limit)) NOT VALID
+                """,
+                on: sql)
+            // The scan, under a lock ordinary traffic does not contend with.
+            try await PostgresMigrationSQL.execute(
+                """
+                ALTER TABLE \(Self.quoted(column.table)) \
+                VALIDATE CONSTRAINT \(Self.quoted(column.constraintName))
                 """,
                 on: sql)
         }
@@ -92,6 +115,10 @@ struct BoundResourceTextColumns: AsyncMigration {
     /// that don't fit. Reported as an error rather than repaired: these are
     /// names and descriptions someone wrote, and shortening them is an
     /// operator's decision.
+    ///
+    /// Assumes the table's key is `id`, which every Fluent model here uses. A
+    /// future bounded table keyed otherwise reports `<unreadable>` for the id
+    /// and still names the table, column and length — degraded, not broken.
     private static func assertRowsFit(_ column: BoundedColumn, on sql: any SQLDatabase) async throws {
         let offenders = try await sql.raw(
             """

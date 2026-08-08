@@ -51,9 +51,10 @@ applied. Non-integer values are rejected with `400`.
 
 ### Input size limits
 
-Every caller-supplied string and list is bounded, and a value past its ceiling
-is a `400` naming the field (STR-195). Two ceilings cover almost the whole
-surface:
+The `name` and `description` of every **workload and hierarchy resource** — VMs,
+volumes, sandboxes, images, snapshots, networks, security groups, projects,
+organizations, folders, groups, and quotas — is bounded, and a value past its
+ceiling is a `400` naming the field (STR-195). Two ceilings cover that surface:
 
 - **128 characters** for a `name` — and for anything else that behaves like one
   (a quota's `environment`, a project's environment labels). Names are trimmed
@@ -72,9 +73,15 @@ create that the attach endpoint enforces.
 
 Characters are counted the way Postgres counts them, and the same ceilings are
 enforced by `CHECK` constraints on the columns, so the API and the database
-reject exactly the same values. Independently of any field, a collected request
-body is capped at **1 MiB**; the image-upload and snapshot-transfer routes
-stream instead of collecting and carry their own, much larger limits.
+reject exactly the same values.
+
+Resources outside that set — DNS zones and records, security-group rules, sites,
+floating-IP pools, webhook subscriptions, IAM policies and roles, guardrails,
+API keys, registry pull secrets, OIDC providers, and users — do not yet carry
+per-field ceilings. Independently of any field, though, a collected request body
+is capped at **1 MiB**, which bounds them all; the image-upload, artifact-upload
+and snapshot-transfer routes stream instead of collecting and carry their own,
+much larger limits.
 
 ### Asynchronous mutations
 

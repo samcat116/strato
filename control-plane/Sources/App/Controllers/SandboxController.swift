@@ -233,7 +233,33 @@ struct SandboxController: RouteCollection {
                 try Validate.stringList(entrypoint, "entrypoint", maxEntries: Self.maxProcessArguments)
                 try Validate.stringList(cmd, "cmd", maxEntries: Self.maxProcessArguments)
                 try Validate.stringMap(env, "env", maxEntries: Self.maxEnvironmentVariables)
+                try validateProcessConfigurationSize()
                 try Validate.list(securityGroupIds, "securityGroupIds", max: SecurityGroup.maxGroupsPerNIC)
+            }
+
+            /// Bounds the process fields *together*, not just individually.
+            ///
+            /// Per-element and per-count ceilings alone leave the product
+            /// unbounded: 256 arguments of 4096 characters is a megabyte, and so
+            /// is the environment beside it. That matters more here than at any
+            /// other create site, because unlike a name this payload is not
+            /// written once and read on demand — it rides `DesiredStateMessage`
+            /// to the agent on every reconcile, for the life of the sandbox.
+            private func validateProcessConfigurationSize() throws {
+                func length(of strings: [String]) -> Int {
+                    strings.reduce(into: 0) { $0 += Validate.length($1) }
+                }
+                var total = length(of: entrypoint ?? [])
+                total += length(of: cmd ?? [])
+                for (key, value) in env ?? [:] {
+                    total += Validate.length(key) + Validate.length(value)
+                }
+                guard total <= Self.maxProcessConfigurationLength else {
+                    throw Abort(
+                        .badRequest,
+                        reason: "'entrypoint', 'cmd' and 'env' must total "
+                            + "\(Self.maxProcessConfigurationLength) characters or fewer")
+                }
             }
 
             /// An OCI reference is bounded by its own spec well below this —
@@ -247,6 +273,12 @@ struct SandboxController: RouteCollection {
             /// unbounded argv.
             static let maxProcessArguments = 256
             static let maxEnvironmentVariables = 256
+
+            /// Combined ceiling on the process configuration. 64 KiB is far
+            /// past any real container's argv and environment and far under the
+            /// 1 MiB request body, so the field bound — not the transport — is
+            /// what decides.
+            static let maxProcessConfigurationLength = 64 * 1024
         }
 
         let createRequest = try req.content.decodeValidated(CreateSandboxRequest.self)

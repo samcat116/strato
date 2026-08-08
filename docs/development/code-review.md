@@ -370,6 +370,27 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
   half-finished.
 - Backing formats are **detected**, never assumed.
 
+**Input bounds**
+- A new create/update body decodes with `req.content.decodeValidated`, not
+  `req.content.decode`, and its DTO conforms to `ValidatedRequestBody`. Nothing
+  enforces this — the plain `decode` still compiles and still works — which is
+  exactly how the bound decayed into a hand-applied habit the first time
+  (STR-195). Check it by name on every new DTO.
+- Pick a ceiling from `Validate` (`nameLength`, `textLength`); don't invent a
+  per-field number. A third ceiling is how the first two stop meaning anything.
+- `validate()` is `mutating` and normalizes — so anything that *reads* a field
+  must run after it, or use the same `Validate` helper first. A uniqueness check
+  comparing the raw value while the save writes the trimmed one lets `"Foo "`
+  past a scope that already holds `"Foo"`.
+- Bound lists in both dimensions, and bound the product where it matters. A
+  count ceiling and an element ceiling still multiply out to megabytes; for
+  anything that rides `DesiredStateMessage`, that payload is re-sent on every
+  reconcile.
+- A field that leaves the database needs more than a length — it needs a
+  grammar. `LogicalNetwork.name` becomes an OVN ownership key,
+  `VM.sshPublicKey` becomes a line in a guest's `authorized_keys`, and
+  `domainName` becomes netplan structure.
+
 **Outbound HTTP (SSRF)**
 - Any fetch whose destination a tenant can influence — image `sourceURL`, an
   OCI registry host or the token realm it advertises, a webhook URL, an OIDC
