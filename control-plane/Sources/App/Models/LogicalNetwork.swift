@@ -291,7 +291,9 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
     let gateway6: String?
     /// Pass false for a v4-only network (subnet6 must then be omitted).
     let ipv6Enabled: Bool?
-    /// Defaults to the caller's default project when omitted.
+    /// Required: there is no default project (issue #1059). Optional here so
+    /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
+    /// rather than a `Codable` decode failure that names neither.
     let projectId: UUID?
     /// Whether agents program OVN DHCP for this network. Defaults true.
     let dhcpEnabled: Bool?

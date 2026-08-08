@@ -2161,7 +2161,7 @@ export interface paths {
         put?: never;
         /**
          * Create an organization
-         * @description Creates the organization, makes the caller an admin, and provisions a "Default Project" beneath it. Organization names are globally unique.
+         * @description Creates the organization, makes the caller an admin, and provisions a first project named "Default Project" beneath it — a starting point, not a default: every create names the project it lands in, and nothing resolves a project by that name. Organization names are globally unique.
          */
         post: operations["createOrganization"];
         delete?: never;
@@ -5267,7 +5267,7 @@ export interface components {
              */
             imageId?: string;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
             environment?: string;
             cpu?: number;
             /**
@@ -5493,7 +5493,7 @@ export interface components {
              */
             restoreFrom?: string;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
             environment?: string;
             cpus?: number;
             /**
@@ -5789,7 +5789,7 @@ export interface components {
             name: string;
             description?: string;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
             sizeGB: number;
             format?: components["schemas"]["VolumeFormat"];
             volumeType?: components["schemas"]["VolumeType"];
@@ -5957,7 +5957,7 @@ export interface components {
             gateway6?: string;
             ipv6Enabled?: boolean;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
             dhcpEnabled?: boolean;
             /** @description The network's resolvers. With `resolverEnabled` (the default) these are the upstream forwarders the network's built-in resolver sends misses to; with it off they are advertised to guests over DHCP verbatim. */
             dnsServers?: string[];
@@ -6072,7 +6072,7 @@ export interface components {
             /** Format: uuid */
             poolId: string;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
         };
         AttachFloatingIPRequest: {
             /** Format: uuid */
@@ -6162,9 +6162,9 @@ export interface components {
             description?: string;
             /**
              * Format: uuid
-             * @description Defaults to the caller's default project when omitted.
+             * @description The project the resource belongs to. Required; there is no default project.
              */
-            projectId?: string;
+            projectId: string;
         };
         UpdateSecurityGroupRequest: {
             name?: string;
@@ -6240,9 +6240,9 @@ export interface components {
             description?: string;
             /**
              * Format: uuid
-             * @description Defaults to the caller's default project when omitted.
+             * @description The project the resource belongs to. Required; there is no default project.
              */
-            projectId?: string;
+            projectId: string;
         };
         UpdateDNSZoneRequest: {
             name?: string;

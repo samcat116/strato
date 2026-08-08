@@ -131,7 +131,7 @@ struct NetworkCommand: AsyncParsableCommand {
                     body: .json(
                         .init(
                             name: name, subnet: subnet, gateway: gateway,
-                            projectId: project ?? env.context.project, dhcpEnabled: dhcp,
+                            projectId: try resolveProject(project, environment: env), dhcpEnabled: dhcp,
                             dnsServers: dnsServers.isEmpty ? nil : dnsServers, domainName: domainName,
                             metadataEnabled: metadata, resolverEnabled: resolver))
                 ).ok.body.json

@@ -346,7 +346,7 @@ struct FloatingIPController: RouteCollection {
         let request = try req.content.decode(CreateFloatingIPRequest.self)
 
         let project = try await req.authorizedProjectForCreate(
-            requested: request.projectId, user: user,
+            requested: request.projectId,
             action: "create_floating_ip", resourceKind: "floating IPs", verb: "allocate")
         let projectId = try project.requireID()
 

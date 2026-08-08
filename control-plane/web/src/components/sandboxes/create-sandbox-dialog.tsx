@@ -21,7 +21,7 @@ import {
 } from "@/lib/stores/mutations-store";
 import { useNetworks } from "@/lib/hooks/use-networks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
-import { useProjectContext } from "@/providers";
+import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { toast } from "sonner";
 import { MAX_SECURITY_GROUPS_PER_NIC } from "@/types/api";
 
@@ -96,6 +96,14 @@ export function CreateSandboxDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Required: there is no default project to fall back to (issue #1059).
+    // Without this the body would go out with the key dropped by
+    // JSON.stringify and come back a 400 the user cannot act on.
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
+
     if (!formData.name.trim()) {
       toast.error("Please enter a sandbox name");
       return;
@@ -169,7 +177,9 @@ export function CreateSandboxDialog({
         <DialogHeader>
           <DialogTitle>Create Sandbox</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Boot a microVM from an OCI image
+            {currentProject
+              ? `Boot a microVM from an OCI image in ${currentProject.name}`
+              : NO_PROJECT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>

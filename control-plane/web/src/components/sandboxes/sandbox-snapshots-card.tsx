@@ -78,6 +78,15 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
     event.preventDefault();
     if (!selected || !name.trim()) return;
 
+    // Required: there is no default project to fall back to (issue #1059).
+    // The fork lands in the current project, or — when there is none — in the
+    // one the source sandbox is already in, which is always known here.
+    const projectId = currentProject?.id ?? sandbox.projectId;
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
+
     setIsForking(true);
     try {
       // A fork is an ordinary sandbox create, so it answers with the new
@@ -85,7 +94,7 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
       const accepted = await sandboxesApi.create({
         name: name.trim(),
         restoreFrom: selected.id,
-        projectId: currentProject?.id ?? sandbox.projectId,
+        projectId,
       });
       watch(
         acceptedMutation(accepted, {

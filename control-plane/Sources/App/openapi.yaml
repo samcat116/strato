@@ -3037,7 +3037,9 @@ paths:
       summary: Create an organization
       description: >-
         Creates the organization, makes the caller an admin, and provisions a
-        "Default Project" beneath it. Organization names are globally unique.
+        first project named "Default Project" beneath it — a starting point, not
+        a default: every create names the project it lands in, and nothing
+        resolves a project by that name. Organization names are globally unique.
       tags: [Organizations]
       requestBody:
         required: true
@@ -8916,7 +8918,7 @@ components:
 
     CreateVMRequest:
       type: object
-      required: [name]
+      required: [name, projectId]
       properties:
         name:
           type: string
@@ -9344,7 +9346,7 @@ components:
 
     CreateSandboxRequest:
       type: object
-      required: [name]
+      required: [name, projectId]
       properties:
         name:
           type: string
@@ -9925,7 +9927,7 @@ components:
 
     CreateVolumeRequest:
       type: object
-      required: [name, sizeGB]
+      required: [name, projectId, sizeGB]
       properties:
         name:
           type: string
@@ -10231,7 +10233,7 @@ components:
 
     CreateNetworkRequest:
       type: object
-      required: [name, subnet]
+      required: [name, projectId, subnet]
       properties:
         name:
           type: string
@@ -10494,7 +10496,7 @@ components:
           format: date-time
     CreateFloatingIPRequest:
       type: object
-      required: [poolId]
+      required: [poolId, projectId]
       properties:
         poolId:
           type: string
@@ -10632,7 +10634,7 @@ components:
           format: date-time
     CreateSecurityGroupRequest:
       type: object
-      required: [name]
+      required: [name, projectId]
       properties:
         name:
           type: string
@@ -10641,7 +10643,7 @@ components:
         projectId:
           type: string
           format: uuid
-          description: Defaults to the caller's default project when omitted.
+          description: The project the resource belongs to. Required; there is no default project.
     UpdateSecurityGroupRequest:
       type: object
       properties:
@@ -10761,7 +10763,7 @@ components:
           format: date-time
     CreateDNSZoneRequest:
       type: object
-      required: [name]
+      required: [name, projectId]
       properties:
         name:
           type: string
@@ -10771,7 +10773,7 @@ components:
         projectId:
           type: string
           format: uuid
-          description: Defaults to the caller's default project when omitted.
+          description: The project the resource belongs to. Required; there is no default project.
     UpdateDNSZoneRequest:
       type: object
       properties:

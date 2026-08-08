@@ -118,7 +118,7 @@ struct NetworkController: RouteCollection {
         let request = try req.content.decodeValidated(CreateNetworkRequest.self)
 
         let project = try await req.authorizedProjectForCreate(
-            requested: request.projectId, user: user,
+            requested: request.projectId,
             action: "create_network", resourceKind: "networks")
         let projectId = try project.requireID()
 

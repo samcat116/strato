@@ -92,8 +92,9 @@ extension SecurityGroup: Content {}
 struct CreateSecurityGroupRequest: Content, ValidatedRequestBody {
     var name: String
     let description: String?
-    /// Defaults to the caller's default project when omitted, matching VM and
-    /// network creation.
+    /// Required: there is no default project (issue #1059). Optional here so
+    /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
+    /// rather than a `Codable` decode failure that names neither.
     let projectId: UUID?
 
     init(name: String, description: String? = nil, projectId: UUID? = nil) {
