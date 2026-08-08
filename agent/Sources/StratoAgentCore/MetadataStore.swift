@@ -88,6 +88,10 @@ public actor MetadataStore {
         /// itself sent, which means "nothing to serve right now" and stays
         /// reversible at the same generation.
         var withdrawn = false
+        /// Restored from the durable copy and not yet confirmed by an
+        /// authoritative sync. Cleared by any write, so only records this
+        /// process has not heard about since starting carry it.
+        var provisional = false
 
         /// Why a payload write at `generation` must be refused, or nil to let
         /// it through.
@@ -216,13 +220,61 @@ public actor MetadataStore {
     /// assigned wholesale: a restore racing the first sync must not roll a VM
     /// backward just because the file is older than the message. In the ordinary
     /// case the store is empty and every record is taken.
+    ///
+    /// Everything restored is **provisional** until `confirmRestored` runs. The
+    /// file is a snapshot of what the control plane said last time this agent
+    /// ran, and the agent may have been down while a VM was deleted and reaped
+    /// — in which case no sync will ever carry the `wantsAbsent` entry that
+    /// would withdraw it, and no teardown will run. Without the confirmation
+    /// step such a record would stay servable forever, and hand the deleted VM's
+    /// metadata to whatever next holds its address.
     public func restore(_ persisted: [UUID: PersistedMetadataRecord]) {
         for (vmId, record) in persisted {
             if let existing = records[vmId], existing.generation >= record.generation { continue }
             records[vmId] = Record(
-                generation: record.generation, metadata: record.metadata, withdrawn: record.withdrawn)
+                generation: record.generation, metadata: record.metadata, withdrawn: record.withdrawn,
+                provisional: true)
         }
         restoredFromDisk = true
+    }
+
+    /// Arbitrate the restored records against the first authoritative sync:
+    /// anything it does not name is retired. Returns what was retired, for the
+    /// log.
+    ///
+    /// A sync is a full snapshot of what this host should hold, so a restored
+    /// record it does not mention describes a VM the control plane no longer
+    /// has. That is the one case the durable copy can be *wrong* rather than
+    /// merely stale, and it is not self-correcting: nothing else in the store
+    /// ever removes a record, deliberately (a VM the sync merely omits keeps its
+    /// metadata — STR-98, omission is not an instruction). That rule protects
+    /// records this process learned from a sync; it must not be extended to
+    /// records it inherited from a file, which no sync has vouched for.
+    ///
+    /// Retired records are **withdrawn, not deleted**. A tombstone stops the
+    /// payload being served — which is the whole point — while keeping the
+    /// generation that refuses a late replay of the sync that still listed the
+    /// VM. Deleting outright would fix the disclosure and reopen the
+    /// resurrection it was sealed against.
+    ///
+    /// Idempotent, and free after the first sync: nothing is provisional once
+    /// this has run.
+    @discardableResult
+    public func confirmRestored(namedBy named: Set<UUID>) -> [UUID] {
+        var retired: [UUID] = []
+        for (vmId, record) in records where record.provisional {
+            guard !named.contains(vmId) else {
+                records[vmId]?.provisional = false
+                continue
+            }
+            records[vmId] = Record(
+                generation: record.generation, metadata: nil, withdrawn: true, provisional: false)
+            // Only a record that was actually serving something is worth
+            // reporting: a restored tombstone the sync does not name is the
+            // ordinary end state of a VM that left cleanly.
+            if record.metadata != nil { retired.append(vmId) }
+        }
+        return retired.sorted { $0.uuidString < $1.uuidString }
     }
 }
 

@@ -1377,6 +1377,22 @@ public actor Reconciler {
                     "recordedGeneration": .stringConvertible(recorded),
                 ])
         }
+
+        // Arbitrate what was restored from disk against this authoritative
+        // snapshot (STR-56). A VM deleted while this agent was down appears in
+        // no sync at all — not even as `wantsAbsent` — so nothing above would
+        // ever reach it, and the restored payload would stay servable for the
+        // life of the host. Runs after the loop so this sync's own writes have
+        // already cleared their records' provisional mark.
+        guard includeMetadata else { return }
+        let retired = await metadataStore.confirmRestored(namedBy: Set(desired.map(\.vmId)))
+        guard !retired.isEmpty else { return }
+        logger.info(
+            "Retired restored instance metadata the control plane no longer knows about",
+            metadata: [
+                "count": .stringConvertible(retired.count),
+                "vmIds": .string(retired.map(\.uuidString).joined(separator: ",")),
+            ])
     }
 
     private func appliedGenerations(kind: WorkloadKind) -> [String: Int64] {

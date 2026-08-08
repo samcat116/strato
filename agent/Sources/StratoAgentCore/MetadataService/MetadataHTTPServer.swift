@@ -42,6 +42,10 @@ public actor MetadataHTTPServer {
     private let hopLimit: Int
     private let logger: Logger
     private var channels: [any Channel] = []
+    /// Shared by every address this listener binds, so the cap is per *listener*
+    /// as documented rather than per address family — a box created inside
+    /// `listen` would give a dual-stack namespace twice the intended budget.
+    private let connections = NIOLockedValueBox(ConnectionLedger())
 
     public init(group: any EventLoopGroup, responder: MetadataResponder, hopLimit: Int, logger: Logger) {
         self.group = group
@@ -55,7 +59,7 @@ public actor MetadataHTTPServer {
     @discardableResult
     public func listen(address: String, port: Int) async throws -> Int {
         let socketAddress = try SocketAddress(ipAddress: address, port: port)
-        let connections = NIOLockedValueBox(0)
+        let connections = self.connections
         let responder = self.responder
         let logger = self.logger
         let hopLimitOption = Self.hopLimitOption(for: socketAddress)
@@ -66,15 +70,19 @@ public actor MetadataHTTPServer {
             .childChannelInitializer { channel in
                 // Refused before a single byte is read, so a connection flood
                 // costs an accept and a close rather than a pipeline.
-                let live = connections.withLockedValue { value -> Int in
-                    value += 1
-                    return value
-                }
-                guard live <= MetadataLimits.maxConnections else {
-                    connections.withLockedValue { $0 -= 1 }
+                //
+                // Two caps, and the per-source one is the load-bearing half: a
+                // namespace is shared by every guest on that network, so without
+                // it one VM holding the whole budget open — trickling a byte
+                // inside the idle timeout to stay alive — denies its neighbours
+                // their metadata.
+                let source = channel.remoteAddress?.ipAddress ?? "unknown"
+                guard connections.withLockedValue({ $0.admit(source) }) else {
                     return channel.close()
                 }
-                channel.closeFuture.whenComplete { _ in connections.withLockedValue { $0 -= 1 } }
+                channel.closeFuture.whenComplete { _ in
+                    connections.withLockedValue { $0.release(source) }
+                }
 
                 // Built and added on the event loop, so the handlers — none of
                 // which is `Sendable`, by design — never cross a concurrency
@@ -146,6 +154,35 @@ public actor MetadataHTTPServer {
             return nil
         }
     }
+}
+
+// MARK: - Connection accounting
+
+/// Live connections, in total and per source address.
+struct ConnectionLedger: Sendable {
+    private var total = 0
+    private var bySource: [String: Int] = [:]
+
+    /// Admits a connection from `source`, or refuses it. Counted at accept, so
+    /// a refusal costs an accept and a close rather than a pipeline.
+    mutating func admit(_ source: String) -> Bool {
+        guard total < MetadataLimits.maxConnections else { return false }
+        let owned = bySource[source, default: 0]
+        guard owned < MetadataLimits.maxConnectionsPerSource else { return false }
+        total += 1
+        bySource[source] = owned + 1
+        return true
+    }
+
+    mutating func release(_ source: String) {
+        total = max(0, total - 1)
+        guard let owned = bySource[source] else { return }
+        // Removed at zero rather than left at zero: the key is attacker-chosen,
+        // so a map that only ever grows is its own denial-of-service.
+        if owned <= 1 { bySource.removeValue(forKey: source) } else { bySource[source] = owned - 1 }
+    }
+
+    var liveConnections: Int { total }
 }
 
 // MARK: - The size bound

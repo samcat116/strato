@@ -1,3 +1,8 @@
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 import Foundation
 import Logging
 
@@ -75,9 +80,20 @@ public struct MetadataSnapshotStore: Sendable {
         }
     }
 
-    /// Atomically replaces the durable copy, `0600`.
+    /// Atomically replaces the durable copy, `0600` from the moment it holds a
+    /// byte.
+    ///
+    /// Written into a file this method creates `0600` and then `rename(2)`d over
+    /// the target, rather than through `Data.write(options: .atomic)`. The
+    /// difference matters only because of what is in here: `.atomic` writes its
+    /// own temporary file and the mode of *that* file is not ours to choose, so
+    /// chmod-after-write leaves a window in which SSH authorized keys and
+    /// cloud-init user data sit on disk under whatever mode Foundation picked.
+    /// A post-write assertion cannot catch that window, which is why the shape
+    /// is different here from `SnapshotRecordStore` — that one holds no secrets.
     @discardableResult
     public func save(_ records: [UUID: PersistedMetadataRecord]) -> Bool {
+        let temporaryPath = path + ".tmp"
         do {
             let directory = (path as NSString).deletingLastPathComponent
             if !directory.isEmpty {
@@ -87,15 +103,26 @@ public struct MetadataSnapshotStore: Sendable {
             encoder.outputFormatting = [.sortedKeys]
             let data = try encoder.encode(
                 Dictionary(uniqueKeysWithValues: records.map { ($0.key.uuidString, $0.value) }))
-            let url = URL(fileURLWithPath: path)
-            try data.write(to: url, options: .atomic)
-            // After the write, because `.atomic` replaces the file by rename and
-            // the replacement carries the temporary file's mode, not the old
-            // file's. Setting it beforehand would be silently undone on every
-            // save after the first.
-            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path)
+
+            // Removed first so the attributes are applied to a file this call
+            // creates: `createFile` on an existing path truncates it and leaves
+            // the old mode.
+            try? FileManager.default.removeItem(atPath: temporaryPath)
+            guard
+                FileManager.default.createFile(
+                    atPath: temporaryPath, contents: nil, attributes: [.posixPermissions: 0o600])
+            else {
+                throw MetadataSnapshotStoreError.couldNotCreateTemporaryFile(temporaryPath)
+            }
+            try data.write(to: URL(fileURLWithPath: temporaryPath))
+            // Same directory, so this is the atomic replace `.atomic` would have
+            // done — with a mode we chose.
+            guard rename(temporaryPath, path) == 0 else {
+                throw MetadataSnapshotStoreError.couldNotReplace(path, errno: errno)
+            }
             return true
         } catch {
+            try? FileManager.default.removeItem(atPath: temporaryPath)
             logger.error(
                 """
                 Failed to write the metadata record file; a restart before the next successful write \
@@ -114,5 +141,19 @@ public struct MetadataSnapshotStore: Sendable {
             """,
             metadata: ["path": .string(path), "reason": .string(reason)])
         return .unknown
+    }
+}
+
+enum MetadataSnapshotStoreError: Error, CustomStringConvertible {
+    case couldNotCreateTemporaryFile(String)
+    case couldNotReplace(String, errno: CInt)
+
+    var description: String {
+        switch self {
+        case .couldNotCreateTemporaryFile(let path):
+            return "could not create \(path)"
+        case .couldNotReplace(let path, let code):
+            return "could not replace \(path): errno \(code)"
+        }
     }
 }

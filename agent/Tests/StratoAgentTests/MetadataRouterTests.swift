@@ -149,6 +149,15 @@ struct MetadataRouterTests {
         #expect(
             Self.route("PUT", "/latest/api/token", ("X-AWS-EC2-Metadata-Token-TTL-Seconds", "60"))
                 == .mintToken(ttlSeconds: 60))
+
+        // Both sides of the match, not just the incoming header: looking up a
+        // mixed-case *name* has to work too, or the case-insensitivity is an
+        // accident of every call site passing a lowercase literal.
+        let headers = Self.headers(("x-aws-ec2-metadata-token", "abc"))
+        #expect(headers.lookup("X-AWS-EC2-Metadata-Token") == .one("abc"))
+        #expect(headers.lookup(MetadataHeaderName.token) == .one("abc"))
+        // Values are untouched.
+        #expect(Self.headers(("x-test", "MixedCase")).lookup("X-Test") == .one("MixedCase"))
     }
 
     @Test("Every response carries no-store, including the failures")
@@ -160,5 +169,6 @@ struct MetadataRouterTests {
         // A token in a guest's HTTP cache outlives the process that fetched it.
         #expect(response.header("cache-control") == "no-store")
         #expect(response.header("content-type") == "text/plain")
+        #expect(response.header("x-content-type-options") == "nosniff")
     }
 }

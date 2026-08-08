@@ -33,8 +33,13 @@ public enum MetadataLimits {
     /// Cap on the buffered request head, enforced by the decoder's
     /// `maximumBufferSize`.
     public static let maxRequestHeadBytes = 8 * 1024
-    /// Concurrent connections per namespace listener.
+    /// Concurrent connections per namespace listener, across both address
+    /// families.
     public static let maxConnections = 64
+    /// Concurrent connections from one source address. The namespace is shared
+    /// by every guest on the network, so this is what stops one of them holding
+    /// the whole budget and denying its neighbours the service.
+    public static let maxConnectionsPerSource = 8
     /// How long a connection may sit without sending anything.
     public static let idleTimeoutSeconds = 10
     /// Live sessions retained per VM before the soonest-expiring is evicted. A
@@ -67,10 +72,16 @@ public struct MetadataHeaders: Sendable, Equatable {
         self.values = values
     }
 
+    /// Case-insensitive in the name, exact in the value. The argument is
+    /// lowercased here rather than relying on every call site passing a
+    /// lowercase literal — which is what made this case-insensitive before, and
+    /// would have stopped being true the first time someone passed a constant
+    /// spelled any other way.
     public func lookup(_ name: String) -> Lookup {
-        switch values[name]?.count ?? 0 {
+        let matches = values[name.lowercased()] ?? []
+        switch matches.count {
         case 0: return .absent
-        case 1: return .one(values[name]![0])
+        case 1: return .one(matches[0])
         default: return .duplicated
         }
     }
@@ -100,7 +111,14 @@ public struct MetadataResponse: Sendable, Equatable {
         // `no-store` on every response, including the failures: a token in a
         // guest's HTTP cache outlives the process that fetched it.
         self.headers =
-            [Header("content-type", "text/plain"), Header("cache-control", "no-store")] + headers
+            [
+                Header("content-type", "text/plain"),
+                Header("cache-control", "no-store"),
+                // Every response body here is caller-influenced only through
+                // what the control plane published, but a guest's browser-shaped
+                // client should never be the one deciding that.
+                Header("x-content-type-options", "nosniff"),
+            ] + headers
         self.body = body
     }
 

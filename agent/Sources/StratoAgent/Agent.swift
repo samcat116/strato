@@ -5227,11 +5227,31 @@ extension Agent {
                 metadata: ["searched": .string(SandboxJailerResolver.ipBinaryCandidates.joined(separator: ", "))])
             return
         }
-        metadataServers = MetadataServerSupervisor(
-            spawner: MetadataServerProcessSpawner(
-                ipBinaryPath: ipBinaryPath, logLevel: logger.logLevel.rawValue,
-                hopLimit: metadataHopLimit, logger: logger),
-            logger: logger)
+        let spawner = MetadataServerProcessSpawner(
+            ipBinaryPath: ipBinaryPath, logLevel: logger.logLevel.rawValue,
+            hopLimit: metadataHopLimit, logger: logger)
+        metadataServers = MetadataServerSupervisor(spawner: spawner, logger: logger)
+
+        // Start serving before the first sync, from the namespaces this host
+        // already has. Without this the durable copy above would be pointless:
+        // its whole purpose is to keep answering across a control-plane outage
+        // that spans an agent restart, and until a sync arrives there would be
+        // no listener process to answer with — guests would get connection
+        // refused rather than stale-but-honest metadata, and `.restored` would
+        // be a state nothing could ever observe.
+        //
+        // The namespaces are the right source because they are host state that
+        // outlives the agent: the chassis reconcile created them and only a host
+        // reboot clears the tmpfs they live on. A network removed while this
+        // agent was down leaves a stale namespace and so starts a listener that
+        // is not wanted; the first sync stops it, which is the level-triggered
+        // correction this whole path is built on.
+        let existing = spawner.existingNamespaces()
+        guard !existing.isEmpty else { return }
+        logger.info(
+            "Starting metadata listeners for namespaces that survived the agent",
+            metadata: ["networks": .stringConvertible(existing.count)])
+        await reconcileMetadataServers(networks: existing)
         #endif
     }
 
@@ -5261,7 +5281,20 @@ extension Agent {
     }
 
     /// Write the durable copy. Coalesced by `metadataPersistTrigger`.
+    ///
+    /// The encode and the write happen off the actor. `userData` rides inline
+    /// per instance, so this file is megabytes on a busy host, and a synchronous
+    /// write on the actor would stall every message the agent is handling for
+    /// as long as the disk takes. Debouncing bounds how often that happens, not
+    /// how long it lasts.
     private func persistInstanceMetadata() async {
-        metadataSnapshotStore.save(await metadataStore.exportRecords())
+        let records = await metadataStore.exportRecords()
+        let store = metadataSnapshotStore
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .utility).async {
+                store.save(records)
+                continuation.resume()
+            }
+        }
     }
 }

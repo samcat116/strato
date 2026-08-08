@@ -45,6 +45,14 @@ public protocol MetadataServerSpawning: Sendable {
     /// bind before then, and the namespace is created by a different reconcile
     /// pass, so this is an ordinary state rather than an error.
     func namespaceExists(networkId: UUID) -> Bool
+    /// Every network this host already has a metadata namespace for.
+    ///
+    /// This is what a restarting agent knows before any sync arrives: the
+    /// namespaces are host state that outlives the process. Without it the
+    /// durable metadata copy would be pointless, because the listeners that
+    /// would serve it do not exist until the control plane is reachable again —
+    /// which is the outage the copy was written for.
+    func existingNamespaces() -> [UUID]
     func spawn(networkId: UUID) throws -> any MetadataServerHandle
 }
 

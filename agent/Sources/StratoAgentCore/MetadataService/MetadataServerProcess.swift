@@ -33,6 +33,13 @@ public struct MetadataServerProcessSpawner: MetadataServerSpawning {
         FileManager.default.fileExists(atPath: MetadataChassisPlan.netnsPath(networkId: networkId))
     }
 
+    public func existingNamespaces() -> [UUID] {
+        let names =
+            (try? FileManager.default.contentsOfDirectory(atPath: MetadataChassisPlan.netnsDirectory)) ?? []
+        return names.compactMap(MetadataChassisPlan.networkId(fromNetnsName:))
+            .sorted { $0.uuidString < $1.uuidString }
+    }
+
     public func spawn(networkId: UUID) throws -> any MetadataServerHandle {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: ipBinaryPath)
@@ -114,9 +121,14 @@ final class MetadataServerProcessHandle: MetadataServerHandle, @unchecked Sendab
         draining = true
         state.unlock()
 
+        // Scheduled *before* the throw, never after. The reverse order left the
+        // handle able to become a silent black hole: a caller that swallowed the
+        // error would leave `draining` true with nothing draining, and every
+        // later push would return success and write nothing. The supervisor does
+        // reap on a throw today, which is the only reason that was latent rather
+        // than a stale-metadata bug — and one refactor away from not being.
+        if !alreadyDraining { queue.async { [weak self] in self?.drain() } }
         if let previous { throw previous }
-        guard !alreadyDraining else { return }
-        queue.async { [weak self] in self?.drain() }
     }
 
     func terminate() {
@@ -151,6 +163,11 @@ final class MetadataServerProcessHandle: MetadataServerHandle, @unchecked Sendab
 
     /// The child logs to stderr; the parent republishes it so one agent log
     /// carries both halves.
+    ///
+    /// Each line arrives tagged `<level>\t<message>` (see the child's log
+    /// handler) and is re-emitted at that level. Relaying everything at one
+    /// level instead would both misreport a child's warning as routine and
+    /// print the level twice — once as the parent's, once inside the message.
     private func relay(_ errors: Pipe) {
         let logger = self.logger
         let networkId = self.networkId
@@ -161,10 +178,24 @@ final class MetadataServerProcessHandle: MetadataServerHandle, @unchecked Sendab
                 return
             }
             for line in String(decoding: data, as: UTF8.self).split(separator: "\n") where !line.isEmpty {
-                logger.info(
-                    "\(line)",
+                let (level, message) = MetadataServerProcessHandle.split(line: String(line))
+                logger.log(
+                    level: level, "\(message)",
                     metadata: ["source": .string("metadata-listener"), "networkId": .string(networkId.uuidString)])
             }
         }
+    }
+
+    /// Splits a child log line into its level and its message. A line without a
+    /// recognizable tag is relayed whole at `info` rather than dropped — it is
+    /// most likely something the runtime wrote straight to stderr, which is
+    /// exactly the output worth keeping.
+    static func split(line: String) -> (Logger.Level, String) {
+        guard let tab = line.firstIndex(of: "\t"),
+            let level = Logger.Level(rawValue: String(line[line.startIndex..<tab]))
+        else {
+            return (.info, line)
+        }
+        return (level, String(line[line.index(after: tab)...]))
     }
 }

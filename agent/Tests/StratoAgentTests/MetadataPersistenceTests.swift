@@ -110,6 +110,34 @@ struct MetadataPersistenceTests {
         #expect(loaded.count == 1)
     }
 
+    @Test("The record file is never on disk under a wider mode, even momentarily")
+    func temporaryFileIsAlsoPrivate() throws {
+        // The mode is asserted on the *temporary* file, because that is where
+        // the window was: an atomic write puts the secrets in a file whose mode
+        // is not ours to choose and then renames it, so a post-write check
+        // cannot see the exposure it is meant to rule out.
+        let path = Self.temporaryPath()
+        defer {
+            try? FileManager.default.removeItem(atPath: path)
+            try? FileManager.default.removeItem(atPath: path + ".tmp")
+        }
+        // Stand in for a leftover temporary from a crashed save, world-readable.
+        FileManager.default.createFile(
+            atPath: path + ".tmp", contents: Data("stale".utf8), attributes: [.posixPermissions: 0o644])
+
+        let vmId = UUID()
+        #expect(
+            Self.store(path).save([
+                vmId: PersistedMetadataRecord(generation: 1, metadata: Self.metadata(vmId), withdrawn: false)
+            ]))
+
+        // The stale temporary was replaced rather than reused, and nothing is
+        // left behind holding SSH keys.
+        #expect(!FileManager.default.fileExists(atPath: path + ".tmp"))
+        let mode = try FileManager.default.attributesOfItem(atPath: path)[.posixPermissions] as? NSNumber
+        #expect(mode?.int16Value == 0o600)
+    }
+
     // MARK: - Readiness
 
     @Test("A store that has neither synced nor restored knows nothing")
@@ -214,5 +242,97 @@ struct MetadataPersistenceTests {
         #expect(await after.metadata(for: served)?.hostname == "web-01")
         #expect(await after.metadata(for: gone) == nil)
         #expect(await after.snapshot().count == 1)
+    }
+
+    // MARK: - Arbitrating a restore against the first sync
+
+    @Test("A VM deleted while the agent was down does not come back as a servable ghost")
+    func unconfirmedRestoreIsRetired() async {
+        // The reachable path: the agent is down, the VM is deleted and reaped,
+        // so no sync ever carries a `wantsAbsent` entry and no teardown runs.
+        // Nothing else in the store removes a record, so without arbitration the
+        // payload stays servable for the life of the host — and IPAM hands its
+        // address to somebody else.
+        let survivor = UUID()
+        let deleted = UUID()
+        let store = MetadataStore()
+        await store.restore([
+            survivor: PersistedMetadataRecord(
+                generation: 4, metadata: Self.metadata(survivor, hostname: "still-here"), withdrawn: false),
+            deleted: PersistedMetadataRecord(
+                generation: 4, metadata: Self.metadata(deleted, hostname: "long-gone"), withdrawn: false),
+        ])
+        #expect(await store.snapshot().count == 2)
+
+        // The first authoritative sync names only the survivor.
+        await store.apply(Self.metadata(survivor, hostname: "still-here"), generation: 5, for: survivor)
+        let retired = await store.confirmRestored(namedBy: [survivor])
+
+        #expect(retired == [deleted])
+        #expect(await store.metadata(for: deleted) == nil)
+        #expect(await store.snapshot().keys.sorted { $0.uuidString < $1.uuidString } == [survivor])
+    }
+
+    @Test("A retired ghost is withdrawn rather than deleted, so a replay cannot resurrect it")
+    func retiredGhostKeepsItsSeal() async {
+        // Deleting outright would fix the disclosure and reopen the
+        // resurrection the seal exists for.
+        let ghost = UUID()
+        let store = MetadataStore()
+        await store.restore([
+            ghost: PersistedMetadataRecord(generation: 4, metadata: Self.metadata(ghost), withdrawn: false)
+        ])
+        await store.confirmRestored(namedBy: [])
+
+        #expect(await store.appliedGeneration(for: ghost) == 4)
+        #expect(await store.apply(Self.metadata(ghost), generation: 4, for: ghost) == .stale(recorded: 4))
+        #expect(await store.metadata(for: ghost) == nil)
+
+        // A genuinely newer sync — the VM being recreated — still gets through.
+        #expect(await store.apply(Self.metadata(ghost), generation: 5, for: ghost) == .applied)
+    }
+
+    @Test("A record this process learned from a sync is never retired by arbitration")
+    func syncedRecordsAreNotProvisional() async {
+        // STR-98's rule stands for records a sync vouched for: omission is not
+        // an instruction. Arbitration applies only to what came off the disk.
+        let vmId = UUID()
+        let store = MetadataStore()
+        await store.apply(Self.metadata(vmId, hostname: "web-01"), generation: 2, for: vmId)
+
+        let retired = await store.confirmRestored(namedBy: [])
+        #expect(retired.isEmpty)
+        #expect(await store.metadata(for: vmId)?.hostname == "web-01")
+    }
+
+    @Test("Arbitration runs once: a later sync cannot retire what the first one confirmed")
+    func arbitrationIsOneShot() async {
+        let vmId = UUID()
+        let store = MetadataStore()
+        await store.restore([
+            vmId: PersistedMetadataRecord(generation: 1, metadata: Self.metadata(vmId), withdrawn: false)
+        ])
+
+        // The first sync names it, so it is confirmed and no longer provisional.
+        await store.confirmRestored(namedBy: [vmId])
+        #expect(await store.metadata(for: vmId) != nil)
+
+        // A later sync that happens not to carry it must not retire it — that is
+        // an ordinary omission.
+        #expect(await store.confirmRestored(namedBy: []).isEmpty)
+        #expect(await store.metadata(for: vmId) != nil)
+    }
+
+    @Test("Retiring a restored tombstone is not reported as a loss")
+    func restoredTombstonesRetireQuietly() async {
+        // The ordinary end state of a VM that left cleanly: it is already
+        // withdrawn, so there is nothing to warn about.
+        let gone = UUID()
+        let store = MetadataStore()
+        await store.restore([
+            gone: PersistedMetadataRecord(generation: 3, metadata: nil, withdrawn: true)
+        ])
+        #expect(await store.confirmRestored(namedBy: []).isEmpty)
+        #expect(await store.appliedGeneration(for: gone) == 3)
     }
 }

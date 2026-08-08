@@ -189,16 +189,63 @@ struct MetadataHTTPServerTests {
         #expect(response.status == 400)
     }
 
+    @Test("One guest cannot hold the whole connection budget against its neighbours")
+    func perSourceConnectionCap() {
+        // The namespace is shared by every guest on the network, so a total-only
+        // cap lets one VM — trickling a byte inside the idle timeout to stay
+        // alive — deny metadata to all of them.
+        var ledger = ConnectionLedger()
+        let noisy = "10.0.0.5"
+        let quiet = "10.0.0.6"
+
+        // Hoisted out of `#expect` because `admit` mutates: the macro captures
+        // its expression in a closure, where the ledger would be immutable.
+        for _ in 0..<MetadataLimits.maxConnectionsPerSource {
+            let admitted = ledger.admit(noisy)
+            #expect(admitted)
+        }
+        let overCap = ledger.admit(noisy)
+        #expect(overCap == false)
+
+        // The neighbour is unaffected.
+        let neighbour = ledger.admit(quiet)
+        #expect(neighbour)
+
+        // And a released slot is reusable, with the key dropped at zero so an
+        // attacker-chosen key cannot grow the map forever.
+        ledger.release(noisy)
+        let reused = ledger.admit(noisy)
+        #expect(reused)
+        for _ in 0..<MetadataLimits.maxConnectionsPerSource { ledger.release(noisy) }
+        #expect(ledger.liveConnections == 1)
+    }
+
+    @Test("The total cap is per listener, not per address family")
+    func totalConnectionCapIsShared() {
+        // A ledger created per bind would give a dual-stack namespace twice the
+        // budget its documentation claims.
+        var ledger = ConnectionLedger()
+        var admitted = 0
+        for index in 0..<(MetadataLimits.maxConnections * 2) where ledger.admit("10.0.0.\(index)") {
+            admitted += 1
+        }
+        #expect(admitted == MetadataLimits.maxConnections)
+        #expect(ledger.liveConnections == MetadataLimits.maxConnections)
+    }
+
     @Test("Connections past the cap are closed without being served")
     func connectionCap() async throws {
         let (port, _, stop) = try await Self.serve()
         defer { Task { await stop() } }
 
-        // Hold the cap open. Idle connections are enough: the cap is counted at
-        // accept, before a byte is read.
+        // Hold one source's budget open. Idle connections are enough: the cap
+        // is counted at accept, before a byte is read. Over loopback every
+        // connection shares a source address, so this exercises the per-source
+        // cap — which is the one that matters, since a namespace is shared by
+        // every guest on the network.
         var held: [RawHTTP.Connection] = []
         defer { held.forEach { $0.disconnect() } }
-        for _ in 0..<MetadataLimits.maxConnections {
+        for _ in 0..<MetadataLimits.maxConnectionsPerSource {
             held.append(try RawHTTP.Connection(port: port))
         }
 

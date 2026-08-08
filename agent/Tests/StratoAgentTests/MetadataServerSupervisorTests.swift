@@ -86,6 +86,12 @@ struct MetadataServerSupervisorTests {
             return namespaces.contains(networkId)
         }
 
+        func existingNamespaces() -> [UUID] {
+            lock.lock()
+            defer { lock.unlock() }
+            return namespaces.sorted { $0.uuidString < $1.uuidString }
+        }
+
         func spawn(networkId: UUID) throws -> any MetadataServerHandle {
             lock.lock()
             defer { lock.unlock() }
@@ -240,6 +246,38 @@ struct MetadataServerSupervisorTests {
         #expect(await supervisor.runningNetworks().isEmpty)
         #expect(spawner.handles[first]?.terminated == true)
         #expect(spawner.handles[second]?.terminated == true)
+    }
+}
+
+@Suite("Metadata Listener Log Relay Tests")
+struct MetadataListenerLogRelayTests {
+
+    @Test("A child's line is re-emitted at the level the child chose")
+    func tagIsHonored() {
+        // Relaying everything at one level would misreport a child's warning as
+        // routine, and print the level twice — once as the parent's, once inside
+        // the message.
+        let (level, message) = MetadataServerProcessHandle.split(line: "warning\tCould not bind the metadata address")
+        #expect(level == .warning)
+        #expect(message == "Could not bind the metadata address")
+
+        let (debugLevel, debugMessage) = MetadataServerProcessHandle.split(line: "debug\tAdopted a metadata snapshot")
+        #expect(debugLevel == .debug)
+        #expect(debugMessage == "Adopted a metadata snapshot")
+    }
+
+    @Test("An untagged line is kept whole rather than dropped or mangled")
+    func untaggedLinesSurvive() {
+        // Anything the runtime writes straight to stderr — a crash trace, a
+        // loader error — is exactly the output worth keeping.
+        let (level, message) = MetadataServerProcessHandle.split(line: "Fatal error: something went wrong")
+        #expect(level == .info)
+        #expect(message == "Fatal error: something went wrong")
+
+        // A tab with an unrecognized tag is not a tag.
+        let (fallback, whole) = MetadataServerProcessHandle.split(line: "loud\tmessage")
+        #expect(fallback == .info)
+        #expect(whole == "loud\tmessage")
     }
 }
 

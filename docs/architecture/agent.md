@@ -906,6 +906,19 @@ carries withdrawn records too: they hold no payload but they hold the
 generation that refuses a replay, and dropping them at the file boundary
 would resurrect a released VM's metadata once per agent restart.
 
+**Everything restored is provisional until the first sync arbitrates it.**
+The file records what the control plane said last time this agent ran, and a
+VM can be deleted and reaped while the agent is down — in which case no sync
+ever carries the `wantsAbsent` entry that would withdraw it and no teardown
+runs, so nothing would ever reach the record. `confirmRestored(namedBy:)`
+retires any restored record the first authoritative sync does not name.
+Retired means **withdrawn, not deleted**: a tombstone stops the payload being
+served while keeping the generation that refuses a replay, where deleting
+outright would fix the disclosure and reopen the resurrection. This is the one
+place the store departs from STR-98's "omission is not an instruction" — that
+rule protects records a sync vouched for, and cannot be extended to records
+inherited from a file that no sync has.
+
 Three rules keep it honest, and each is a place the obvious implementation
 would be wrong:
 
@@ -981,6 +994,16 @@ namespaces exist *and* the snapshot is current. Syncs are the retry timer:
 a listener that failed to start is simply not running, and the next sync tries
 again.
 
+**Listeners come up before the first sync**, from the `strato-md-*` namespaces
+already on the host. Without that the durable copy above would be pointless:
+its purpose is to keep answering across a control-plane outage that spans an
+agent restart, and until a sync landed there would be no listener to answer
+with — guests would get connection refused, and `.restored` would be a state
+nothing could observe. The namespaces are the right source because they are
+host state that outlives the process (created by the chassis reconcile, cleared
+only by a host reboot). A network removed while the agent was down leaves a
+stale namespace and so starts an unwanted listener; the first sync stops it.
+
 **Session auth is mandatory.** `PUT /latest/api/token` with an
 `X-aws-ec2-metadata-token-ttl-seconds` header (1..21600) mints an opaque
 bearer token; every read requires `X-aws-ec2-metadata-token`. There is no
@@ -1032,8 +1055,11 @@ serving it forever.
 a raw-byte cap in front of the HTTP decoder (`ByteToMessageHandler`'s
 `maximumBufferSize` does *not* cover this — NIOHTTP1's decoder consumes each
 header line as it arrives, so a long header list never trips it while
-`HTTPHeaders` grows behind it), a read-idle timeout, a concurrent-connection
-cap counted at accept, and outright refusal of any request carrying a body.
+`HTTPHeaders` grows behind it), a read-idle timeout, connection caps counted at
+accept — a total per listener and, load-bearingly, a per-source-address one,
+since a namespace is shared by every guest on the network and one VM holding
+the whole budget would deny its neighbours the service — and outright refusal
+of any request carrying a body.
 The request log records method, target, status and source — never a token, not
 even a prefix.
 

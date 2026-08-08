@@ -44,9 +44,13 @@ extension StratoAgent {
             }
             // Straight to stderr, which the parent relays into its own log: this
             // process reads no config and installs no signal handlers.
+            //
+            // A tab-tagged handler rather than `StreamLogHandler`, so the parent
+            // can re-emit each line at the level the child chose instead of
+            // flattening everything to one level and printing the level twice.
             let level = Logger.Level(rawValue: logLevel) ?? .info
-            LoggingSystem.bootstrap { label in
-                var handler = StreamLogHandler.standardError(label: label)
+            LoggingSystem.bootstrap { _ in
+                var handler = MetadataListenerLogHandler()
                 handler.logLevel = level
                 return handler
             }
@@ -84,10 +88,16 @@ extension StratoAgent {
         /// gives: on a host without IPv6 the v6 half simply never works, and the
         /// v4 metadata service must not be held hostage to it.
         private func bind(server: MetadataHTTPServer, logger: Logger) async throws {
-            let v4 = await attemptBind(
+            // Raced rather than sequenced. Attempting v4's full retry budget
+            // first would delay the v6 listener by up to half a minute on a host
+            // where v4 never binds — with the parent seeing a perfectly healthy
+            // child throughout — which contradicts the independence the comment
+            // above claims.
+            async let ipv4 = attemptBind(
                 server: server, address: InstanceMetadataEndpoint.address, attempts: 30, logger: logger)
-            let v6 = await attemptBind(
-                server: server, address: InstanceMetadataEndpoint.addressV6, attempts: 3, logger: logger)
+            async let ipv6 = attemptBind(
+                server: server, address: InstanceMetadataEndpoint.addressV6, attempts: 30, logger: logger)
+            let (v4, v6) = await (ipv4, ipv6)
             guard v4 || v6 else {
                 // Exiting non-zero is the honest report: the parent sees the
                 // child gone and retries on the next sync, rather than a
@@ -175,6 +185,36 @@ extension StratoAgent {
                 thread.start()
             }
         }
+    }
+}
+
+/// Writes `<level>\t<message>` lines to stderr for the parent agent to relay.
+///
+/// Deliberately minimal: nothing reads this output but the parent, which adds
+/// its own timestamp, label and metadata, so anything this handler formatted
+/// would be duplicated there.
+struct MetadataListenerLogHandler: LogHandler {
+    var logLevel: Logger.Level = .info
+    var metadata: Logger.Metadata = [:]
+
+    subscript(metadataKey key: String) -> Logger.Metadata.Value? {
+        get { metadata[key] }
+        set { metadata[key] = newValue }
+    }
+
+    func log(
+        level: Logger.Level, message: Logger.Message, metadata: Logger.Metadata?,
+        source: String, file: String, function: String, line: UInt
+    ) {
+        let merged = self.metadata.merging(metadata ?? [:]) { _, new in new }
+        let rendered =
+            merged.isEmpty
+            ? message.description
+            : message.description + " "
+                + merged.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: " ")
+        // Newlines would be read by the parent as extra, untagged lines.
+        let oneLine = rendered.replacingOccurrences(of: "\n", with: " ")
+        FileHandle.standardError.write(Data("\(level.rawValue)\t\(oneLine)\n".utf8))
     }
 }
 
