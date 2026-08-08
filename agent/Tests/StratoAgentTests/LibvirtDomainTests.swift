@@ -56,17 +56,37 @@ struct LibvirtDomainTests {
         #expect(LibvirtDomain.vmStatus(forRawState: 1) == .running)
     }
 
-    @Test("Activity is read the way a delete needs it, with unknown counting as active")
-    func activeStates() {
-        for state in [LibvirtDomain.State.running, .blocked, .paused, .pmSuspended, .shuttingDown] {
-            #expect(state.isActive, "state \(state)")
+    @Test("Resource-holding is read the way a delete needs it: unknown and crashed both count")
+    func resourceHoldingStates() {
+        for state in [LibvirtDomain.State.running, .blocked, .paused, .pmSuspended, .shuttingDown, .crashed] {
+            #expect(state.holdsResources, "state \(state)")
         }
-        for state in [LibvirtDomain.State.shutoff, .crashed, .noState] {
-            #expect(!state.isActive, "state \(state)")
+        for state in [LibvirtDomain.State.shutoff, .noState] {
+            #expect(!state.holdsResources, "state \(state)")
         }
         // The caller that asks is about to unlink a running guest's disk, so an
         // unreadable state must not read as "safe to remove".
-        #expect(LibvirtDomain.isActive(rawState: 99))
+        #expect(LibvirtDomain.holdsResources(rawState: 99))
+        // `crashed` counts even though the document's `<on_crash>destroy</>`
+        // means libvirt should never park a domain there: under `preserve` the
+        // QEMU process is still alive, and that must not become a cross-file
+        // dependency of "may I delete these disks".
+        #expect(LibvirtDomain.holdsResources(rawState: 6))
+    }
+
+    /// The two predicates are deliberately not each other's negation, and this
+    /// is the pairing that proves it: a boot must attempt the start on a state
+    /// it cannot read, while a delete must keep its hands off the disks of one.
+    @Test("Running-or-paused takes the opposite default, so an unreadable state never skips a boot")
+    func runningOrPausedStates() {
+        for state in [LibvirtDomain.State.running, .blocked, .paused, .pmSuspended, .shuttingDown] {
+            #expect(state.isRunningOrPaused, "state \(state)")
+        }
+        for state in [LibvirtDomain.State.shutoff, .crashed, .noState] {
+            #expect(!state.isRunningOrPaused, "state \(state)")
+        }
+        #expect(!LibvirtDomain.isRunningOrPaused(rawState: 99))
+        #expect(LibvirtDomain.holdsResources(rawState: 99) != LibvirtDomain.isRunningOrPaused(rawState: 99))
     }
 
     // MARK: - Flags
@@ -79,8 +99,13 @@ struct LibvirtDomainTests {
         // VIR_DOMAIN_NONE / VIR_DOMAIN_SHUTDOWN_DEFAULT.
         #expect(LibvirtDomain.startFlags == 0)
         #expect(LibvirtDomain.shutdownFlags == 0)
-        // VIR_DOMAIN_DESTROY_GRACEFUL.
-        #expect(LibvirtDomain.destroyGraceful == 1)
+        // VIR_DOMAIN_DESTROY_DEFAULT — SIGTERM, then SIGKILL. Asserting the
+        // value alone would be worthless here, since `GRACEFUL` (1) is the
+        // *weaker* behaviour despite the name: it is SIGTERM-only, and every
+        // destroy this driver issues is an escalation that has to be able to
+        // force. So the assertion is written as "not GRACEFUL".
+        #expect(LibvirtDomain.destroyFlags == 0)
+        #expect(LibvirtDomain.destroyFlags & 1 == 0, "VIR_DOMAIN_DESTROY_GRACEFUL cannot force a wedged guest down")
         // VIR_CONNECT_LIST_DOMAINS with no filter: persistent and transient,
         // running and not.
         #expect(LibvirtDomain.listAllDomains == 0)

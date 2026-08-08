@@ -91,7 +91,11 @@ log_level = "info"
 # provisions it), and stops attracting QEMU placements while it is not.
 #
 # Not yet supported by the libvirt driver: disk hot-plug, online resize and
-# VM checkpoints (STR-134). Attach volumes before booting a VM on such a node.
+# VM checkpoints (STR-134). A volume can only reach a VM at *create* time —
+# attaching one to an existing VM is refused whether it is running or stopped,
+# because the domain document is written once. Checkpoint capture is refused
+# earlier still: such a node stops advertising the capability, so the control
+# plane never admits one.
 # qemu_driver = "libvirt"
 
 # Hardware acceleration for QEMU VMs

@@ -78,6 +78,12 @@ actor Agent {
     // means one new registration here (plus the enum case and its data tables
     // in HypervisorTypes.swift), not new switch sites.
     private var hypervisorServices: [HypervisorType: any HypervisorService] = [:]
+    // Whether the `.qemu` driver actually registered can realize a VM
+    // checkpoint, which decides whether this host advertises
+    // `snapshot:vm_checkpoint` (issue #902). Read from what was registered
+    // rather than from `qemuDriver`, so simulation mode — which registers mocks
+    // whatever the config says — is described by what it is running.
+    private var qemuDriverCheckpoints = true
     private var networkService: (any NetworkServiceProtocol)?
     private var imageCacheService: ImageCacheService?
     private var storageBackend: (any StorageBackend)?
@@ -620,6 +626,9 @@ actor Agent {
             #endif
 
             if useLibvirt {
+                // No `checkpointVM` until STR-134, and the control plane must
+                // not admit a capture this host can only ever fail.
+                qemuDriverCheckpoints = false
                 logger.info(
                     "Initializing libvirt hypervisor service", metadata: ["uri": .string(LibvirtProbe.systemURI)])
                 hypervisorServices[.qemu] = LibvirtService(
@@ -1520,8 +1529,20 @@ actor Agent {
         // the sandbox runtime probe, which is not resolved until after this
         // returns — it is advertised beside `sandboxCapable` in
         // `registerWithControlPlane` instead.
+        //
+        // "Has QEMU" stopped implying "can checkpoint" when the libvirt driver
+        // arrived (issue #902): it answers to `.qemu` and is perfectly usable,
+        // but `checkpointVM` is STR-134 and takes the protocol's `notSupported`
+        // default until then. Since STR-150 an artifact inherits its parent
+        // VM's host and there is no re-placement and no imperative fallback, so
+        // a capture admitted here degrades permanently on a host it cannot be
+        // moved off — exactly what this gate exists to prevent. The volume
+        // family is unaffected: `qemu-img` in the storage backend realizes it,
+        // not the hypervisor driver.
         if hypervisors.contains(where: { $0.type == .qemu && $0.available }) {
-            capabilities.append(SnapshotArtifactKind.vmCheckpoint.agentCapability)
+            if qemuDriverCheckpoints {
+                capabilities.append(SnapshotArtifactKind.vmCheckpoint.agentCapability)
+            }
             capabilities.append(SnapshotArtifactKind.volumeSnapshot.agentCapability)
         }
 

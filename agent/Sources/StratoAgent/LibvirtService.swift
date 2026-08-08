@@ -47,10 +47,17 @@ import StratoShared
 ///
 /// Disk hot-plug, online resize, checkpoints and lifecycle events are STR-134
 /// and STR-135; the calls below throw `notSupported` or take the protocol's
-/// defaults. The visible consequence is that attaching a volume to a **stopped**
-/// libvirt VM is recorded but not realized — the domain document is written at
-/// create and nothing here rewrites it — while attaching to a running one fails
-/// loudly. Both land with hot-plug in STR-134.
+/// defaults.
+///
+/// The consequence worth stating plainly: **a volume can only reach a VM at
+/// create time.** The domain document is written once by `createVM` and nothing
+/// here rewrites it, so attaching to an existing VM is refused whether it is
+/// running or stopped — see `hasLiveSession`, which exists in this driver to
+/// make sure that refusal is reached rather than papered over by recording the
+/// attachment. Checkpoint capture is kept away by capability instead: the agent
+/// stops advertising `snapshot:vm_checkpoint` on a libvirt node, because since
+/// STR-150 an artifact inherits its parent's host and a capture admitted here
+/// could only degrade permanently.
 actor LibvirtService: HypervisorService {
     private let logger: Logger
     private let storage: (any StorageBackend)?
@@ -94,8 +101,21 @@ actor LibvirtService: HypervisorService {
     /// libvirtd that answers with an error has to be covered here. Nil means
     /// this driver has never had an answer, which is the one case where empty
     /// is the truth.
-    private var lastKnownVMIds: [String]?
-    private var lastKnownReservations: (vcpus: Int, memoryBytes: Int64)?
+    private var lastKnownVMIds: Cached<[String]>?
+    private var lastKnownReservations: Cached<(vcpus: Int, memoryBytes: Int64)>?
+
+    /// An answer libvirtd gave, with when it gave it — the timestamp being the
+    /// only thing that distinguishes a fresh reading from an indefinitely stale
+    /// one at the point it is served.
+    private struct Cached<Value> {
+        let value: Value
+        let at: ContinuousClock.Instant
+
+        init(_ value: Value) {
+            self.value = value
+            self.at = ContinuousClock.now
+        }
+    }
 
     init(
         logger: Logger,
@@ -308,9 +328,13 @@ actor LibvirtService: HypervisorService {
     func bootVM(vmId: String) async throws {
         try await perform("boot", vmId: vmId) {
             let dom = try await domain(vmId)
-            guard !LibvirtDomain.isActive(rawState: try await state(of: dom, vmId: vmId)) else {
+            // `isRunningOrPaused`, not the negation of `holdsResources`: this
+            // branch *skips the boot*, so a state this build cannot read has to
+            // fall through and attempt the start. Reading it as "active" would
+            // report success on a VM that never came up.
+            guard !LibvirtDomain.isRunningOrPaused(rawState: try await state(of: dom, vmId: vmId)) else {
                 logger.info(
-                    "libvirt domain is already active; treating boot as a no-op",
+                    "libvirt domain is already running; treating boot as a no-op",
                     metadata: ["vmId": .string(vmId)])
                 return
             }
@@ -329,10 +353,11 @@ actor LibvirtService: HypervisorService {
                         dom: dom, flags: LibvirtDomain.startFlags, deadline: deadline)
                 }
             } catch let error where LibvirtFailure.isOperationInvalid(error) {
-                // Lost a race with something else starting the domain.
-                guard try await satisfied(dom, vmId: vmId, by: LibvirtDomain.isActive(rawState:)) else {
-                    throw error
-                }
+                // Lost a race with something else starting the domain. Same
+                // polarity as the guard above: only a guest we can see running
+                // counts as this request being satisfied.
+                guard try await satisfied(dom, vmId: vmId, by: LibvirtDomain.isRunningOrPaused(rawState:))
+                else { throw error }
             }
             logger.info("libvirt domain started", metadata: ["vmId": .string(vmId)])
         }
@@ -348,7 +373,7 @@ actor LibvirtService: HypervisorService {
     func shutdownVM(vmId: String) async throws {
         try await perform("shutdown", vmId: vmId) {
             let dom = try await domain(vmId)
-            guard LibvirtDomain.isActive(rawState: try await state(of: dom, vmId: vmId)) else {
+            guard LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
                 logger.info(
                     "libvirt domain is already inactive; treating shutdown as a no-op",
                     metadata: ["vmId": .string(vmId)])
@@ -366,7 +391,7 @@ actor LibvirtService: HypervisorService {
                         dom: dom, flags: LibvirtDomain.shutdownFlags, deadline: deadline)
                 }
             } catch let error where LibvirtFailure.isOperationInvalid(error) {
-                guard try await satisfied(dom, vmId: vmId, by: { !LibvirtDomain.isActive(rawState: $0) })
+                guard try await satisfied(dom, vmId: vmId, by: { !LibvirtDomain.holdsResources(rawState: $0) })
                 else { throw error }
                 return
             }
@@ -383,12 +408,30 @@ actor LibvirtService: HypervisorService {
         }
     }
 
+    /// Reboots the guest, treating a domain that is already down as satisfying
+    /// the request.
+    ///
+    /// That is not leniency, it is STR-151's semantics: a reboot is an edge
+    /// nonce, consumed by being *performed or superseded*, and a stop or a boot
+    /// supersedes it. `virDomainReboot` answers `VIR_ERR_OPERATION_INVALID` on
+    /// an inactive domain, so a reboot that lands in the window just after the
+    /// guest powered itself off would otherwise fail the lane and strand the
+    /// nonce — while the reconciler is about to boot the VM anyway, which is
+    /// the very thing the request wanted.
     func rebootVM(vmId: String) async throws {
         try await perform("reboot", vmId: vmId) {
             let dom = try await domain(vmId)
             logger.info("Rebooting libvirt domain", metadata: ["vmId": .string(vmId)])
-            try await call("libvirt-reboot", vmId: vmId) { client, deadline in
-                try await client.domainReboot(dom: dom, flags: 0, deadline: deadline)
+            do {
+                try await call("libvirt-reboot", vmId: vmId) { client, deadline in
+                    try await client.domainReboot(dom: dom, flags: 0, deadline: deadline)
+                }
+            } catch let error where LibvirtFailure.isOperationInvalid(error) {
+                guard try await satisfied(dom, vmId: vmId, by: { !LibvirtDomain.holdsResources(rawState: $0) })
+                else { throw error }
+                logger.info(
+                    "libvirt domain is already down; the reboot is superseded by the boot that follows",
+                    metadata: ["vmId": .string(vmId)])
             }
         }
     }
@@ -473,7 +516,7 @@ actor LibvirtService: HypervisorService {
         // the safe end of that trade.
         do {
             let dom = try await domain(vmId)
-            guard !LibvirtDomain.isActive(rawState: try await state(of: dom, vmId: vmId)) else {
+            guard !LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId)) else {
                 logger.error(
                     "Refusing to reclaim the directory of a VM whose domain is still active",
                     metadata: ["vmId": .string(vmId)])
@@ -571,13 +614,10 @@ actor LibvirtService: HypervisorService {
                     needResults: 1, flags: LibvirtDomain.listAllDomains, deadline: deadline
                 ).domains.map(\.name)
             }.filter(LibvirtDomain.isStratoDomainName)
-            lastKnownVMIds = ids
+            lastKnownVMIds = Cached(ids)
             return ids
         } catch {
-            logger.error(
-                "Could not list libvirt domains; reporting the last known set",
-                metadata: ["error": .string(error.localizedDescription)])
-            return lastKnownVMIds ?? []
+            return stale(lastKnownVMIds, "the VM list", error) ?? []
         }
     }
 
@@ -602,23 +642,67 @@ actor LibvirtService: HypervisorService {
                     needResults: 1, flags: LibvirtDomain.listAllDomains, deadline: deadline
                 ).domains.filter { LibvirtDomain.isStratoDomainName($0.name) }
 
-                var vcpus = 0
-                var memoryBytes: Int64 = 0
-                for dom in domains {
-                    let info = try await client.domainGetInfo(dom: dom, deadline: deadline)
-                    vcpus += Int(info.nrVirtCpu)
-                    memoryBytes += Int64(clamping: info.maxMem) * 1024
+                // Concurrently, not in sequence: the reads are independent and
+                // already share one absolute deadline, so serializing them turns
+                // a host's domain count into `N x RTT` inside a budget sized for
+                // a single query — on a busy host, reliably unfinishable.
+                return try await withThrowingTaskGroup(of: (Int, Int64).self) { group in
+                    for dom in domains {
+                        group.addTask {
+                            let info = try await client.domainGetInfo(dom: dom, deadline: deadline)
+                            // `maxMem`, in KiB.
+                            return (Int(info.nrVirtCpu), Int64(clamping: info.maxMem) * 1024)
+                        }
+                    }
+                    var vcpus = 0
+                    var memoryBytes: Int64 = 0
+                    for try await (domVCPUs, domMemory) in group {
+                        vcpus += domVCPUs
+                        memoryBytes += domMemory
+                    }
+                    return (vcpus: vcpus, memoryBytes: memoryBytes)
                 }
-                return (vcpus: vcpus, memoryBytes: memoryBytes)
             }
-            lastKnownReservations = reserved
+            lastKnownReservations = Cached(reserved)
             return reserved
         } catch {
-            logger.error(
-                "Could not read libvirt reservations; reporting the last known figures",
-                metadata: ["error": .string(error.localizedDescription)])
-            return lastKnownReservations ?? (vcpus: 0, memoryBytes: 0)
+            return stale(lastKnownReservations, "host reservations", error) ?? (vcpus: 0, memoryBytes: 0)
         }
+    }
+
+    /// Serves a cached inventory answer after a live query failed, escalating
+    /// the log as it ages.
+    ///
+    /// Serving the last answer beats serving an empty one — an empty VM list
+    /// makes the control plane mark every VM here lost, and zero reservations
+    /// invite the scheduler to over-place the host. What deserved a bound is the
+    /// *indefiniteness*: without one, "these are this second's figures" and
+    /// "these are from an hour ago" differ only by a log line nobody reads,
+    /// while the host goes on looking healthy. Past the threshold this says so
+    /// at error level on every heartbeat.
+    private func stale<T>(_ cached: Cached<T>?, _ what: String, _ error: any Error) -> T? {
+        guard let cached else {
+            logger.error(
+                "Could not read \(what) from libvirt, and have never had an answer to fall back on",
+                metadata: ["error": .string(error.localizedDescription)])
+            return nil
+        }
+        let age = ContinuousClock.now - cached.at
+        let metadata: Logger.Metadata = [
+            "error": .string(error.localizedDescription),
+            "ageSeconds": .stringConvertible(age.components.seconds),
+        ]
+        if age > Self.staleInventoryThreshold {
+            logger.error(
+                """
+                Still reporting \(what) from a libvirt answer that is now badly out of date; \
+                this host's advertised capacity and VM list cannot be trusted
+                """,
+                metadata: metadata)
+        } else {
+            logger.warning("Could not read \(what) from libvirt; reporting the last known answer", metadata: metadata)
+        }
+        return cached.value
     }
 
     // MARK: - Guest observation
@@ -667,34 +751,44 @@ actor LibvirtService: HypervisorService {
         }
     }
 
-    /// Whether the domain is running (or paused) and could be issued a hot-plug
-    /// command.
+    /// True for any domain libvirtd has, running or not.
     ///
-    /// Answered honestly even though `attachDisk` below cannot yet act on it:
-    /// the alternative — reporting no live session — would have the volume
-    /// reconciler record the attachment and report success, while nothing ever
-    /// rewrites the domain document to realize it. A loud `notSupported` on a
-    /// running VM is worse UX and better behaviour.
+    /// This reads as a lie about "live session" and is not: the *question* the
+    /// volume reconciler asks with it is whether recording an attachment is
+    /// enough to realize it. The protocol documents the false branch as "is
+    /// already realized by having been recorded, since the spawn path rebuilds
+    /// a VM's disk set from the recorded volumes" — and this driver does not
+    /// rebuild anything. `createVM` writes the domain document once and never
+    /// runs again for a domain that exists, so an attachment that is only
+    /// recorded is realized on no boot, ever.
+    ///
+    /// Answering true routes every attach to `attachDisk` below, which refuses
+    /// loudly and degrades the volume until STR-134. That is worse to look at
+    /// and strictly better to have: the alternative converges the volume, shows
+    /// it attached in the UI, and leaves the guest without it forever.
     func hasLiveSession(vmId: String) async -> Bool {
-        guard let dom = try? await domain(vmId), let raw = try? await state(of: dom, vmId: vmId) else {
-            return false
-        }
-        return LibvirtDomain.isActive(rawState: raw)
+        (try? await domain(vmId)) != nil
     }
 
     // MARK: - Deferred to STR-134
 
+    /// - Note: this refuses for a *stopped* VM too, which the QEMU driver would
+    ///   have satisfied by recording. See `hasLiveSession`: recording alone is
+    ///   not realization here, so refusing is the only answer that does not
+    ///   quietly lose the disk.
     func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool)
         async throws
     {
         throw HypervisorServiceError.notSupported(
-            "the libvirt driver cannot hot-plug disks yet (STR-134); attach the volume before booting VM \(vmId)")
+            "the libvirt driver cannot attach a volume to an existing VM yet (STR-134): VM \(vmId)'s domain "
+                + "document is written once at create, so volume \(volumeId) has to be part of the VM's spec "
+                + "when it is created")
     }
 
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
         throw HypervisorServiceError.notSupported(
-            "the libvirt driver cannot hot-unplug disks yet (STR-134); detach the volume while VM \(vmId) is stopped"
-        )
+            "the libvirt driver cannot detach a volume from an existing VM yet (STR-134): VM \(vmId)'s domain "
+                + "document is written once at create, so volume \(volumeId) cannot be removed from it")
     }
 
     // MARK: - Helpers
@@ -708,6 +802,11 @@ actor LibvirtService: HypervisorService {
     /// about the host rather than one VM.
     private static let hostScope = "(host)"
 
+    /// How stale a cached inventory answer may get before the log stops calling
+    /// it a hiccup. Several heartbeat intervals: one failed sweep is noise, but
+    /// a host that has not answered in minutes is advertising fiction.
+    private static let staleInventoryThreshold: Duration = .seconds(300)
+
     private var accelerator: DomainAccelerator {
         guard hardwareAccelerationEnabled else { return .tcg }
         #if os(Linux)
@@ -718,16 +817,19 @@ actor LibvirtService: HypervisorService {
     }
 
     /// Destroys the domain, treating an already-inactive one as success.
-    /// `GRACEFUL` sends the emulator a SIGTERM first and only escalates to
-    /// SIGKILL if it does not go, which gives QEMU the chance to flush.
+    ///
+    /// Both callers reach here as an *escalation* — a guest that ignored its
+    /// whole shutdown budget, or a delete tearing the VM down for good — so the
+    /// flags must be the ones that can force. See `LibvirtDomain.destroyFlags`
+    /// for why that is `DEFAULT` and emphatically not `GRACEFUL`.
     private func destroy(_ dom: Domain, vmId: String) async throws {
         do {
             try await call("libvirt-destroy", vmId: vmId) { client, deadline in
                 try await client.domainDestroyFlags(
-                    dom: dom, flags: LibvirtDomain.destroyGraceful, deadline: deadline)
+                    dom: dom, flags: LibvirtDomain.destroyFlags, deadline: deadline)
             }
         } catch let error where LibvirtFailure.isOperationInvalid(error) {
-            guard try await satisfied(dom, vmId: vmId, by: { !LibvirtDomain.isActive(rawState: $0) })
+            guard try await satisfied(dom, vmId: vmId, by: { !LibvirtDomain.holdsResources(rawState: $0) })
             else { throw error }
         }
     }
@@ -739,7 +841,7 @@ actor LibvirtService: HypervisorService {
         let deadline = ContinuousClock.now + .seconds(seconds)
         while ContinuousClock.now < deadline {
             guard let raw = try? await state(of: dom, vmId: vmId) else { return false }
-            if !LibvirtDomain.isActive(rawState: raw) { return true }
+            if !LibvirtDomain.holdsResources(rawState: raw) { return true }
             do {
                 try await Task.sleep(for: .seconds(1))
             } catch {

@@ -903,6 +903,17 @@ public struct AgentConfig: Codable {
         }
         #endif
 
+        // libvirt selects the emulator from its own capabilities, so a domain
+        // never names one and `qemu_binary_path` has no effect. Said out loud
+        // because the startup banner echoes the path back either way, and an
+        // operator who pointed this node at a custom QEMU build would otherwise
+        // see it accepted and get a different binary.
+        if qemuDriver == .libvirt, let qemuBinaryPath {
+            logger?.warning(
+                "qemu_binary_path is ignored under qemu_driver = \"libvirt\"; libvirt selects the emulator itself",
+                metadata: ["qemuBinaryPath": .string(qemuBinaryPath)])
+        }
+
         return AgentConfig(
             controlPlaneURL: controlPlaneURL,
             qemuSocketDir: qemuSocketDir,

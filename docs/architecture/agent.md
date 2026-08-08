@@ -195,12 +195,26 @@ durable store rather than a process the agent has to remember:
   either way, which is why `guestInfo`/`memoryStats` are `HypervisorService`
   requirements rather than one driver's methods.
 
-Not yet implemented, and gated behind `notSupported` rather than silently
-skipped: disk hot-plug, online resize and VM checkpoints (STR-134), and
-lifecycle events in place of status polling (STR-135). The visible consequence
-is that a volume attached to a **stopped** libvirt VM is recorded but not
-realized — the domain document is written at create and nothing rewrites it —
-while attaching to a running one fails loudly.
+Not yet implemented, and refused rather than silently skipped: disk hot-plug,
+online resize and VM checkpoints (STR-134), and lifecycle events in place of
+status polling (STR-135). Two of those refusals are load-bearing:
+
+- **A volume can only reach a VM at create time.** The domain document is
+  written once by `createVM`, so an attach against an existing VM is refused
+  whichever state it is in. `hasLiveSession` returns true for *any* domain here
+  for that reason: the false branch means "recording the attachment realizes
+  it", which is true of the QEMU driver's respawn-from-configuration path and
+  false of this one, and taking it would converge a volume the guest never sees.
+- **`snapshot:vm_checkpoint` is not advertised** by a libvirt node, so the
+  control plane never admits a capture. Since STR-150 an artifact inherits its
+  parent VM's host and cannot be re-placed, so admitting one would degrade it
+  permanently. Volume snapshots are unaffected — `qemu-img` in the storage
+  backend realizes those, not the hypervisor driver.
+
+A libvirt node is therefore not yet a full-capability QEMU node even though it
+advertises `qemu`: that is the cost of keeping the driver choice invisible to
+the control plane, which is otherwise what makes rolling a fleet over one node
+at a time possible.
 
 ### Diagnosing a failed QEMU spawn
 

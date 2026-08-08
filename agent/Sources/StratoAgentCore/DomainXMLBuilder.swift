@@ -228,6 +228,13 @@ public enum DomainXMLBuilder {
         // libvirt's own defaults, stated explicitly because the reconciler
         // depends on them: a guest shutdown must stop the domain (so the agent
         // observes `shutdown`), and a guest reboot must not.
+        //
+        // `on_crash` is `destroy` for a third reason, and changing it is not
+        // just a policy tweak: under `preserve` libvirt keeps a panicked domain
+        // *and its QEMU process* alive in `VIR_DOMAIN_CRASHED`. Anything that
+        // reads a crashed domain as stopped would then be reasoning about a live
+        // guest — see `LibvirtDomain.State.holdsResources`, which counts it as
+        // holding for exactly that reason.
         domain.append(DomainXMLNode("clock", [("offset", "utc")]))
         domain.append(DomainXMLNode("on_poweroff", text: "destroy"))
         domain.append(DomainXMLNode("on_reboot", text: "restart"))

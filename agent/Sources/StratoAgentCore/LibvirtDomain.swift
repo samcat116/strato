@@ -66,10 +66,32 @@ public enum LibvirtDomain {
             }
         }
 
-        /// Whether libvirt considers the domain *active* — the question a
-        /// delete asks before it unlinks the VM's disks, and an adoption asks
-        /// before it reports the VM back as managed.
-        public var isActive: Bool {
+        /// Whether the domain may still be holding host resources — the
+        /// question asked before unlinking its disks.
+        ///
+        /// `crashed` counts, and the reason is one file away:
+        /// `DomainXMLBuilder` emits `<on_crash>destroy</on_crash>`, so libvirt
+        /// tears a panicked domain down to `shutoff` rather than parking it
+        /// here — but under `preserve` it would keep the domain *and its QEMU
+        /// process* alive in `crashed`, and unlinking that guest's disk is not
+        /// something to make contingent on a policy element elsewhere.
+        public var holdsResources: Bool {
+            switch self {
+            case .running, .blocked, .paused, .pmSuspended, .shuttingDown, .crashed:
+                return true
+            case .shutoff, .noState:
+                return false
+            }
+        }
+
+        /// Whether the guest is executing or merely suspended — the question a
+        /// boot asks before deciding it has nothing to do.
+        ///
+        /// Deliberately **not** the negation of `holdsResources`: the two want
+        /// opposite treatment of the states they cannot vouch for. A crashed
+        /// domain still holds its disks but is not a running guest, and a boot
+        /// that skipped itself over one would leave the VM down for good.
+        public var isRunningOrPaused: Bool {
             switch self {
             case .running, .blocked, .paused, .pmSuspended, .shuttingDown:
                 return true
@@ -87,11 +109,25 @@ public enum LibvirtDomain {
         State(rawValue: raw)?.vmStatus ?? .unknown
     }
 
-    /// Whether a raw `virDomainGetState` value describes an active domain.
-    /// Unknown states count as active, which is the safe end of the trade: the
-    /// caller that asks is about to unlink a disk.
-    public static func isActive(rawState raw: Int32) -> Bool {
-        State(rawValue: raw)?.isActive ?? true
+    /// Whether a raw `virDomainGetState` value may describe a domain still
+    /// holding host resources. **Unknown states count as holding**, which is
+    /// the safe end of that trade: the caller is about to unlink a disk.
+    public static func holdsResources(rawState raw: Int32) -> Bool {
+        State(rawValue: raw)?.holdsResources ?? true
+    }
+
+    /// Whether a raw `virDomainGetState` value describes a guest that is
+    /// definitely up. **Unknown states count as down**, which is the safe end
+    /// of *this* trade, and it is the opposite of the one above.
+    ///
+    /// The asymmetry is the point. A boot decides from this whether it has
+    /// nothing to do, so a state this build cannot read must make it attempt
+    /// the start rather than report success: the alternative is a VM that never
+    /// boots, reported as converged, with `vmStatus(forRawState:)` answering
+    /// `.unknown` so the reconciler sees neither progress nor an error — silent,
+    /// and it survives every retry.
+    public static func isRunningOrPaused(rawState raw: Int32) -> Bool {
+        State(rawValue: raw)?.isRunningOrPaused ?? false
     }
 
     // MARK: - Flags
@@ -110,10 +146,25 @@ public enum LibvirtDomain {
     /// shutdown `QEMUService` reaches for qga to get.
     public static let shutdownFlags: UInt32 = 0
 
-    /// `virDomainDestroyFlagsValues.VIR_DOMAIN_DESTROY_GRACEFUL` — SIGTERM the
-    /// emulator and only escalate to SIGKILL if it does not go, rather than
-    /// killing it outright.
-    public static let destroyGraceful: UInt32 = 1 << 0
+    /// `virDomainDestroyFlagsValues.VIR_DOMAIN_DESTROY_DEFAULT` — SIGTERM the
+    /// emulator and escalate to SIGKILL if it does not go.
+    ///
+    /// **`VIR_DOMAIN_DESTROY_GRACEFUL` (`1 << 0`) is the opposite of what its
+    /// name suggests, and is deliberately not used here.** libvirt's header
+    /// annotates the default as "could lead to data loss!!", which reads like
+    /// the flag is the safer choice; what it actually selects is *SIGTERM only,
+    /// never SIGKILL*. The QEMU driver ORs in `VIR_QEMU_PROCESS_KILL_FORCE`
+    /// precisely when the flag is **absent**, and with it set a survivor comes
+    /// back as `VIR_ERR_OPERATION_FAILED`.
+    ///
+    /// Every destroy this driver issues is an escalation — `shutdownVM` reaches
+    /// for it only after the guest has ignored its whole budget, and `deleteVM`
+    /// is tearing the VM down for good — so the one thing it must be able to do
+    /// is force. Under `GRACEFUL` a wedged guest could never be stopped: the
+    /// failure is not `operationInvalid`, so it escapes the recovery both
+    /// callers have, the VM never converges on `shutdown`, and a delete aborts
+    /// before reclaiming the VM's directory on every retry.
+    public static let destroyFlags: UInt32 = 0
 
     /// `virDomainUndefineFlagsValues`, as one mask. Every bit is load-bearing:
     ///

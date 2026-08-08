@@ -495,7 +495,19 @@ which `install.sh` provisions — and while they fail the node stops advertising
 QEMU rather than accepting VMs it cannot serve.
 
 The libvirt driver does not yet support disk hot-plug, online resize or VM
-checkpoints. Attach volumes to a VM before booting it on such a node.
+checkpoints. Two consequences are worth knowing before moving a node:
+
+- **A volume can only reach a VM at create time.** Attaching one to an existing
+  VM is refused whether it is running or stopped — the domain document is
+  written once — so the attach degrades rather than silently never arriving.
+- **VM checkpoints are refused earlier**, by capability: a libvirt node stops
+  advertising `snapshot:vm_checkpoint`, so the control plane never admits a
+  capture it could not converge. Volume snapshots are unaffected; the storage
+  backend realizes those with `qemu-img`.
+
+So a libvirt node is not yet a full-capability QEMU node, even though it
+advertises `qemu` — that is the trade for keeping the driver choice invisible to
+the control plane.
 
 Two host packages change what a node can be asked to run rather than how it
 runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
