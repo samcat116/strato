@@ -2504,12 +2504,31 @@ actor AgentService {
             // recorded compatibility constraints (wire v13, same architecture,
             // same Firecracker version, CPU template or identical CPU model)
             // can stage the archive from object storage instead.
+            //
+            // A *networked* fork adds one more, and it applies to the pinned
+            // agent too (STR-104): remapping the checkpointed network device
+            // needs Firecracker 1.12+, which the capture path does not, so a
+            // snapshot's own host can be unable to fork it. Filtering here is
+            // what turns that into a scheduling failure naming the version
+            // rather than a placement onto a host that refuses permanently.
+            let forkNeedsNetworkRemap = !nic.isEmpty
             var candidates: [SchedulableAgent] = []
+            var networkRemapBlocker: String?
             if let pinnedAgentID = snapshot.agentId,
                 let pinned = schedulableAgents.first(where: { $0.id == pinnedAgentID }),
                 WireProtocol.supportsSandboxFork(pinned.wireProtocolVersion ?? 0)
             {
-                candidates.append(pinned)
+                var pinnedBlocker: String?
+                if forkNeedsNetworkRemap, let pinnedUUID = UUID(uuidString: pinnedAgentID),
+                    let pinnedRow = try await Agent.find(pinnedUUID, on: db)
+                {
+                    pinnedBlocker = SandboxSnapshotCompatibility.networkedForkBlocker(target: pinnedRow)
+                }
+                if let pinnedBlocker {
+                    networkRemapBlocker = pinnedBlocker
+                } else {
+                    candidates.append(pinned)
+                }
             }
             if snapshot.isExported {
                 let otherIDs =
@@ -2524,14 +2543,19 @@ actor AgentService {
                     let compatibleIDs = Set(
                         rows.filter {
                             SandboxSnapshotCompatibility.restoreBlocker(snapshot: snapshot, target: $0) == nil
+                                && (!forkNeedsNetworkRemap
+                                    || SandboxSnapshotCompatibility.networkedForkBlocker(target: $0) == nil)
                         }.compactMap { $0.id?.uuidString })
                     candidates += schedulableAgents.filter { compatibleIDs.contains($0.id) }
                 }
             }
             guard !candidates.isEmpty else {
+                if let networkRemapBlocker, !snapshot.isExported {
+                    throw AgentServiceError.schedulingFailed(networkRemapBlocker)
+                }
                 if snapshot.isExported {
                     throw AgentServiceError.schedulingFailed(
-                        "no schedulable agent is compatible with the restore snapshot (need Firecracker \(SandboxSnapshotCompatibility.normalizedFirecrackerVersion(snapshot.firecrackerVersion) ?? "unknown") on \(snapshot.architecture ?? "unknown"), and a matching CPU template or identical CPU)"
+                        "no schedulable agent is compatible with the restore snapshot (need Firecracker \(SandboxSnapshotCompatibility.normalizedFirecrackerVersion(snapshot.firecrackerVersion) ?? "unknown") on \(snapshot.architecture ?? "unknown")\(forkNeedsNetworkRemap ? " — at least \(FirecrackerSnapshotFeatures.networkOverridesMinimumVersion) to remap the NIC" : ""), and a matching CPU template or identical CPU)"
                     )
                 }
                 throw AgentServiceError.schedulingFailed(

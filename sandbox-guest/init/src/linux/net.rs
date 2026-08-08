@@ -391,14 +391,24 @@ fn parse_mac(mac: &str) -> Result<[u8; 6]> {
     Ok(out)
 }
 
-/// Remove every address this init could have put on the device: the IPv4
-/// primary, and each non-link-local IPv6 address.
+/// Clear the device's addresses, which the two families do to different
+/// depths — worth knowing exactly, because this is what a fork's identity
+/// boundary actually amounts to at L3.
 ///
-/// Link-local IPv6 is deliberately left alone — the kernel derives it and will
-/// re-derive it from the new MAC — and so is anything the workload itself
-/// added, which is out of reach here anyway (this runs before the workload of a
-/// warm launch, and a fork's workload has no business holding the source's
-/// address either).
+/// **IPv6 is complete**: every non-link-local address on the device is
+/// enumerated and deleted, whoever added it. Link-local is deliberately left —
+/// the kernel owns it and re-derives one from the new MAC.
+///
+/// **IPv4 is the primary address only.** `SIOCSIFADDR` with `0.0.0.0` is the
+/// classic "unset the address" call and it is all the ioctl API can see;
+/// a *secondary* address (`ip addr add`, netlink) survives it. That is moot on
+/// the warm-launch path, where no workload has run — but a fork restores a
+/// live sandbox, so a workload that added its own IPv4 address carries it into
+/// the fork. Nothing escapes: OVN `port_security` on the fork's port drops
+/// frames whose source does not match the fork's own allocation. What is wrong
+/// is only the guest's own view of itself, and closing that would mean an
+/// `RTM_GETADDR` dump here — worth doing if it ever matters, and deliberately
+/// not done blind.
 fn flush_addresses(sock: &Socket, name: &str) -> Result<()> {
     let mut req = IfReq::new(name)?;
     req.data[..16].copy_from_slice(&sockaddr_in(Ipv4Addr::UNSPECIFIED));
@@ -415,13 +425,24 @@ fn flush_addresses(sock: &Socket, name: &str) -> Result<()> {
 /// The non-link-local IPv6 addresses currently on `name`, read from
 /// `/proc/net/if_inet6` (there is no ioctl that enumerates them).
 ///
-/// An unreadable or malformed file yields nothing rather than an error: the
-/// caller is about to assign the address it wants either way, and a stale
-/// leftover is a smaller problem than refusing to configure the NIC at all.
+/// An unreadable file yields nothing rather than an error: the caller is about
+/// to assign the address it wants either way, and a stale leftover is a smaller
+/// problem than refusing to configure the NIC at all.
 fn global_ipv6_addresses(name: &str) -> Vec<Ipv6Addr> {
-    let Ok(contents) = fs::read_to_string(PROC_NET_IF_INET6) else {
-        return Vec::new();
-    };
+    fs::read_to_string(PROC_NET_IF_INET6)
+        .map(|contents| parse_if_inet6(&contents, name))
+        .unwrap_or_default()
+}
+
+/// Parse `/proc/net/if_inet6` for the non-link-local addresses on `name`.
+///
+/// Each line is `<32 hex chars> <ifindex> <prefix> <scope> <flags> <devname>`,
+/// all hex, no header. Split out from the read so the column indices and the
+/// scope filter are testable: every failure mode here is a *silent* skip, so a
+/// wrong index would not error — it would quietly leave the source sandbox's
+/// address on a fork's interface, which is the leak `reidentify` exists to
+/// close.
+fn parse_if_inet6(contents: &str, name: &str) -> Vec<Ipv6Addr> {
     let mut out = Vec::new();
     for line in contents.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -432,6 +453,7 @@ fn global_ipv6_addresses(name: &str) -> Vec<Ipv6Addr> {
         let Ok(scope) = u32::from_str_radix(fields[3], 16) else {
             continue;
         };
+        // Link-local is the kernel's, and it re-derives one from the new MAC.
         if scope == IPV6_SCOPE_LINKLOCAL {
             continue;
         }
@@ -622,16 +644,59 @@ fn add_default_route(
 fn delete_default_route(family: u8, index: u32) -> Result<()> {
     match default_route_request(RTM_DELROUTE, NLM_F_REQUEST | NLM_F_ACK, family, None, index) {
         Ok(()) => Ok(()),
-        Err(e) if tolerated_route_delete_error(&e) => Ok(()),
-        Err(e) => Err(e),
+        Err(e) if tolerated_route_delete_errno(e.errno) => Ok(()),
+        Err(e) => Err(e.to_string()),
     }
 }
 
 /// `ESRCH`/`ENOENT` from a route delete mean the route is not there, which is
-/// what the delete was for. Matched on the message because `await_ack` renders
-/// the kernel's errno into one.
-fn tolerated_route_delete_error(error: &str) -> bool {
-    error.contains("No such process") || error.contains("No such file or directory")
+/// what the delete was for.
+///
+/// Matched on the errno the kernel actually sent, not on its `strerror`
+/// rendering: this decision makes a benign result fatal if it goes the wrong
+/// way — the whole `reconfigure_interface` fails, which fails the
+/// `launch`/`reidentify` — and a locale or a libc wording change has no
+/// business being what decides it.
+fn tolerated_route_delete_errno(errno: Option<i32>) -> bool {
+    matches!(errno, Some(libc::ESRCH) | Some(libc::ENOENT))
+}
+
+/// A failed rtnetlink exchange, carrying the kernel's errno when it sent one.
+///
+/// The errno is the authoritative value and callers that treat some failures
+/// as success need it; the message is for humans and keeps the surrounding
+/// error strings reading the way they did.
+#[derive(Debug)]
+struct NetlinkFailure {
+    /// `-errno` from an `NLMSG_ERROR` reply. None for transport and framing
+    /// failures, which have no kernel verdict to report.
+    errno: Option<i32>,
+    message: String,
+}
+
+impl NetlinkFailure {
+    fn kernel(errno: i32) -> Self {
+        NetlinkFailure {
+            errno: Some(errno),
+            message: format!(
+                "the kernel rejected it: {}",
+                std::io::Error::from_raw_os_error(errno)
+            ),
+        }
+    }
+
+    fn transport(message: String) -> Self {
+        NetlinkFailure {
+            errno: None,
+            message,
+        }
+    }
+}
+
+impl std::fmt::Display for NetlinkFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
 }
 
 /// `(rtm_protocol, rtm_scope, rtm_type)` for a route message of `kind`.
@@ -655,8 +720,8 @@ fn default_route_request(
     family: u8,
     gateway: Option<&[u8]>,
     index: u32,
-) -> Result<()> {
-    let sock = netlink_socket()?;
+) -> std::result::Result<(), NetlinkFailure> {
+    let sock = netlink_socket().map_err(NetlinkFailure::transport)?;
     // The sequence number the ACK must echo. Constant is fine: the socket is
     // opened per call and closed on return, so there is exactly one request
     // outstanding on it ever.
@@ -694,7 +759,8 @@ fn default_route_request(
     let length = message.len() as u32;
     message[..4].copy_from_slice(&length.to_ne_bytes());
 
-    sock.send_to_kernel(&message)?;
+    sock.send_to_kernel(&message)
+        .map_err(NetlinkFailure::transport)?;
     sock.await_ack(sequence)
 }
 
@@ -854,7 +920,7 @@ impl Socket {
     /// Nothing can race it today — the socket is fresh per call, joins no
     /// multicast groups, and only the init is running — so this is about being
     /// correct on inspection rather than correct by context.
-    fn await_ack(&self, sequence: u32) -> Result<()> {
+    fn await_ack(&self, sequence: u32) -> std::result::Result<(), NetlinkFailure> {
         #[repr(C)]
         struct SockaddrNl {
             family: u16,
@@ -884,46 +950,47 @@ impl Socket {
             )
         };
         if read < 0 {
-            return Err(format!(
+            return Err(NetlinkFailure::transport(format!(
                 "read rtnetlink reply: {}",
                 std::io::Error::last_os_error()
-            ));
+            )));
         }
         let read = read as usize;
         if read > buffer.len() {
-            return Err(format!(
+            return Err(NetlinkFailure::transport(format!(
                 "rtnetlink reply is {read} bytes, larger than the {} the reply buffer holds",
                 buffer.len()
-            ));
+            )));
         }
         if source.pid != 0 {
-            return Err(format!(
+            return Err(NetlinkFailure::transport(format!(
                 "rtnetlink reply came from port {} rather than the kernel",
                 source.pid
-            ));
+            )));
         }
         // nlmsghdr(16) + nlmsgerr's leading `int error`.
         if read < 20 {
-            return Err(format!("truncated rtnetlink reply ({read} bytes)"));
+            return Err(NetlinkFailure::transport(format!(
+                "truncated rtnetlink reply ({read} bytes)"
+            )));
         }
         let kind = u16::from_ne_bytes([buffer[4], buffer[5]]);
         if kind != NLMSG_ERROR {
-            return Err(format!("unexpected rtnetlink reply type {kind}"));
+            return Err(NetlinkFailure::transport(format!(
+                "unexpected rtnetlink reply type {kind}"
+            )));
         }
         let echoed = u32::from_ne_bytes([buffer[8], buffer[9], buffer[10], buffer[11]]);
         if echoed != sequence {
-            return Err(format!(
+            return Err(NetlinkFailure::transport(format!(
                 "rtnetlink reply echoes sequence {echoed}, not the {sequence} we sent"
-            ));
+            )));
         }
         let code = i32::from_ne_bytes([buffer[16], buffer[17], buffer[18], buffer[19]]);
         if code == 0 {
             Ok(())
         } else {
-            Err(format!(
-                "the kernel rejected it: {}",
-                std::io::Error::from_raw_os_error(-code)
-            ))
+            Err(NetlinkFailure::kernel(-code))
         }
     }
 }
@@ -1001,6 +1068,45 @@ mod tests {
         assert!(IfReq::new("0123456789abcde").is_ok());
     }
 
+    /// A real `/proc/net/if_inet6`: two addresses on our device (one global,
+    /// one link-local), one on someone else's, and one truncated.
+    const IF_INET6_FIXTURE: &str = concat!(
+        "fd123456789a0000000000000000000509 02 40 00 80 eth0\n",
+        "fd123456789a00000000000000000005 02 40 00 80     eth0\n",
+        "fe800000000000000400acfffe100005 02 40 20 80      eth0\n",
+        "20010db8000000000000000000000001 03 64 00 80      eth1\n",
+        "00000000000000000000000000000001 01 80 10 80        lo\n",
+        "deadbeef 02 40 00 80 eth0\n",
+    );
+
+    #[test]
+    fn if_inet6_yields_only_this_devices_global_addresses() {
+        let found = parse_if_inet6(IF_INET6_FIXTURE, "eth0");
+        assert_eq!(
+            found,
+            vec!["fd12:3456:789a::5".parse::<Ipv6Addr>().expect("addr")],
+            "link-local, other devices, and unparseable lines are all skipped"
+        );
+    }
+
+    #[test]
+    fn if_inet6_skips_a_device_with_no_addresses() {
+        assert!(parse_if_inet6(IF_INET6_FIXTURE, "eth2").is_empty());
+    }
+
+    /// The scope column is `fields[3]`, and reading the wrong one is a silent
+    /// wrong answer rather than an error — so pin that a global address whose
+    /// *prefix* happens to equal the link-local scope value still survives.
+    #[test]
+    fn if_inet6_reads_scope_from_the_scope_column() {
+        // prefix 0x20 (32), scope 0x00 (global): must be kept.
+        let line = "20010db8000000000000000000000009 02 20 00 80 eth0\n";
+        assert_eq!(
+            parse_if_inet6(line, "eth0"),
+            vec!["2001:db8::9".parse::<Ipv6Addr>().expect("addr")]
+        );
+    }
+
     #[test]
     fn macs_parse_into_the_ioctl_payload() {
         assert_eq!(
@@ -1046,18 +1152,28 @@ mod tests {
     }
 
     /// The kernel reports these as "already in the state you asked for", and
-    /// they are: a route the address flush already took with it.
+    /// they are: a route the address flush already took with it. Decided on
+    /// the errno rather than its rendering, so neither a locale nor a libc
+    /// wording change can turn a benign result into a failed re-identification.
     #[test]
     fn a_missing_route_is_not_a_delete_failure() {
-        assert!(tolerated_route_delete_error(
-            "the kernel rejected it: No such process"
-        ));
-        assert!(tolerated_route_delete_error(
-            "the kernel rejected it: No such file or directory"
-        ));
-        assert!(!tolerated_route_delete_error(
-            "the kernel rejected it: Operation not permitted"
-        ));
+        assert!(tolerated_route_delete_errno(Some(libc::ESRCH)));
+        assert!(tolerated_route_delete_errno(Some(libc::ENOENT)));
+        assert!(!tolerated_route_delete_errno(Some(libc::EPERM)));
+        // A transport or framing failure carries no kernel verdict, so it is
+        // not something to swallow.
+        assert!(!tolerated_route_delete_errno(None));
+    }
+
+    #[test]
+    fn a_netlink_failure_keeps_the_errno_beside_its_message() {
+        let kernel = NetlinkFailure::kernel(libc::ESRCH);
+        assert_eq!(kernel.errno, Some(libc::ESRCH));
+        assert!(kernel.to_string().contains("the kernel rejected it"));
+
+        let transport = NetlinkFailure::transport("truncated reply".into());
+        assert_eq!(transport.errno, None);
+        assert_eq!(transport.to_string(), "truncated reply");
     }
 
     #[test]

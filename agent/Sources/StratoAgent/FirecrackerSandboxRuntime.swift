@@ -104,9 +104,15 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     /// Whether this host's Firecracker can repoint a restored network device
     /// at a different host TAP (STR-104), resolved once per agent life from
-    /// `firecracker --version`. The binary cannot change under a running agent
-    /// — an update replaces the agent too — so a probe failure is cached as
-    /// "no" rather than retried on every create.
+    /// `firecracker --version`. The binary cannot change under a running
+    /// agent — an update replaces the agent too — so a version the probe
+    /// actually read is cached for good.
+    ///
+    /// A probe *failure* is not, deliberately: `firecrackerVersion` answers nil
+    /// for a spawn error, a timeout and a non-zero exit as readily as for a
+    /// build too old to say, and memoizing that would let one `--version` fork
+    /// timing out under create pressure make every networked fork on the host
+    /// fail permanently until a restart.
     private var networkOverridesSupport: Bool?
 
     /// The Firecracker interface id every sandbox NIC is configured with. It
@@ -376,7 +382,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         if networkAttachments.isEmpty {
             warmNetworkRemapOK = true
         } else {
-            warmNetworkRemapOK = await supportsNetworkOverrides()
+            // A host that could not be asked reads the same as one that
+            // cannot: warm start only ever trades latency, so an unknown is a
+            // cold boot rather than something to fail or retry over.
+            warmNetworkRemapOK = await probeNetworkOverridesSupport() == true
         }
         let warmEligible =
             warmStartActive && warmNetworkRemapOK
@@ -452,16 +461,28 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// Whether this host's Firecracker accepts `network_overrides` on a
     /// snapshot load — the single thing that makes a checkpoint's network
     /// device reusable under a different host TAP (STR-104).
-    private func supportsNetworkOverrides() async -> Bool {
+    ///
+    /// **Nil means "could not tell", not "no".** The three answers are
+    /// genuinely different to callers: `true` remaps, `false` is a permanent
+    /// property of the host, and nil is a probe that failed for reasons a
+    /// retry can clear.
+    private func probeNetworkOverridesSupport() async -> Bool? {
         if let networkOverridesSupport { return networkOverridesSupport }
-        let version = await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath)
+        guard let version = await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath)
+        else {
+            // Deliberately not memoized — see the property.
+            logger.warning(
+                "Could not read the Firecracker version, so whether a restored network device can be remapped is unknown",
+                metadata: ["firecrackerBinaryPath": .string(firecrackerBinaryPath)])
+            return nil
+        }
         let supported = FirecrackerSnapshotFeatures.supportsNetworkOverrides(version)
         networkOverridesSupport = supported
         if !supported {
             logger.info(
                 "Firecracker cannot remap a restored network device; networked sandboxes cold-boot and cannot be forked",
                 metadata: [
-                    "firecrackerVersion": .string(version ?? "unknown"),
+                    "firecrackerVersion": .string(version),
                     "minimumVersion": .string(
                         FirecrackerSnapshotFeatures.networkOverridesMinimumVersion),
                 ])
@@ -489,24 +510,52 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         return tapName
     }
 
-    /// The `network_overrides` entry pointing a restored NIC at `tapName`, or
-    /// nil when there is nothing to remap (no NIC) or no way to — a Firecracker
-    /// that predates the field rejects the whole load body over it, so the key
-    /// has to be absent rather than present-and-ignored.
+    /// The `network_overrides` entry pointing a restored NIC at `tapName`,
+    /// where the remap is *optional*: nil when there is no NIC, and nil rather
+    /// than an error when this host cannot (or could not be asked to) remap.
     ///
-    /// Nil on a pre-1.12 host is deliberately not an error here. Restoring a
-    /// sandbox **in place** does not need the remap at all — the TAP name is
-    /// derived from the sandbox id, so the snapshot recorded the same one — and
-    /// the paths that genuinely cannot work without it (fork, warm start)
-    /// refuse up front rather than relying on this returning something.
-    private func networkOverrides(
+    /// Only restore **in place** may use this. It does not need the remap at
+    /// all — the TAP name derives from the sandbox id, which a restore in
+    /// place does not change, so the checkpoint already names the right device
+    /// — and a Firecracker that predates the field rejects the whole load body
+    /// over it, so the key has to be absent rather than present-and-ignored.
+    private func optionalNetworkOverrides(
         forTAP tapName: String?
     ) async -> [SnapshotLoadConfig.NetworkOverride]? {
-        guard let tapName, await supportsNetworkOverrides() else { return nil }
+        guard let tapName, await probeNetworkOverridesSupport() == true else { return nil }
         return [
             SnapshotLoadConfig.NetworkOverride(
                 ifaceId: Self.networkInterfaceId, hostDevName: tapName)
         ]
+    }
+
+    /// The `network_overrides` entry for a load that cannot work without one —
+    /// a fork, or a warm restore — or nil when there is no NIC to remap.
+    ///
+    /// Separates the two ways this can be unavailable, because they call for
+    /// opposite handling. A Firecracker too old is a property of the host, so
+    /// it is permanent and the caller's convergence stops. A probe that could
+    /// not answer is transient: the version is unread, not old, and retrying
+    /// is what distinguishes them.
+    private func requiredNetworkOverrides(
+        forTAP tapName: String?, operation: String
+    ) async throws -> [SnapshotLoadConfig.NetworkOverride]? {
+        guard let tapName else { return nil }
+        switch await probeNetworkOverridesSupport() {
+        case true:
+            return [
+                SnapshotLoadConfig.NetworkOverride(
+                    ifaceId: Self.networkInterfaceId, hostDevName: tapName)
+            ]
+        case false:
+            throw SandboxRuntimeError.networkingUnsupported(
+                "\(operation) needs Firecracker "
+                    + "\(FirecrackerSnapshotFeatures.networkOverridesMinimumVersion) or newer to point the "
+                    + "checkpointed network device at this sandbox's TAP")
+        case nil:
+            throw SandboxRuntimeError.hostCapabilityUnknown(
+                "could not read the Firecracker version, so \(operation) cannot be shown to be safe yet")
+        }
     }
 
     /// The config-drive network block for a sandbox's realized NIC, or nil
@@ -764,15 +813,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // The template's NIC is a throwaway TAP in the template's own
         // namespace, long gone by now; the shape key guarantees the device
         // exists, and this is what points it at this sandbox's real TAP
-        // (STR-104). Warm eligibility already required the remap, so a nil
-        // here with a NIC present is a contradiction worth failing on rather
-        // than restoring a device onto a name that does not resolve.
+        // (STR-104). Warm eligibility already established the remap, so a
+        // throw here is a contradiction rather than a routine refusal — and
+        // every warm failure falls back to a cold boot either way.
         let tapName = try sandboxTAPName(networkAttachments)
-        let overrides = await networkOverrides(forTAP: tapName)
-        if tapName != nil, overrides == nil {
-            throw SandboxRuntimeError.warmStartFailed(
-                "the sandbox has a NIC but this Firecracker cannot remap a restored network device")
-        }
+        let overrides = try await requiredNetworkOverrides(
+            forTAP: tapName, operation: "warm-starting a networked sandbox")
         let plan = SandboxJailPlan(
             sandboxId: sandboxId, config: jailerConfig, firecrackerBinaryPath: firecrackerBinaryPath)
         do {
@@ -851,13 +897,8 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // sandbox published with an interface that opens the *source's* TAP.
         let targetNetwork = try guestNetwork(attachments: networkAttachments)
         let tapName = try sandboxTAPName(networkAttachments)
-        let overrides = await networkOverrides(forTAP: tapName)
-        if tapName != nil, overrides == nil {
-            throw SandboxRuntimeError.networkingUnsupported(
-                "forking a networked sandbox needs Firecracker "
-                    + "\(FirecrackerSnapshotFeatures.networkOverridesMinimumVersion) or newer to point the "
-                    + "checkpointed network device at this sandbox's TAP")
-        }
+        let overrides = try await requiredNetworkOverrides(
+            forTAP: tapName, operation: "forking a networked sandbox")
 
         let sourceSandboxId = restoreFrom.sourceSandboxId.uuidString
         let snapshotId = restoreFrom.snapshotId.uuidString
@@ -922,6 +963,19 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             }
             try await createNetns(plan.netnsName)
 
+            // Loaded resumed, which opens a window: `reidentify` cannot be sent
+            // until the restored guest's vsock listener is back, so for those
+            // few hundred milliseconds the guest is running with the *source*
+            // sandbox's MAC and IP and transmitting onto the fork's own OVS
+            // port. What closes it is OVN `port_security` on that port, which
+            // the agent sets unconditionally from the fork's own allocation
+            // (`NetworkServiceLinux.createVMNetwork`): frames whose source
+            // MAC/IP are not the fork's are dropped at the switch, so a
+            // gratuitous ARP for a live source's address never reaches the L2
+            // domain. It is the only thing standing there, so it is worth
+            // naming — `NetworkConfiguration.portSecurity` exists on the wire
+            // and is never consulted, and this is one of the places that would
+            // quietly depend on it if it ever became real.
             let manager = try await client.restoreVM(
                 vmId: sandboxId,
                 jail: makeJailerOptions(plan: plan, guestMemoryBytes: spec.memoryBytes),
@@ -1704,7 +1758,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         if !networkAttachments.isEmpty {
             sandboxes[sandboxId]?.networkAttachments = networkAttachments
         }
-        let overrides = await networkOverrides(forTAP: try sandboxTAPName(networkAttachments))
+        let overrides = await optionalNetworkOverrides(forTAP: try sandboxTAPName(networkAttachments))
 
         // Resolve the archive: local artifacts when this host took the
         // snapshot, otherwise a verified download of the exported copy
@@ -2389,6 +2443,17 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             jailerConfig.chrootBaseDir + "/" + (firecrackerBinaryPath as NSString).lastPathComponent
         if let names = try? fileManager.contentsOfDirectory(atPath: jailBase) {
             leaked.formUnion(names.filter { $0.hasPrefix("warm-template-") })
+        }
+        // The namespace of a NIC-shaped template (STR-104), which is the
+        // *first* artifact its build creates — before the jail root or the
+        // storage directory the two scans above look at. A crash in that
+        // window leaves a namespace with no other trace of the template, and
+        // template ids are random and never retried, so nothing else would
+        // ever reap it.
+        if let names = try? fileManager.contentsOfDirectory(atPath: SandboxJailPlan.netnsDirectory) {
+            leaked.formUnion(
+                names.compactMap(SandboxJailPlan.sandboxId(fromNetnsName:))
+                    .filter { $0.hasPrefix("warm-template-") })
         }
         for templateId in leaked.sorted() {
             logger.warning(

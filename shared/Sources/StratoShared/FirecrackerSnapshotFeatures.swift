@@ -3,10 +3,16 @@ import Foundation
 /// Firecracker capabilities that a snapshot restore depends on, keyed by the
 /// VMM's own version string.
 ///
-/// Separate from `HypervisorProbe`, which only answers "is Firecracker usable
-/// here": these are finer-grained facts about what a *load* can be asked to do,
-/// and the agent reads them on paths where guessing wrong means an API call
-/// Firecracker rejects outright rather than a capability it quietly lacks.
+/// Separate from the agent's `HypervisorProbe`, which only answers "is
+/// Firecracker usable here": these are finer-grained facts about what a *load*
+/// can be asked to do, and the agent reads them on paths where guessing wrong
+/// means an API call Firecracker rejects outright rather than a capability it
+/// quietly lacks.
+///
+/// Shared rather than agent-local because the control plane needs the same
+/// answer: an agent's probed Firecracker version rides its registration
+/// (`HypervisorSupport.version`), so placement can refuse a fork the target
+/// could only fail at, instead of leaving the caller a degraded sandbox.
 public enum FirecrackerSnapshotFeatures {
     /// The first Firecracker release whose `PUT /snapshot/load` accepts
     /// `network_overrides` (STR-104).

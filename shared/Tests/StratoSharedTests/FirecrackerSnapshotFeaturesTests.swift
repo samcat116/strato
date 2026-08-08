@@ -1,6 +1,6 @@
 import Testing
 
-@testable import StratoAgentCore
+@testable import StratoShared
 
 /// The Firecracker version gate behind snapshot network remapping (STR-104).
 ///

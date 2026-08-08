@@ -231,6 +231,12 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
     /// handshake, or the post-restore launch. Transient: every warm failure
     /// falls back to (or is retried as) a cold boot.
     case warmStartFailed(String)
+    /// A host property this operation depends on could not be read — the
+    /// Firecracker version behind snapshot network remapping (STR-104), say.
+    /// Transient, and deliberately distinct from `networkingUnsupported`: "the
+    /// host cannot" is permanent, but "we could not find out" is a probe that
+    /// timed out or failed to spawn, which a retry clears.
+    case hostCapabilityUnknown(String)
 
     public var failureClassification: FailureClassification {
         switch self {
@@ -238,7 +244,7 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
             .notSnapshottable, .snapshotNotFound:
             return .permanent
         case .sandboxNotFound, .adoptionTargetGone, .execSessionNotFound, .jailSetupFailed,
-            .checkpointInProgress, .snapshotIOFailed, .warmStartFailed:
+            .checkpointInProgress, .snapshotIOFailed, .warmStartFailed, .hostCapabilityUnknown:
             return .transient
         }
     }
@@ -271,6 +277,8 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
             return "snapshot artifact I/O failed: \(reason)"
         case .warmStartFailed(let reason):
             return "sandbox warm start failed: \(reason)"
+        case .hostCapabilityUnknown(let reason):
+            return "a host capability this needs could not be determined: \(reason)"
         }
     }
 }

@@ -70,7 +70,11 @@ final class SandboxTests {
         sandboxCapable: Bool? = nil,
         sandboxNetworkingCapable: Bool? = nil,
         protocolVersion: Int? = WireProtocol.currentVersion,
-        architecture: CPUArchitecture? = nil
+        architecture: CPUArchitecture? = nil,
+        // Recent enough to remap a restored network device (STR-104), which is
+        // what a networked fork places on. Tests probing that gate pass an
+        // older one; everything else wants a host that is simply current.
+        firecrackerVersion: String? = FirecrackerSnapshotFeatures.networkOverridesMinimumVersion
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: agentName,
@@ -83,6 +87,11 @@ final class SandboxTests {
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
             architecture: architecture,
+            hypervisors: [
+                HypervisorSupport(
+                    type: .firecracker, available: true, accelerated: true,
+                    capabilities: .firecracker, version: firecrackerVersion)
+            ],
             // A sandbox NIC is OVN-only, so an agent that can realize one is by
             // construction an overlay host — the two travel together here so a
             // test never has to remember to set both.
@@ -678,6 +687,67 @@ final class SandboxTests {
             } afterResponse: { res in
                 #expect(res.status == .conflict)
                 #expect(res.body.string.contains("cannot re-address its NIC"))
+            }
+        }
+    }
+
+    /// Capturing a networked checkpoint needs nothing special, but forking one
+    /// needs `network_overrides` on the load — so a snapshot can sit on a host
+    /// that cannot fork it. Without this gate the only signal is a permanent
+    /// agent-side refusal the caller sees as a degraded sandbox.
+    @Test("Fork refuses a networked snapshot pinned to a pre-1.12 Firecracker host")
+    func createFromSnapshotRejectsNetworkedForkOnOldFirecracker() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let agentId = try await registerAgent(
+                app: app, sandbox: source, named: "pre-1-12-firecracker-agent",
+                sandboxCapable: true, sandboxNetworkingCapable: true,
+                firecrackerVersion: "1.11.0")
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            try await SandboxNetworkInterface(
+                sandboxID: source.id!,
+                logicalNetworkID: try network.requireID(),
+                macAddress: "52:54:00:00:00:13"
+            ).save(on: app.db)
+            let snapshot = try await self.readySnapshot(
+                named: "old-vmm-checkpoint", source: source, project: project, user: user,
+                agentId: agentId, on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "unremappable-fork",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("cannot point a restored network device"))
+            }
+        }
+    }
+
+    /// The gate is scoped to the remap, not to forking: the same host forks a
+    /// network-free checkpoint perfectly well, because nothing on that path
+    /// touches `network_overrides`.
+    @Test("A network-free fork is unaffected by the host's Firecracker version")
+    func createFromSnapshotAllowsNetworkFreeForkOnOldFirecracker() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let agentId = try await registerAgent(
+                app: app, sandbox: source, named: "pre-1-12-firecracker-agent-networkless",
+                sandboxCapable: true, firecrackerVersion: "1.11.0")
+            let snapshot = try await self.readySnapshot(
+                named: "old-vmm-networkless-checkpoint", source: source, project: project,
+                user: user, agentId: agentId, on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "networkless-fork",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
             }
         }
     }

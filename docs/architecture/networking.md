@@ -446,6 +446,17 @@ upstream. A restore **in place** needs none of this: same sandbox, same
 identity, and all three device names derive from the sandbox id, so the
 checkpoint already names devices that still exist.
 
+Two things about that boundary are worth stating exactly, because both rest on
+`port_security` rather than on the guest. The flush is complete for IPv6 (every
+non-link-local address on the device, whoever added it) but reaches only the
+**primary** IPv4 address, which is all the `SIOCSIFADDR` API can see — so a
+forked workload that had added its own IPv4 address with netlink carries it in.
+And a fork is loaded *resumed*, so between the load and the re-address the
+guest is briefly running with the source's MAC and IP on the fork's own OVS
+port. In both cases the frames are dropped at the switch, because the port's
+`port_security` was programmed from the fork's own allocation before the veth
+went live; what is wrong is only the guest's view of itself.
+
 **Host requirements.** iproute2's `ip` *and* `tc`, plus the kernel's `sch_clsact`,
 `cls_matchall`, and `act_mirred` modules. Both binaries are invoked by absolute
 path resolved from a fixed candidate list, not via `PATH` — a service manager's

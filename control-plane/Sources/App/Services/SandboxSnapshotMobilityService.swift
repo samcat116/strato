@@ -76,6 +76,29 @@ enum SandboxSnapshotCompatibility {
         return nil
     }
 
+    /// Why `agent` cannot restore a checkpoint whose device set includes a NIC
+    /// into a *different* sandbox — a fork (STR-104) — or nil when it can.
+    ///
+    /// Pointing the checkpointed network device at the target's TAP is
+    /// `network_overrides` on `PUT /snapshot/load`, which is Firecracker
+    /// 1.12.0 and newer. Unlike `restoreBlocker`'s constraints this one is
+    /// about the *target host alone*: a pre-1.12 host takes networked
+    /// checkpoints perfectly well (nothing in the capture path needs the
+    /// field), so a snapshot can exist that its own agent cannot fork.
+    /// Missing information is incompatible here for the reason it is
+    /// everywhere else in this type — and because the alternative is a
+    /// permanent agent-side failure the caller only sees as a degraded
+    /// sandbox.
+    static func networkedForkBlocker(target agent: Agent) -> String? {
+        let version = normalizedFirecrackerVersion(
+            agent.hypervisors.first { $0.type == .firecracker && $0.available }?.version)
+        guard FirecrackerSnapshotFeatures.supportsNetworkOverrides(version) else {
+            return
+                "agent '\(agent.name)' runs Firecracker \(version ?? "of unknown version"), which cannot point a restored network device at a new TAP (need >= \(FirecrackerSnapshotFeatures.networkOverridesMinimumVersion)); fork the snapshot without a network, or onto a newer host"
+        }
+        return nil
+    }
+
     /// Firecracker prints "Firecracker v1.7.0" but reports `vmm_version`
     /// "1.7.0"; compare without the cosmetic prefix.
     static func normalizedFirecrackerVersion(_ raw: String?) -> String? {

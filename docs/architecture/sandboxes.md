@@ -982,12 +982,26 @@ snapshot paths, each differently, and all three are now covered:
 Two host requirements run through all of it. Repointing a device is Firecracker
 `network_overrides` on `PUT /snapshot/load`, which arrived in **1.12.0**; an
 older VMM rejects the whole request body rather than ignoring the field, so the
-agent probes `firecracker --version` once per life and treats an unknown version
-as incapable. And re-addressing the guest is control protocol **v4**, which the
-agent learns from the guest's own versioned `pong` — never from its own build,
-since the guest image is installed separately. Neither gate degrades a
+version is a hard gate — checked at fork placement and admission from the
+agent's registered `HypervisorSupport.version`, and again agent-side from
+`firecracker --version`, which is memoized only when it actually answered (a
+probe that timed out is a retry, not a permanent "no"). And re-addressing the
+guest is control protocol **v4**, which the agent learns from the guest's own
+versioned `pong` — never from its own build, since the guest image is installed
+separately. Neither gate degrades a
 network-free sandbox: those keep checkpointing, warm-starting and forking on any
 Firecracker and any guest that was already good enough.
+
+**What the fork's L3 boundary actually covers.** The guest flushes every
+non-link-local IPv6 address on the device but only the *primary* IPv4 one —
+`SIOCSIFADDR` sees no further — so a forked workload that had added its own
+IPv4 address with netlink keeps it. And the checkpoint is loaded resumed, so
+between the load and the `reidentify` the guest is briefly live under the
+source's MAC and IP. Neither reaches the network: OVN `port_security` on the
+fork's port was programmed from the fork's own allocation before its veth went
+live, so anything else is dropped at the switch. The gap is the guest's view of
+itself, not the L2 domain's — see
+[Sandbox NICs](./networking.md#sandbox-nics).
 
 ## Quotas, TTL, and expiry
 

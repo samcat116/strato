@@ -411,6 +411,8 @@ fn handle_launch(state: &GuestState, args: LaunchArgs) -> Response {
             };
         }
     }
+    // Both halves of the identity are recorded by now, networked or not.
+    rewrite_resolver_files(state);
 
     let process = match config::resolve_process(&image_config, &overrides) {
         Ok(process) => process,
@@ -444,24 +446,36 @@ fn handle_launch(state: &GuestState, args: LaunchArgs) -> Response {
 /// Re-address the NIC of a guest restored from someone else's checkpoint
 /// (STR-104), and record what was applied so a later request can still find
 /// the device by the MAC this one gave it.
-///
-/// The resolver files are rewritten too, straight into the live root (the
-/// guest has long since switched onto the container rootfs by the time any
-/// control request arrives), so a fork's `/etc/hosts` maps its own address and
-/// not the source's. They stay best effort for the reason the boot path gives:
-/// a read-only rootfs is a legitimate sandbox shape.
 fn apply_network(state: &GuestState, network: &NetworkConfig) -> Result<(), String> {
     let previous = state.network.lock().expect("network poisoned").clone();
     let name = super::net::reconfigure_interface(previous.as_ref(), network)?;
     *state.network.lock().expect("network poisoned") = Some(network.clone());
+    eprintln!("[sandbox-init] reconfigured {name}");
+    Ok(())
+}
+
+/// Rewrite `/etc/resolv.conf` and `/etc/hosts` from whatever identity the
+/// guest now carries, after a `launch` or `reidentify` has updated it.
+///
+/// Driven by the recorded state rather than by the request, so the two warm
+/// paths cannot diverge: a network-free sandbox launched out of a template
+/// would otherwise keep the *template's* `/etc/hosts`, with its own hostname
+/// unresolvable, purely because the request had no `network` block to hang
+/// this off.
+///
+/// Straight into the live root: `switch_into_rootfs` chroots into the
+/// container rootfs before the vsock server thread starts, so `/` really is
+/// the container's root by the time any control request lands. Best effort,
+/// for the reason the boot path gives — a read-only rootfs is a legitimate
+/// sandbox shape.
+fn rewrite_resolver_files(state: &GuestState) {
     let hostname = state.hostname.lock().expect("hostname poisoned").clone();
+    let network = state.network.lock().expect("network poisoned").clone();
     super::net::write_resolver_files(
         std::path::Path::new("/"),
         hostname.as_deref(),
-        Some(network),
+        network.as_ref(),
     );
-    eprintln!("[sandbox-init] reconfigured {name}");
-    Ok(())
 }
 
 /// Mix host-supplied random bytes into the kernel RNG by writing them to
@@ -561,6 +575,9 @@ fn handle_reidentify(state: &GuestState, args: ReidentifyArgs) -> Response {
             };
         }
     }
+    // The fork's own name and addresses, not the source's — and unconditional
+    // for the same reason as on the launch path.
+    rewrite_resolver_files(state);
 
     // Log records belong to the identity that produced them. Keep the
     // monotonic sequence and active stdio writers, but start target delivery

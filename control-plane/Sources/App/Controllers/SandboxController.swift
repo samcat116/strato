@@ -339,6 +339,18 @@ struct SandboxController: RouteCollection {
                         "Snapshot's checkpointed guest cannot re-address its NIC (guest control protocol \(snapshot.guestControlProtocolVersion ?? 0), need >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))"
                 )
             }
+            // …and a *host* that can point the checkpointed network device at
+            // the fork's TAP. Capture needs no such thing, so a networked
+            // snapshot can exist on a host that cannot fork it; without this
+            // the only place that shows up is a permanent agent-side refusal
+            // the caller sees as a degraded sandbox. Same shape as the gate
+            // above it: only refuse a fork that could never place anywhere,
+            // and leave the per-agent filtering to the scheduler.
+            if restoreSourceNetworkID != nil, !snapshot.isExported, let pinnedAgent,
+                let blocker = SandboxSnapshotCompatibility.networkedForkBlocker(target: pinnedAgent)
+            {
+                throw Abort(.conflict, reason: blocker)
+            }
             restoreSnapshot = snapshot
             restoreSource = source
         } else {
