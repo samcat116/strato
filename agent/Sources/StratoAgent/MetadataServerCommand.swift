@@ -84,7 +84,7 @@ extension StratoAgent {
         /// the addresses are on the interface. Without the retry that race would
         /// cost a whole sync interval of metadata for a booting guest.
         ///
-        /// The two families are independent for the reason `MetadataChassisPlan`
+        /// The two families are independent for the reason `ChassisServicePlan`
         /// gives: on a host without IPv6 the v6 half simply never works, and the
         /// v4 metadata service must not be held hostage to it.
         private func bind(server: MetadataHTTPServer, logger: Logger) async throws {

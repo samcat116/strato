@@ -5,6 +5,8 @@
 - **Deciders**: Sam Schmitt
 - **Scope**: agent-side instance metadata dataplane (STR-49), and the listener
   design it constrains (STR-56)
+- **Amended**: 2026-08-08 (STR-40) — the namespace now hosts a second service,
+  and its deferred cost has been paid. See "Amendment" below.
 
 ## Summary
 
@@ -139,7 +141,7 @@ here, with no listener in hand.
   tmpfs. After a host reboot the row returns, `ovs-vswitchd` recreates the
   netdev, and `ovn-controller` rebinds the localport and answers guest ARP for
   the metadata address — with no namespace, no addresses, and no routes behind
-  it, so guests hang instead of failing fast. `ObservedMetadataPort` therefore
+  it, so guests hang instead of failing fast. `ObservedChassisServicePort` (`ObservedMetadataPort` when this was written) therefore
   probes the namespace path alongside the row, and a setup that fails partway
   rolls the namespace back so the next pass observes an honest "not built".
 - **No MTU is set on the namespace interface**, unlike the sandbox NIC path.
@@ -152,3 +154,49 @@ here, with no listener in hand.
   internal port is a datapath port owned by `ovs-vswitchd`, and relocating one
   is the standard OpenStack pattern. The scar is close enough that the agent
   verifies `ofport` and `error` after the move rather than trusting the rows.
+
+## Amendment (2026-08-08, STR-40)
+
+Two things this ADR left open have since been settled, by the per-network DNS
+resolver rather than by the metadata listener it was written for.
+
+**The namespace hosts two services.** It now also terminates
+`169.254.169.253` / `fd00:ec2::253`, the network's DNS resolver, on the *same*
+OVS internal port and the same `localport`. Nothing about the reasoning above
+changes — attribution and reply routing are what a resolver needs from a
+namespace too, and it is precisely what a single host-namespace listener could
+not have given it. Three details follow:
+
+- The port's addresses are now a composed set rather than a constant, so the
+  agent stamps `external_ids:strato-services` on the interface and re-realizes a
+  namespace whose service set has changed. A missing stamp reads as
+  metadata-only, which is a statement of fact about every interface built before
+  this: the resolver did not exist.
+- The namespace's default route's preferred source is whichever service address
+  actually exists. `ip route add … src <addr>` is rejected outright for an
+  unconfigured address, so a resolver-only network would otherwise fail to build
+  its namespace at all.
+- An ingress `tc` policer caps the aggregate packet rate guests may push at the
+  interface. Aggregate across both services, because what it protects is the
+  hypervisor.
+
+**The per-namespace listener cost has been paid twice, and both times the shape
+was a helper process.** This ADR argued that per-namespace listening "does not
+compose cheaply with a single-process Swift agent" and left STR-56 to choose
+between a helper process per namespace and a namespace-entering listener.
+STR-56 and STR-40 answered it independently and in parallel — the metadata
+listener with a forked `MetadataServerSupervisor`, the DNS resolver with one
+CoreDNS per namespace, each carrying its own supervision, adoption and backoff
+machinery. Neither inherited the choice from the other, which makes the
+agreement worth more than a precedent would have been: the constraint recorded
+here is real, not an artifact of whichever feature reached it first.
+
+The obvious follow-up is whether the two supervisors should become one. They
+converged on the same shape for the same reason but differ in what they
+supervise — a Strato subcommand whose protocol we own, versus a third-party
+binary configured through files on disk — so nothing here argues they must
+merge, only that a future reader should expect to find both and know why.
+
+[ADR 0006](./0007-coredns-per-chassis-namespace.md) records why the resolver
+reused this namespace instead of the single host-namespace listener its own
+issue proposed.

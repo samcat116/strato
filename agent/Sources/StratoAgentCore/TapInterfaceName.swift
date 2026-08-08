@@ -67,7 +67,7 @@ public func sandboxNICDeviceNames(sandboxId: String, nicIndex: Int) -> SandboxNI
 /// veth names, so it survives an agent restart and teardown can rederive it with
 /// no persisted state. There is exactly one such device per network per chassis,
 /// so there is no NIC index to mix in.
-public func metadataInterfaceName(networkId: String) -> String {
+public func chassisServiceInterfaceName(networkId: String) -> String {
     interfaceName(prefix: "mdp", workloadId: networkId, nicIndex: 0)
 }
 

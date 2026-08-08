@@ -305,7 +305,11 @@ public struct NetworkSpec: Codable, Sendable {
     /// platforms without OVN), the guest is configured statically via cloud-init.
     /// Defaults false so older agents and non-OVN paths keep today's behavior.
     public let dhcpEnabled: Bool
-    /// DNS resolvers advertised to the guest over DHCP (`dns_server` option).
+    /// The network's DNS resolvers. What they are depends on
+    /// `resolverEnabled`: with it off these are advertised to the guest over
+    /// DHCP (`dns_server` option), which is all they ever were; with it on the
+    /// guest is told `NetworkResolverEndpoint.address` and these become the
+    /// upstream forwarders the network's CoreDNS sends misses to (wire v37).
     public let dnsServers: [String]
     /// DNS search domain advertised over DHCP (`domain_name` option), if set.
     public let domainName: String?
@@ -341,6 +345,22 @@ public struct NetworkSpec: Codable, Sendable {
     /// Nil ≙ a control plane that predates the field; the agent converges
     /// nothing rather than reading silence as "tear down".
     public let metadataEnabled: Bool?
+    /// Whether this NIC's network publishes the per-network DNS resolver
+    /// (STR-40, wire v37).
+    ///
+    /// Here for exactly `metadataEnabled`'s reason, and realized on the same
+    /// per-network chassis foot: `DesiredNetworkState.resolverEnabled` authors
+    /// the OVN `localport` and the DHCP row, and this per-NIC copy is what
+    /// reaches a sited non-authority agent, whose `networks` list is empty
+    /// because it may not author topology but which still has to materialize
+    /// the resolver address — and run a CoreDNS — for its own guests.
+    ///
+    /// The forwarders and search domain that CoreDNS needs are already on this
+    /// spec as `dnsServers` and `domainName`, so this flag is the only addition.
+    ///
+    /// Nil ≙ a control plane that predates the field; the agent converges
+    /// nothing rather than reading silence as "tear down".
+    public let resolverEnabled: Bool?
 
     public init(
         network: String,
@@ -358,7 +378,8 @@ public struct NetworkSpec: Codable, Sendable {
         domainName: String? = nil,
         leaseTime: Int? = nil,
         securityGroupIds: [UUID]? = nil,
-        metadataEnabled: Bool? = nil
+        metadataEnabled: Bool? = nil,
+        resolverEnabled: Bool? = nil
     ) {
         self.network = network
         self.networkId = networkId
@@ -376,13 +397,14 @@ public struct NetworkSpec: Codable, Sendable {
         self.leaseTime = leaseTime
         self.securityGroupIds = securityGroupIds
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
     }
 
     private enum CodingKeys: String, CodingKey {
         case network, networkId, macAddress, ipAddress, netmask, gateway, mtu
         case ipv6Address, ipv6PrefixLength, gateway6
         case dhcpEnabled, dnsServers, domainName, leaseTime
-        case securityGroupIds, metadataEnabled
+        case securityGroupIds, metadataEnabled, resolverEnabled
     }
 
     /// Tolerates specs from an older control plane that predates the DHCP fields:
@@ -408,6 +430,7 @@ public struct NetworkSpec: Codable, Sendable {
         self.leaseTime = try container.decodeIfPresent(Int.self, forKey: .leaseTime)
         self.securityGroupIds = try container.decodeIfPresent([UUID].self, forKey: .securityGroupIds)
         self.metadataEnabled = try container.decodeIfPresent(Bool.self, forKey: .metadataEnabled)
+        self.resolverEnabled = try container.decodeIfPresent(Bool.self, forKey: .resolverEnabled)
     }
 }
 

@@ -208,6 +208,7 @@ struct NetworkController: RouteCollection {
             leaseTime: request.leaseTime,
             externalAccess: request.externalAccess ?? true,
             metadataEnabled: request.metadataEnabled ?? true,
+            resolverEnabled: request.resolverEnabled ?? false,
             siteID: request.siteId
         )
 
@@ -465,6 +466,9 @@ struct NetworkController: RouteCollection {
         // agents treat legitimately concurrent syncs as stale.
         if let metadataEnabled = request.metadataEnabled {
             network.metadataEnabled = metadataEnabled
+        }
+        if let resolverEnabled = request.resolverEnabled {
+            network.resolverEnabled = resolverEnabled
         }
 
         // The zone this network's VMs register into (issue #770). Only ever a

@@ -57,6 +57,11 @@ public struct ResolvedNetworkAttachment: Sendable {
     public let dhcpEnabled: Bool
     /// DNS resolvers for this NIC. Delivered over DHCP when `dhcpEnabled`;
     /// otherwise written into the static guest config as `nameservers`.
+    ///
+    /// With `resolverEnabled` these are *not* what the guest is told — it is
+    /// pointed at `NetworkResolverEndpoint` instead, and these become that
+    /// resolver's upstream forwarders (STR-40). Both readings live on one field
+    /// because the value is the same list either way; only its consumer moves.
     public let dnsServers: [String]
     /// DNS search domain for this NIC. Delivered over DHCP (`domain_name` /
     /// `domain_search`) when `dhcpEnabled`; otherwise written into the static
@@ -69,6 +74,15 @@ public struct ResolvedNetworkAttachment: Sendable {
     /// OVN `localport` terminating those addresses, so a route to them would
     /// lead nowhere.
     public let metadataEnabled: Bool
+    /// Whether this NIC's network publishes the per-network DNS resolver, and
+    /// therefore whether the guest should be pointed at
+    /// `NetworkResolverEndpoint` and given a route to it (STR-40). Gated on a
+    /// real TAP for `metadataEnabled`'s reason: under user-mode (SLIRP) there is
+    /// no `localport` terminating the address, and a guest told to resolve
+    /// through it would have no working DNS at all — a strictly worse outcome
+    /// than the missing metadata route, which is why the fallback hands it
+    /// `dnsServers` directly instead.
+    public let resolverEnabled: Bool
 
     public init(
         network: String,
@@ -84,7 +98,8 @@ public struct ResolvedNetworkAttachment: Sendable {
         dhcpEnabled: Bool = false,
         dnsServers: [String] = [],
         domainName: String? = nil,
-        metadataEnabled: Bool = false
+        metadataEnabled: Bool = false,
+        resolverEnabled: Bool = false
     ) {
         self.network = network
         self.attachment = attachment
@@ -100,6 +115,7 @@ public struct ResolvedNetworkAttachment: Sendable {
         self.dnsServers = dnsServers
         self.domainName = domainName
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
     }
 }
 

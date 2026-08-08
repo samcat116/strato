@@ -304,3 +304,31 @@ use in code, tests, docs, and review. Architecture-level maps live in
   back to the platform domain is **degraded**, not equivalent — it cross-signs
   tenants under one root. A guest's domain is chosen once, when its registration
   is written, and the URI never moves.
+
+## Networking
+
+- **Chassis service foot** — the per-network pair of things every hypervisor
+  builds for the link-local services its guests use: one OVN `localport` on the
+  network's logical switch (authored by the site's topology authority) and one
+  network namespace, `strato-md-<network-uuid>`, terminating it on this host
+  (built by every agent running a NIC on that network). Two services share it:
+  instance metadata and the network's DNS **resolver**. Not "the metadata
+  namespace" any more, though the OVN and OVS names still say `metadata` — those
+  are ownership markers on rows every live site already has, and renaming them
+  would orphan every one of them.
+
+- **Resolver** — the DNS server a network's guests are pointed at, answering on
+  a link-local address inside the chassis service foot. One CoreDNS process per
+  network per hypervisor. It serves the zones attached to the network in full —
+  including the CNAME/TXT/SRV records the OVN `DNS` table cannot express — and
+  **forwards** everything else. Enabling it is a **site-wide** decision, not a
+  per-host one: guests are pointed at the address by one DHCP row while the
+  process answering runs per chassis, so one host that cannot serve one
+  withholds the feature from every network in its site.
+
+- **Upstream forwarder** — where a network's resolver sends the names it does
+  not serve itself. This is what `LogicalNetwork.dnsServers` means on a network
+  with the resolver enabled; with it disabled the same list is what guests are
+  told directly. One field, two readings, and which applies is
+  `resolverEnabled`. An empty list is not a fallback to anything: internal names
+  resolve and everything else is refused.

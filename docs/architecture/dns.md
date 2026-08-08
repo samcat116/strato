@@ -5,13 +5,19 @@ model** with swappable realization. This document describes that model — what 
 zone is, where records come from, and how a zone's contents are assembled — and
 sketches the layers that will realize it.
 
-Status: **phases 1 and 3 are implemented.** Zones, attachments, records, and
-hostnames are fully manageable through the API and CLI; the assembler produces a
-correct record set for a zone; and the A/AAAA/PTR subset of that set is realized
-into the OVN `DNS` table by each network's topology authority, so a guest
-resolves its peers by `<hostname>.<zone>` in the datapath. The full record
-vocabulary (CNAME, TXT, SRV) and external forwarding wait for the per-network
-resolver in phase 4.
+Status: **phases 1 and 3 are implemented; phase 4 is partial.** Zones,
+attachments, records, and hostnames are fully manageable through the API and
+CLI; the assembler produces a correct record set for a zone; and the A/AAAA/PTR
+subset of that set is realized into the OVN `DNS` table by each network's
+topology authority, so a guest resolves its peers by `<hostname>.<zone>` in the
+datapath.
+
+Phase 4's resolver exists and serves the **full record vocabulary** — CNAME, TXT
+and SRV, which the datapath cannot express — but it **cannot forward upstream
+yet**, so `resolverEnabled` is an opt-in rather than the opt-out it is meant to
+become. See "The forwarding gap" below; it is the one thing standing between
+this phase and the bug it was filed to fix. Inbound resolution from outside the
+overlay (phase 5) and external publication (phase 6) are untouched.
 
 ## What exists before this
 
@@ -178,23 +184,30 @@ forward entries are co-tenants of one row set and nothing needs to own
 
 Two consequences to settle before the driver phases, rather than in them:
 
-- **The CoreDNS driver (phase 4) cannot put these in the forward zone's file.**
-  It will need to synthesize a separate reverse zone from the same assembled
-  set — filtering PTR entries out of the forward file and grouping them by
-  their `in-addr.arpa` / `ip6.arpa` suffix. The assembler's output already
-  carries everything needed to do that; what it does not carry is a *decision*,
-  and this paragraph is it.
+- **The CoreDNS driver cannot put these in the forward zone's file.** It
+  synthesizes a separate reverse zone from the same assembled set — filtering
+  PTR entries out of the forward file and grouping them by their
+  `in-addr.arpa` / `ip6.arpa` suffix. Done in phase 4; see "Realizing a zone
+  into CoreDNS" below.
 - **A hand-made reverse zone is not reconciled against derived PTRs.**
   `2.0.192.in-addr.arpa` is a legal `DNSZone` name, so an operator can create
   one and author PTRs in it. Those are never compared against the PTRs derived
   into a forward zone, so the write-time conflict check — careful everywhere
-  else — has a blind spot here. Nothing today realizes either, so nothing is
-  broken yet; closing it means deciding whether reverse space is a zone of its
-  own at all. Phase 3 did not settle it: the OVN driver realizes derived PTRs
-  from the forward zone and authored PTRs in a hand-made reverse zone alike, as
-  co-tenants of the same flat name → value space, so the two can still shadow
-  each other. Settling it is now phase 4's business, where a zone file forces
-  the question.
+  else — has a blind spot here.
+
+  **Phase 4 settles this, and the answer is that reverse space is not a zone of
+  its own.** Both drivers treat a PTR as a record like any other, wherever it
+  was authored: the OVN driver puts derived and authored PTRs alike into one
+  flat name → value space, and the CoreDNS driver regroups *both* into the same
+  synthesized reverse zone. So a hand-made `2.0.192.in-addr.arpa` zone is not a
+  second authority for that space — its records simply join the same pool, and
+  a name published twice resolves to whichever the merge kept (derived wins,
+  per "Conflict handling" below).
+
+  The consequence worth naming is that creating such a zone buys nothing the
+  record API does not already give you, and the write-time conflict check still
+  will not warn you when its contents shadow a derived PTR. That is a gap in the
+  *warning*, not in the outcome.
 
 ### Conflict handling
 
@@ -245,7 +258,8 @@ layer of its own. Each layer names the phase that built it:
    `ovn-controller` (phase 3). No server process, no HA story, no failure
    domain. Implemented — see "Realizing a zone into OVN" below.
 3. **Per-network link-local CoreDNS** for the full record vocabulary, external
-   forwarding, and isolated networks (phase 4).
+   forwarding, and isolated networks (phase 4). Implemented — see "Realizing a
+   zone into CoreDNS" below.
 4. **Control-plane resolver / external publication** for ops-facing inbound
    resolution and public names (phases 5 and 6).
 
@@ -317,6 +331,194 @@ Agent-side (`agent/Sources/StratoAgentCore/DNSZoneRealization.swift`):
   row is enough to unpublish it — `Logical_Switch.dns_records` is a weak
   reference set, so ovsdb-server drops the UUID from every switch naming it.
 
+## Realizing a zone into CoreDNS (phase 4, wire v37)
+
+The OVN table answers A/AAAA/PTR because that is all
+`Logical_Switch.dns_records` can hold. Phase 4 puts a real resolver behind it,
+which is what makes CNAME, TXT and SRV resolve — and, more urgently, what fixes
+**external** resolution on a network without external access.
+
+That last part is the bug this phase exists for. OVN is an *interceptor*, not a
+forwarder: a miss is released toward whatever `dns_server` the guest was handed
+over DHCP, and on a network whose `externalAccess` is off there is no SNAT and
+therefore no path to a public resolver. Those guests could resolve nothing
+external at all. A resolver on the guest's own hypervisor forwards on its
+behalf and closes it. OpenStack hit exactly this moving from ML2/OVS, where
+dnsmasq had been forwarding.
+
+### Where it runs
+
+**In the network's existing chassis namespace**, on the *same* OVN `localport`
+the instance metadata service already publishes from — see
+[networking](./networking.md) §Link-local services. One port carries up to four
+addresses, one namespace terminates them, and one `external_ids:strato-services`
+stamp records which of the two services it was built for so turning a resolver
+on re-realizes exactly the namespaces that need it.
+
+The resolver answers on `169.254.169.253` and `fd00:ec2::253` — AWS's addresses
+for the same service, adopted for the reason its metadata addresses were.
+
+**Reusing the namespace is the load-bearing decision**, and it is not what
+STR-40's issue originally proposed. The issue argued for a distinct
+`169.254/16` address per network so that a *single* CoreDNS in the host
+namespace could tell which network asked, by destination address. That was
+written before [ADR 0003](../adr/0003-imds-chassis-namespace.md), which built
+the per-network namespace and rejected the host-namespace shape on blast-radius
+grounds. The namespace already solves both halves — attribution *and* reply
+routing to a tenant address three networks may share — so a distinct address per
+network would buy nothing and cost an allocation, a column, and a per-network
+security-group match instead of a constant one. The price paid instead is one
+CoreDNS process per network with a local NIC. [ADR 0007](../adr/0007-coredns-per-chassis-namespace.md)
+records the trade.
+
+### What the agent renders
+
+`CoreDNSZoneRenderer` is pure, golden-file tested, and produces a `Corefile`
+plus one zone file per zone, under `<config_dir>/<network-uuid>/`:
+
+- **One forward zone file per attached zone**, with a synthesized SOA and NS —
+  CoreDNS's `file` plugin refuses a zone without an SOA. Both point at
+  `ns.strato.invalid.`, deliberately outside every zone: an in-zone `ns.<zone>`
+  would collide with a tenant's own record, and a `CNAME` authored at that name
+  would put a CNAME beside other data and make CoreDNS refuse the entire zone.
+- **Synthesized reverse zones.** PTRs are filtered out of the forward file and
+  regrouped at the `/24` (`in-addr.arpa`) and `/64` (`ip6.arpa`) boundary
+  derived from the PTR name itself — not from the network's subnet, which the
+  renderer does not have and which would be the wrong key for a zone attached to
+  two networks.
+- **A catch-all `.` block** with `forward . <upstreams>`, `cache`, and `errors`.
+  An empty upstream list renders no `forward` at all: the resolver answers its
+  zones and REFUSEs everything else. Synthesizing a public default would put a
+  tenant's queries somewhere the operator never chose. (The `forward` is
+  rendered but does not currently reach anything — see "The forwarding gap".)
+
+Three things it refuses to emit rather than emit wrong, on
+`OVNDNSRecords.flatten`'s reasoning in its sharper form — a zone file is parsed
+as a whole, so one bad line costs every name in it: a `CNAME` coexisting with
+other data at the same owner, a TXT value carrying a quote or backslash (which
+would round-trip differently through the OVN driver if escaped here), and any
+value that fails its type's shape check. Each is a logged diagnostic.
+
+The serial is derived from the zone's content digest — the control plane's
+`recordsHash` for a forward zone, a locally computed one for a synthesized
+reverse zone. It changes when and only when the zone does, which is what a
+serial is for. It is **not monotonic**, which would matter if anything ever
+transferred these zones; nothing does.
+
+### What travels, and what gates it
+
+`DesiredDNSRecord` gains a `ttl` at wire v37. Phase 3 deliberately left it off —
+an OVN `DNS` row has nowhere to put one — and a zone file writes one TTL per
+RRset, so this is the field that was waiting for a reader. It is folded into
+`recordsHash`, which moves every stamp once on upgrade and heals with one
+rewrite per zone.
+
+**Zone delivery widens past the topology authority.** OVN `DNS` rows are
+switch-scoped topology and only the site's controller may write them, but a
+CoreDNS runs wherever the guests are. So from v37 a zone is sent to any agent
+that either authors an attached network *or* runs a local NIC on one, and the
+agent decides which half it realizes from `networksAuthoritative` — which it
+already receives. The records themselves stay assembled fleet-wide, as they have
+since phase 3.
+
+**`LogicalNetwork.dnsServers` is redefined, not replaced.** With the resolver on,
+the DHCP `dns_server` option becomes the resolver's link-local address and the
+configured list becomes the resolver's *upstream forwarders*. The column, its
+validation, and the wire field are unchanged; only the consumer moves. That is
+safe across skew in both directions because a pre-v37 agent never sees
+`resolverEnabled` and keeps handing the list to guests verbatim, which is exactly
+the old behaviour. The API and UI say which reading applies.
+
+**The capability is site-wide, not per agent.** The control plane withholds
+`resolverEnabled` unless *every* agent registered to the site reports
+`AgentRegisterMessage.resolverCapable`. The DHCP
+option pointing guests at the resolver is one row per network authored by the
+topology authority, while the process answering is per chassis — so one host
+without CoreDNS would give that network DNS that works until a VM lands
+somewhere else, which presents as an intermittent network fault rather than as
+the missing dependency it is. Offline agents count; a host that is down is one
+that will come back.
+
+### The forwarding gap
+
+**Upstream forwarding does not work, and the architecture above is why.**
+
+CoreDNS runs inside the network's chassis namespace, whose only egress is the
+OVS internal port on the tenant switch and whose only addresses are link-local.
+The namespace's default route is on-link out that port with a link-local source.
+So a query to `1.1.1.1` either ARPs for a public address on a tenant switch —
+where nothing answers — or, routed via the network's gateway, leaves with a
+`169.254/16` source that no SNAT rule matches (`logical_ip` is the tenant
+subnet) and that no router has a route back to.
+
+This is the half of phase 4 the issue got right and this design lost. In the
+issue's original shape the resolver sat in the **host** namespace, where
+forwarding is free: the hypervisor has its own egress, and using it is precisely
+what lets a guest on a network with no external access resolve a public name.
+Moving the resolver into the tenant namespace bought attribution and reply
+routing (see [ADR 0007](../adr/0007-coredns-per-chassis-namespace.md)) and gave
+that up without noticing.
+
+Three ways out, none of them free:
+
+1. **A veth from each namespace to the host, with host-side NAT.** Restores the
+   headline fix in full, including for isolated networks, because the egress is
+   the *host's*. Costs the agent host firewall state, which it has never
+   managed, and re-opens the "L3 foot in every tenant network" question ADR 0007
+   thought it had avoided.
+2. **An IPAM-allocated tenant address on the namespace interface**, routed via
+   the network's gateway so SNAT matches. Small and entirely inside OVN, but it
+   consumes a tenant IP per (network, chassis) — which the issue explicitly set
+   out to avoid — and it fixes forwarding only on networks that already have
+   external access, i.e. not the case the phase exists for.
+3. **Move the resolver to the host namespace after all**, with a distinct
+   link-local address per network as the issue proposed, plus the per-network
+   policy routing that reply routing then requires. Reverses ADR 0007.
+
+Until one lands, a network with the resolver on resolves its own zones and
+REFUSEs everything else, which is why the column defaults off.
+
+### Degradation
+
+If CoreDNS dies, OVN keeps intercepting UDP/53 whatever the destination and
+keeps answering A/AAAA/PTR from its own table. So the failure mode is "internal
+names still resolve, external ones don't" rather than "no DNS" — which is what
+makes running this without HA acceptable, and is the same argument layer 2 was
+built to support.
+
+The supervisor restarts an exited CoreDNS with exponential backoff capped at a
+minute, and reports a crash loop after three consecutive failures. A record edit
+costs no restart at all: the `file` plugin watches its zone files and the
+Corefile carries `reload`.
+
+A rollback below v37 strips the resolver's addresses from the localport while
+leaving the metadata ones, and reverts the DHCP row in the same sync, so guests
+are told to use the real resolvers again at their next lease. That is a
+consistent rollback rather than a half-state — deliberately not protected by the
+localport's opinionless guard, which fires only when the sync has no opinion
+about *either* service.
+
+### Reachability
+
+Two things could silently break DNS for every guest and are handled explicitly:
+
+- **Security groups.** The site-singleton drop group carries four
+  non-overridable `allow-related` egress ACLs to the resolver address at
+  priority 1003 — v4/v6 × udp/tcp, because an OVN match is per family *and* per
+  protocol and a resolver that answers only UDP breaks every truncated response.
+  Without them a default-deny egress policy would blackhole DNS. `dropGroupRevision`
+  was bumped to 5 so the drop group is rewritten on upgrade.
+- **Routes.** The resolver address is link-local and belongs to no subnet, so it
+  needs an advertised route: DHCP option 121 for v4, and the NoCloud
+  `network-config` for statically addressed NICs and for all v6 (there is no
+  DHCPv6 counterpart to option 121). Same mechanisms, same one-NIC-per-family
+  rule, as the metadata routes.
+
+Guests may push at most `[resolver] rate_limit_pps` packets per second at a
+network's chassis interface — 1024 by default, AWS's ceiling — policed on
+ingress with `tc`, aggregate across DNS and metadata together, because what it
+protects is the hypervisor rather than either service.
+
 ## Open questions
 
 - **Do sandboxes get derived records?** They share IPAM and the NIC shape, so
@@ -326,8 +528,10 @@ Agent-side (`agent/Sources/StratoAgentCore/DNSZoneRealization.swift`):
   security-group precedent: dead quota plumbing would be worse than an honest
   cap.
 - **Whether authored `PTR` records are user-writable or always derived.** They
-  are writable today — see "Where reverse records live" for the reconciliation
-  gap that leaves.
+  are writable today. Phase 4 settled *where* they land — both drivers pool them
+  with the derived ones — but the write-time conflict check still does not warn
+  when a hand-made reverse zone shadows a derived PTR. See "Where reverse
+  records live".
 
 ## References
 
@@ -340,5 +544,12 @@ Agent-side (`agent/Sources/StratoAgentCore/DNSZoneRealization.swift`):
   `shared/Sources/StratoShared/ReconciliationProtocol.swift`
 - OVN realization: `agent/Sources/StratoAgentCore/DNSZoneRealization.swift`,
   driven through `NetworkActuator` by `NetworkServiceLinux`
+- CoreDNS realization: `agent/Sources/StratoAgentCore/CoreDNSZoneRenderer.swift`
+  (pure), `ResolverSupervisionPolicy.swift` (pure),
+  `agent/Sources/StratoAgent/ResolverSupervisor.swift` (processes)
+- Addresses: `shared/Sources/StratoShared/NetworkResolverEndpoint.swift`
+- Chassis foot: `agent/Sources/StratoAgentCore/ChassisServicePlan.swift`, and
+  [ADR 0003](../adr/0003-imds-chassis-namespace.md) /
+  [ADR 0007](../adr/0007-coredns-per-chassis-namespace.md)
 - Networking design (the L2/L3 substrate): [networking](./networking.md)
 - IAM vocabulary: [iam](./iam.md)

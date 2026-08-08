@@ -616,6 +616,89 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("The resolver defaults off and toggles without bumping the generation")
+    func resolverEnabledDefaultsOffAndDoesNotBumpGeneration() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            var created: NetworkResponse?
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "res-net", subnet: "10.66.0.0/24", projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                created = try res.content.decode(NetworkResponse.self)
+                // An opt-*in*, unlike the metadata service, and the reason is a
+                // limitation rather than a preference: the resolver cannot yet
+                // forward upstream, so enabling it trades external resolution
+                // for the full internal record vocabulary. That trade has to be
+                // the operator's rather than one an upgrade makes for them.
+                #expect(created?.resolverEnabled == false)
+            }
+            let networkID = try #require(created?.id)
+            let startGeneration = try #require(
+                await LogicalNetwork.find(networkID, on: app.db)?.generation)
+
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(resolverEnabled: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let enabled = try res.content.decode(NetworkResponse.self)
+                #expect(enabled.resolverEnabled == true)
+            }
+
+            let updated = try await LogicalNetwork.find(networkID, on: app.db)
+            #expect(updated?.resolverEnabled == true)
+            // No bump, for the metadata port's reason: the localport, the DHCP
+            // row and the resolver process all converge level-triggered on every
+            // network reconcile.
+            #expect(updated?.generation == startGeneration)
+
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(resolverEnabled: false))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            let reDisabled = try await LogicalNetwork.find(networkID, on: app.db)
+            #expect(reDisabled?.resolverEnabled == false)
+        }
+    }
+
+    @Test("An update that omits the resolver leaves it alone")
+    func resolverIsUntouchedByUnrelatedEdits() async throws {
+        // Every dialog resubmits the whole form, so an older client that does
+        // not know the field must not be able to turn a network's resolver off
+        // by omission.
+        try await withNetworkTestApp { app, user, project, token in
+            var created: NetworkResponse?
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "res-keep", subnet: "10.67.0.0/24", projectId: project.id!,
+                        resolverEnabled: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                created = try res.content.decode(NetworkResponse.self)
+                #expect(created?.resolverEnabled == true)
+            }
+            let networkID = try #require(created?.id)
+
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(dnsServers: ["9.9.9.9"]))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            let after = try await LogicalNetwork.find(networkID, on: app.db)
+            #expect(after?.resolverEnabled == true)
+            // The list itself is unchanged in shape; only what consumes it moved.
+            #expect(after?.dnsServers == ["9.9.9.9"])
+        }
+    }
+
     @Test("subnetsOverlap detects containment, equality, and disjoint ranges")
     func subnetOverlapLogic() {
         #expect(NetworkController.subnetsOverlap("10.0.0.0/16", "10.0.1.0/24"))

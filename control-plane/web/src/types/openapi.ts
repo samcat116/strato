@@ -5949,6 +5949,7 @@ export interface components {
             /** Format: uuid */
             projectId?: string;
             dhcpEnabled?: boolean;
+            /** @description The network's resolvers. With `resolverEnabled` these are the upstream forwarders the network's built-in resolver sends misses to; with it off (the default) they are advertised to guests over DHCP verbatim. */
             dnsServers?: string[];
             /** @description DHCP search domain for the network's guests. A sequence of RFC 1123 labels — `corp.example.com` or a bare `internal` — stored lowercased and without a trailing dot. An empty string clears it. */
             domainName?: string;
@@ -5956,6 +5957,8 @@ export interface components {
             externalAccess?: boolean;
             /** @description Whether the network publishes the link-local instance metadata service to its guests. Defaults true; this is an opt-out. */
             metadataEnabled?: boolean;
+            /** @description Whether the network gives its guests a DNS resolver at a link-local address, serving the zones attached to the network in full — including the CNAME, TXT and SRV records the datapath cannot express. Defaults false; this is an opt-in, because the resolver cannot yet forward to upstream servers, so enabling it trades external resolution for the full internal record vocabulary. */
+            resolverEnabled?: boolean;
             /** Format: uuid */
             siteId?: string;
         };
@@ -5967,6 +5970,7 @@ export interface components {
             gateway6?: string;
             ipv6Enabled?: boolean;
             dhcpEnabled?: boolean;
+            /** @description The network's resolvers. With `resolverEnabled` these are the upstream forwarders the network's built-in resolver sends misses to; with it off (the default) they are advertised to guests over DHCP verbatim. */
             dnsServers?: string[];
             /** @description DHCP search domain for the network's guests. A sequence of RFC 1123 labels — `corp.example.com` or a bare `internal` — stored lowercased and without a trailing dot. An empty string clears it. */
             domainName?: string;
@@ -5974,6 +5978,8 @@ export interface components {
             externalAccess?: boolean;
             /** @description Whether the network publishes the link-local instance metadata service to its guests. Defaults true; this is an opt-out. */
             metadataEnabled?: boolean;
+            /** @description Whether the network gives its guests a DNS resolver at a link-local address, serving the zones attached to the network in full — including the CNAME, TXT and SRV records the datapath cannot express. Defaults false; this is an opt-in, because the resolver cannot yet forward to upstream servers, so enabling it trades external resolution for the full internal record vocabulary. */
+            resolverEnabled?: boolean;
             /**
              * Format: uuid
              * @description The DNS zone this network's VMs auto-register into. Must already be attached to the network.
@@ -5996,12 +6002,15 @@ export interface components {
             /** @description VM and sandbox interfaces attached to this network. */
             attachedInterfaceCount: number;
             dhcpEnabled: boolean;
+            /** @description The network's resolvers. With `resolverEnabled` these are the upstream forwarders the network's built-in resolver sends misses to; with it off (the default) they are advertised to guests over DHCP verbatim. */
             dnsServers: string[];
             domainName?: string;
             leaseTime?: number;
             externalAccess: boolean;
             /** @description Whether the network publishes the link-local instance metadata service to its guests. Defaults true; this is an opt-out. */
             metadataEnabled: boolean;
+            /** @description Whether the network gives its guests a DNS resolver at a link-local address, serving the zones attached to the network in full — including the CNAME, TXT and SRV records the datapath cannot express. Defaults false; this is an opt-in, because the resolver cannot yet forward to upstream servers, so enabling it trades external resolution for the full internal record vocabulary. */
+            resolverEnabled: boolean;
             /** Format: uuid */
             siteId?: string;
             /**
