@@ -676,6 +676,14 @@ public enum WireProtocol {
     /// never sends `ioLimits`, and a v35 agent reads its absence as "no caps",
     /// which is what every volume created before this meant. Nothing has to be
     /// upgraded first.
+    ///
+    /// STR-152 rides this version without claiming one of its own. It removed
+    /// `SuccessMessage.data` along with the correlation apparatus that was its
+    /// only consumer, and deleting an optional field is compatible in both
+    /// directions — an old peer decoding a payload without it gets nil, a new
+    /// peer decoding one with it ignores the key. Every other bump in this
+    /// changelog protects a misreading of silence; this one has none to
+    /// protect, so a gate would be a version floor with no behavior behind it.
     public static let currentVersion = 35
 
     /// The lowest protocol version that speaks reconciliation state sync

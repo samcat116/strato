@@ -58,6 +58,91 @@ struct MigrationRoundTripTests {
         }
     }
 
+    /// The fully-migrated schema is the *fresh database* half of STR-152: the
+    /// migrations that built `resource_operations` are deleted rather than
+    /// reverted, so the table is simply never created.
+    @Test("The retired operations table is absent from the migrated schema")
+    func resourceOperationsIsAbsent() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT id FROM resource_operations").all()
+            }
+        }
+    }
+
+    /// And the *existing database* half. A deployment upgrading into this build
+    /// still has the table, its rows, its indexes and the `CHECK` constraints
+    /// `EnforcePersistedEnumValues` installed on it — none of which the deleted
+    /// migrations are around to take down. `DropResourceOperations` is the only
+    /// thing that removes them, so it is worth asserting against a table shaped
+    /// like the one it will actually meet rather than against nothing.
+    @Test("The drop migration removes both pre-upgrade operations tables and their dependents")
+    func dropMigrationRemovesPreUpgradeTable() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+
+            try await sql.raw(
+                """
+                CREATE TABLE resource_operations (
+                    id uuid PRIMARY KEY,
+                    resource_kind text NOT NULL DEFAULT 'virtual_machine',
+                    resource_id uuid NOT NULL,
+                    user_id uuid NOT NULL,
+                    kind text NOT NULL,
+                    status text NOT NULL,
+                    error text,
+                    created_at timestamptz,
+                    completed_at timestamptz,
+                    organization_id uuid,
+                    project_id uuid,
+                    resource_name text,
+                    CONSTRAINT ck_resource_operations_status_enum
+                        CHECK (status IN ('pending', 'succeeded', 'failed'))
+                )
+                """
+            ).run()
+            try await sql.raw(
+                "CREATE UNIQUE INDEX idx_resource_operations_pending_resource "
+                    + "ON resource_operations (resource_kind, resource_id) WHERE status = 'pending'"
+            ).run()
+            // A row the previous build left `pending` — the case the sweep and
+            // the verdict path survived nine stages to take terminal.
+            try await sql.raw(
+                """
+                INSERT INTO resource_operations (id, resource_id, user_id, kind, status, created_at)
+                VALUES (gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), 'boot', 'pending', now())
+                """
+            ).run()
+
+            // A database old enough to have run `CreateVMOperation` but never
+            // `GeneralizeVMOperations` keeps the pre-rename table; both
+            // migrations are deleted, so this is the only thing left that names
+            // it.
+            try await sql.raw(
+                "CREATE TABLE vm_operations (id uuid PRIMARY KEY, vm_id uuid NOT NULL, status text NOT NULL)"
+            ).run()
+
+            try await DropResourceOperations().prepare(on: app.db)
+
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT id FROM resource_operations").all()
+            }
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT id FROM vm_operations").all()
+            }
+            let indexes = try await sql.raw(
+                "SELECT indexname FROM pg_indexes WHERE schemaname = current_schema() "
+                    + "AND tablename = 'resource_operations'"
+            ).all()
+            #expect(indexes.isEmpty)
+
+            // Idempotent: a replica that runs it twice, or a fresh database
+            // that never had the table, must not fail.
+            try await DropResourceOperations().prepare(on: app.db)
+        }
+    }
+
     @Test("Every hot-path index is present on the migrated schema")
     func hotPathIndexesArePresent() async throws {
         try await withTestApp { app in

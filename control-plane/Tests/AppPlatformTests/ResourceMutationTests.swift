@@ -6,6 +6,26 @@ import Vapor
 import AppTestSupport
 @testable import App
 
+/// Fake `AgentDispatch` for driving a mutation through `ResourceMutation`'s own
+/// interface — no HTTP round-trip, no agent socket, no `forTesting` back-doors.
+/// Records what the mutation asked the agent to do.
+///
+/// Inherited from `ResourceOperationCoordinatorTests`, which went with the
+/// coordinator in STR-152; it lost its `response` field at the same time,
+/// because a dispatch has no reply to canned any more.
+actor FakeAgentDispatch: AgentDispatch {
+    var online: Bool
+    private(set) var syncedAgentIds: [String] = []
+
+    init(online: Bool = true) {
+        self.online = online
+    }
+
+    func agentIsOnline(agentId: String) async -> Bool { online }
+
+    func syncDesiredState(agentId: String) async { syncedAgentIds.append(agentId) }
+}
+
 /// `ResourceMutation` — the accept path that replaced the operation row for
 /// generation-backed lifecycle mutations (ADR 0001 stage 4, STR-147).
 ///

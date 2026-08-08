@@ -19,9 +19,12 @@ struct PersistedEnumConstraintTests {
             "image_artifacts.format": rawValues(ImageFormat.self),
             "image_artifacts.architecture": rawValues(CPUArchitecture.self),
             "image_artifacts.status": rawValues(ArtifactStatus.self),
-            "resource_operations.resource_kind": rawValues(OperationResourceKind.self),
-            "resource_operations.kind": rawValues(VMOperationKind.self),
-            "resource_operations.status": rawValues(VMOperationStatus.self),
+            // The three `resource_operations` columns pinned here went with
+            // the table (STR-152). The same vocabularies are still guarded
+            // where they are still stored — `resource_events` and
+            // `agent_workload_claims` — by their own suites, which install
+            // their constraints through a different mechanism because those
+            // tables are append-only.
             "sandboxes.status": rawValues(SandboxStatus.self),
             "sandboxes.desired_status": rawValues(DesiredSandboxStatus.self),
             "sandbox_snapshots.status": rawValues(SandboxSnapshotStatus.self),

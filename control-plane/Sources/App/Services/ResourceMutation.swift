@@ -2,6 +2,29 @@ import Fluent
 import StratoShared
 import Vapor
 
+/// The agent-facing seam a mutation depends on, so the accept path can be
+/// exercised through its own interface with an in-memory fake instead of a live
+/// agent socket. Production adapter: `AgentService` (conformance below); test
+/// adapter: a fake that records syncs.
+protocol AgentDispatch: Sendable {
+    /// Whether the resource's owning agent is online somewhere in the cluster.
+    /// False for an unplaced resource (nil id) or an offline/unknown agent.
+    func agentIsOnline(agentId: String) async -> Bool
+
+    /// Signal that the agent's desired state changed — by ringing the
+    /// broadcast doorbell, plus a direct push when this replica holds the
+    /// socket of a push-mode agent. Losing the signal is safe: the agent
+    /// re-fetches (or is re-pushed) on its own interval regardless.
+    func syncDesiredState(agentId: String) async
+}
+
+extension AgentService: AgentDispatch {
+    func agentIsOnline(agentId: String) async -> Bool {
+        guard let agent = await getAgentInfo(agentId) else { return false }
+        return agent.status == .online
+    }
+}
+
 /// Accepts one asynchronous lifecycle mutation on a VM or sandbox and hands it
 /// to the reconciliation loop (ADR 0001 stage 4, STR-147).
 ///
@@ -9,9 +32,9 @@ import Vapor
 /// coordinator's job was to insert a `pending` row, dispatch, and later record
 /// a verdict on it; every one of those steps was bookkeeping *about* a fact the
 /// resource already carries — `observedGeneration >= generation`. So the row is
-/// gone and what remains is the part that was never redundant: apply the
-/// desired-state change, stamp how long convergence may take, append the
-/// attribution record, and reach the agent.
+/// gone (and, with STR-152, so is the coordinator) and what remains is the part
+/// that was never redundant: apply the desired-state change, stamp how long
+/// convergence may take, append the attribution record, and reach the agent.
 ///
 /// The client gets `202 { resource, targetGeneration, mutationId }` and polls
 /// the resource's `conditions`, not an operation.
@@ -23,13 +46,8 @@ import Vapor
 /// "stop" during a slow start actually wants. The one place overlap was more
 /// than a race in name is the resize path's quota delta, and that is guarded
 /// where it belongs, by recomputing the delta inside the mutation transaction.
-///
-/// The coordinator survives for the mutations that are still imperative RPCs
-/// with no generation to converge on — VM reboot, and every snapshot verb —
-/// until STR-151 and ADR stage 8 convert them.
 struct ResourceMutation {
-    /// The agent seam, shared with `ResourceOperationCoordinator` so tests can
-    /// substitute a fake for the live actor.
+    /// The agent seam. Injected so tests substitute a fake for the live actor.
     let agentDispatch: any AgentDispatch
     let logger: Logger
 

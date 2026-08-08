@@ -86,13 +86,14 @@ recorded: a delete succeeds by its resource ceasing to exist, which the
 resource itself cannot report, so the reap appends a terminal event and
 clients poll `GET /api/operations/:id` with the `mutationId`.
 
-VM **restart** and VM/sandbox **restore** are still imperative agent commands
-with no generation to converge on: they keep `ResourceOperation` rows, the
-`409` double-submit guard, and the operation-polling contract until ADR 0001
-converts them. Snapshots and checkpoints left that list in STR-150 — an
-artifact's *existence* is a state even though capturing it is an action. The operations API otherwise survives as a read-only façade
-synthesized from `resource_events` plus the resource's conditions, so older
-clients keep working.
+**Nothing is an imperative agent command any more.** Snapshots and checkpoints
+converted in STR-150 — an artifact's *existence* is a state even though
+capturing it is an action — and VM **restart** and VM/sandbox **restore** in
+STR-151, as monotonic nonces the agent applies once against its own durable
+record. The operations API survives as a read-only façade synthesized from
+`resource_events` plus the resource's conditions, so older clients keep
+working; the side-table behind it, and the request/response machinery the
+imperative verbs needed, were deleted in STR-152.
 
 ## Multi-replica control plane
 

@@ -409,15 +409,56 @@ extension SandboxController {
         guard let source = try await Sandbox.find(sourceID, on: db), source.desiredStatus != .absent else {
             throw Abort(.conflict, reason: "Snapshot source sandbox is being deleted")
         }
-        let pendingRestore = try await ResourceOperation.query(on: db)
+        try await requireNoRestoreInFlight(on: source, on: db)
+    }
+
+    /// Refuses a fork while the source sandbox has an in-place restore the
+    /// agent has not applied: its rootfs is about to be replaced under the
+    /// fork's feet, so the layout this fork would clone is not the one it read.
+    ///
+    /// Read from the audit trail plus the source's own convergence, rather than
+    /// from a pending operation row — which is what this used to query, and
+    /// which nothing has written since restore became an edge-nonce (STR-151).
+    ///
+    /// **The newest `.restore`, not the newest mutation.** The row this replaces
+    /// matched *any* pending restore, and the agent's rule is that nothing
+    /// supersedes a restore — `Reconciliation.planWorkloadSteps` applies one
+    /// only when the workload is wanted running, and a stop makes it wait
+    /// rather than consume it. So a restore followed by a `.shutdown` is still
+    /// outstanding even though the shutdown is the newer event, and keying on
+    /// "the newest mutation happens to be a restore" would admit a fork the row
+    /// refused.
+    ///
+    /// **Known gap.** The agent reports no applied-nonce echo —
+    /// `ObservedSandboxState` carries `observedGeneration` and nothing about
+    /// `restore` — so the only signal here is generation convergence, and it
+    /// cannot see a restore the agent has deferred. A restore requested at
+    /// generation N and then superseded by a stop converges at N+1 with the
+    /// restore still pending on the agent, and this admits the fork. Closing
+    /// that needs the applied nonce on the wire (or a control-plane latch fed
+    /// by one); it is deliberately not faked from current state, because every
+    /// derivation that closes it also refuses forks of any sandbox that was
+    /// restored and later stopped.
+    private static func requireNoRestoreInFlight(
+        on source: Sandbox, on db: any Database
+    ) async throws {
+        let sourceID = try source.requireID()
+        let restore = try await ResourceEvent.query(on: db)
             .filter(\.$resourceKind == .sandbox)
             .filter(\.$resourceID == sourceID)
-            .filter(\.$status == .pending)
-            .filter(\.$kind == .restore)
+            .filter(\.$phase == .requested)
+            .filter(\.$mutation == .restore)
+            .sort(\.$createdAt, .descending)
             .first()
-        guard pendingRestore == nil else {
-            throw Abort(.conflict, reason: "Snapshot is being restored in place")
+        guard let restore else { return }
+        // `requestRestore` bumps the sandbox's generation alongside its
+        // `restoreGeneration` (via `setDesiredStatus(.running)`), so the
+        // generation the restore was requested at is what the agent has to
+        // report before it can have applied it.
+        guard source.observedGeneration < (restore.targetGeneration ?? source.generation) else {
+            return
         }
+        throw Abort(.conflict, reason: "Snapshot is being restored in place")
     }
 
     /// Fetch the :snapshotID snapshot and confirm it belongs to `sandbox`

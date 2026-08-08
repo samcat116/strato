@@ -1,14 +1,14 @@
 # ADR 0001: A fully declarative agent protocol
 
 - **Status**: Accepted
-- **Progress**: stages 1 (conditions, STR-142), 2 (`resource_events`,
-  STR-143), 3 (finalizers, STR-144), 4 (202 → `{resource, targetGeneration}`,
-  STR-147), 5 (volumes declarative, STR-148), 6 (`agent_update` removal,
-  STR-145), 7 (`volume_info` removal, STR-149), 8 (snapshots and checkpoints
-  declarative, STR-150), 9 (reboot/restore as edge-nonces, STR-151), and 10
-  (pull transport, STR-146) have landed. **Every durable-resource RPC has now
-  converted**; only stage 11 — deleting `ResourceOperation`, its sweep, and the
-  pending-request apparatus — remains.
+- **Progress**: **complete.** Stages 1 (conditions, STR-142), 2
+  (`resource_events`, STR-143), 3 (finalizers, STR-144), 4 (202 → `{resource,
+  targetGeneration}`, STR-147), 5 (volumes declarative, STR-148), 6
+  (`agent_update` removal, STR-145), 7 (`volume_info` removal, STR-149), 8
+  (snapshots and checkpoints declarative, STR-150), 9 (reboot/restore as
+  edge-nonces, STR-151), 10 (pull transport, STR-146) and 11 (deleting
+  `ResourceOperation`, its sweep, the pending-request apparatus and the
+  cross-replica RPC bridge, STR-152) have all landed.
 - **Date**: 2026-08-02
 - **Deciders**: Sam Schmitt
 - **Scope**: control-plane ↔ agent protocol, `ResourceOperation` machinery,
@@ -44,10 +44,10 @@ VM checkpoint/restore/snapshot-delete trio, the sandbox snapshot quartet,
 `vm_reboot`, `agent_update` — correlated by `requestId` and answered with
 `success`/`error`. These drag in, on the control plane:
 
-- **The pending-request apparatus** (`AgentService.swift` ~2452–2670):
-  checked continuations, per-request timeout tasks, cancellation
-  bookkeeping, `failPendingRequests(for:)` on disconnect, response
-  correlation and ownership checks.
+- **The pending-request apparatus** (`AgentService.swift`): checked
+  continuations, per-request timeout tasks, cancellation bookkeeping,
+  `failPendingRequests(for:)` on disconnect, response correlation and
+  ownership checks.
 - **`ResourceOperation`** (issue #412): a side-table of async operations with
   per-kind completion budgets, a cluster-singleton stuck-operation sweep,
   per-resource-kind stuck-resolution paths, and deliberate FK-lessness so
@@ -564,7 +564,20 @@ agent is involved.
     exchange to the socket holder and to fail fast when nobody holds it, and
     a broadcast can express neither a reply nor an immediate "offline".
 11. **Delete** `ResourceOperation`, its coordinator, sweep, and the pending-
-    request apparatus when only façade reads and stream RPCs remain.
+    request apparatus when only façade reads and stream RPCs remain. **Landed
+    (STR-152).** With it went the cross-replica RPC bridge — the
+    `replica:{id}:rpc` / `rpc-replies` channels, `ReplicaMessageBridge.call`
+    and `runLocalExchange` — and the `agent:{name}:replica` routing key that
+    existed only to serve it; `ReplicaMessageBridge` is now a broadcast
+    doorbell and nothing else. The webhook enqueue that hung off
+    `completeIfPending` had already moved to `ResourceConvergence` in stage 4,
+    so the #559 exactly-once guarantee needed no further change. The
+    `resource_operations` table is dropped outright, with no deprecation
+    window: the migrations that built it are deleted rather than reverted, so
+    a fresh database never creates it. `success`/`error` survive as
+    *uncorrelated* control-plane → agent frames — an ACK and a registration
+    rejection — and `SuccessMessage.data` went with the correlation. Deleting
+    an optional field needs no version gate, so the wire stays at v34.
 
 Stages 1–4 are safe even if the program stops there. Stage 10 can move
 earlier if multi-replica pain justifies it; it only requires stage 5–9

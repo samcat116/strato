@@ -11,7 +11,6 @@ import type {
   SandboxLogEntry,
   SandboxLogsQueryParams,
   AcceptedMutation,
-  Operation,
   Page,
   SandboxSnapshot,
   CreateSandboxSnapshotRequest,
@@ -61,12 +60,6 @@ export const sandboxesApi = {
 
   restart(id: string): Promise<AcceptedMutation<Sandbox>> {
     return api.post<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}/restart`);
-  },
-
-  listOperations(id: string, limit?: number): Promise<Operation[]> {
-    return api.get<Operation[]>(
-      `/api/sandboxes/${id}/operations${limit ? `?limit=${limit}` : ""}`
-    );
   },
 
   getStatus(id: string): Promise<Sandbox> {

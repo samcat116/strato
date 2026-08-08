@@ -87,10 +87,10 @@ catches. Check the parts it can't:
 - **Comments explain why, not what** — the code already says what. Comments
   earn their place by recording the non-obvious: the race being avoided, the
   reason the ordering matters, the upstream bug being worked around.
-  `ResourceOperationCoordinator.recordVerdict` is the local model: its doc
-  comment explains why the method returns a value at all — a lost race means
-  the sweep already resolved the resource — which nothing in the signature
-  conveys.
+  `ResourceConditions.claimConvergenceTimeout` is the local model: its doc
+  comment explains why the method returns a value at all — losing the claim
+  means another replica's sweep pass already owns this deadline, and the
+  webhook is theirs to emit — which nothing in the signature conveys.
 - **Function shape** — deep modules, narrow interfaces. A long function
   doing one thing beats five short ones that must be read together to
   understand any of them. Flag "helper" methods that can't be understood

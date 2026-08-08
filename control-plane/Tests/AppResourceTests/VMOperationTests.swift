@@ -7,12 +7,17 @@ import StratoShared
 import AppTestSupport
 @testable import App
 
-/// Tests for asynchronous VM operations (issue #259), as ADR 0001 stage 4
-/// left them (STR-147): lifecycle mutations return `202 Accepted` with
-/// `{resource, targetGeneration, mutationId}` and are judged by the VM's own
-/// `conditions`, the operations API keeps answering for them as a façade, and
-/// the stuck-operation sweep still covers the imperative verbs that kept their
-/// rows.
+/// Tests for asynchronous VM operations (issue #259), as ADR 0001 left them:
+/// lifecycle mutations return `202 Accepted` with `{resource,
+/// targetGeneration, mutationId}` and are judged by the VM's own `conditions`
+/// (stage 4, STR-147), and the operations API answers for them purely as a
+/// façade over `resource_events` (stage 11, STR-152).
+///
+/// The operation-row half of this suite went with the table: the pending-row
+/// uniqueness index, the compare-and-swap verdict guard, and the
+/// stuck-operation sweep. Their replacements — the convergence deadline and
+/// `conditions.degraded` — are exercised by the stuck-convergence section
+/// below.
 @Suite("VM Operation Tests", .serialized)
 final class VMOperationTests {
 
@@ -299,13 +304,15 @@ final class VMOperationTests {
 
     // MARK: - The dropped mutex
 
-    @Test("A pending snapshot operation no longer blocks a lifecycle mutation")
+    @Test("An unconverged mutation no longer blocks another lifecycle mutation")
     func pendingOperationDoesNotBlockLifecycleMutation() async throws {
         try await withVMTestApp { app, user, vm, token in
-            // A checkpoint in flight: still an operation row, because it is an
-            // imperative agent RPC with no generation to converge on.
-            let pending = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .snapshot)
-            try await pending.save(on: app.db)
+            // A mutation in flight: desired state moved and the agent has not
+            // confirmed it, which is what the operation mutex used to key on.
+            vm.setDesiredStatus(.shutdown)
+            vm.extendConvergenceDeadline(by: 600)
+            try await vm.save(on: app.db)
+            _ = try await record(.shutdown, on: vm, by: user, on: app.db)
 
             // Starting the VM is a level-triggered desired-state write, so it
             // is accepted rather than refused with the `409` the operation
@@ -325,247 +332,25 @@ final class VMOperationTests {
         }
     }
 
-    @Test("The partial unique index allows at most one pending operation per VM")
-    func pendingUniquenessEnforcedByDatabase() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            // The database, not just the controller's read-then-insert check,
-            // must reject a second pending operation — that is what closes the
-            // race between two concurrent mutations.
-            let first = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await first.save(on: app.db)
-
-            let second = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
-            await #expect(throws: (any Error).self) {
-                try await second.save(on: app.db)
-            }
-
-            // Terminal operations do not block new pending ones (the index is
-            // partial on status = 'pending').
-            _ = try await first.completeIfPending(as: .failed, error: "boom", on: app.db)
-            let third = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
-            try await third.save(on: app.db)
-        }
-    }
-
-    // MARK: - Completion guard (only one verdict per operation)
-
-    @Test("A stale pending instance cannot overwrite a recorded verdict")
-    func staleInstanceCannotOverwriteVerdict() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
-
-            // The two completion paths — the observed-state applier and the
-            // stuck-operation sweep — each load their own instance while the row
-            // is still pending. Whichever writes second is holding a stale
-            // in-memory `pending`, so only a database-side check can stop it.
-            let applierView = try #require(try await ResourceOperation.find(operation.id, on: app.db))
-            let sweepView = try #require(try await ResourceOperation.find(operation.id, on: app.db))
-
-            let applierWon = try await applierView.completeIfPending(as: .succeeded, error: nil, on: app.db)
-            #expect(applierWon)
-
-            #expect(sweepView.status == .pending)
-            let sweepWon = try await sweepView.completeIfPending(as: .failed, error: "timed out", on: app.db)
-            #expect(!sweepWon)
-
-            // The winner's verdict stands; the loser wrote nothing.
-            let settled = try #require(try await ResourceOperation.find(operation.id, on: app.db))
-            #expect(settled.status == .succeeded)
-            #expect(settled.error == nil)
-        }
-    }
-
-    @Test("Two concurrent completions with opposite verdicts: exactly one wins")
-    func concurrentCompletionsSettleOnOneVerdict() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .reboot)
-            try await operation.save(on: app.db)
-            let operationID = try operation.requireID()
-
-            let verdicts: [(status: VMOperationStatus, error: String?)] = [
-                (.succeeded, nil), (.failed, "timed out"),
-            ]
-            let wins = try await withThrowingTaskGroup(of: Bool.self) { group in
-                for verdict in verdicts {
-                    group.addTask {
-                        guard let view = try await ResourceOperation.find(operationID, on: app.db) else {
-                            return false
-                        }
-                        return try await view.completeIfPending(
-                            as: verdict.status, error: verdict.error, on: app.db)
-                    }
-                }
-                var results: [Bool] = []
-                for try await won in group { results.append(won) }
-                return results
-            }
-
-            #expect(wins.count(where: { $0 }) == 1)
-            #expect(wins.count(where: { !$0 }) == 1)
-
-            // The row settled on one of the two verdicts, consistently — a
-            // `.failed` row must carry its error and a `.succeeded` one must not.
-            let settled = try #require(try await ResourceOperation.find(operationID, on: app.db))
-            #expect(settled.status != .pending)
-            #expect(settled.completedAt != nil)
-            #expect((settled.status == .failed) == (settled.error != nil))
-        }
-    }
-
-    // MARK: - Stuck-operation sweep (restart safety)
-
-    @Test("The sweep fails a pending operation past its budget and resolves the VM")
-    func sweepFailsStuckOperationAndResolvesVM() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            // Simulate a boot whose dispatching process died: pending operation,
-            // VM stuck `.starting`, and no completion path left but the sweep.
-            vm.setStatus(.starting, at: Date().addingTimeInterval(-400))
-            try await vm.save(on: app.db)
-
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
-            operation.createdAt = Date().addingTimeInterval(-400)  // past the 180s boot budget
-            try await operation.save(on: app.db)
-
-            await app.agentService.sweepStuckOperations()
-
-            let swept = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(swept?.status == .failed)
-            #expect(swept?.error?.contains("timed out") == true)
-            #expect(swept?.completedAt != nil)
-
-            let sweptVM = try await VM.find(vm.id, on: app.db)
-            #expect(sweptVM?.status == .error)
-        }
-    }
-
-    @Test("The sweep fails a stuck create and marks the .created VM as error")
-    func sweepFailsStuckCreate() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .create)
-            try await operation.save(on: app.db)
-            operation.createdAt = Date().addingTimeInterval(-700)  // past the 600s create budget
-            try await operation.save(on: app.db)
-
-            await app.agentService.sweepStuckOperations()
-
-            let swept = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(swept?.status == .failed)
-
-            // `.created` counts as stuck for a create operation specifically.
-            let sweptVM = try await VM.find(vm.id, on: app.db)
-            #expect(sweptVM?.status == .error)
-        }
-    }
-
-    @Test("The sweep leaves fresh pending operations and their VMs alone")
-    func sweepIgnoresFreshOperations() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            vm.setStatus(.starting)
-            try await vm.save(on: app.db)
-
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
-
-            await app.agentService.sweepStuckOperations()
-
-            let fresh = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(fresh?.status == .pending)
-
-            let freshVM = try await VM.find(vm.id, on: app.db)
-            #expect(freshVM?.status == .starting)
-        }
-    }
-
-    @Test("A transitional VM past the timeout is left alone while an operation is still pending")
-    func sweepLeavesTransitionalVMWithPendingOperationAlone() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            // Old enough for the transitional backstop (120s) but with a fresh
-            // operation still inside its own budget: the pending operation owns
-            // this VM's resolution, so the backstop must skip it. Without the
-            // backdating, `sweepIgnoresFreshOperations` never reaches the guard
-            // — the VM is filtered out in SQL by the age predicate first.
-            vm.setStatus(.starting, at: Date().addingTimeInterval(-400))
-            try await vm.save(on: app.db)
-
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
-
-            await app.agentService.sweepStuckOperations()
-
-            let fresh = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(fresh?.status == .pending)
-
-            let freshVM = try await VM.find(vm.id, on: app.db)
-            #expect(freshVM?.status == .starting)
-        }
-    }
-
-    @Test("A transitional VM with no status timestamp is aged off updatedAt")
-    func sweepAgesTransitionalVMOffUpdatedAtWhenStatusTimestampIsMissing() async throws {
-        try await withVMTestApp { app, _, vm, _ in
-            vm.setStatus(.starting)
-            try await vm.save(on: app.db)
-
-            // Rows written before `status_changed_at` existed carry NULL. The
-            // sweep's age predicate is evaluated in SQL now, so this fallback
-            // branch is the one that could silently stop matching.
-            let vmID = try vm.requireID()
-            let sql = try #require(app.db as? any SQLDatabase)
-            let past = Date().addingTimeInterval(-400)
-            try await sql.raw(
-                """
-                UPDATE vms SET status_changed_at = NULL, updated_at = \(bind: past)
-                WHERE id = \(bind: vmID)
-                """
-            ).run()
-
-            await app.agentService.sweepStuckOperations()
-
-            let swept = try await VM.find(vm.id, on: app.db)
-            #expect(swept?.status == .error)
-        }
-    }
-
-    @Test("A transitional VM with no timestamps at all is left alone")
-    func sweepLeavesTimestamplessTransitionalVMAlone() async throws {
-        try await withVMTestApp { app, _, vm, _ in
-            vm.setStatus(.starting)
-            try await vm.save(on: app.db)
-
-            // No measurable age: the sweep has no evidence the VM is stuck, so
-            // it must not be errored on the strength of a NULL.
-            let vmID = try vm.requireID()
-            let sql = try #require(app.db as? any SQLDatabase)
-            try await sql.raw(
-                """
-                UPDATE vms SET status_changed_at = NULL, updated_at = NULL
-                WHERE id = \(bind: vmID)
-                """
-            ).run()
-
-            await app.agentService.sweepStuckOperations()
-
-            let swept = try await VM.find(vm.id, on: app.db)
-            #expect(swept?.status == .starting)
-        }
-    }
+    // The partial unique index that allowed at most one pending operation per
+    // VM went with the table (STR-152). Nothing replaces it, and that is the
+    // point of the section above: two overlapping desired-state writes leave
+    // the last one standing, and `lockAndRefresh` is what serializes them.
 
     // MARK: - Operation read API authorization
 
     @Test("GET /api/operations/:id follows the VM's read permission")
     func operationReadFollowsVMPermission() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
+            let event = try await record(.boot, on: vm, by: user, on: app.db)
+            let eventID = try event.requireID()
 
-            try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let body = try res.content.decode(OperationResponse.self)
-                #expect(body.id == operation.id)
+                #expect(body.id == eventID)
                 #expect(body.vmId == vm.id)
             }
 
@@ -573,7 +358,7 @@ final class VMOperationTests {
             let outsider = try await TestDataBuilder(db: app.db).createUser(
                 username: "op-outsider", email: "op-outsider@example.com")
             let outsiderToken = try await outsider.generateAPIKey(on: app.db)
-            try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
@@ -584,14 +369,13 @@ final class VMOperationTests {
     @Test("An operation whose VM is gone is visible to its initiator only")
     func operationForDeletedVMVisibleToInitiatorOnly() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
-            operation.status = .succeeded
-            try await operation.save(on: app.db)
+            let event = try await record(.delete, on: vm, by: user, on: app.db)
+            let eventID = try event.requireID()
 
             // Remove the VM row directly, as a completed delete would.
             try await vm.delete(on: app.db)
 
-            try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -607,7 +391,7 @@ final class VMOperationTests {
             )
             let otherToken = try await other.generateAPIKey(on: app.db)
 
-            try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
+            try await app.test(.GET, "/api/operations/\(eventID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: otherToken)
             } afterResponse: { res in
                 #expect(res.status == .notFound)
@@ -618,15 +402,11 @@ final class VMOperationTests {
     @Test("GET /api/vms/:id/operations lists newest first and honors limit")
     func listOperationsNewestFirst() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let older = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            older.status = .succeeded
-            try await older.save(on: app.db)
-            older.createdAt = Date().addingTimeInterval(-60)
-            try await older.save(on: app.db)
-
-            let newer = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .shutdown)
-            newer.status = .succeeded
-            try await newer.save(on: app.db)
+            // Recorded in order and never rewritten: `resource_events` is
+            // append-only (its trigger rejects an `UPDATE`), so the insert
+            // order is the only way to age one row relative to another.
+            _ = try await record(.boot, on: vm, by: user, on: app.db)
+            let newer = try await record(.shutdown, on: vm, by: user, on: app.db)
 
             try await app.test(.GET, "/api/vms/\(vm.id!)/operations?limit=1") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -834,15 +614,14 @@ final class VMOperationTests {
         }
     }
 
-    @Test("GET /api/vms/:id/operations merges recorded mutations with operation rows")
-    func historyMergesBothSources() async throws {
+    /// One source now: `resource_events`. The list used to merge in the
+    /// operation rows the still-imperative verbs wrote, and the merge went with
+    /// them (STR-152) rather than the events half, because every verb records
+    /// an event and none records a row.
+    @Test("GET /api/vms/:id/operations lists every recorded mutation")
+    func historyListsRecordedMutations() async throws {
         try await withVMTestApp { app, user, vm, token in
-            let snapshotOp = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .snapshot)
-            snapshotOp.status = .succeeded
-            try await snapshotOp.save(on: app.db)
-            snapshotOp.createdAt = Date().addingTimeInterval(-60)
-            try await snapshotOp.save(on: app.db)
-
+            _ = try await record(.snapshot, on: vm, by: user, on: app.db)
             _ = try await record(.boot, on: vm, by: user, on: app.db)
 
             try await app.test(.GET, "/api/vms/\(vm.id!)/operations") { req in

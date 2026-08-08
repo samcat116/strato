@@ -15,8 +15,8 @@ strings:
 
 | Type | Fires when |
 | ---- | ---------- |
-| `operation.completed` | An async resource operation (VM or sandbox create/start/stop/delete/reboot/…) succeeds |
-| `operation.failed` | An async resource operation fails (agent error or the stuck-operation sweep) |
+| `operation.completed` | An async resource mutation (VM, sandbox or volume create/start/stop/delete/resize/…) converges |
+| `operation.failed` | An async resource mutation fails (agent error, or the stuck-convergence sweep past its deadline) |
 | `vm.state_changed` | A VM's observed status transitions (agent reports, drift, loss) |
 | `agent.connected` | An agent registers its WebSocket connection |
 | `agent.disconnected` | An agent unregisters, its socket closes, or its heartbeat goes stale |
@@ -68,10 +68,15 @@ subscription, all sharing the event's id — on the same `Database` handle as
 the state change that produced the event:
 
 - `operation.completed`/`operation.failed` are enqueued inside
-  `ResourceOperation.completeIfPending`, the one funnel every completion path
-  (agent response, post-202 task, stuck-operation sweep) goes through. The
-  status flip and the outbox insert commit in one transaction, and the
-  "only the winner completes" guard means the event is enqueued exactly once.
+  `ResourceConvergence.recordSuccess`/`recordFailure` — the two funnels every
+  outcome goes through — in the same transaction as the write that closes the
+  transition. Committing the guard without the event would lose it permanently,
+  since nothing re-enters; committing the event without the guard would fire it
+  twice. A **delete** is the exception, because its success is the resource's
+  absence: the finalizer reap enqueues `operation.completed` from the terminal
+  `resource_events` row, which is the only place the delivery context still
+  exists. (Both replaced `ResourceOperation.completeIfPending`, which was the
+  single funnel until the operations table retired in STR-152.)
 - `quota.threshold_exceeded` is enqueued inside the quota admission
   transaction (`QuotaEnforcementService.reserveWorkload`), comparing the
   post-resync baseline against the post-admission reservation so only a

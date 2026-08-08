@@ -63,14 +63,19 @@ struct CoordinationServiceTests {
         #expect(await service.isAgentPresent(agentKey: agentKey("agent-a")) == true)
     }
 
-    @Test("Paired liveness refresh records presence and route together")
-    func pairedLivenessRefresh() async {
+    /// Operator teardown must not leave a node advertising itself as live for
+    /// up to a TTL: the stale-agent sweep skips anything with a live presence
+    /// key, so a cleared key is what lets the sweep see it at all.
+    @Test("Clearing presence drops the key immediately rather than waiting out the TTL")
+    func clearPresence() async {
         let service = makeService()
         let key = agentKey("agent-a")
 
-        #expect(await service.recordAgentLiveness(agentKey: key, replicaId: "replica-1"))
+        #expect(await service.recordAgentPresence(agentKey: key))
         #expect(await service.isAgentPresent(agentKey: key) == true)
-        #expect(await service.agentRoute(agentKey: key) == "replica-1")
+
+        await service.clearAgentPresence(agentKey: key)
+        #expect(await service.isAgentPresent(agentKey: key) == false)
     }
 
     // MARK: - Sweep locks

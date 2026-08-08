@@ -122,7 +122,7 @@ an operator's own, which never needed enrollment.
 ### Fleet rollout (control plane)
 
 A cluster-singleton sweep (`lock:sweep:agent_auto_update`, same Valkey
-pattern as the stuck-operation sweep) advances the rollout each heartbeat
+pattern as the other background sweeps) advances the rollout each heartbeat
 tick. All rollout state lives on the agent rows, so any replica can continue
 where another stopped:
 

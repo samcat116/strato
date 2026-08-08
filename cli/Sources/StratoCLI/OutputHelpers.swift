@@ -44,11 +44,7 @@ func handleMutation(
             print("Accepted: operation \(accepted.id).")
             print("Track it with 'strato operation wait \(accepted.id)'.")
         case .json:
-            if let seed = accepted.seed {
-                print(try renderJSON(seed))
-            } else {
-                print(try renderJSON(["operationId": accepted.id]))
-            }
+            print(try renderJSON(["operationId": accepted.id]))
         }
         return
     }

@@ -98,7 +98,7 @@ final class ResourceEventTests {
         }
     }
 
-    @Test("Create appends an event even though it bypasses ResourceOperation.begin")
+    @Test("Create appends an event even though it never goes through the mutation accept path")
     func createAppendsEvent() async throws {
         try await withEventTestApp { app, user, org, project, _, token in
             let builder = TestDataBuilder(db: app.db)
@@ -190,11 +190,14 @@ final class ResourceEventTests {
             let sandbox = try await builder.createSandbox(name: "expiring", project: project)
             let sandboxID = try sandbox.requireID()
 
-            // The path the sandbox expiry sweep takes (issue #424): an
-            // operation with the system sentinel for a user id.
-            _ = try await ResourceOperation.begin(
-                .delete, resourceKind: .sandbox, resourceID: sandboxID,
-                userID: ResourceOperation.systemUserID, on: app.db
+            // The path the sandbox expiry sweep takes (issue #424). It used to
+            // name the actor with a sentinel user id that matched no real user,
+            // which `MutationActor` derived `.system` from; the sentinel went
+            // with the operations table (STR-152) and the sweep passes the
+            // actor directly.
+            _ = try await app.resourceMutation.accept(
+                .delete, on: sandbox, actor: .system, dispatch: .stateSync,
+                on: app.db, app: app
             ) { db in
                 sandbox.setDesiredStatus(.absent)
                 try await sandbox.save(on: db)
@@ -232,14 +235,13 @@ final class ResourceEventTests {
                 try await Task.sleep(for: .milliseconds(50))
             }
             guard removed else {
-                let operation = try await ResourceOperation.query(on: app.db)
-                    .filter(\.$resourceID == vmID)
-                    .first()
+                let conditions = try await VM.find(vmID, on: app.db)?.conditions
                 Issue.record(
                     """
                     VM \(vmID) was still present after 5s, so the delete never resolved; \
-                    operation status \(operation?.status.rawValue ?? "<none>") \
-                    error \(operation?.error ?? "<none>")
+                    observed generation \(conditions?.observedGeneration.description ?? "<none>") \
+                    of \(conditions?.targetGeneration.description ?? "<none>"), \
+                    degraded \(conditions?.degraded?.reason ?? "<none>")
                     """)
                 return
             }
@@ -273,7 +275,7 @@ final class ResourceEventTests {
         }
     }
 
-    @Test("A mutation that throws after the operation insert appends nothing either")
+    @Test("A mutation that throws mid-transaction appends nothing either")
     func failedMutationAppendsNothing() async throws {
         try await withEventTestApp { app, user, _, _, vm, _ in
             let vmID = try vm.requireID()
@@ -281,13 +283,13 @@ final class ResourceEventTests {
             struct MutationFailure: Error {}
 
             // The other half of "the trail cannot disagree with what applied":
-            // the 409 guard rejects before anything is written, but a mutation
-            // that throws *after* the operation row is inserted relies on the
-            // transaction rolling both the operation and the event back.
+            // a mutation that throws after its desired-state write relies on
+            // the transaction rolling the generation bump and the event back
+            // together.
             await #expect(throws: MutationFailure.self) {
-                _ = try await ResourceOperation.begin(
-                    .boot, resourceKind: .virtualMachine, resourceID: vmID,
-                    userID: try user.requireID(), on: app.db
+                _ = try await app.resourceMutation.accept(
+                    .boot, on: vm, actor: .user(try user.requireID()),
+                    dispatch: .stateSync, on: app.db, app: app
                 ) { db in
                     vm.setDesiredStatus(.running)
                     try await vm.save(on: db)
@@ -296,7 +298,6 @@ final class ResourceEventTests {
             }
 
             #expect(try await self.events(for: vmID, on: app.db).isEmpty)
-            #expect(try await ResourceOperation.query(on: app.db).filter(\.$resourceID == vmID).count() == 0)
             #expect(try await VM.find(vmID, on: app.db)?.generation == 0)
         }
     }

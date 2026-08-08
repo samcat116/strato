@@ -429,8 +429,6 @@ final class DesiredStateReconciliationTests {
             )
             #expect(reserved)
 
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .create)
-            try await operation.save(on: app.db)
             let envelope = try self.report(
                 agentId: agentId,
                 vms: [
@@ -487,18 +485,16 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("A stale error from a previous generation does not fail a fresh operation")
+    @Test("A stale error from a previous generation does not degrade the current one")
     func staleErrorFromPreviousGenerationIgnored() async throws {
-        try await withVMTestApp { app, user, vm, _ in
+        try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
 
             // Boot at generation 1 failed and capped out; the user retried,
-            // minting generation 2 and a fresh pending operation.
+            // minting generation 2.
             vm.setDesiredStatus(.running)  // gen 1
             vm.setDesiredStatus(.running)  // gen 2 (retry)
             try await vm.save(on: app.db)
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
 
             // A heartbeat report still carrying generation 1's error arrives
             // before the agent attempts generation 2.
@@ -513,21 +509,25 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            // The fresh operation must not be failed by the stale error.
-            let stillPending = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(stillPending?.status == .pending)
+            // The error is recorded verbatim, but tagged with the generation
+            // that produced it — so a client comparing `sinceGeneration`
+            // against `targetGeneration` sees a superseded failure, not a
+            // failure of the retry.
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            let conditions = refreshed.conditions
+            #expect(conditions.targetGeneration == 2)
+            #expect(conditions.degraded?.sinceGeneration == 1)
+            #expect(conditions.converged == false)
         }
     }
 
-    @Test("Progress-only entries neither settle status nor complete operations")
+    @Test("Progress-only entries neither settle status nor converge")
     func convergingEntriesAreProgressOnly() async throws {
-        try await withVMTestApp { app, user, vm, _ in
+        try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
 
             vm.setDesiredStatus(.running)
             try await vm.save(on: app.db)
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .create)
-            try await operation.save(on: app.db)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -539,11 +539,13 @@ final class DesiredStateReconciliationTests {
             )
             await app.agentService.applyObservedStateReport(envelope, fromAgentKey: agentKey("recon-agent"))
 
-            let refreshed = try await VM.find(vm.id, on: app.db)
-            #expect(refreshed?.status == .created)  // untouched
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.status == .created)  // untouched
 
-            let stillPending = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(stillPending?.status == .pending)
+            let conditions = refreshed.conditions
+            #expect(conditions.converged == false)
+            #expect(conditions.degraded == nil)
+            #expect(conditions.phase == "downloading image")
         }
     }
 
@@ -610,22 +612,20 @@ final class DesiredStateReconciliationTests {
             // running VM and the agent has not reported the absence yet.
             vm.setStatus(.running)
             vm.setDesiredStatus(.absent)
+            // Already past its budget when the sweep runs.
+            vm.convergenceDeadline = Date().addingTimeInterval(-100)
             try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .delete, resourceKind: .virtualMachine, resourceID: vm.id!,
+                actor: .user(user.id!), on: app.db)
 
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .delete)
-            try await operation.save(on: app.db)
-            operation.createdAt = Date().addingTimeInterval(-400)  // past the 300s delete budget
-            try await operation.save(on: app.db)
+            await app.agentService.sweepStuckConvergence()
 
-            await app.agentService.sweepStuckOperations()
-
-            // The operation times out, but the deletion intent survives it
-            // (issue #734) — reverting desired to `.running` here would have
+            // The delete is marked degraded, but the deletion intent survives
+            // it (issue #734) — reverting desired to `.running` here would have
             // the agent recreate a fresh, blank VM under this id.
-            let swept = try await ResourceOperation.find(operation.id, on: app.db)
-            #expect(swept?.status == .failed)
-
             let sweptVM = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(sweptVM.conditions.degraded?.sinceGeneration == vm.generation)
             #expect(sweptVM.desiredStatus == .absent)
             #expect(sweptVM.generation == vm.generation)
 

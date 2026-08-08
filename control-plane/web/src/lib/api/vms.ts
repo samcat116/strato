@@ -7,7 +7,6 @@ import type {
   CreateVMRequest,
   UpdateVMRequest,
   AcceptedMutation,
-  Operation,
   Page,
   VMLogEntry,
   VMLogsQueryParams,
@@ -78,12 +77,6 @@ export const vmsApi = {
 
   resume(id: string): Promise<AcceptedMutation<VM>> {
     return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/resume`);
-  },
-
-  listOperations(id: string, limit?: number): Promise<Operation[]> {
-    return api.get<Operation[]>(
-      `/api/vms/${id}/operations${limit ? `?limit=${limit}` : ""}`
-    );
   },
 
   getStatus(id: string): Promise<{ status: string }> {

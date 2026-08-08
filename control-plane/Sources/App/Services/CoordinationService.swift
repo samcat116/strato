@@ -50,6 +50,9 @@ protocol CoordinationStore: Sendable {
     /// Whether `key` currently exists (i.e. was written and has not expired).
     func keyExists(_ key: String) async throws -> Bool
 
+    /// Remove `key` now rather than waiting out its TTL.
+    func deleteKey(_ key: String) async throws
+
     /// Presence of every key, in input order, fetched in one store round trip.
     func keysExist(_ keys: [String]) async throws -> [Bool]
 
@@ -83,26 +86,11 @@ protocol CoordinationStore: Sendable {
     /// Sum reservations for every agent key in one pipelined store round trip.
     func reservedTotals(agentKeys: [String]) async throws -> [ReservationAmounts]
 
-    /// Write `key` = `value` with a TTL (SET EX semantics), replacing any
-    /// existing value and TTL.
-    func setValue(_ key: String, value: String, ttlSeconds: Int) async throws
-
-    /// Refresh the paired presence and socket-route keys in one backend
-    /// round trip. They share a TTL and are always advanced together.
-    func setAgentLiveness(
-        presenceKey: String,
-        routeKey: String,
-        replicaId: String,
-        ttlSeconds: Int
-    ) async throws
-
-    /// Current value of `key`, or nil when the key is absent or expired.
-    func getValue(_ key: String) async throws -> String?
-
-    /// Atomically delete `key` only if it currently holds `value`. Lets a
-    /// stale owner (e.g. a replica processing a delayed socket close) clear
-    /// its own claim without tearing down a successor's.
-    func deleteValue(_ key: String, ifEquals value: String) async throws
+    // The value primitives — `setValue`/`getValue`/`deleteValue(_:ifEquals:)`
+    // and the paired `setAgentLiveness` write — existed for the
+    // `agent:{name}:replica` socket-route key and went with it (STR-152). Every
+    // key this store writes now is a presence/lock/grant marker whose *value*
+    // carries nothing, which is what `setKey`/`keyExists` are for.
 
     /// Publish `message` to `channel` — fire-and-forget fan-out to current
     /// subscribers, no persistence. Losing a message must always be safe for
@@ -144,13 +132,6 @@ struct ValkeyCoordinationStore: CoordinationStore {
         self.client = app.coordinationValkey
         self.scripts = ValkeyScriptExecutor(client: app.coordinationValkey)
     }
-
-    private static let setAgentLivenessScript = """
-        local ttl = tonumber(ARGV[2])
-        redis.call('SET', KEYS[1], '1', 'EX', ttl)
-        redis.call('SET', KEYS[2], ARGV[1], 'EX', ttl)
-        return 1
-        """
 
     /// Sum unexpired reservations (pruning expired index entries), check the
     /// new reservation fits `capacity`, and write it — all atomically. A VM's
@@ -215,6 +196,10 @@ struct ValkeyCoordinationStore: CoordinationStore {
     func setKey(_ key: String, ttlSeconds: Int) async throws {
         _ = try await client.set(
             ValkeyKey(key), value: "1", expiration: .seconds(max(1, ttlSeconds)))
+    }
+
+    func deleteKey(_ key: String) async throws {
+        _ = try await client.del(keys: [ValkeyKey(key)])
     }
 
     func keyExists(_ key: String) async throws -> Bool {
@@ -301,47 +286,6 @@ struct ValkeyCoordinationStore: CoordinationStore {
         return try responses.map(Self.decodeReservationTotal)
     }
 
-    func setValue(_ key: String, value: String, ttlSeconds: Int) async throws {
-        _ = try await client.set(
-            ValkeyKey(key), value: value, expiration: .seconds(max(1, ttlSeconds)))
-    }
-
-    func setAgentLiveness(
-        presenceKey: String,
-        routeKey: String,
-        replicaId: String,
-        ttlSeconds: Int
-    ) async throws {
-        _ = try await client.eval(
-            script: Self.setAgentLivenessScript,
-            keys: [ValkeyKey(presenceKey), ValkeyKey(routeKey)],
-            args: [replicaId, String(max(1, ttlSeconds))]
-        )
-    }
-
-    func getValue(_ key: String) async throws -> String? {
-        try await client.get(ValkeyKey(key)).map(String.init)
-    }
-
-    /// GET-compare-DEL as a Lua script so the check and the delete are atomic:
-    /// a replica clearing its own stale claim can never race a successor's
-    /// fresh write in between.
-    private static let deleteIfEqualsScript = """
-        if redis.call('GET', KEYS[1]) == ARGV[1] then
-            return redis.call('DEL', KEYS[1])
-        end
-        return 0
-        """
-
-    func deleteValue(_ key: String, ifEquals value: String) async throws {
-        _ = try await scripts.execute(
-            name: "coordination.delete-if-equals",
-            script: Self.deleteIfEqualsScript,
-            keys: [ValkeyKey(key)],
-            args: [value]
-        )
-    }
-
     func publish(channel: String, message: String) async throws {
         _ = try await client.publish(channel: channel, message: message)
     }
@@ -405,11 +349,14 @@ actor InMemoryCoordinationStore: CoordinationStore {
     private var keys: [String: Date] = [:]
     private var locks: [String: Date] = [:]
     private var reservations: [String: [String: Reservation]] = [:]
-    private var values: [String: (value: String, expiresAt: Date)] = [:]
     private var subscribers: [String: [@Sendable (String) -> Void]] = [:]
 
     func setKey(_ key: String, ttlSeconds: Int) {
         keys[key] = Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds)))
+    }
+
+    func deleteKey(_ key: String) {
+        keys.removeValue(forKey: key)
     }
 
     func keyExists(_ key: String) -> Bool {
@@ -484,35 +431,6 @@ actor InMemoryCoordinationStore: CoordinationStore {
         agentKeys.map(reservedTotal)
     }
 
-    func setValue(_ key: String, value: String, ttlSeconds: Int) {
-        values[key] = (value, Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds))))
-    }
-
-    func setAgentLiveness(
-        presenceKey: String,
-        routeKey: String,
-        replicaId: String,
-        ttlSeconds: Int
-    ) {
-        let expiresAt = Date().addingTimeInterval(TimeInterval(max(1, ttlSeconds)))
-        keys[presenceKey] = expiresAt
-        values[routeKey] = (replicaId, expiresAt)
-    }
-
-    func getValue(_ key: String) -> String? {
-        guard let entry = values[key] else { return nil }
-        guard entry.expiresAt > Date() else {
-            values.removeValue(forKey: key)
-            return nil
-        }
-        return entry.value
-    }
-
-    func deleteValue(_ key: String, ifEquals value: String) {
-        guard getValue(key) == value else { return }
-        values.removeValue(forKey: key)
-    }
-
     func publish(channel: String, message: String) {
         // Deliver off the actor, mirroring Valkey's asynchronous fan-out, so a
         // handler that re-enters this store never deadlocks the publisher.
@@ -540,15 +458,15 @@ actor InMemoryCoordinationStore: CoordinationStore {
 /// routing and cross-replica signalling added in phase 3, issue #261; the
 /// desired-state doorbell made broadcast in STR-146).
 ///
+/// Since STR-152 nothing here is load-bearing for correctness: every key and
+/// channel below is a latency optimization or a duplicate-work guard, and the
+/// paths that genuinely needed a distributed directory — the socket-route key
+/// `agent:{name}:replica` and the `replica:{id}:rpc` forwarding channels — went
+/// with the imperative exchanges that read them.
+///
 /// The key families:
 /// - `agent:{name}:presence` — agent liveness visible to every control-plane
 ///   process, written on registration and refreshed on every heartbeat.
-/// - `agent:{name}:replica` — which replica holds the agent's WebSocket,
-///   written on socket accept and refreshed with presence. Lets any replica
-///   forward an imperative RPC (volume operations, reboot) to the process that
-///   can actually reach the agent. Desired state no longer consults it: since
-///   STR-146 that travels by broadcast doorbell and needs no routing directory,
-///   and this key retires with the last imperative exchange (STR-152).
 /// - `imggrant:agent:{agentId}:image:{imageId}` — the images an agent has been
 ///   handed download URLs for, written at sync assembly and volume create; the
 ///   image-download route authorizes an agent's fetch against them (#562).
@@ -565,9 +483,6 @@ actor InMemoryCoordinationStore: CoordinationStore {
 ///   the rest no-op. Contentless and unrouted on purpose — over-ringing is
 ///   free, and under-ringing costs only latency because the agent re-fetches
 ///   unconditionally on its own timer.
-/// - `replica:{id}:rpc` / `replica:{id}:rpc-replies` — correlated
-///   request/response forwarding for the few remaining imperative exchanges
-///   (volume operations, reboot) when the caller doesn't hold the socket.
 ///
 /// Degradation policy: coordination improves correctness but must never make
 /// the control plane less available than it was without it. Store errors are
@@ -615,39 +530,41 @@ actor CoordinationService {
 
     /// Record (or refresh) an agent's presence. Failures are logged, not
     /// thrown: a missed refresh costs one TTL window of cross-process
-    /// visibility and the next heartbeat repairs it.
-    func recordAgentPresence(agentKey: String, ttlSeconds: Int = CoordinationService.presenceTTLSeconds) async {
+    /// visibility and the next heartbeat repairs it. Returns whether the write
+    /// landed, so a caller throttling refreshes can decline to record a failed
+    /// attempt as one and retry on the next frame.
+    ///
+    /// This used to write presence and the socket-route key together in one Lua
+    /// invocation, so the pair could never drift apart under a throttle. The
+    /// route key went with the cross-replica RPC bridge (STR-152), leaving one
+    /// key and one `SET`.
+    @discardableResult
+    func recordAgentPresence(
+        agentKey: String, ttlSeconds: Int = CoordinationService.presenceTTLSeconds
+    ) async -> Bool {
         do {
             try await store.setKey(Self.presenceKey(agentKey: agentKey), ttlSeconds: ttlSeconds)
+            return true
         } catch {
             logger.warning(
                 "Failed to record agent presence in coordination store",
                 metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
+            return false
         }
     }
 
-    /// Refresh presence and route as one logical liveness record. The Valkey
-    /// backend performs both writes in one Lua invocation; callers can safely
-    /// throttle this to half the TTL without the two keys drifting apart.
-    @discardableResult
-    func recordAgentLiveness(
-        agentKey: String,
-        replicaId: String,
-        ttlSeconds: Int = CoordinationService.presenceTTLSeconds
-    ) async -> Bool {
+    /// Drop the agent's presence key immediately, instead of leaving it to
+    /// expire. Used by operator teardown (deregister, force-offline): a node
+    /// an operator has just torn down must not keep advertising itself as live
+    /// for up to a TTL, because the stale-agent sweep skips anything with a
+    /// live presence key. Best-effort, like every write here.
+    func clearAgentPresence(agentKey: String) async {
         do {
-            try await store.setAgentLiveness(
-                presenceKey: Self.presenceKey(agentKey: agentKey),
-                routeKey: Self.routeKey(agentKey: agentKey),
-                replicaId: replicaId,
-                ttlSeconds: ttlSeconds
-            )
-            return true
+            try await store.deleteKey(Self.presenceKey(agentKey: agentKey))
         } catch {
             logger.warning(
-                "Failed to record agent liveness in coordination store",
+                "Failed to clear agent presence in coordination store; TTL will reclaim it",
                 metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
-            return false
         }
     }
 
@@ -848,68 +765,6 @@ actor CoordinationService {
             logger.warning(
                 "Failed to release reported VMs' reservations; TTL will reclaim them",
                 metadata: ["agentId": .string(agentId), "error": .string("\(error)")])
-        }
-    }
-
-    // MARK: Socket routing (issue #261)
-
-    /// Route TTL matches the presence TTL: both are refreshed together by the
-    /// heartbeat path, and a crashed replica's stale route expires in one
-    /// window (the agent is effectively offline until it reconnects anyway).
-    static let routeTTLSeconds = presenceTTLSeconds
-
-    nonisolated static func routeKey(agentKey: String) -> String {
-        "agent:\(agentKey):replica"
-    }
-
-    nonisolated static func rpcChannel(replicaId: String) -> String {
-        "replica:\(replicaId):rpc"
-    }
-
-    nonisolated static func rpcReplyChannel(replicaId: String) -> String {
-        "replica:\(replicaId):rpc-replies"
-    }
-
-    /// Record (or refresh) which replica holds an agent's WebSocket. Failures
-    /// are logged, not thrown: without the route, a cross-replica imperative
-    /// exchange fails as unreachable and its caller retries. Desired state is
-    /// unaffected — it does not consult the route (STR-146).
-    func recordAgentRoute(
-        agentKey: String, replicaId: String, ttlSeconds: Int = CoordinationService.routeTTLSeconds
-    ) async {
-        do {
-            try await store.setValue(
-                Self.routeKey(agentKey: agentKey), value: replicaId, ttlSeconds: ttlSeconds)
-        } catch {
-            logger.warning(
-                "Failed to record agent socket route in coordination store",
-                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
-        }
-    }
-
-    /// The replica currently holding the agent's socket, or nil when unknown
-    /// (agent offline, route expired, or store unavailable).
-    func agentRoute(agentKey: String) async -> String? {
-        do {
-            return try await store.getValue(Self.routeKey(agentKey: agentKey))
-        } catch {
-            logger.warning(
-                "Failed to read agent socket route from coordination store",
-                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
-            return nil
-        }
-    }
-
-    /// Clear the agent's route only if this replica still owns it, so a
-    /// delayed close after the agent reconnected elsewhere cannot erase the
-    /// successor's claim. Best-effort: the TTL is the backstop.
-    func clearAgentRoute(agentKey: String, replicaId: String) async {
-        do {
-            try await store.deleteValue(Self.routeKey(agentKey: agentKey), ifEquals: replicaId)
-        } catch {
-            logger.warning(
-                "Failed to clear agent socket route; TTL will reclaim it",
-                metadata: ["agentKey": .string(agentKey), "error": .string("\(error)")])
         }
     }
 

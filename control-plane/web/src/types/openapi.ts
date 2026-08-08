@@ -394,7 +394,7 @@ export interface paths {
         };
         /**
          * Get an operation
-         * @description Poll this until `status` is terminal (`succeeded` or `failed`).
+         * @description Poll this until `status` is terminal (`succeeded` or `failed`). Answers for the `mutationId` any `202` returned.
          */
         get: operations["getOperation"];
         put?: never;
@@ -5214,9 +5214,9 @@ export interface components {
             mutationId: string;
         };
         /**
-         * @description A durable record of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal.
+         * @description The operation view of one asynchronous resource lifecycle mutation. Poll it until `status` is terminal.
          *
-         *     Served from two sources. The verbs still dispatched as imperative agent commands — VM restart, and VM/sandbox restore — have real operation records. Everything else is synthesized on read from the mutation's audit record and the resource's `conditions`, so a client written against the older contract keeps working; those responses report no `completedAt` except for a completed delete.
+         *     Synthesized on read from the mutation's audit record and the resource's `conditions` — there is no operations table behind it — so a client written against the older contract keeps working. `completedAt` is reported only for a completed delete, which is the one outcome recorded rather than derived.
          */
         ResourceOperation: {
             /** Format: uuid */
@@ -5238,7 +5238,7 @@ export interface components {
             completedAt?: string;
         };
         /**
-         * @description Which kind of resource an operation acts on.
+         * @description Which kind of resource a mutation acts on.
          * @enum {string}
          */
         OperationResourceKind: "virtual_machine" | "sandbox";
@@ -9092,7 +9092,7 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The request conflicts with current state (e.g. a pending operation). */
+        /** @description The request conflicts with current state. */
         Conflict: {
             headers: {
                 [name: string]: unknown;

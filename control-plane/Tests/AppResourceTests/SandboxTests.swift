@@ -643,10 +643,15 @@ final class SandboxTests {
             }
 
             source.desiredStatus = .running
+            // An in-place restore in flight: `requestRestore` bumps both the
+            // restore nonce and the generation, and the agent has not confirmed
+            // the latter. That window is what used to be a pending `restore`
+            // operation row (STR-152).
+            source.requestRestore(snapshotID: snapshot.id!)
             try await source.save(on: app.db)
-            let restore = ResourceOperation(
-                sandboxID: source.id!, userID: user.id!, kind: .restore)
-            try await restore.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .restore, resourceKind: .sandbox, resourceID: source.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -657,6 +662,112 @@ final class SandboxTests {
             } afterResponse: { res in
                 #expect(res.status == .conflict)
                 #expect(res.body.string.contains("being restored in place"))
+            }
+        }
+    }
+
+    /// A restore is not consumed by being superseded — the agent applies one
+    /// only when the workload is wanted running, so a stop makes it *wait*
+    /// (`Reconciliation.planWorkloadSteps`). The guard therefore has to key on
+    /// the newest `.restore`, not on the newest mutation: keying on the latter
+    /// would let a `.shutdown` issued after the restore hide it and admit a
+    /// fork the retired operation row refused.
+    @Test("A restore hidden behind a newer mutation still blocks a fork")
+    func createFromSnapshotBlockedByRestoreBehindNewerMutation() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let agentId = try await registerAgent(
+                app: app,
+                sandbox: source,
+                named: "superseded-restore-agent",
+                sandboxCapable: true)
+            let snapshot = SandboxSnapshot(
+                name: "superseded-restore-checkpoint",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.guestControlProtocolVersion =
+                SandboxGuestControlProtocol.currentVersion
+            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
+            try await snapshot.save(on: app.db)
+
+            let sourceID = try source.requireID()
+            let userID = try user.requireID()
+
+            // The restore is requested first...
+            source.requestRestore(snapshotID: snapshot.id!)
+            try await source.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .restore, resourceKind: .sandbox, resourceID: sourceID,
+                actor: .user(userID), on: app.db)
+
+            // ...then a stop lands on top of it, making `.shutdown` the newest
+            // recorded mutation while the restore is still unapplied.
+            source.setDesiredStatus(.stopped)
+            try await source.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .shutdown, resourceKind: .sandbox, resourceID: sourceID,
+                actor: .user(userID), on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "fork-behind-superseded-restore",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("being restored in place"))
+            }
+        }
+    }
+
+    /// The other half of the restore guard: it has to *close*. The operation
+    /// row it used to read closed when an RPC returned; the nonce closes when
+    /// the agent reports the generation, which is the only signal that the
+    /// source's rootfs has stopped moving.
+    @Test("A converged restore stops blocking forks of the source")
+    func createFromSnapshotAllowedOnceRestoreConverges() async throws {
+        try await withSandboxTestApp { app, user, project, source, token in
+            let agentId = try await registerAgent(
+                app: app,
+                sandbox: source,
+                named: "restore-converged-agent",
+                sandboxCapable: true)
+            let snapshot = SandboxSnapshot(
+                name: "converged-restore-checkpoint",
+                sandboxID: source.id!,
+                projectID: project.id!,
+                environment: source.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.guestControlProtocolVersion =
+                SandboxGuestControlProtocol.currentVersion
+            snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
+            try await snapshot.save(on: app.db)
+
+            source.setStatus(.running)
+            source.requestRestore(snapshotID: snapshot.id!)
+            // The agent applied the nonce and reported the generation back.
+            source.observedGeneration = source.generation
+            try await source.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .restore, resourceKind: .sandbox, resourceID: source.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode([
+                    "name": "fork-after-source-restore",
+                    "restoreFrom": snapshot.id!.uuidString,
+                    "projectId": project.id!.uuidString,
+                ])
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
             }
         }
     }
@@ -733,11 +844,11 @@ final class SandboxTests {
             sandbox.setStatus(.running)
             try await sandbox.save(on: app.db)
 
-            // A checkpoint in flight: still an operation row, because it is an
-            // imperative agent RPC with no generation to converge on.
-            let pending = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .snapshot)
-            try await pending.save(on: app.db)
+            // A mutation in flight: desired state moved and the agent has not
+            // confirmed it, which is what the operation mutex used to key on.
+            sandbox.setDesiredStatus(.running)
+            sandbox.extendConvergenceDeadline(by: 600)
+            try await sandbox.save(on: app.db)
 
             // The double-submit `409` went with the operation row (STR-147):
             // desired state is level-triggered, so the stop is accepted and the
@@ -813,11 +924,11 @@ final class SandboxTests {
     @Test("GET /api/operations/:id resolves sandbox operations")
     func operationVisibility() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, token in
-            let operation = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
+            let event = try await ResourceEvent.record(
+                .boot, resourceKind: .sandbox, resourceID: try sandbox.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
 
-            try await app.test(.GET, "/api/operations/\(operation.id!)") { req in
+            try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -831,16 +942,15 @@ final class SandboxTests {
     @Test("GET /api/sandboxes/:id/operations lists newest first and honors limit")
     func listOperationsNewestFirst() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, token in
-            let older = ResourceOperation(sandboxID: sandbox.id!, userID: user.id!, kind: .boot)
-            older.status = .succeeded
-            try await older.save(on: app.db)
-            older.createdAt = Date().addingTimeInterval(-60)
-            try await older.save(on: app.db)
-
-            let newer = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .shutdown)
-            newer.status = .succeeded
-            try await newer.save(on: app.db)
+            let sandboxID = try sandbox.requireID()
+            let userID = try user.requireID()
+            // Recorded in order and never rewritten: `resource_events` is
+            // append-only (its trigger rejects an `UPDATE`), so the insert
+            // order is the only way to age one row relative to another.
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .sandbox, resourceID: sandboxID, actor: .user(userID), on: app.db)
+            let newer = try await ResourceEvent.record(
+                .shutdown, resourceKind: .sandbox, resourceID: sandboxID, actor: .user(userID), on: app.db)
 
             try await app.test(.GET, "/api/sandboxes/\(sandbox.id!)/operations?limit=1") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -1370,69 +1480,12 @@ final class SandboxTests {
         }
     }
 
-    // MARK: - Stuck-operation sweep
+    // MARK: - Stuck-convergence sweep
 
-    @Test("The sweep fails a stuck sandbox create past its budget and resolves the sandbox")
-    func sweepResolvesStuckCreate() async throws {
-        try await withSandboxTestApp { app, user, _, sandbox, _ in
-            sandbox.setDesiredStatus(.stopped)
-            try await sandbox.save(on: app.db)
-
-            let operation = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .create)
-            try await operation.save(on: app.db)
-            // Backdate past the create budget so the sweep sees it as stuck.
-            operation.createdAt = Date(timeIntervalSinceNow: -700)
-            try await operation.save(on: app.db)
-
-            await app.agentService.sweepStuckOperations()
-
-            let swept = try #require(await ResourceOperation.find(operation.id, on: app.db))
-            #expect(swept.status == .failed)
-
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
-            #expect(refreshed.status == .error)
-        }
-    }
-
-    @Test("The sweep errors a transitional sandbox with no pending operation")
-    func sweepResolvesTransitionalSandboxWithoutOperation() async throws {
-        try await withSandboxTestApp { app, _, _, sandbox, _ in
-            // The sandbox half of the transitional backstop: the operation
-            // completed (or never existed) but the confirming report never
-            // landed, so only elapsed time is left to go on.
-            sandbox.setStatus(.starting, at: Date(timeIntervalSinceNow: -400))
-            try await sandbox.save(on: app.db)
-
-            await app.agentService.sweepStuckOperations()
-
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
-            #expect(refreshed.status == .error)
-        }
-    }
-
-    @Test("The sweep leaves a transitional sandbox alone while an operation is still pending")
-    func sweepLeavesTransitionalSandboxWithPendingOperationAlone() async throws {
-        try await withSandboxTestApp { app, user, _, sandbox, _ in
-            // Past the transitional backstop's 120s timeout, but the fresh
-            // operation is inside its own budget and owns the resolution.
-            sandbox.setStatus(.starting, at: Date(timeIntervalSinceNow: -400))
-            try await sandbox.save(on: app.db)
-
-            let operation = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
-
-            await app.agentService.sweepStuckOperations()
-
-            let fresh = try #require(await ResourceOperation.find(operation.id, on: app.db))
-            #expect(fresh.status == .pending)
-
-            let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
-            #expect(refreshed.status == .starting)
-        }
-    }
-
+    /// The stuck-*operation* sweep this section used to exercise — failing a
+    /// row past its per-kind budget, and erroring a transitional sandbox with
+    /// no pending row — went with the table (STR-152). The deadline every
+    /// accepted mutation stamps says the same thing without a cluster lock.
     @Test("A timed-out sandbox delete keeps converging on absent instead of resurrecting it")
     func sweepLeavesStuckDeleteConvergingOnAbsent() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
@@ -1442,22 +1495,18 @@ final class SandboxTests {
             // running sandbox and the agent has not reported the absence yet.
             sandbox.setStatus(.running)
             sandbox.setDesiredStatus(.absent)
+            sandbox.convergenceDeadline = Date(timeIntervalSinceNow: -100)
             try await sandbox.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .delete, resourceKind: .sandbox, resourceID: try sandbox.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
 
-            let operation = ResourceOperation(
-                sandboxID: sandbox.id!, userID: user.id!, kind: .delete)
-            try await operation.save(on: app.db)
-            operation.createdAt = Date(timeIntervalSinceNow: -400)  // past the delete budget
-            try await operation.save(on: app.db)
-
-            await app.agentService.sweepStuckOperations()
-
-            let swept = try #require(await ResourceOperation.find(operation.id, on: app.db))
-            #expect(swept.status == .failed)
+            await app.agentService.sweepStuckConvergence()
 
             // The timeout must not abandon the deletion (issue #734) — a live
             // desired state would have the agent recreate a blank sandbox.
             let refreshed = try #require(await Sandbox.find(sandbox.id, on: app.db))
+            #expect(refreshed.conditions.degraded?.sinceGeneration == sandbox.generation)
             #expect(refreshed.desiredStatus == .absent)
             #expect(refreshed.generation == sandbox.generation)
 
