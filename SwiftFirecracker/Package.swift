@@ -37,6 +37,8 @@ let package = Package(
                 "SwiftFirecracker",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
+                // EmbeddedChannel, for driving the line framer without a socket.
+                .product(name: "NIOEmbedded", package: "swift-nio"),
             ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
