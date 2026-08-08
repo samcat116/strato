@@ -130,6 +130,14 @@ console endpoints, disk hot-(de)attach, `reservedResources()`, an
 opt-in `adoptVM` for orphan re-adoption, and `reclaimVMDirectory` for the
 delete path that has no session to tear down (below).
 
+The two host-inventory queries — `listVMs()` and `reservedResources()` —
+return **optionals** (STR-196). Nil means the backend could not answer, and
+the agent substitutes its durable manifest; an empty list or a zero
+reservation is a positive claim about the host that only a backend which
+actually knows may make. The distinction is load-bearing because a
+synthesized zero reads exactly like an idle host to the scheduler, which is
+how STR-190 stayed invisible in the field.
+
 The registry is a dictionary on the `Agent` actor keyed by
 `HypervisorType`, populated once at `start()`. That dictionary and
 `getHypervisorService(for:)` are the **only** places message handling

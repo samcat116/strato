@@ -382,13 +382,20 @@ actor FirecrackerService: HypervisorService {
         }
     }
 
-    func listVMs() async -> [String] {
+    /// Never nil, unlike `LibvirtService`: this driver mirrors every VM it
+    /// manages in its own memory, so there is no query that can fail and no
+    /// state in which it does not know what it holds. Nil is for a backend that
+    /// had to ask something else and got no reply (STR-196).
+    func listVMs() async -> [String]? {
         return Array(vmManagers.keys)
     }
 
     /// Sum of vCPUs and memory (in bytes) reserved by all VMs this service is managing.
     /// Used to compute accurate available-resource figures for the scheduler.
-    func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
+    ///
+    /// Never nil, for the same reason as `listVMs()`: the specs are held here,
+    /// so a zero from this driver is always a real zero.
+    func reservedResources() -> (vcpus: Int, memoryBytes: Int64)? {
         var vcpus = 0
         var memoryBytes: Int64 = 0
         for spec in vmSpecs.values {
@@ -551,7 +558,10 @@ actor FirecrackerService: HypervisorService {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
     }
 
-    func listVMs() async -> [String] {
+    /// Empty rather than nil, and that is a real answer: this stub refuses every
+    /// create, so it can never come to hold a VM. Nothing is true of it rather
+    /// than merely assumed (STR-196).
+    func listVMs() async -> [String]? {
         return []
     }
 
@@ -568,7 +578,9 @@ actor FirecrackerService: HypervisorService {
         throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
     }
 
-    func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
+    /// Zero rather than nil, for the same reason as `listVMs()`: a stub that
+    /// holds no VM reserves nothing, truthfully.
+    func reservedResources() -> (vcpus: Int, memoryBytes: Int64)? {
         return (0, 0)
     }
 }

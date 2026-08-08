@@ -102,6 +102,33 @@ struct HypervisorHangResilienceTests {
         #expect(value == "running")
     }
 
+    /// The transport half of the STR-196 seam. The decision that a hypervisor
+    /// cannot answer is made in the driver (`LastKnownInventoryTests`), and the
+    /// reporting path — `Agent.observe`, which is this budget plus a log line —
+    /// must be incapable of upgrading that to a figure on the way out. With
+    /// this and the timeout tests above, both nils reaching
+    /// `?? manifestReservations(for:)` mean the same thing: substitute the
+    /// manifest.
+    @Test("A budget carries a backend's \"I don't know\" through as nil rather than inventing an answer")
+    func budgetPassesThroughAnAbsentAnswer() async throws {
+        let unknown = try await StageBudget.run(
+            seconds: StageBudget.observationSeconds, stage: "reserved-resources", onTimeout: .abandon
+        ) {
+            Optional<(vcpus: Int, memoryBytes: Int64)>.none
+        }
+        #expect(unknown == nil)
+
+        let eightGiB = Int64(8) * 1024 * 1024 * 1024
+        let known = try await StageBudget.run(
+            seconds: StageBudget.observationSeconds, stage: "reserved-resources", onTimeout: .abandon
+        ) {
+            Optional<(vcpus: Int, memoryBytes: Int64)>.some((vcpus: 4, memoryBytes: eightGiB))
+        }
+        let reserved = try #require(known)
+        #expect(reserved.vcpus == 4)
+        #expect(reserved.memoryBytes == eightGiB)
+    }
+
     @Test("Adoption and control budgets are bounded and ordered sensibly")
     func budgetsAreConfigured() {
         // The reported hang was an unbounded re-adoption, so this must have a

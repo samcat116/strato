@@ -161,9 +161,17 @@ public protocol HypervisorService: Actor, Sendable {
     /// - Returns: The current VM status
     func getVMStatus(vmId: String) async throws -> VMStatus
 
-    /// Lists all VM IDs managed by this service
-    /// - Returns: Array of VM identifiers
-    func listVMs() async -> [String]
+    /// Every VM id this service manages, or nil if it cannot say (STR-196).
+    ///
+    /// The empty list is an *answer*, not a shrug: it claims this backend
+    /// manages nothing, and absence from an inventory of what exists on a host
+    /// reads downstream as gone. A backend that could not reach its hypervisor
+    /// is in no position to make that claim and must return nil, which the
+    /// agent answers by substituting its durable manifest.
+    ///
+    /// Backends holding their VM set in memory always know, and always answer.
+    /// - Returns: VM identifiers, or nil if this backend cannot say
+    func listVMs() async -> [String]?
 
     /// Returns the console access points for a VM, or nil if none exist yet
     /// (e.g. the VM is not running).
@@ -190,9 +198,20 @@ public protocol HypervisorService: Actor, Sendable {
     ///   resize a running VM at all
     func resizeVM(vmId: String, spec: VMSpec) async throws
 
-    /// Sum of vCPUs and memory (in bytes) committed to VMs this service manages.
-    /// Used to compute accurate available-resource figures for the scheduler.
-    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)
+    /// Sum of vCPUs and memory (in bytes) committed to VMs this service
+    /// manages, or nil if it cannot say (STR-196).
+    ///
+    /// Used to compute available-resource figures for the scheduler, which is
+    /// why `(0, 0)` is reserved for a backend that really is idle rather than
+    /// spent on one that failed to find out: under-reporting reservations
+    /// advertises capacity this host does not have. STR-190 is what that costs
+    /// — a libvirt decoder that never once worked reported the same figure an
+    /// idle host does, and the node advertised its whole machine as free while
+    /// running VMs. Nil is how a backend says it cannot say, and the agent
+    /// answers it by substituting the sizing from its durable manifest.
+    ///
+    /// Backends holding their VM set in memory always know, and always answer.
+    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)?
 
     /// Re-adopts a VM whose hypervisor process survived an agent restart
     /// (reconciliation phase 2, issue #260): reconnects the control session
