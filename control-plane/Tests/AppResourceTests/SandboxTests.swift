@@ -937,6 +937,28 @@ final class SandboxTests {
         }
     }
 
+    /// `Error` means the agent could not confirm the sandbox, which very often
+    /// means its guest is still running — a failed checkpoint used to land one
+    /// there while the microVM kept serving. Refusing the stop left deletion as
+    /// the only way out (STR-194); the start guard already made this exception.
+    @Test("POST stop is accepted for a sandbox whose state could not be confirmed")
+    func stopAcceptedWhileErrored() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, token in
+            sandbox.setStatus(.error)
+            try await sandbox.save(on: app.db)
+
+            try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/stop") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let shutdown = try await ResourceEvent.latest(
+                .requested, resourceKind: .sandbox, resourceID: sandbox.id!, on: app.db)
+            #expect(shutdown?.mutation == .shutdown)
+        }
+    }
+
     @Test("A pending snapshot operation no longer blocks a lifecycle mutation")
     func pendingOperationDoesNotBlockLifecycleMutation() async throws {
         try await withSandboxTestApp { app, user, _, sandbox, token in

@@ -1085,6 +1085,19 @@ Unix-socket HTTP client), plus typed models (`MachineConfig`, `BootSource`,
 `Drive`, `NetworkInterface`, `Vsock`, jailer options) and the vsock
 host↔guest handshake.
 
+The API socket client (`UnixSocketHTTPClient`) pairs responses to requests in
+pipeline order, so a round trip that times out has to take the whole channel
+with it — a request abandoned mid-queue would mis-pair everything behind it.
+What it must not take with it is the client: the next request **redials**
+(never replaying the failed one), because without that a single unanswered
+request left the agent unable to reach that microVM's API for the rest of its
+life, and a still-running sandbox could only be deleted (STR-194). An explicit
+`disconnect()` revokes the redial — by then the socket path may belong to a
+different VM. The request deadline sits deliberately *above* Firecracker's own
+30s `RECV_TIMEOUT_SEC`, so a VMM whose vCPUs are slow to acknowledge a
+pause/resume answers with its real fault message instead of losing the race to
+an identical host-side ceiling.
+
 ## Tests
 
 `agent/Tests/StratoAgentTests/` (~68 files) mirrors the Core units:

@@ -17,9 +17,17 @@ public actor FirecrackerManager {
     /// - Parameters:
     ///   - socketPath: Path to the Firecracker API Unix socket
     ///   - logger: Logger instance for debug output
-    public init(socketPath: String, logger: Logger = Logger(label: "SwiftFirecracker.Manager")) {
+    ///   - requestTimeout: Ceiling on one API round trip. The default is sized
+    ///     for the calls that wait on the vCPUs; reads that do not take
+    ///     ``UnixSocketHTTPClient/defaultReadTimeout`` per call instead.
+    public init(
+        socketPath: String,
+        logger: Logger = Logger(label: "SwiftFirecracker.Manager"),
+        requestTimeout: TimeInterval = UnixSocketHTTPClient.defaultRequestTimeout
+    ) {
         self.socketPath = socketPath
-        self.httpClient = UnixSocketHTTPClient(socketPath: socketPath, logger: logger)
+        self.httpClient = UnixSocketHTTPClient(
+            socketPath: socketPath, logger: logger, requestTimeout: requestTimeout)
         self.logger = logger
         self.encoder = JSONEncoder()
         self.decoder = JSONDecoder()
@@ -292,9 +300,16 @@ public actor FirecrackerManager {
 
     // MARK: - Instance Information
 
-    /// Gets the current instance information
+    /// Gets the current instance information.
+    ///
+    /// Bounded by the short read budget rather than the client's default: the
+    /// VMM answers this from its own event loop without asking the vCPUs
+    /// anything, and callers pair it with an action in the same convergence
+    /// step (`shutdownSandbox` is `getInstanceInfo` then `pause`), where the two
+    /// ceilings add up against one mutation deadline.
     public func getInstanceInfo() async throws -> InstanceInfo {
-        let response = try await httpClient.request(method: .GET, path: "/")
+        let response = try await httpClient.request(
+            method: .GET, path: "/", timeout: UnixSocketHTTPClient.defaultReadTimeout)
         try handleResponse(response)
         guard let body = response.body else {
             throw FirecrackerError.deserializationError("Empty response body")
