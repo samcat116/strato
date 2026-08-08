@@ -898,4 +898,9 @@ private actor RecordingNetworkActuator: NetworkActuator {
     func removeRouterPort(name: String) async throws { calls.append("removeRouterPort(\(name))") }
     func removeExternalSwitch(name: String) async throws { calls.append("removeExternalSwitch(\(name))") }
     func removeRouter(name: String) async throws { calls.append("removeRouter(\(name))") }
+    func observeDNSZones() async throws -> [ObservedDNSZone] { [] }
+    func ensureDNSZone(_ write: DNSZoneWrite) async throws {
+        calls.append("ensureDNSZone(\(write.plan.zoneName))")
+    }
+    func removeDNSZone(uuid: String) async throws { calls.append("removeDNSZone(\(uuid))") }
 }

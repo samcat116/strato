@@ -346,6 +346,73 @@ struct ReconciliationProtocolTests {
         #expect(WireProtocol.supportsNetworkSync(WireProtocol.currentVersion))
     }
 
+    @Test("DesiredStateMessage carries DNS zones through the envelope")
+    func desiredDNSZonesRoundTrip() throws {
+        let zoneID = UUID()
+        let networkID = UUID()
+        let message = DesiredStateMessage(
+            vms: [],
+            dnsZones: [
+                DesiredDNSZone(
+                    zoneId: zoneID,
+                    zoneName: "acme.internal",
+                    networkIds: [networkID],
+                    records: [
+                        DesiredDNSRecord(
+                            name: "web.acme.internal", type: "A", values: ["10.0.0.5", "10.0.0.6"]),
+                        DesiredDNSRecord(
+                            name: "5.0.0.10.in-addr.arpa", type: "PTR", values: ["web.acme.internal"]),
+                    ],
+                    recordsHash: "abc123")
+            ])
+        let decoded = try MessageEnvelope(message: message).decode(as: DesiredStateMessage.self)
+        let zone = try #require(decoded.dnsZones?.first)
+        #expect(zone.zoneId == zoneID)
+        #expect(zone.zoneName == "acme.internal")
+        #expect(zone.networkIds == [networkID])
+        #expect(zone.recordsHash == "abc123")
+        #expect(zone.records.count == 2)
+        #expect(zone.records[0].values == ["10.0.0.5", "10.0.0.6"])
+    }
+
+    @Test("A sync without DNS zones decodes to nil, never an empty opinion")
+    func desiredDNSZonesBackwardCompatible() throws {
+        // A pre-v36 control plane emits no `dnsZones` key. Nil is what makes
+        // the agent leave every managed DNS row alone; `[]` would have it sweep
+        // the site's rows on the first sync after a control-plane rollback.
+        let legacy = """
+            {"requestId":"r","timestamp":0,"syncId":"s","vms":[]}
+            """
+        let decoded = try WireProtocol.makeDecoder().decode(
+            DesiredStateMessage.self, from: Data(legacy.utf8))
+        #expect(decoded.dnsZones == nil)
+
+        let empty = DesiredStateMessage(vms: [], dnsZones: [])
+        let decodedEmpty = try MessageEnvelope(message: empty).decode(as: DesiredStateMessage.self)
+        #expect(decodedEmpty.dnsZones?.isEmpty == true)
+    }
+
+    @Test("An unknown record type decodes rather than failing the whole sync")
+    func desiredDNSRecordUnknownType() throws {
+        // Types travel as strings precisely so a newer control plane's
+        // vocabulary reaches an older agent as an entry it can skip.
+        let payload = """
+            {"name":"acme.internal","type":"CAA","values":["0 issue \\"letsencrypt.org\\""]}
+            """
+        let decoded = try WireProtocol.makeDecoder().decode(
+            DesiredDNSRecord.self, from: Data(payload.utf8))
+        #expect(decoded.type == "CAA")
+    }
+
+    @Test("DNS zone support is keyed on protocol version 36")
+    func dnsZoneVersionGate() {
+        // A pre-v36 agent decodes and discards the field, so the control plane
+        // omits it — and skips assembling zones it would only throw away.
+        #expect(!WireProtocol.supportsDNSZones(35))
+        #expect(WireProtocol.supportsDNSZones(36))
+        #expect(WireProtocol.supportsDNSZones(WireProtocol.currentVersion))
+    }
+
     @Test("Site-authority support is keyed on protocol version 4")
     func siteAuthorityVersionGate() {
         // A v3 agent ignores `networksAuthoritative`, so a non-authoritative

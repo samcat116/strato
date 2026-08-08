@@ -1,4 +1,6 @@
+import Crypto
 import Fluent
+import Foundation
 import StratoShared
 import Vapor
 
@@ -61,13 +63,37 @@ enum DNSZoneAssembler {
     /// Assemble one zone.
     static func assemble(zone: DNSZone, on db: any Database) async throws -> AssembledDNSZone {
         let zoneID = try zone.requireID()
-        let derived = try await derivedRecords(zoneID: zoneID, zoneName: zone.name, on: db)
-        let authored = try await authoredRecords(zoneID: zoneID, zoneName: zone.name, on: db)
-        return AssembledDNSZone(
-            zoneId: zoneID,
-            zoneName: zone.name,
-            records: merge(derived: derived, authored: authored)
-        )
+        guard let assembled = try await assemble(zones: [zoneID: zone.name], on: db).first else {
+            // Unreachable: the batch returns one entry per id it was given.
+            return AssembledDNSZone(zoneId: zoneID, zoneName: zone.name, records: [])
+        }
+        return assembled
+    }
+
+    /// Assemble several zones in a fixed number of queries.
+    ///
+    /// The desired-state sync assembles every zone attached to a site's
+    /// networks on *every* poll of the topology authority, so the per-zone
+    /// shape this replaces was O(zones) round trips against tables whose rows
+    /// are O(VMs). Batching is four queries whether there is one zone or fifty.
+    ///
+    /// The single-zone entry point delegates here rather than the other way
+    /// around, so there stays exactly one implementation of what a zone
+    /// contains — the property this type exists to hold.
+    ///
+    /// Returned in the order `zones` iterates; callers that need a stable order
+    /// impose their own.
+    static func assemble(zones: [UUID: String], on db: any Database) async throws -> [AssembledDNSZone] {
+        guard !zones.isEmpty else { return [] }
+        let derived = try await derivedRecords(forZones: zones, on: db)
+        let authored = try await authoredRecords(forZones: zones, on: db)
+        return zones.map { zoneID, zoneName in
+            AssembledDNSZone(
+                zoneId: zoneID,
+                zoneName: zoneName,
+                records: merge(derived: derived[zoneID] ?? [], authored: authored[zoneID] ?? [])
+            )
+        }
     }
 
     // MARK: - Derived
@@ -87,17 +113,36 @@ enum DNSZoneAssembler {
     static func derivedRecords(
         zoneID: UUID, zoneName: String, on db: any Database
     ) async throws -> [AssembledDNSRecord] {
-        let networkIDs = try await LogicalNetwork.query(on: db)
-            .filter(\.$primaryDNSZone.$id == zoneID)
+        try await derivedRecords(forZones: [zoneID: zoneName], on: db)[zoneID] ?? []
+    }
+
+    /// The derived records of several zones at once, keyed by zone.
+    ///
+    /// Three queries regardless of how many zones are asked for: the networks
+    /// registering into any of them, those networks' NICs with their addresses,
+    /// and the NICs' VMs. Grouping is by `(zone, fqdn)`, so a VM with NICs on
+    /// two networks that share a primary zone still publishes one name — and a
+    /// VM on two networks with *different* primary zones lands in both, each
+    /// carrying only the addresses that zone's networks allocated.
+    private static func derivedRecords(
+        forZones zones: [UUID: String], on db: any Database
+    ) async throws -> [UUID: [AssembledDNSRecord]] {
+        guard !zones.isEmpty else { return [:] }
+        var zoneByNetwork: [UUID: UUID] = [:]
+        for network in try await LogicalNetwork.query(on: db)
+            .filter(\.$primaryDNSZone.$id ~~ Array(zones.keys))
             .all()
-            .compactMap(\.id)
-        guard !networkIDs.isEmpty else { return [] }
+        {
+            guard let networkID = network.id, let zoneID = network.$primaryDNSZone.id else { continue }
+            zoneByNetwork[networkID] = zoneID
+        }
+        guard !zoneByNetwork.isEmpty else { return [:] }
 
         let interfaces = try await VMNetworkInterface.query(on: db)
-            .filter(\.$logicalNetwork.$id ~~ networkIDs)
+            .filter(\.$logicalNetwork.$id ~~ Array(zoneByNetwork.keys))
             .with(\.$addresses)
             .all()
-        guard !interfaces.isEmpty else { return [] }
+        guard !interfaces.isEmpty else { return [:] }
 
         let vmIDs = Array(Set(interfaces.map { $0.$vm.id }))
         var hostnames: [UUID: String] = [:]
@@ -106,37 +151,44 @@ enum DNSZoneAssembler {
             hostnames[id] = hostname
         }
 
-        // Group by (fqdn, family) so a multi-NIC VM's addresses land in one
-        // RRset, then emit the matching PTR for each address.
-        var forward: [DNSRecordType: [String: Set<String>]] = [:]
-        var reverse: [String: Set<String>] = [:]
+        // Group by (zone, fqdn, family) so a multi-NIC VM's addresses land in
+        // one RRset, then emit the matching PTR for each address.
+        var forward: [UUID: [DNSRecordType: [String: Set<String>]]] = [:]
+        var reverse: [UUID: [String: Set<String>]] = [:]
         for interface in interfaces {
-            guard let hostname = hostnames[interface.$vm.id] else { continue }
+            guard let hostname = hostnames[interface.$vm.id],
+                let zoneID = zoneByNetwork[interface.logicalNetworkID],
+                let zoneName = zones[zoneID]
+            else { continue }
             let fqdn = DNSName.qualified(name: hostname, inZone: zoneName)
             for address in interface.allocatedAddresses {
                 guard let family = address.ipFamily else { continue }
                 let type: DNSRecordType = family == .ipv6 ? .aaaa : .a
-                forward[type, default: [:]][fqdn, default: []].insert(address.address)
+                forward[zoneID, default: [:]][type, default: [:]][fqdn, default: []].insert(address.address)
                 if let reverseName = DNSName.reverseName(forAddress: address.address) {
-                    reverse[reverseName, default: []].insert(fqdn)
+                    reverse[zoneID, default: [:]][reverseName, default: []].insert(fqdn)
                 }
             }
         }
 
-        var records: [AssembledDNSRecord] = []
-        for (type, byName) in forward {
-            for (name, values) in byName {
-                records.append(
-                    AssembledDNSRecord(
-                        name: name, type: type, values: values.sorted(),
-                        ttl: DNSRecord.defaultTTL, view: .internal, origin: .derived))
+        var records: [UUID: [AssembledDNSRecord]] = [:]
+        for (zoneID, byType) in forward {
+            for (type, byName) in byType {
+                for (name, values) in byName {
+                    records[zoneID, default: []].append(
+                        AssembledDNSRecord(
+                            name: name, type: type, values: values.sorted(),
+                            ttl: DNSRecord.defaultTTL, view: .internal, origin: .derived))
+                }
             }
         }
-        for (name, targets) in reverse {
-            records.append(
-                AssembledDNSRecord(
-                    name: name, type: .ptr, values: targets.sorted(),
-                    ttl: DNSRecord.defaultTTL, view: .internal, origin: .derived))
+        for (zoneID, byName) in reverse {
+            for (name, targets) in byName {
+                records[zoneID, default: []].append(
+                    AssembledDNSRecord(
+                        name: name, type: .ptr, values: targets.sorted(),
+                        ttl: DNSRecord.defaultTTL, view: .internal, origin: .derived))
+            }
         }
         return records
     }
@@ -159,23 +211,36 @@ enum DNSZoneAssembler {
     static func authoredRecords(
         zoneID: UUID, zoneName: String, on db: any Database
     ) async throws -> [AssembledDNSRecord] {
-        let rows = try await DNSRecord.query(on: db).filter(\.$zone.$id == zoneID).all()
-        // One entry per (name, type) — an RRset. TTL and view are properties of
-        // the set, not of its members (RFC 2181 §5.2), and the write path
-        // enforces that, so every row here agrees with its siblings and the
-        // first one's values stand for the set.
+        try await authoredRecords(forZones: [zoneID: zoneName], on: db)[zoneID] ?? []
+    }
+
+    /// The authored records of several zones at once, in one query.
+    private static func authoredRecords(
+        forZones zones: [UUID: String], on db: any Database
+    ) async throws -> [UUID: [AssembledDNSRecord]] {
+        guard !zones.isEmpty else { return [:] }
+        let rows = try await DNSRecord.query(on: db).filter(\.$zone.$id ~~ Array(zones.keys)).all()
+        // One entry per (zone, name, type) — an RRset. TTL and view are
+        // properties of the set, not of its members (RFC 2181 §5.2), and the
+        // write path enforces that, so every row here agrees with its siblings
+        // and the first one's values stand for the set.
         //
         // Grouping any finer would let one `(name, type)` yield several entries,
         // which neither planned driver can express: OVN keeps one row per name
         // and a zone file writes one TTL per RRset. See `DNSZoneService`.
         struct Key: Hashable {
+            let zoneID: UUID
             let name: String
             let type: DNSRecordType
         }
         var values: [Key: Set<String>] = [:]
         var settings: [Key: (ttl: Int, view: DNSRecordView)] = [:]
         for row in rows {
-            let key = Key(name: DNSName.qualified(name: row.name, inZone: zoneName), type: row.type)
+            let zoneID = row.$zone.id
+            guard let zoneName = zones[zoneID] else { continue }
+            let key = Key(
+                zoneID: zoneID, name: DNSName.qualified(name: row.name, inZone: zoneName),
+                type: row.type)
             values[key, default: []].insert(row.value)
             // Lowest TTL and narrowest view win, so a row that predates the
             // write-time rule (or slipped through a race) degrades toward
@@ -186,12 +251,15 @@ enum DNSZoneAssembler {
                 view: Self.narrower(existing?.view ?? row.view, row.view)
             )
         }
-        return values.map { key, values in
+        var records: [UUID: [AssembledDNSRecord]] = [:]
+        for (key, values) in values {
             let setting = settings[key] ?? (ttl: DNSRecord.defaultTTL, view: .both)
-            return AssembledDNSRecord(
-                name: key.name, type: key.type, values: values.sorted(),
-                ttl: setting.ttl, view: setting.view, origin: .authored)
+            records[key.zoneID, default: []].append(
+                AssembledDNSRecord(
+                    name: key.name, type: key.type, values: values.sorted(),
+                    ttl: setting.ttl, view: setting.view, origin: .authored))
         }
+        return records
     }
 
     /// The more restrictive of two views, for the degradation rule above:
@@ -232,5 +300,69 @@ enum DNSZoneAssembler {
             ($0.name, $0.type.rawValue, $0.ttl, $0.view.rawValue, $0.values.joined(separator: ","))
                 < ($1.name, $1.type.rawValue, $1.ttl, $1.view.rawValue, $1.values.joined(separator: ","))
         }
+    }
+}
+
+// MARK: - Wire projection (STR-39)
+
+extension DNSZoneAssembler {
+    /// The desired-state entry for an assembled zone: what the topology
+    /// authority realizes, and where.
+    ///
+    /// Records travel typed rather than pre-flattened into the map OVN's `DNS`
+    /// table takes, so the receiving driver decides what it can express — see
+    /// `DesiredDNSRecord`. TTL does not travel at all: OVN's responder has no
+    /// per-record TTL, and a field no driver reads would be a thing that
+    /// changes the digest without changing anything realized.
+    ///
+    /// `.external`-view records are dropped here rather than on the agent.
+    /// Split horizon is a control-plane concept (roadmap phase 6) and the
+    /// internal resolver is by definition the internal side; sending records
+    /// marked for publication elsewhere would make the agent responsible for a
+    /// distinction it has no other reason to know about.
+    static func desiredZone(_ assembled: AssembledDNSZone, networkIDs: [UUID]) -> DesiredDNSZone {
+        let records = assembled.records
+            .filter { $0.view != .external }
+            .map { DesiredDNSRecord(name: $0.name, type: $0.type.rawValue, values: $0.values) }
+        return DesiredDNSZone(
+            zoneId: assembled.zoneId,
+            zoneName: assembled.zoneName,
+            networkIds: networkIDs.sorted { $0.uuidString < $1.uuidString },
+            records: records,
+            recordsHash: recordsHash(records))
+    }
+
+    /// A digest of a zone's wire records, so the agent can skip an OVSDB
+    /// transaction for a zone that hasn't changed.
+    ///
+    /// Over the whole *projected* set — every record an agent is sent,
+    /// including the types the OVN backend cannot express, and excluding the
+    /// `.external`-view records `desiredZone` withheld. The stamp means "this
+    /// row was written from this version of the zone as the agent sees it": a
+    /// hash that ignored the unrealizable records would leave a row claiming to
+    /// be current after an edit it deliberately didn't realize, and one that
+    /// counted the withheld records would move without anything on the agent
+    /// changing. `AssembledDNSZone` is already totally ordered, and both tiers
+    /// emit one entry per `(name, type)`, so the input here is canonical
+    /// without re-sorting.
+    ///
+    /// Fields are length-prefixed rather than joined with a separator: a TXT
+    /// record's value is arbitrary text, so any delimiter is one an operator
+    /// can author, and two different zones hashing equal is the one failure
+    /// mode a change detector must not have.
+    static func recordsHash(_ records: [DesiredDNSRecord]) -> String {
+        var hasher = SHA256()
+        func update(_ field: String) {
+            let bytes = Data(field.utf8)
+            withUnsafeBytes(of: UInt32(bytes.count).bigEndian) { hasher.update(data: Data($0)) }
+            hasher.update(data: bytes)
+        }
+        for record in records {
+            update(record.name)
+            update(record.type)
+            withUnsafeBytes(of: UInt32(record.values.count).bigEndian) { hasher.update(data: Data($0)) }
+            for value in record.values { update(value) }
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
