@@ -403,6 +403,17 @@ struct SecurityGroupReconcilerTests {
     func sandboxPortMembership() async {
         let sandboxPort = OVNNaming.sandboxPortName(sandboxId: "S", nicIndex: 0)
         #expect(sandboxPort != OVNNaming.vmPortName(vmId: "S", nicIndex: 0))
+        // The membership derivation in `Agent.handleMessage` calls
+        // `sandboxPortName` directly — it has no `NICPlacement` in hand — while
+        // the orchestrator that *creates* the port routes through
+        // `portName(workloadId:nicIndex:placement:)`. Two decision sites for one
+        // name, so pin that they agree: if `portName` ever grew a case that
+        // named a sandbox port differently, membership would converge against a
+        // port OVN does not have, and nothing would say so.
+        #expect(
+            OVNNaming.portName(
+                workloadId: "S", nicIndex: 0,
+                placement: .sandboxNetns(netnsName: "strato-sbx-S", owner: nil)) == sandboxPort)
 
         let actuator = RecordingSecurityGroupActuator(
             membership: [sandboxPort: [OVNNaming.dropPortGroupName, peerPG]])

@@ -1061,6 +1061,15 @@ struct DesiredStateAssembler {
 
     /// The sandbox twin (STR-102), reading the sandbox NICs' own join table.
     ///
+    /// Its result is **discarded on every sync today**, and deliberately: the
+    /// only consumer is `SandboxSpecBuilder.networkSpec`, which returns nil
+    /// under a closed `guestNetworkingSupported`. That is one `IN` query per
+    /// sync per agent that hosts sandbox NICs (the `isEmpty` guard means agents
+    /// without them pay nothing), bought so the STR-103 flip is a one-line
+    /// change rather than a new code path — and so nobody has to prove, at
+    /// flip time, that a sandbox port comes up filtered. Named here so it is
+    /// not later rediscovered as a mystery and optimized into a gap.
+    ///
     /// Kept as a separate query and a separate dictionary rather than merged
     /// with the VM map: the two ids could only share a keyspace because they
     /// come from different tables and so cannot collide, which is true but

@@ -436,10 +436,18 @@ struct SandboxDetailResponse: Content {
     let networkInterfaces: [SandboxNetworkInterfaceResponse]
     /// Whether the attached groups actually filter traffic. Nil means unknown —
     /// the sandbox has no NIC — and is *not* a claim that they don't; false
-    /// says they demonstrably do not. Same contract as
-    /// `VMDetailResponse.securityGroupsEnforced`, and false for every networked
-    /// sandbox today: the NIC does not reach the wire until STR-103, so no OVN
-    /// port exists to join a port group.
+    /// says they demonstrably do not. False for every networked sandbox today:
+    /// the NIC does not reach the wire until STR-103, so no OVN port exists to
+    /// join a port group.
+    ///
+    /// The nil/false *meanings* match `VMDetailResponse.securityGroupsEnforced`,
+    /// but the mapping does not yet: an unplaced VM reads nil (no realizer to
+    /// judge), while an unplaced sandbox *with* a NIC reads false, because what
+    /// makes it unenforced is the closed wire gate rather than the missing host.
+    /// STR-103 removes that short-circuit and so flips unplaced-with-NIC from
+    /// false to nil — a client branching on `=== false` today changes behavior
+    /// then, which is the one reason to read this field as three-valued rather
+    /// than as a boolean with a null.
     let securityGroupsEnforced: Bool?
     /// How far the sandbox is from the state the API was last asked to put it
     /// in (STR-142) — same contract as the VM's; see `ResourceConditions`.
@@ -467,14 +475,19 @@ struct SandboxDetailResponse: Content {
         self.cpuTemplate = sandbox.cpuTemplate
         self.status = sandbox.status
         self.exitCode = sandbox.exitCode
-        self.securityGroupIds = sandbox.$networkInterfaces.value?
+        // One ordering for both fields, so "the sandbox's NIC" means the same
+        // interface in each. Deriving the flat field from insertion order and
+        // the list from `deviceName` agrees only while v1 is single-NIC, and
+        // the flat field is the one older clients read — so the disagreement
+        // would surface first for the clients least able to notice it.
+        let orderedInterfaces = (sandbox.$networkInterfaces.value ?? [])
+            .sorted { $0.deviceName < $1.deviceName }
+        self.securityGroupIds = orderedInterfaces
             .first?
             .$securityGroupMemberships.value?
             .map { $0.$securityGroup.id }
             .sorted { $0.uuidString < $1.uuidString }
-        self.networkInterfaces = (sandbox.$networkInterfaces.value ?? [])
-            .sorted { $0.deviceName < $1.deviceName }
-            .map(SandboxNetworkInterfaceResponse.init)
+        self.networkInterfaces = orderedInterfaces.map(SandboxNetworkInterfaceResponse.init)
         self.securityGroupsEnforced = securityGroupsEnforced
         self.conditions = sandbox.conditions
         self.createdAt = sandbox.createdAt

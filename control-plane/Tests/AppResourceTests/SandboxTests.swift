@@ -1347,6 +1347,43 @@ final class SandboxTests {
         }
     }
 
+    /// The flat `securityGroupIds` and the `networkInterfaces` list must agree
+    /// about which interface is the sandbox's first. They are derived from one
+    /// ordering, but nothing in the types enforces it, and v1's single NIC hides
+    /// a disagreement — so pin it against a second interface whose insertion
+    /// order is the reverse of its device name.
+    @Test("The flat security-group ids come from the same NIC the list orders first")
+    func sandboxDetailFlatIDsMatchFirstOrderedNIC() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: try project.requireID(), on: app.db)
+            let other = SecurityGroup(
+                projectID: try project.requireID(), name: "sbx-second", description: nil)
+            try await other.save(on: app.db)
+
+            // Saved net1 first, so insertion order and device-name order differ.
+            for (deviceName, group) in [("net1", other), ("net0", defaultGroup)] {
+                let nic = SandboxNetworkInterface(
+                    sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+                    macAddress: VMNetworkInterface.generateMACAddress(), deviceName: deviceName)
+                try await nic.save(on: app.db)
+                try await SandboxInterfaceSecurityGroup(
+                    interfaceID: try nic.requireID(), securityGroupID: try group.requireID()
+                ).save(on: app.db)
+            }
+
+            try await sandbox.$networkInterfaces.load(on: app.db)
+            for interface in sandbox.networkInterfaces {
+                try await interface.$securityGroupMemberships.load(on: app.db)
+            }
+            let detail = SandboxDetailResponse(from: sandbox)
+            #expect(detail.networkInterfaces.map(\.deviceName) == ["net0", "net1"])
+            #expect(detail.securityGroupIds == [try defaultGroup.requireID()])
+            #expect(detail.securityGroupIds == detail.networkInterfaces.first?.securityGroupIds)
+        }
+    }
+
     @Test("Deleting a sandbox cascades its NIC and address rows")
     func deleteCascadesNIC() async throws {
         try await withSandboxTestApp { app, _, project, _, token in

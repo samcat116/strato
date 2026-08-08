@@ -372,6 +372,13 @@ struct SecurityGroupController: RouteCollection {
         // the version half here would refuse attaches that are still inert
         // while passing a v20 agent that cannot realize a sandbox NIC at all.
         // STR-103 owns the combined gate.
+        //
+        // What the skip costs meanwhile, stated so STR-103 inherits it: an
+        // attach against a sandbox on a **pre-v20 host** is accepted and
+        // records a membership whose group that host's site will never realize.
+        // Less honest than before, when no sandbox attach achieved anything
+        // anywhere — but `securityGroupsEnforced` reports false either way
+        // today, so the API does not currently claim otherwise.
         if case .vm(let vm) = target.workload {
             try await Self.assertRealizersSupportSecurityGroups(for: vm, on: req.db)
         }
