@@ -86,9 +86,12 @@ struct AddHotPathIndexes: AsyncMigration {
     func prepare(on database: Database) async throws {
         guard let sql = database as? SQLDatabase else { return }
 
-        // Plain (non-concurrent) creates: Fluent runs migrations inside a
-        // transaction, which `CREATE INDEX CONCURRENTLY` cannot join. At
-        // current table sizes the brief write lock is acceptable.
+        // Plain (non-concurrent) creates. This used to claim Fluent wraps
+        // migrations in a transaction — it does not, and that false belief is
+        // what STR-183 was filed about. `SchemaMigrator` now does, so
+        // `CREATE INDEX CONCURRENTLY` genuinely cannot join it and would need
+        // the `UntransactedMigration` opt-out. At current table sizes the brief
+        // write lock is acceptable, so these stay plain creates.
         for index in Self.indexes {
             try await sql.raw(
                 "CREATE INDEX IF NOT EXISTS \(unsafeRaw: index.name) ON \(unsafeRaw: index.definition)"

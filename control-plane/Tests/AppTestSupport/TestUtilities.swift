@@ -260,16 +260,38 @@ extension Application {
         return try await make(env, database: databaseName)
     }
 
-    private static func make(_ env: Environment, database databaseName: String) async throws
-        -> Application
-    {
+    /// Boot an application against a database the caller already minted, so more
+    /// than one application can share one schema — what a concurrent-boot test
+    /// needs and what every other fixture deliberately prevents.
+    ///
+    /// Exactly one application should be the `owningDatabase` one: only that
+    /// one's `shutdownForTesting()` drops the clone, and it must be the last to
+    /// go (the drop is `WITH (FORCE)`, so it would kill a sibling's connections).
+    /// Shut the others down with plain `asyncShutdown()` first.
+    package static func makeForTesting(
+        database databaseName: String,
+        owningDatabase: Bool,
+        _ environment: Environment = .testing
+    ) async throws -> Application {
+        var env = environment
+        env.arguments = ["vapor"]
+        return try await make(env, database: databaseName, owningDatabase: owningDatabase)
+    }
+
+    private static func make(
+        _ env: Environment,
+        database databaseName: String,
+        owningDatabase: Bool = true
+    ) async throws -> Application {
         let app = try await Application.make(env, .shared(PostgresTestDatabases.appEventLoopGroup))
         app.logger.logLevel = .debug
         app.databases.use(
             .postgres(configuration: PostgresTestDatabases.configuration(database: databaseName)),
             as: .psql
         )
-        app.storage[TestDatabaseNameKey.self] = databaseName
+        if owningDatabase {
+            app.storage[TestDatabaseNameKey.self] = databaseName
+        }
         return app
     }
 }

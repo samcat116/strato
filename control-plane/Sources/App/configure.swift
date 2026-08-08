@@ -855,7 +855,13 @@ public func configure(_ app: Application) async throws {
     // ever touched the table, and nothing is left to order after it.
     app.migrations.add(DropResourceOperations())
 
-    try await app.autoMigrate()
+    // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
+    // wraps no transaction around a migration and the `_fluent_migrations` row
+    // that records it, so concurrent replica boots race the same migration and a
+    // crash mid-migration leaves a half-state no later boot can get past.
+    // `SchemaMigrator` serializes the phase on a Postgres advisory lock and
+    // commits each migration with its log row.
+    try await SchemaMigrator.run(on: app)
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
     // curated registry. Runs every startup so registry changes land with the
