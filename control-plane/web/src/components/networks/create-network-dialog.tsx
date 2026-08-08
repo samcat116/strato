@@ -23,6 +23,7 @@ import {
   type DhcpFormState,
 } from "./dhcp-fields";
 import { MetadataField } from "./metadata-field";
+import { ResolverField } from "./resolver-field";
 
 interface CreateNetworkDialogProps {
   open: boolean;
@@ -51,6 +52,7 @@ export function CreateNetworkDialog({
   const [ipv6Enabled, setIpv6Enabled] = useState(true);
   const [dhcp, setDhcp] = useState<DhcpFormState>(emptyDhcpForm);
   const [metadataEnabled, setMetadataEnabled] = useState(true);
+  const [resolverEnabled, setResolverEnabled] = useState(true);
 
   // The network is created in the project selected in the header switcher.
   const { currentProject } = useProjectContext();
@@ -96,6 +98,7 @@ export function CreateNetworkDialog({
         projectId,
         ...parseDhcpForm(dhcp),
         metadataEnabled,
+        resolverEnabled,
       });
       toast.success(`Network "${name}" created`);
       onOpenChange(false);
@@ -210,7 +213,17 @@ export function CreateNetworkDialog({
                 </>
               )}
             </div>
-            <DHCPFields value={dhcp} onChange={setDhcp} disabled={isLoading} />
+            <DHCPFields
+              value={dhcp}
+              onChange={setDhcp}
+              disabled={isLoading}
+              resolverEnabled={resolverEnabled}
+            />
+            <ResolverField
+              value={resolverEnabled}
+              onChange={setResolverEnabled}
+              disabled={isLoading}
+            />
             <MetadataField
               value={metadataEnabled}
               onChange={setMetadataEnabled}

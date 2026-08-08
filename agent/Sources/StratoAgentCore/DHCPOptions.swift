@@ -12,12 +12,19 @@ public enum OVNDHCPOptionsBuilder {
     /// only its IPv4 entries belong in a DHCPv4 option (v6 entries go to
     /// `v6Options`).
     ///
-    /// `metadataEnabled` adds option 121 (`classless_static_route`) so guests on
-    /// a network publishing the instance metadata service actually have a route
-    /// to it — see `classlessStaticRoute`.
+    /// `metadataEnabled` and `resolverEnabled` each add their address to option
+    /// 121 (`classless_static_route`) so guests on a network publishing that
+    /// service actually have a route to it — see `classlessStaticRoute`.
+    ///
+    /// `resolverEnabled` also **replaces** `dns_server`: the guest is told the
+    /// network's own resolver and `dnsServers` becomes what that resolver
+    /// forwards to (STR-40). The substitution happens here rather than control
+    /// plane side so one field carries one meaning on the wire, and so an agent
+    /// that degraded a NIC to user-mode can fall back to the raw list.
     public static func v4Options(
         gateway: String, dnsServers: [String], domainName: String?, leaseTime: Int?, subnet: String,
-        metadataEnabled: Bool = false
+        metadataEnabled: Bool = false,
+        resolverAddresses: [String] = []
     ) -> [String: String] {
         var options: [String: String] = [
             "server_id": gateway,
@@ -25,40 +32,58 @@ public enum OVNDHCPOptionsBuilder {
             "lease_time": String(leaseTime ?? 3600),
             "router": gateway,
         ]
+        // The network's *own* resolver address, not a constant: every network
+        // has a distinct pair so they can all be served from the host namespace.
+        let resolverV4 = resolverAddresses.filter { IPv4Address($0) != nil }
         let cleanedDNS =
-            dnsServers
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { IPv4Address($0) != nil }
+            resolverV4.isEmpty
+            ? dnsServers
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { IPv4Address($0) != nil }
+            : resolverV4
         if !cleanedDNS.isEmpty {
             options["dns_server"] = "{\(cleanedDNS.joined(separator: ", "))}"
         }
         if let domainName = wellFormedDomain(domainName) {
             options["domain_name"] = "\"\(domainName)\""
         }
-        if metadataEnabled {
-            options["classless_static_route"] = classlessStaticRoute(gateway: gateway)
+        if metadataEnabled || !resolverV4.isEmpty {
+            options["classless_static_route"] = classlessStaticRoute(
+                gateway: gateway, metadata: metadataEnabled, resolver: resolverV4.first)
         }
         return options
     }
 
-    /// DHCP option 121's route list: the IPv4 metadata address on-link, plus
-    /// this network's default route (STR-53).
+    /// DHCP option 121's route list: the IPv4 link-local service addresses this
+    /// network publishes, on-link, plus this network's default route (STR-53,
+    /// extended for the resolver by STR-40).
     ///
     /// **The default route is repeated here on purpose.** RFC 3442 requires a
     /// client that understands option 121 to ignore option 3 (`router`)
-    /// entirely, so advertising only the metadata route would hand every guest
+    /// entirely, so advertising only the service routes would hand every guest
     /// a path to the IMDS and take away its default gateway. `router` stays in
     /// the map for the clients that don't implement 121 — the two options are
     /// alternatives, never a merge.
     ///
     /// `0.0.0.0` as the next hop is RFC 3442's on-link encoding: the guest ARPs
-    /// for `169.254.169.254` itself, and OVN's ARP responder answers from the
-    /// metadata `localport`'s `addresses` (STR-49). On-link rather than via the
-    /// gateway because there is nothing to route it *through* — the localport
-    /// hangs off the logical switch, the logical router has no route to the
-    /// address, and an isolated network has no router at all.
-    static func classlessStaticRoute(gateway: String) -> String {
-        "{\(InstanceMetadataEndpoint.cidr),0.0.0.0, 0.0.0.0/0,\(gateway)}"
+    /// for the address itself, and OVN's ARP responder answers from the
+    /// `localport`'s `addresses` (STR-49). On-link rather than via the gateway
+    /// because there is nothing to route it *through* — the localport hangs off
+    /// the logical switch, the logical router has no route to the address, and
+    /// an isolated network has no router at all.
+    ///
+    /// The resolver route matters more than the metadata one here. Most Linux
+    /// images carry a `169.254.0.0/16` link-local route that covers both by
+    /// accident; where they don't, a missing metadata route costs the guest
+    /// IMDS, while a missing resolver route costs it *all* name resolution.
+    static func classlessStaticRoute(
+        gateway: String, metadata: Bool = true, resolver: String? = nil
+    ) -> String {
+        var routes: [String] = []
+        if metadata { routes.append("\(InstanceMetadataEndpoint.cidr),0.0.0.0") }
+        if let resolver { routes.append("\(resolver)/32,0.0.0.0") }
+        routes.append("0.0.0.0/0,\(gateway)")
+        return "{\(routes.joined(separator: ", "))}"
     }
 
     /// Builds the OVN DHCPv6 option map. OVN keys the family off the
@@ -69,22 +94,31 @@ public enum OVNDHCPOptionsBuilder {
     /// route from Router Advertisements (`ipv6_ra_configs` on the router
     /// port), not DHCPv6.
     ///
-    /// There is likewise no metadata route here, and no `metadataEnabled`
-    /// parameter to take one: DHCPv6 has no counterpart to option 121, and the
-    /// RA cannot carry an on-link route to `fd00:ec2::254` either (RFC 4191
-    /// route information is a route *via the advertising router*, which has no
-    /// path to a localport on the switch). The v6 metadata route reaches guests
-    /// only through `CloudInitProvisioner.networkConfigYAML` — see STR-53.
+    /// There is likewise no route for either link-local service here, and no
+    /// `metadataEnabled` parameter to take one: DHCPv6 has no counterpart to
+    /// option 121, and the RA cannot carry an on-link route to `fd00:ec2::254`
+    /// or `fd00:ec2::253` either (RFC 4191 route information is a route *via
+    /// the advertising router*, which has no path to a localport on the switch).
+    /// Those routes reach guests only through
+    /// `CloudInitProvisioner.networkConfigYAML` — see STR-53.
+    ///
+    /// `resolverEnabled` still applies to `dns_server`, which DHCPv6 does
+    /// carry: the guest is told the resolver's v6 address and `dnsServers`
+    /// becomes that resolver's upstreams, exactly as in `v4Options`.
     public static func v6Options(
-        dnsServers: [String], domainName: String?, subnet6: String
+        dnsServers: [String], domainName: String?, subnet6: String,
+        resolverAddresses: [String] = []
     ) -> [String: String] {
         var options: [String: String] = [
             "server_id": serverMAC(for: subnet6)
         ]
+        let resolverV6 = resolverAddresses.filter { IPv6Address($0) != nil }
         let v6DNS =
-            dnsServers
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { IPv6Address($0) != nil }
+            resolverV6.isEmpty
+            ? dnsServers
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { IPv6Address($0) != nil }
+            : resolverV6
         if !v6DNS.isEmpty {
             options["dns_server"] = "{\(v6DNS.joined(separator: ", "))}"
         }

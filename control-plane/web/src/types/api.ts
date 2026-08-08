@@ -1958,6 +1958,8 @@ export interface Network {
    * (169.254.169.254 / fd00:ec2::254) to its guests. Defaults on.
    */
   metadataEnabled: boolean;
+  resolverEnabled: boolean;
+  resolverAddresses?: string[];
   createdAt?: string;
   updatedAt?: string;
 }
@@ -1978,6 +1980,7 @@ export interface CreateNetworkRequest {
   leaseTime?: number;
   /** Omitted → the server's default (on). */
   metadataEnabled?: boolean;
+  resolverEnabled?: boolean;
 }
 
 export interface UpdateNetworkRequest {
@@ -1993,6 +1996,7 @@ export interface UpdateNetworkRequest {
   domainName?: string;
   leaseTime?: number;
   metadataEnabled?: boolean;
+  resolverEnabled?: boolean;
 }
 
 // Security groups (stateful NIC-level firewalls, realized as OVN ACLs)

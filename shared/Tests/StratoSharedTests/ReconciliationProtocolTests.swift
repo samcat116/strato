@@ -121,7 +121,7 @@ struct ReconciliationProtocolTests {
         #expect(decoded.dnsServers == nil)
         // Nil again, and for a sharper reason: network teardown is a set
         // difference, so reading this silence as "off" would delete a live
-        // metadata port. `NetworkReconciler.metadataProtection(for:)` is what
+        // metadata port. `NetworkReconciler.serviceLocalPortProtection(for:)` is what
         // enforces that.
         #expect(decoded.metadataEnabled == nil)
         #expect(decoded.subnet == "192.168.1.0/24")
@@ -421,5 +421,176 @@ struct ReconciliationProtocolTests {
         #expect(!WireProtocol.supportsSiteAuthority(3))
         #expect(WireProtocol.supportsSiteAuthority(4))
         #expect(WireProtocol.supportsSiteAuthority(WireProtocol.currentVersion))
+    }
+
+    // MARK: - Per-network resolver (wire v37, STR-40)
+
+    @Test("resolverEnabled rides the network carrier and survives a round trip")
+    func desiredNetworkResolverRoundTrip() throws {
+        let network = DesiredNetworkState(
+            networkId: UUID(), name: "default", subnet: "10.0.0.0/24", gateway: "10.0.0.1",
+            routerKey: "project-x", externalAccess: false, metadataEnabled: true,
+            resolverEnabled: true, generation: 3)
+        let message = DesiredStateMessage(vms: [], networks: [network])
+        let decoded = try MessageEnvelope(message: message).decode(as: DesiredStateMessage.self)
+        #expect(decoded.networks.first?.resolverEnabled == true)
+    }
+
+    @Test("A sync without resolverEnabled decodes to nil, never to off")
+    func resolverEnabledAbsenceIsSilence() throws {
+        // Reading a pre-v37 control plane's silence as "off" would strip the
+        // resolver's addresses from every localport on the host during a
+        // rollback — the teardown-on-omission failure the protocol's absence
+        // rules exist to prevent.
+        let legacy = """
+            {"networkId":"\(UUID().uuidString)","name":"default","subnet":"10.0.0.0/24",\
+            "routerKey":"k","externalAccess":false,"generation":1}
+            """
+        let decoded = try WireProtocol.makeDecoder().decode(
+            DesiredNetworkState.self, from: Data(legacy.utf8))
+        #expect(decoded.resolverEnabled == nil)
+        #expect(decoded.metadataEnabled == nil)
+    }
+
+    @Test("NetworkSpec carries the per-NIC resolver flag, which is what reaches the chassis")
+    func networkSpecResolverRoundTrip() throws {
+        // A sited non-authority agent receives an empty `networks` list by
+        // design, so its own workloads' specs are the only input it has.
+        let spec = NetworkSpec(
+            network: "default", networkId: UUID(), dhcpEnabled: true,
+            dnsServers: ["1.1.1.1"], domainName: "corp.example.com",
+            metadataEnabled: true, resolverEnabled: true)
+        let data = try WireProtocol.makeEncoder().encode(spec)
+        let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data)
+        #expect(decoded.resolverEnabled == true)
+        // The resolver's upstreams and search domain ride fields that already
+        // existed, so no other field was needed.
+        #expect(decoded.dnsServers == ["1.1.1.1"])
+        #expect(decoded.domainName == "corp.example.com")
+    }
+
+    @Test("A NetworkSpec from an older control plane decodes with a nil resolver flag")
+    func networkSpecResolverBackwardCompatible() throws {
+        let legacy = """
+            {"network":"default","networkId":"\(UUID().uuidString)"}
+            """
+        let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: Data(legacy.utf8))
+        #expect(decoded.resolverEnabled == nil)
+    }
+
+    @Test("A record's TTL travels, which is what a zone file needs and OVN never did")
+    func desiredDNSRecordTTLRoundTrip() throws {
+        let record = DesiredDNSRecord(name: "web.acme.internal", type: "A", values: ["10.0.0.5"], ttl: 60)
+        let data = try WireProtocol.makeEncoder().encode(record)
+        let decoded = try WireProtocol.makeDecoder().decode(DesiredDNSRecord.self, from: data)
+        #expect(decoded.ttl == 60)
+    }
+
+    @Test("A record without a TTL decodes to nil rather than to zero")
+    func desiredDNSRecordTTLBackwardCompatible() throws {
+        // A pre-v37 control plane sends no key; zero would be a TTL meaning
+        // "never cache", which is a different claim from "not stated".
+        let legacy = """
+            {"name":"web.acme.internal","type":"A","values":["10.0.0.5"]}
+            """
+        let decoded = try WireProtocol.makeDecoder().decode(
+            DesiredDNSRecord.self, from: Data(legacy.utf8))
+        #expect(decoded.ttl == nil)
+    }
+
+    @Test("resolverCapable rides registration and is absent-means-false")
+    func agentRegisterResolverCapable() throws {
+        // Speaking v37 is not the same as having a CoreDNS; the two are folded
+        // site-wide before the control plane enables any network's resolver.
+        let message = AgentRegisterMessage(
+            agentId: "a", hostname: "h", version: "1", capabilities: [],
+            resources: AgentResources(
+                totalCPU: 1, availableCPU: 1, totalMemory: 1, availableMemory: 1, totalDisk: 1,
+                availableDisk: 1),
+            resolverCapable: true)
+        let decoded = try MessageEnvelope(message: message).decode(as: AgentRegisterMessage.self)
+        #expect(decoded.resolverCapable == true)
+
+        let legacy = """
+            {"requestId":"r","timestamp":0,"agentId":"a","hostname":"h","version":"1",\
+            "capabilities":[],"resources":{"totalCPU":1,"totalMemory":1,"totalDisk":1,\
+            "availableCPU":1,"availableMemory":1,"availableDisk":1},"hypervisorType":"qemu"}
+            """
+        let old = try WireProtocol.makeDecoder().decode(
+            AgentRegisterMessage.self, from: Data(legacy.utf8))
+        #expect(old.resolverCapable == nil)
+    }
+
+    @Test("supportsNetworkResolver gates at 37")
+    func resolverVersionGate() {
+        #expect(!WireProtocol.supportsNetworkResolver(36))
+        #expect(WireProtocol.supportsNetworkResolver(37))
+        #expect(WireProtocol.supportsNetworkResolver(WireProtocol.currentVersion))
+        // The resolver's fields ride the same list as the zones they serve, so
+        // an agent that speaks one must speak the other.
+        #expect(WireProtocol.networkResolverMinimumVersion >= WireProtocol.dnsZoneMinimumVersion)
+    }
+
+    @Test("Each network's resolver addresses are distinct and derive from one index")
+    func resolverAddressesAreDistinctPerNetwork() {
+        // The property the whole design rests on: distinct addresses are what
+        // let every resolver on a host share the *host* namespace, which is what
+        // lets them forward at all.
+        let first = NetworkResolverEndpoint.firstIndex
+        #expect(NetworkResolverEndpoint.address(forIndex: first) == "169.254.1.0")
+        #expect(NetworkResolverEndpoint.address(forIndex: first + 1) == "169.254.1.1")
+        #expect(NetworkResolverEndpoint.address(forIndex: 512) == "169.254.2.0")
+        #expect(
+            NetworkResolverEndpoint.address(forIndex: NetworkResolverEndpoint.lastIndex)
+                == "169.254.254.255")
+        #expect(NetworkResolverEndpoint.addressV6(forIndex: first) == "fd00:ec2:1::100")
+        // Disjoint from the instance metadata ULA, while sharing the /32 the
+        // security-group carve-out matches.
+        #expect(!NetworkResolverEndpoint.addressV6(forIndex: first).hasPrefix("fd00:ec2::"))
+    }
+
+    @Test("The metadata address is never handed to a network")
+    func metadataAddressIsReserved() {
+        // 169.254.169.254 falls inside the allocatable range, so without the
+        // reservation a network would eventually be given the metadata address
+        // and its guests' DNS would arrive at a namespace serving HTTP.
+        let metadata = (169 << 8) | 254
+        #expect(NetworkResolverEndpoint.address(forIndex: metadata) == "169.254.169.254")
+        #expect(!NetworkResolverEndpoint.isValidIndex(metadata))
+        #expect(!NetworkResolverEndpoint.isValidIndex((169 << 8) | 253))
+        #expect(NetworkResolverEndpoint.isValidIndex(NetworkResolverEndpoint.firstIndex))
+        #expect(!NetworkResolverEndpoint.isValidIndex(NetworkResolverEndpoint.firstIndex - 1))
+        #expect(!NetworkResolverEndpoint.isValidIndex(NetworkResolverEndpoint.lastIndex + 1))
+    }
+
+    @Test("Routing tables are per network and clear of the reserved ids")
+    func routingTablesAreSafe() {
+        // 253/254/255 are `default`/`main`/`local`; colliding would silently
+        // merge a tenant network's routes into the host's own table.
+        #expect(
+            NetworkResolverEndpoint.routingTable(forIndex: NetworkResolverEndpoint.firstIndex) > 255)
+        #expect(
+            NetworkResolverEndpoint.routingTable(forIndex: 1)
+                != NetworkResolverEndpoint.routingTable(forIndex: 2))
+    }
+
+    @Test("The resolver addresses ride both carriers")
+    func resolverAddressesRoundTrip() throws {
+        let addresses = ["169.254.1.0", "fd00:ec2:1::100"]
+        let network = DesiredNetworkState(
+            networkId: UUID(), name: "default", subnet: "10.0.0.0/24", gateway: "10.0.0.1",
+            routerKey: "k", externalAccess: false, resolverEnabled: true,
+            resolverAddresses: addresses, generation: 1)
+        let decoded = try MessageEnvelope(message: DesiredStateMessage(vms: [], networks: [network]))
+            .decode(as: DesiredStateMessage.self)
+        #expect(decoded.networks.first?.resolverAddresses == addresses)
+
+        let spec = NetworkSpec(
+            network: "default", networkId: UUID(), resolverEnabled: true,
+            resolverAddresses: addresses)
+        let data = try WireProtocol.makeEncoder().encode(spec)
+        #expect(
+            try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data).resolverAddresses
+                == addresses)
     }
 }

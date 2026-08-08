@@ -7,7 +7,7 @@ public enum MetadataServerAction: Sendable, Equatable {
     case stop(networkId: UUID)
 }
 
-/// Pure diff for the listener fleet, mirroring `MetadataChassisReconciler` —
+/// Pure diff for the listener fleet, mirroring `ChassisServiceReconciler` —
 /// same input, same nil contract, and living beside it for the same reason: the
 /// half that *stops* things is the half worth asserting.
 public enum MetadataServerReconciler {

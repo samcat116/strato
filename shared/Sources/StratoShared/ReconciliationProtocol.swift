@@ -829,9 +829,17 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// control planes that predate the field: the agent then leaves DHCP rows
     /// alone, preserving the old NIC-driven behavior.
     public let dhcpEnabled: Bool?
-    /// DNS resolvers advertised over DHCP; may be mixed-family (the agent
-    /// splits per DHCP family). Nil ≙ pre-field control plane, like
-    /// `dhcpEnabled`.
+    /// The network's DNS resolvers; may be mixed-family (the agent splits per
+    /// DHCP family). Nil ≙ pre-field control plane, like `dhcpEnabled`.
+    ///
+    /// **What this list is depends on `resolverEnabled`** (wire v37, STR-40).
+    /// With the resolver off it is what the guest is told over DHCP, which is
+    /// all it ever was. With the resolver on, the guest is told
+    /// `NetworkResolverEndpoint.address` instead and this becomes the
+    /// *upstream forwarders* the network's CoreDNS sends misses to. The field
+    /// did not change shape or validation, only its consumer — and the two
+    /// readings agree on the values that matter, because a resolver list was
+    /// already a list of recursive resolvers.
     public let dnsServers: [String]?
     /// DNS search domain advertised over DHCP.
     public let domainName: String?
@@ -854,8 +862,43 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// a nil that merely planned no port would read as "remove it", so a
     /// rollback would sweep every live metadata port. `false` is an opinion and
     /// *is* honored — that is what makes turning the feature off work. See
-    /// `NetworkReconciler.metadataProtection(for:)`.
+    /// `NetworkReconciler.serviceLocalPortProtection(for:)`.
     public let metadataEnabled: Bool?
+    /// Whether this network's guests get a resolver at the addresses in
+    /// `resolverAddresses` (STR-40, wire v37): the host-wide CoreDNS each agent
+    /// runs in its *host* namespace, which serves the network's zones in full —
+    /// including the CNAME/TXT/SRV the OVN `DNS` table cannot express — and
+    /// forwards everything else to `dnsServers`.
+    ///
+    /// Realized on a **second** `localport` of its own, not the one
+    /// `metadataEnabled` authors, because the two services terminate in
+    /// different namespaces and one OVS interface claims one `iface-id` (ADR
+    /// 0008). It is still a second flag on one carrier rather than a second
+    /// carrier, because both are properties of the same network row.
+    ///
+    /// Everything said about `metadataEnabled`'s absence applies here word for
+    /// word — nil neither creates nor deletes, `false` is an opinion and is
+    /// honored, and the deletion half is what keeps a rollback from sweeping
+    /// live ports. What differs is that this flag also decides what the DHCP
+    /// `dns_server` option contains, so a network flipping it changes what
+    /// guests are told at their next lease.
+    ///
+    /// The control plane withholds `true` unless *every* agent in the site
+    /// reports `resolverCapable` — see `WireProtocol.supportsNetworkResolver`.
+    public let resolverEnabled: Bool?
+    /// This network's own resolver addresses, v4 first (STR-40).
+    ///
+    /// **Distinct per network**, which is what lets every resolver on a host
+    /// share one namespace — the host's — and so forward upstream through the
+    /// hypervisor's own egress. A single well-known address could not: the
+    /// listener would have no way to tell which network asked, and the host no
+    /// way to route a reply back to a `10.0.0.5` that exists on three switches.
+    ///
+    /// Non-nil exactly when `resolverEnabled` is true. Two fields rather than
+    /// one derived from an index on the wire, because the agent should realize
+    /// what it was told rather than re-derive an allocation scheme the control
+    /// plane owns.
+    public let resolverAddresses: [String]?
     /// Monotonic per-network counter, bumped by the control plane on any change
     /// that alters realization (subnet, gateway, router membership, external
     /// access). Lets the agent reject replayed or reordered syncs. DHCP-only
@@ -883,6 +926,8 @@ public struct DesiredNetworkState: Codable, Sendable {
         domainName: String? = nil,
         leaseTime: Int? = nil,
         metadataEnabled: Bool? = nil,
+        resolverEnabled: Bool? = nil,
+        resolverAddresses: [String]? = nil,
         generation: Int64,
         floatingIPs: [DesiredFloatingIP]? = nil
     ) {
@@ -899,6 +944,8 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.domainName = domainName
         self.leaseTime = leaseTime
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
+        self.resolverAddresses = resolverAddresses
         self.generation = generation
         self.floatingIPs = floatingIPs
     }
@@ -929,16 +976,27 @@ public struct DesiredDNSRecord: Codable, Sendable, Equatable {
     /// The RRset's values, deduplicated and sorted by the control plane so two
     /// assemblies of the same data compare (and hash) equal.
     public let values: [String]
+    /// The RRset's TTL in seconds (wire v37, STR-40).
+    ///
+    /// v36 deliberately left this off: an OVN `DNS` row has nowhere to put a
+    /// TTL, so carrying one would have been dead weight on every sync. A zone
+    /// file has to write one, and it writes **one per RRset** — which is why
+    /// the control plane enforces a single TTL across an RRset (RFC 2181 §5.2)
+    /// rather than storing it per value.
+    ///
+    /// Optional so a pre-v37 control plane's payload still decodes; a receiver
+    /// that gets nil renders the record at its zone's default TTL.
+    public let ttl: Int?
 
-    public init(name: String, type: String, values: [String]) {
+    public init(name: String, type: String, values: [String], ttl: Int? = nil) {
         self.name = name
         self.type = type
         self.values = values
+        self.ttl = ttl
     }
 }
 
-/// A DNS zone the receiving agent should realize for the networks it is the
-/// topology authority for (STR-39, roadmap #769).
+/// A DNS zone the receiving agent should realize (STR-39, roadmap #769).
 ///
 /// This rides the **network-level carrier, not `NetworkSpec`**: DNS and DHCP
 /// edits deliberately don't bump VM generations, so a converged VM never
@@ -948,19 +1006,36 @@ public struct DesiredDNSRecord: Codable, Sendable, Equatable {
 ///
 /// A zone's contents span every VM on every attached network across *all*
 /// agents, so `records` is assembled from the whole fleet rather than from the
-/// receiving agent's own workloads — which is precisely why only the topology
-/// authority is sent zones at all: `Logical_Switch.dns_records` is
-/// switch-scoped topology, and two level-triggered writers would fight over it.
+/// receiving agent's own workloads. That has been true since v36 and is what
+/// makes the two realizations below able to share one payload.
+///
+/// ## Two backends, two audiences
+///
+/// The **OVN `DNS` table** (v36) is switch-scoped topology written into the
+/// shared northbound database, so only the site's topology authority may write
+/// it — two level-triggered writers would fight over one row. `networkIds`
+/// carries the networks that agent authors.
+///
+/// The **per-network resolver** (v37, STR-40) is not topology: a CoreDNS runs
+/// in the host namespace of every host with a local NIC on the network, serving
+/// the zones attached to that network from a server block bound to its own
+/// address pair (ADR 0008). So from v37 a zone is sent
+/// to any agent that either authors an attached network *or* runs a workload
+/// on one, and `networkIds` is the union of both. An agent realizes the OVN
+/// half only for the networks it actually authors, which it already knows from
+/// `DesiredStateMessage.networksAuthoritative`.
 public struct DesiredDNSZone: Codable, Sendable, Equatable {
     public let zoneId: UUID
     /// The zone's fully-qualified name, lowercased with no trailing dot. Not
     /// an identifier — zone names are unique only within a project — and used
     /// only as a human label on the realized row.
     public let zoneName: String
-    /// The networks whose switches should answer from this zone, restricted to
-    /// the ones this agent authors. The agent derives switch names from the
-    /// ids (`OVNNaming.switchName`), so user-chosen names never enter the OVN
-    /// namespace.
+    /// The networks that should answer from this zone, restricted to the ones
+    /// this agent has something to do with — those it authors topology for,
+    /// plus (from v37) those it runs a local NIC on. The agent derives switch
+    /// and namespace names from the ids (`OVNNaming.switchName`,
+    /// `ChassisServicePlan.netnsName`), so user-chosen names never enter the
+    /// OVN or host namespace.
     public let networkIds: [UUID]
     /// The zone's effective contents, derived ∪ authored, in a stable order.
     public let records: [DesiredDNSRecord]

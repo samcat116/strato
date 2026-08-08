@@ -907,24 +907,121 @@ site-topology authority, per-network generation guards) and
 network reconciliation (`reconcileNetworks`) defaults to a no-op on
 non-SDN platforms. See [networking](./networking.md).
 
-### Instance metadata chassis (IMDS)
+### Chassis service foot (IMDS and the DNS resolver)
 
-The chassis-local half of the metadata dataplane (wire v27, STR-49) is
-planned by `StratoAgentCore/MetadataChassisPlan.swift`: the OVS internal
-port and per-network namespace (`strato-md-<network-uuid>`) that terminate
-the metadata addresses on this host, kept a pure plan (like
-`SandboxNetnsAttachmentPlan`) so the command sequence stays unit-testable,
-and executed by `NetworkServiceLinux`. Its input is the agent's own workload
-specs (`NetworkSpec.metadataEnabled`), not the `networks` list — it must
-exist on every chassis running a NIC on the network, including sited
-non-controller agents, which receive an empty `networks` list by design. The
-`NetworkReconciler` converges the OVN `localport` itself from
-`DesiredNetworkState.metadataEnabled` on authoritative agents, and
-`metadataProtection(for:)` shields existing ports from teardown when the
-field is nil (a pre-v27 control plane's silence must not delete live ports).
-What serves HTTP inside those namespaces is the metadata server below. See
-[ADR 0003](../adr/0003-imds-chassis-namespace.md) and
+The chassis-local half of a network's link-local services is planned by
+`StratoAgentCore/ChassisServicePlan.swift`: the OVS internal port and
+per-network namespace (`strato-md-<network-uuid>`) that terminate them on this
+host, kept a pure plan (like `SandboxNetnsAttachmentPlan`) so the command
+sequence stays unit-testable, and executed by `NetworkServiceLinux`.
+
+Two services share it — instance metadata (wire v27, STR-49) and the network's
+DNS resolver (wire v37, STR-40) — and its input is the agent's own workload
+specs (`NetworkSpec.metadataEnabled` / `.resolverEnabled`), not the `networks`
+list: it must exist on every chassis running a NIC on the network, including
+sited non-controller agents, which receive an empty `networks` list by design.
+An `ip`-invoked `tc` ingress policer caps the packet rate guests may push at the
+interface, because what it protects is the hypervisor rather than the service.
+
+The resolver has the same two halves, but its second one lands in the **host**
+namespace on a port of its own (§Per-network resolver) — a resolver has to
+forward and a chassis namespace has no egress, which is
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md). Metadata stays here
+because source-IP attribution is its security model and it needs no egress at
+all.
+
+The `NetworkReconciler` converges both OVN `localport`s from
+`DesiredNetworkState`'s two flags on authoritative agents, and
+`serviceLocalPortProtection(for:)` shields each existing port from teardown when
+the sync has no opinion about *its* service (a pre-v27 control plane's silence
+must not delete live metadata ports; a pre-v37 one's silence about the resolver
+must not stop `metadataEnabled: false` from working, nor reap a resolver port it
+has never heard of).
+
+The metadata listener is a helper process the agent forks per namespace
+(STR-56), because `setns(2)` is per-thread and does not compose with Swift
+concurrency — the cost ADR 0003 deferred. The resolver needed no such helper once
+it left the namespace: one CoreDNS serves every network on the host. See
+[ADR 0003](../adr/0003-imds-chassis-namespace.md),
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md) and
 [networking](./networking.md).
+
+### Per-network resolver
+
+`StratoAgent/ResolverSupervisor.swift` runs **one** CoreDNS for the whole host,
+in the host network namespace, with one server block per resolver-enabled network
+this host has a NIC on, bound to that network's own address pair (STR-40). One
+process rather than one per network because the addresses are distinct — which is
+what moving out of the chassis namespace forced, and what
+[ADR 0008](../adr/0008-resolver-in-host-namespace.md) records. That a single
+CoreDNS will serve the same zone name from different bind addresses with
+different contents was verified empirically before the design relied on it.
+
+`StratoAgentCore/ResolverHostPortPlan.swift` is the foot: pure `NetnsCommand`
+plans that attach the OVS internal port, assign the addresses, and install the
+per-network policy routing (`ip rule from <resolver-address> lookup 20000+index`)
+that gets replies back out the right port — the one job the namespace used to do
+for free. Rules are deleted before being added so a re-reconcile cannot stack
+duplicates, and torn down before the OVS detach so one never outlives its port.
+Forwarding is disabled on the interface for both families, `rp_filter` is loose,
+`arp_ignore`/`arp_announce` keep the host from answering ARP there for addresses
+on its other interfaces, `accept_ra` is off, and the same `tc` ingress policer
+the metadata foot carries caps what guests may push at it. All of them are
+asserted in tests rather than left to review. The loose `rp_filter` is only
+effective when `net.ipv4.conf.all.rp_filter` is not `1` — the kernel takes the
+max of the global and per-device values — so the preflight reports that rather
+than the agent weakening a host-wide setting.
+
+The supervisor takes its host effects through an injected `ResolverHosting`, the
+shape `MetadataServerSupervisor` uses for the same reason: adoption, the
+stop/reconcile race, and whether the failure counter actually escalates are
+lifecycle questions that cannot be asked of an actor that forks processes
+directly. `StratoAgent/ResolverProcessHost.swift` is the real one. It supervises
+a single process, so a Corefile a new network makes CoreDNS refuse takes every
+network's resolver with it — bounded by OVN still answering A/AAAA/PTR first, and
+by the renderer refusing to emit a record it cannot render safely.
+
+The decisions live in two pure types the tests can reach:
+`StratoAgentCore/CoreDNSZoneRenderer.swift` produces the `Corefile` and zone
+files (golden-tested, like `CloudInitProvisioner.networkConfigYAML`), and
+`ResolverSupervisionPolicy.swift` decides what to write, when to start, and how
+long to back off.
+
+Two skips keep a steady-state sync cheap, and they are independent.
+`ResolverRenderKey` — the control plane's per-zone `recordsHash` plus the
+upstreams, search domain and bind addresses — decides whether to *build* the
+files at all, which matters because a zone's records span every VM on every
+attached network fleet-wide, so the render's cost grows with the cluster rather
+than with this host. `DesiredResolver.configurationDigest` then decides whether
+to *write* them, so a hash that moved without changing what this backend emits
+reaches neither the disk nor CoreDNS's file watch. Both keys cover every network
+at once, because there is one configuration.
+
+**The failure counter is cleared by a run, not by a spawn.** Every failure the
+backoff exists for — a Corefile CoreDNS refuses to parse, `:53` already held by
+an orphan — forks cleanly and exits a moment later, so resetting on a successful
+spawn would pin the delay at its first step and the crash-loop threshold would
+never be reached. Exits are noticed on the next reconcile rather than from a
+callback, which keeps the accounting deterministic, so the handle carries the
+*moment* it exited: measuring to when it was noticed would make a child that died
+instantly look like one that ran for a five-minute sync interval. Zone files live
+under `<config_dir>/zones/<network-uuid>/` — namespaced by network because two
+networks may hold a zone of the same name with different contents — derived from
+the network id per the `VMDirectoryLayout` convention, which is what lets a
+restarted agent rederive them all and reap directories for networks it no longer
+serves.
+
+A record edit costs no restart: files are written atomically, the `file` plugin
+watches them, and the Corefile carries `reload`. Adding or removing a *network*
+does not either, for the same reason — the server blocks live in the watched
+Corefile. A restarted agent **adopts** a CoreDNS its predecessor started rather
+than replacing it, verified by pid liveness plus a `/proc/<pid>/cmdline` check,
+because killing it would cost every network on the host its resolver for a
+process start for nothing.
+
+The host reports whether it can run one at all as
+`AgentRegisterMessage.resolverCapable`, and the control plane folds that across
+the whole site before enabling any network's resolver. See [dns](./dns.md).
 
 ### Instance metadata store (IMDS payload)
 

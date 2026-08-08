@@ -416,7 +416,7 @@ public enum WireProtocol {
     /// Absence is asymmetric in the v3/v5 sense on both fields, and on
     /// `DesiredNetworkState` the asymmetry is enforced in code, not by
     /// convention: network teardown is `observed − desired`, so
-    /// `NetworkReconciler.metadataProtection(for:)` explicitly protects the
+    /// `NetworkReconciler.serviceLocalPortProtection(for:)` explicitly protects the
     /// ports of networks whose `metadataEnabled` is nil. Without it, rolling a
     /// control plane back to v26 would delete every live metadata port on the
     /// next sync. `false` remains an opinion and is honored, which is what makes
@@ -718,7 +718,64 @@ public enum WireProtocol {
     /// Skew in the other direction is inert: a pre-v36 control plane sends no
     /// key at all, a v36 agent reads nil, and every managed row stays exactly
     /// as the last v36 sync left it.
-    public static let currentVersion = 36
+    ///
+    /// Version 37: the per-network resolver (STR-40, roadmap #769 phase 4).
+    /// Three additions, one of which changes the meaning of a field that was
+    /// already there.
+    ///
+    /// `DesiredNetworkState.resolverEnabled` and `NetworkSpec.resolverEnabled`
+    /// are the v27 metadata-port pair repeated exactly: the network carrier
+    /// authors the OVN `localport` and the DHCP row, the per-NIC copy reaches
+    /// the *chassis* half on agents that receive an empty `networks` list
+    /// because they may not author topology. Nil ≙ "the sender has no opinion",
+    /// never "off" — an agent converges nothing rather than reading silence as
+    /// teardown.
+    ///
+    /// Each carrier also gains `resolverAddresses`, non-nil exactly when the
+    /// flag is true: **one distinct v4/v6 pair per network**, allocated by the
+    /// control plane from `169.254.0.0/16` and `fd00:ec2:1::/48`. That
+    /// distinctness is what the whole feature rests on. A resolver terminated in
+    /// the network's own chassis namespace has only link-local addresses and no
+    /// egress the OVN router will SNAT, so it can answer for the zones it holds
+    /// and forward nothing — the bug STR-40 was filed to fix. A pair per network
+    /// puts every resolver in the *host* namespace, where forwarding is the
+    /// hypervisor's own, while the destination address still says which network
+    /// asked and a per-address routing rule sends the reply back to the right
+    /// switch. See ADR 0008.
+    ///
+    /// **`dnsServers` is redefined rather than replaced.** On a network with
+    /// `resolverEnabled`, the DHCP `dns_server` option becomes
+    /// `NetworkResolverEndpoint.address` / `.addressV6` and the configured list
+    /// becomes the resolver's *upstream forwarders*. The field, its validation
+    /// and its wire shape are unchanged; only its consumer moves. That is safe
+    /// across skew in both directions because a pre-v37 agent never sees
+    /// `resolverEnabled` at all and keeps handing the list to guests verbatim,
+    /// which is exactly today's behavior.
+    ///
+    /// `DesiredDNSRecord.ttl` is new, and it is the one field v36 deliberately
+    /// left off. An OVN `DNS` row has nowhere to put a TTL, so carrying one
+    /// would have been dead weight; a zone file writes **one TTL per RRset**,
+    /// so the CoreDNS driver cannot render without it. It is folded into
+    /// `recordsHash`, which invalidates every stamped hash once on upgrade —
+    /// self-healing, because `DNSZoneReconciler`'s drift compare rewrites the
+    /// zone and re-stamps it. A pre-v37 control plane sends no key and a v37
+    /// agent renders the record at the zone's default TTL.
+    ///
+    /// `supportsNetworkResolver` gates the *fields*, and separately
+    /// `AgentRegisterMessage.resolverCapable` reports whether this host can
+    /// actually run the resolver — the `sandboxCapable`/`tpmCapable` shape,
+    /// used for the same reason: speaking a version is not the same as having
+    /// the runtime. The two compose into a **site-wide** admission decision in
+    /// `DesiredStateAssembler`, because the DHCP option is authored once per
+    /// network by the topology authority while the listener is per chassis. A
+    /// site where one host lacks CoreDNS would otherwise hand every guest an
+    /// address that answers on only some hypervisors, and the symptom — DNS
+    /// that works until a VM migrates — is far worse than not enabling it.
+    ///
+    /// Skew in the other direction is inert: a pre-v37 control plane sends
+    /// neither key, a v37 agent reads nil for both, and guests keep receiving
+    /// the configured resolver list over DHCP exactly as before.
+    public static let currentVersion = 37
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -989,7 +1046,7 @@ public enum WireProtocol {
     /// sender knows the field for, from an older one the sender has never heard
     /// of the feature and the agent must leave existing ports alone. Since
     /// network teardown is a set difference, that reading is enforced by
-    /// `NetworkReconciler.metadataProtection(for:)` rather than left to each
+    /// `NetworkReconciler.serviceLocalPortProtection(for:)` rather than left to each
     /// call site. Control-plane-side it lets sync assembly omit the field for
     /// agents that would discard it.
     public static func supportsMetadataPort(_ version: Int) -> Bool {
@@ -1101,6 +1158,34 @@ public enum WireProtocol {
     /// `supportsEdgeNonces` and `supportsSnapshotSync` refuse at the API.
     public static func supportsDNSZones(_ version: Int) -> Bool {
         version >= dnsZoneMinimumVersion
+    }
+
+    /// The lowest protocol version that speaks the per-network resolver
+    /// (see `currentVersion` version 37 notes).
+    public static let networkResolverMinimumVersion = 37
+
+    /// Whether a peer at `version` speaks `resolverEnabled` and record TTLs.
+    ///
+    /// A **field gate**, like `supportsDNSZones` and for the same reason: sync
+    /// assembly omits `resolverEnabled` for an agent that would discard it, and
+    /// the agent reads the version before planning against the field, so
+    /// silence from an older control plane is never mistaken for "off".
+    ///
+    /// It is deliberately not an admission gate, and the asymmetry with
+    /// `supportsEdgeNonces` is the point. A pre-v37 agent that ignores
+    /// `resolverEnabled` keeps handing guests the configured `dnsServers`
+    /// verbatim — which is precisely what it did before the field existed — so
+    /// the failure mode is "this network did not get the new resolver yet",
+    /// not a mutation reported as converged when nothing happened. Nothing
+    /// about a resolver is ever reported converged, so there is no false
+    /// success to refuse at the API.
+    ///
+    /// It is also not, on its own, sufficient. Whether the *host* can run the
+    /// resolver is a separate question answered by
+    /// `AgentRegisterMessage.resolverCapable`, and the two are combined
+    /// site-wide before the field is sent — see the version 37 notes.
+    public static func supportsNetworkResolver(_ version: Int) -> Bool {
+        version >= networkResolverMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

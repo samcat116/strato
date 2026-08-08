@@ -345,6 +345,56 @@ log_level = "info"
 # external_cidr6 = "2001:db8::2/64"  # dedicated router IPv6 on the provider net
 # gateway6 = "2001:db8::1"           # next hop for the router's ::/0 route
 
+# Per-network DNS resolver (Linux, network_mode = "ovn" only)
+#
+# Each network with the resolver enabled gets a CoreDNS on this host, listening
+# on a link-local address inside the network's chassis namespace — the same
+# namespace and the same OVN localport the instance metadata service already
+# uses. It serves the DNS zones attached to the network (including the CNAME,
+# TXT and SRV records the OVN DNS table cannot express) and forwards everything
+# else to the network's configured DNS servers.
+#
+# This is what makes external name resolution work on a network *without*
+# external access: OVN intercepts DNS but does not forward it, so without a
+# local resolver those guests have no path to the public servers they were
+# handed.
+#
+# The resolver is an opt-out on the network, not on the host, so there is
+# normally nothing to configure here. What this section does control is whether
+# this host can run one at all — and it is site-wide: the control plane enables
+# a network's resolver only when *every* agent in the site reports it can serve
+# one, because guests are pointed at the address by a single DHCP option while
+# the process answering them runs per hypervisor. One host without CoreDNS
+# therefore holds the feature back for its whole site.
+#
+# [resolver]
+# # Host escape hatch. False makes this agent report that it cannot serve a
+# # resolver, which withholds the feature from every network in this site.
+# enabled = true
+#
+# # Path to the CoreDNS binary. Optional - defaults are checked in this order:
+# #   1. /usr/local/bin/coredns
+# #   2. /usr/bin/coredns
+# #   3. /opt/coredns/coredns
+# # When set explicitly there is no fallback: an operator who named a binary
+# # meant that one.
+# coredns_binary_path = "/usr/local/bin/coredns"
+#
+# # Where the agent renders each network's Corefile and zone files. Every path
+# # under it is derived from the network id, and directories for networks this
+# # host no longer serves are removed.
+# # Optional - defaults to /var/lib/strato/resolver
+# config_dir = "/var/lib/strato/resolver"
+#
+# # Aggregate ingress packet-rate cap on each network's chassis service
+# # interface, covering DNS and instance metadata together. One namespace serves
+# # every guest on the network from a process on this hypervisor, so an
+# # unbounded query rate from one VM is a noisy-neighbour lever on all of them.
+# # 1024 is AWS's published ceiling for its link-local services. 0 disables the
+# # limiter; it also has no effect on a host without iproute2's `tc`.
+# # Optional - defaults to 1024
+# rate_limit_pps = 1024
+
 # OVN native dynamic routing (issue #344): advertise floating IPs and tenant
 # routes northbound over BGP. Requires OVN >= 25.03 on this host plus an
 # operator-configured FRR daemon (with `redistribute connected` in the VRF

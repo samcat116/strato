@@ -268,6 +268,109 @@ public enum ProcessRunner {
         )
     }
 
+    /// A long-lived child the caller supervises itself.
+    ///
+    /// `run` and `runStreaming` both wait for exit, which is the right shape for
+    /// every tool the agent shells out to. The per-network resolver is the first
+    /// thing the agent owns that is *meant* to keep running (STR-40): libvirt
+    /// supervises QEMU and swtpm, Firecracker is driven over its API socket, and
+    /// the agent itself assumes an external supervisor — so there was nothing to
+    /// reuse.
+    public struct SpawnedProcess: @unchecked Sendable {
+        public let process: Process
+        public var processIdentifier: Int32 { process.processIdentifier }
+        public var isRunning: Bool { process.isRunning }
+
+        /// Sends SIGTERM, then SIGKILL after a grace period if it is still
+        /// running. The same escalation `run`'s timeout path uses, exposed
+        /// because a supervisor stopping a resolver has the identical problem.
+        public func terminate(grace: Duration = ProcessRunner.signalEscalationGrace) async {
+            guard process.isRunning else { return }
+            process.terminate()
+            try? await Task.sleep(for: grace)
+            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+        }
+    }
+
+    /// Launches a child and returns without waiting for it.
+    ///
+    /// Output goes to `logPath` (both streams, appended) rather than to pipes.
+    /// A pipe nobody drains fills its buffer and blocks the child forever, which
+    /// for a resolver means one that answered until it had logged 64KB — the
+    /// worst kind of failure, since it looks like a network problem. A file has
+    /// no such ceiling, and it is what an operator debugging the host will
+    /// reach for anyway.
+    ///
+    /// `workingDirectory` is set because the rendered Corefile references its
+    /// zone files by relative path, which is what keeps the file legible and
+    /// relocatable.
+    /// `onExit` is invoked with the child's termination status when it dies.
+    ///
+    /// Installed as `terminationHandler` **before** `run()`, which is the only
+    /// safe way to observe exit here: `waitUntilExit()` parks the calling thread
+    /// for the child's entire lifetime, so a supervisor watching one long-lived
+    /// child per network would consume a cooperative-pool thread per network and
+    /// eventually starve every actor in the agent. It can also miss its wakeup
+    /// outright (see the type doc). The handler is driven by the same event that
+    /// performs the reap, so it cannot miss.
+    public static func spawn(
+        executableURL: URL,
+        arguments: [String],
+        workingDirectory: String? = nil,
+        logPath: String? = nil,
+        environment: [String: String]? = nil,
+        onExit: (@Sendable (Int32) -> Void)? = nil
+    ) throws -> SpawnedProcess {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        if let environment { process.environment = environment }
+        if let onExit {
+            process.terminationHandler = { finished in onExit(finished.terminationStatus) }
+        }
+        if let workingDirectory {
+            process.currentDirectoryURL = URL(fileURLWithPath: workingDirectory)
+        }
+        if let logPath {
+            // Truncated when it has grown past the cap, rather than rotated.
+            // A supervised child is respawned often enough that this is checked
+            // regularly, and the alternative — an append-only file with no
+            // ceiling — is a resolver that fills `/var/lib` on a host whose
+            // upstreams are down and whose `errors` plugin is logging every
+            // SERVFAIL. Losing the older half of a log nobody has read is the
+            // cheaper failure; the recent lines are the ones that explain a
+            // crash loop.
+            if let size = fileSize(atPath: logPath), size > maximumSpawnLogBytes {
+                try? Data().write(to: URL(fileURLWithPath: logPath))
+            } else if !FileManager.default.fileExists(atPath: logPath) {
+                FileManager.default.createFile(atPath: logPath, contents: nil)
+            }
+            if let handle = FileHandle(forWritingAtPath: logPath) {
+                handle.seekToEndOfFile()
+                process.standardOutput = handle
+                process.standardError = handle
+            }
+        }
+        try process.run()
+        return SpawnedProcess(process: process)
+    }
+
+    /// Size past which `spawn` truncates a child's log rather than appending to
+    /// it. Big enough to hold a crash loop's worth of context, small enough
+    /// that a hundred of them do not matter on a hypervisor.
+    static let maximumSpawnLogBytes: Int64 = 16 << 20  // 16 MiB
+
+    /// Whether a process id is alive, for adopting a child this agent started
+    /// before it restarted. `kill(pid, 0)` is the portable liveness probe: it
+    /// performs the permission check and delivers nothing.
+    ///
+    /// Liveness alone is deliberately not enough for adoption — pids are
+    /// recycled — so callers pair it with a check that the process is the
+    /// binary they expect.
+    public static func isAlive(pid: Int32) -> Bool {
+        pid > 0 && kill(pid, 0) == 0
+    }
+
     /// Current size of `path` via `stat(2)`, or nil if it cannot be read.
     static func fileSize(atPath path: String) -> Int64? {
         var info = stat()
@@ -276,7 +379,7 @@ public enum ProcessRunner {
     }
 
     /// Grace between SIGTERM and SIGKILL for a timed-out child.
-    private static let signalEscalationGrace: Duration = .seconds(2)
+    public static let signalEscalationGrace: Duration = .seconds(2)
 
     /// How long the timed-out path waits for the termination handler before
     /// throwing anyway — bounded because a grandchild can delay the handler
