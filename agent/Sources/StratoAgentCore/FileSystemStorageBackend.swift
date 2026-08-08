@@ -608,8 +608,25 @@ public actor FileSystemStorageBackend: StorageBackend {
         try await queryImageInfo(path: path).format
     }
 
+    /// Reads `qemu-img info` for an image that may be open elsewhere.
+    ///
+    /// `-U` (force-share) is what makes that possible: a running QEMU holds a
+    /// write lock on every image it has opened, and without `-U` this call
+    /// fails outright (STR-193). Resize is where that bit: both the size probe
+    /// and the grow precheck inspect the volume, so a grow against an attached
+    /// volume died here — reported as `Volume info query failed` — instead of
+    /// reaching the guard that decides online vs offline. `detectFormat` runs
+    /// the same query, so snapshot and clone would have failed identically had
+    /// the control plane not refused those on an attached volume already.
+    ///
+    /// It belongs on this call and no other. `-U` is safe here precisely
+    /// because inspection is read-only: the worst case is reading fields a
+    /// concurrent writer is mid-update on. On a mutating invocation
+    /// (`create`, `convert`, `resize`) the lock is doing real work — it is the
+    /// only thing standing between us and rewriting qcow2 metadata underneath
+    /// a live guest — so it must never be forced there.
     private func queryImageInfo(path: String) async throws -> QemuImgInfo {
-        let result = try await runQemuImg(["info", "--output=json", path])
+        let result = try await runQemuImg(["info", "-U", "--output=json", path])
         if result.terminationStatus != 0 {
             throw StorageBackendError.infoFailed("qemu-img info failed: \(result.combinedOutput)")
         }

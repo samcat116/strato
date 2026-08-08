@@ -35,17 +35,15 @@ Most of the layered model below is implemented. What exists today:
   default-drop group (§Security groups).
 - **IPv4/IPv6 dual-stack**: a generated ULA /64 alongside each network's v4
   subnet by default, per-family NIC address rows, RA + DHCPv6 delivery.
-- **Instance metadata dataplane**: the per-VM metadata document rides the
-  sync (wire v26), the OVN localport + per-chassis namespace exist (wire
-  v27), guests are told how to reach the addresses (STR-53), and security
-  groups can't take that reachability away (STR-54) — see §Instance metadata
-  (IMDS).
+- **Instance metadata (IMDS)**: guests read their own metadata over HTTP at
+  `169.254.169.254` / `[fd00:ec2::254]` behind a mandatory IMDSv2-style token
+  handshake (STR-56). The document rides the sync (wire v26), the OVN
+  localport + per-chassis namespace carry it (wire v27), guests are told how
+  to reach the addresses (STR-53), and security groups can't take that
+  reachability away (STR-54) — see §Instance metadata (IMDS).
 
 What genuinely remains missing (details in §Known gaps):
 
-- **No guest-visible metadata service yet**: nothing listens in the metadata
-  namespace (STR-56). Everything around it is in place — the localport, the
-  advertised routes, and the implicit security-group egress allow (STR-54).
 - **Networked-sandbox snapshots** (STR-104): a checkpoint carries no
   Firecracker network device to remap, so restore and fork refuse a sandbox
   that has a NIC. Everything else in sandbox networking is landed — the jail
@@ -181,10 +179,15 @@ factory extension in `InstanceMetadataFactory.swift`) and
 `DesiredVMState.metadata` (wire v26, STR-48/51;
 `shared/Sources/StratoShared/InstanceMetadata.swift`). The agent keeps it in
 `MetadataStore` (STR-52), written by the reconciler as syncs arrive and read
-with no control-plane round trip, so it holds per VM exactly what a metadata
-listener should serve — see [agent](./agent.md) §Instance metadata store. With
-both halves in place, the only piece missing for guest-visible IMDS is the HTTP
-listener inside the namespace (STR-56).
+with no control-plane round trip, so it holds per VM exactly what the metadata
+listener serves — see [agent](./agent.md) §Instance metadata store.
+
+The **listener** joining the two is STR-56: one child process per namespace,
+started by the agent through `ip netns exec`, answering on both addresses
+behind a mandatory IMDSv2-style token handshake and identifying its caller by
+source address within the namespace's network. Responses carry a hop limit of
+1, so a guest cannot relay them off-box. See [agent](./agent.md) §Instance
+metadata server and [ADR 0006](../adr/0006-imds-session-auth.md).
 
 The localport realization itself has **two halves with two different owners**,
 and that shape is load-bearing rather than incidental:
@@ -594,12 +597,14 @@ is not subject to security-group rules either.
 
 **The AWS parallel is deliberately partial.** AWS pairs that rule with a
 per-instance kill switch (`HttpEndpoint: disabled`, a hop limit, IMDSv2
-enforcement); the only lever here is `metadataEnabled`, which is per *network*.
-So an operator hardening one workload against SSRF cannot currently deny it the
-service short of moving the VM to its own network. That is academic while
-nothing listens, and becomes real the moment STR-56 lands a listener — tracked
-as issue #1013, and the reserved space above 1003 is where such a deny would
-go.
+enforcement). Strato has two of the three fleet-wide — IMDSv2 is mandatory
+rather than optional, and the hop limit is `metadata_response_hop_limit` on the
+agent — but the only *per-workload* lever is `metadataEnabled`, which is per
+**network**. So an operator hardening one workload against SSRF cannot deny it
+the service short of moving the VM to its own network. That was academic while
+nothing listened; with STR-56's listener answering it is real, and it is
+tracked as issue #1013 / STR-185. The reserved ACL space above 1003 is where
+such a deny would go.
 
 One collision to keep in mind while that is open: the v4 address is link-local
 and can never overlap a tenant subnet, but `fd00:ec2::254` is a ULA drawn from
@@ -945,16 +950,24 @@ verification on real multi-node hardware (recipe in
   IPv4 subnet, and each NIC carries one address row per family. IPv6 is
   allocated, delivered (RA + DHCPv6), and realized; what remains open is
   IPv6-specific L3 work such as external egress.
-- **Metadata reachability** — the localport, its per-chassis namespace
-  (STR-49), the advertised routes (STR-53), and the implicit security-group
-  egress allow (STR-54) all exist, but nothing listens in the namespace
-  (STR-56). Until STR-56 lands, the advertised route points at an address with
-  no listener behind it: a guest's cloud-init Ec2 probe now *connects* to a
-  namespace that RSTs rather than failing to route, which is a faster failure
-  than the pre-STR-53 unreachable-address timeout — but a chassis whose
-  namespace failed to converge (see the reboot/tmpfs case above) gives the
-  guest a route to a black hole and turns the probe into a minutes-long retry
-  loop. That is the failure mode to watch for when rolling this out.
+- **The metadata service has not been verified against a real guest.** Every
+  piece is unit-tested and the listener is exercised end to end over loopback,
+  but nothing here has yet answered a request that crossed an OVN localport.
+  The specific things only a live host can show: that the child binds inside
+  `strato-md-<network>` (`ip netns exec ... ss -ltnp`), that the hop limit
+  survives to the guest on both the SYN/ACK and the data segments (different
+  kernel paths — `tcpdump` both), and the STR-54 question below. A chassis
+  whose namespace failed to converge (the reboot/tmpfs case above) still gives
+  a guest a route to a black hole, which now shows up as a hung probe rather
+  than a refused connection — that is the failure mode to watch for when
+  rolling this out.
+- **cloud-init's Ec2 datasource can complete the handshake, and will find
+  almost nothing.** The listener speaks EC2's header names deliberately
+  ([ADR 0006](../adr/0006-imds-session-auth.md)), so a guest that probes
+  `/latest/meta-data/instance-id` gets an answer — but the rest of the EC2 tree
+  is 404 until STR-65 renders it, and `user-data` until STR-60. Nothing depends
+  on this today: Strato still writes a NoCloud seed ISO, and `datasource_list`
+  puts NoCloud ahead of Ec2.
 - **STR-53 landed on renderer-level verification only.** The entry it replaced
   gated it on STR-49 being verified against a live deployment first, for the
   black-hole reason above. What was actually verified is that the generated
@@ -966,13 +979,13 @@ verification on real multi-node hardware (recipe in
   Ubuntu 24.04/26.04, Debian 13, Fedora, and Rocky is still owed.
 - **STR-54's carve-out is verified as ACL construction, not as forwarding.**
   The match strings and their priority are unit-tested; that a guest in a
-  no-egress group actually reaches the namespace is not, and cannot be until
-  STR-56 puts a listener there. The specific assumption to check then is that
-  `allow-related` on `from-lport` is enough for the reply — i.e. that
-  ovn-northd's established bypass in `ls_out_acl` admits it without a standing
-  `to-lport` allow. If it does not, the symptom is a guest whose SYN leaves and
-  whose SYN/ACK never arrives, which looks exactly like the missing listener it
-  would land alongside.
+  no-egress group actually reaches the namespace is not. With STR-56's listener
+  in place this is now checkable, and it is the first thing to check: the
+  assumption is that `allow-related` on `from-lport` is enough for the reply —
+  i.e. that ovn-northd's established bypass in `ls_out_acl` admits it without a
+  standing `to-lport` allow. If it does not, the symptom is a guest whose SYN
+  leaves and whose SYN/ACK never arrives, which looks exactly like a listener
+  that never started.
 - **Downgrading an agent below wire v27 leaks its metadata namespaces.** A
   pre-STR-49 agent has no concept of `strato-md-*` namespaces or `mdp*` ports, so
   it neither converges nor removes them — the mirror of the localport's nil
