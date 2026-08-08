@@ -13,10 +13,10 @@ entrypoint/cmd/env/workdir.
 > vsock control, `FirecrackerSandboxRuntime`, jailer hardening), exec/attach
 > + workload logs, snapshots (checkpoint/restore, warm start, fork,
 > cross-agent mobility), and **guest networking** are all landed: a sandbox
-> gets a real OVN NIC on any host that advertises the capability, and
-> placement refuses one that does not. What is left of that front is
-> networked-sandbox snapshots (STR-104) — see
-> [Guest networking](#guest-networking).
+> gets a real OVN NIC on any host that advertises the capability, placement
+> refuses one that does not, and since STR-104 a networked sandbox
+> checkpoints, warm-starts and forks like any other — see
+> [Networked snapshots](#networked-snapshots-str-104).
 > [History](#history) maps the build-out; issue numbers throughout mark which
 > change delivered each piece.
 
@@ -248,12 +248,15 @@ and fails loudly only on one carrying something it would otherwise ignore.
 vsock port (default 1024). The v1 surface is health + exit only: `ping` →
 `pong`, and `get_status` → the workload's lifecycle state and, once it ends,
 its exit code. Every response echoes `sandbox_id` + boot `nonce` so the host
-can re-identify a guest after a snapshot/resume. The surface has grown twice
-since: protocol v2 added the exec and log-follow stream modes (#423 — see
-[Exec, attach, and workload logs](#exec-attach-and-workload-logs)), and the
-snapshot era added `sync_clock`, the warm-start `launch` request and `held`
-state, the fork `reidentify` request, and a versioned `pong` — guests
-advertise their control-protocol version, and fork admission keys on v3 (see
+can re-identify a guest after a snapshot/resume. The surface has grown since:
+protocol v2 added the exec and log-follow stream modes (#423 — see
+[Exec, attach, and workload logs](#exec-attach-and-workload-logs)); v3 added
+`sync_clock`, the warm-start `launch` request and `held`
+state, the fork `reidentify` request, and a versioned `pong`; and v4 (STR-104)
+put a `network` block on `launch` and `reidentify` so a guest restored from
+someone else's checkpoint can be re-addressed in place. Guests
+advertise their control-protocol version, and admission keys on it: v3 for a
+fork, v4 for a *networked* fork or warm start (see
 [Snapshots](#snapshots-warm-start-fork-and-mobility)).
 
 **On-disk layout & capability gating.** The two artifacts install as a directory
@@ -516,8 +519,15 @@ health check (ping + identity nonce, which the checkpointed memory carries) →
 best-effort `sync_clock` over vsock (the restored guest's wall clock froze at
 checkpoint time; PID 1 sets `CLOCK_REALTIME`) → log follow resumes from its
 seq checkpoint. The restored device topology re-binds the original vsock UDS
-path; the (future — STR-104) TAP devices come back under their original names
-the same way.
+path, and a NIC comes back the same way: its TAP name derives from the sandbox
+id, which a restore in place does not change, so the checkpoint already names a
+device that still exists. What the restore *does* have to guarantee is that it
+still exists **before** the load — a snapshot is loaded resumed, and a resumed
+guest transmits immediately — so the reconciler re-realizes the whole host-side
+attachment (netns, veth, TAP, `tc` filters, OVS port) first. That is idempotent,
+and it is what covers a namespace a crash sweep removed and an attachment this
+agent life never learned because the sandbox was adopted rather than created
+here.
 
 ### Snapshot rows and convergence
 
@@ -574,6 +584,19 @@ never correctness. `sandbox_warm_start` (default true) gates it;
 `sandbox_warm_cache_max_size_gb` (default 20) bounds the template cache at
 `<vm_storage_dir>/warm-snapshots/`, LRU-swept like the image caches.
 
+**Keyed on the NIC shape, too.** A snapshot load can repoint a device but never
+add or drop one, so a template built without a network device could only ever
+produce a sandbox without an interface — reporting perfectly healthy while being
+unreachable. `WarmSnapshotKey` therefore carries the NIC count (STR-104), which
+makes that combination a cache *miss* and a cold boot rather than a silent
+mis-provision. A template for networked sandboxes is built with a throwaway TAP
+in its own namespace, attached to nothing: a template has no logical port and
+needs no connectivity, because the held guest never addresses the device. All
+that has to survive into the snapshot is the device itself. (A pre-1.12
+Firecracker cannot remap it on load at all, so there a networked sandbox is
+simply cold-only — the honest trade, and it costs latency rather than
+correctness.)
+
 **Jailed-only.** Snapshot vmstate records drive/vsock backing files *by
 path*. Jailed, those paths are chroot-relative constants (`/rootfs.ext4`,
 `/snapshots/...`) identical in every jail, so a template snapshot loads
@@ -611,15 +634,22 @@ nonce → tear the template down.
 **Warm provision + launch.** Create stages the new sandbox's jail with
 reflink clones of the template's rootfs/memory/vmstate and the sandbox's
 *own* config drive, then `PUT /snapshot/load` without resuming — landing in
-`Paused`, exactly where a created-but-not-booted sandbox sits. Boot resumes
+`Paused`, exactly where a created-but-not-booted sandbox sits. For a networked
+sandbox the load carries `network_overrides`, pointing the template's device at
+this sandbox's TAP (STR-104). Boot resumes
 it and requires the guest to answer in the `held` state with **exactly the
 template identity recorded in the cache meta** (so a workload can never be
 launched into some other process answering on the deterministic UDS); it
 then sends `sync_clock` and the `launch` control request — carrying the
 sandbox id, nonce, image config + overrides (the guest resolves them with
-the identical cold-boot merge rules), and 32 bytes of host entropy the
-guest mixes into `/dev/urandom` as best-effort warm-template divergence —
-and verifies the guest now echoes the new identity. The
+the identical cold-boot merge rules), 32 bytes of host entropy the
+guest mixes into `/dev/urandom` as best-effort warm-template divergence, and
+the NIC's L3 configuration for the device the load just remapped — and
+verifies the guest now echoes the new identity. Unlike the entropy and the
+hostname, the network block is **not** best effort: a guest that dropped it
+(one predating control protocol v4) would spawn the workload on an unaddressed
+interface and answer healthy, so a networked launch is refused against such a
+guest and the sandbox demotes to a cold boot. The
 launch payload is reconstructed from the staged config drive, so the flow
 survives agent restarts between create and boot with no extra persisted
 state (identity delivery rides vsock rather than a guest re-read of the
@@ -646,9 +676,9 @@ the measurement hook for the cold-vs-warm latency comparison on strato-dev.
 `POST /api/sandboxes` accepts `restoreFrom: <snapshot UUID>` instead of an
 image (#427). The caller needs `read` on the source `sandbox_snapshot` and
 `create_resources` on the target project. Machine and process overrides are
-rejected: the fork preserves the checkpointed image, vCPU/memory shape, and
-process configuration, while the target supplies its own name, project,
-environment, and TTL. `sandboxes.restored_from_snapshot_id` records lineage;
+rejected: the fork preserves the checkpointed image, vCPU/memory shape,
+process configuration, and — since STR-104 — NIC shape, while the target
+supplies its own name, project, environment, and TTL. `sandboxes.restored_from_snapshot_id` records lineage;
 the API and web detail page expose it, and the snapshot list offers the fork
 action.
 
@@ -658,7 +688,8 @@ then any compatible agent is a candidate (see
 [Snapshot mobility](#snapshot-mobility)). The agent
 also captures the checkpointed guest's own control-protocol version from its
 versioned `pong` and persists it on the snapshot. Fork admission and placement
-require guest control protocol v3; an upgraded v12 agent therefore cannot
+require guest control protocol v3 — v4 when the fork has a NIC; an upgraded v12
+agent therefore cannot
 mistake an older guest frozen in memory for one that understands
 `reidentify`, and legacy/unknown snapshots remain usable for in-place restore
 only. Snapshot creation also persists a fork-layout version only for jailed
@@ -671,20 +702,36 @@ reflink-copies, or normally copies, `rootfs.ext4`, `memory.snap`,
 the snapshot resumed. It first proves that the resumed guest has the source
 sandbox id + nonce, then sends a one-shot `reidentify` request over the
 restored vsock listener. That request supplies a fresh target nonce,
-hostname, host entropy, and wall clock; PID 1 strictly reseeds `/dev/urandom`,
+hostname, host entropy, wall clock, and — for a networked fork — the target's
+own NIC configuration (STR-104); PID 1 strictly reseeds `/dev/urandom`,
 rewrites machine-id when the image provides one (scratch/distroless images may
-omit `/etc` entirely), sets the hostname and `CLOCK_REALTIME`, and swaps its
-reported sandbox identity last. Retained guest log history is cleared at that
-boundary (sequence numbers and live stdio writers continue), so source output
-is never replayed under the target. A second ping must return the target id +
-nonce before the agent publishes the sandbox as managed. The target config
-drive is then rewritten with the new identity so adoption and future
-snapshots remain self-describing.
+omit `/etc` entirely), sets the hostname and `CLOCK_REALTIME`, re-addresses the
+NIC, and swaps its reported sandbox identity last. Retained guest log history
+is cleared at that boundary (sequence numbers and live stdio writers continue),
+so source output is never replayed under the target. A second ping must return
+the target id + nonce before the agent publishes the sandbox as managed. The
+target config drive is then rewritten with the new identity — and the new
+network block — so adoption and future snapshots remain self-describing.
 
-The create transaction always allocates a new sandbox row and default NIC,
-MAC, and IPAM reservation — though a fork's restore refuses a networked
-sandbox outright until STR-104 remaps the device on load (see
-[Guest networking](#guest-networking)).
+The create transaction always allocates a new sandbox row, MAC, and IPAM
+reservation, and since STR-104 that includes the NIC: the load repoints the
+checkpointed device at the target's TAP and `reidentify` gives the guest the
+target's addressing.
+
+A load can repoint a device but never add or drop one, so the fork's **NIC
+shape must match the checkpoint's** — which makes the NIC part of what a fork
+*inherits*, like its image and machine shape. Naming no network gets the
+source's (its own MAC and IPAM allocation, though: sharing those with a
+possibly-live source is what re-identification exists to prevent); naming one
+explicitly still works, and is the only option for a fork landing in a
+different project, since networks are project-scoped. What is refused with
+`409` is a fork asking for a network the checkpoint has no device for. So is a
+networked fork of a snapshot whose guest is below control protocol **v4** — a
+v3 guest decodes `reidentify` but drops its `network` field, and would come up
+holding an address that generally still belongs to a live sandbox. The agent
+re-checks the shape against the archived config drive, which is the exact
+witness (the runtime writes a `network` block precisely when it configures a
+Firecracker NIC), and refuses permanently.
 
 ### Clone-safety policy
 
@@ -906,15 +953,41 @@ every correctly-networked sandbox after an agent restart. Recovering the
 attachment at adoption comes first; the wire field and the verdict fold are
 cheap after that.
 
-Two arms are still queued:
+One arm is still queued: **recovering a sandbox's NIC at adoption**, and the
+observed signal it unlocks — see the enforcement caveat above. (The restore
+path now hands the runtime a freshly realized attachment, so a restored sandbox
+is the one case where an adopted entry does regain its NIC; every other adopted
+sandbox stays blank until this lands.)
 
-- **Snapshots of networked sandboxes** (STR-104): current checkpoints
-  contain no Firecracker network device to remap, so restore and fork
-  refuse networked sandboxes until STR-104 passes Firecracker
-  `network_overrides` on load and reconfigures the guest interface/DHCP
-  lease before health succeeds.
-- **Recovering a sandbox's NIC at adoption**, and the observed signal it
-  unlocks — see the enforcement caveat above.
+### Networked snapshots (STR-104)
+
+A Firecracker snapshot captures a device *set*, and a load can repoint a device
+but never add or drop one. Once a sandbox has a NIC that touches all three
+snapshot paths, each differently, and all three are now covered:
+
+- **Restore in place** needs no remap at all: the sandbox keeps its identity,
+  and its netns and all three device names derive from that id, so the
+  checkpoint already names devices that still exist. What it does need is for
+  them to exist *before* the load — see
+  [Checkpoint and restore in place](#checkpoint-and-restore-in-place).
+- **Warm start** keys the template cache on the NIC shape, so a no-NIC template
+  is a miss for a networked sandbox rather than a silent mis-provision, and
+  builds NIC-shaped templates against a throwaway TAP — see
+  [Warm start](#warm-start).
+- **Fork** repoints the checkpointed device at the target's TAP and re-addresses
+  the guest inside `reidentify`; the NIC joins what a fork inherits, and a
+  guest-v4 gate covers the re-addressing — see
+  [Fork into a new sandbox](#fork-into-a-new-sandbox).
+
+Two host requirements run through all of it. Repointing a device is Firecracker
+`network_overrides` on `PUT /snapshot/load`, which arrived in **1.12.0**; an
+older VMM rejects the whole request body rather than ignoring the field, so the
+agent probes `firecracker --version` once per life and treats an unknown version
+as incapable. And re-addressing the guest is control protocol **v4**, which the
+agent learns from the guest's own versioned `pong` — never from its own build,
+since the guest image is installed separately. Neither gate degrades a
+network-free sandbox: those keep checkpointing, warm-starting and forking on any
+Firecracker and any guest that was already good enough.
 
 ## Quotas, TTL, and expiry
 
@@ -973,9 +1046,9 @@ Guest networking was deliberately scoped out — #524 kept the NIC off the wire
 spec — and re-planned as STR-99..104: the measured move-a-TAP failure
 (STR-99), the netns attach path (STR-100), the in-guest network config
 (STR-101, config-drive schema v2), security-group membership assembly
-(STR-102), and the per-agent capability gate that put the NIC on the wire
-(STR-103) are landed; networked-snapshot remapping (STR-104) remains — see
-[Guest networking](#guest-networking).
+(STR-102), the per-agent capability gate that put the NIC on the wire
+(STR-103), and networked-snapshot remapping (STR-104, guest control protocol
+v4) are all landed — see [Guest networking](#guest-networking).
 
 ### Open threads
 
@@ -987,12 +1060,12 @@ spec — and re-planned as STR-99..104: the measured move-a-TAP failure
   (#428).
 - **Guest identity** (#496, design in [guest-identity](./guest-identity.md)):
   a SPIFFE Workload API socket inside the sandbox, served by strato-agent
-  over a v4 control-protocol identity port. Sandboxes are the ready half of
+  over a new control-protocol identity port (the design was written against a
+  hypothetical v4; STR-104 took that number, so it lands as the version after
+  whatever is current). Sandboxes are the ready half of
   that proposal — vsock and an in-house PID 1 are already here — and the
   fork case composes with the clone-safety policy, because identity arrives
   over a live channel rather than baked into the config drive.
-- Networked-sandbox snapshots, STR-104 — see
-  [Guest networking](#guest-networking).
 
 ## Non-goals
 

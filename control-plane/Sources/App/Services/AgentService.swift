@@ -2484,6 +2484,20 @@ actor AgentService {
                     "snapshot guest is too old for sandbox forks (need guest control protocol >= \(SandboxGuestControlProtocol.reidentifyMinimumVersion))"
                 )
             }
+            // A *networked* fork needs one version more: the checkpointed
+            // guest holds the source sandbox's MAC and address, and only a v4
+            // guest acts on the `network` block `reidentify` carries to
+            // replace them (STR-104). Re-checked here as well as at admission
+            // because placement is where a stale row would otherwise send the
+            // fork to an agent that can only fail it.
+            if !nic.isEmpty,
+                !SandboxGuestControlProtocol.supportsNetworkReconfigure(
+                    snapshot.guestControlProtocolVersion)
+            {
+                throw AgentServiceError.schedulingFailed(
+                    "snapshot guest cannot re-address its NIC, so it can only be forked without one (need guest control protocol >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))"
+                )
+            }
 
             // Candidates (issue #428): the snapshot's own agent restores from
             // local artifacts; once exported, any agent that satisfies the

@@ -56,14 +56,20 @@ public protocol SandboxRuntimeService: Sendable {
     /// Restore the sandbox in place from one of its snapshots: tear down the
     /// current microVM process, re-stage the checkpointed rootfs, spawn a
     /// fresh Firecracker, load the snapshot, resume, and confirm the guest
-    /// answers. Same identity — the vsock wiring and (future) NIC devices come
-    /// back under their original names from the snapshotted device topology.
+    /// answers. Same identity — the vsock wiring and the NIC come back under
+    /// their original names, both derived from the sandbox id, so nothing in
+    /// the snapshotted device topology has moved.
     /// `artifacts` is non-nil when the archive is not on this host: the
     /// runtime stages it from the signed, checksummed download descriptors
     /// before loading (cross-agent restore, issue #428).
+    /// `networkAttachments` is what the caller re-realized for this sandbox
+    /// before the restore, because a resumed guest transmits immediately: the
+    /// whole host-side attachment has to exist before the load, not after
+    /// (STR-104).
     func restoreSandbox(
         sandboxId: String, snapshotId: String,
-        artifacts: [SandboxSnapshotArtifactDescriptor]?
+        artifacts: [SandboxSnapshotArtifactDescriptor]?,
+        networkAttachments: [ResolvedNetworkAttachment]
     ) async throws
 
     /// Stream a snapshot's artifacts to the pre-signed upload targets, one
@@ -191,10 +197,12 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
     /// (never started, or already ended). The Agent answers with
     /// `sandboxExecClosed` so the control plane tears its side down.
     case execSessionNotFound(String)
-    /// The sandbox requested a NIC this host or this code path cannot realize —
+    /// The sandbox requested a NIC this host or this code path cannot realize:
     /// an unjailed agent (a sandbox NIC lives in the jail's network namespace),
-    /// or a snapshot restore, whose captured device set has no network interface
-    /// to remap onto. Permanent: only a host/config change, or new agent code,
+    /// a NIC the network service resolved to something other than a TAP, a
+    /// Firecracker too old to repoint a restored network device, or a fork
+    /// whose NIC shape disagrees with the checkpoint's device set (STR-104).
+    /// Permanent: only a host/config change, or new agent code,
     /// can satisfy it. The reason says which (issue STR-100).
     case networkingUnsupported(String)
     /// Setting up the jailer barrier (issue #425) failed host-side — chroot

@@ -171,6 +171,28 @@ struct SwiftFirecrackerTests {
         #expect(json.contains("\"backend_type\":\"File\""))
         #expect(json.contains("backend_path"))
         #expect(json.contains("\"resume_vm\":true"))
+        // Omitted entirely, not `[]`: a pre-1.12 Firecracker rejects the
+        // unknown key, so a load that remaps nothing must look exactly as it
+        // did before the field existed.
+        #expect(!json.contains("network_overrides"))
+    }
+
+    @Test("SnapshotLoadConfig carries network overrides when the TAP moved")
+    func testSnapshotLoadConfigNetworkOverrides() throws {
+        let config = SnapshotLoadConfig(
+            snapshotPath: "/snapshots/vmstate.snap",
+            memFilePath: "/snapshots/memory.snap",
+            resumeVM: true,
+            networkOverrides: [
+                SnapshotLoadConfig.NetworkOverride(ifaceId: "eth0", hostDevName: "tapb2c3d4e5f601")
+            ]
+        )
+        let encoder = JSONEncoder()
+        let json = String(data: try encoder.encode(config), encoding: .utf8)!
+
+        #expect(json.contains("\"network_overrides\""))
+        #expect(json.contains("\"iface_id\":\"eth0\""))
+        #expect(json.contains("\"host_dev_name\":\"tapb2c3d4e5f601\""))
     }
 
     @Test("MachineConfigUpdate encodes only the provided fields")
