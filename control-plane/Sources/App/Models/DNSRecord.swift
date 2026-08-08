@@ -116,7 +116,7 @@ extension DNSRecord: Content {}
 
 // MARK: - Request/Response DTOs
 
-struct CreateDNSRecordRequest: Content {
+struct CreateDNSRecordRequest: Content, ValidatedRequestBody {
     /// Owner name relative to the zone; `@` (or omitted) means the apex.
     let name: String?
     let type: DNSRecordType
@@ -136,9 +136,30 @@ struct CreateDNSRecordRequest: Content {
         self.ttl = ttl
         self.view = view
     }
+
+    /// Bounded, not normalized (STR-198). Both fields have a parser downstream
+    /// and it owns their shape; this is the floor underneath it, applied before
+    /// the parser does O(n) work on a value it will refuse anyway.
+    ///
+    /// `name` takes `Validate.text` rather than `Validate.name` because empty is
+    /// meaningful here — `DNSName.normalizedRecordName` reads `""` as the apex,
+    /// the same as `@` — so the non-empty rule that comes with a "required name"
+    /// would turn a documented spelling into a `400`. Its ceiling is the
+    /// grammar's, for the reason given on `CreateDNSZoneRequest.validate()`.
+    ///
+    /// `value` takes `Validate.textLength`, which is deliberately looser than
+    /// anything `DNSZoneService.validatedValue` accepts (255 bytes for TXT, a
+    /// domain name for CNAME/PTR/SRV, a parsed address for A/AAAA). A second
+    /// content-shaped number would be the drift this whole helper exists to
+    /// avoid; what this pins is the same ceiling the `dns_records.value` column
+    /// carries, so the API and the backstop agree.
+    mutating func validate() throws {
+        try Validate.text(name, "name", max: DNSName.maxNameLength)
+        try Validate.text(value, "value")
+    }
 }
 
-struct UpdateDNSRecordRequest: Content {
+struct UpdateDNSRecordRequest: Content, ValidatedRequestBody {
     let value: String?
     let ttl: Int?
     let view: DNSRecordView?
@@ -147,6 +168,13 @@ struct UpdateDNSRecordRequest: Content {
         self.value = value
         self.ttl = ttl
         self.view = view
+    }
+
+    /// The same ceiling on the same field as the create path — a record's name
+    /// and type are its identity and are immutable, so `value` is the only text
+    /// an update carries.
+    mutating func validate() throws {
+        try Validate.text(value, "value")
     }
 }
 

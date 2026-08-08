@@ -10765,9 +10765,11 @@ components:
       properties:
         name:
           type: string
+          maxLength: 253
           description: Fully-qualified zone name, e.g. `acme.internal`.
         description:
           type: string
+          maxLength: 4096
         projectId:
           type: string
           format: uuid
@@ -10777,8 +10779,10 @@ components:
       properties:
         name:
           type: string
+          maxLength: 253
         description:
           type: string
+          maxLength: 4096
     AttachDNSZoneRequest:
       type: object
       required: [networkId]
@@ -10832,6 +10836,7 @@ components:
       properties:
         name:
           type: string
+          maxLength: 253
           description: >-
             Owner name relative to the zone; omitted means the apex (`@`). A
             leftmost `*` label is a wildcard, including a bare `*` for the
@@ -10840,6 +10845,11 @@ components:
           $ref: "#/components/schemas/DNSRecordType"
         value:
           type: string
+          maxLength: 4096
+          description: >-
+            Bounded far above what any record type accepts — each type's real
+            ceiling comes from its own grammar (255 bytes for TXT, a domain
+            name for CNAME/PTR/SRV, an address for A/AAAA).
         ttl:
           type: integer
           default: 300
@@ -10855,6 +10865,7 @@ components:
       properties:
         value:
           type: string
+          maxLength: 4096
         ttl:
           type: integer
         view:
