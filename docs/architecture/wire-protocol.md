@@ -50,7 +50,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 34), stamped on
+`WireProtocol.swift` holds the protocol version (currently 35), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -332,6 +332,21 @@ It defends the *request*: with no fallback frame left, a reboot aimed at a
 pre-v34 agent would be accepted into a field that agent ignores and then
 reported as converged, so it is refused with `409` at admission.
 
+**A capability is sometimes the whole answer, with no bump at all.** STR-103
+put sandbox NICs on the wire without touching the version, because
+`SandboxSpec.network` has been in the shape since v5 — what was missing was
+never a field an old agent could not decode, but evidence that a given host can
+realize one. That evidence cannot come from a version: the three things a
+sandbox NIC needs (OVN, the jailer barrier, and a guest image whose init
+configures the interface) are all installed independently of the agent binary,
+so an agent at `currentVersion` paired with a two-releases-old guest image
+would refuse the config drive. Hence
+`AgentRegisterMessage.sandboxNetworkingCapable`, re-probed at every
+registration, gating both placement and whether assembly puts the NIC on the
+wire — the `sandboxCapable` shape, applied to a sharper question. Reach for a
+version bump when a peer would *misread* a payload; reach for a capability when
+it would understand the payload perfectly and still be unable to act on it.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -362,7 +377,7 @@ v34 no `vm_reboot`, `vm_restore` or `sandbox_restore` either.
 
 | Message | Purpose |
 |---|---|
-| `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, protocol version |
+| `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, `sandboxNetworkingCapable`, protocol version |
 | `agent_heartbeat` | Periodic resource usage and running VM IDs |
 | `agent_unregister` | Graceful disconnect with a reason |
 | `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567, incl. `balloonActualBytes` at v19) |

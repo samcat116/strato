@@ -140,6 +140,26 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// the version. Optional so registrations from older agents decode fine;
     /// absent means not capable.
     public let sandboxCapable: Bool?
+    /// Whether this agent can realize a **sandbox NIC** (STR-103), as opposed
+    /// to merely running sandboxes.
+    ///
+    /// A second signal on top of `sandboxCapable`, and for a sharper version of
+    /// the same reason: the pieces a sandbox NIC needs are installed
+    /// independently of the agent binary, so no version and no other capability
+    /// implies them. It takes OVN/OVS networking (the veth + in-namespace TAP
+    /// recipe has no user-mode equivalent), the jailer barrier (the NIC lives in
+    /// the jail's network namespace, and an unjailed sandbox has none), and a
+    /// **guest image** whose init understands the config drive's `network`
+    /// block — and the guest image is a separately distributed artifact at
+    /// `sandbox_guest_image_path`, so an up-to-date agent can be paired with a
+    /// guest that would refuse the document.
+    ///
+    /// The control plane uses it twice: the scheduler refuses to place a
+    /// sandbox that has a NIC on a host without it, and desired-state assembly
+    /// withholds `SandboxSpec.network` from such a host — so an agent that
+    /// cannot realize a NIC is never handed one. Optional so registrations from
+    /// older agents decode fine; absent means not capable.
+    public let sandboxNetworkingCapable: Bool?
     /// Whether this host can give a guest an emulated TPM 2.0 — it has a
     /// usable `swtpm` binary (issue #565). Like `sandboxCapable`, speaking the
     /// wire version is deliberately not sufficient: the protocol carries
@@ -188,6 +208,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         networkCapability: NetworkCapability? = nil,
         protocolVersion: Int? = WireProtocol.currentVersion,
         sandboxCapable: Bool? = nil,
+        sandboxNetworkingCapable: Bool? = nil,
         tpmCapable: Bool? = nil,
         operatingSystem: OperatingSystem? = nil,
         hostInfo: HostInfo? = nil,
@@ -206,6 +227,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.networkCapability = networkCapability
         self.protocolVersion = protocolVersion
         self.sandboxCapable = sandboxCapable
+        self.sandboxNetworkingCapable = sandboxNetworkingCapable
         self.tpmCapable = tpmCapable
         self.operatingSystem = operatingSystem
         self.hostInfo = hostInfo

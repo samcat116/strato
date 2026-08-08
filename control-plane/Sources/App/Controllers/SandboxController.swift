@@ -103,21 +103,18 @@ struct SandboxController: RouteCollection {
         let nodes = allSandboxes.compactMap { $0.id.map { IAMNode(type: .sandbox, id: $0) } }
         let readable = try await req.canFilter("sandbox:read", on: nodes)
 
-        var responses: [SandboxDetailResponse] = []
-        for sandbox in allSandboxes {
-            guard let id = sandbox.id, readable.contains(IAMNode(type: .sandbox, id: id)) else { continue }
-            // Per row rather than batched, because it costs nothing today: the
-            // verdict short-circuits on `guestNetworkingSupported` before it
-            // reaches the database. STR-103 removes that short-circuit and owes
-            // this loop the per-host/per-site memoization `enforcementByVM`
-            // does for the VM list.
-            responses.append(
-                SandboxDetailResponse(
-                    from: sandbox,
-                    securityGroupsEnforced: try await SecurityGroupService.sandboxEnforcement(
-                        for: sandbox, on: req.db)))
+        let visible = allSandboxes.filter { sandbox in
+            sandbox.id.map { readable.contains(IAMNode(type: .sandbox, id: $0)) } ?? false
         }
-        return responses
+        // Batched, like the VM list: since STR-103 the enforcement verdict reads
+        // the host row (it needs the sandbox-networking capability), so a
+        // per-row call would be one query per sandbox plus a site lookup each.
+        let enforcedBySandbox = try await SecurityGroupService.enforcementBySandbox(visible, on: req.db)
+        return visible.map { sandbox in
+            SandboxDetailResponse(
+                from: sandbox,
+                securityGroupsEnforced: sandbox.id.flatMap { enforcedBySandbox[$0] })
+        }
     }
 
     /// Fetch a sandbox by its :sandboxID route parameter and enforce a
@@ -145,10 +142,9 @@ struct SandboxController: RouteCollection {
     }
 
     /// The detail response for one sandbox, with its NIC loaded and its
-    /// enforcement verdict resolved. The verdict costs no query today —
-    /// `sandboxEnforcement` short-circuits on `guestNetworkingSupported` before
-    /// reaching the database — which is why the list path below can afford it
-    /// per row. STR-103 removes that short-circuit and must add batching.
+    /// enforcement verdict resolved. Single-sandbox only — the list path uses
+    /// `enforcementBySandbox`, which memoizes the host and site lookups this
+    /// makes per call.
     private static func detailResponse(for sandbox: Sandbox, on db: Database) async throws
         -> SandboxDetailResponse
     {
@@ -553,12 +549,12 @@ struct SandboxController: RouteCollection {
     /// A named network is resolved within the sandbox's own project, exactly as
     /// VM create resolves it (issue #765). Naming none is not an error the way
     /// it is for a VM — the sandbox is simply created **with no NIC**. The NIC
-    /// is still a pure control-plane address reservation: agents can realize a
-    /// sandbox NIC end to end since STR-100/101, but the wire spec withholds it
-    /// until STR-103 replaces the fleet-wide
-    /// `SandboxSpecBuilder.guestNetworkingSupported` with a per-agent gate.
-    /// Refusing the create, or silently picking a network on the caller's
-    /// behalf, would both be worse than reserving nothing.
+    /// pins where the sandbox can be placed: since STR-103 a NIC constrains the
+    /// sandbox to a host that advertises sandbox networking (and, if the network
+    /// is site-pinned, to that site), and placement is refused rather than
+    /// degraded when none is available. Refusing the create for naming *no*
+    /// network, or silently picking one on the caller's behalf, would both be
+    /// worse than reserving nothing.
     ///
     /// The NIC joins its security groups here too (STR-34, STR-102), the
     /// project's default when the caller named none — the same ≥1-group

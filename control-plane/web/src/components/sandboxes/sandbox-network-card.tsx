@@ -49,15 +49,17 @@ export function SandboxNetworkCard({ sandbox }: { sandbox: Sandbox }) {
         {sandbox.securityGroupsEnforced === false && (
           // Same reason as the VM banner — showing groups that filter nothing
           // reads as "filtered" — but a different cause, so different copy:
-          // nothing is wrong with the host here, sandbox guest networking is
-          // simply not switched on yet.
+          // the host this sandbox landed on cannot realize a sandbox NIC
+          // (backend STR-103), so there is no port for the groups to contain.
           <div className="mb-3 flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
             <span>
-              Security groups are <strong>not enforced</strong> on sandboxes
-              yet: guest networking is not enabled, so this interface is an
-              address reservation and the groups below filter nothing. The
-              memberships are recorded and will take effect as soon as it is.
+              Security groups are <strong>not enforced</strong> on this
+              sandbox: its node cannot realize a sandbox network interface, so
+              this is an address reservation and the groups below filter
+              nothing. The node needs OVN networking, the sandbox jailer, and a
+              guest image new enough to configure the interface. The
+              memberships are recorded and take effect once it does.
             </span>
           </div>
         )}

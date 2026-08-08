@@ -53,6 +53,12 @@ struct SchedulableAgent: Sendable {
     /// capable runtime behind a pre-v5 protocol could never receive the
     /// desired entries).
     let supportsSandboxWorkloads: Bool
+    /// Whether this agent can realize a **sandbox NIC** (STR-103): it
+    /// advertised OVN, the jailer barrier, and a guest image that configures
+    /// the interface, AND speaks a wire protocol that carries the NIC's
+    /// security groups. Strictly stronger than `supportsSandboxWorkloads` — a
+    /// host with only that runs network-free sandboxes and nothing else.
+    let supportsSandboxNetworking: Bool
     /// Whether this agent can give a guest an emulated TPM 2.0 (issue #565):
     /// it advertised swtpm AND speaks a wire protocol that carries the machine
     /// profile. Same two-signal rule as `supportsSandboxWorkloads`.
@@ -85,6 +91,7 @@ struct SchedulableAgent: Sendable {
         siteID: UUID? = nil,
         wireProtocolVersion: Int? = nil,
         supportsSandboxWorkloads: Bool = false,
+        supportsSandboxNetworking: Bool = false,
         supportsVTPM: Bool = false,
         supportsMachineProfile: Bool = false,
         supportsGraphicsConsole: Bool = false
@@ -105,6 +112,7 @@ struct SchedulableAgent: Sendable {
         self.siteID = siteID
         self.wireProtocolVersion = wireProtocolVersion
         self.supportsSandboxWorkloads = supportsSandboxWorkloads
+        self.supportsSandboxNetworking = supportsSandboxNetworking
         self.supportsVTPM = supportsVTPM
         self.supportsMachineProfile = supportsMachineProfile
         self.supportsGraphicsConsole = supportsGraphicsConsole
@@ -162,6 +170,7 @@ struct SchedulableAgent: Sendable {
             siteID: siteID,
             wireProtocolVersion: wireProtocolVersion,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
+            supportsSandboxNetworking: supportsSandboxNetworking,
             supportsVTPM: supportsVTPM,
             supportsMachineProfile: supportsMachineProfile,
             supportsGraphicsConsole: supportsGraphicsConsole
@@ -195,6 +204,13 @@ struct VMPlacementRequirements: Sendable {
     /// support alone is not enough, since a Firecracker-capable agent may
     /// lack the runtime or the guest base image.
     let requiresSandboxRuntime: Bool
+    /// Whether the sandbox has a NIC, which only agents advertising sandbox
+    /// networking can realize (STR-103). Hard constraint, and refusal is the
+    /// deliberate choice over the alternative: an agent without it boots the
+    /// sandbox with no interface at all while the API keeps reporting the
+    /// address IPAM allocated, and a workload that is silently unreachable is
+    /// worse than one that never started.
+    let requiresSandboxNetworking: Bool
     /// Whether the VM asks for an emulated TPM 2.0 (issue #565). Hard
     /// constraint: only agents with swtpm can realize one, and a guest that
     /// silently loses its TPM fails Windows setup with nothing in the API
@@ -220,6 +236,7 @@ struct VMPlacementRequirements: Sendable {
         requiresInterVMNetworking: Bool = false,
         siteID: UUID? = nil,
         requiresSandboxRuntime: Bool = false,
+        requiresSandboxNetworking: Bool = false,
         requiresVTPM: Bool = false,
         requiresSecureBoot: Bool = false,
         requiresGraphicsConsole: Bool = false
@@ -232,6 +249,7 @@ struct VMPlacementRequirements: Sendable {
         self.requiresInterVMNetworking = requiresInterVMNetworking
         self.siteID = siteID
         self.requiresSandboxRuntime = requiresSandboxRuntime
+        self.requiresSandboxNetworking = requiresSandboxNetworking
         self.requiresVTPM = requiresVTPM
         self.requiresSecureBoot = requiresSecureBoot
         self.requiresGraphicsConsole = requiresGraphicsConsole
@@ -246,6 +264,7 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case architectureMismatch(required: CPUArchitecture)
     case networkCapabilityUnsatisfied
     case sandboxRuntimeUnsatisfied(eligibleAgents: Int)
+    case sandboxNetworkingUnsatisfied(eligibleAgents: Int)
     case vtpmUnsatisfied(eligibleAgents: Int)
     case machineProfileUnsatisfied(eligibleAgents: Int)
     case graphicsConsoleUnsatisfied(eligibleAgents: Int)
@@ -277,6 +296,12 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
         case .sandboxRuntimeUnsatisfied(let eligibleAgents):
             return
                 "No eligible agent advertises the sandbox runtime (\(eligibleAgents) Firecracker-capable agent(s) checked) — each needs a working Firecracker/KVM setup and the sandbox guest base image installed"
+        case .sandboxNetworkingUnsatisfied(let eligibleAgents):
+            return
+                "No eligible agent can give a sandbox a NIC (\(eligibleAgents) sandbox-capable agent(s) checked) "
+                + "— each needs `network_mode = \"ovn\"` with a connected OVN/OVS, "
+                + "`sandbox_jailer_mode = \"required\"` satisfied, and a sandbox guest image new enough to "
+                + "configure its interface; create the sandbox without a network to place it anyway"
         case .vtpmUnsatisfied(let eligibleAgents):
             return
                 "No eligible agent can provide a TPM 2.0 (\(eligibleAgents) agent(s) checked) — install swtpm on a "
@@ -566,7 +591,7 @@ final class SchedulerService: @unchecked Sendable {
         // explicitly at registration (Firecracker/KVM usable plus the guest
         // base image on disk) — hypervisor support alone doesn't prove it,
         // and neither does the wire protocol version (issue #415).
-        let runtimeCapable: [SchedulableAgent]
+        var runtimeCapable: [SchedulableAgent]
         if requirements.requiresSandboxRuntime {
             runtimeCapable = hypervisorCapable.filter { $0.supportsSandboxWorkloads }
             guard !runtimeCapable.isEmpty else {
@@ -574,6 +599,20 @@ final class SchedulerService: @unchecked Sendable {
             }
         } else {
             runtimeCapable = hypervisorCapable
+        }
+
+        // A sandbox with a NIC needs more than the runtime (STR-103): OVN, the
+        // jailer barrier the NIC's namespace belongs to, and a guest image that
+        // configures the interface. Categorical and refused rather than
+        // degraded, unlike every other network constraint here — a sandbox
+        // placed without its NIC boots unreachable while the API still shows
+        // the address IPAM allocated, and nothing later notices.
+        if requirements.requiresSandboxNetworking {
+            let networkingCapable = runtimeCapable.filter { $0.supportsSandboxNetworking }
+            guard !networkingCapable.isEmpty else {
+                throw SchedulerError.sandboxNetworkingUnsatisfied(eligibleAgents: runtimeCapable.count)
+            }
+            runtimeCapable = networkingCapable
         }
 
         // Secure Boot and vTPM both ride `VMSpec.machine`, which only a v17+

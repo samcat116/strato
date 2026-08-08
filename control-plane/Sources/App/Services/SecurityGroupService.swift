@@ -362,18 +362,58 @@ enum SecurityGroupService {
     /// eager-loaded; an unloaded relation reads as "no NIC", which is the same
     /// contract `SandboxDetailResponse.securityGroupIds` already keeps — the
     /// two are shown side by side, so they must agree about what silence means.
+    ///
+    /// One question more than the VM path asks (STR-103): a host that does not
+    /// advertise sandbox networking is never sent the NIC's `NetworkSpec`, so
+    /// there is no logical switch port to join a port group and no version or
+    /// site authority can change that. `false`, not nil — the groups are
+    /// attached and demonstrably enforce nothing, which is the same answer an
+    /// unauthored site gets.
     static func sandboxEnforcement(for sandbox: Sandbox, on db: Database) async throws -> Bool? {
         // No interface, nothing to filter. Nil is "unknown", not "unenforced" —
         // the same distinction an unplaced VM gets.
         guard let interfaces = sandbox.$networkInterfaces.value, !interfaces.isEmpty else { return nil }
-        // The NIC is not on the wire, so no port exists to join a port group,
-        // whatever the host's version says. Returning here also means the whole
-        // check costs zero queries today, which is why the sandbox *list*
-        // endpoint can call it per row without the per-host/per-site memoization
-        // `enforcementByVM` needs. STR-103 removes this clause — and must add
-        // that batching in the same change.
-        guard SandboxSpecBuilder.guestNetworkingSupported else { return false }
-        return enforcement(of: try await realization(forHypervisorId: sandbox.hypervisorId, on: db))
+        guard let hypervisorId = sandbox.hypervisorId,
+            let hostID = UUID(uuidString: hypervisorId),
+            let host = try await Agent.find(hostID, on: db)
+        else { return nil }
+        guard host.sandboxNetworkingCapable else { return false }
+        return enforcement(of: try await realization(host: host, on: db))
+    }
+
+    /// Whether each sandbox's security groups are enforced, keyed by sandbox
+    /// id — the batched form of ``sandboxEnforcement(for:on:)``, on the same
+    /// terms as ``enforcementByVM(_:on:)``: resolved once per distinct host and
+    /// once per distinct site, with a sandbox absent from the result whenever
+    /// the answer is "unknown" (no NIC, unplaced, or a `hypervisorId` naming a
+    /// row that no longer exists).
+    ///
+    /// The list endpoint needs this now that the verdict reads the database.
+    /// Before STR-103 it short-circuited on a fleet-wide constant and cost no
+    /// query at all, which is why the list path could afford it per row.
+    static func enforcementBySandbox(_ sandboxes: [Sandbox], on db: Database) async throws -> [UUID: Bool] {
+        let hostIDsBySandbox: [UUID: UUID] = sandboxes.reduce(into: [:]) { map, sandbox in
+            guard let sandboxID = sandbox.id,
+                let interfaces = sandbox.$networkInterfaces.value, !interfaces.isEmpty,
+                let hypervisorId = sandbox.hypervisorId,
+                let hostID = UUID(uuidString: hypervisorId)
+            else { return }
+            map[sandboxID] = hostID
+        }
+        guard !hostIDsBySandbox.isEmpty else { return [:] }
+
+        let enforcedByHost = try await enforcementByHost(
+            ids: Set(hostIDsBySandbox.values), on: db,
+            // A host that cannot realize a sandbox NIC has no port to filter,
+            // whatever its site authority says — see `sandboxEnforcement`.
+            override: { $0.sandboxNetworkingCapable ? nil : false })
+
+        var result: [UUID: Bool] = [:]
+        for (sandboxID, hostID) in hostIDsBySandbox {
+            guard let enforced = enforcedByHost[hostID] else { continue }
+            result[sandboxID] = enforced
+        }
+        return result
     }
 
     private static func enforcement(of realization: Realization) -> Bool? {
@@ -404,13 +444,42 @@ enum SecurityGroupService {
         }
         guard !hostIDsByVM.isEmpty else { return [:] }
 
+        let enforcedByHost = try await enforcementByHost(ids: Set(hostIDsByVM.values), on: db)
+
+        var result: [UUID: Bool] = [:]
+        for (vmID, hostID) in hostIDsByVM {
+            // A hypervisorId naming an agent row that no longer exists reads as
+            // unplaced: better "unknown" than a claim in either direction.
+            guard let enforced = enforcedByHost[hostID] else { continue }
+            result[vmID] = enforced
+        }
+        return result
+    }
+
+    /// The enforcement verdict per host, memoized per site — the shared half of
+    /// both batch paths.
+    ///
+    /// `override` gets first refusal on each host, for a workload-family fact
+    /// that settles the answer before topology authority is even relevant (the
+    /// sandbox NIC's capability gate is the only one today). Returning nil from
+    /// it means "no opinion, resolve normally".
+    ///
+    /// Hosts absent from the result are hosts whose row was not found; their
+    /// workloads read as unplaced.
+    private static func enforcementByHost(
+        ids: Set<UUID>, on db: Database, override: (Agent) -> Bool? = { _ in nil }
+    ) async throws -> [UUID: Bool] {
         let hosts = try await Agent.query(on: db)
-            .filter(\.$id ~~ Array(Set(hostIDsByVM.values)))
+            .filter(\.$id ~~ Array(ids))
             .all()
         var enforcedByHost: [UUID: Bool] = [:]
         var authorityBySite: [UUID: SiteNetworkAuthority.Authority] = [:]
         for host in hosts {
             guard let hostID = host.id else { continue }
+            if let settled = override(host) {
+                enforcedByHost[hostID] = settled
+                continue
+            }
             let authority: SiteNetworkAuthority.Authority
             if let siteID = host.$site.id, let cached = authorityBySite[siteID] {
                 authority = cached
@@ -426,14 +495,6 @@ enum SecurityGroupService {
             }
             enforcedByHost[hostID] = enforcement(of: realization(host: host, authority: authority))
         }
-
-        var result: [UUID: Bool] = [:]
-        for (vmID, hostID) in hostIDsByVM {
-            // A hypervisorId naming an agent row that no longer exists reads as
-            // unplaced: better "unknown" than a claim in either direction.
-            guard let enforced = enforcedByHost[hostID] else { continue }
-            result[vmID] = enforced
-        }
-        return result
+        return enforcedByHost
     }
 }

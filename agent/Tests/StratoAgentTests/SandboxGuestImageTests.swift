@@ -82,16 +82,65 @@ struct SandboxGuestImageTests {
         }
     }
 
-    @Test("an unsupported schema version is rejected")
+    @Test("a schema version past what this build reads is rejected")
     func unsupportedSchema() throws {
-        let manifest = multiArchManifest.replacingOccurrences(of: "\"schemaVersion\": 1", with: "\"schemaVersion\": 2")
+        let manifest = multiArchManifest.replacingOccurrences(of: "\"schemaVersion\": 1", with: "\"schemaVersion\": 3")
         let dir = try makeGuestDir(manifest: manifest)
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
         #expect {
             try SandboxGuestImage.resolve(atDirectory: dir, architecture: .x86_64)
         } throws: { error in
-            error as? SandboxGuestImageError == .unsupportedSchema(2)
+            error as? SandboxGuestImageError == .unsupportedSchema(3)
+        }
+    }
+
+    /// The whole point of the range: the guest image is installed separately
+    /// from the agent, so "agent newer than image" is the normal rollout state.
+    /// A v1 manifest must keep resolving, and must read as advertising nothing
+    /// rather than as an error.
+    @Test("a v1 manifest still resolves, and advertises no capabilities")
+    func schemaV1IsStillAccepted() throws {
+        let dir = try makeGuestDir(manifest: multiArchManifest)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let image = try SandboxGuestImage.resolve(atDirectory: dir, architecture: .x86_64)
+        #expect(image.capabilities.isEmpty)
+        #expect(image.supportsNetworking == false)
+        #expect(try SandboxGuestImage.capabilities(atDirectory: dir).isEmpty)
+    }
+
+    @Test("a v2 manifest surfaces its capability list")
+    func schemaV2CarriesCapabilities() throws {
+        let manifest =
+            multiArchManifest
+            .replacingOccurrences(of: "\"schemaVersion\": 1", with: "\"schemaVersion\": 2")
+            .replacingOccurrences(
+                of: "\"gitSHA\": \"abc1234\",", with: "\"gitSHA\": \"abc1234\", \"capabilities\": [\"network\"],")
+        let dir = try makeGuestDir(manifest: manifest)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let image = try SandboxGuestImage.resolve(atDirectory: dir, architecture: .x86_64)
+        #expect(image.supportsNetworking)
+        #expect(try SandboxGuestImage.capabilities(atDirectory: dir) == ["network"])
+    }
+
+    /// The probe reads capabilities on every registration and must not need the
+    /// host arch's artifacts on disk to answer — that is a different question,
+    /// owned by the base sandbox capability.
+    @Test("capabilities are readable without any artifact present")
+    func capabilitiesNeedNoArtifacts() throws {
+        let manifest =
+            multiArchManifest
+            .replacingOccurrences(of: "\"schemaVersion\": 1", with: "\"schemaVersion\": 2")
+            .replacingOccurrences(
+                of: "\"gitSHA\": \"abc1234\",", with: "\"gitSHA\": \"abc1234\", \"capabilities\": [\"network\"],")
+        let dir = try makeGuestDir(manifest: manifest, files: [])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        #expect(try SandboxGuestImage.capabilities(atDirectory: dir) == ["network"])
+        #expect(throws: SandboxGuestImageError.self) {
+            try SandboxGuestImage.resolve(atDirectory: dir, architecture: .x86_64)
         }
     }
 
