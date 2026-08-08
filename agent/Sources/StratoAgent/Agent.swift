@@ -1263,15 +1263,31 @@ actor Agent {
         // the host probe alone is necessary but not sufficient.
         let sandboxProbe: SandboxRuntimeProbe.Report
         if isSimulationMode {
-            sandboxProbe = SandboxRuntimeProbe.Report(capable: true)
+            // Networking included, on the same terms as the faked
+            // `ovn_networking` above: a simulated agent exists to model a full
+            // Linux host to the *scheduler*, and withholding this would quietly
+            // remove networked sandboxes from everything simulation covers
+            // (placement, assembly, reconciliation). Nothing is realized —
+            // `sandboxNICPlacement` short-circuits to the host namespace and the
+            // orchestrator is a no-op — so the promise of "no real side effects"
+            // holds.
+            sandboxProbe = SandboxRuntimeProbe.Report(capable: true, networkingUnavailabilityReason: nil)
         } else {
             sandboxProbe = SandboxRuntimeProbe.probe(
                 firecracker: hypervisors.first { $0.type == .firecracker },
                 guestImagePath: sandboxGuestImagePath,
-                jailerBlockedReason: sandboxJailerBlockedReason
+                jailerBlockedReason: sandboxJailerBlockedReason,
+                jailsNewSandboxes: sandboxJailNewSandboxes,
+                networkCapability: networkCapability
             )
         }
         let sandboxCapable = sandboxProbe.capable && sandboxRuntime != nil
+        // Sandbox networking (STR-103) is a second, strictly stronger signal on
+        // the same probe: OVN, the jailer, and a guest image that brings the
+        // interface up. Reported separately because the control plane needs
+        // both answers — it places NIC-less sandboxes on a host with only the
+        // first, and withholds `SandboxSpec.network` from it.
+        let sandboxNetworkingCapable = sandboxCapable && sandboxProbe.networkingCapable
         if sandboxCapable {
             capabilities.append(SandboxRuntimeProbe.capabilityName)
             // The sandbox-snapshot capture capability rides the same gate, and
@@ -1294,6 +1310,22 @@ actor Agent {
             #endif
         }
 
+        // Logged at warning, unlike the capability above: a host that runs no
+        // sandboxes at all is an ordinary configuration, but one that runs them
+        // and cannot network them will silently attract only NIC-less
+        // placements, which is the kind of half-working state an operator
+        // should be told about rather than have to infer from a scheduler
+        // refusal elsewhere in the fleet.
+        if sandboxNetworkingCapable {
+            capabilities.append(SandboxRuntimeProbe.networkingCapabilityName)
+        } else if sandboxCapable, let reason = sandboxProbe.networkingUnavailabilityReason {
+            logger.warning(
+                "This host runs sandboxes but cannot give them a NIC; not advertising sandbox networking",
+                metadata: [
+                    "reason": .string(reason)
+                ])
+        }
+
         // vTPM capability: the typed flag is what the scheduler gates on; the
         // capability string is display-only, matching the sandbox pattern.
         if tpmAvailable {
@@ -1311,6 +1343,7 @@ actor Agent {
             hypervisors: hypervisors,
             networkCapability: networkCapability,
             sandboxCapable: sandboxCapable,
+            sandboxNetworkingCapable: sandboxNetworkingCapable,
             tpmCapable: tpmAvailable,
             operatingSystem: OperatingSystem.current,
             hostInfo: HostInfoProbe.gather(),
@@ -4603,6 +4636,12 @@ extension Agent: ReconcileActuator {
     /// new sandboxes: the jail layout is built unconditionally precisely so a
     /// previous life's jailed leftovers can still be cleaned up.
     private func sandboxNICPlacement(sandboxId: String) throws -> NICPlacement {
+        // A simulated agent jails nothing and realizes nothing, but it does
+        // advertise sandbox networking so the scheduler treats it as a full
+        // host (STR-103). The host namespace is the honest answer for it: the
+        // orchestrator is a no-op either way, and refusing here would make the
+        // advertised capability a lie the very first time it was used.
+        if isSimulationMode { return .hostNamespace }
         guard sandboxJailNewSandboxes, let jailerConfig = sandboxJailerConfig else {
             throw SandboxRuntimeError.networkingUnsupported(
                 "a sandbox NIC lives in the jail's network namespace, and this agent creates sandboxes "

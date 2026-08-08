@@ -78,11 +78,18 @@ done
 # strips the trailing newline, so the accumulated string ends with a bare ",".
 joined="$(printf '%s,\n' "${entries[@]}")"
 joined="${joined%,}"
+# `capabilities` (manifest schema v2, STR-103) is what the agent reads to decide
+# whether it may advertise sandbox networking. The guest image is installed
+# separately from the agent binary, so this is the only evidence the agent has
+# that the init in this initramfs understands the config drive's `network`
+# block; without it the control plane withholds every sandbox NIC from this
+# host rather than shipping a document the guest would refuse.
 cat > "${OUT_DIR}/guest.json" <<JSON
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "version": "${VERSION}",
   "gitSHA": "${GIT_SHA}",
+  "capabilities": ["network"],
   "artifacts": [
 ${joined}
   ]

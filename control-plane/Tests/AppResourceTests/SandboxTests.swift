@@ -68,6 +68,7 @@ final class SandboxTests {
         sandbox: Sandbox? = nil,
         named agentName: String = "sandbox-agent",
         sandboxCapable: Bool? = nil,
+        sandboxNetworkingCapable: Bool? = nil,
         protocolVersion: Int? = WireProtocol.currentVersion,
         architecture: CPUArchitecture? = nil
     ) async throws -> String {
@@ -82,8 +83,13 @@ final class SandboxTests {
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
             architecture: architecture,
+            // A sandbox NIC is OVN-only, so an agent that can realize one is by
+            // construction an overlay host — the two travel together here so a
+            // test never has to remember to set both.
+            networkCapability: (sandboxNetworkingCapable ?? false) ? .overlay : nil,
             protocolVersion: protocolVersion,
-            sandboxCapable: sandboxCapable
+            sandboxCapable: sandboxCapable,
+            sandboxNetworkingCapable: sandboxNetworkingCapable
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let agentUUID = try await app.agentService.registerAgent(
@@ -242,6 +248,96 @@ final class SandboxTests {
         }
     }
 
+    // MARK: - Sandbox networking gating (STR-103)
+
+    @Test("Registration persists the sandbox-networking capability separately, and its absence clears it")
+    func registrationPersistsSandboxNetworkingCapability() async throws {
+        try await withSandboxTestApp { app, _, _, _, _ in
+            let agentId = try await registerAgent(
+                app: app, named: "networked-agent", sandboxCapable: true, sandboxNetworkingCapable: true)
+            let registered = try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            #expect(registered?.sandboxNetworkingCapable == true)
+
+            // A guest-image rollback, OVN going down, or the jailer no longer
+            // resolving must be able to take the flag back down. The runtime
+            // capability is unaffected — that is the whole reason these are two
+            // signals rather than one.
+            _ = try await registerAgent(
+                app: app, named: "networked-agent", sandboxCapable: true, sandboxNetworkingCapable: nil)
+            let reRegistered = try await Agent.find(UUID(uuidString: agentId), on: app.db)
+            #expect(reRegistered?.sandboxNetworkingCapable == false)
+            #expect(reRegistered?.sandboxCapable == true)
+        }
+    }
+
+    @Test("createSandbox refuses to place a networked sandbox on a fleet that cannot realize a NIC")
+    func createSandboxRefusesNetworkedSandboxOnIncapableFleet() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            // Runs sandboxes, cannot network them — e.g. an unjailed host, or
+            // one whose installed guest image predates STR-101.
+            _ = try await registerAgent(
+                app: app, named: "no-sandbox-net", sandboxCapable: true, sandboxNetworkingCapable: nil)
+
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            try await SandboxNetworkInterface(
+                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: "00:0c:29:ab:cd:22"
+            ).save(on: app.db)
+
+            do {
+                try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+                Issue.record("Expected schedulingFailed error")
+            } catch let error as AgentServiceError {
+                guard case .schedulingFailed(let reason) = error else {
+                    Issue.record("Expected schedulingFailed, got \(error)")
+                    return
+                }
+                #expect(reason.contains("sandbox a NIC"))
+            }
+
+            // Refused, not degraded: booting it unnetworked would leave the API
+            // reporting an address the workload never gets.
+            let unplaced = try await Sandbox.find(sandbox.id, on: app.db)
+            #expect(unplaced?.hypervisorId == nil)
+        }
+    }
+
+    /// The same fleet still hosts sandboxes — the constraint is a property of
+    /// the workload's NIC, not of the host's ability to run sandboxes at all.
+    @Test("A network-free sandbox still places on an agent that cannot realize a NIC")
+    func createSandboxPlacesNetworkFreeOnNetworklessAgent() async throws {
+        try await withSandboxTestApp { app, _, _, sandbox, _ in
+            let agentId = try await registerAgent(
+                app: app, named: "no-sandbox-net", sandboxCapable: true, sandboxNetworkingCapable: nil)
+
+            try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+
+            let placed = try await Sandbox.find(sandbox.id, on: app.db)
+            #expect(placed?.hypervisorId == agentId)
+        }
+    }
+
+    @Test("createSandbox places a networked sandbox on the agent that advertises sandbox networking")
+    func createSandboxPlacesNetworkedOnCapableAgent() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            _ = try await registerAgent(
+                app: app, named: "no-sandbox-net", sandboxCapable: true, sandboxNetworkingCapable: nil)
+            let capableId = try await registerAgent(
+                app: app, named: "sandbox-net", sandboxCapable: true, sandboxNetworkingCapable: true)
+
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            try await SandboxNetworkInterface(
+                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: "00:0c:29:ab:cd:33"
+            ).save(on: app.db)
+
+            try await app.agentService.createSandbox(sandbox: sandbox, db: app.db)
+
+            let placed = try await Sandbox.find(sandbox.id, on: app.db)
+            #expect(placed?.hypervisorId == capableId)
+        }
+    }
+
     // MARK: - Create
 
     @Test("POST /api/sandboxes returns 202 with a pending create operation")
@@ -301,6 +397,10 @@ final class SandboxTests {
                 sandbox: source,
                 named: "fork-agent",
                 sandboxCapable: true,
+                // The fork below names a network, so it gets a NIC — and since
+                // STR-103 that constrains placement to a host that can realize
+                // one.
+                sandboxNetworkingCapable: true,
                 architecture: CPUArchitecture.current)
 
             source.imageDigest = "sha256:" + String(repeating: "a", count: 64)
@@ -1213,11 +1313,12 @@ final class SandboxTests {
         }
     }
 
-    @Test("the desired-state assembly omits the NIC from the wire spec until guest networking lands")
-    func assemblyOmitsNICSpec() async throws {
+    @Test("the desired-state assembly puts a NIC on the wire for a sandbox-networking agent")
+    func assemblyCarriesNICSpecForCapableAgent() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
             let network = try await self.projectNetwork(project: project, on: app.db)
-            let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
+            let agentId = try await self.registerAgent(
+                app: app, sandbox: sandbox, sandboxCapable: true, sandboxNetworkingCapable: true)
 
             // Attach a NIC with an allocated address directly.
             let nic = SandboxNetworkInterface(
@@ -1229,22 +1330,80 @@ final class SandboxTests {
                 address: "192.168.1.7", prefixLength: 24, gateway: network.gateway
             ).save(on: app.db)
 
-            // `guestNetworkingSupported` is fleet-wide while the capability is
-            // per-agent (STR-103), so the NIC row must stay off the wire even
-            // when it holds an address — and even though its security-group
-            // ids are now resolved and passed to the builder (STR-102).
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first)
-            #expect(entry.spec.network == nil)
+            let spec = try #require(entry.spec.network)
+            #expect(spec.macAddress == "00:0c:29:ab:cd:ef")
+            #expect(spec.ipAddress == "192.168.1.7")
+            #expect(spec.network == network.name)
 
-            // The sandbox's network is still realized on its host (scope
-            // computation is unchanged), ready for when guest networking lands.
+            // The sandbox's network is realized on its host too.
             #expect(message.networks.contains { $0.name == network.name })
         }
     }
 
-    @Test("A freshly created sandbox's wire spec has no network, so it can boot")
-    func createdSandboxWireSpecHasNoNetwork() async throws {
+    /// The upgrade hazard STR-103 exists for. Sandbox NICs have been allocated
+    /// control-plane-side since #416 while never reaching the wire, so a
+    /// control plane that shipped them to every agent at once would hand a NIC
+    /// to hosts whose guest image predates the config drive's `network` block —
+    /// failing every sandbox create there, permanently.
+    @Test("the assembly withholds the NIC from an agent that does not advertise sandbox networking")
+    func assemblyWithholdsNICFromIncapableAgent() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            let agentId = try await self.registerAgent(
+                app: app, sandbox: sandbox, sandboxCapable: true, sandboxNetworkingCapable: nil)
+
+            let nic = SandboxNetworkInterface(
+                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: "00:0c:29:ab:cd:ee")
+            try await nic.save(on: app.db)
+            try await SandboxInterfaceAddress(
+                interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
+                address: "192.168.1.8", prefixLength: 24, gateway: network.gateway
+            ).save(on: app.db)
+
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let entry = try #require(message.sandboxes.first)
+            #expect(entry.spec.network == nil)
+            // The sandbox itself is still desired state; only its NIC is held back.
+            #expect(entry.sandboxId == sandbox.id)
+        }
+    }
+
+    /// The assembler's gate must not be weaker than the scheduler's, which
+    /// folds the capability with a v20+ protocol. A capable-but-pre-v20 agent
+    /// is refused at placement; if assembly sent it the NIC anyway the spec
+    /// would arrive with `securityGroupIds: nil` — the membership map is empty
+    /// below v20 — and the port would come up *unfiltered* while the API
+    /// reports its groups. Unreachable with a stock agent, since anything
+    /// advertising the capability is built at `currentVersion`; the two gates
+    /// disagreeing is what this pins.
+    @Test("the assembly withholds the NIC from a capable agent that predates security groups")
+    func assemblyWithholdsNICFromPreV20CapableAgent() async throws {
+        try await withSandboxTestApp { app, _, project, sandbox, _ in
+            let network = try await self.projectNetwork(project: project, on: app.db)
+            let agentId = try await self.registerAgent(
+                app: app, sandbox: sandbox, sandboxCapable: true, sandboxNetworkingCapable: true,
+                protocolVersion: WireProtocol.securityGroupsMinimumVersion - 1)
+
+            let nic = SandboxNetworkInterface(
+                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: "00:0c:29:ab:cd:dd")
+            try await nic.save(on: app.db)
+            try await SandboxInterfaceAddress(
+                interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
+                address: "192.168.1.10", prefixLength: 24, gateway: network.gateway
+            ).save(on: app.db)
+
+            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let entry = try #require(message.sandboxes.first)
+            #expect(entry.spec.network == nil)
+        }
+    }
+
+    @Test("A freshly created sandbox converges with the NIC its create reserved")
+    func createdSandboxWireSpecCarriesItsNetwork() async throws {
         try await withSandboxTestApp { app, _, project, _, token in
             let network = try await self.projectNetwork(project: project, on: app.db)
             var accepted: AcceptedSandbox?
@@ -1266,38 +1425,30 @@ final class SandboxTests {
             // the manual placement below.
             try await self.pollSandboxDegraded(sandboxID, on: app.db)
             let created = try #require(await Sandbox.find(sandboxID, on: app.db))
-            let agentId = try await self.registerAgent(app: app, sandbox: created)
+            let agentId = try await self.registerAgent(
+                app: app, sandbox: created, sandboxCapable: true, sandboxNetworkingCapable: true)
 
-            // Agents can realize a sandbox NIC end to end now — STR-100
-            // attaches one into the jail's network namespace, STR-101 has the
-            // guest configure it, STR-102 gives it security groups. One thing
-            // still keeps it off the wire: `guestNetworkingSupported` is
-            // fleet-wide while the capability is per-agent, and an unjailed or
-            // older agent would fail every placement it received. STR-103
-            // replaces the flag with a per-agent gate; until then a freshly
-            // created sandbox converges only with no NIC on the wire.
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let entry = try #require(message.sandboxes.first { $0.sandboxId == sandboxID })
-            #expect(entry.spec.network == nil)
+            let spec = try #require(entry.spec.network)
 
-            // The create path still reserved the NIC and its address —
-            // control-plane-side only, stable for when guest networking lands.
             let nic = try #require(
                 await SandboxNetworkInterface.query(on: app.db)
                     .filter(\.$sandbox.$id == sandboxID)
                     .with(\.$addresses)
                     .first())
-            #expect(nic.ipv4Address != nil)
+            #expect(spec.ipAddress == nic.ipv4Address?.address)
+            // The default group the create transaction attached rides with it,
+            // so the port is filtered from the moment it exists (STR-102).
+            #expect(spec.securityGroupIds?.isEmpty == false)
         }
     }
 
-    /// The seam STR-103 flips, from both sides: the new `securityGroupIds`
-    /// parameter must not become a way around the flag, and the field mapping
-    /// underneath it must actually carry the ids — otherwise the flip would
-    /// land sandbox ports unmanaged, which is the one outcome STR-102 exists
-    /// to prevent.
-    @Test("Security-group ids reach a sandbox NIC's wire spec, but the wire gate still withholds it")
-    func sandboxNICSpecCarriesSecurityGroupsBehindTheGate() async throws {
+    /// Both sides of the seam: the per-agent gate is the outermost check, and
+    /// the mapping underneath it carries the security-group ids — otherwise a
+    /// sandbox port would come up unmanaged, the one outcome STR-102 prevents.
+    @Test("Security-group ids reach a sandbox NIC's wire spec, and the per-agent gate still withholds it")
+    func sandboxNICSpecCarriesSecurityGroups() async throws {
         try await withSandboxTestApp { app, _, project, sandbox, _ in
             let network = try await self.projectNetwork(project: project, on: app.db)
             let nic = SandboxNetworkInterface(
@@ -1311,21 +1462,23 @@ final class SandboxTests {
             try await nic.$addresses.load(on: app.db)
 
             let groupIDs = [UUID(), UUID()]
-            // The gate is still the outermost check: ids or no ids.
-            #expect(SandboxSpecBuilder.guestNetworkingSupported == false)
+            // The gate is the outermost check: ids or no ids.
             #expect(
                 SandboxSpecBuilder.networkSpec(
-                    from: nic, network: network, securityGroupIds: groupIDs) == nil)
+                    from: nic, network: network, securityGroupIds: groupIDs,
+                    agentRealizesSandboxNICs: false) == nil)
 
-            // The mapping below it is live, and generic over `NetworkAddressable`
-            // — the same call the builder makes once the gate opens.
-            let spec = NetworkSpec.build(
-                interface: nic, network: network, securityGroupIds: groupIDs)
+            let spec = try #require(
+                SandboxSpecBuilder.networkSpec(
+                    from: nic, network: network, securityGroupIds: groupIDs,
+                    agentRealizesSandboxNICs: true))
             #expect(spec.securityGroupIds == groupIDs)
             #expect(spec.macAddress == nic.macAddress)
             #expect(spec.ipAddress == "192.168.1.9")
             // Nil stays nil: "unmanaged", never "no groups".
-            #expect(NetworkSpec.build(interface: nic, network: network).securityGroupIds == nil)
+            #expect(
+                SandboxSpecBuilder.networkSpec(
+                    from: nic, network: network, agentRealizesSandboxNICs: true)?.securityGroupIds == nil)
         }
     }
 

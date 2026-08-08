@@ -56,7 +56,19 @@ let package = Package(
         // protocol over NIO rather than linking libvirt's C library, so it has
         // no system dependency, and its `.macOS(.v15)` floor matches this
         // package's exactly. Only the *registration* is platform-gated.
-        .package(url: "https://github.com/samcat116/swift-libvirt.git", from: "0.1.0"),
+        //
+        // 0.1.1 is a floor, not a preference (STR-190): before it, XDR `char`
+        // and `unsigned char` were decoded as byte strings rather than as the
+        // four-byte scalars they are, so `domainGetInfo` never decoded at all —
+        // host reservations read zero and every resize failed.
+        //
+        // `.upToNextMinor` rather than `from:`, which SwiftPM reads as
+        // `.upToNextMajor` with no special case for `0.x` — so `from: "0.1.1"`
+        // would let a `swift package update` take `0.2.0` unattended, from the
+        // very upstream whose pre-1.0 decoding just changed shape under us. A
+        // minor bump here should be somebody's decision.
+        .package(
+            url: "https://github.com/samcat116/swift-libvirt.git", .upToNextMinor(from: "0.1.1")),
     ],
     targets: [
         // Core library with testable code (no native-library dependencies)

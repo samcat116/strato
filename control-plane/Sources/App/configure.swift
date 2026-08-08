@@ -811,6 +811,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddVolumeIOLimits())
     app.migrations.add(AddThrottleOperationKind())
 
+    // STR-103: per-agent sandbox-networking capability, the gate that lets a
+    // sandbox's NIC reach the wire at all.
+    app.migrations.add(AddSandboxNetworkingCapableToAgent())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.

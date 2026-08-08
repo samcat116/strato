@@ -363,24 +363,17 @@ struct SecurityGroupController: RouteCollection {
         // assembly omits the fields for old agents either way (documented
         // mixed-fleet semantics).
         //
-        // Sandboxes still skip the gate, but no longer because nothing about
-        // them reaches the wire — since STR-102 their groups ride the topology
-        // authority's closure. A sandbox needs *two* predicates to be filtered:
-        // a v20 host, and its NIC actually on the wire. The second is
-        // per-agent and does not exist yet
-        // (`SandboxSpecBuilder.guestNetworkingSupported`), so enforcing only
-        // the version half here would refuse attaches that are still inert
-        // while passing a v20 agent that cannot realize a sandbox NIC at all.
-        // STR-103 owns the combined gate.
-        //
-        // What the skip costs meanwhile, stated so STR-103 inherits it: an
-        // attach against a sandbox on a **pre-v20 host** is accepted and
-        // records a membership whose group that host's site will never realize.
-        // Less honest than before, when no sandbox attach achieved anything
-        // anywhere — but `securityGroupsEnforced` reports false either way
-        // today, so the API does not currently claim otherwise.
-        if case .vm(let vm) = target.workload {
+        // A sandbox is gated on both halves (STR-103): its host must speak v20
+        // *and* advertise sandbox networking, because only then is the NIC on
+        // the wire with a port to join a port group. Enforcing the version half
+        // alone — which is all that existed before the capability did — would
+        // have refused attaches that were still inert while passing a v20 agent
+        // that cannot realize a sandbox NIC at all.
+        switch target.workload {
+        case .vm(let vm):
             try await Self.assertRealizersSupportSecurityGroups(for: vm, on: req.db)
+        case .sandbox(let sandbox):
+            try await Self.assertSandboxNICCanBeFiltered(sandbox, on: req.db)
         }
 
         // Read-guard-write under one transaction and one per-NIC lock, so the
@@ -614,7 +607,36 @@ struct SecurityGroupController: RouteCollection {
     /// `securityGroupsEnforced` indicator can never disagree. An unplaced VM
     /// passes — see the call site.
     static func assertRealizersSupportSecurityGroups(for vm: VM, on db: Database) async throws {
-        switch try await SecurityGroupService.realization(for: vm, on: db) {
+        try assertRealizersSupportSecurityGroups(try await SecurityGroupService.realization(for: vm, on: db))
+    }
+
+    /// The sandbox twin (STR-103), which asks one question first: a host that
+    /// does not advertise sandbox networking is never sent the NIC's
+    /// `NetworkSpec`, so no port exists for a port group to contain and the
+    /// attach would record filtering that nothing can apply. An unplaced
+    /// sandbox passes, like an unplaced VM — the project's default group is
+    /// attached in the create transaction, long before scheduling.
+    static func assertSandboxNICCanBeFiltered(_ sandbox: Sandbox, on db: Database) async throws {
+        guard let hypervisorId = sandbox.hypervisorId,
+            let hostID = UUID(uuidString: hypervisorId),
+            let host = try await Agent.find(hostID, on: db)
+        else { return }
+        guard host.sandboxNetworkingCapable else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(host.name)' cannot realize a sandbox NIC, so this sandbox's port does not exist "
+                    + "to be filtered; it needs OVN networking, the sandbox jailer, and a guest image that "
+                    + "configures the interface"
+            )
+        }
+        try assertRealizersSupportSecurityGroups(try await SecurityGroupService.realization(host: host, on: db))
+    }
+
+    private static func assertRealizersSupportSecurityGroups(
+        _ realization: SecurityGroupService.Realization
+    ) throws {
+        switch realization {
         case .unplaced:
             return
         case .unauthored(let refusal):
