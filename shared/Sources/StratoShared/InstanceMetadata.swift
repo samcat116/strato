@@ -311,9 +311,10 @@ public struct MetadataNIC: Codable, Sendable, Equatable {
 /// Nil on `InstanceMetadata` is the conservative reading and the only one
 /// available today: no identity is vended.
 public struct IdentityPolicy: Codable, Sendable, Equatable {
-    /// The SPIFFE ID the instance may be issued documents for, e.g.
-    /// `spiffe://strato/project/<uuid>/vm/<uuid>`. Authored by the control
-    /// plane; the agent never derives or extends it.
+    /// The SPIFFE ID the instance may be issued documents for:
+    /// `spiffe://<trust-domain>/vm/<vm-uuid>`, the key the VM's workload
+    /// registration is filed under (STR-55). Authored by the control plane; the
+    /// agent never derives or extends it.
     public let spiffeId: String
     /// Audiences the IMDS may mint JWT-SVIDs for. Empty means none — a guest
     /// asking for an audience outside this list is refused rather than served

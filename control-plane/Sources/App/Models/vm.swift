@@ -621,6 +621,12 @@ struct VMDetailResponse: Content {
     /// `SecurityGroupService.enforcementByVM` from the same realizer lookup
     /// that gates attach/detach, so the two can never disagree.
     let securityGroupsEnforced: Bool?
+    /// The VM's SPIFFE instance identity (STR-55) —
+    /// `spiffe://<trust-domain>/vm/<vm-id>`, the key its workload registration
+    /// is filed under. A *name*, never an authorization: what the identity may
+    /// do comes from role bindings against that principal. Nil when the caller
+    /// did not resolve it, and when an administrator revoked the registration.
+    let spiffeId: String?
     /// How far the VM is from the state the API was last asked to put it in
     /// (STR-142), derived from the generation pair and the agent's reported
     /// convergence progress. A client can refetch the VM until
@@ -630,7 +636,7 @@ struct VMDetailResponse: Content {
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from vm: VM, securityGroupsEnforced: Bool? = nil) {
+    init(from vm: VM, securityGroupsEnforced: Bool? = nil, spiffeId: String? = nil) {
         self.id = vm.id
         self.name = vm.name
         self.description = vm.description
@@ -652,6 +658,7 @@ struct VMDetailResponse: Content {
             .inDeviceOrder
             .map(NetworkInterfaceResponse.init)
         self.securityGroupsEnforced = securityGroupsEnforced
+        self.spiffeId = spiffeId
         self.hostname = vm.hostname
         self.secureBoot = vm.secureBoot
         self.tpmEnabled = vm.tpmEnabled

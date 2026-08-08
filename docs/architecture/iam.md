@@ -760,7 +760,29 @@ never parsed for claims — to what it names:
 - **`workload`** — a directly registered customer workload; the registration
   row itself is the principal (`principal_type = workload`). Registered by
   system administrators (`/api/workload-registrations`), granted per-project
-  via `/api/projects/{id}/workload-grants/{registrationID}`.
+  via `/api/projects/{id}/workload-grants/{registrationID}`. Since STR-55 a
+  VM's **instance identity** is the same kind of row, written by the VM's own
+  create transaction rather than by an operator: `vm_id` links it to the VM,
+  `ON DELETE CASCADE` destroys it with the VM, and `organization_id` is the
+  project's root organization. No `display_name` is stored — a VM-owned row's
+  label is the VM's *current* name, hydrated at read time, because a stored copy
+  would decay from the first rename and the registry listing is exactly where
+  someone goes to ask which VM an identity belongs to.
+
+The registry listing is paged and filterable (`kind`, `spiffeId`, `vmOwned`),
+which it did not need to be while rows were only ever hand-registered. Both of
+instance identity's remediation paths — the `409` a VM create answers when a
+constraint could not be satisfied, and the backfill's stranded-VM warning — send
+an operator to `GET /api/workload-registrations?spiffeId=…`, so an unbounded
+listing of one row per VM would fail exactly where it is needed.
+
+A registration whose `organization_id` is NULL is **external to every
+organization**, so binding a role to it requires `iam:grantExternal`
+(`CrossOrgBindingGate.isExternal`). That is the long-standing answer for a
+principal that cannot be placed, and it stays reachable only defensively:
+`Project.validate()` refuses a project belonging to neither an organization nor a
+folder, and both project-create routes are nested under an organization, so a
+VM's registration resolves an org in practice.
 
 In the Cedar schema, `Workload` and `ServiceAccount` are principal types
 alongside `User`: every role carries four `Grants` sets (users, groups,
@@ -851,19 +873,57 @@ Still future: per-org trust domains for JWT-SVID auth, and the impersonation
 *flow* (minting short-lived credentials) behind the already-modeled
 `serviceaccount:impersonate` permission.
 
-### Guest identities are minted elsewhere (issue #496)
+### Guest identities (issue #496)
 
 The registry describes SPIFFE identities Strato *authorizes*. A separate design
 proposal — [guest-identity](./guest-identity.md) — covers issuing SVIDs to the
-VMs and sandboxes Strato hosts, for their own service-to-service mTLS. It
-reserves `/vm/<uuid>` and `/sandbox/<uuid>` as guest namespaces alongside the
-already-reserved `/agent/`, so a hand-registered URI cannot collide with one a
-guest will later be minted into.
+VMs and sandboxes Strato hosts, for their own service-to-service mTLS. The two
+are deliberately independent, and the invariant above is why: an SVID minted for
+a guest names a workload and grants nothing. Turning it into a principal is an
+ordinary registration — the same `workload_registrations` row and the same role
+bindings as any other machine principal.
 
-The two are deliberately independent, and the invariant above is why: an SVID
-minted for a guest names a workload and grants nothing. Turning it into a
-principal is an ordinary registration — the same `workload_registrations` row and
-the same role bindings as any other machine principal.
+**A VM is that principal today (STR-55).** Every VM is registered under
+`spiffe://<trust-domain>/vm/<vm-id>` (the id lowercased) in its create
+transaction, and the row is cascade-deleted with the VM. The trust domain is the
+organization's own when per-org trust domains are enabled and that domain is one
+the control plane would accept identities from, else the platform domain — a
+**degraded** fallback, not an equivalent one. The choice is made once and the URI
+never moves, so turning `SPIRE_ORG_TRUST_DOMAINS_ENABLED` on later leaves
+existing VMs on the platform domain until a migration re-issues them. The VM's
+SPIFFE ID is published to the guest through the instance metadata service:
+publishable precisely because it is a *name*, with no key, no token and nothing
+that expires. **Sandboxes are not covered yet** (STR-166).
+
+**Identity is not opt-in per VM.** The issue that specified this work asked for
+an opt-in switch, default off, on the reasoning that a VM with an identity lets
+anything inside it act as that principal. That switch was deliberately not built,
+because the invariant this section opens with already provides what it would: a
+registration carries no grants, so until an operator writes a role binding
+against the principal it authenticates and authorizes nothing. A per-VM switch
+would be a second lock on a door the authorization model holds shut, and the
+first thing to drift out of sync with the registry. The audited, explicit step is
+the *binding*, which is where it belongs.
+
+Two consequences worth stating plainly:
+
+- With `SPIFFE_JWT_SVID_AUTH_ENABLED` on and guest SVID delivery shipped, any
+  process in any guest could present its VM's identity to the API. Zero bindings
+  means zero access, and the middleware is default-deny — but list endpoints
+  accept any authenticated principal and then filter, so such a caller gets a
+  `200` with an empty list rather than a `401`. That is the intended shape.
+- `DELETE /api/workload-registrations/{id}` is the **only** revocation lever, and
+  it is one-way: identity is granted at VM create and nothing re-creates the row.
+  A self-heal would undo the only revocation lever on an unpredictable delay.
+
+`/vm/` and `/sandbox/` are **not yet refused** by
+`WorkloadRegistry.validateRegistrable` — that reservation is STR-165 — so until
+it lands the `spiffe_id` unique index is what stops a hand-registered URI from
+colliding with a VM's, and a collision is answered by the create path's retry
+redrawing the VM's id. The minting path deliberately does not route through
+`validateRegistrable`: its contract is validating a URI *supplied to a
+registration API*, so sending a machine-composed URI through it would break VM
+creation the day the reservation lands.
 
 ## Architecture: the evaluator is in-process
 

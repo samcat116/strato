@@ -19,6 +19,12 @@ enum WorkloadRegistrationKind: String, Codable, CaseIterable, Sendable {
 /// The workload registry (issue #491): one row per registered SPIFFE ID,
 /// mapping it to the principal it names.
 ///
+/// Rows arrive from three places: an agent registers itself at the mTLS edge on
+/// first connect, an operator registers a service account's or a customer
+/// workload's identity through the registration APIs, and — since STR-55 —
+/// every VM is given one in its own create transaction, naming
+/// `spiffe://<trust-domain>/vm/<vm-id>`.
+///
 /// The SPIFFE ID is a **lookup key** and nothing more — no roles or claims
 /// are ever parsed out of an SVID (docs/architecture/iam.md: "identity names
 /// the principal; it never carries authorization"). What a registered
@@ -54,6 +60,18 @@ final class WorkloadRegistration: Model, Content, @unchecked Sendable {
     @OptionalParent(key: "organization_id")
     var organization: Organization?
 
+    /// For `kind == .workload`: the VM whose instance identity this is
+    /// (STR-55). Set on every VM at create time and nil on every other
+    /// registration, so `vm_id != nil` is what discriminates a VM-owned row —
+    /// there is no fourth `WorkloadRegistrationKind`.
+    ///
+    /// Cascade-deleted with the VM, which is why
+    /// `ResourceBindingCleanup.cascadingPrincipals` names `.virtualMachine`:
+    /// the bindings this principal *holds* are orphaned by that cascade and
+    /// have to be swept before it.
+    @OptionalParent(key: "vm_id")
+    var vm: VM?
+
     /// Operator-facing label for `kind == .workload` registrations.
     @OptionalField(key: "display_name")
     var displayName: String?
@@ -74,7 +92,8 @@ final class WorkloadRegistration: Model, Content, @unchecked Sendable {
         serviceAccountID: UUID? = nil,
         organizationID: UUID? = nil,
         displayName: String? = nil,
-        createdBy: UUID? = nil
+        createdBy: UUID? = nil,
+        vmID: UUID? = nil
     ) {
         self.id = id
         self.spiffeID = spiffeID
@@ -84,5 +103,6 @@ final class WorkloadRegistration: Model, Content, @unchecked Sendable {
         self.$organization.id = organizationID
         self.displayName = displayName
         self.createdBy = createdBy
+        self.$vm.id = vmID
     }
 }
