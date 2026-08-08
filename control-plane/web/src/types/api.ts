@@ -1972,6 +1972,12 @@ export interface Network {
   metadataEnabled: boolean;
   resolverEnabled: boolean;
   resolverAddresses?: string[];
+  /**
+   * Why this network's guests will not resolve the DNS zones attached to it,
+   * with the remedy — absent when they will, and absent for a network with no
+   * attached zone, which has nothing to fail to deliver.
+   */
+  zoneResolutionWarning?: string;
   createdAt?: string;
   updatedAt?: string;
 }

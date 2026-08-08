@@ -850,6 +850,11 @@ public func configure(_ app: Application) async throws {
     // for, so a grow the agent has refused stops reading as one that landed.
     app.migrations.add(AddVolumeObservedSize())
 
+    // STR-201: hand an address to the networks `AddResolverEnabledToLogicalNetwork`
+    // switched the resolver on for, which never got one because an index is only
+    // allocated by a network create or update.
+    app.migrations.add(BackfillResolverIndexes())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.

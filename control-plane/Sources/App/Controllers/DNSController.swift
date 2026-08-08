@@ -393,6 +393,16 @@ struct DNSController: RouteCollection {
             }
         }
         if promoting {
+            // The search domain follows the zone unless an operator has set one
+            // of their own (STR-201). Without it a guest resolves
+            // `alpha.<zone>` and not `alpha`, which is the half of "attaching a
+            // primary zone points guests at it" that the resolver cannot supply
+            // — a search list is guest-side config, not something a resolver
+            // answers with.
+            let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
+            network.domainName = try NetworkController.validatedDomainName(
+                DNSZoneService.searchDomainFollowingPrimaryZone(
+                    current: network.domainName, previousZoneName: outgoing, nextZoneName: zone.name))
             network.$primaryDNSZone.id = zoneID
             try await network.save(on: req.db)
         }
@@ -544,6 +554,19 @@ struct DNSController: RouteCollection {
                 if let id = network.id { networks[id] = network }
             }
         }
+        // The warning is about the *network*, so it counts every zone attached
+        // to it — not just the ones on this page — and is computed once per
+        // network rather than once per attachment (STR-201).
+        let zoneCounts = try await DNSZoneNetwork.counts(
+            groupedBy: \.$logicalNetwork, in: networkIDs, on: db)
+        let capability = try await ResolverCapability.index(on: db)
+        var warnings: [UUID: String] = [:]
+        for (networkID, network) in networks {
+            warnings[networkID] = ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: zoneCounts[networkID] ?? 0,
+                incapableAgentNames: capability.incapableAgentNames(forSite: network.$site.id))
+        }
+
         var attachedByZone: [UUID: [DNSZoneNetworkResponse]] = [:]
         for attachment in attachments {
             guard let network = networks[attachment.$logicalNetwork.id], let networkID = network.id else {
@@ -553,7 +576,8 @@ struct DNSController: RouteCollection {
                 DNSZoneNetworkResponse(
                     networkId: networkID,
                     networkName: network.name,
-                    isPrimary: network.$primaryDNSZone.id == attachment.$zone.id))
+                    isPrimary: network.$primaryDNSZone.id == attachment.$zone.id,
+                    zoneResolutionWarning: warnings[networkID]))
         }
 
         var recordCounts: [UUID: Int] = [:]

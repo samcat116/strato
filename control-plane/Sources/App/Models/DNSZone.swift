@@ -121,6 +121,15 @@ struct DNSZoneNetworkResponse: Content {
     /// Whether this zone is the network's primary — i.e. whether the
     /// network's VMs register their derived records here.
     let isPrimary: Bool
+    /// Why this network's guests will not resolve the zones attached to it, or
+    /// nil when they will (STR-201).
+    ///
+    /// Carried here rather than only on the network so that the **attach
+    /// response itself** answers: attaching is the moment the operator states
+    /// the intent, and it is the only moment at which "this will not reach your
+    /// guests" is worth reading. It is a property of the network, not of this
+    /// zone, so every entry for one network repeats the same string.
+    let zoneResolutionWarning: String?
 }
 
 struct DNSZoneResponse: Content {

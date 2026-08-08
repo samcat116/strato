@@ -340,3 +340,17 @@ use in code, tests, docs, and review. Architecture-level maps live in
   told directly. One field, two readings, and which applies is
   `resolverEnabled`. An empty list is not a fallback to anything: internal names
   resolve and everything else is refused.
+
+- **Search domain** — what a guest appends to an unqualified name, delivered as
+  the DHCP `domain_name`/`domain_search` option or as cloud-init's
+  `nameservers.search`, and stored as `LogicalNetwork.domainName`. Guest-side
+  config, which is the whole point: no resolver can supply one, so pointing a
+  guest at the resolver that answers `alpha.corp.internal` still leaves `alpha`
+  unresolvable until this is set.
+
+  It **follows the primary zone while the operator has not claimed it** (STR-201)
+  — promotion sets it, re-pointing moves it, demotion clears it — and stops
+  following the moment someone sets a value of their own.
+  `primaryDNSZone` already means "the zone this network's VMs register into", and
+  "and resolve through" is the same intent; making the operator say it twice is
+  what left a correctly realized zone inert.

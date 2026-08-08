@@ -6030,6 +6030,8 @@ export interface components {
              * @description The DNS zone this network's VMs auto-register into, if any.
              */
             primaryDnsZoneId?: string;
+            /** @description Why this network's guests will not resolve the DNS zones attached to it, with the remedy, or absent when they will — the network's resolver is off, its site cannot run one, or it has no address yet. Absent for a network with no attached zone, which has nothing to fail to deliver. */
+            zoneResolutionWarning?: string;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -6216,6 +6218,8 @@ export interface components {
             networkName: string;
             /** @description Whether this zone is the network's primary — i.e. whether the network's VMs auto-register their derived records here. */
             isPrimary: boolean;
+            /** @description Why this network's guests will not resolve the DNS zones attached to it, with the remedy, or absent when they will. A property of the network rather than of this zone, so every entry for one network repeats it. */
+            zoneResolutionWarning?: string;
         };
         DNSZone: {
             /** Format: uuid */

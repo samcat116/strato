@@ -638,25 +638,14 @@ struct DesiredStateAssembler {
         guard let site, let siteID = site.id else {
             return agent.resolverCapable
         }
-        // Counted in the database rather than materialized: this runs once per
-        // sync per agent, and the question is an all-satisfy over rows this
-        // assembly has no other use for.
-        let incapable = try await Agent.query(on: db)
-            .filter(\.$site.$id == siteID)
-            .filter(\.$resolverCapable == false)
-            .count()
-        guard incapable == 0 else {
-            // The names cost a second query, but only on the path that is
-            // already withholding a service — and without them the operator is
-            // told a site is holding the feature back with no way to find which
-            // host. The remedy is in the message because it is not obvious: a
-            // decommissioned agent whose row was never deleted counts here
-            // forever, and looks identical to one that is merely un-upgraded.
-            let names = try await Agent.query(on: db)
-                .filter(\.$site.$id == siteID)
-                .filter(\.$resolverCapable == false)
-                .all()
-                .map(\.name).sorted()
+        // One query returning the offending names rather than a count plus a
+        // second lookup on failure: the common answer materializes zero rows, so
+        // this costs the hot path nothing, and the names are what makes the
+        // withholding actionable. The predicate itself lives on
+        // `ResolverCapability`, shared with the API surface that has to report
+        // the same verdict (STR-201).
+        let names = try await ResolverCapability.incapableAgentNames(inSite: siteID, on: db)
+        guard names.isEmpty else {
             app.logger.notice(
                 "Withholding the per-network DNS resolver: not every agent in the site can run it",
                 metadata: [

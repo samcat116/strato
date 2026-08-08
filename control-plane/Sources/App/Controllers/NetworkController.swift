@@ -84,10 +84,24 @@ struct NetworkController: RouteCollection {
             groupedBy: \.$logicalNetwork, in: visibleIDs, on: req.db)
         let sandboxCounts = try await SandboxNetworkInterface.counts(
             groupedBy: \.$logicalNetwork, in: visibleIDs, on: req.db)
+        // One more grouped read for the zone-resolution warning (STR-201), and a
+        // second only when a network on this page could have one — a deployment
+        // using no DNS zones pays a single count for the whole page.
+        let zoneCounts = try await DNSZoneNetwork.counts(
+            groupedBy: \.$logicalNetwork, in: visibleIDs, on: req.db)
+        let capability =
+            zoneCounts.isEmpty
+            ? ResolverCapability.Index(incapable: [])
+            : try await ResolverCapability.index(on: req.db)
         return visible.map { network in
             let id = network.id
             let attached = (id.map { vmCounts[$0] ?? 0 } ?? 0) + (id.map { sandboxCounts[$0] ?? 0 } ?? 0)
-            return NetworkResponse(from: network, attachedInterfaceCount: attached)
+            return NetworkResponse(
+                from: network, attachedInterfaceCount: attached,
+                zoneResolutionWarning: ResolverCapability.zoneResolutionWarning(
+                    network: network,
+                    attachedZoneCount: id.map { zoneCounts[$0] ?? 0 } ?? 0,
+                    incapableAgentNames: capability.incapableAgentNames(forSite: network.$site.id)))
         }
     }
 
@@ -232,7 +246,9 @@ struct NetworkController: RouteCollection {
                 "projectId": .string(projectId.uuidString),
             ])
 
-        return NetworkResponse(from: network, attachedInterfaceCount: 0)
+        // Nil rather than computed: a network created a moment ago has no zone
+        // attached to it, so there is nothing it can be failing to resolve.
+        return NetworkResponse(from: network, attachedInterfaceCount: 0, zoneResolutionWarning: nil)
     }
 
     // MARK: - Get Network
@@ -244,7 +260,9 @@ struct NetworkController: RouteCollection {
         let user = try req.auth.require(User.self)
         let network = try await fetchNetworkWithPermission(req: req, user: user, permission: "read")
         let count = try await attachedInterfaceCount(for: network, on: req.db)
-        return NetworkResponse(from: network, attachedInterfaceCount: count)
+        return NetworkResponse(
+            from: network, attachedInterfaceCount: count,
+            zoneResolutionWarning: try await zoneResolutionWarning(for: network, on: req.db))
     }
 
     // MARK: - Update Network
@@ -433,6 +451,11 @@ struct NetworkController: RouteCollection {
         if let dnsServers = request.dnsServers {
             network.dnsServers = try Self.validatedDNS(dnsServers)
         }
+        // Captured, not just applied: an explicit `domainName` in this request
+        // outranks the one the primary-zone block below would derive, and the
+        // two are only distinguishable here — once applied, an operator's value
+        // and a derived one are the same column (STR-201).
+        let domainNameExplicit = request.domainName != nil
         if let domainName = request.domainName {
             network.domainName = try Self.validatedDomainName(domainName)
         }
@@ -464,11 +487,20 @@ struct NetworkController: RouteCollection {
         // zone already attached to the network — attachment is what grants
         // resolution, and registering into a zone the network cannot resolve
         // would publish names its own VMs can't look up.
+        //
+        // Both branches also move the search domain, which follows the primary
+        // zone while the operator has not claimed it (STR-201) — see
+        // `DNSZoneService.searchDomainFollowingPrimaryZone`.
         if request.clearPrimaryDnsZone == true {
             guard request.primaryDnsZoneId == nil else {
                 throw Abort(
                     .badRequest,
                     reason: "primaryDnsZoneId cannot be combined with clearPrimaryDnsZone=true")
+            }
+            if !domainNameExplicit {
+                let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
+                network.domainName = DNSZoneService.searchDomainFollowingPrimaryZone(
+                    current: network.domainName, previousZoneName: outgoing, nextZoneName: nil)
             }
             network.$primaryDNSZone.id = nil
         } else if let zoneID = request.primaryDnsZoneId, zoneID != network.$primaryDNSZone.id {
@@ -490,6 +522,13 @@ struct NetworkController: RouteCollection {
             }
             try await DNSZoneService.assertPrimaryZoneAssignable(
                 zone: zone, networkID: networkID, on: req.db)
+            if !domainNameExplicit {
+                let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
+                network.domainName = try Self.validatedDomainName(
+                    DNSZoneService.searchDomainFollowingPrimaryZone(
+                        current: network.domainName, previousZoneName: outgoing,
+                        nextZoneName: zone.name))
+            }
             network.$primaryDNSZone.id = zoneID
         }
 
@@ -527,7 +566,9 @@ struct NetworkController: RouteCollection {
                 "name": .string(network.name),
             ])
 
-        return NetworkResponse(from: network, attachedInterfaceCount: interfaceCount)
+        return NetworkResponse(
+            from: network, attachedInterfaceCount: interfaceCount,
+            zoneResolutionWarning: try await zoneResolutionWarning(for: network, on: req.db))
     }
 
     // MARK: - Delete Network
@@ -844,6 +885,27 @@ struct NetworkController: RouteCollection {
             .filter(\.$logicalNetwork.$id == networkID)
             .count()
         return vmInterfaces + sandboxInterfaces
+    }
+
+    /// The zone-resolution warning for one network (STR-201), for the handlers
+    /// that answer with a single row.
+    ///
+    /// The zone count is asked first and short-circuits everything else: a
+    /// network with no attached zone cannot be failing to deliver one, and that
+    /// is the overwhelming majority of networks, so the capability read is only
+    /// paid for by the ones the answer could be about.
+    private func zoneResolutionWarning(for network: LogicalNetwork, on db: any Database) async throws
+        -> String?
+    {
+        let networkID = try network.requireID()
+        let zoneCount = try await DNSZoneNetwork.query(on: db)
+            .filter(\.$logicalNetwork.$id == networkID)
+            .count()
+        guard zoneCount > 0 else { return nil }
+        let capability = try await ResolverCapability.index(on: db)
+        return ResolverCapability.zoneResolutionWarning(
+            network: network, attachedZoneCount: zoneCount,
+            incapableAgentNames: capability.incapableAgentNames(forSite: network.$site.id))
     }
 
     /// Fetch a network and check permission. Access derives entirely from the
