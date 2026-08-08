@@ -888,8 +888,7 @@ non-controller agents, which receive an empty `networks` list by design. The
 `DesiredNetworkState.metadataEnabled` on authoritative agents, and
 `metadataProtection(for:)` shields existing ports from teardown when the
 field is nil (a pre-v27 control plane's silence must not delete live ports).
-Nothing serves HTTP inside the namespace yet — the guest-facing IMDS
-listener is future work. See
+What serves HTTP inside those namespaces is the metadata server below. See
 [ADR 0003](../adr/0003-imds-chassis-namespace.md) and
 [networking](./networking.md).
 
@@ -902,14 +901,33 @@ Reads are answered entirely from here, with no control-plane round trip —
 the same fail-static posture as the rest of the reconciler, and deliberate,
 because a guest that cannot read its metadata may fail to boot.
 
-**That guarantee holds across a control-plane outage, for the life of the
-agent process — not across an agent restart.** The store is in memory while
-the VM manifest is durable, so a restarted agent re-adopts running VMs it can
-serve nothing for until the first sync lands, and indefinitely if the control
-plane is unreachable then. Harmless only because nothing serves reads yet:
-the listener (STR-56) has to close it, either by persisting the store beside
-the manifest or by refusing to answer until the first sync has been applied.
-Serving a guest a confidently empty document is worse than making it wait.
+**That guarantee once held only for the life of the agent process.** The
+store is in memory while the VM manifest is durable, so a restarted agent
+re-adopted running VMs it could serve nothing for until the first sync
+landed, and indefinitely if the control plane was unreachable then — the same
+outage the design claims immunity to, arriving through the other door.
+STR-56 closes it from both ends, because the two halves answer different
+failures. `MetadataSnapshotStore` writes the records beside the VM manifest
+(`instance-metadata.json`, mode `0600` — it holds SSH keys and user data), so
+a restart keeps serving what the last sync said. And `origin()` reports
+whether anything is known at all, so a host with neither a sync nor a
+restorable file answers **503**, never a confidently empty document. Export
+carries withdrawn records too: they hold no payload but they hold the
+generation that refuses a replay, and dropping them at the file boundary
+would resurrect a released VM's metadata once per agent restart.
+
+**Everything restored is provisional until the first sync arbitrates it.**
+The file records what the control plane said last time this agent ran, and a
+VM can be deleted and reaped while the agent is down — in which case no sync
+ever carries the `wantsAbsent` entry that would withdraw it and no teardown
+runs, so nothing would ever reach the record. `confirmRestored(namedBy:)`
+retires any restored record the first authoritative sync does not name.
+Retired means **withdrawn, not deleted**: a tombstone stops the payload being
+served while keeping the generation that refuses a replay, where deleting
+outright would fix the disclosure and reopen the resurrection. This is the one
+place the store departs from STR-98's "omission is not an instruction" — that
+rule protects records a sync vouched for, and cannot be extended to records
+inherited from a file that no sync has.
 
 Three rules keep it honest, and each is a place the obvious implementation
 would be wrong:
@@ -952,6 +970,109 @@ is authoritative and withdraws what we serve, while from an older one it is
 silence, and reading it as an instruction would empty every VM's metadata the
 moment a control plane is rolled back.
 
+### Instance metadata server (the guest-facing listener)
+
+`StratoAgentCore/MetadataService/` is what guests actually talk to (STR-56):
+an HTTP listener on `169.254.169.254:80` and `[fd00:ec2::254]:80`, one per
+network, answering from the store above. It changes nothing on the wire.
+
+**One child process per namespace.** ADR 0003 puts each network's metadata
+interface in its own namespace and leaves this issue to decide how a listener
+gets in there. The agent starts `ip netns exec strato-md-<network>
+strato-agent metadata-server --network-id <uuid>` — the same binary under a
+hidden subcommand, so the updater still replaces one file — and the child is
+simply *in* the namespace and binds normally. The alternative, entering the
+namespace in-process, needs `setns(2)`, which Swift's Glibc overlay does not
+export at all (it would have meant the repo's first C target) and which is
+per-thread, so a failed restore would strand a thread of the shared
+concurrency pool in a tenant namespace. The child also buys fault isolation
+where it matters most: this is the only code in the agent parsing bytes a
+guest chose, and a crash costs one network's listener rather than the
+reconciler.
+
+**Push, not pull.** The agent pushes each network's servable slice down the
+child's stdin as length-prefixed JSON (`MetadataControlProtocol`) on every
+sync; the child answers entirely from its own copy, with no request-time call
+back to the parent. Same fail-static reasoning as the store: a wedged or
+restarting agent must not become a hung metadata service. The child exits on
+stdin EOF, so a dead parent leaves no orphan answering guests unsupervised,
+and a child is only handed the instances on *its* network — a listener cannot
+leak what it was never given. `MetadataServerSupervisor` converges the fleet
+from the same `metadataNetworks` list the chassis reconcile consumes (nil ≙ no
+opinion, empty ≙ stop everything), after the reconciler has run so the
+namespaces exist *and* the snapshot is current. Syncs are the retry timer:
+a listener that failed to start is simply not running, and the next sync tries
+again.
+
+**Listeners come up before the first sync**, from the `strato-md-*` namespaces
+already on the host. Without that the durable copy above would be pointless:
+its purpose is to keep answering across a control-plane outage that spans an
+agent restart, and until a sync landed there would be no listener to answer
+with — guests would get connection refused, and `.restored` would be a state
+nothing could observe. The namespaces are the right source because they are
+host state that outlives the process (created by the chassis reconcile, cleared
+only by a host reboot). A network removed while the agent was down leaves a
+stale namespace and so starts an unwanted listener; the first sync stops it.
+
+**Session auth is mandatory.** `PUT /latest/api/token` with an
+`X-aws-ec2-metadata-token-ttl-seconds` header (1..21600) mints an opaque
+bearer token; every read requires `X-aws-ec2-metadata-token`. There is no
+unauthenticated mode — AWS shipped IMDSv1 optional and spent years unwinding
+it, and there was no compatibility debt here to justify repeating that. The
+barrier is the shape of the mint, not the name of the header: a request-forging
+bug inside a guest can reach a link-local URL but cannot make it a `PUT`
+carrying a custom header. `GET /latest/api/token` answers 405 and mints
+nothing. EC2's header spellings are used rather than Strato-prefixed ones so
+stock guest tooling can complete the handshake at all; see
+[ADR 0006](../adr/0006-imds-session-auth.md).
+
+**The caller is its source address, and the session is bound to it.**
+`MetadataCallerIndex` resolves `(this namespace's network, source address) →
+vmId` from the served metadata's own `MetadataNIC` entries — the allocated v4
+and v6 addresses plus the EUI-64 link-local derived from the NIC's MAC, all
+three of which are inside OVN's `port_security` — so an authentication
+decision never depends on a second source of truth. An address claimed by two
+instances resolves to *neither*, loudly: that is ADR 0003's named silent
+failure, and it is reachable whenever a deleted VM's address is reallocated
+before its withdrawal lands. A token records the instance it was minted for
+and is refused when anyone else presents it, so stealing a neighbour's token
+buys nothing. Tokens are stored as SHA-256 digests, which is why no
+constant-time comparison is needed: nothing here ever compares a secret.
+
+**Verdicts.** 503 + `Retry-After` while the store is `.cold` (checked *before*
+identification: with no knowledge, 404 would assert something the agent cannot
+know); 404 for an unresolvable or ambiguous caller, and for a withdrawn
+instance; 401 for a missing, expired, or wrong-instance token; 404 for an
+unserved path, but only *after* authentication, so nothing that merely reaches
+the address can map the tree.
+
+**Responses carry a hop limit of 1** (`IP_TTL` / `IPV6_UNICAST_HOPS`, set on
+the listener and on each accepted child). The guest is one L2 hop away — both
+advertised routes are on-link with a zero next hop — so a reply that crosses
+any router dies, and a guest cannot proxy metadata off-box.
+`metadata_response_hop_limit` raises it; `metadata_service = false` turns the
+listener off without touching the dataplane, which is a property of the
+network rather than of the agent.
+
+**What it serves is deliberately four documents**: `/latest/`,
+`/latest/meta-data/`, `/latest/meta-data/instance-id` and
+`/latest/meta-data/hostname` (404 on a hostname-less VM — nothing here may
+invent one). The renderer trees are STR-60 (NoCloud-net), STR-65 (EC2) and
+STR-62 (identity); naming an EC2-shaped key now would commit those issues to
+serving it forever.
+
+**Bounds, because the peer is untrusted guest code that can retry forever:**
+a raw-byte cap in front of the HTTP decoder (`ByteToMessageHandler`'s
+`maximumBufferSize` does *not* cover this — NIOHTTP1's decoder consumes each
+header line as it arrives, so a long header list never trips it while
+`HTTPHeaders` grows behind it), a read-idle timeout, connection caps counted at
+accept — a total per listener and, load-bearingly, a per-source-address one,
+since a namespace is shared by every guest on the network and one VM holding
+the whole budget would deny its neighbours the service — and outright refusal
+of any request carrying a body.
+The request log records method, target, status and source — never a token, not
+even a prefix.
+
 ## Self-update
 
 `StratoAgentCore/AgentUpdater.swift`: stages next to the binary (same
@@ -973,6 +1094,19 @@ surviving processes) and `FirecrackerManager` (per-VM API wrapper over a
 Unix-socket HTTP client), plus typed models (`MachineConfig`, `BootSource`,
 `Drive`, `NetworkInterface`, `Vsock`, jailer options) and the vsock
 host↔guest handshake.
+
+The API socket client (`UnixSocketHTTPClient`) pairs responses to requests in
+pipeline order, so a round trip that times out has to take the whole channel
+with it — a request abandoned mid-queue would mis-pair everything behind it.
+What it must not take with it is the client: the next request **redials**
+(never replaying the failed one), because without that a single unanswered
+request left the agent unable to reach that microVM's API for the rest of its
+life, and a still-running sandbox could only be deleted (STR-194). An explicit
+`disconnect()` revokes the redial — by then the socket path may belong to a
+different VM. The request deadline sits deliberately *above* Firecracker's own
+30s `RECV_TIMEOUT_SEC`, so a VMM whose vCPUs are slow to acknowledge a
+pause/resume answers with its real fault message instead of losing the race to
+an identical host-side ceiling.
 
 ## Tests
 

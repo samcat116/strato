@@ -1,5 +1,6 @@
 import Foundation
 import Libvirt
+import NIOCore
 import StratoShared
 import Testing
 
@@ -418,5 +419,111 @@ struct LibvirtDomainTests {
         #expect(LibvirtMemoryStats.parse([stat(5, kib: .max), stat(8, kib: 512)]) == nil)
         let partial = LibvirtMemoryStats.parse([stat(5, kib: 1024), stat(8, kib: 512), stat(4, kib: .max)])
         #expect(partial?.freeBytes == nil)
+    }
+
+    // MARK: - Host reservations
+
+    /// A real `REMOTE_PROC_DOMAIN_GET_INFO` reply for a running two-vCPU domain
+    /// with an 8 GiB ceiling, captured off the wire from libvirtd.
+    ///
+    /// Decoded here rather than constructed, because what broke was the decode:
+    /// `state` is an `unsigned char`, which XDR sends as a whole four-byte word,
+    /// and a client reading it as a length-prefixed byte string consumed the
+    /// head of `maxMem` and shifted every field behind it. `reservedResources`
+    /// swallows that failure by design — it serves the last good answer — and
+    /// the last good answer is `(0, 0)`, recorded legitimately back when the
+    /// host had no Strato domains to sweep. So the first VM defined on a host
+    /// turned every later sweep into a stale read of that zero while the node
+    /// went on advertising its full capacity to the scheduler. Nothing about
+    /// that is visible above this line: a zero from a genuinely empty host and a
+    /// zero from a decoder that has never once worked read identically.
+    static let runningDomainInfoReply: [UInt8] = [
+        0x00, 0x00, 0x00, 0x01,  // state: VIR_DOMAIN_RUNNING, one whole word
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00, 0x00,  // maxMem: 8 GiB, in KiB
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,  // memory: current balloon
+        0x00, 0x00, 0x00, 0x02,  // nrVirtCpu
+        0x18, 0xC9, 0xD6, 0xC1, 0xDA, 0x65, 0xA5, 0x18,  // cpuTime
+    ]
+
+    @Test("A running domain reserves what it was given, decoded from the daemon's own bytes")
+    func reservationFromWireBytes() throws {
+        var buffer = ByteBuffer(bytes: Self.runningDomainInfoReply)
+        let info = try DomainGetInfoRet(fromXDR: &buffer)
+        #expect(buffer.readableBytes == 0)
+
+        let reserved = LibvirtDomain.reservation(from: info)
+        #expect(reserved.vcpus == 2)
+        #expect(reserved.memoryBytes == Int64(8) * 1024 * 1024 * 1024)
+    }
+
+    /// `maxMem`, not `memory`: the live figure is the current balloon setting,
+    /// so an inflated balloon would read as the guest handing its grant back to
+    /// a host that cannot actually re-lend it.
+    @Test("The ceiling is reserved, not the balloon's current setting")
+    func reservesTheCeilingNotTheBalloon() {
+        let info = DomainGetInfoRet(
+            state: 1, maxMem: 8 * 1024 * 1024, memory: 512 * 1024, nrVirtCpu: 4, cpuTime: 0)
+        let reserved = LibvirtDomain.reservation(from: info)
+        #expect(reserved.vcpus == 4)
+        #expect(reserved.memoryBytes == Int64(8) * 1024 * 1024 * 1024)
+    }
+
+    /// A stopped domain still holds its placement and its disks, and
+    /// `reservedResources` counts it deliberately — `listAllDomains` is asked
+    /// for every domain, not just the running ones.
+    @Test("A defined-but-stopped domain still reserves its grant")
+    func stoppedDomainStillReserves() {
+        let info = DomainGetInfoRet(
+            state: 5, maxMem: 2 * 1024 * 1024, memory: 0, nrVirtCpu: 1, cpuTime: 0)
+        let reserved = LibvirtDomain.reservation(from: info)
+        #expect(reserved.vcpus == 1)
+        #expect(reserved.memoryBytes == Int64(2) * 1024 * 1024 * 1024)
+    }
+
+    /// The sentence STR-190 made false, asserted on the sum rather than on a
+    /// domain: no arrangement of live domains adds up to an idle host. A
+    /// per-domain test cannot say this — the bug produced no per-domain answers
+    /// at all, and the fold over nothing is what read as zero.
+    @Test("A host with domains on it never reports zero")
+    func aPopulatedHostNeverReadsIdle() {
+        let infos = [
+            DomainGetInfoRet(state: 1, maxMem: 4 * 1024 * 1024, memory: 0, nrVirtCpu: 2, cpuTime: 0),
+            DomainGetInfoRet(state: 5, maxMem: 2 * 1024 * 1024, memory: 0, nrVirtCpu: 1, cpuTime: 0),
+            DomainGetInfoRet(state: 3, maxMem: 1024 * 1024, memory: 0, nrVirtCpu: 1, cpuTime: 0),
+        ]
+        let reserved = LibvirtDomain.reservation(from: infos)
+        #expect(reserved.vcpus == 4)
+        #expect(reserved.memoryBytes == Int64(7) * 1024 * 1024 * 1024)
+    }
+
+    /// The one host that truthfully reserves nothing — and the state the cached
+    /// zero in STR-190 was legitimately recorded from, before the first VM
+    /// landed and every later sweep started failing back onto it.
+    @Test("A host with no domains reserves nothing")
+    func anEmptyHostReservesNothing() {
+        let reserved = LibvirtDomain.reservation(from: [])
+        #expect(reserved.vcpus == 0)
+        #expect(reserved.memoryBytes == 0)
+    }
+
+    /// Saturation, not a trap. `maxMem` here is the eight bytes of `cpuTime`
+    /// from the golden reply above — what the STR-190 misalignment actually
+    /// delivered into this field — and `× 1024` on it overflows `Int64`. The
+    /// agent reporting an absurd reservation for one heartbeat is recoverable;
+    /// the agent crashing inside the heartbeat's task group is not.
+    @Test("A corrupt memory ceiling saturates rather than trapping")
+    func absurdCeilingSaturates() {
+        let misaligned = DomainGetInfoRet(
+            state: 1, maxMem: 0x18C9_D6C1_DA65_A518, memory: 0, nrVirtCpu: 2, cpuTime: 0)
+        #expect(LibvirtDomain.reservation(from: misaligned).memoryBytes == .max)
+
+        let maximal = DomainGetInfoRet(
+            state: 1, maxMem: .max, memory: 0, nrVirtCpu: .max, cpuTime: 0)
+        #expect(LibvirtDomain.reservation(from: maximal).memoryBytes == .max)
+        #expect(LibvirtDomain.reservation(from: maximal).vcpus == Int(UInt32.max))
+
+        // And the fold over them, which would otherwise trap on the addition.
+        let total = LibvirtDomain.reservation(from: [maximal, maximal])
+        #expect(total.memoryBytes == .max)
     }
 }

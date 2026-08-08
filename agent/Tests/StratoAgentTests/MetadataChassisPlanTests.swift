@@ -255,4 +255,29 @@ struct MetadataChassisReconcilerTests {
                 .remove(networkId: stale, interfaceName: "mdpc"),
             ])
     }
+
+    @Test("A namespace name round-trips to the network it belongs to")
+    func netnsNameRoundTrips() {
+        // The inverse is what a restarting agent uses to learn which networks it
+        // was serving metadata on: the namespaces outlive the process, the
+        // desired-state list that named them does not.
+        let networkId = UUID()
+        let name = MetadataChassisPlan.netnsName(networkId: networkId)
+        #expect(MetadataChassisPlan.networkId(fromNetnsName: name) == networkId)
+    }
+
+    @Test("Namespaces that are not ours are not claimed")
+    func foreignNamespacesIgnored() {
+        // /var/run/netns is shared with everything else on the host, including
+        // Strato's own sandbox jails.
+        for name in [
+            "strato-sbx-11111111-1111-1111-1111-111111111111",
+            "ovnmeta-11111111-1111-1111-1111-111111111111",
+            "strato-md-not-a-uuid",
+            "strato-md-",
+            "default",
+        ] {
+            #expect(MetadataChassisPlan.networkId(fromNetnsName: name) == nil, "\(name) must not be claimed")
+        }
+    }
 }

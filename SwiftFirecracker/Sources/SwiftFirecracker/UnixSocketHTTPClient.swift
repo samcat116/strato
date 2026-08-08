@@ -28,7 +28,28 @@ public actor UnixSocketHTTPClient {
     /// the caller forever and grow the handler's waiter queue without bound.
     /// Firecracker's API calls are local and fast; this only has to be far
     /// enough above normal to never fire in practice.
-    public static let defaultRequestTimeout: TimeInterval = 30
+    ///
+    /// Deliberately *above* Firecracker's own internal budget rather than equal
+    /// to it. Actions the API thread hands to the VMM thread — `PATCH /vm`
+    /// (pause/resume), `PUT /snapshot/create` — wait on the vCPU threads for
+    /// `RECV_TIMEOUT_SEC`, which upstream sets to 30 seconds, and then answer
+    /// with an error. A 30-second ceiling here tied that exactly, so a VMM
+    /// whose vCPUs were slow to acknowledge always lost the race by a hair: the
+    /// caller saw "Firecracker did not answer ... in time" and a torn-down
+    /// channel instead of the fault message Firecracker was about to send
+    /// (STR-194). Anything comfortably past 30s makes the VMM's own answer the
+    /// one that arrives first.
+    public static let defaultRequestTimeout: TimeInterval = 60
+
+    /// Ceiling for a read that only asks the VMM what it already knows.
+    ///
+    /// `GET /` never waits on the vCPUs — it is answered from the VMM thread's
+    /// own event loop — so it has no reason to inherit a budget sized for an
+    /// action that does. Kept short on purpose: these are the calls whose whole
+    /// job is to find out quickly that the VMM has stopped answering, and they
+    /// are the ones that run *before* an action in the same convergence step,
+    /// where the two budgets add up against the mutation's deadline.
+    public static let defaultReadTimeout: TimeInterval = 15
 
     private let socketPath: String
     private let logger: Logger
@@ -36,6 +57,17 @@ public actor UnixSocketHTTPClient {
     private let requestTimeout: TimeInterval
     private var channel: Channel?
     private var roundTrip: HTTPRoundTripHandler?
+    /// Whether this client has ever completed a `connect()`. Gates the
+    /// reconnect in ``ensureConnected()`` so it only ever *re*-dials.
+    private var everConnected = false
+    /// The redial in flight, shared by every caller that finds the channel dead
+    /// at the same moment, tagged so its owner clears only its own entry.
+    private var reconnect: (id: UInt64, task: Task<Void, Error>)?
+    private var nextRedialID: UInt64 = 0
+    /// Bumped by every explicit ``disconnect()``. A redial that was in flight
+    /// across one compares this against the value it started with, which is the
+    /// only way it can tell that its result is no longer wanted.
+    private var teardownEpoch: UInt64 = 0
 
     public init(
         socketPath: String,
@@ -61,9 +93,9 @@ public actor UnixSocketHTTPClient {
             throw FirecrackerError.invalidSocketPath(socketPath)
         }
 
-        if channel != nil {
-            await disconnect()
-        }
+        // `closeChannel()` rather than `disconnect()`: a redial that fails must
+        // not revoke the client's own right to redial again later.
+        await closeChannel()
 
         let handler = HTTPRoundTripHandler()
         // Pin to one loop so the handler's promises never hop.
@@ -83,17 +115,91 @@ public actor UnixSocketHTTPClient {
 
         self.channel = channel
         self.roundTrip = handler
+        self.everConnected = true
         logger.info("Connected to Firecracker socket", metadata: ["path": "\(socketPath)"])
     }
 
-    /// Disconnects from the socket
+    /// Re-establishes a connection that a previous round trip took down.
+    ///
+    /// A request that times out (or errors) fails the whole channel — responses
+    /// are consumed in order, so a request abandoned mid-queue cannot simply be
+    /// dropped without mis-pairing everything behind it. Without a redial that
+    /// left the client dead for the rest of the VM's life: the handler latches
+    /// its failure, the channel closes, and every later request throws
+    /// `notConnected` with nothing anywhere to reconnect it. That is how a
+    /// single timed-out pause used to cost a running sandbox, which could then
+    /// only be deleted (STR-194).
+    ///
+    /// Nothing is replayed: the request that failed stays failed. This only
+    /// makes the *next* one possible — which is what the API socket being
+    /// connectionless-in-spirit (each Firecracker request is independent)
+    /// allows. A client that has never connected is left alone, so a caller
+    /// that forgot `connect()` still finds out.
+    private func ensureConnected() async throws {
+        if let channel, channel.isActive { return }
+        guard everConnected else { return }
+
+        // Sampled before the redial suspends: a `disconnect()` that lands while
+        // it is in flight cannot see the channel it has not installed yet, so
+        // the redial has to be the one that notices and undoes itself.
+        let epoch = teardownEpoch
+
+        if let reconnect {
+            // Ride the redial already in flight rather than closing the channel
+            // it is about to install.
+            try await reconnect.task.value
+        } else {
+            logger.warning(
+                "Firecracker API connection is down; reconnecting",
+                metadata: ["path": "\(socketPath)"])
+            nextRedialID += 1
+            let id = nextRedialID
+            let task = Task { try await self.connect() }
+            reconnect = (id: id, task: task)
+            // Compare-and-clear: this frame can exit while its task is still
+            // running (the *caller* being cancelled aborts the await, not the
+            // unstructured task), and clearing someone else's entry would let a
+            // second `connect()` start — two of which close each other's freshly
+            // installed channel, since `connect()` opens with `closeChannel()`.
+            defer { if reconnect?.id == id { reconnect = nil } }
+            try await task.value
+        }
+
+        guard teardownEpoch != epoch else { return }
+        logger.debug(
+            "Discarding a reconnect that raced an explicit disconnect",
+            metadata: ["path": "\(socketPath)"])
+        await closeChannel()
+        everConnected = false
+    }
+
+    /// Disconnects from the socket.
+    ///
+    /// A deliberate teardown, unlike the channel dying under a request: this
+    /// also revokes the redial, so a stray later request cannot reach a socket
+    /// path that teardown may since have handed to a different VM. Revoking is
+    /// the epoch bump rather than cancelling the redial task — `connect()`
+    /// suspends inside NIO futures that do not observe cancellation, so the only
+    /// reliable point to refuse its result is after it has produced one.
     public func disconnect() async {
-        if let channel {
+        teardownEpoch += 1
+        await closeChannel()
+        everConnected = false
+        logger.debug("Disconnected from socket")
+    }
+
+    /// Drops the current channel without touching the redial permission.
+    ///
+    /// Loops rather than closing once: `channel` is cleared *before* the await,
+    /// so a redial that installs its own channel while this one is closing is
+    /// caught by the next turn instead of being silently unreferenced and left
+    /// open.
+    private func closeChannel() async {
+        while let channel {
+            self.channel = nil
+            self.roundTrip = nil
             try? await channel.close().get()
         }
-        channel = nil
-        roundTrip = nil
-        logger.debug("Disconnected from socket")
     }
 
     /// Sends an HTTP request and returns the response.
@@ -101,11 +207,16 @@ public actor UnixSocketHTTPClient {
     /// Safe to call concurrently: each round trip is queued in pipeline order,
     /// so a response is always delivered to the caller that sent the matching
     /// request.
+    /// - Parameter timeout: Overrides this client's default ceiling for one
+    ///   request. Use it to give a call a budget matched to what it actually
+    ///   waits on — see ``defaultReadTimeout``.
     public func request(
         method: HTTPMethod,
         path: String,
-        body: Data? = nil
+        body: Data? = nil,
+        timeout: TimeInterval? = nil
     ) async throws -> HTTPResponse {
+        try await ensureConnected()
         guard let channel, let roundTrip, channel.isActive else {
             throw FirecrackerError.notConnected
         }
@@ -136,7 +247,7 @@ public actor UnixSocketHTTPClient {
 
         let response = try await roundTrip.send(
             head: head, body: buffer, on: channel.eventLoop,
-            timeout: .clamping(seconds: requestTimeout)
+            timeout: .clamping(seconds: timeout ?? requestTimeout)
         ).get()
 
         logger.debug(

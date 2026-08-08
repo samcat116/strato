@@ -124,4 +124,122 @@ struct SandboxRuntimeProbeTests {
         #expect(report.unavailabilityReason?.contains("sandbox_jailer_mode") == true)
         #expect(report.unavailabilityReason?.contains("not running as root") == true)
     }
+
+    // MARK: - Sandbox networking (STR-103)
+
+    /// A guest image directory whose `guest.json` advertises `capabilities`.
+    private func makeGuestImage(capabilities: [String]?, schemaVersion: Int = 2) throws -> String {
+        let dir = NSTemporaryDirectory() + "sandbox-probe-guest-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let capabilityField =
+            capabilities.map {
+                "\"capabilities\": [\($0.map { "\"\($0)\"" }.joined(separator: ", "))],"
+            } ?? ""
+        let manifest = """
+            {
+              "schemaVersion": \(schemaVersion),
+              "version": "v", "gitSHA": "s",
+              \(capabilityField)
+              "artifacts": [
+                {"arch": "x86_64", "kernel": "vmlinux-x86_64",
+                 "initramfs": "initramfs-x86_64.cpio.gz", "bootArgs": "console=ttyS0"}
+              ]
+            }
+            """
+        try manifest.write(toFile: dir + "/guest.json", atomically: true, encoding: .utf8)
+        return dir
+    }
+
+    private func networkingReport(
+        guestImagePath: String, jailsNewSandboxes: Bool = true,
+        networkCapability: NetworkCapability? = .overlay
+    ) -> SandboxRuntimeProbe.Report {
+        SandboxRuntimeProbe.probe(
+            firecracker: firecrackerAvailable, guestImagePath: guestImagePath, runtimeBuilt: true,
+            jailsNewSandboxes: jailsNewSandboxes, networkCapability: networkCapability)
+    }
+
+    @Test("networking is capable with OVN, the jailer, and a network-capable guest image")
+    func networkingCapableWithAllThree() throws {
+        let dir = try makeGuestImage(capabilities: ["network"])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let report = networkingReport(guestImagePath: dir)
+        #expect(report.capable)
+        #expect(report.networkingCapable)
+        #expect(report.networkingUnavailabilityReason == nil)
+    }
+
+    /// The trap this whole signal exists for: the guest image ships separately
+    /// from the agent, so a current agent routinely runs against a guest that
+    /// would refuse a config drive carrying a NIC.
+    @Test("a guest image that predates the network block blocks networking, not sandboxes")
+    func oldGuestImageBlocksNetworkingOnly() throws {
+        let dir = try makeGuestImage(capabilities: nil, schemaVersion: 1)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let report = networkingReport(guestImagePath: dir)
+        #expect(report.capable)
+        #expect(!report.networkingCapable)
+        #expect(report.networkingUnavailabilityReason?.contains("'network' capability") == true)
+    }
+
+    @Test("an unreadable manifest blocks networking rather than being assumed capable")
+    func unreadableManifestBlocksNetworking() throws {
+        let dir = NSTemporaryDirectory() + "sandbox-probe-guest-" + UUID().uuidString
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        try "not json".write(toFile: dir + "/guest.json", atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let report = networkingReport(guestImagePath: dir)
+        #expect(report.capable)
+        #expect(!report.networkingCapable)
+        #expect(report.networkingUnavailabilityReason?.contains("could not be read") == true)
+    }
+
+    @Test("user-mode networking blocks a sandbox NIC — there is no user-mode form of one")
+    func userModeBlocksNetworking() throws {
+        let dir = try makeGuestImage(capabilities: ["network"])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let report = networkingReport(guestImagePath: dir, networkCapability: .userMode)
+        #expect(report.capable)
+        #expect(!report.networkingCapable)
+        #expect(report.networkingUnavailabilityReason?.contains("network_mode") == true)
+    }
+
+    @Test("an unjailed agent has no namespace to attach a NIC into")
+    func unjailedBlocksNetworking() throws {
+        let dir = try makeGuestImage(capabilities: ["network"])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let report = networkingReport(guestImagePath: dir, jailsNewSandboxes: false)
+        #expect(report.capable)
+        #expect(!report.networkingCapable)
+        #expect(report.networkingUnavailabilityReason?.contains("sandbox_jailer_mode") == true)
+    }
+
+    /// Networking is strictly downstream of the runtime: a host that cannot run
+    /// sandboxes at all still gets a networking reason, restated rather than
+    /// left nil, so an operator reading that line alone is not left guessing.
+    @Test("a host with no sandbox runtime reports networking unavailable too")
+    func networkingFollowsTheBaseCapability() throws {
+        let dir = try makeGuestImage(capabilities: ["network"])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        let report = SandboxRuntimeProbe.probe(
+            firecracker: firecrackerUnavailable, guestImagePath: dir, runtimeBuilt: true,
+            jailsNewSandboxes: true, networkCapability: .overlay)
+        #expect(!report.capable)
+        #expect(!report.networkingCapable)
+        #expect(report.networkingUnavailabilityReason?.contains("/dev/kvm not present") == true)
+    }
+
+    @Test("networking is off by default, so a caller that asks nothing never over-claims")
+    func networkingDefaultsOff() {
+        let report = SandboxRuntimeProbe.probe(
+            firecracker: firecrackerAvailable, guestImagePath: presentPath)
+        #expect(report.capable)
+        #expect(!report.networkingCapable)
+    }
 }

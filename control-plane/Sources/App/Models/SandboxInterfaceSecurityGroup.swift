@@ -14,14 +14,14 @@ import Vapor
 ///   rules reference, is seeded into `DesiredStateMessage.securityGroups`, so
 ///   a topology authority realizes the port groups and ACLs *today*.
 /// - **The per-NIC membership** — the ids inside the sandbox's `NetworkSpec` —
-///   is withheld with the whole spec while
-///   `SandboxSpecBuilder.guestNetworkingSupported` is false. There is no OVN
-///   port yet, so there is nothing to make a member of anything.
+///   rides the spec, and so reaches only a host that advertises sandbox
+///   networking (STR-103). On a host without it there is no OVN port, so there
+///   is nothing to make a member of anything.
 ///
-/// STR-103 flips that flag and the second half starts flowing. Realizing the
-/// groups first is what makes that flip safe: a port group with no members
-/// filters nothing, and its existing means the first sandbox port to come up
-/// joins it immediately instead of parking on `DependencyPendingError`.
+/// Realizing the groups first is what makes that per-host arrival safe: a port
+/// group with no members filters nothing, and its existing means the first
+/// sandbox port to come up joins it immediately instead of parking on
+/// `DependencyPendingError`.
 final class SandboxInterfaceSecurityGroup: Model, @unchecked Sendable {
     static let schema = "sandbox_interface_security_groups"
 
