@@ -21,9 +21,16 @@ extension Request {
     ///
     /// Distinct from `authorizedProjectForCreate(...)`, which is the spine
     /// behind the project-scoped infrastructure creates (volume, network,
-    /// security group, floating IP, DNS zone): those have no environment, each
-    /// carries its own create action, and their default-project fallback is the
-    /// organization's first project rather than the one named "Default Project".
+    /// security group, floating IP, DNS zone): those have no environment and
+    /// each carries its own create action.
+    ///
+    /// **The two fallbacks disagree, and that is not by design.** This one
+    /// takes the project *named* "Default Project"; the other takes the
+    /// organization's oldest project. So in an organization holding more than
+    /// one project, `POST /api/vms` and `POST /api/volumes` with no `projectId`
+    /// can land in different places. Reconciling them is issue #1059 — until
+    /// then, do not read either as the installation's answer to "the default
+    /// project".
     ///
     /// - Parameter resourceKind: Plural noun for the resource being created
     ///   (e.g. `"VMs"`, `"sandboxes"`), used only in the forbidden-permission message.
@@ -131,17 +138,26 @@ extension Request {
     /// reach is the tier-1 policy rather than a bypass, and a role binding
     /// pinned directly at the missing id does not rescue it either.
     /// `ProjectResolutionTests` pins both, at all five endpoints: what a caller
-    /// inventing a UUID actually gets is `403`. The `400` is kept for the case
-    /// the evaluator stops covering it, because the failure it stands in front
-    /// of is a constraint violation surfacing as a `500` mid-create.
+    /// inventing a UUID actually gets is `403`.
     ///
-    /// **The fallback is still unordered.** `.first()` with no sort takes
-    /// whatever row Postgres hands back, so across an organization with more
-    /// than one project "the default project" is not a stable choice and can
-    /// differ between two calls by the same user. Settling that — an explicit
-    /// default-project field, oldest-created, or refusing when ambiguous — is
-    /// deliberately left open; what changed is that it is now one query to
-    /// settle instead of five.
+    /// Keeping a check nothing currently reaches is a trade, and it is not free
+    /// or uniform: the fallback path drops from two queries to one at all five
+    /// endpoints (the resolved row is reused), while a request that names its
+    /// project costs one `SELECT` more than it did at volume create and at
+    /// site-less network create — the two that were not already looking the
+    /// project up. That is worth paying for the failure it stands in front of,
+    /// which is an insert against a dangling foreign key surfacing as a `500`
+    /// mid-create rather than a `400` before anything is written.
+    ///
+    /// **The fallback is stable, not decided.** It used to be `.first()` with
+    /// no sort at all, so across an organization with more than one project two
+    /// identical requests by the same user could land in different projects —
+    /// Postgres is free to return a different row. The `created_at`/`id` sort
+    /// removes that, and nothing more: it makes the answer repeatable without
+    /// claiming the oldest project *ought* to be the default. Which project
+    /// should be — an explicit default-project field, or refusing when the
+    /// choice is ambiguous — is issue #1059, along with the fact that this
+    /// fallback and `resolveProjectForCreate`'s disagree.
     ///
     /// - Parameters:
     ///   - requestedProjectId: The project named by the request body, if any.
@@ -169,6 +185,8 @@ extension Request {
             guard
                 let defaultProject = try await Project.query(on: db)
                     .filter(\.$organization.$id == currentOrgId)
+                    .sort(\.$createdAt, .ascending)
+                    .sort(\.$id, .ascending)
                     .first()
             else {
                 throw Abort(.badRequest, reason: "No project specified and no default project found")
