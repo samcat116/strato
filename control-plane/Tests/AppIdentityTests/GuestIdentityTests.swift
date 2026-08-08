@@ -26,20 +26,20 @@ final class GuestIdentityTests {
         try await app.shutdownForTesting()
     }
 
-    /// Runs `body` with the per-org trust domain feature flag on. The flag is
-    /// read from the environment on each access and the suite is `.serialized`,
-    /// so this is safe to toggle in-process (same shape as `OrgTrustDomainTests`).
-    private func withFeatureFlagOn<T>(_ body: () async throws -> T) async rethrows -> T {
-        let previous = ProcessInfo.processInfo.environment["SPIRE_ORG_TRUST_DOMAINS_ENABLED"]
-        setenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED", "true", 1)
-        defer {
-            if let previous {
-                setenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED", previous, 1)
-            } else {
-                unsetenv("SPIRE_ORG_TRUST_DOMAINS_ENABLED")
-            }
-        }
-        return try await body()
+    /// Runs `body` with the per-org trust domain feature flag on.
+    ///
+    /// Through `EnvironmentFlag` rather than a bare `setenv`: `.serialized`
+    /// orders tests within this suite but suites run in parallel, and
+    /// `OrgTrustDomainTests` in this same target drives the same variable.
+    private func withFeatureFlagOn<T>(_ body: () async throws -> T) async throws -> T {
+        try await EnvironmentFlag.withValue("SPIRE_ORG_TRUST_DOMAINS_ENABLED", "true", body)
+    }
+
+    /// …and the same for asserting flag-*off* behavior, which is the direction
+    /// that actually loses the race: a parallel suite holding the flag on would
+    /// make an unguarded off-path assertion fail.
+    private func withFeatureFlagOff<T>(_ body: () async throws -> T) async throws -> T {
+        try await EnvironmentFlag.withValue("SPIRE_ORG_TRUST_DOMAINS_ENABLED", nil, body)
     }
 
     @discardableResult
@@ -93,11 +93,14 @@ final class GuestIdentityTests {
             let row = try await claimTrustDomain(
                 app, organizationID: orgID, phase: .active, bundlePEM: "-----BEGIN CERTIFICATE-----")
 
-            // The row exists and would qualify — the flag alone keeps the
-            // multi-domain path dormant, which is the whole point of phase 2.
-            let resolved = try await GuestIdentity.trustDomain(forOrganization: orgID, on: app.db)
-            #expect(resolved == PlatformTrustDomain.current)
-            #expect(resolved != row.trustDomain)
+            try await self.withFeatureFlagOff {
+                // The row exists and would qualify — the flag alone keeps the
+                // multi-domain path dormant, which is the whole point of phase 2.
+                let resolved = try await GuestIdentity.trustDomain(
+                    forOrganization: orgID, on: app.db)
+                #expect(resolved == PlatformTrustDomain.current)
+                #expect(resolved != row.trustDomain)
+            }
         }
     }
 
@@ -178,8 +181,7 @@ final class GuestIdentityTests {
             let orgID = try org.requireID()
 
             let registration = try await GuestIdentity.register(
-                vmID: vmID, organizationID: orgID, displayName: vm.name, createdBy: nil,
-                on: app.db)
+                vmID: vmID, organizationID: orgID, createdBy: nil, on: app.db)
             let registrationID = try registration.requireID()
 
             #expect(registration.kind == .workload)
@@ -218,6 +220,37 @@ final class GuestIdentityTests {
         }
     }
 
+    @Test("An org-less registration is external to every organization")
+    func orgLessRegistrationIsExternal() async throws {
+        try await withApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Gate Org")
+            let project = try await builder.createProject(
+                name: "Gate Project", description: "d", organization: org)
+            let vm = try await builder.createVM(name: "orgless-vm", project: project)
+
+            // The defensive shape, not a reachable one: `Project.validate()`
+            // refuses a project belonging to neither an organization nor a
+            // folder, and both create routes are nested under an organization,
+            // so `getRootOrganizationId` does not return nil in practice. It is
+            // typed `UUID?` though, and STR-55 writes whatever it returns — so
+            // pin what a NULL-org registration means before someone rediscovers
+            // it as a bug.
+            let registration = try await GuestIdentity.register(
+                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.db)
+            #expect(registration.$organization.id == nil)
+
+            // External, so binding a role to it needs `iam:grantExternal` — the
+            // safe default, and the same answer any org-less workload row has
+            // always got: a principal that cannot be placed must not slip past
+            // the gate.
+            let external = try await CrossOrgBindingGate.isExternal(
+                principalType: .workload, principalID: try registration.requireID(),
+                organizationID: try org.requireID(), on: app.db)
+            #expect(external)
+        }
+    }
+
     @Test("A VM cannot hold two identities")
     func oneRegistrationPerVM() async throws {
         try await withApp { app in
@@ -230,7 +263,7 @@ final class GuestIdentityTests {
             let orgID = try org.requireID()
 
             try await GuestIdentity.register(
-                vmID: vmID, organizationID: orgID, displayName: vm.name, createdBy: nil, on: app.db)
+                vmID: vmID, organizationID: orgID, createdBy: nil, on: app.db)
 
             // A *distinct* SPIFFE ID on the same VM, so the `spiffe_id` index
             // cannot be what refuses it: two rows would give one VM two

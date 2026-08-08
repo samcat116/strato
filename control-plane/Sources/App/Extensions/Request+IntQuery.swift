@@ -22,4 +22,21 @@ extension Request {
         let value = try intQuery(name) ?? defaultValue
         return Swift.min(Swift.max(value, range.lowerBound), range.upperBound)
     }
+
+    /// A boolean query parameter, or `nil` when absent (or present but empty).
+    ///
+    /// Deliberately **not** `query[Bool.self, at:]`: that decodes a missing key
+    /// as `false` rather than as nil, so an optional tri-state filter written
+    /// against it silently becomes "absent means exclude" — a listing that
+    /// answers a narrower question than it was asked, and nobody finds out.
+    /// Same rule as `intQuery` for a malformed value: a 400, not a fallback.
+    func boolQuery(_ name: String) throws -> Bool? {
+        guard let raw = query[String.self, at: name], !raw.isEmpty else { return nil }
+        switch raw.lowercased() {
+        case "true", "1", "yes": return true
+        case "false", "0", "no": return false
+        default:
+            throw Abort(.badRequest, reason: "Query parameter '\(name)' must be true or false")
+        }
+    }
 }

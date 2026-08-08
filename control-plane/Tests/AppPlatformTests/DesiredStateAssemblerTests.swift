@@ -133,8 +133,7 @@ final class DesiredStateAssemblerTests {
             // because `placeVM` builds the row directly rather than going
             // through the create endpoint that would register it.
             let identity = try await GuestIdentity.register(
-                vmID: try vm.requireID(), organizationID: nil, displayName: vm.name,
-                createdBy: nil, on: app.db)
+                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.db)
 
             // Two networks with different DHCP/DNS config, so a per-NIC field
             // taken from the wrong network row would show up.
@@ -435,7 +434,7 @@ final class DesiredStateAssemblerTests {
                     // would never show up in the counts below.
                     try await GuestIdentity.register(
                         vmID: try vm.requireID(), organizationID: try org.requireID(),
-                        displayName: vm.name, createdBy: nil, on: app.db)
+                        createdBy: nil, on: app.db)
                     for nic in 0..<2 {
                         try await self.attachNIC(
                             app: app, vm: vm, network: network, deviceName: "net\(nic)",

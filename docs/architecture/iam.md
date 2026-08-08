@@ -763,8 +763,26 @@ never parsed for claims — to what it names:
   via `/api/projects/{id}/workload-grants/{registrationID}`. Since STR-55 a
   VM's **instance identity** is the same kind of row, written by the VM's own
   create transaction rather than by an operator: `vm_id` links it to the VM,
-  `ON DELETE CASCADE` destroys it with the VM, `display_name` snapshots the
-  VM's name, and `organization_id` is the project's root organization.
+  `ON DELETE CASCADE` destroys it with the VM, and `organization_id` is the
+  project's root organization. No `display_name` is stored — a VM-owned row's
+  label is the VM's *current* name, hydrated at read time, because a stored copy
+  would decay from the first rename and the registry listing is exactly where
+  someone goes to ask which VM an identity belongs to.
+
+The registry listing is paged and filterable (`kind`, `spiffeId`, `vmOwned`),
+which it did not need to be while rows were only ever hand-registered. Both of
+instance identity's remediation paths — the `409` a VM create answers when a
+constraint could not be satisfied, and the backfill's stranded-VM warning — send
+an operator to `GET /api/workload-registrations?spiffeId=…`, so an unbounded
+listing of one row per VM would fail exactly where it is needed.
+
+A registration whose `organization_id` is NULL is **external to every
+organization**, so binding a role to it requires `iam:grantExternal`
+(`CrossOrgBindingGate.isExternal`). That is the long-standing answer for a
+principal that cannot be placed, and it stays reachable only defensively:
+`Project.validate()` refuses a project belonging to neither an organization nor a
+folder, and both project-create routes are nested under an organization, so a
+VM's registration resolves an org in practice.
 
 In the Cedar schema, `Workload` and `ServiceAccount` are principal types
 alongside `User`: every role carries four `Grants` sets (users, groups,

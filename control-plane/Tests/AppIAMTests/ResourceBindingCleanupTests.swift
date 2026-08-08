@@ -189,8 +189,7 @@ struct ResourceBindingCleanupTests {
             // VM's delete does not reach — this is the row the `vm_id` cascade
             // would strand.
             let identity = try await GuestIdentity.register(
-                vmID: vmID, organizationID: orgID, displayName: vm.name, createdBy: user.id,
-                on: app.db)
+                vmID: vmID, organizationID: orgID, createdBy: user.id, on: app.db)
             let identityID = try identity.requireID()
 
             // A workload principal with no VM behind it, standing in for every

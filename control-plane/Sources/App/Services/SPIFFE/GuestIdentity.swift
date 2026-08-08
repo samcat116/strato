@@ -96,11 +96,19 @@ enum GuestIdentity {
     /// Call inside the VM's create transaction: the identity and the VM commit
     /// together or not at all, so there is no window in which a VM exists
     /// without one.
+    ///
+    /// No `display_name` is stored. An operator-facing label for a VM-owned row
+    /// is the VM's *current* name, and the row dies with the VM — so a stored
+    /// copy would have no independent lifetime and nothing but decay to offer:
+    /// after a rename the registry listing, which is exactly where someone goes
+    /// to answer "which VM is this?", would show the old one. `vm_id` is right
+    /// there, so the label is hydrated at read time instead
+    /// (`WorkloadRegistrationController.list`). Absent beats stale as a failure
+    /// mode for a read path that forgets.
     @discardableResult
     static func register(
         vmID: UUID,
         organizationID: UUID?,
-        displayName: String?,
         createdBy: UUID?,
         on db: any Database
     ) async throws -> WorkloadRegistration {
@@ -109,7 +117,6 @@ enum GuestIdentity {
             spiffeID: spiffeID(forVM: vmID, trustDomain: trustDomain),
             kind: .workload,
             organizationID: organizationID,
-            displayName: displayName,
             createdBy: createdBy,
             vmID: vmID
         )
@@ -117,7 +124,33 @@ enum GuestIdentity {
         return registration
     }
 
-    /// The SPIFFE IDs of a set of VMs, in one query.
+    /// The current names of a set of VMs, for hydrating registry labels.
+    /// Chunked and batched for the same reason `spiffeIDs(forVMs:on:)` is.
+    static func names(forVMs vmIDs: [UUID], on db: any Database) async throws -> [UUID: String] {
+        guard !vmIDs.isEmpty else { return [:] }
+
+        var result: [UUID: String] = [:]
+        for start in stride(from: 0, to: vmIDs.count, by: lookupChunkSize) {
+            let chunk = Array(vmIDs[start..<min(start + lookupChunkSize, vmIDs.count)])
+            let rows = try await VM.query(on: db).filter(\.$id ~~ chunk).all()
+            for row in rows {
+                guard let vmID = row.id else { continue }
+                result[vmID] = row.name
+            }
+        }
+        return result
+    }
+
+    /// `IN` lists are bounded: Postgres refuses a statement with more than
+    /// 65535 bind parameters and plans a long list poorly well before that.
+    /// Both callers of `spiffeIDs(forVMs:on:)` size their list by *VM count* —
+    /// the sync assembly by an agent's whole guest population, the list endpoint
+    /// by everything the caller can read — so the chunking lives here rather
+    /// than being repeated, or forgotten, at each call site.
+    /// (`RoleBindingService` bounds its own sweeps the same way.)
+    private static let lookupChunkSize = 1000
+
+    /// The SPIFFE IDs of a set of VMs.
     ///
     /// The batched form is the only one the desired-state assembly and the VM
     /// list may use: both run over every VM in scope, so a per-VM lookup there
@@ -126,13 +159,19 @@ enum GuestIdentity {
     /// is vended no identity.
     static func spiffeIDs(forVMs vmIDs: [UUID], on db: any Database) async throws -> [UUID: String] {
         guard !vmIDs.isEmpty else { return [:] }
-        let rows = try await WorkloadRegistration.query(on: db)
-            .filter(\.$vm.$id ~~ vmIDs)
-            .all()
-        return Dictionary(
-            rows.compactMap { row in row.$vm.id.map { ($0, row.spiffeID) } },
-            uniquingKeysWith: { first, _ in first }
-        )
+
+        var result: [UUID: String] = [:]
+        for start in stride(from: 0, to: vmIDs.count, by: lookupChunkSize) {
+            let chunk = Array(vmIDs[start..<min(start + lookupChunkSize, vmIDs.count)])
+            let rows = try await WorkloadRegistration.query(on: db)
+                .filter(\.$vm.$id ~~ chunk)
+                .all()
+            for row in rows {
+                guard let vmID = row.$vm.id else { continue }
+                result[vmID] = row.spiffeID
+            }
+        }
+        return result
     }
 
     /// One VM's SPIFFE ID, for the single-resource endpoints. Nil when the VM

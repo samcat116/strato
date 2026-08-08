@@ -32,41 +32,35 @@ struct BackfillVMWorkloadRegistrations: AsyncMigration {
         let platformTrustDomain = PlatformTrustDomain.current
         let orgDomainsEnabled = OrgTrustDomainsFeature.isEnabled
 
-        var query: SQLQueryString = """
-            INSERT INTO workload_registrations
-                (id, spiffe_id, kind, organization_id, vm_id, display_name, created_at)
-            SELECT gen_random_uuid(),
-                   'spiffe://' ||
-            """
+        // The URI expression and the walk that feeds it, built once and used by
+        // both statements below: the insert, and the diagnostic that reports
+        // which VMs the insert could not reach. Two hand-written copies would be
+        // two chances for the diagnostic to name a SPIFFE ID that is not the one
+        // the insert actually tried.
+        //
+        // `lower(v.id::text)` is `GuestIdentity.path(forVM:)` in SQL — the same
+        // lowercase spelling, for the same reason: the URI is matched by exact
+        // string on the way back in.
+        var uri: SQLQueryString = "'spiffe://' || "
+        if orgDomainsEnabled {
+            uri += "COALESCE(otd.trust_domain, \(bind: platformTrustDomain))"
+        } else {
+            uri += "\(bind: platformTrustDomain)"
+        }
+        uri += " || '/vm/' || lower(v.id::text)"
 
         // The org-domain join is emitted only when the flag is on: with it off
         // there is no org domain to prefer, and an always-present join would
         // read as one.
-        if orgDomainsEnabled {
-            query += " COALESCE(otd.trust_domain, \(bind: platformTrustDomain))"
-        } else {
-            query += " \(bind: platformTrustDomain)"
-        }
-
-        // `lower(v.id::text)` is `GuestIdentity.path(forVM:)` in SQL — the same
-        // lowercase spelling, for the same reason: the URI is matched by exact
-        // string on the way back in.
-        query += """
-             || '/vm/' || lower(v.id::text),
-                   'workload'::workload_registration_kind,
-                   org.id,
-                   v.id,
-                   v.name,
-                   now()
+        var walk: SQLQueryString = """
             FROM vms v
             LEFT JOIN projects p ON p.id = v.project_id
             LEFT JOIN organizational_units ou ON ou.id = p.organizational_unit_id
             LEFT JOIN organizations org
                    ON org.id = COALESCE(p.organization_id, ou.organization_id)
             """
-
         if orgDomainsEnabled {
-            query += """
+            walk += """
 
                 LEFT JOIN org_trust_domains otd
                        ON otd.organization_id = org.id
@@ -75,37 +69,72 @@ struct BackfillVMWorkloadRegistrations: AsyncMigration {
                 """
         }
 
+        let missing: SQLQueryString = """
+            WHERE NOT EXISTS (
+                      SELECT 1 FROM workload_registrations wr WHERE wr.vm_id = v.id)
+            """
+
+        // No `display_name`: an operator-facing label for a VM-owned row is the
+        // VM's *current* name, hydrated at read time, not a copy that decays
+        // from the first rename onwards. Matches `GuestIdentity.register`.
+        //
         // `ON CONFLICT DO NOTHING` covers the `spiffe_id` unique index, which a
         // hand-registered URI could be squatting while `/vm/` is unreserved
         // (STR-165). Skipping such a row is the only safe answer here — a
         // migration cannot redraw a VM's id the way the create path's retry can
-        // — so the count below is what makes the skip visible instead of
+        // — so the diagnostic below is what makes the skip visible instead of
         // silent. The `NOT EXISTS` guard covers re-application, which
         // `MigrationRoundTripTests` performs.
-        query += """
-
-            WHERE NOT EXISTS (
-                      SELECT 1 FROM workload_registrations wr WHERE wr.vm_id = v.id)
-            ON CONFLICT DO NOTHING
+        var insert: SQLQueryString = """
+            INSERT INTO workload_registrations
+                (id, spiffe_id, kind, organization_id, vm_id, display_name, created_at)
+            SELECT gen_random_uuid(),
+                  \u{20}
             """
+        insert += uri
+        insert += """
+            ,
+                   'workload'::workload_registration_kind,
+                   org.id,
+                   v.id,
+                   NULL,
+                   now()
 
-        try await sql.raw(query).run()
+            """
+        insert += walk
+        insert += "\n"
+        insert += missing
+        insert += "\nON CONFLICT DO NOTHING"
 
-        let strandedRow = try await sql.raw(
-            """
-            SELECT count(*) AS stranded FROM vms v
-            WHERE NOT EXISTS (SELECT 1 FROM workload_registrations wr WHERE wr.vm_id = v.id)
-            """
-        ).first()
-        let stranded = try strandedRow?.decode(column: "stranded", as: Int.self) ?? 0
-        if stranded > 0 {
+        try await sql.raw(insert).run()
+
+        // A sample of the offending SPIFFE IDs, not just a count: the operator's
+        // next step is to look each one up, and a bare number would send them
+        // searching a registry that now holds one row per VM. Ten is enough to
+        // act on and short enough to log.
+        var stragglers: SQLQueryString = "SELECT count(*) OVER () AS stranded, "
+        stragglers += uri
+        stragglers += " AS spiffe_id\n"
+        stragglers += walk
+        stragglers += "\n"
+        stragglers += missing
+        stragglers += "\nLIMIT 10"
+
+        let strandedRows = try await sql.raw(stragglers).all()
+        if let first = strandedRows.first {
+            let stranded = try first.decode(column: "stranded", as: Int.self)
+            let sample = try strandedRows.map { try $0.decode(column: "spiffe_id", as: String.self) }
             database.logger.warning(
                 """
-                Some VMs could not be given an instance identity; their SPIFFE ID is already \
-                registered to another principal. Inspect GET /api/workload-registrations and \
-                remove the squatting rows, then re-run this migration.
+                Some VMs could not be given an instance identity: their SPIFFE ID is already \
+                registered to another principal. Look each up with \
+                GET /api/workload-registrations?spiffeId=<id>, remove the squatting rows, then \
+                re-run this migration.
                 """,
-                metadata: ["vms_without_identity": .stringConvertible(stranded)]
+                metadata: [
+                    "vms_without_identity": .stringConvertible(stranded),
+                    "sample_spiffe_ids": .array(sample.map { .string($0) }),
+                ]
             )
         }
     }

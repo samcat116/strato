@@ -183,7 +183,9 @@ struct MigrationRoundTripTests {
                 #expect(found.count == 1, "\(name)")
                 let row = try #require(found.first)
                 #expect(row.kind == .workload)
-                #expect(row.displayName == name)
+                // No stored label, matching `GuestIdentity.register`: the
+                // registry hydrates it from the VM.
+                #expect(row.displayName == nil)
                 // The organization is reached through the project either way.
                 #expect(row.$organization.id == orgID, "\(name)")
                 #expect(

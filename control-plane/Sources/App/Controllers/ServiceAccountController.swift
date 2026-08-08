@@ -67,7 +67,10 @@ struct ServiceAccountController: RouteCollection {
         let displayName: String?
         let createdAt: Date?
 
-        init(_ row: WorkloadRegistration) throws {
+        /// - Parameter displayName: overrides the stored label. VM-owned rows
+        ///   store none and are hydrated from the VM's current name, so the
+        ///   registry never shows a name a rename has already invalidated.
+        init(_ row: WorkloadRegistration, displayName: String? = nil) throws {
             self.id = try row.requireID()
             self.spiffeId = row.spiffeID
             self.kind = row.kind.rawValue
@@ -75,7 +78,7 @@ struct ServiceAccountController: RouteCollection {
             self.serviceAccountId = row.$serviceAccount.id
             self.organizationId = row.$organization.id
             self.vmId = row.$vm.id
-            self.displayName = row.displayName
+            self.displayName = displayName ?? row.displayName
             self.createdAt = row.createdAt
         }
     }
@@ -284,7 +287,9 @@ struct ServiceAccountController: RouteCollection {
             .filter(\.$serviceAccount.$id == accountID)
             .sort(\.$spiffeID)
             .all()
-            .map(WorkloadRegistrationResponse.init)
+            // No label hydration: a service account's registrations never carry
+            // a `vm_id`, so there is no VM to read a current name from.
+            .map { try WorkloadRegistrationResponse($0) }
     }
 
     /// POST /api/service-accounts/:serviceAccountID/registrations — register

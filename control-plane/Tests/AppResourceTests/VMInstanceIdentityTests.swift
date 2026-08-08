@@ -132,9 +132,9 @@ final class VMInstanceIdentityTests {
             #expect(row.kind == .workload)
             #expect(row.$organization.id == org.id)
             #expect(row.createdBy == user.id)
-            // An operator-facing label snapshotted at create, not a second name
-            // for the identity: the id in the path is the identity.
-            #expect(row.displayName == "identified-vm")
+            // No stored label: the id in the SPIFFE path is the identity, and a
+            // copy of `vm.name` would only decay. The registry hydrates it.
+            #expect(row.displayName == nil)
             #expect(
                 row.spiffeID
                     == GuestIdentity.spiffeID(forVM: vmID, trustDomain: PlatformTrustDomain.current))
@@ -192,6 +192,174 @@ final class VMInstanceIdentityTests {
         }
     }
 
+    @Test("The registry shows the VM's current name, not the one it had at create")
+    func registryLabelTracksRenames() async throws {
+        try await withIdentityTestApp { app, user, org, project, token in
+            let admin = try await TestDataBuilder(db: app.db).createUser(
+                username: "registryadmin", email: "registryadmin@example.com",
+                displayName: "Registry Admin", isSystemAdmin: true)
+            let adminToken = try await admin.generateAPIKey(on: app.db)
+
+            let created = try await self.createVM(
+                app, project: project, user: user, token: token, name: "before-rename",
+                suffix: "rename")
+            let vmID = try #require(created.id)
+            let spiffeID = try #require(
+                try await self.registration(forVM: vmID, on: app.db)?.spiffeID)
+
+            let vm = try #require(try await VM.find(vmID, on: app.db))
+            vm.name = "after-rename"
+            try await vm.save(on: app.db)
+
+            struct RegistrationBody: Content {
+                let spiffeId: String
+                let vmId: UUID?
+                let displayName: String?
+            }
+            struct PagedRegistrations: Content {
+                let items: [RegistrationBody]
+                let total: Int
+            }
+
+            // Percent-encoded: a SPIFFE URI carries `:` and `//`, so a raw
+            // value would not survive the query string intact.
+            let encoded = try #require(
+                spiffeID.addingPercentEncoding(withAllowedCharacters: .alphanumerics))
+
+            // Filtered to the one row, which is also the diagnostic path the
+            // create-conflict and backfill messages send an operator down.
+            try await app.test(
+                .GET, "/api/workload-registrations?spiffeId=\(encoded)"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let paged = try res.content.decode(PagedRegistrations.self)
+                #expect(paged.total == 1)
+                let row = try #require(paged.items.first)
+                #expect(row.vmId == vmID)
+                // Hydrated from the VM, so it cannot show a name a rename has
+                // already invalidated — which is the whole reason it is not
+                // stored.
+                #expect(row.displayName == "after-rename")
+            }
+        }
+    }
+
+    @Test("The registry filters by kind and by whether a row is VM-owned")
+    func registryFilters() async throws {
+        try await withIdentityTestApp { app, user, org, project, token in
+            let admin = try await TestDataBuilder(db: app.db).createUser(
+                username: "filteradmin", email: "filteradmin@example.com",
+                displayName: "Filter Admin", isSystemAdmin: true)
+            let adminToken = try await admin.generateAPIKey(on: app.db)
+
+            let created = try await self.createVM(
+                app, project: project, user: user, token: token, name: "filtered-vm",
+                suffix: "filter")
+            let vmID = try #require(created.id)
+
+            // A workload row with no VM behind it, so `vmOwned` has something to
+            // exclude rather than trivially matching everything.
+            try await WorkloadRegistration(
+                spiffeID: "spiffe://\(PlatformTrustDomain.current)/sa/filter-bystander",
+                kind: .workload, organizationID: try org.requireID()
+            ).save(on: app.db)
+
+            struct RegistrationBody: Content {
+                let spiffeId: String
+                let vmId: UUID?
+            }
+            struct PagedRegistrations: Content {
+                let items: [RegistrationBody]
+                let total: Int
+            }
+
+            func list(_ query: String) async throws -> PagedRegistrations {
+                var decoded: PagedRegistrations?
+                try await app.test(.GET, "/api/workload-registrations?\(query)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                    decoded = try res.content.decode(PagedRegistrations.self)
+                }
+                return try #require(decoded)
+            }
+
+            // The unfiltered listing must contain *both*. This is the case that
+            // caught `query[Bool.self, at:]` decoding a missing key as `false`:
+            // the endpoint silently answered "every registration with no VM",
+            // which is the minority of the table and looked like an empty
+            // registry.
+            let unfiltered = try await list("")
+            #expect(unfiltered.items.contains { $0.vmId == vmID })
+            #expect(unfiltered.items.contains { $0.spiffeId.hasSuffix("/sa/filter-bystander") })
+
+            let vmOwned = try await list("vmOwned=true")
+            #expect(vmOwned.items.allSatisfy { $0.vmId != nil })
+            #expect(vmOwned.items.contains { $0.vmId == vmID })
+
+            let notVMOwned = try await list("vmOwned=false")
+            #expect(notVMOwned.items.allSatisfy { $0.vmId == nil })
+            #expect(notVMOwned.items.contains { $0.spiffeId.hasSuffix("/sa/filter-bystander") })
+
+            let agents = try await list("kind=agent")
+            #expect(agents.items.isEmpty)
+
+            // A bad value is a 400, not a silently narrowed page — the same rule
+            // `intQuery` follows, and the reason `boolQuery` exists.
+            for bad in ["kind=nonsense", "vmOwned=maybe"] {
+                try await app.test(.GET, "/api/workload-registrations?\(bad)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest, "\(bad)")
+                }
+            }
+        }
+    }
+
+    // MARK: - Squatting
+
+    @Test("A squatted SPIFFE ID fails registration, and a redrawn VM id escapes it")
+    func squattedIdentityIsEscapedByRedrawingTheID() async throws {
+        try await withIdentityTestApp { app, user, org, project, _ in
+            let orgID = try org.requireID()
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "squatted-vm", project: project)
+            let vmID = try vm.requireID()
+
+            // What an administrator could do today, because `/vm/` is not yet
+            // refused by `WorkloadRegistry.validateRegistrable` (STR-165): claim
+            // the URI a VM would be minted into.
+            try await WorkloadRegistration(
+                spiffeID: GuestIdentity.spiffeID(
+                    forVM: vmID, trustDomain: PlatformTrustDomain.current),
+                kind: .workload, organizationID: orgID
+            ).save(on: app.db)
+
+            // The `spiffe_id` unique index is the interim guard, and this is the
+            // failure the create path's retry wrapper catches.
+            await #expect(throws: (any Error).self) {
+                try await GuestIdentity.register(
+                    vmID: vmID, organizationID: orgID, createdBy: user.id, on: app.db)
+            }
+
+            // And this is why the retry is the answer: `retryingOnConstraintFailure`
+            // resets `vm.id` between attempts, so the next attempt composes a
+            // different URI and the squat no longer applies. A migration cannot
+            // do this, which is why the backfill skips and warns instead.
+            let redrawn = try await builder.createVM(name: "redrawn-vm", project: project)
+            let redrawnID = try redrawn.requireID()
+            #expect(redrawnID != vmID)
+            let registration = try await GuestIdentity.register(
+                vmID: redrawnID, organizationID: orgID, createdBy: user.id, on: app.db)
+            #expect(
+                registration.spiffeID
+                    == GuestIdentity.spiffeID(
+                        forVM: redrawnID, trustDomain: PlatformTrustDomain.current))
+        }
+    }
+
     // MARK: - Delete
 
     @Test("Reaping a VM removes its identity and the grants that principal held")
@@ -202,8 +370,7 @@ final class VMInstanceIdentityTests {
             let vmID = try vm.requireID()
 
             let row = try await GuestIdentity.register(
-                vmID: vmID, organizationID: try org.requireID(), displayName: vm.name,
-                createdBy: user.id, on: app.db)
+                vmID: vmID, organizationID: try org.requireID(), createdBy: user.id, on: app.db)
             let registrationID = try row.requireID()
 
             // A grant the identity holds somewhere else entirely — the kind the
@@ -258,8 +425,7 @@ final class VMInstanceIdentityTests {
             let vm = try await builder.createVM(name: "revoked-vm", project: project)
             let vmID = try vm.requireID()
             let row = try await GuestIdentity.register(
-                vmID: vmID, organizationID: try org.requireID(), displayName: vm.name,
-                createdBy: user.id, on: app.db)
+                vmID: vmID, organizationID: try org.requireID(), createdBy: user.id, on: app.db)
 
             try await app.test(.DELETE, "/api/workload-registrations/\(try row.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: adminToken)

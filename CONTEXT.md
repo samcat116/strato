@@ -282,7 +282,9 @@ use in code, tests, docs, and review. Architecture-level maps live in
   `spiffe://<trust-domain>/vm/<vm-id>` with the id lowercased (STR-55). One
   `workload_registrations` row per VM (`kind = workload`, linked by `vm_id`),
   written in the VM's create transaction and cascade-deleted with it, and
-  published to the guest through the instance metadata service. It **names** the
+  published to the guest through the instance metadata service. The row stores no
+  label: an operator-facing name for it is the VM's current one, read through
+  `vm_id` rather than copied and left to decay. It **names** the
   VM as an IAM principal; it grants nothing — a registration with no role
   bindings authenticates and authorizes nothing, which is why every VM has one
   rather than it being opt-in. Revocable only by deleting the row, and that is

@@ -153,13 +153,23 @@ struct VMController: RouteCollection {
         // per-row realizer walk would be three queries per VM.
         let enforcement = try await SecurityGroupService.enforcementByVM(allVMs, on: req.db)
 
+        let visible = allVMs.filter { vm in
+            vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
+        }
+
         // …and for the same reason again: the page's instance identities
         // (STR-55) in one query rather than one per row.
+        //
+        // Over `visible`, not `allVMs`: this is the one lookup here whose `IN`
+        // list grows with the *fleet* rather than with the host count, so it is
+        // also the one worth not widening with rows whose identity is about to
+        // be discarded — and resolving an identity for a VM the caller may not
+        // read is work with no reader.
         let spiffeIDs = try await GuestIdentity.spiffeIDs(
-            forVMs: allVMs.compactMap(\.id), on: req.db)
+            forVMs: visible.compactMap(\.id), on: req.db)
 
-        return allVMs.compactMap { vm in
-            guard let id = vm.id, readable.contains(IAMNode(type: .virtualMachine, id: id)) else { return nil }
+        return visible.compactMap { vm in
+            guard let id = vm.id else { return nil }
             return VMDetailResponse(
                 from: vm, securityGroupsEnforced: enforcement[id], spiffeId: spiffeIDs[id])
         }
@@ -651,12 +661,13 @@ struct VMController: RouteCollection {
                     // switch would be a second lock on a door the authorization
                     // model already holds shut.
                     //
-                    // `displayName` is the VM's name — an operator-facing label
-                    // for the registry listing, refreshed by nothing. The id in
-                    // the SPIFFE path is the identity; a rename must never move
-                    // one (docs/architecture/guest-identity.md, "UUIDs, never
-                    // names"). A project belonging to no organization still
-                    // gets a row, scoped to nothing, on the platform domain.
+                    // No label is stored: the id in the SPIFFE path is the
+                    // identity, a rename must never move one
+                    // (docs/architecture/guest-identity.md, "UUIDs, never
+                    // names"), and a stored copy of `vm.name` would only decay.
+                    // The registry hydrates it from the VM. A project belonging
+                    // to no organization still gets a row, scoped to nothing, on
+                    // the platform domain.
                     //
                     // A `spiffe_id` collision — an administrator having
                     // hand-registered this VM's URI while `/vm/` is still
@@ -667,7 +678,6 @@ struct VMController: RouteCollection {
                     try await GuestIdentity.register(
                         vmID: vmID,
                         organizationID: rootOrganizationID,
-                        displayName: vm.name,
                         createdBy: userID,
                         on: db
                     )
@@ -681,20 +691,28 @@ struct VMController: RouteCollection {
             // back, so no VM was created.
             throw Abort(.conflict, reason: error.errorDescription ?? "No free IP addresses in the selected network")
         } catch let error as any DatabaseError where error.isConstraintFailure {
-            // Every attempt lost the same unique index. In practice that is
-            // either a saturated network the IPAM retry could not walk past, or
-            // a pre-registered `spiffe://<td>/vm/<uuid>` that the id redraw
-            // should have escaped — both conflicts, not server faults, and both
-            // rolled back whole.
+            // Every attempt lost the same constraint. A conflict rather than a
+            // server fault — the transaction rolled back whole — so `409` is the
+            // honest status, where this previously fell through as a `500`.
+            //
+            // The catch is broader than any one cause and the message stays
+            // broad to match: an address race, a squatted
+            // `spiffe://<td>/vm/<uuid>`, or a constraint on any other row this
+            // transaction writes all land here, and naming only one of them
+            // would send an operator down a dead end for the others. Which
+            // constraint actually fired is in the log line below, where the
+            // full error description carries the index name.
             req.logger.warning(
                 "VM create exhausted its retries on a constraint failure",
-                metadata: ["error": .string(String(describing: error))])
+                metadata: [
+                    "project_id": .string(projectId.uuidString),
+                    "error": .string(String(describing: error)),
+                ])
             throw Abort(
                 .conflict,
                 reason: """
-                    Could not create the VM: a uniqueness constraint could not be satisfied. \
-                    Retry; if it persists, check GET /api/workload-registrations for a \
-                    registration squatting this VM's SPIFFE ID.
+                    Could not create the VM: a uniqueness constraint could not be satisfied \
+                    after retrying. Retry; if it persists, the server log names the constraint.
                     """)
         }
 
