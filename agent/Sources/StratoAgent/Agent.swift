@@ -551,8 +551,10 @@ actor Agent {
                         configured: resolverConfig?.corednsBinaryPath, isExecutable: isExecutable)
                     : nil
                 let resolverSupervisor = resolverBinaryPath.flatMap { binaryPath -> ResolverSupervisor? in
-                    // Both binaries are required: the resolver is forked *into*
-                    // a namespace, so no `ip` means no way in.
+                    // Both binaries are required. CoreDNS runs in the host
+                    // namespace and needs no `ip` to start, but it binds
+                    // addresses that `ip` is what puts on the interface — so
+                    // without it there is nothing for the resolver to answer on.
                     guard let ipBinaryPath else { return nil }
                     return ResolverSupervisor(
                         root: resolverConfig?.effectiveConfigDirectory
