@@ -254,6 +254,19 @@ actor Agent {
     // OVN native dynamic routing (issue #344): BGP advertisement of floating
     // IPs / connected routes via FRR on the egress host.
     private let ovnDynamicRouting: OVNDynamicRoutingConfig?
+    // Per-network DNS resolver settings (STR-40). Nil means the defaults, which
+    // is deliberately "on": the feature is an opt-out on the *network*, so a
+    // host whose config says nothing about it is one that should run it.
+    private let resolverConfig: NetworkResolverConfig?
+    // The CoreDNS this host will run, resolved once at network-service setup.
+    // Nil means the host cannot answer on a resolver address at all — no
+    // binary, the feature disabled here, or user-mode networking — which is
+    // exactly what `AgentRegisterMessage.resolverCapable` reports.
+    private var resolverBinaryPath: String?
+    // Owns one CoreDNS per resolver-enabled network with a local NIC. Held here
+    // as well as inside the network service so shutdown can stop them: a
+    // draining host must not keep answering for networks it no longer serves.
+    private var resolverSupervisor: ResolverSupervisor?
     private let ovnNorthbound: String?
     // TLS material for an ssl: ovn_northbound endpoint (nil = tcp/unix).
     private let ovnNorthboundTLS: OVNNorthboundTLSConfig?
@@ -370,6 +383,7 @@ actor Agent {
         ovnChassisConfig: OVNChassisConfig = OVNChassisConfig(),
         ovnUplink: OVNUplinkConfig? = nil,
         ovnDynamicRouting: OVNDynamicRoutingConfig? = nil,
+        resolverConfig: NetworkResolverConfig? = nil,
         ovnNorthbound: String? = nil,
         ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
         logger: Logger,
@@ -404,6 +418,7 @@ actor Agent {
         self.ovnChassisConfig = ovnChassisConfig
         self.ovnUplink = ovnUplink
         self.ovnDynamicRouting = ovnDynamicRouting
+        self.resolverConfig = resolverConfig
         self.ovnNorthbound = ovnNorthbound
         self.ovnNorthboundTLS = ovnNorthboundTLS
         self.logger = logger
@@ -503,11 +518,34 @@ actor Agent {
                 // `tc`, and a service manager's stripped `PATH` must not be able
                 // to break a host that has them (issue STR-100).
                 let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+                let ipBinaryPath = SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable)
+                // The resolver is OVN-only by construction: it terminates on a
+                // `localport` in a chassis namespace, neither of which exists
+                // under user-mode networking. Resolved here rather than at
+                // startup so `resolverBinaryPath` is nil on every path that
+                // cannot run it, and `resolverCapable` follows from one check.
+                resolverBinaryPath =
+                    (resolverConfig?.enabled ?? true)
+                    ? NetworkResolverDefaults.resolveBinaryPath(
+                        configured: resolverConfig?.corednsBinaryPath, isExecutable: isExecutable)
+                    : nil
+                let resolverSupervisor = resolverBinaryPath.map { binaryPath in
+                    ResolverSupervisor(
+                        root: resolverConfig?.effectiveConfigDirectory
+                            ?? NetworkResolverDefaults.configDirectory,
+                        binaryPath: binaryPath,
+                        ipBinaryPath: ipBinaryPath,
+                        logger: logger)
+                }
+                self.resolverSupervisor = resolverSupervisor
                 networkService = NetworkServiceLinux(
                     nbConnection: ovnNorthbound, nbTLS: ovnNorthboundTLS, chassisConfig: ovnChassisConfig,
                     uplink: ovnUplink, dynamicRouting: ovnDynamicRouting,
-                    ipBinaryPath: SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable),
+                    ipBinaryPath: ipBinaryPath,
                     tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable),
+                    chassisServiceRatePPS: resolverConfig?.effectiveRateLimitPPS
+                        ?? NetworkResolverDefaults.rateLimitPPS,
+                    resolverSupervisor: resolverSupervisor,
                     logger: logger)
                 effectiveNetworkMode = .ovn
                 #else
@@ -897,6 +935,14 @@ actor Agent {
 
         networkConnectTask?.cancel()
         networkConnectTask = nil
+
+        // Stop the per-network resolvers (STR-40). A draining host must not keep
+        // a CoreDNS answering for networks whose guests have moved elsewhere:
+        // the localport is instantiated on every chassis, so a stale process
+        // here would answer a query from a guest that is still local — with
+        // zone data this agent stopped converging.
+        await resolverSupervisor?.shutdown()
+        resolverSupervisor = nil
 
         // Stop polling before the inbound stream is finished, so an in-flight
         // poll cannot deliver into a consumer that is already gone.
@@ -1288,7 +1334,14 @@ actor Agent {
             // not commit us to it — if the control plane turns out to predate
             // the endpoint we never start the poller, and it never stopped
             // pushing either, because it applies the same version gate.
-            pullsDesiredState: desiredStatePullEnabled
+            pullsDesiredState: desiredStatePullEnabled,
+            // Speaking wire v37 is not the same as being able to answer on the
+            // resolver address, so this is reported separately — the
+            // `sandboxCapable`/`tpmCapable` shape. The control plane folds it
+            // across the whole site before enabling any network's resolver,
+            // because the DHCP option that points guests at it is authored once
+            // per network while the listener is per chassis.
+            resolverCapable: resolverBinaryPath != nil
         )
 
         if let client = websocketClient {
@@ -2372,6 +2425,37 @@ extension Agent {
                     } else {
                         metadataNetworks = nil
                     }
+                    // The resolver's twin of the list above (STR-40), derived
+                    // the same way from the same specs. Kept separate rather
+                    // than merged here because the two gates are different
+                    // versions and the receiving service is what folds them
+                    // into one per-network service set — a network wanting only
+                    // one of the two still gets exactly one namespace.
+                    // Carries the network's upstream forwarders and search
+                    // domain alongside the id, because the resolver itself needs
+                    // them and `message.networks` is empty on a non-authority
+                    // agent. Two NICs on one network describe the same resolver,
+                    // so the first wins — they are two copies of one row's
+                    // columns, not two opinions.
+                    let resolverNetworks: [ResolverNetworkConfig]?
+                    if WireProtocol.supportsNetworkResolver(envelope.senderVersion) {
+                        var byNetwork: [UUID: ResolverNetworkConfig] = [:]
+                        let specs =
+                            message.vms.flatMap { $0.spec.networks }
+                            + message.sandboxes.compactMap { $0.spec.network }
+                        for spec in specs where spec.resolverEnabled == true {
+                            guard byNetwork[spec.networkId] == nil else { continue }
+                            byNetwork[spec.networkId] = ResolverNetworkConfig(
+                                networkId: spec.networkId,
+                                upstreams: spec.dnsServers,
+                                searchDomain: spec.domainName)
+                        }
+                        resolverNetworks = byNetwork.values.sorted {
+                            $0.networkId.uuidString < $1.networkId.uuidString
+                        }
+                    } else {
+                        resolverNetworks = nil
+                    }
                     // DNS zones (STR-39) carry the same "silence is not an
                     // instruction" contract as volumes, and for a sharper
                     // reason: these rows are switch-scoped topology whose
@@ -2387,6 +2471,7 @@ extension Agent {
                         securityGroups: message.securityGroups,
                         portMemberships: portMemberships,
                         metadataNetworks: metadataNetworks,
+                        resolverNetworks: resolverNetworks,
                         dnsZones: dnsZones)
                 }
                 // Sandbox reconciliation is likewise gated on the sender: a

@@ -29,6 +29,27 @@ enum DNSName {
         return label.allSatisfy { $0.isASCII && ($0.isLowercase || $0.isNumber || $0 == "-") }
     }
 
+    /// Whether `label` is legal as a **record owner** label.
+    ///
+    /// `isValidLabel` plus RFC 8552's underscored names: a label may begin with
+    /// `_`, as in `_sip._tcp` or `_dmarc`. Deliberately only on the record path
+    /// — a zone name, a hostname, and a DHCP search domain all stay strict,
+    /// because each of those reaches somewhere (a `Logical_Switch` name, a
+    /// guest's hostname, an OVN option string) where an underscore is either
+    /// meaningless or actively wrong.
+    ///
+    /// Without this, `SRV` is a record type nobody can author in the only form
+    /// it is defined for: RFC 2782 owner names are `_service._proto.name`, and
+    /// the underscore is what keeps that namespace disjoint from host names.
+    /// `TXT` is nearly as affected — `_dmarc` and `_acme-challenge` are most of
+    /// what a TXT record is for.
+    static func isValidRecordLabel(_ label: String) -> Bool {
+        guard label.hasPrefix("_") else { return isValidLabel(label) }
+        // The underscore is a prefix marker, not a character the rest of the
+        // label may use: `_a_b` is not an underscored name.
+        return isValidLabel(String(label.dropFirst()))
+    }
+
     /// Normalize and validate a fully-qualified zone name.
     ///
     /// Deliberately not constrained to `.internal`: a tenant may serve
@@ -99,11 +120,12 @@ enum DNSName {
         var labels = normalized.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
         let isWildcard = labels.first == "*"
         if isWildcard { labels.removeFirst() }
-        guard isWildcard || !labels.isEmpty, labels.allSatisfy(isValidLabel) else {
+        guard isWildcard || !labels.isEmpty, labels.allSatisfy(isValidRecordLabel) else {
             throw Abort(
                 .badRequest,
                 reason: "Record name '\(raw)' is not a valid DNS name: each label must be 1–\(maxLabelLength) "
-                    + "characters of letters, digits, and hyphens, and must not start or end with a hyphen")
+                    + "characters of letters, digits, and hyphens, must not start or end with a hyphen, and "
+                    + "may carry a leading underscore only as a service prefix (`_sip._tcp`)")
         }
         return normalized
     }

@@ -22,6 +22,7 @@ import {
   type DhcpFormState,
 } from "./dhcp-fields";
 import { MetadataField } from "./metadata-field";
+import { ResolverField } from "./resolver-field";
 
 interface EditNetworkDialogProps {
   network: Network | null;
@@ -84,6 +85,7 @@ function EditNetworkForm({
   const [enableIpv6, setEnableIpv6] = useState(false);
   const [dhcp, setDhcp] = useState<DhcpFormState>(() => dhcpFormFrom(network));
   const [metadataEnabled, setMetadataEnabled] = useState(network.metadataEnabled);
+  const [resolverEnabled, setResolverEnabled] = useState(network.resolverEnabled);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -98,6 +100,7 @@ function EditNetworkForm({
         ipv6Enabled: enableIpv6 ? true : undefined,
         ...parseDhcpForm(dhcp),
         metadataEnabled,
+        resolverEnabled,
       });
       toast.success(`Network "${network.name}" updated`);
       onOpenChange(false);
@@ -161,7 +164,17 @@ function EditNetworkForm({
               </Label>
             </div>
           )}
-          <DHCPFields value={dhcp} onChange={setDhcp} disabled={isLoading} />
+          <DHCPFields
+            value={dhcp}
+            onChange={setDhcp}
+            disabled={isLoading}
+            resolverEnabled={resolverEnabled}
+          />
+          <ResolverField
+            value={resolverEnabled}
+            onChange={setResolverEnabled}
+            disabled={isLoading}
+          />
           <MetadataField
             value={metadataEnabled}
             onChange={setMetadataEnabled}

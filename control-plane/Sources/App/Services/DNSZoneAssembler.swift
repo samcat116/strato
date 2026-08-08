@@ -311,9 +311,11 @@ extension DNSZoneAssembler {
     ///
     /// Records travel typed rather than pre-flattened into the map OVN's `DNS`
     /// table takes, so the receiving driver decides what it can express — see
-    /// `DesiredDNSRecord`. TTL does not travel at all: OVN's responder has no
-    /// per-record TTL, and a field no driver reads would be a thing that
-    /// changes the digest without changing anything realized.
+    /// `DesiredDNSRecord`. TTL travels as of wire v37 (STR-40): it did not
+    /// under phase 3, deliberately, because OVN's responder has no per-record
+    /// TTL and a field no driver read would have changed the digest without
+    /// changing anything realized. A zone file writes one TTL per RRset, so the
+    /// resolver driver is the reader that field was waiting for.
     ///
     /// `.external`-view records are dropped here rather than on the agent.
     /// Split horizon is a control-plane concept (roadmap phase 6) and the
@@ -323,7 +325,10 @@ extension DNSZoneAssembler {
     static func desiredZone(_ assembled: AssembledDNSZone, networkIDs: [UUID]) -> DesiredDNSZone {
         let records = assembled.records
             .filter { $0.view != .external }
-            .map { DesiredDNSRecord(name: $0.name, type: $0.type.rawValue, values: $0.values) }
+            .map {
+                DesiredDNSRecord(
+                    name: $0.name, type: $0.type.rawValue, values: $0.values, ttl: $0.ttl)
+            }
         return DesiredDNSZone(
             zoneId: assembled.zoneId,
             zoneName: assembled.zoneName,
@@ -350,6 +355,11 @@ extension DNSZoneAssembler {
     /// record's value is arbitrary text, so any delimiter is one an operator
     /// can author, and two different zones hashing equal is the one failure
     /// mode a change detector must not have.
+    ///
+    /// The TTL is folded in as of wire v37, because a zone file writes one and
+    /// so a TTL-only edit has to reach the resolver. It changes every stamp
+    /// once on upgrade: the OVN driver then rewrites each zone one time and
+    /// re-stamps it, which is exactly what the drift compare exists for.
     static func recordsHash(_ records: [DesiredDNSRecord]) -> String {
         var hasher = SHA256()
         func update(_ field: String) {
@@ -362,6 +372,18 @@ extension DNSZoneAssembler {
             update(record.type)
             withUnsafeBytes(of: UInt32(record.values.count).bigEndian) { hasher.update(data: Data($0)) }
             for value in record.values { update(value) }
+            // Absent and present-but-default are different claims — a zone
+            // whose TTL the control plane declines to state is not the same
+            // input as one that states 300 — so the marker byte distinguishes
+            // them rather than hashing nil as zero.
+            if let ttl = record.ttl {
+                hasher.update(data: Data([1]))
+                withUnsafeBytes(of: UInt32(bitPattern: Int32(truncatingIfNeeded: ttl)).bigEndian) {
+                    hasher.update(data: Data($0))
+                }
+            } else {
+                hasher.update(data: Data([0]))
+            }
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }

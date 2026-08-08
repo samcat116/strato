@@ -112,13 +112,21 @@ public enum SecurityGroupACLBuilder {
     /// Bumped when the drop-group ACL set below changes shape, so existing
     /// deployments replace it on upgrade (the generation mechanism reused).
     /// 2: MLD carve-outs (STR-34). 3: MLD split by direction so guests cannot
-    /// originate Queries. 4: instance metadata egress (STR-54).
+    /// originate Queries. 4: instance metadata egress (STR-54). 5: per-network
+    /// resolver egress (STR-40).
     ///
     /// "On upgrade" means the *authority's* upgrade: this group's ACLs are
     /// authored only by the site's network-controller agent, so a mixed-version
     /// site behind an older authority keeps the older ACL set no matter how
-    /// current its other agents are.
-    public static let dropGroupRevision: Int64 = 4
+    /// current its other agents are. That skew is worth naming for revision 5
+    /// in particular: guests on freshly upgraded agents in a site whose
+    /// authority is still on 4 keep getting DNS to the resolver *dropped*, so
+    /// on a network with a restrictive security group the resolver looks broken
+    /// until the controller upgrades. The reverse direction is safe —
+    /// `needsACLRewrite` returns false when the planned generation is older
+    /// than the observed one, so a lagging authority leaves a revision-5 group
+    /// alone instead of stripping the carve-out back off.
+    public static let dropGroupRevision: Int64 = 5
 
     /// Bumped whenever this builder's ACL *construction* changes — a fixed
     /// match syntax, a newly expressible rule shape — so upgraded agents
@@ -307,6 +315,47 @@ public enum SecurityGroupACLBuilder {
         ]
     }
 
+    /// The implicit egress allow to the network's DNS resolver (STR-40).
+    ///
+    /// `metadataEgressACLs`' twin, and everything that doc comment argues holds
+    /// here — non-overridable at `metadataAllowPriority`, egress only and
+    /// stateful, scoped to the service's port, applied on the site-singleton
+    /// drop group so it also lands harmlessly on ports whose network publishes
+    /// no such address.
+    ///
+    /// Two differences are worth naming.
+    ///
+    /// **Four ACLs, not two.** An OVN match is per family *and* per protocol,
+    /// and DNS is both: a resolver that answers only UDP silently breaks every
+    /// response large enough to set TC, which a guest then retries over TCP and
+    /// never gets. The four are v4/v6 × udp/tcp.
+    ///
+    /// **The consequence of getting this wrong is larger.** Without the
+    /// metadata carve-out a default-denied guest loses IMDS; without this one
+    /// it loses name resolution outright — including for the SNAT'd egress its
+    /// security groups do allow — and the symptom reads as a broken network
+    /// rather than as the policy outcome it is.
+    public static func resolverEgressACLs() -> [ACLSpec] {
+        let pg = OVNNaming.dropPortGroupName
+        let ids = [managedKey: managedValue]
+        let port = NetworkResolverEndpoint.port
+        var acls: [ACLSpec] = []
+        for (family, address) in [
+            ("ip4", NetworkResolverEndpoint.address), ("ip6", NetworkResolverEndpoint.addressV6),
+        ] {
+            for proto in ["udp", "tcp"] {
+                acls.append(
+                    ACLSpec(
+                        direction: "from-lport", priority: metadataAllowPriority,
+                        match:
+                            "inport == @\(pg) && \(family) && \(family).dst == \(address) "
+                            + "&& \(proto) && \(proto).dst == \(port)",
+                        action: "allow-related", externalIDs: ids))
+            }
+        }
+        return acls
+    }
+
     /// The drop group's ACL set: default-deny both directions for all IP
     /// traffic (ARP is not `ip`, so address resolution keeps working), with
     /// carve-outs for DHCP, IPv6 neighbor discovery / router advertisements,
@@ -315,11 +364,14 @@ public enum SecurityGroupACLBuilder {
     /// depends on listener reports reaching the querier) would silently stop
     /// working the moment a NIC joined a security group. Instance metadata
     /// egress rides here too, for the same reason and with the same
-    /// unconditional reach — see `metadataEgressACLs`.
+    /// unconditional reach — see `metadataEgressACLs`. So does DNS to the
+    /// network's own resolver, which needs it more than any of them: a guest
+    /// that cannot resolve has no working network at all, however permissive
+    /// the rest of its policy — see `resolverEgressACLs`.
     public static func dropGroupACLs() -> [ACLSpec] {
         let pg = OVNNaming.dropPortGroupName
         let ids = [managedKey: managedValue]
-        return metadataEgressACLs() + [
+        return metadataEgressACLs() + resolverEgressACLs() + [
             // DHCPv4/v6: the guest's requests out, the server's replies in.
             ACLSpec(
                 direction: "from-lport", priority: allowPriority,

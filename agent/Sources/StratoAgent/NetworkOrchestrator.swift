@@ -52,9 +52,14 @@ struct NetworkOrchestrator: Sendable {
                     dhcpEnabled: false,
                     dnsServers: spec.dnsServers,
                     domainName: spec.domainName,
-                    // ...and no OVN means no metadata localport either, so the
-                    // guest gets no route to an address nothing terminates.
-                    metadataEnabled: false
+                    // ...and no OVN means no localport either, so the guest gets
+                    // no route to an address nothing terminates. For the
+                    // resolver that also means falling back to handing it
+                    // `dnsServers` directly, which the static config above
+                    // already does — a SLIRP NIC therefore loses internal name
+                    // resolution but keeps working DNS.
+                    metadataEnabled: false,
+                    resolverEnabled: false
                 )
             }
         }
@@ -79,8 +84,9 @@ struct NetworkOrchestrator: Sendable {
                 securityGroupIds: spec.securityGroupIds,
                 mtu: spec.mtu,
                 // `== true`: nil is a control plane with no opinion on the
-                // metadata service, which advertises no route to it.
-                metadataEnabled: spec.metadataEnabled == true
+                // service, which advertises no route to it.
+                metadataEnabled: spec.metadataEnabled == true,
+                resolverEnabled: spec.resolverEnabled == true
             )
 
             do {
@@ -98,6 +104,22 @@ struct NetworkOrchestrator: Sendable {
                 if spec.metadataEnabled == true && !metadataRealized {
                     logger.debug(
                         "NIC degraded to user-mode; withholding the guest's route to the metadata service",
+                        metadata: [
+                            "vmId": .string(vmId),
+                            "nicIndex": .stringConvertible(index),
+                            "network": .string(spec.network),
+                        ])
+                }
+                // Same gate for the resolver, and the consequence is larger:
+                // withholding it does not remove a service, it moves the guest
+                // back to resolving through `dnsServers` directly. So a SLIRP
+                // NIC keeps working DNS and loses only internal names — which is
+                // the right trade, since SLIRP has no VM-to-VM reachability for
+                // those names to point at anyway.
+                let resolverRealized = spec.resolverEnabled == true && info.attachment.isTap
+                if spec.resolverEnabled == true && !resolverRealized {
+                    logger.debug(
+                        "NIC degraded to user-mode; the guest resolves through the network's upstream servers",
                         metadata: [
                             "vmId": .string(vmId),
                             "nicIndex": .stringConvertible(index),
@@ -126,7 +148,8 @@ struct NetworkOrchestrator: Sendable {
                         // degraded to user-mode has no OVN localport behind the
                         // metadata addresses, so telling the guest to route to
                         // them would only give it a route into a black hole.
-                        metadataEnabled: metadataRealized
+                        metadataEnabled: metadataRealized,
+                        resolverEnabled: resolverRealized
                     ))
             } catch {
                 logger.error(

@@ -85,6 +85,28 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @Field(key: "metadata_enabled")
     var metadataEnabled: Bool
 
+    /// When true, agents give this network's guests a DNS resolver at
+    /// `NetworkResolverEndpoint` — a CoreDNS in the same per-network chassis
+    /// namespace the metadata service uses, serving the network's zones in full
+    /// (including the CNAME/TXT/SRV the OVN `DNS` table cannot express) and
+    /// forwarding everything else to `dnsServers` (STR-40).
+    ///
+    /// **This changes what `dnsServers` means for the network.** With the
+    /// resolver on, guests are told the resolver's link-local address over DHCP
+    /// and `dnsServers` becomes the resolver's upstream forwarders; with it off,
+    /// `dnsServers` is handed to guests verbatim, which is what it always was.
+    ///
+    /// An opt-*in*, defaulting false, unlike `metadataEnabled` — see
+    /// `AddResolverEnabledToLogicalNetwork` for why. The resolver serves this
+    /// network's zones in full but cannot yet forward to upstream servers, so
+    /// turning it on trades external resolution for the full internal record
+    /// vocabulary, and that trade has to be the operator's.
+    ///
+    /// Editing it deliberately does **not** bump `generation` — the port and the
+    /// DHCP row converge level-triggered on every network reconcile.
+    @Field(key: "resolver_enabled")
+    var resolverEnabled: Bool
+
     /// Monotonic counter bumped whenever a change alters how agents realize the
     /// network's L3 (subnet, gateway, or external access). Sent to agents as the
     /// `DesiredNetworkState.generation` so replayed/reordered syncs can't roll
@@ -142,6 +164,7 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         leaseTime: Int? = nil,
         externalAccess: Bool = true,
         metadataEnabled: Bool = true,
+        resolverEnabled: Bool = false,
         generation: Int = 1,
         siteID: UUID? = nil
     ) {
@@ -160,6 +183,7 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
         self.generation = generation
     }
 
@@ -224,7 +248,9 @@ struct CreateNetworkRequest: Content {
     let projectId: UUID?
     /// Whether agents program OVN DHCP for this network. Defaults true.
     let dhcpEnabled: Bool?
-    /// DNS resolvers advertised over DHCP.
+    /// With `resolverEnabled` (the default) these are the network resolver's
+    /// upstream forwarders; without it they are advertised to guests over DHCP
+    /// verbatim.
     let dnsServers: [String]?
     /// DNS search domain advertised over DHCP. Held to the same grammar as a
     /// DNS zone name — it reaches guests as structured config, not as text.
@@ -236,6 +262,11 @@ struct CreateNetworkRequest: Content {
     /// Whether the network publishes the instance metadata service to its
     /// guests. Defaults true — an opt-out, not an opt-in.
     let metadataEnabled: Bool?
+    /// Whether the network gives its guests a built-in DNS resolver, serving the
+    /// zones attached to it in full. Defaults false: the resolver cannot yet
+    /// forward to upstream servers, so turning it on trades external resolution
+    /// for the internal record vocabulary.
+    let resolverEnabled: Bool?
     /// Site to pin the network to; its VMs then only place on that site's
     /// agents, where the shared OVN deployment spans it across nodes.
     let siteId: UUID?
@@ -247,7 +278,7 @@ struct CreateNetworkRequest: Content {
         gateway6: String? = nil, ipv6Enabled: Bool? = nil, projectId: UUID? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
         leaseTime: Int? = nil, externalAccess: Bool? = nil, metadataEnabled: Bool? = nil,
-        siteId: UUID? = nil
+        resolverEnabled: Bool? = nil, siteId: UUID? = nil
     ) {
         self.name = name
         self.subnet = subnet
@@ -262,6 +293,7 @@ struct CreateNetworkRequest: Content {
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
         self.siteId = siteId
     }
 }
@@ -294,6 +326,11 @@ struct UpdateNetworkRequest: Content {
     /// Toggle the instance metadata service. Re-synced to agents, which create
     /// or delete the network's metadata port and namespaces.
     let metadataEnabled: Bool?
+    /// Toggle the network's built-in DNS resolver. Re-synced to agents, which
+    /// add or remove the resolver's addresses from the network's localport and
+    /// start or stop its CoreDNS. Guests pick the change up at their next DHCP
+    /// lease, not immediately.
+    let resolverEnabled: Bool?
     /// The zone this network's VMs auto-register into. Must already be
     /// attached to the network. Send `clearPrimaryDnsZone: true` to unset it —
     /// a JSON `null` is indistinguishable from an omitted field here.
@@ -305,6 +342,7 @@ struct UpdateNetworkRequest: Content {
         subnet6: String? = nil, gateway6: String? = nil, ipv6Enabled: Bool? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
         leaseTime: Int? = nil, externalAccess: Bool? = nil, metadataEnabled: Bool? = nil,
+        resolverEnabled: Bool? = nil,
         primaryDnsZoneId: UUID? = nil, clearPrimaryDnsZone: Bool? = nil
     ) {
         self.name = name
@@ -319,6 +357,7 @@ struct UpdateNetworkRequest: Content {
         self.leaseTime = leaseTime
         self.externalAccess = externalAccess
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
         self.primaryDnsZoneId = primaryDnsZoneId
         self.clearPrimaryDnsZone = clearPrimaryDnsZone
     }
@@ -339,6 +378,7 @@ struct NetworkResponse: Content {
     let leaseTime: Int?
     let externalAccess: Bool
     let metadataEnabled: Bool
+    let resolverEnabled: Bool
     let siteId: UUID?
     /// The zone this network's VMs auto-register into, if any (issue #770).
     let primaryDnsZoneId: UUID?
@@ -360,6 +400,7 @@ struct NetworkResponse: Content {
         self.leaseTime = network.leaseTime
         self.externalAccess = network.externalAccess
         self.metadataEnabled = network.metadataEnabled
+        self.resolverEnabled = network.resolverEnabled
         self.siteId = network.$site.id
         self.primaryDnsZoneId = network.$primaryDNSZone.id
         self.createdAt = network.createdAt

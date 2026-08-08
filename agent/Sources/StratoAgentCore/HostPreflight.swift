@@ -41,6 +41,7 @@ public enum HostPreflight {
         case tcTool = "tc"
         case ovsVsctlTool = "ovs-vsctl"
         case ovnAppctlTool = "ovn-appctl"
+        case corednsBinary = "coredns"
         case storageFreeSpace = "storage_free_space"
     }
 
@@ -353,6 +354,26 @@ public enum HostPreflight {
                     "ovn-appctl", kind: .ovnAppctlTool, severity: .advisory, searchPath: inputs.searchPath,
                     hint: "install ovn-host; without it the agent cannot verify ovn-controller is connected "
                         + "to the southbound database"))
+            // Advisory, and deliberately not gating: a host without CoreDNS
+            // runs VMs perfectly well. What it cannot do is answer on a
+            // network's resolver address — so it registers `resolverCapable:
+            // false` and the control plane withholds the resolver from every
+            // network in its *site*, because the DHCP option pointing guests at
+            // it is authored once per network while the listener is per chassis.
+            //
+            // The consequence is that one un-provisioned host holds the feature
+            // back for its whole site, which is why this is worth a loud line at
+            // startup rather than a silent capability bit. Like `tc`, the hint
+            // names the candidate list: this check walks `PATH` while the
+            // supervisor invokes an absolute path.
+            checks.append(
+                checkTool(
+                    "coredns", kind: .corednsBinary, severity: .advisory, searchPath: inputs.searchPath,
+                    hint: "install CoreDNS; without it this host cannot serve its networks' DNS resolver, "
+                        + "and the control plane withholds the resolver from every network in this site. "
+                        + "It must be at one of "
+                        + NetworkResolverDefaults.corednsBinaryCandidates.joined(separator: ", ")
+                        + ", or named by [resolver] coredns_binary_path"))
         }
 
         checks.append(checkFreeSpace(inputs.vmStoragePath, minimum: inputs.minimumFreeDiskBytes))

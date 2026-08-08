@@ -736,3 +736,152 @@ struct CloudInitNetworkConfigTests {
         #expect(yaml?.contains("- 10.10.0.5/24") == true)
     }
 }
+
+/// The seed's half of the per-network resolver (STR-40): the route to the
+/// resolver's link-local address, and — on a statically addressed NIC — the
+/// substitution that points the guest at it rather than at the network's
+/// upstream forwarders.
+@Suite("Cloud-init network-config — per-network resolver")
+struct CloudInitResolverConfigTests {
+
+    private func staticNIC(
+        mac: String = "52:54:00:aa:bb:cc",
+        ip: String = "192.168.1.5",
+        ip6: String? = nil,
+        dnsServers: [String] = ["1.1.1.1"],
+        metadata: Bool = false,
+        resolver: Bool = false
+    ) -> ResolvedNetworkAttachment {
+        ResolvedNetworkAttachment(
+            network: "default",
+            attachment: .tap(interface: "tap0123456789ab"),
+            macAddress: mac,
+            ipAddress: ip,
+            netmask: "255.255.255.0",
+            gateway: "192.168.1.1",
+            ip6Address: ip6,
+            prefixLength6: ip6 == nil ? nil : 64,
+            gateway6: ip6 == nil ? nil : "fd00::1",
+            dhcpEnabled: false,
+            dnsServers: dnsServers,
+            metadataEnabled: metadata,
+            resolverEnabled: resolver)
+    }
+
+    private func dhcpNIC(
+        ip6: String? = nil, metadata: Bool = false, resolver: Bool = false
+    ) -> ResolvedNetworkAttachment {
+        ResolvedNetworkAttachment(
+            network: "default",
+            attachment: .tap(interface: "tap0123456789ab"),
+            macAddress: "52:54:00:aa:bb:cc",
+            ipAddress: "192.168.1.5",
+            netmask: "255.255.255.0",
+            gateway: "192.168.1.1",
+            ip6Address: ip6,
+            prefixLength6: ip6 == nil ? nil : 64,
+            gateway6: ip6 == nil ? nil : "fd00::1",
+            dhcpEnabled: true,
+            dnsServers: ["1.1.1.1"],
+            metadataEnabled: metadata,
+            resolverEnabled: resolver)
+    }
+
+    @Test("A static resolver NIC is pointed at the resolver, not at the upstreams")
+    func staticNICUsesResolver() throws {
+        // The static counterpart of the `dns_server` substitution the DHCP path
+        // makes. Without it a statically addressed guest would resolve nothing
+        // internal while its DHCP neighbours on the same network resolved
+        // everything.
+        let yaml = try #require(
+            CloudInitProvisioner.networkConfigYAML(for: [staticNIC(dnsServers: ["1.1.1.1"], resolver: true)]))
+        #expect(yaml.contains("addresses: [169.254.169.253]"))
+        #expect(!yaml.contains("1.1.1.1"))
+    }
+
+    @Test("The v6 resolver address is only added when the NIC has a v6 address")
+    func v6ResolverNeedsAV6Address() throws {
+        // Without a global v6 address the guest has no valid source address for
+        // a ULA destination, and an unreachable entry in resolv.conf costs every
+        // lookup a timeout before the v4 fallback.
+        let v4Only = try #require(CloudInitProvisioner.networkConfigYAML(for: [staticNIC(resolver: true)]))
+        #expect(!v4Only.contains("fd00:ec2::253"))
+
+        let dualStack = try #require(
+            CloudInitProvisioner.networkConfigYAML(for: [staticNIC(ip6: "fd00::5", resolver: true)]))
+        #expect(dualStack.contains("addresses: [169.254.169.253, fd00:ec2::253]"))
+    }
+
+    @Test("A static resolver NIC gets an on-link route to the resolver")
+    func staticNICCarriesResolverRoute() throws {
+        let yaml = try #require(CloudInitProvisioner.networkConfigYAML(for: [staticNIC(resolver: true)]))
+        #expect(yaml.contains("- to: 169.254.169.253/32"))
+        #expect(yaml.contains("via: 0.0.0.0"))
+    }
+
+    @Test("A DHCP NIC gets no v4 resolver route — option 121 already carries it")
+    func dhcpNICLeavesV4ToOption121() throws {
+        // Option 121 reaches every DHCP client on the network, not only the ones
+        // booting from this seed.
+        let yaml = try #require(CloudInitProvisioner.networkConfigYAML(for: [dhcpNIC(resolver: true)]))
+        #expect(!yaml.contains("- to: 169.254.169.253/32"))
+    }
+
+    @Test("A dual-stack DHCP NIC gets the v6 resolver route, which DHCPv6 cannot carry")
+    func dhcpNICCarriesV6ResolverRoute() throws {
+        // There is no DHCPv6 counterpart to option 121, and an RA cannot help:
+        // RFC 4191 advertises a route *via the advertising router*, which has no
+        // path to a localport hanging off the switch.
+        let yaml = try #require(
+            CloudInitProvisioner.networkConfigYAML(for: [dhcpNIC(ip6: "fd00::5", resolver: true)]))
+        #expect(yaml.contains("- to: fd00:ec2::253/128"))
+        #expect(yaml.contains("via: \"::\""))
+    }
+
+    @Test("Both services' routes coexist, metadata first")
+    func bothServicesRender() throws {
+        let yaml = try #require(
+            CloudInitProvisioner.networkConfigYAML(
+                for: [staticNIC(ip6: "fd00::5", metadata: true, resolver: true)]))
+        let metadataIndex = try #require(yaml.range(of: "169.254.169.254/32")).lowerBound
+        let resolverIndex = try #require(yaml.range(of: "169.254.169.253/32")).lowerBound
+        // Metadata first, so a NIC that carries both renders the same bytes it
+        // did before the resolver existed plus an appended pair.
+        #expect(metadataIndex < resolverIndex)
+        #expect(yaml.contains("fd00:ec2::254/128"))
+        #expect(yaml.contains("fd00:ec2::253/128"))
+    }
+
+    @Test("Only one NIC per family carries the resolver route")
+    func oneNICPerFamilyClaimsTheRoute() throws {
+        // Two interfaces claiming one destination is a duplicate route the guest
+        // resolves arbitrarily.
+        let yaml = try #require(
+            CloudInitProvisioner.networkConfigYAML(for: [
+                staticNIC(mac: "52:54:00:aa:bb:01", ip: "192.168.1.5", resolver: true),
+                staticNIC(mac: "52:54:00:aa:bb:02", ip: "192.168.1.6", resolver: true),
+            ]))
+        #expect(yaml.components(separatedBy: "- to: 169.254.169.253/32").count - 1 == 1)
+    }
+
+    @Test("The metadata and resolver claims are tracked independently")
+    func claimsAreIndependentPerService() throws {
+        // The NIC that discharges the metadata route is not necessarily the one
+        // that discharges the resolver route.
+        let yaml = try #require(
+            CloudInitProvisioner.networkConfigYAML(for: [
+                staticNIC(mac: "52:54:00:aa:bb:01", ip: "192.168.1.5", metadata: true, resolver: false),
+                staticNIC(mac: "52:54:00:aa:bb:02", ip: "192.168.1.6", metadata: false, resolver: true),
+            ]))
+        #expect(yaml.contains("- to: 169.254.169.254/32"))
+        #expect(yaml.contains("- to: 169.254.169.253/32"))
+    }
+
+    @Test("A resolver-less NIC still gets the network's own servers")
+    func resolverOffKeepsConfiguredServers() throws {
+        let yaml = try #require(
+            CloudInitProvisioner.networkConfigYAML(for: [staticNIC(dnsServers: ["1.1.1.1"], resolver: false)]))
+        #expect(yaml.contains("addresses: [1.1.1.1]"))
+        #expect(!yaml.contains("169.254.169.253"))
+    }
+}

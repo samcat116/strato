@@ -44,7 +44,8 @@ final class DesiredStateDNSZoneTests {
         app: Application,
         named name: String,
         siteID: UUID? = nil,
-        protocolVersion: Int = WireProtocol.currentVersion
+        protocolVersion: Int = WireProtocol.currentVersion,
+        resolverCapable: Bool = false
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: name,
@@ -56,7 +57,8 @@ final class DesiredStateDNSZoneTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: protocolVersion
+            protocolVersion: protocolVersion,
+            resolverCapable: resolverCapable
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let uuid = try await app.agentService.registerAgent(
@@ -384,6 +386,211 @@ final class DesiredStateDNSZoneTests {
             // Attachment grants resolution; registration is the primary
             // pointer, which this network doesn't have.
             #expect(assembled.records.map(\.name) == ["db.services.internal"])
+        }
+    }
+
+    // MARK: - The per-network resolver (STR-40)
+
+    @Test("A non-authoritative agent running a NIC on the network is sent its zones")
+    func resolverPeerReceivesZones() async throws {
+        // The widening phase 4 needs: OVN `DNS` rows stay switch-scoped and only
+        // the controller writes them, but a resolver runs wherever the guests
+        // are, so the peer needs the zone's contents to render its zone files.
+        try await withDNSSyncApp { app, org, project in
+            let site = Site(name: "dc-resolver", organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
+            let siteID = try site.requireID()
+            let controller = try await self.registerAgent(
+                app: app, named: "res-controller", siteID: siteID, resolverCapable: true)
+            let peer = try await self.registerAgent(
+                app: app, named: "res-peer", siteID: siteID, resolverCapable: true)
+            site.$networkControllerAgent.id = UUID(uuidString: controller)
+            try await site.save(on: app.db)
+
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "res-net", project: project, subnet: "10.70.0.0/24", gateway: "10.70.0.1",
+                site: site)
+            network.resolverEnabled = true
+            try await network.save(on: app.db)
+            let zone = DNSZone(name: "res.internal", projectID: try project.requireID())
+            try await zone.save(on: app.db)
+            try await self.attachZone(app: app, zone: zone, to: network, primary: true)
+            try await self.placeVM(
+                app: app, project: project, named: "vm-res", hostname: "res-vm",
+                onAgent: peer, network: network, ipv4: "10.70.0.5")
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: peer)
+            #expect(sync.networksAuthoritative == false)
+            let zones = try #require(sync.dnsZones)
+            #expect(zones.map(\.zoneName) == ["res.internal"])
+            // Fleet-wide records still, and the peer knows it may not author
+            // topology — which is how it decides to realize only the resolver
+            // half.
+            #expect(zones[0].records.contains { $0.name == "res-vm.res.internal" })
+        }
+    }
+
+    @Test("A non-authoritative agent with no local NIC on a zoned network still gets nil")
+    func resolverPeerWithoutLocalNICStillNil() async throws {
+        // Sending `[]` to a peer of the controller would have it read the
+        // controller's live rows as garbage to sweep, which is the reason nil
+        // exists here. Widening the scope must not weaken that.
+        try await withDNSSyncApp { app, org, project in
+            let site = Site(name: "dc-idle", organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
+            let siteID = try site.requireID()
+            let controller = try await self.registerAgent(
+                app: app, named: "idle-controller", siteID: siteID, resolverCapable: true)
+            let peer = try await self.registerAgent(
+                app: app, named: "idle-peer", siteID: siteID, resolverCapable: true)
+            site.$networkControllerAgent.id = UUID(uuidString: controller)
+            try await site.save(on: app.db)
+
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "idle-net", project: project, subnet: "10.71.0.0/24", gateway: "10.71.0.1",
+                site: site)
+            network.resolverEnabled = true
+            try await network.save(on: app.db)
+            let zone = DNSZone(name: "idle.internal", projectID: try project.requireID())
+            try await zone.save(on: app.db)
+            try await self.attachZone(app: app, zone: zone, to: network, primary: true)
+            try await self.placeVM(
+                app: app, project: project, named: "vm-idle", hostname: "idle-vm",
+                onAgent: controller, network: network, ipv4: "10.71.0.5")
+
+            #expect(try await app.desiredStateAssembler.assemble(agentId: peer).dnsZones == nil)
+        }
+    }
+
+    @Test("resolverEnabled reaches the network state and every NIC spec")
+    func resolverReachesBothCarriers() async throws {
+        try await withDNSSyncApp { app, _, project in
+            let agentId = try await self.registerAgent(
+                app: app, named: "res-solo", resolverCapable: true)
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "res-solo-net", project: project, subnet: "10.72.0.0/24", gateway: "10.72.0.1")
+            network.resolverEnabled = true
+            try await network.save(on: app.db)
+            try await self.placeVM(
+                app: app, project: project, named: "vm", hostname: "vm", onAgent: agentId,
+                network: network, ipv4: "10.72.0.5")
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            // Both halves, and they must agree: the network carrier authors the
+            // localport and the DHCP row, the per-NIC copy reaches the chassis.
+            #expect(sync.networks.first?.resolverEnabled == true)
+            #expect(sync.vms.first?.spec.networks.first?.resolverEnabled == true)
+        }
+    }
+
+    @Test("One incapable agent withholds the resolver from every network in the site")
+    func siteWideCapabilityGate() async throws {
+        // The DHCP option is authored once per network by the topology
+        // authority while the listener is per chassis, so enabling it with one
+        // un-provisioned host would give the network DNS that works until a VM
+        // lands somewhere else.
+        try await withDNSSyncApp { app, org, project in
+            let site = Site(name: "dc-mixed", organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
+            let siteID = try site.requireID()
+            let controller = try await self.registerAgent(
+                app: app, named: "mixed-controller", siteID: siteID, resolverCapable: true)
+            _ = try await self.registerAgent(
+                app: app, named: "mixed-laggard", siteID: siteID, resolverCapable: false)
+            site.$networkControllerAgent.id = UUID(uuidString: controller)
+            try await site.save(on: app.db)
+
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "mixed-net", project: project, subnet: "10.73.0.0/24", gateway: "10.73.0.1",
+                site: site)
+            network.resolverEnabled = true
+            try await network.save(on: app.db)
+            try await self.placeVM(
+                app: app, project: project, named: "vm", hostname: "vm", onAgent: controller,
+                network: network, ipv4: "10.73.0.5")
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: controller)
+            // False, not nil: the agent speaks v37, so the control plane has an
+            // opinion — and that opinion is "not yet".
+            #expect(sync.networks.first?.resolverEnabled == false)
+            #expect(sync.vms.first?.spec.networks.first?.resolverEnabled == false)
+        }
+    }
+
+    @Test("A pre-v37 agent is sent no resolver opinion at all")
+    func preV37AgentGetsNilResolver() async throws {
+        try await withDNSSyncApp { app, _, project in
+            let agentId = try await self.registerAgent(
+                app: app, named: "res-old",
+                protocolVersion: WireProtocol.networkResolverMinimumVersion - 1,
+                resolverCapable: true)
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "res-old-net", project: project, subnet: "10.74.0.0/24", gateway: "10.74.0.1")
+            network.resolverEnabled = true
+            try await network.save(on: app.db)
+            try await self.placeVM(
+                app: app, project: project, named: "vm", hostname: "vm", onAgent: agentId,
+                network: network, ipv4: "10.74.0.5")
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            // Nil rather than false, so the agent's own absence check and the
+            // version gate say the same thing: "no opinion", never "off".
+            #expect(sync.networks.first?.resolverEnabled == nil)
+            #expect(sync.vms.first?.spec.networks.first?.resolverEnabled == nil)
+        }
+    }
+
+    @Test("Turning the network's resolver off reaches both carriers as false")
+    func resolverOptOutIsHonored() async throws {
+        try await withDNSSyncApp { app, _, project in
+            let agentId = try await self.registerAgent(
+                app: app, named: "res-off", resolverCapable: true)
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "res-off-net", project: project, subnet: "10.75.0.0/24", gateway: "10.75.0.1")
+            network.resolverEnabled = false
+            try await network.save(on: app.db)
+            try await self.placeVM(
+                app: app, project: project, named: "vm", hostname: "vm", onAgent: agentId,
+                network: network, ipv4: "10.75.0.5")
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            #expect(sync.networks.first?.resolverEnabled == false)
+            #expect(sync.vms.first?.spec.networks.first?.resolverEnabled == false)
+        }
+    }
+
+    @Test("A record's TTL travels, and moves the zone's hash")
+    func recordTTLTravelsAndHashes() async throws {
+        // v36 dropped the TTL because an OVN row has nowhere to put it; a zone
+        // file writes one per RRset, so a TTL-only edit has to reach the
+        // resolver — which means it has to move the hash the agent skips on.
+        try await withDNSSyncApp { app, _, project in
+            let agentId = try await self.registerAgent(app: app, named: "ttl-agent")
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "ttl-net", project: project, subnet: "10.76.0.0/24", gateway: "10.76.0.1")
+            let zone = DNSZone(name: "ttl.internal", projectID: try project.requireID())
+            try await zone.save(on: app.db)
+            try await self.attachZone(app: app, zone: zone, to: network, primary: true)
+            try await self.placeVM(
+                app: app, project: project, named: "vm", hostname: "vm", onAgent: agentId,
+                network: network, ipv4: "10.76.0.5")
+
+            let record = DNSRecord(
+                zoneID: try zone.requireID(), name: "www", type: .cname, value: "vm.ttl.internal",
+                ttl: 60)
+            try await record.save(on: app.db)
+
+            let before = try #require(
+                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
+            let cname = try #require(before.records.first { $0.type == "CNAME" })
+            #expect(cname.ttl == 60)
+
+            record.ttl = 120
+            try await record.save(on: app.db)
+            let after = try #require(
+                try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones?.first)
+            #expect(after.recordsHash != before.recordsHash)
+            #expect(after.records.first { $0.type == "CNAME" }?.ttl == 120)
         }
     }
 }

@@ -65,6 +65,10 @@ export default defineConfig({
           { text: 'ADR 0003: IMDS Chassis Namespace', link: '/adr/0003-imds-chassis-namespace' },
           { text: 'ADR 0004: Cedar for Authorization', link: '/adr/0004-cedar-for-authorization' },
           { text: 'ADR 0005: Agent Drives libvirt', link: '/adr/0005-agent-drives-libvirt-not-qemu' },
+          {
+            text: 'ADR 0006: CoreDNS per Chassis Namespace',
+            link: '/adr/0006-coredns-per-chassis-namespace',
+          },
           { text: 'Authorization Edge Audit (July 2026)', link: '/architecture/authorization-edge-audit' }
         ]
       },

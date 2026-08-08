@@ -99,6 +99,32 @@ struct DesiredStateAssembler {
         // opinion", which is what keeps a rollback from sweeping live ports.
         let sendMetadataPort =
             agent.map { WireProtocol.supportsMetadataPort($0.wireProtocolVersion ?? 0) } ?? true
+        // The per-network resolver (STR-40). Nil for an agent that predates the
+        // field — the `sendMetadataPort: false` posture — and otherwise whether
+        // this agent's *site* can answer on the resolver address at all.
+        //
+        // The site, not the agent, because the two halves of this feature have
+        // different reach: the DHCP option pointing guests at the resolver is
+        // one row per network, authored by the site's topology authority, while
+        // the process answering on the address runs on each chassis. Enabling
+        // it while one host in the site lacks CoreDNS would give that network
+        // DNS that works until a VM lands on the wrong hypervisor — a failure
+        // that looks like a flaky network rather than a missing dependency. So
+        // the whole site converges or none of it does.
+        let siteResolverCapable: Bool?
+        if let agent, WireProtocol.supportsNetworkResolver(agent.wireProtocolVersion ?? 0) {
+            siteResolverCapable = try await resolverCapableSiteWide(agent: agent, site: site, on: db)
+        } else {
+            // Nil for an agent this assembly could not load at all — the
+            // synthetic and backstop syncs — rather than the permissive `?? true`
+            // the version gates above use, and rather than `false`. The other
+            // gates decide whether a *field* is understood; this one would be an
+            // opinion, and `false` is a teardown instruction: it strips the
+            // resolver's addresses from the localport, reverts the DHCP row, and
+            // stops CoreDNS. Silence is the only honest answer about a host we
+            // know nothing about.
+            siteResolverCapable = nil
+        }
         let securityGroupsByInterface: [UUID: [UUID]]
         let sandboxSecurityGroupsByInterface: [UUID: [UUID]]
         if sendSecurityGroups {
@@ -166,7 +192,8 @@ struct DesiredStateAssembler {
                 volumes: vm.volumes,
                 resolvedInterfaces: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
-                sendsMetadataPort: sendMetadataPort
+                sendsMetadataPort: sendMetadataPort,
+                siteResolverCapable: siteResolverCapable
             )
 
             // Image download info lets the agent materialize a VM it doesn't
@@ -276,6 +303,7 @@ struct DesiredStateAssembler {
                     domainName: network.domainName,
                     leaseTime: network.leaseTime,
                     metadataEnabled: sendMetadataPort ? network.metadataEnabled : nil,
+                    resolverEnabled: siteResolverCapable.map { $0 && network.resolverEnabled },
                     generation: Int64(network.generation),
                     floatingIPs: floatingIPsByNetwork[networkId]
                 )
@@ -374,7 +402,8 @@ struct DesiredStateAssembler {
                 from: interface,
                 network: interface.flatMap { networksByID[$0.logicalNetworkID] },
                 securityGroupIds: interface?.id.flatMap { sandboxSecurityGroupsByInterface[$0] },
-                sendsMetadataPort: sendMetadataPort)
+                sendsMetadataPort: sendMetadataPort,
+                siteResolverCapable: siteResolverCapable)
             // The restore *edge* (STR-151), as distinct from the fork create
             // strategy above. Its artifacts follow the same rule for the same
             // reason: a sandbox that has moved off the agent that captured the
@@ -447,18 +476,38 @@ struct DesiredStateAssembler {
             snapshots = nil
         }
 
-        // The DNS zones the topology authority realizes into the OVN `DNS`
-        // table (STR-39). Nil — not `[]` — for a non-authoritative agent, on
-        // `securityGroups`' terms and one sharper one: these rows are
-        // switch-scoped, so an empty list sent to a peer would have it read the
-        // controller's live rows as garbage to sweep. Skipped entirely for an
-        // agent that would discard the field, which is worth more here than
-        // elsewhere: assembling a zone reads every VM registered in it.
+        // The DNS zones this agent realizes. Two backends read one list:
+        //
+        //  - the OVN `DNS` table (STR-39), written only by the topology
+        //    authority because those rows are switch-scoped, and
+        //  - the per-network resolver (STR-40), run by every agent with a local
+        //    NIC on the network, because CoreDNS answers where the guests are.
+        //
+        // So the zone selection is the union of "networks I author" and
+        // "networks I run something on". Before v37 only the first term existed
+        // and a non-authority agent was sent nil; it still is when it has no
+        // local NIC on an attached network, which keeps `[]`-as-teardown from
+        // ever reaching a peer of the controller. An agent that *is* sent zones
+        // without authority realizes only the resolver half — it already knows
+        // which half it may write from `networksAuthoritative`.
+        //
+        // Skipped entirely for an agent that would discard the field, which is
+        // worth more here than elsewhere: assembling a zone reads every VM
+        // registered in it.
         let dnsZones: [DesiredDNSZone]?
-        if scope.authoritative,
-            agent.map({ WireProtocol.supportsDNSZones($0.wireProtocolVersion ?? 0) }) ?? true
-        {
-            dnsZones = try await desiredDNSZones(networkIDs: scope.networkIDs, on: db)
+        if agent.map({ WireProtocol.supportsDNSZones($0.wireProtocolVersion ?? 0) }) ?? true {
+            // Local NICs only count toward zone selection once the agent can
+            // actually run a resolver for them; without that this would widen
+            // the fan-out of a query that reads every VM in a zone, for nothing.
+            let resolverNetworkIDs =
+                (siteResolverCapable ?? false)
+                ? ownVMNetworkIDs.union(sandboxNetworkIDs) : []
+            let zoneNetworkIDs =
+                (scope.authoritative ? scope.networkIDs : []).union(resolverNetworkIDs)
+            dnsZones =
+                zoneNetworkIDs.isEmpty && !scope.authoritative
+                ? nil
+                : try await desiredDNSZones(networkIDs: zoneNetworkIDs, on: db)
         } else {
             dnsZones = nil
         }
@@ -519,6 +568,50 @@ struct DesiredStateAssembler {
         return try await DNSZoneAssembler.assemble(zones: names, on: db)
             .map { DNSZoneAssembler.desiredZone($0, networkIDs: networksByZone[$0.zoneId] ?? []) }
             .sorted { $0.zoneId.uuidString < $1.zoneId.uuidString }
+    }
+
+    /// Whether every agent that could host a guest on this agent's networks can
+    /// answer on the resolver address (STR-40).
+    ///
+    /// Deliberately a property of the **site**, not of the receiving agent. A
+    /// network's resolver is advertised through one DHCP row — authored by the
+    /// site's topology authority — but answered by a CoreDNS on each chassis.
+    /// Ask the agent alone and a site with one un-upgraded host hands every
+    /// guest on that network an address that resolves until the guest's VM is
+    /// migrated, which presents as an intermittent network fault rather than as
+    /// the missing dependency it is.
+    ///
+    /// Offline agents count. A host that is down is one that will come back,
+    /// and treating "not currently connected" as "not in the site" would flip
+    /// the resolver on during a rolling restart and off again afterwards.
+    ///
+    /// A site-less agent (the legacy single-node model) answers for itself: it
+    /// is the only host its networks can place on. An agent this assembly could
+    /// not load at all is not asked — the caller sends nil rather than an
+    /// opinion, because `false` here is a teardown instruction rather than
+    /// silence.
+    private func resolverCapableSiteWide(agent: Agent, site: Site?, on db: any Database)
+        async throws -> Bool
+    {
+        guard let site, let siteID = site.id else {
+            return agent.resolverCapable
+        }
+        let siteAgents = try await Agent.query(on: db)
+            .filter(\.$site.$id == siteID)
+            .all()
+        guard !siteAgents.isEmpty else { return false }
+        guard siteAgents.allSatisfy(\.resolverCapable) else {
+            app.logger.notice(
+                "Withholding the per-network DNS resolver: not every agent in the site can run it",
+                metadata: [
+                    "siteId": .string(siteID.uuidString),
+                    "incapableAgents": .string(
+                        siteAgents.filter { !$0.resolverCapable }.map(\.name).sorted()
+                            .joined(separator: ",")),
+                ])
+            return false
+        }
+        return true
     }
 
     /// Every snapshot artifact this agent holds, as desired entries (STR-150).

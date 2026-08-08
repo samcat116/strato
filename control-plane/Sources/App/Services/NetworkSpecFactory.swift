@@ -20,9 +20,19 @@ extension NetworkSpec {
     /// `sendsMetadataPort` is the same kind of gate, for `metadataEnabled` (STR-49):
     /// false omits the field entirely for an agent that predates it, so nil on
     /// the wire always means "the sender has no opinion" rather than "off".
+    ///
+    /// `siteResolverCapable` carries both halves of the resolver gate (STR-40)
+    /// in one parameter, because neither alone decides the field. Nil means the
+    /// receiver predates v37 and the key is omitted entirely, exactly as
+    /// `sendsMetadataPort: false` does. A non-nil value is whether the
+    /// receiver's **site** can answer on the resolver address at all — every
+    /// agent in it reports `resolverCapable` — which is ANDed with the
+    /// network's own opt-out. The site half is a scalar and the network half is
+    /// per row, so this is the only place they meet.
     static func build(
         interface: some NetworkAddressable, network: LogicalNetwork, securityGroupIds: [UUID]? = nil,
-        sendsMetadataPort: Bool = true
+        sendsMetadataPort: Bool = true,
+        siteResolverCapable: Bool? = true
     ) -> NetworkSpec {
         let ipv4 = interface.ipv4Address
         let ipv6 = interface.ipv6Address
@@ -50,7 +60,8 @@ extension NetworkSpec {
             domainName: network.domainName,
             leaseTime: network.leaseTime,
             securityGroupIds: securityGroupIds,
-            metadataEnabled: sendsMetadataPort ? network.metadataEnabled : nil
+            metadataEnabled: sendsMetadataPort ? network.metadataEnabled : nil,
+            resolverEnabled: siteResolverCapable.map { $0 && network.resolverEnabled }
         )
     }
 }

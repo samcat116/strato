@@ -355,6 +355,7 @@ actor AgentService {
             agent.hostInfo = message.hostInfo ?? agent.hostInfo
             agent.sandboxCapable = message.sandboxCapable ?? false
             agent.tpmCapable = message.tpmCapable ?? false
+            agent.resolverCapable = message.resolverCapable ?? false
             agent.updateResources(message.resources)
             agent.status = .online
         } else {

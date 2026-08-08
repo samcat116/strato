@@ -863,25 +863,64 @@ site-topology authority, per-network generation guards) and
 network reconciliation (`reconcileNetworks`) defaults to a no-op on
 non-SDN platforms. See [networking](./networking.md).
 
-### Instance metadata chassis (IMDS)
+### Chassis service foot (IMDS and the DNS resolver)
 
-The chassis-local half of the metadata dataplane (wire v27, STR-49) is
-planned by `StratoAgentCore/MetadataChassisPlan.swift`: the OVS internal
-port and per-network namespace (`strato-md-<network-uuid>`) that terminate
-the metadata addresses on this host, kept a pure plan (like
-`SandboxNetnsAttachmentPlan`) so the command sequence stays unit-testable,
-and executed by `NetworkServiceLinux`. Its input is the agent's own workload
-specs (`NetworkSpec.metadataEnabled`), not the `networks` list — it must
-exist on every chassis running a NIC on the network, including sited
-non-controller agents, which receive an empty `networks` list by design. The
-`NetworkReconciler` converges the OVN `localport` itself from
-`DesiredNetworkState.metadataEnabled` on authoritative agents, and
-`metadataProtection(for:)` shields existing ports from teardown when the
-field is nil (a pre-v27 control plane's silence must not delete live ports).
-Nothing serves HTTP inside the namespace yet — the guest-facing IMDS
-listener is future work. See
-[ADR 0003](../adr/0003-imds-chassis-namespace.md) and
+The chassis-local half of a network's link-local services is planned by
+`StratoAgentCore/ChassisServicePlan.swift`: the OVS internal port and
+per-network namespace (`strato-md-<network-uuid>`) that terminate them on this
+host, kept a pure plan (like `SandboxNetnsAttachmentPlan`) so the command
+sequence stays unit-testable, and executed by `NetworkServiceLinux`.
+
+Two services share it — instance metadata (wire v27, STR-49) and the network's
+DNS resolver (wire v37, STR-40) — and its input is the agent's own workload
+specs (`NetworkSpec.metadataEnabled` / `.resolverEnabled`), not the `networks`
+list: it must exist on every chassis running a NIC on the network, including
+sited non-controller agents, which receive an empty `networks` list by design.
+An `external_ids:strato-services` stamp records which services the namespace was
+built for, so turning one on re-realizes exactly the namespaces that need it. An
+`ip`-invoked `tc` ingress policer caps the aggregate packet rate guests may push
+at the interface.
+
+The `NetworkReconciler` converges the OVN `localport` itself from
+`DesiredNetworkState`'s two flags on authoritative agents, and
+`serviceLocalPortProtection(for:)` shields existing ports from teardown when the
+sync has an opinion about *neither* service (a pre-v27 control plane's silence
+must not delete live ports; a pre-v37 one's silence about the resolver alone
+must not stop `metadataEnabled: false` from working).
+
+Nothing serves HTTP inside the namespace yet — the guest-facing IMDS listener is
+future work. DNS does: see §Per-network resolver below. See
+[ADR 0003](../adr/0003-imds-chassis-namespace.md),
+[ADR 0006](../adr/0006-coredns-per-chassis-namespace.md) and
 [networking](./networking.md).
+
+### Per-network resolver
+
+`StratoAgent/ResolverSupervisor.swift` runs one CoreDNS per resolver-enabled
+network this host has a NIC on, launched into that network's chassis namespace
+with `ip netns exec` (STR-40). A helper process per namespace rather than a
+listener inside the agent, because `setns(2)` is per-thread and does not compose
+with Swift's concurrency runtime — the cost ADR 0003 named and left to its first
+consumer.
+
+The decisions live in two pure types the tests can reach:
+`StratoAgentCore/CoreDNSZoneRenderer.swift` produces the `Corefile` and zone
+files (golden-tested, like `CloudInitProvisioner.networkConfigYAML`), and
+`ResolverSupervisionPolicy.swift` decides what to write, when to start, and how
+long to back off. Every path under `<config_dir>/<network-uuid>/` is derived
+from the network id, the `VMDirectoryLayout` convention, which is what lets a
+restarted agent rederive them all — and reap directories for networks it no
+longer serves.
+
+A record edit costs no restart: files are written atomically, the `file` plugin
+watches them, and the Corefile carries `reload`. A restarted agent **adopts** a
+CoreDNS its predecessor started rather than replacing it, verified by pid
+liveness plus a `/proc/<pid>/cmdline` check, because killing it would cost the
+network its resolver for a process start for nothing.
+
+The host reports whether it can run one at all as
+`AgentRegisterMessage.resolverCapable`, and the control plane folds that across
+the whole site before enabling any network's resolver. See [dns](./dns.md).
 
 ### Instance metadata store (IMDS payload)
 

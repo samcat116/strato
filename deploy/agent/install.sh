@@ -121,6 +121,7 @@ INGEST_URL=""
 SPIRE_VERSION="1.9.6"
 ALLOY_VERSION="v1.17.1"
 SPIFFE_HELPER_VERSION="v0.11.0"
+COREDNS_VERSION="1.12.0"
 
 STRATO_CONF_DIR=/etc/strato
 STRATO_STATE_DIR=/var/lib/strato
@@ -424,6 +425,35 @@ install_spiffe_helper() {
   log "Installed spiffe-helper to ${BIN_DIR}/spiffe-helper"
 }
 
+install_coredns() {
+  # The per-network DNS resolver (STR-40). Not packaged by Debian/Ubuntu in a
+  # version worth pinning to, and the agent invokes it by absolute path, so it
+  # is downloaded like spire-agent and alloy rather than apt-installed.
+  #
+  # Only relevant in OVN mode: the resolver terminates on a localport inside a
+  # per-network namespace, neither of which exists under user-mode networking.
+  if [ "$NETWORK_MODE" != "ovn" ]; then
+    return 0
+  fi
+  if command -v coredns >/dev/null 2>&1 \
+    && coredns -version 2>&1 | grep -q "CoreDNS-${COREDNS_VERSION}"; then
+    log "coredns ${COREDNS_VERSION} already installed; skipping download"
+    return 0
+  fi
+  local tarball="coredns_${COREDNS_VERSION}_linux_${GOARCH}.tgz"
+  local base="https://github.com/coredns/coredns/releases/download/v${COREDNS_VERSION}"
+  local tmp
+  tmp="$(mktemp -d)"
+  # shellcheck disable=SC2064
+  trap "rm -rf '$tmp'" RETURN
+  log "Downloading CoreDNS ${COREDNS_VERSION} (${GOARCH})"
+  fetch "${base}/${tarball}" "${tmp}/${tarball}" "coredns"
+  tar -xzf "${tmp}/${tarball}" -C "$tmp" coredns \
+    || die "coredns tarball did not contain a 'coredns' binary"
+  install -m 0755 "${tmp}/coredns" "${BIN_DIR}/coredns"
+  log "Installed coredns to ${BIN_DIR}/coredns"
+}
+
 # (Invoked after install_deps below: install_alloy needs the unzip package.)
 
 # --- host dependencies -------------------------------------------------------
@@ -685,6 +715,7 @@ enable_libvirt_socket
 disable_libvirt_default_network
 
 install_spire_agent
+install_coredns
 if [ "$INSTALL_TELEMETRY" -eq 1 ]; then
   install_alloy
   install_spiffe_helper
@@ -780,6 +811,11 @@ preflight() {
     check_present "ip (iproute2)"    "install iproute2"           command -v ip
     check_present "ovs-vsctl (OVS)"  "install openvswitch-switch" command -v ovs-vsctl
     check_present "ovn-appctl (OVN)" "install ovn-host"           command -v ovn-appctl
+    # Advisory here as in the agent's own preflight, but worth naming the reach:
+    # the control plane withholds a network's resolver unless every agent in the
+    # site can serve one, so this host missing CoreDNS holds the whole site back.
+    check_present "coredns (per-network DNS resolver)" \
+      "rerun this installer, or install CoreDNS to ${BIN_DIR}/coredns" command -v coredns
   fi
   if [ "$PREFLIGHT_OK" -eq 0 ]; then
     warn "some host dependencies are missing (see [MISS] above); the agent will run but may report reduced capacity"

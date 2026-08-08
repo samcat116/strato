@@ -320,6 +320,10 @@ public struct AgentConfig: Codable {
     /// and an operator-configured FRR on the egress host; nil or disabled
     /// strips any previously applied `dynamic-routing*` options.
     public let ovnDynamicRouting: OVNDynamicRoutingConfig?
+    /// Per-network DNS resolver settings (STR-40). Nil means the built-in
+    /// defaults: enabled, CoreDNS discovered on `PATH`-adjacent locations,
+    /// config under `/var/lib/strato/resolver`, and AWS's 1024 pps ceiling.
+    public let resolver: NetworkResolverConfig?
     /// Simulation ("dummy agent") settings. Nil (or disabled) means a normal
     /// agent that drives real hypervisor/network/storage backends.
     public let simulation: SimulationConfig?
@@ -409,6 +413,7 @@ public struct AgentConfig: Codable {
         case hypervisorType = "hypervisor_type"
         case ovnUplink = "ovn_uplink"
         case ovnDynamicRouting = "ovn_dynamic_routing"
+        case resolver
         case simulation
         case reconcileTeardownMinimum = "reconcile_teardown_minimum"
         case reconcileTeardownPercent = "reconcile_teardown_percent"
@@ -455,6 +460,7 @@ public struct AgentConfig: Codable {
         hypervisorType: HypervisorType? = nil,
         ovnUplink: OVNUplinkConfig? = nil,
         ovnDynamicRouting: OVNDynamicRoutingConfig? = nil,
+        resolver: NetworkResolverConfig? = nil,
         simulation: SimulationConfig? = nil,
         reconcileTeardownMinimum: Int? = nil,
         reconcileTeardownPercent: Int? = nil,
@@ -499,6 +505,7 @@ public struct AgentConfig: Codable {
         self.hypervisorType = hypervisorType
         self.ovnUplink = ovnUplink
         self.ovnDynamicRouting = ovnDynamicRouting
+        self.resolver = resolver
         self.simulation = simulation
         self.reconcileTeardownMinimum = reconcileTeardownMinimum
         self.reconcileTeardownPercent = reconcileTeardownPercent
@@ -824,6 +831,28 @@ public struct AgentConfig: Codable {
             ovnDynamicRouting = nil
         }
 
+        // Parse the per-network resolver from the [resolver] section (STR-40).
+        // Presence tested with `hasTable`, the same swift-toml gotcha the two
+        // sections above document. Absent means the defaults, which is what an
+        // upgraded agent that was never reconfigured should get: the feature is
+        // an opt-out on the network, so a host that says nothing about it is one
+        // that should run it.
+        let resolver: NetworkResolverConfig?
+        if tomlData.hasTable("resolver"), let resolverTable = tomlData.table("resolver") {
+            let ratePPS = resolverTable.int("rate_limit_pps")
+            guard ratePPS.map({ $0 >= 0 }) ?? true else {
+                throw AgentConfigError.invalidConfiguration(
+                    "[resolver] rate_limit_pps must be zero (no limit) or a positive integer")
+            }
+            resolver = NetworkResolverConfig(
+                enabled: resolverTable.bool("enabled") ?? true,
+                corednsBinaryPath: resolverTable.string("coredns_binary_path"),
+                configDirectory: resolverTable.string("config_dir"),
+                rateLimitPPS: ratePPS)
+        } else {
+            resolver = nil
+        }
+
         // Parse simulation ("dummy agent") settings from the [simulation]
         // section. Absent section means a normal agent. `table(_:)` returns an
         // empty scoped view even for an absent section, so presence must be
@@ -899,6 +928,7 @@ public struct AgentConfig: Codable {
             hypervisorType: hypervisorType,
             ovnUplink: ovnUplink,
             ovnDynamicRouting: ovnDynamicRouting,
+            resolver: resolver,
             simulation: simulationConfig,
             reconcileTeardownMinimum: reconcileTeardownMinimum,
             reconcileTeardownPercent: reconcileTeardownPercent,

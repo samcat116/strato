@@ -54,17 +54,28 @@ protocol NetworkServiceProtocol: Sendable {
     /// guests to serve. Nil ≙ a control plane with no opinion — converge
     /// nothing, rather than reading silence as "tear every namespace down".
     ///
-    /// `dnsZones` is the authority's DNS desired state (STR-39): every zone
-    /// attached to a network whose topology this agent authors, with the
-    /// zone's full effective record set — assembled fleet-wide, since a zone's
-    /// names span every agent's VMs. Nil ≙ no opinion (a pre-v36 control plane,
-    /// or a non-authoritative agent): leave every managed `DNS` row alone.
+    /// `resolverNetworks` is `metadataNetworks`' twin (STR-40): the networks
+    /// this host runs a resolver-enabled NIC on, whose link-local resolver
+    /// address it must materialize — on the *same* localport and in the *same*
+    /// namespace — and answer on with a CoreDNS. Nil ≙ no opinion, on the same
+    /// terms. The two lists are folded into one per-network service set, so a
+    /// network on both gets one namespace carrying four addresses.
+    ///
+    /// `dnsZones` is the DNS desired state (STR-39, widened by STR-40): every
+    /// zone attached to a network this agent either authors topology for or
+    /// runs a local NIC on, with the zone's full effective record set —
+    /// assembled fleet-wide, since a zone's names span every agent's VMs. The
+    /// OVN `DNS` rows are still written only under `authoritative`; the
+    /// resolver's zone files are rendered regardless. Nil ≙ no opinion (a
+    /// pre-v36 control plane, or an agent with nothing to do for any zone):
+    /// leave every managed row and rendered file alone.
     ///
     /// Default no-op so platforms without a real SDN (macOS user-mode) ignore it.
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
         securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
-        metadataNetworks: [UUID]?, dnsZones: [DesiredDNSZone]?
+        metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
+        dnsZones: [DesiredDNSZone]?
     ) async
 }
 
@@ -89,7 +100,8 @@ extension NetworkServiceProtocol {
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
         securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
-        metadataNetworks: [UUID]?, dnsZones: [DesiredDNSZone]?
+        metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
+        dnsZones: [DesiredDNSZone]?
     ) async {}
 }
 
@@ -143,13 +155,18 @@ struct VMNetworkConfig: Sendable {
     /// plane predates the field — the row simply keeps today's options, which
     /// is what a sender with no opinion should get.
     let metadataEnabled: Bool
+    /// Whether this NIC's network publishes the per-network DNS resolver
+    /// (STR-40). Decides what the OVN `DHCP_Options` row hands the guest as
+    /// `dns_server`, and whether the row advertises a route to the resolver.
+    let resolverEnabled: Bool
 
     init(
         networkName: String, networkId: UUID, macAddress: String? = nil, ipAddress: String? = nil,
         subnet: String? = nil, gateway: String? = nil, ip6Address: String? = nil, prefixLength6: Int? = nil,
         gateway6: String? = nil, subnet6: String? = nil, dhcpEnabled: Bool = false, dnsServers: [String] = [],
         domainName: String? = nil, leaseTime: Int? = nil, securityGroupIds: [UUID]? = nil, mtu: Int? = nil,
-        metadataEnabled: Bool = false
+        metadataEnabled: Bool = false,
+        resolverEnabled: Bool = false
     ) {
         self.networkName = networkName
         self.networkId = networkId
@@ -168,6 +185,7 @@ struct VMNetworkConfig: Sendable {
         self.securityGroupIds = securityGroupIds
         self.mtu = mtu
         self.metadataEnabled = metadataEnabled
+        self.resolverEnabled = resolverEnabled
     }
 }
 
