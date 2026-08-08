@@ -331,10 +331,9 @@ public enum LibvirtDomain {
     /// `DomainXMLBuilder` writes the VM id into `<name>` and the control plane
     /// only ever issues UUIDs, so this is exact rather than a heuristic. It
     /// matters because both `listVMs()` and `reservedResources()` read the
-    /// daemon's full domain list, and *that list is not advisory*: a VM absent
-    /// from the heartbeat is marked `.error` by the control plane, and a
-    /// co-tenant domain present in it would be reported as a Strato VM that no
-    /// sync can explain.
+    /// daemon's full domain list, and *that list is not advisory*: absence from
+    /// an inventory reads as gone, while a co-tenant domain present in it would
+    /// be reported as a Strato VM that no sync can explain.
     public static func isStratoDomainName(_ name: String) -> Bool {
         UUID(uuidString: name) != nil
     }

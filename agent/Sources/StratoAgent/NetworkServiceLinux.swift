@@ -423,8 +423,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             portName: "mock-vm-\(vmId)",
             portUUID: UUID().uuidString,
             attachment: .tap(interface: "tap-\(vmId)"),
-            macAddress: mockAttachment.macAddress,
-            ipAddress: mockAttachment.ipAddress
+            macAddress: config.macAddress ?? "02:00:00:00:00:01",
+            ipAddress: config.ipAddress ?? "192.168.1.100"
         )
         #endif
     }

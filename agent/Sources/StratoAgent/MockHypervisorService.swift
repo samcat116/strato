@@ -114,7 +114,9 @@ actor MockHypervisorService: HypervisorService {
         return vm.status
     }
 
-    func listVMs() async -> [String] {
+    /// Never nil: the VM table is this actor's own, so there is no query that
+    /// can fail and no state in which it does not know (STR-196).
+    func listVMs() async -> [String]? {
         Array(vms.keys)
     }
 
@@ -182,7 +184,10 @@ actor MockHypervisorService: HypervisorService {
     /// Real committed CPU/memory across every tracked VM, so the agent reports
     /// depleting capacity to the scheduler as placements land — the whole point
     /// of simulation-mode scale testing.
-    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64) {
+    ///
+    /// Never nil, for the same reason as `listVMs()`: the specs are held here,
+    /// so a zero from this backend is always a real zero.
+    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)? {
         vms.values.lazy.map(\.spec).reservedResources
     }
 }

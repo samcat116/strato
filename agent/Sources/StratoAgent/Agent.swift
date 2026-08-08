@@ -2191,7 +2191,11 @@ actor Agent {
         for (type, service) in hypervisorServices {
             // Falls back to the manifest, never to nothing: under-reporting
             // reservations advertises capacity this host does not have and
-            // invites the scheduler to over-place.
+            // invites the scheduler to over-place. Since STR-196 that covers
+            // the case this was always written for — a backend that *answers*
+            // without knowing, not merely one that runs out of time. A driver
+            // returning a synthesized zero was indistinguishable from an idle
+            // host, which is how STR-190 stayed invisible in the field.
             let reserved =
                 await observe(type, "reserved-resources") {
                     await service.reservedResources()
@@ -2287,17 +2291,25 @@ actor Agent {
     }
 
     /// Query a hypervisor for reporting purposes under a short budget,
-    /// returning nil if it does not answer in time.
+    /// returning nil if it does not answer in time — or answers that it cannot
+    /// say.
     ///
     /// These calls exist only to describe the host, but they run on the
     /// hypervisor's actor alongside real work. Before issue #516 the heartbeat
     /// awaited them unbounded, so one stuck hypervisor call stopped every
     /// subsequent heartbeat and the control plane marked a live agent offline.
     /// A stale-but-recent answer is far better than no heartbeat at all.
+    ///
+    /// Two nils are flattened into one deliberately (STR-196): the budget
+    /// overran, or the backend could not find out. The agent's response to both
+    /// is the same manifest substitution, and each is already logged by whoever
+    /// produced it — so nothing is lost by conflating them, and the caller's
+    /// fallback covers a backend that answers *wrongly* rather than only one
+    /// that answers *slowly*.
     private func observe<T: Sendable>(
         _ type: HypervisorType,
         _ stage: String,
-        _ query: @escaping @Sendable () async -> T
+        _ query: @escaping @Sendable () async -> T?
     ) async -> T? {
         do {
             return try await StageBudget.run(
