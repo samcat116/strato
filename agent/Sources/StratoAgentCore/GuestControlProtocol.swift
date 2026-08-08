@@ -79,6 +79,18 @@ public enum GuestControlProtocol {
         /// at 1 and steps by one per record, so no real stream comes within
         /// astronomical distance of this; the point is to leave the host's own
         /// `lastSeq + 1` resume arithmetic unable to overflow.
+        ///
+        /// The cap stops the overflow, not everything a bogus seq can do. The
+        /// follow loop takes `lastSeq = max(lastSeq, seq)`, so a guest that
+        /// sends one *accepted* record near this ceiling pins its own resume
+        /// point there: the guest only replays `seq >= since_seq`, its counter
+        /// restarts small, and that sandbox's log follow then reconnects
+        /// cleanly and delivers nothing, silently, forever. It is self-
+        /// inflicted (a tenant wedging their own logs) and far better than
+        /// trapping the agent, but no cap value fixes it — any ceiling can be
+        /// claimed by the record below it. The fix is a plausibility check on
+        /// how far one record may advance the resume point, which belongs with
+        /// the follow loop's cross-boot seq semantics rather than here.
         public static let maxLogSeq: UInt64 = 1 << 53
 
         /// How much of an offending line a ``GuestControlError`` carries. The
@@ -96,6 +108,47 @@ public enum GuestControlProtocol {
     /// guest's serde contract declares it as one, and this is a rename plus a
     /// hardening pass, not a redesign.
     public static let allowedStreams: Set<String> = ["stdout", "stderr"]
+
+    /// `text` cut to at most `limit` UTF-8 bytes, on a scalar boundary.
+    ///
+    /// Two things make this more than a `prefix`. Truncation is by UTF-8 bytes,
+    /// not by `Character`, because one grapheme cluster can be arbitrarily long
+    /// — a character-wise prefix would let a guest push a megabyte of combining
+    /// marks through a byte cap. And the cut lands on a scalar boundary, because
+    /// a fragment left behind is repaired by `String(decoding:)` into a 3-byte
+    /// U+FFFD, which would make the result *longer* than the cap enforcing it.
+    static func truncated(_ text: some StringProtocol, toUTF8Bytes limit: Int) -> String {
+        // One byte past the cap: its value is what says whether the cut landed
+        // inside a multi-byte scalar.
+        var bytes = Array(text.utf8.prefix(limit + 1))
+        guard bytes.count > limit else { return String(text) }
+
+        let overrun = bytes.removeLast()
+        if isContinuationByte(overrun) {
+            while let last = bytes.last, isContinuationByte(last) {
+                bytes.removeLast()
+            }
+            if !bytes.isEmpty {
+                bytes.removeLast()  // the split scalar's leading byte
+            }
+        }
+        return String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// `text` held to `limit` UTF-8 bytes with a visible marker when it had to
+    /// be cut, so a reader can tell a clipped diagnostic from a short one. The
+    /// result is never longer than `limit`.
+    static func elided(_ text: some StringProtocol, toUTF8Bytes limit: Int) -> String {
+        guard text.utf8.count > limit else { return String(text) }
+        let marker = "…[truncated]"
+        guard limit > marker.utf8.count else { return truncated(text, toUTF8Bytes: limit) }
+        return truncated(text, toUTF8Bytes: limit - marker.utf8.count) + marker
+    }
+
+    /// Whether `byte` is a UTF-8 continuation byte (`10xxxxxx`).
+    private static func isContinuationByte(_ byte: UInt8) -> Bool {
+        byte & 0b1100_0000 == 0b1000_0000
+    }
 
     /// The parameters of an `exec` request (spec §1): the argv to spawn in the
     /// workload's container context, plus optional environment overrides,
@@ -452,7 +505,7 @@ public enum GuestControlProtocol {
                     state: state,
                     exitCode: try raw.boundedExitCode())
             case "error":
-                return .error(message: try raw.errorMessage())
+                return .error(message: raw.errorMessage())
             case "exec_started":
                 return .execStarted
             case "output":
@@ -546,11 +599,19 @@ public enum GuestControlProtocol {
             return try Self.capped(value, field: field, limit: Limits.maxIdentifierBytes)
         }
 
-        /// A guest `error` message, capped: it is logged verbatim and travels
-        /// to the control plane as an exec session's close reason.
-        func errorMessage() throws -> String {
+        /// A guest `error` message, bounded by **truncation** rather than by
+        /// rejection — the one field where those differ deliberately.
+        ///
+        /// Every other capped field is compared against or feeds arithmetic, so
+        /// an out-of-contract value must not enter the system at all. `message`
+        /// is purely diagnostic: it is logged verbatim and becomes an exec
+        /// session's close reason. Throwing here would replace the guest's
+        /// actual complaint with "field too large" — losing the only thing the
+        /// field is for — and the memory it could cost is already bounded by
+        /// the line cap. So it is clipped, with a marker, and delivered.
+        func errorMessage() -> String {
             guard let message else { return "" }
-            return try Self.capped(message, field: "message", limit: Limits.maxMessageBytes)
+            return GuestControlProtocol.elided(message, toUTF8Bytes: Limits.maxMessageBytes)
         }
 
         /// The `stream` label, which must be one the protocol defines. See
@@ -650,35 +711,9 @@ public enum GuestControlError: Error, LocalizedError, Equatable, Sendable {
 
     /// A ``malformedResponse`` carrying at most
     /// ``GuestControlProtocol/Limits/excerptBytes`` of the offending line.
-    ///
-    /// Truncation is by UTF-8 bytes, not by `Character`: one grapheme cluster
-    /// can be arbitrarily long, so a character-wise `prefix` would still let a
-    /// guest push a megabyte of combining marks into the host's log.
     public static func malformed(_ line: some StringProtocol) -> GuestControlError {
-        let limit = GuestControlProtocol.Limits.excerptBytes
-        // One byte past the cap: its value is what says whether the cut landed
-        // inside a multi-byte scalar.
-        var bytes = Array(line.utf8.prefix(limit + 1))
-        guard bytes.count > limit else { return .malformedResponse(String(line)) }
-
-        let overrun = bytes.removeLast()
-        if isContinuationByte(overrun) {
-            // Back up over the split scalar. Left in place, `String(decoding:)`
-            // would repair the orphaned fragment into a 3-byte U+FFFD and the
-            // excerpt would come out *longer* than the cap enforcing it.
-            while let last = bytes.last, isContinuationByte(last) {
-                bytes.removeLast()
-            }
-            if !bytes.isEmpty {
-                bytes.removeLast()  // the scalar's leading byte
-            }
-        }
-        return .malformedResponse(String(decoding: bytes, as: UTF8.self))
-    }
-
-    /// Whether `byte` is a UTF-8 continuation byte (`10xxxxxx`).
-    private static func isContinuationByte(_ byte: UInt8) -> Bool {
-        byte & 0b1100_0000 == 0b1000_0000
+        .malformedResponse(
+            GuestControlProtocol.truncated(line, toUTF8Bytes: GuestControlProtocol.Limits.excerptBytes))
     }
 
     public var errorDescription: String? {

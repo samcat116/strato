@@ -378,6 +378,31 @@ determines a connection's role:
   line (output that ended without a trailing newline) instead of holding it
   until teardown. Workload stdin is `/dev/null`.
 
+**What the host will accept.** Guest→host lines are hostile input by
+definition — a trap in the host parser aborts the agent and takes every VM on
+the node with it, not just one tenant's session — so `GuestControlProtocol`
+(agent-side) is a total function over them: every response either lands inside
+these bounds or throws, closing the connection. The walls, all far outside
+what the in-repo guest produces (it reads workload and exec output in 8 KiB
+chunks), live in `GuestControlProtocol.Limits`:
+
+| Bound | Value | Applies to |
+| --- | --- | --- |
+| Line length | 1 MiB | every response line; matches the transport's line framer, which fails the channel rather than accumulating an unterminated line |
+| Decoded stdio payload | 64 KiB | `output`/`log` `data` (checked on the base64 text first, so an oversized chunk is never materialized) |
+| Identity fields | 256 B | `sandbox_id`, `nonce` |
+| `error` message | 4 KiB | **truncated with a marker**, not rejected — it is purely diagnostic, and throwing would discard the guest's actual complaint |
+| `seq` | 2^53 | `log` records; keeps the host's `lastSeq + 1` resume arithmetic clear of overflow |
+| `stream` | `stdout` \| `stderr` only | `output`/`log`; the host buffers a partial line per stream *name*, so arbitrary labels would grow host memory without bound |
+| `exit_code` | `i32` range | `exec_exit`, `status` |
+| `control_protocol_version` | `u32` range | `pong` |
+
+A future guest that wants to stream larger records has to move these
+deliberately, on both sides. Note that a *valid* `seq` near its ceiling still
+pins that sandbox's follow resume point permanently (the guest only replays
+`seq >= since_seq`); it is self-inflicted and silent, and a plausibility check
+on per-record seq advance is the outstanding fix.
+
 PID 1's reaper is restructured to run forever with a child registry (exec
 waiters + a bounded unclaimed-exit map), so exec exit codes are routed to
 their sessions while the workload's exit still lands in the shared status the

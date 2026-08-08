@@ -20,42 +20,55 @@ struct GuestControlProtocolHardeningTests {
 
     // MARK: - Line length
 
-    @Test("a line past the byte cap is refused before it is parsed")
+    @Test("a line past the byte cap is refused, and by the line cap specifically")
     func oversizedLineRefused() {
-        // Valid JSON, so nothing but the cap can reject it.
+        // The bulk goes in an *unknown* field, which has no cap of its own and
+        // which the decoder otherwise ignores. So the line guard is the only
+        // thing that can reject this: assert the case, not just that something
+        // threw, or deleting the guard would leave the test green.
         let filler = String(repeating: "a", count: Limits.maxLineBytes)
-        let line = #"{"type":"error","message":"\#(filler)"}"#
-        #expect(throws: GuestControlError.self) {
+        let line = #"{"type":"log_eof","x":"\#(filler)"}"#
+        let error = #expect(throws: GuestControlError.self) {
             try GuestControlProtocol.Response.decode(line: line)
         }
+        guard case .responseTooLarge(_, let limit)? = error else {
+            Issue.record("expected a line cap rejection, got \(String(describing: error))")
+            return
+        }
+        #expect(limit == Limits.maxLineBytes)
     }
 
     @Test("a line at the byte cap is still parsed")
     func lineAtCapAccepted() {
-        let base = #"{"type":"error","message":""}"#
+        // Same shape one byte shorter: it must decode, proving the cap does not
+        // fire early. Unknown fields are ignored, so this is a plain log_eof.
+        let base = #"{"type":"log_eof","x":""}"#
         let filler = String(repeating: "a", count: Limits.maxLineBytes - base.utf8.count)
-        let line = #"{"type":"error","message":"\#(filler)"}"#
+        let line = #"{"type":"log_eof","x":"\#(filler)"}"#
         #expect(line.utf8.count == Limits.maxLineBytes)
-        // Rejected on the *message* cap rather than the line cap — the point is
-        // that the line cap did not fire one byte early.
-        let error = #expect(throws: GuestControlError.self) {
-            try GuestControlProtocol.Response.decode(line: line)
-        }
-        guard case .fieldTooLarge(let field, _, _)? = error else {
-            Issue.record("expected a field cap rejection, got \(String(describing: error))")
-            return
-        }
-        #expect(field == "message")
+        #expect((try? GuestControlProtocol.Response.decode(line: line)) == .logEof)
     }
 
     // MARK: - Field length caps
 
-    @Test("an oversized error message is refused rather than logged verbatim")
-    func oversizedMessageRefused() {
-        let message = String(repeating: "x", count: Limits.maxMessageBytes + 1)
-        #expect(throws: GuestControlError.self) {
-            try GuestControlProtocol.Response.decode(line: #"{"type":"error","message":"\#(message)"}"#)
+    @Test("an oversized error message is clipped, not thrown away")
+    func oversizedMessageTruncated() throws {
+        // `message` is purely diagnostic, so the bound is truncation: rejecting
+        // would replace the guest's actual complaint with "field too large".
+        let message = "boom: " + String(repeating: "x", count: Limits.maxMessageBytes)
+        let response = try GuestControlProtocol.Response.decode(
+            line: #"{"type":"error","message":"\#(message)"}"#)
+        guard case .error(let delivered) = response else {
+            Issue.record("expected an error response, got \(response)")
+            return
         }
+        #expect(delivered.utf8.count <= Limits.maxMessageBytes)
+        #expect(delivered.hasPrefix("boom: "), "the head of the diagnostic must survive")
+        #expect(delivered.hasSuffix("…[truncated]"), "a clipped message must say so")
+    }
+
+    @Test("an error message at the cap is delivered whole, unmarked")
+    func messageAtCapUntouched() {
         let atCap = String(repeating: "x", count: Limits.maxMessageBytes)
         let accepted = try? GuestControlProtocol.Response.decode(line: #"{"type":"error","message":"\#(atCap)"}"#)
         #expect(accepted == .error(message: atCap))
@@ -71,6 +84,20 @@ struct GuestControlProtocolHardeningTests {
             try GuestControlProtocol.Response.decode(
                 line: #"{"type":"status","sandbox_id":"s","nonce":"\#(id)","state":"running"}"#)
         }
+    }
+
+    @Test("a response with no identity fields decodes to empty ones, not a rejection")
+    func missingIdentityIsLegacyNotMalformed() throws {
+        // A compatibility contract, not an oversight: guests predating identity
+        // echo send neither field, and the host's identity check reads "" as
+        // "nothing to match" and falls back to id-only. Capping these fields
+        // must not turn their absence into a throw.
+        #expect(
+            try GuestControlProtocol.Response.decode(line: #"{"type":"pong"}"#)
+                == .pong(sandboxId: "", nonce: "", controlProtocolVersion: nil))
+        #expect(
+            try GuestControlProtocol.Response.decode(line: #"{"type":"status","state":"running"}"#)
+                == .status(sandboxId: "", nonce: "", state: .running, exitCode: nil))
     }
 
     @Test("multi-byte characters count against a cap as bytes, not as characters")
