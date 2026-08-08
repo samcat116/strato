@@ -119,8 +119,8 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 /// Translates a `VMSpec` and its host-resolved disks and NICs into a libvirt
 /// domain XML document.
 ///
-/// This is the libvirt counterpart of `QEMUService.convertToQEMUConfiguration`.
-/// It lives in the core library for the reason `QEMUBalloonDevice` and
+/// This is the libvirt counterpart of the process driver's argv assembly.
+/// It lives in the core library for the reason `QEMUGraphicsDevice` and
 /// `QEMUGraphicsDevice` give: the driver that will call it links a hypervisor
 /// SDK and therefore has no unit tests, and a device the hypervisor rejects
 /// kills every VM boot on the host while surfacing only as an opaque timeout

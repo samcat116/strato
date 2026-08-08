@@ -356,6 +356,57 @@ struct DomainXMLBuilderTests {
         // RFB password; a TCP listener would expose it unauthenticated.
         #expect(!xml.contains("<graphics type='vnc' port"))
         #expect(!xml.contains("listen type='address'"))
+
+        // Exactly one balloon, and free-page *reporting* rather than the QEMU
+        // path's free-page hinting — see the builder's note. Reporting needs no
+        // iothread, which is what let the hand-built device (and the argv
+        // builder around it) go away with the process driver.
+        #expect(xml.components(separatedBy: "<memballoon ").count == 2)
+        #expect(xml.contains("<memballoon model='virtio' freePageReporting='on'/>"))
+    }
+
+    /// The graphics console's device reasoning (issue #566), which used to be
+    /// asserted against a QEMU command line before the process driver was
+    /// deleted (STR-136). The goldens record the whole document; these are the
+    /// four choices that are wrong-looking-but-deliberate, so a future edit has
+    /// to argue with them rather than just re-record a golden.
+    @Test("the graphics console's device choices", arguments: CPUArchitecture.allCases)
+    func graphicsDevices(_ architecture: CPUArchitecture) throws {
+        let xml = try DomainXMLBuilder.build(
+            Self.input(spec: Self.spec(graphics: .vnc), architecture: architecture))
+
+        // Standard VGA on x86, virtio on arm64: this console exists for
+        // pre-driver output — UEFI, GRUB, Windows Setup, a panic screen — which
+        // a virtio adapter cannot show without a guest driver. The arm64 `virt`
+        // machine has no VGA device at all, and EDK2 drives virtio-gpu at
+        // firmware time through `VirtioGpuDxe`.
+        let model = architecture == .x86_64 ? "vga" : "virtio"
+        #expect(xml.contains("<model type='\(model)' heads='1'/>"))
+
+        // An absolute-positioning tablet, or the guest cursor drifts away from
+        // the browser's and a graphical installer becomes unclickable.
+        #expect(xml.contains("<input type='tablet' bus='usb'/>"))
+        // A USB keyboard on *every* architecture, and arm64 is why: `virt` has
+        // no PS/2 controller and creates no input devices, so a guest there
+        // would render and accept clicks while dropping every keystroke. x86
+        // would type without it (q35 keeps the default i8042), so testing only
+        // that architecture would hide the bug entirely.
+        #expect(xml.contains("<input type='keyboard' bus='usb'/>"))
+        // Both need a controller to sit on: q35 starts with USB off and `virt`
+        // has none at all. xHCI is the one model present on both machines.
+        #expect(xml.contains("<controller type='usb' index='0' model='qemu-xhci'/>"))
+    }
+
+    /// A headless VM states `<video><model type='none'/>`, rather than omitting
+    /// the element, so no libvirt version auto-adds a framebuffer to a VM whose
+    /// console is the serial port.
+    @Test("a headless VM declares no display rather than leaving it open")
+    func headlessDeclaresNoVideo() throws {
+        let xml = try DomainXMLBuilder.build(Self.input(spec: Self.spec()))
+        #expect(xml.contains("<model type='none'/>"))
+        #expect(!xml.contains("<graphics"))
+        #expect(!xml.contains("<input"))
+        #expect(!xml.contains("qemu-xhci"))
     }
 
     @Test("user-mode networking is refused rather than guessed at")
@@ -626,8 +677,8 @@ struct DomainXMLBuilderTests {
             MemoryHotplugPlan.alignedHotplugBytes(spec: Self.spec(), architecture: .x86_64) == 0)
     }
 
-    /// `QEMUService` holds its own copies of these names until the QEMU driver
-    /// is removed; a rename on one side has to fail loudly rather than strand a
+    /// The domain document and the agent's own socket clients derive these
+    /// paths separately; a rename has to fail loudly here rather than strand a
     /// running VM's console.
     @Test("per-VM filenames are stable")
     func vmDirectoryLayout() {

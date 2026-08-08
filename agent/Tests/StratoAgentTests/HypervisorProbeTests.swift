@@ -15,32 +15,37 @@ struct HypervisorProbeTests {
 
     // MARK: - QEMU
 
-    @Test("QEMU is available and accelerated when binary exists and acceleration is on")
-    func qemuAvailableAccelerated() {
-        let report = HypervisorProbe.qemuReport(binaryPath: executableBinary, acceleration: accelerationOn)
+    /// There is no QEMU binary to look for any more (STR-136): the agent drives
+    /// libvirtd, which picks the emulator from its own capabilities. What
+    /// decides availability is whether that daemon is reachable and new enough,
+    /// and `HostPreflight.gate` applies it — see `HostPreflightTests`.
+    @Test("QEMU availability is left to the libvirt gate rather than a binary probe")
+    func qemuAvailabilityIsALibvirtFact() {
+        let report = HypervisorProbe.qemuReport(acceleration: accelerationOn)
 
         #expect(report.type == .qemu)
+        #expect(report.capabilities == .qemu)
+        #if os(Linux)
         #expect(report.available)
         #expect(report.accelerated)
         #expect(report.unavailabilityReason == nil)
-        #expect(report.capabilities == .qemu)
+        #else
+        // Off Linux the registered `.qemu` backend is a mock, so the host must
+        // not advertise itself as able to run VMs — otherwise the scheduler
+        // places real workloads onto it.
+        #expect(!report.available)
+        #expect(report.unavailabilityReason?.contains("Linux") == true)
+        #endif
     }
 
     @Test("QEMU stays available without acceleration (TCG fallback)")
     func qemuAvailableUnaccelerated() {
-        let report = HypervisorProbe.qemuReport(binaryPath: executableBinary, acceleration: accelerationOff)
+        let report = HypervisorProbe.qemuReport(acceleration: accelerationOff)
 
+        #expect(!report.accelerated)
+        #if os(Linux)
         #expect(report.available)
-        #expect(!report.accelerated)
-    }
-
-    @Test("QEMU is unavailable when the binary is missing")
-    func qemuUnavailableWithoutBinary() {
-        let report = HypervisorProbe.qemuReport(binaryPath: missingBinary, acceleration: accelerationOn)
-
-        #expect(!report.available)
-        #expect(!report.accelerated)
-        #expect(report.unavailabilityReason?.contains(missingBinary) == true)
+        #endif
     }
 
     // MARK: - Firecracker
@@ -77,10 +82,7 @@ struct HypervisorProbeTests {
 
     @Test("probeAll reports both hypervisor types exactly once")
     func probeAllCoversAllTypes() {
-        let reports = HypervisorProbe.probeAll(
-            qemuBinaryPath: missingBinary,
-            firecrackerBinaryPath: missingBinary
-        )
+        let reports = HypervisorProbe.probeAll(firecrackerBinaryPath: missingBinary)
 
         #expect(reports.count == HypervisorType.allCases.count)
         for type in HypervisorType.allCases {
@@ -91,10 +93,7 @@ struct HypervisorProbeTests {
     @Test("probeAll marks Firecracker unavailable on non-Linux platforms")
     func probeAllFirecrackerPlatformGate() throws {
         #if os(macOS)
-        let reports = HypervisorProbe.probeAll(
-            qemuBinaryPath: executableBinary,
-            firecrackerBinaryPath: executableBinary
-        )
+        let reports = HypervisorProbe.probeAll(firecrackerBinaryPath: executableBinary)
         let firecracker = try #require(reports.first { $0.type == .firecracker })
         #expect(!firecracker.available)
         #expect(firecracker.unavailabilityReason != nil)
@@ -125,10 +124,7 @@ struct HypervisorProbeTests {
 
     @Test("stampingFirecrackerVersion only touches the Firecracker entry")
     func stampingTargetsFirecrackerOnly() throws {
-        let reports = HypervisorProbe.probeAll(
-            qemuBinaryPath: executableBinary,
-            firecrackerBinaryPath: executableBinary
-        )
+        let reports = HypervisorProbe.probeAll(firecrackerBinaryPath: executableBinary)
         let stamped = HypervisorProbe.stampingFirecrackerVersion(reports, version: "1.7.0")
         let firecracker = try #require(stamped.first { $0.type == .firecracker })
         let qemu = try #require(stamped.first { $0.type == .qemu })

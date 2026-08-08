@@ -20,7 +20,7 @@ public enum LibvirtDomain {
     /// `virDomainState`, as returned by `virDomainGetState`.
     ///
     /// Mapping to `VMStatus` is markedly simpler than
-    /// `QEMUService.vmStatus(from:awaitingFirstStart:)`, and the reason is the
+    /// the process driver's `vmStatus(from:awaitingFirstStart:)`, and the reason is the
     /// create path rather than this enum: `domainDefineXML` leaves the domain
     /// `SHUTOFF`, which satisfies `ReconcileStep.create`'s "exists, not
     /// running" contract directly. There is no `prelaunch`-versus-`paused`
@@ -194,7 +194,7 @@ public enum LibvirtDomain {
     /// `virDomainShutdownFlagValues.VIR_DOMAIN_SHUTDOWN_DEFAULT` — let libvirt
     /// pick, which tries the guest agent and falls back to the ACPI power
     /// button. Naming a single method here would throw away the verified
-    /// shutdown `QEMUService` reaches for qga to get.
+    /// shutdown a direct qga client would have to ask for.
     public static let shutdownFlags: UInt32 = 0
 
     /// `virDomainDestroyFlagsValues.VIR_DOMAIN_DESTROY_DEFAULT` — SIGTERM the
@@ -353,7 +353,7 @@ public enum LibvirtFailure {
     /// (`VIR_ERR_NO_DOMAIN_SNAPSHOT`).
     ///
     /// Read as **success** by a checkpoint delete, whose post-condition is
-    /// exactly this — the same idempotency `QEMUService.deleteVMCheckpoint`
+    /// exactly this — the same idempotency the process driver's `deleteVMCheckpoint`
     /// reaches by finding no block node carrying the tag. Read as a failure by
     /// a restore, which has nothing to load.
     public static func isSnapshotMissing(_ error: any Error) -> Bool {
@@ -465,7 +465,7 @@ public enum LibvirtFailure {
 ///
 /// libvirt reports the same virtio-balloon guest statistics QEMU exposes
 /// through `qom-get guest-stats`, tagged and in KiB, so this is the libvirt
-/// spelling of `QMPProbeClient.collectMemoryStats` and follows its rule
+/// spelling of QMP's `query-balloon`/`guest-stats` pair and follows its rule
 /// exactly: without the load-bearing pair there is nothing truthful to report,
 /// and nil means "no stats", never "no memory used".
 ///

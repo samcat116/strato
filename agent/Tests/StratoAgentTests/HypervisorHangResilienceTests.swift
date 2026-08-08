@@ -8,10 +8,10 @@ import Logging
 /// took the whole agent offline — it stopped processing control-plane messages
 /// and stopped heartbeating, with no timeout, no watchdog and no error log.
 ///
-/// The call that hung lived in SwiftQEMU (a QMP continuation that was never
-/// resumed) and is fixed there. These tests cover the agent-side containment:
-/// hypervisor work is bounded, and a step that hangs anyway must not take
-/// unrelated work down with it.
+/// The call that hung lived in the hypervisor SDK (a monitor continuation that
+/// was never resumed) and was fixed there. These tests cover the agent-side
+/// containment: hypervisor work is bounded, and a step that hangs anyway must
+/// not take unrelated work down with it.
 @Suite("Hypervisor Hang Resilience")
 struct HypervisorHangResilienceTests {
 

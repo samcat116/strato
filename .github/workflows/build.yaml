@@ -466,7 +466,7 @@ jobs:
       # --force-resolved-versions builds exactly what Package.resolved pins and
       # skips re-resolution. With a cold cache the win is small (it avoids the
       # remote branch checks that the branch-pinned deps — swift-scim and
-      # webauthn-swift at main, swift-qemu at main, swift-toml at master — force
+      # webauthn-swift at main, swift-toml at master — force
       # on every unforced resolve), but it also makes CI build the pinned graph
       # rather than silently re-resolving. NOTE that makes a Package.swift change
       # with an uncommitted Package.resolved a build failure instead of a silent

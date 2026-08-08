@@ -111,16 +111,14 @@ RUN export DEBIAN_FRONTEND=noninteractive DEBCONF_NONINTERACTIVE_SEEN=true \
     ca-certificates \
     tzdata \
     socat \
-    # QEMU and KVM for virtualization
-    qemu-system-x86 \
+    # qemu-img, which the storage backend shells out to for every disk
+    # materialization, resize and snapshot. Not qemu-system-*: the agent never
+    # launches QEMU — libvirtd does, on the host.
     qemu-utils \
-    # glib-2.0 development files for QEMUKit
-    libglib2.0-0 \
-    libglib2.0-dev \
     # The client side of libvirt only: a containerized agent drives the *host's*
-    # libvirtd (mount /run/libvirt in), so the daemon and swtpm belong on the
-    # host, not in this image. virsh is what the host preflight connects to
-    # qemu:///system with.
+    # libvirtd (mount /run/libvirt in), so the daemon, QEMU and swtpm belong on
+    # the host, not in this image. virsh is what the host preflight and the
+    # domain-capabilities probe connect to qemu:///system with.
     libvirt-clients \
     # OVN/OVS for software-defined networking. Hypervisors run only the
     # chassis side (ovn-controller + OVS); the NB/SB/northd central is a

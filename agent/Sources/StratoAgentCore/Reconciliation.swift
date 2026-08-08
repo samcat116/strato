@@ -10,7 +10,7 @@ import StratoShared
 // onto the shared `SerialTaskQueue` lanes and tracks per-workload generations
 // so replayed or reordered syncs cannot roll state backward. All runtime side
 // effects go through `ReconcileActuator`, implemented by the Agent — this file
-// stays free of SwiftQEMU so the whole engine is unit-testable.
+// stays free of hypervisor SDKs so the whole engine is unit-testable.
 //
 // Issue #417 generalized the engine over `WorkloadKind`: the diff, generation
 // guard, attempt cap, and failure classification are shared between VMs and

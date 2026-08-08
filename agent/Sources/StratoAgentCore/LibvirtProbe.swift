@@ -153,6 +153,64 @@ public enum LibvirtProbe {
         return .reachable(version)
     }
 
+    /// What this host's libvirt can do about a guest vTPM (issue #565).
+    ///
+    /// Three cases rather than a Bool, for the reason `Status` gives: "libvirt
+    /// says no emulated TPM backend" is an installable problem with a named
+    /// remedy, while "we could not ask" is not — and telling an operator to
+    /// install swtpm on a host whose libvirtd simply never answered would send
+    /// them after the wrong thing.
+    public enum TPMSupport: Sendable, Equatable {
+        /// libvirt reports an `emulator` TPM backend: swtpm is installed and
+        /// libvirtd can drive it.
+        case supported
+        /// libvirt answered, and the answer is no.
+        case unsupported
+        /// The question could not be put to libvirt. The detail says why.
+        case unknown(String)
+    }
+
+    /// Asks libvirt what it can do about a vTPM on this host.
+    ///
+    /// `virsh domcapabilities` with no arguments reports the default emulator,
+    /// architecture and machine type — the same defaults a domain that names
+    /// none of them gets, which is exactly what Strato's domains do.
+    ///
+    /// Note for operators: libvirtd caches its capabilities, so installing
+    /// swtpm under a running daemon does not change this answer until libvirtd
+    /// restarts. `HostPreflight` says so in the remediation.
+    public static func probeTPM(
+        searchPath: String = ProcessInfo.processInfo.environment["PATH"]
+            ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        uri: String = systemURI,
+        timeout: Duration = probeTimeout
+    ) async -> TPMSupport {
+        guard let virsh = HostPreflight.locateTool("virsh", searchPath: searchPath) else {
+            return .unknown("virsh not found on PATH — libvirt is not installed here")
+        }
+
+        let result: ProcessResult
+        do {
+            result = try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: virsh),
+                arguments: ["-c", uri, "domcapabilities"],
+                timeout: timeout,
+                environment: cLocaleEnvironment())
+        } catch {
+            return .unknown("\(virsh) failed: \(error)")
+        }
+
+        guard result.terminationStatus == 0 else {
+            let stderr = String(data: result.standardError, encoding: .utf8) ?? ""
+            return .unknown(
+                firstMeaningfulLine(stderr) ?? "virsh domcapabilities exited \(result.terminationStatus)")
+        }
+        guard let output = String(data: result.standardOutput, encoding: .utf8), !output.isEmpty else {
+            return .unknown("virsh domcapabilities printed nothing")
+        }
+        return DomainCapabilities.tpmEmulatorSupported(in: output) ? .supported : .unsupported
+    }
+
     /// Extracts the daemon version from `virsh version --daemon` output, whose
     /// last line is `Running against daemon: 11.5.0`. The other lines report the
     /// client's compiled-against and in-use library versions, which say nothing

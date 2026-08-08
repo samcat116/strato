@@ -77,12 +77,12 @@ swift test --filter "Load valid TOML configuration"
 ```
 agent/
 ├── Sources/
-│   ├── StratoAgentCore/      # Testable core components (no SwiftQEMU dependency)
+│   ├── StratoAgentCore/      # Testable core components (no hypervisor SDKs)
 │   │   ├── AgentConfig.swift
 │   │   └── CustomLogHandler.swift
 │   └── StratoAgent/           # Main agent executable
 │       ├── Agent.swift
-│       ├── QEMUService.swift
+│       ├── LibvirtService.swift
 │       ├── WebSocketClient.swift
 │       └── ...
 └── Tests/
@@ -151,9 +151,9 @@ struct FeatureTests {
 ## Future Work
 
 Additional test coverage should be added for:
-- `Agent.swift` - Main agent coordination logic (requires mocking WebSocket and QEMU)
+- `Agent.swift` - Main agent coordination logic (requires mocking WebSocket and libvirt)
 - `WebSocketClient.swift` - WebSocket communication (requires mock server)
-- `QEMUService.swift` - VM lifecycle management (requires QEMU or advanced mocking)
+- `LibvirtService.swift` - VM lifecycle management (requires a libvirtd or advanced mocking)
 - `NetworkServiceLinux.swift` / `NetworkServiceMacOS.swift` - Network management (platform-specific)
 
 These components are more complex and require either:

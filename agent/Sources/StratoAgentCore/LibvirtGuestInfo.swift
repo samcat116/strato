@@ -4,12 +4,10 @@ import StratoShared
 
 /// `virDomainGetGuestInfo` + `virDomainInterfaceAddresses` → `GuestInfo`.
 ///
-/// The libvirt spelling of `QGAClient.collectGuestInfo` (issue #563), and it
-/// reports the same thing from the same source: libvirt asks the guest agent
-/// over the `org.qemu.guest_agent.0` channel the domain document binds, so what
-/// reaches the control plane does not change with the driver — only who owns
-/// the socket. The transport, framing and resync `QGAClient` implements are all
-/// libvirtd's problem now.
+/// libvirt asks the guest agent over the `org.qemu.guest_agent.0` channel the
+/// domain document binds, so the transport, the JSON framing and the resync
+/// handshake that reaching a guest agent needs are all libvirtd's problem
+/// (issue #563) rather than a socket client of the agent's own (STR-136).
 ///
 /// Lives here rather than in the driver for the reason `LibvirtMemoryStats`
 /// gives: `LibvirtService` links a hypervisor SDK and therefore has no unit
@@ -61,16 +59,27 @@ public enum LibvirtGuestInfo {
 
         return GuestInfo(
             qgaAvailable: true,
-            // Empty is dropped to nil, matching the qga path: a guest that
-            // reports "" has not told us its hostname.
+            // Empty is dropped to nil: a guest that reports "" has not told us
+            // its hostname.
             hostname: hostname.flatMap { $0.isEmpty ? nil : $0 },
             interfaces: (interfaces ?? []).map(networkInterface(from:)))
+    }
+
+    /// Lowercases a MAC so the control plane's matching against a
+    /// `VMNetworkInterface` MAC is case-insensitive, and drops an
+    /// empty/whitespace-only value to nil (some guests report loopback with no
+    /// hardware address).
+    static func normalizeMAC(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespaces), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed.lowercased()
     }
 
     private static func networkInterface(from iface: DomainInterface) -> GuestNetworkInterface {
         GuestNetworkInterface(
             name: iface.name,
-            hardwareAddress: GuestInfo.normalizeMAC(iface.hwaddr),
+            hardwareAddress: normalizeMAC(iface.hwaddr),
             // An address whose family this build does not recognise is dropped
             // rather than guessed: `virIPAddrType` is append-only upstream, and
             // reporting an address under the wrong family would have the

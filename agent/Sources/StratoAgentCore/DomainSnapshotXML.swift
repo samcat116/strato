@@ -8,10 +8,10 @@ import FoundationXML
 /// The `<domainsnapshot>` document a VM checkpoint is taken with, and the two
 /// readings taken off the result (STR-134, issue #564).
 ///
-/// libvirt's system checkpoint is what `QEMUService` assembles by hand out of
+/// libvirt's system checkpoint is what the process driver assembled by hand out of
 /// `snapshot-save` plus a block-node selection: guest RAM, device state and the
 /// disks captured at one instant, all inside the VM's own qcow2 files.
-/// `VMCheckpointTargets` has no counterpart here — libvirt chooses the disks —
+/// The block-node selection has no counterpart here — libvirt chooses the disks —
 /// so what is left to own is the document and the two facts
 /// `VMCheckpointReport` carries.
 ///
@@ -40,7 +40,7 @@ public enum DomainSnapshotXML {
             snapshot.append(DomainXMLNode("memory", [("snapshot", "internal")]))
         }
         // No `<disks>`: naming none lets libvirt capture every disk it can,
-        // which is the selection `VMCheckpointTargets.forCapture` spent its
+        // which is the selection a QMP-driven capture spent its
         // rules arriving at.
         return snapshot.render()
     }
@@ -92,7 +92,7 @@ public enum DomainSnapshotXML {
     ///
     /// This is QEMU's version, not libvirtd's: `virConnectGetVersion` reports
     /// the hypervisor behind the connection, which is the build a restore has
-    /// to be compatible with — the same thing `QMPProbeClient.qemuVersion`
+    /// to be compatible with — the same thing a `query-version` monitor call
     /// asks QEMU for directly.
     public static func hypervisorVersion(packed: UInt64) -> String? {
         guard packed > 0 else { return nil }

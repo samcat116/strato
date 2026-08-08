@@ -42,7 +42,7 @@ struct DomainSnapshotXMLTests {
     }
 
     /// Naming no disks lets libvirt capture every disk it can — the selection
-    /// `VMCheckpointTargets.forCapture` spent its rules arriving at.
+    /// a QMP-driven capture's block-node rules spent their effort arriving at.
     @Test("the document names no disks")
     func documentSelectsNoDisks() {
         #expect(!DomainSnapshotXML.document(name: "strato-x", includesMemory: true).contains("<disks"))

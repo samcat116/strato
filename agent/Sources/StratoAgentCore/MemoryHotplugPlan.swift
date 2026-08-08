@@ -3,7 +3,7 @@ import StratoShared
 
 /// The virtio-mem sizing a resizable VM is realized with (issue #568).
 ///
-/// Modelled on `QEMUService`'s private `alignedHotplugMemory` /
+/// Modelled on the process driver's `alignedHotplugMemory` /
 /// `virtioMemBlockBytes`, which stay where they are until the QEMU driver is
 /// removed — so for now this is a second copy of the arithmetic, and the two
 /// are held together by review rather than by a shared call site. What it adds

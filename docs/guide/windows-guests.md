@@ -29,17 +29,20 @@ and the agent finds them without configuration. For arm64 guests, install
 
 The agent auto-detects the usual distro locations. Override them only if your
 files live elsewhere — see `firmware_code_path`, `firmware_vars_template`,
-`secure_boot_firmware_code_path`, `secure_boot_firmware_vars_template`, and
-`swtpm_binary_path` in
+`secure_boot_firmware_code_path` and `secure_boot_firmware_vars_template` in
 [`config.toml.example`](https://github.com/samcat116/strato/blob/main/config.toml.example).
+There is no `swtpm` path to configure: libvirt starts and supervises swtpm per
+domain, and the agent asks libvirt whether it can.
 Each firmware pair must be set together or the agent refuses to start: a 4MB
 code image paired with a 2MB variable store produces a firmware that fails to
 boot in a way that looks like a corrupt guest image, so the configuration is
 rejected rather than half-applied.
 
-Restart the agent after installing the packages. Capabilities are reported at
-registration, so a node that gained `swtpm` while running keeps advertising
-the old answer until it re-registers.
+Restart **libvirtd** and then the agent after installing the packages. libvirtd
+caches host capabilities, so it keeps reporting no TPM backend until it restarts
+(`systemctl restart virtqemud.socket virtqemud`, or `libvirtd` on a monolithic
+install); the agent's capabilities are reported at registration, so it keeps
+advertising the old answer until it re-registers.
 
 ## Checking whether a node is TPM-capable
 
@@ -132,9 +135,9 @@ the VM.
 - **The display must be chosen at creation.** A VM created without one cannot
   gain a display later — recreate it. (The serial console is always present
   either way.)
-- **A dead swtpm needs a stop/start.** swtpm outlives the agent the same way
-  QEMU does, so restarting or upgrading an agent leaves running Windows VMs
-  alone. But if a VM's swtpm dies underneath a live QEMU, it cannot be
-  reattached mid-flight — stop and start the VM. The TPM state directory
-  persists across that, so nothing sealed to the TPM (BitLocker keys included)
-  is lost.
+- **swtpm belongs to libvirt, not to the agent.** libvirtd starts and
+  supervises one swtpm per domain and keeps its state under
+  `/var/lib/libvirt/swtpm/`, so restarting or upgrading an agent leaves running
+  Windows VMs alone, and a swtpm that dies is libvirt's to notice. The state
+  survives a VM stop/start, so nothing sealed to the TPM (BitLocker keys
+  included) is lost.

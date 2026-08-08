@@ -349,49 +349,29 @@ struct AgentConfigTests {
         }
     }
 
-    @Test("Load qemu_driver")
-    func loadsQEMUDriver() throws {
-        try withTempDirectory { tempDirectory in
-            for (value, expected) in [("libvirt", QEMUDriver.libvirt), ("process", .process)] {
-                let configPath = tempDirectory.appendingPathComponent("config.toml").path
-                try """
-                control_plane_url = "ws://localhost:8080/agent/ws"
-                qemu_driver = "\(value)"
-                """.write(toFile: configPath, atomically: true, encoding: .utf8)
-
-                #expect(try AgentConfig.load(from: configPath).qemuDriver == expected)
-            }
-        }
-    }
-
-    /// Nil, not `.process`: the resolution to a default belongs to the agent's
-    /// startup, and a config that stores one could not tell "unset" from
-    /// "explicitly the process driver" if that ever mattered.
-    @Test("qemu_driver defaults to nil when absent")
-    func qemuDriverDefaultsToNil() throws {
-        try withTempDirectory { tempDirectory in
-            let configPath = tempDirectory.appendingPathComponent("config.toml").path
-            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
-                toFile: configPath, atomically: true, encoding: .utf8)
-
-            #expect(try AgentConfig.load(from: configPath).qemuDriver == nil)
-        }
-    }
-
-    /// A typo must take the node out of service loudly rather than quietly
-    /// leaving it on the driver the operator was trying to move it off.
-    @Test("A misspelled qemu_driver is rejected, never silently defaulted")
-    func invalidQEMUDriverRejected() throws {
+    /// The three keys that retired with the process QEMU driver (STR-136).
+    /// A config still carrying them has to keep loading — an unattended fleet
+    /// upgrade must not turn into a fleet-wide outage — and the one that
+    /// matters is `qemu_driver = "process"`, which now means something else
+    /// entirely and must not change behaviour in silence.
+    @Test(
+        "A config carrying a retired QEMU key still loads",
+        arguments: [
+            "qemu_driver = \"process\"", "qemu_driver = \"libvirt\"", "qemu_driver = \"libvirtd\"",
+            "qemu_binary_path = \"/usr/bin/qemu-system-x86_64\"", "swtpm_binary_path = \"/usr/bin/swtpm\"",
+        ])
+    func retiredQEMUKeysAreIgnored(_ line: String) throws {
         try withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try """
             control_plane_url = "ws://localhost:8080/agent/ws"
-            qemu_driver = "libvirtd"
+            \(line)
             """.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            #expect(throws: AgentConfigError.self) {
-                try AgentConfig.load(from: configPath)
-            }
+            // Including the value that used to be a hard rejection: there is no
+            // vocabulary left to misspell.
+            let config = try AgentConfig.load(from: configPath)
+            #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
         }
     }
 
@@ -881,7 +861,6 @@ struct AgentConfigTests {
         // for an unset key — a divergent copy here silently wins, because it
         // leaves the field non-nil and the `?? AgentConfig.default*` fallback
         // in StratoAgent is never reached.
-        #expect(config.qemuBinaryPath == AgentConfig.defaultQemuBinaryPath)
         #expect(config.qemuSocketDir == AgentConfig.defaultQemuSocketDir)
         #expect(config.vmStoragePath == AgentConfig.defaultVMStoragePath)
     }

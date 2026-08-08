@@ -107,11 +107,11 @@ Multiple control-plane replicas are supported (see `docs/architecture/multi-repl
 
 All VM message handling routes through a driver registry keyed by `HypervisorType` (`agent/Sources/StratoAgent/Agent.swift`) — adding a backend means one registration, not new switch sites:
 
-- **QEMU** (`QEMUService`, via SwiftQEMU): Linux (KVM) and macOS (HVF). Same-arch VMs only for acceleration; cross-arch falls back to slow TCG.
+- **QEMU** (`LibvirtService`, via swift-libvirt): domains defined and driven through libvirtd at `qemu:///system`. **Linux only**, libvirt ≥ 11.5; off Linux the agent registers a mock and reports `.qemu` unavailable (STR-136). Same-arch VMs only for acceleration; cross-arch falls back to slow TCG.
 - **Firecracker** (`FirecrackerService`, via the vendored `SwiftFirecracker/` package at the repo root): Linux only, kernel+rootfs boot.
 - **Mock** (`MockHypervisorService`): testing.
 
-A persisted VM manifest tracks which backend owns each VM (survives restarts, enables orphan detection). `agent/Sources/StratoAgentCore/` holds the testable core (no SwiftQEMU dependency); `StratoAgent` is the executable.
+A persisted VM manifest tracks which backend owns each VM (survives restarts, enables orphan detection). `agent/Sources/StratoAgentCore/` holds the testable core (no native hypervisor SDKs, though it does link the pure-Swift swift-libvirt for the domain XML builder and state mapping); `StratoAgent` is the executable.
 
 ### Networking
 

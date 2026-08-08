@@ -1,5 +1,5 @@
 {
-  "originHash" : "92dfbd9df661f061f839fb72b24dbf4f1cca673ce1fb5f38fc3d01cd54d189e3",
+  "originHash" : "8e80d51adb8db8850455c9d31af6a18581ee8940a320120c54d472c2acc9e40e",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -226,15 +226,6 @@
       }
     },
     {
-      "identity" : "swift-qemu",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/samcat116/swift-qemu",
-      "state" : {
-        "branch" : "main",
-        "revision" : "b8001d6ddf4c8c4e839250fb5706302ed9dbe66e"
-      }
-    },
-    {
       "identity" : "swift-service-context",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-service-context.git",
@@ -250,15 +241,6 @@
       "state" : {
         "revision" : "1de37290c0ab3c5a96028e0f02911b672fd42348",
         "version" : "2.9.1"
-      }
-    },
-    {
-      "identity" : "swift-subprocess",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/swiftlang/swift-subprocess.git",
-      "state" : {
-        "revision" : "40243d063b41485e17501ccb9d434006bdf837a5",
-        "version" : "1.0.0-beta.1"
       }
     },
     {
