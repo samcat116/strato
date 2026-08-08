@@ -1,7 +1,7 @@
 import Foundation
 
 /// Per-stage time budgets for long VM operations (reconciliation phase 2,
-/// issue #260). A multi-GB image download and a QMP process spawn have wildly
+/// issue #260). A multi-GB image download and a domain start have wildly
 /// different legitimate durations, so each stage gets its own budget instead
 /// of one hard-coded envelope around the whole operation.
 public enum StageBudgetError: Error, LocalizedError, Sendable {
@@ -18,11 +18,11 @@ public enum StageBudgetError: Error, LocalizedError, Sendable {
 public enum StageBudget {
     /// Default budgets per stage of VM creation.
     public static let imageMaterializationSeconds = 1200  // download + qcow2 conversion of multi-GB images
-    public static let hypervisorSpawnSeconds = 60  // process launch + QMP handshake
-    // A live QMP query answers in milliseconds; a bound here keeps a dead/hung
-    // QMP channel (e.g. a re-adopted VM whose control socket went inactive) from
-    // blocking the reconcile — and, because status queries share the QEMU
-    // service, from wedging every other operation behind them.
+    public static let hypervisorSpawnSeconds = 60  // defining and starting a domain
+    // A live hypervisor answers a status query in milliseconds; a bound here
+    // keeps a dead or hung control channel from blocking the reconcile — and,
+    // because status queries share the driver actor, from wedging every other
+    // operation behind them.
     public static let statusQuerySeconds = 10
     // Lifecycle round-trips over the hypervisor's control channel (boot, pause,
     // resume, shutdown, disk hot-plug). Healthy calls answer in milliseconds.
@@ -37,36 +37,14 @@ public enum StageBudget {
     // waiting and reports its last known view instead. Liveness reporting must
     // not be hostage to hypervisor progress.
     public static let observationSeconds = 5
-    // A QEMU-guest-agent round-trip (issue #563). qga is unresponsive whenever
-    // the guest is not running the agent, so a timeout here is the *normal*
-    // outcome, not the error path — the bound must be short so verified-shutdown
-    // and guest-info probes fall back to their qga-less behavior promptly
-    // instead of stalling the report or the shutdown. A live agent answers a
-    // sync + query in milliseconds.
+    // A call that reaches the QEMU guest agent (issue #563), which libvirt
+    // relays over the domain's `org.qemu.guest_agent.0` channel. qga is
+    // unresponsive whenever the guest is not running the agent, so a timeout
+    // here is the *normal* outcome, not the error path — the bound must be
+    // short so guest-info and memory-stat probes fall back to their qga-less
+    // behavior promptly instead of stalling the report. A live agent answers in
+    // milliseconds.
     public static let guestAgentSeconds = 5
-    // The bound on `guest-fsfreeze-freeze` and on any work done while the
-    // guest is frozen (issue #563). More generous than the general qga budget:
-    // freezing flushes dirty pages across every guest filesystem, which under
-    // I/O load is legitimately slower than a millisecond round-trip — too
-    // tight a bound would routinely cancel a freeze that was about to succeed.
-    // A frozen guest is worse than an inconsistent snapshot, so this caps how
-    // long the window can last; a caller must thaw unconditionally once a
-    // freeze was attempted, even if that freeze's reply arrived late.
-    //
-    // Currently unused: volume snapshots stopped freezing in issue #747 (the
-    // overlay they wrapped was never the guest's active layer, so the freeze
-    // only made a non-point-in-time snapshot look trustworthy). Kept alongside
-    // `QGAClient`'s freeze/thaw verbs for the real live-snapshot path.
-    public static let guestFreezeSeconds = 30
-    // A command run inside a guest through `guest-exec` (STR-74). Unlike every
-    // other qga budget this bounds *guest work* rather than a round trip: the
-    // command decides how long it runs, and the agent can only wait. Default
-    // ceiling for a caller that has no better number; callers with a real
-    // operation budget (the run-command API) should pass their own. Note that
-    // qga cannot signal a spawned process, so exceeding this abandons the
-    // command rather than stopping it — the bound protects the agent, not the
-    // guest.
-    public static let guestExecSeconds = 300
     // A full-VM checkpoint or restore (issue #564): QEMU writes (or reads) the
     // guest's entire RAM plus device state through a background job. The cost
     // scales with guest memory at disk speed, exactly like image

@@ -5,23 +5,21 @@ import NIOCore
 import StratoAgentCore
 import StratoShared
 
-/// The QEMU backend driven through **libvirtd** rather than by spawning QEMU
-/// directly (issue #902).
+/// The QEMU backend, driven through **libvirtd** (issue #902).
 ///
-/// Registered in place of `QEMUService` on a node whose `qemu_driver` is
-/// `libvirt`. It answers to the same `HypervisorType.qemu`: nothing on the wire
-/// changes, the control plane's capability gating and scheduler are untouched,
-/// and the agent alone decides how a QEMU placement is realized. Nodes roll
-/// over one at a time.
+/// The only driver `HypervisorType.qemu` has: the agent used to spawn
+/// `qemu-system-*` itself and drive it over QMP, and that driver — along with
+/// the QMP sockets, the guest-agent transport and the swtpm supervision that
+/// existed only to serve it — was deleted in STR-136.
 ///
-/// ## Why this is so much smaller than `QEMUService`
+/// ## Why this is so much smaller than the driver it replaced
 ///
-/// `activeVMs`, `vmSpecs`, `vmConfigs`, `vmSpawnSizing`, `awaitingFirstStart`,
-/// `vmConsoleSocketPaths`, `vmSerialSocketPaths`, `pendingVMs`, `respawn()` and
-/// `indicatesDeadHypervisor()` are all bookkeeping for an *ephemeral process*:
-/// the agent spawned it, so only the agent knows what it spawned, and anything
-/// it forgets is unrecoverable. libvirtd is a durable store. Domains survive the
-/// agent, so this driver **queries** rather than mirrors, and:
+/// A process driver's `activeVMs`, `vmSpecs`, `vmConfigs`, spawn sizing,
+/// awaiting-first-start flags, console socket maps, pending sets and respawn
+/// path are all bookkeeping for an *ephemeral process*: the agent spawned it,
+/// so only the agent knows what it spawned, and anything it forgets is
+/// unrecoverable. libvirtd is a durable store. Domains survive the agent, so
+/// this driver **queries** rather than mirrors, and:
 ///
 /// - creating is `domainDefineXML`, which leaves the domain `SHUTOFF` — the
 ///   `ReconcileStep.create` contract ("exists, not running") with none of the
@@ -33,12 +31,13 @@ import StratoShared
 ///   at all.
 /// - a guest that powers itself off is *announced* rather than discovered on
 ///   the next sweep — see "Lifecycle events" below.
-/// - re-adoption is `connectListAllDomains` plus a state read. `AdoptedQEMUVM`
-///   and the second deterministic QMP socket exist only because `QEMUManager`
-///   cannot attach to a process it did not spawn; here orphan re-adoption stops
-///   being a mechanism and becomes a query.
-/// - libvirt owns swtpm and the UEFI varstore, so `SwtpmSupervisor` and the
-///   copy-if-absent NVRAM templating have no counterpart here.
+/// - re-adoption is `connectListAllDomains` plus a state read: libvirtd owns the
+///   monitor and survives the agent, so orphan re-adoption is a query rather
+///   than a mechanism.
+/// - libvirt owns swtpm and the UEFI varstore, so the agent supervises neither,
+///   and whether a vTPM is possible at all is libvirt's answer to give
+///   (`virsh domcapabilities`, via `DomainCapabilities`) rather than a binary
+///   the agent looks for.
 ///
 /// The two caches below (`lastKnownVMIds`, `lastKnownReservations`) are the only
 /// retained state, they hold *the last answer libvirtd gave* rather than a model
@@ -87,10 +86,20 @@ actor LibvirtService: HypervisorService {
     /// Operator-configured EDK2 firmware paths (issue #565). Empty is the
     /// normal case and means libvirt autoselects — see `resolveFirmware`.
     private let firmware: FirmwareOverrides
-    /// Whether this host has swtpm at all. libvirt runs it, but a host without
-    /// it never advertises the TPM capability, so a spec asking for one here
-    /// means the placement gate was bypassed and the create must fail loudly.
-    private let hasSwtpm: Bool
+    /// Whether libvirt on this host can back a guest vTPM. libvirt runs swtpm
+    /// itself, but a host whose daemon reports no emulator backend never
+    /// advertises the TPM capability, so a spec asking for one here means the
+    /// placement gate was bypassed and the create must fail loudly.
+    ///
+    /// Set from the registration path, which is where the answer arrives
+    /// (`LibvirtProbe.probeTPM` via the host preflight), and re-set on every
+    /// reconnect. **Nil until then, and nil is refused** — the ordering that
+    /// makes a placement impossible before the first registration is a temporal
+    /// invariant spanning two files with nothing enforcing it, and the entire
+    /// point of this flag is to be the check that holds when something else
+    /// did not. A permissive default would make it the check that holds only
+    /// when nothing went wrong.
+    private var tpmSupported: Bool?
     /// KVM on Linux, HVF on macOS; when false, domains run under TCG.
     private let hardwareAccelerationEnabled: Bool
 
@@ -160,7 +169,6 @@ actor LibvirtService: HypervisorService {
         vmStoragePath: String,
         uri: String = LibvirtProbe.systemURI,
         firmware: FirmwareOverrides = FirmwareOverrides(),
-        hasSwtpm: Bool = false,
         hardwareAccelerationEnabled: Bool = true
     ) {
         self.logger = logger
@@ -168,11 +176,20 @@ actor LibvirtService: HypervisorService {
         self.vmStoragePath = vmStoragePath
         self.uri = uri
         self.firmware = firmware
-        self.hasSwtpm = hasSwtpm
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         (self.lifecycleStream, self.lifecycleContinuation) = AsyncStream.makeStream(
             of: VMLifecycleChange.self, bufferingPolicy: .bufferingNewest(64))
         logger.info("libvirt hypervisor service initialized", metadata: ["uri": .string(uri)])
+    }
+
+    /// Records what libvirt said about backing a guest vTPM. Called from the
+    /// registration path, which probes the daemon on the same cadence as every
+    /// other host capability, so a host that gains swtpm starts accepting vTPM
+    /// VMs on the next reconnect rather than after an agent restart. Until the
+    /// first call, `createVM` refuses a vTPM spec rather than assuming one way
+    /// or the other.
+    func setTPMSupported(_ supported: Bool) {
+        tpmSupported = supported
     }
 
     // MARK: - Connection
@@ -220,8 +237,7 @@ actor LibvirtService: HypervisorService {
     /// Runs one RPC under a stage budget, with the connection dropped if *it*
     /// was what failed.
     ///
-    /// `.cancelAndWait`, matching `QEMUService.controlled` and for the same
-    /// reason: these are commands, and abandoning one lets it land after the
+    /// `.cancelAndWait`: these are commands, and abandoning one lets it land after the
     /// agent has reported failure and a retry has run. It terminates because
     /// the call carries a deadline of its own — the second parameter — so the
     /// RPC gives up on the wire rather than parking forever.
@@ -546,15 +562,26 @@ actor LibvirtService: HypervisorService {
             logger.info("Creating libvirt domain", metadata: ["vmId": .string(vmId)])
 
             let machine = spec.effectiveMachine
-            // The agent never advertises the TPM capability without swtpm, so
-            // reaching here means the placement gate was bypassed. libvirt would
-            // fail the domain start with a message about the emulator backend;
-            // this one names the actual remedy.
-            if machine.tpm && !hasSwtpm {
-                throw HypervisorServiceError.invalidConfiguration(
-                    "VM \(vmId) requires a TPM 2.0 but this host has no swtpm binary. libvirt starts and "
-                        + "supervises swtpm per domain, so install it (Debian/Ubuntu: `apt install swtpm "
-                        + "swtpm-tools`) or set swtpm_binary_path.")
+            // The agent never advertises the TPM capability where libvirt
+            // reports no emulator backend, so reaching here means the placement
+            // gate was bypassed. libvirt would fail the domain start with a
+            // message about the backend; these name the actual remedy.
+            if machine.tpm {
+                switch tpmSupported {
+                case true:
+                    break
+                case false:
+                    throw HypervisorServiceError.invalidConfiguration(
+                        "VM \(vmId) requires a TPM 2.0 but libvirt at \(uri) reports no emulated TPM backend. "
+                            + "libvirt starts and supervises swtpm per domain, so install it (Debian/Ubuntu: "
+                            + "`apt install swtpm swtpm-tools`) and restart libvirtd, which caches its "
+                            + "capabilities.")
+                case nil:
+                    throw HypervisorServiceError.invalidConfiguration(
+                        "VM \(vmId) requires a TPM 2.0, but this host has not finished registering and does "
+                            + "not yet know whether libvirt at \(uri) can back one. Retrying is safe: the "
+                            + "answer arrives with the next registration.")
+                }
             }
 
             let vmDirectory = VMDirectoryLayout.directory(vmStoragePath: vmStoragePath, vmId: vmId)
@@ -642,8 +669,8 @@ actor LibvirtService: HypervisorService {
     /// The escalation is not optional: `shutdownFlags` is a *request* the guest
     /// is free to ignore, and without a bound a VM whose guest has no ACPI
     /// handler never converges on its `shutdown` desired state. This is the
-    /// same 60s envelope `QEMUService.shutdownVM` gives the adopted-VM path,
-    /// which polls before forcing termination for exactly this reason.
+    /// same 60s envelope the agent has always given a guest to power itself off
+    /// before termination is forced.
     func shutdownVM(vmId: String) async throws {
         try await perform("shutdown", vmId: vmId) {
             let dom = try await domain(vmId)
@@ -658,9 +685,8 @@ actor LibvirtService: HypervisorService {
             do {
                 try await call("libvirt-shutdown", vmId: vmId) { client, deadline in
                     // `SHUTDOWN_DEFAULT`, so libvirt tries the guest agent
-                    // before the ACPI power button — the verified shutdown
-                    // `QEMUService` reaches for qga to get, without the agent
-                    // having to speak qga itself.
+                    // before the ACPI power button: a verified shutdown,
+                    // without the agent having to speak qga itself.
                     try await client.domainShutdownFlags(
                         dom: dom, flags: LibvirtDomain.shutdownFlags, deadline: deadline)
                 }
@@ -988,8 +1014,8 @@ actor LibvirtService: HypervisorService {
     /// `org.qemu.guest_agent.0` device the domain document binds, so what
     /// reaches the control plane does not change with the driver. What goes is
     /// the transport — the framing, the `guest-sync-delimited` resync and the
-    /// one-client-at-a-time socket `QGAClient` exists to manage are libvirtd's
-    /// problem now, and it multiplexes.
+    /// one-client-at-a-time socket a direct qga client has to manage are
+    /// libvirtd's problem now, and it multiplexes.
     ///
     /// Nil is the normal "no usable agent" answer — a guest with none
     /// installed, one still booting, a VM this host does not have — and never
@@ -1373,7 +1399,7 @@ actor LibvirtService: HypervisorService {
     /// Drives the guest's balloon to `spec.balloonTargetBytes`, or back to its
     /// full grant when the spec carries no target (issue #567 phase 2).
     ///
-    /// Never fatal to the caller, matching `QEMUService.applyBalloonTarget`: a
+    /// Never fatal to the caller: a
     /// guest that ignores the request is not a convergence failure the agent
     /// can act on, and a VM created before the balloon device existed has
     /// nothing to drive. Live only, and for a VM with no memory device that is
@@ -1419,9 +1445,9 @@ actor LibvirtService: HypervisorService {
     /// libvirt **system checkpoint** — an internal snapshot inside the VM's own
     /// qcow2 files, with the guest left running.
     ///
-    /// `VMCheckpointTargets`' block-node selection has no counterpart: naming
-    /// no disks in the document lets libvirt capture every disk it can, which
-    /// is the selection those rules spent their effort arriving at. Two host
+    /// The block-node selection a QMP-driven capture has to compute has no
+    /// counterpart: naming no disks in the document lets libvirt capture every
+    /// disk it can, which is the selection those rules arrived at. Two host
     /// preconditions make this work at all, and both are established elsewhere
     /// — a qcow2 NVRAM varstore (`DomainXMLBuilder`) and libvirt ≥ 11.5
     /// (`LibvirtProbe.minimumVersion`, gating). See `DomainSnapshotXML`.
@@ -1546,8 +1572,7 @@ actor LibvirtService: HypervisorService {
     // MARK: - Helpers
 
     /// How long a guest gets to power itself off before the domain is
-    /// destroyed. Matches the budget `QEMUService.shutdownVM` gives its own
-    /// poll-then-force path.
+    /// destroyed.
     private static let gracefulShutdownSeconds = 60
 
     /// Stands in for a VM id in the log metadata of the two calls that are

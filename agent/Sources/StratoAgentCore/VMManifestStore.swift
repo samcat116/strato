@@ -243,7 +243,7 @@ extension Sequence where Element == VMManifestEntry {
 /// surfaces as `.error` for operator attention.
 public struct VMManifestStore {
     public let path: String
-    /// Path of the manifest written by pre-unified agents, which only QEMUService
+    /// Path of the manifest written by pre-unified agents, which only the QEMU driver
     /// maintained. Read once for migration; removed after a successful rewrite in
     /// the unified format.
     public let legacyQEMUManifestPath: String?

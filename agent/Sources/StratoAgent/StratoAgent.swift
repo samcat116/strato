@@ -39,9 +39,6 @@ struct AgentOptions: ParsableArguments {
     @Option(name: .long, help: "VM storage directory path (overrides config file)")
     var vmStorageDir: String?
 
-    @Option(name: .long, help: "QEMU binary path (overrides config file)")
-    var qemuBinaryPath: String?
-
     @Option(name: .long, help: "Firecracker binary path (overrides config file, Linux only)")
     var firecrackerBinaryPath: String?
 
@@ -127,10 +124,6 @@ private func launchAgent(options: AgentOptions) async throws {
     }
     let finalVMStoragePath = options.vmStorageDir ?? config.vmStoragePath ?? AgentConfig.defaultVMStoragePath
     let finalVolumeStoragePath = config.volumeStoragePath ?? FileSystemStorageBackend.defaultStoragePath
-    let finalQemuBinaryPath = options.qemuBinaryPath ?? config.qemuBinaryPath ?? AgentConfig.defaultQemuBinaryPath
-    // Which QEMU driver this node runs (issue #902). Defaults to the process
-    // driver, so a node moves onto libvirt only when its config says so.
-    let finalQemuDriver = config.qemuDriver ?? .process
 
     // Resolve firmware configuration. The monolithic `firmware_path_*` keys
     // stay architecture-specific (they name one host's image); the split
@@ -148,7 +141,6 @@ private func launchAgent(options: AgentOptions) async throws {
         secureBootVarsTemplatePath: config.secureBootFirmwareVarsTemplate,
         monolithicPath: finalMonolithicFirmwarePath
     )
-    let finalSwtpmBinaryPath = config.swtpmBinaryPath ?? AgentConfig.defaultSwtpmBinaryPath
 
     // Resolve Firecracker configuration (Linux only)
     let finalFirecrackerBinaryPath =
@@ -213,11 +205,8 @@ private func launchAgent(options: AgentOptions) async throws {
             "imageCacheMaxSize": .string(config.imageCacheMaxSizeGB.map { "\($0)GB" } ?? "unbounded"),
             "sandboxImageCacheMaxSize": .string(
                 config.sandboxImageCacheMaxSizeGB.map { "\($0)GB" } ?? "unbounded"),
-            "qemuBinaryPath": .string(finalQemuBinaryPath),
-            "qemuDriver": .string(finalQemuDriver.rawValue),
             "firmwarePath": .string(finalMonolithicFirmwarePath ?? "(platform default)"),
             "firmwareCodePath": .string(config.firmwareCodePath ?? "(platform default)"),
-            "swtpmBinaryPath": .string(finalSwtpmBinaryPath ?? "(not installed)"),
             "firecrackerBinaryPath": .string(finalFirecrackerBinaryPath),
             "firecrackerSocketDir": .string(finalFirecrackerSocketDir),
             "sandboxGuestImagePath": .string(finalSandboxGuestImagePath),
@@ -272,10 +261,7 @@ private func launchAgent(options: AgentOptions) async throws {
         sandboxImageCacheMaxSizeBytes: config.sandboxImageCacheMaxSizeBytes,
         vmStoragePath: finalVMStoragePath,
         volumeStoragePath: finalVolumeStoragePath,
-        qemuBinaryPath: finalQemuBinaryPath,
-        qemuDriver: finalQemuDriver,
         firmware: finalFirmware,
-        swtpmBinaryPath: finalSwtpmBinaryPath,
         firecrackerBinaryPath: finalFirecrackerBinaryPath,
         firecrackerSocketDir: finalFirecrackerSocketDir,
         sandboxGuestImagePath: finalSandboxGuestImagePath,

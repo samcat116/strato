@@ -70,33 +70,15 @@ log_level = "info"
 # Unset means bounded only by the idle eviction.
 # sandbox_image_cache_max_size_gb = 20
 
-# Path to QEMU binary
-# Optional - platform and architecture-specific defaults:
-#   macOS arm64: /opt/homebrew/bin/qemu-system-aarch64
-#   macOS x86_64: /opt/homebrew/bin/qemu-system-x86_64
-#   Linux arm64: /usr/bin/qemu-system-aarch64
-#   Linux x86_64: /usr/bin/qemu-system-x86_64
-# qemu_binary_path = "/opt/homebrew/bin/qemu-system-aarch64"
-
-# How this node realizes a QEMU placement
-#   "process" (default) - the agent spawns qemu-system-* itself and drives it
-#                         over QMP. What every node has run until now.
-#   "libvirt"           - domains are defined and driven through libvirtd at
-#                         qemu:///system. Linux only; ignored on macOS.
+# QEMU placements are libvirt domains: the agent defines and drives them
+# through libvirtd at qemu:///system, and there is no key to configure. The
+# node needs libvirt >= 11.5 reachable there (deploy/agent/install.sh
+# provisions it) and stops attracting QEMU placements while it is not.
+# libvirt selects the emulator binary from its own capabilities.
 #
-# This is a per-node choice, not a cluster one: nothing about it reaches the
-# control plane, so a fleet can be rolled over one node at a time. Selecting
-# "libvirt" makes the host's libvirt checks *gating* — the node needs
-# libvirt >= 11.5 reachable at qemu:///system (deploy/agent/install.sh
-# provisions it), and stops attracting QEMU placements while it is not.
-#
-# Not yet supported by the libvirt driver: disk hot-plug, online resize and
-# VM checkpoints (STR-134). A volume can only reach a VM at *create* time —
-# attaching one to an existing VM is refused whether it is running or stopped,
-# because the domain document is written once. Checkpoint capture is refused
-# earlier still: such a node stops advertising the capability, so the control
-# plane never admits one.
-# qemu_driver = "libvirt"
+# Three keys retired with the process QEMU driver (STR-136): qemu_driver,
+# qemu_binary_path and swtpm_binary_path. A config that still carries one
+# starts fine — the agent logs that it is ignored.
 
 # Hardware acceleration for QEMU VMs
 # When enabled (the default), VMs are backed by the platform accelerator;
@@ -145,15 +127,14 @@ log_level = "info"
 # secure_boot_firmware_code_path = "/usr/share/OVMF/OVMF_CODE_4M.secboot.fd"
 # secure_boot_firmware_vars_template = "/usr/share/OVMF/OVMF_VARS_4M.ms.fd"
 
-# swtpm backs guest TPM 2.0 devices (one process per VM). Its presence is what
-# makes this node eligible for VMs that request a TPM; without it the node stays
-# registered and useful, it just never receives such a placement.
-# Debian/Ubuntu: apt install swtpm swtpm-tools
-# Optional - defaults are checked in this order:
-#   1. /usr/bin/swtpm
-#   2. /usr/local/bin/swtpm
-#   3. /opt/homebrew/bin/swtpm
-# swtpm_binary_path = "/usr/bin/swtpm"
+# swtpm backs guest TPM 2.0 devices. libvirt starts and supervises one per
+# domain, so there is nothing to configure here: the agent asks
+# `virsh domcapabilities` whether libvirt reports an emulated TPM backend, and
+# that is what makes this node eligible for VMs requesting a TPM. Without it the
+# node stays registered and useful, it just never receives such a placement.
+#
+# Debian/Ubuntu: apt install swtpm swtpm-tools — then restart libvirtd, which
+# caches host capabilities (systemctl restart virtqemud.socket virtqemud).
 
 # Firecracker Configuration (Linux only)
 # Firecracker is a lightweight VMM for creating microVMs.

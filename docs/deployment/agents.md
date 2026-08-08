@@ -1,13 +1,15 @@
 # Deploying Agents
 
-Agents run on Linux hypervisor hosts and execute VMs via QEMU (KVM), with
-Firecracker as an optional second backend. They connect out to the control
-plane over WebSocket — no inbound ports needed on the hypervisor.
+Agents run on Linux hypervisor hosts and execute VMs as **libvirt domains**
+under QEMU/KVM, with Firecracker as an optional second backend. They connect out
+to the control plane over WebSocket — no inbound ports needed on the hypervisor.
 
-Hypervisor nodes run **libvirtd** (`qemu:///system`), which VM management is
-moving onto, and it must be **version 11.5 or newer** — see [Host
-requirements](#host-requirements). Ubuntu 24.04 ships libvirt 10.0.0 and is
-*not* a supported hypervisor host.
+**libvirtd (`qemu:///system`) is a hard requirement**, and it must be **version
+11.5 or newer** — see [Host requirements](#host-requirements). A node that
+cannot reach it, or runs an older one, stops advertising QEMU and receives no VM
+placements. Ubuntu 24.04 ships libvirt 10.0.0 and is *not* a supported
+hypervisor host. Why libvirt rather than launching QEMU directly, and what that
+costs, is [ADR 0005](../adr/0005-agent-drives-libvirt-not-qemu.md).
 
 Agents authenticate **only** by SPIFFE/SPIRE-issued X.509 SVID over mTLS.
 Every node is enrolled through the control plane, which provisions its
@@ -31,9 +33,9 @@ revert and inactive-delete not accounting for the qcow2 NVRAM varstore, and
 11.2–11.3 carry a regression that breaks reverting to an internal snapshot;
 11.5 is the first release clear of all of it. An older libvirt would leave a
 node that looks healthy but fails every checkpoint, so both the installer's
-preflight and the agent's own check the version and say so up front. While the
-VM driver still talks to QEMU directly, those checks report rather than take
-the node out of service.
+preflight and the agent's own check the version and say so up front. The agent's
+check is **gating**: a node below the floor reports `.qemu` as unavailable
+rather than accepting VMs it cannot fully serve.
 
 **libvirt configuration.** The agent owns every path under `/var/lib/strato`,
 and libvirt's QEMU driver would otherwise run QEMU as `libvirt-qemu:kvm` and
@@ -477,28 +479,21 @@ fingerprints (`/.dockerenv`, container cgroups) when the marker is absent.
 
 Most settings have platform defaults; see
 [`config.toml.example`](https://github.com/samcat116/strato/blob/main/config.toml.example)
-for the full list (QEMU paths, storage directories, network mode,
-SPIFFE/mTLS). Command-line flags override the config file.
+for the full list (storage directories, network mode, SPIFFE/mTLS).
+Command-line flags override the config file.
 
-### Choosing the QEMU driver
+Three keys retired when the process QEMU driver was deleted (STR-136):
+`qemu_driver`, `qemu_binary_path` and `swtpm_binary_path`. A config that still
+carries one loads and starts — the agent logs that the key is ignored — because
+libvirt now selects the emulator from its own capabilities and supervises swtpm
+per domain. Delete them at your convenience.
 
-`qemu_driver` selects how a node realizes a QEMU placement: `"process"` (the
-default — the agent spawns `qemu-system-*` itself and drives it over QMP) or
-`"libvirt"` (domains defined and driven through libvirtd at `qemu:///system`).
-It is Linux-only and ignored on macOS.
+### What the QEMU driver can be asked for
 
-This is a **per-node** setting, and deliberately so: nothing about it reaches
-the control plane, so a fleet is rolled over one node at a time and a node can
-be moved back by editing one line. Selecting `libvirt` makes the host's libvirt
-checks gating — the node needs libvirt ≥ 11.5 reachable at `qemu:///system`,
-which `install.sh` provisions — and while they fail the node stops advertising
-QEMU rather than accepting VMs it cannot serve.
-
-A libvirt node is a full-capability QEMU node: disk hot-plug, online resize,
-checkpoints, guest IP reporting and balloon statistics all work, and the control
-plane cannot tell which driver a node picked. Two behaviours are worth knowing
-before moving a node, both following from libvirt's domain document being
-written once when the VM is created and never rewritten:
+Every QEMU placement is a libvirt domain. Disk hot-plug, online resize,
+checkpoints, guest IP reporting and balloon statistics all work. Two behaviours
+are worth knowing, both following from libvirt's domain document being written
+once when the VM is created and never rewritten:
 
 - **A VM's hot-plug slots and memory headroom are fixed at create time.** Each
   domain reserves four empty PCIe root ports for later disk hot-plug, and
@@ -506,9 +501,7 @@ written once when the VM is created and never rewritten:
   volume, or growing a VM past the maximum memory it was created with, fails
   with libvirt's own error; recreating the VM is the remedy, and
   [issue #1026](https://github.com/samcat116/strato/issues/1026) tracks removing
-  the limit rather than documenting it. VMs created before a node moved to the
-  libvirt driver are unaffected — they are redefined when this node next creates
-  them.
+  the limit rather than documenting it.
 - **A resize the guest cannot take online lands at its next boot.** vCPU
   removal is never attempted on a live guest, and a VM with no memory headroom
   cannot be resized in place; both are written into the domain definition
@@ -520,6 +513,12 @@ backs guest TPM 2.0 devices — libvirt starts and supervises it per domain, so
 the agent never launches it itself). Without them the node stays registered and
 useful, it simply never receives a placement that requires those features —
 see [Windows Guests](/guide/windows-guests).
+
+Note that **libvirtd caches host capabilities**: installing `swtpm` under a
+running daemon does not make the node TPM-capable until libvirtd restarts
+(`systemctl restart virtqemud.socket virtqemud`, or `libvirtd` on a monolithic
+install). The agent asks `virsh domcapabilities` for an emulated TPM backend
+rather than looking for the binary, so the restart is what it is waiting on.
 
 `ovmf` also installs QEMU's firmware descriptors under
 `/usr/share/qemu/firmware`, which is what lets libvirt autoselect a UEFI

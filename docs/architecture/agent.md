@@ -14,14 +14,16 @@ SwiftPM cannot unit-test an executable target:
 
 - **`StratoAgentCore`** (library) — the testable core. Depends on
   `StratoShared`, Logging, Toml, Crypto, and the transport/file plumbing its
-  services need (NIOCore/NIOPosix/`_NIOFileSystem`, NIOSSL, AsyncHTTPClient)
-  — deliberately **no SwiftQEMU, SwiftFirecracker, or SwiftOVN** — so the
-  reconcile engine, config parsing, storage backend, OCI pipeline, manifest
-  store, and updater are all unit tests away from any hypervisor.
+  services need (NIOCore/`_NIOFileSystem`, NIOSSL, AsyncHTTPClient), plus
+  swift-libvirt for the pure layer of the libvirt driver (it is pure Swift
+  with no system dependency) — deliberately **no SwiftFirecracker or
+  SwiftOVN** — so the reconcile engine, config parsing, storage backend, OCI
+  pipeline, manifest store, domain XML builder, and updater are all unit tests
+  away from any daemon.
 - **`StratoAgentSPIFFE`** (library) — SPIFFE/SPIRE support (SVID types, TLS
   config, Workload API client), split out so tests can import it.
-- **`StratoAgent`** (executable) — the binary and everything touching native
-  libraries: the `Agent` actor, `QEMUService`, `FirecrackerService`,
+- **`StratoAgent`** (executable) — the binary and everything that talks to a
+  live daemon: the `Agent` actor, `LibvirtService`, `FirecrackerService`,
   `FirecrackerSandboxRuntime`, the platform network services, and
   `WebSocketClient`. SwiftOVN and SwiftFirecracker link only on Linux (but
   are declared unconditionally so `Package.resolved` is identical on every
@@ -135,30 +137,27 @@ touches concrete drivers — adding a backend is one registration line plus
 the enum case, not new switch sites. An unregistered type returns nil, so a
 host cleanly rejects placements it can't serve.
 
-- **`QEMUService`** (`.qemu`): Linux KVM / macOS HVF via SwiftQEMU.
-  Materializes boot disks through the storage backend, wires serial/console
-  sockets, and re-adopts orphaned VMs over a deterministic QMP socket path.
-  Optionally gives the guest a **graphics console** (see below).
-- **`LibvirtService`** (`.qemu`, Linux only): the same backend driven through
-  **libvirtd** instead (see below).
+- **`LibvirtService`** (`.qemu`, Linux only): QEMU driven through **libvirtd**
+  at `qemu:///system` (see below). Materializes boot disks through the storage
+  backend, writes a domain document binding the serial/console/guest-agent
+  sockets, and optionally gives the guest a **graphics console**.
 - **`FirecrackerService`** (`.firecracker`, Linux only): translates the
   neutral spec into Firecracker API calls; requires direct-kernel boot and
   `.tap` network attachments. Shares one `FirecrackerClient` with the
   sandbox runtime, so VMs and sandboxes go through a single process
   registry and socket layout.
-- **`MockHypervisorService`**: the no-op backend used as a build fallback
-  and in simulation mode (one mock per hypervisor type). It tracks specs
-  and status so reservations and reconciliation behave realistically.
+- **`MockHypervisorService`**: the no-op backend used in simulation mode (one
+  mock per hypervisor type) and as the `.qemu` registration on a platform that
+  has no libvirt. It tracks specs and status so reservations and reconciliation
+  behave realistically.
+
+**There is no QEMU driver off Linux.** libvirt is Linux-only, so a macOS agent
+registers the mock and reports `.qemu` as *unavailable* — the scheduler places
+nothing on it, and the startup log says so in as many words. This is a
+deliberate, temporary regression (STR-136): the macOS agent is a dev/test host,
+and a native Virtualization.framework driver is separate work.
 
 ### The libvirt QEMU driver
-
-Both QEMU drivers ship, and each node picks one with the agent-local
-`qemu_driver` key (`"process"`, the default, or `"libvirt"`). **Nothing about
-that choice reaches the control plane**: `.qemu` on the wire keeps meaning
-"QEMU node", capability gating, the scheduler and the wire protocol are
-untouched, and the agent alone decides how a QEMU placement is realized — which
-is what lets a fleet roll over one node at a time. The key is ignored on macOS,
-which has no libvirt.
 
 `LibvirtService` (STR-133) drives domains over `qemu:///system` through
 swift-libvirt, which speaks libvirt's RPC wire protocol over NIO rather than
@@ -166,13 +165,23 @@ linking libvirt's C library. It builds on the pieces that landed ahead of it:
 `DomainXMLBuilder`/`DomainXMLNode` (spec → domain XML), `ResolvedDisk` and
 `VMDirectoryLayout` (STR-131), and the libvirtd provisioning and preflight in
 `deploy/agent/install.sh` (STR-132) — including the `qemu.conf` ownership
-settings the agent's own-every-path invariant needs. On a node that selects the
-driver those preflight checks become **gating**: an unreachable libvirtd, or one
-below the 11.5 floor, demotes `.qemu` to unavailable so the node stops
-attracting placements it cannot serve.
+settings the agent's own-every-path invariant needs.
 
-It is much smaller than `QEMUService`, and the reason is that libvirtd is a
-durable store rather than a process the agent has to remember:
+**libvirt's reachability is what `.qemu` availability means.** There is no
+binary probe left — libvirtd picks the emulator from its own capabilities — so
+one `virsh version --daemon` call answers both reachability and version, and its
+result is threaded into `HypervisorProbe.probeAll` rather than looked up twice.
+The split between the two is deliberate: the probe reports *unavailable* for a
+daemon it cannot reach, so a caller that never reaches the gate cannot come away
+believing a host with no libvirt can run VMs, while the **version floor** stays
+in `HostPreflight`, which owns the check and its remediation. The preflight's
+libvirt checks are gating, so a daemon below the 11.5 floor is demoted there.
+Either way the node stops attracting placements it cannot serve. The rationale
+for driving libvirt rather than QEMU — and what it cost — is
+[ADR 0005](../adr/0005-agent-drives-libvirt-not-qemu.md).
+
+It is much smaller than the process driver it replaced, and the reason is that
+libvirtd is a durable store rather than a process the agent has to remember:
 
 - **Create is `domainDefineXML`**, which leaves the domain `SHUTOFF` — the
   `ReconcileStep.create` contract ("exists, not running") with none of the `-S`
@@ -180,21 +189,33 @@ durable store rather than a process the agent has to remember:
   for. Idempotency comes free: define is keyed by name and UUID, so a replayed
   create updates rather than spawning a second machine.
 - **Re-adoption is a query**, not a mechanism: `connectListAllDomains` plus a
-  state read. The deterministic second QMP socket and `AdoptedQEMUVM` exist only
-  because `QEMUManager` cannot attach to a process it did not spawn.
+  state read. libvirtd owns the QEMU monitor and outlives the agent, so there is
+  nothing to reattach to — where a process driver needs a second, deterministic
+  monitor socket precisely because it cannot attach to a process it did not
+  spawn.
 - **A guest that powers itself off** leaves the domain `SHUTOFF` and restarts
   with `domainCreate`; there is no respawn-from-stored-configuration path.
-- **libvirt owns swtpm and the UEFI varstore**, so `SwtpmSupervisor` and the
-  copy-if-absent NVRAM templating have no counterpart. The undefine on delete
+- **libvirt owns swtpm and the UEFI varstore**, so the agent supervises neither
+  and there is no copy-if-absent NVRAM templating. The undefine on delete
   carries the `TPM` flag, because swtpm's per-domain state lives under
-  `/var/lib/libvirt/swtpm/` rather than in the VM's own directory.
+  `/var/lib/libvirt/swtpm/` rather than in the VM's own directory. Whether a
+  vTPM is possible at all is libvirt's answer to give: the agent reads
+  `virsh domcapabilities` for a `<tpm>` `emulator` backend (`DomainCapabilities`)
+  rather than looking for an `swtpm` binary it might not even share a filesystem
+  with. That second `virsh` call is only made of a daemon that answered the
+  first: on a host whose libvirt is unusable the preflight reports the vTPM
+  answer as *not checked* rather than printing an "install swtpm" remedy
+  underneath the gating "libvirt is not usable" one. libvirtd also caches host
+  capabilities, so installing swtpm under a running daemon changes nothing until
+  it restarts — the preflight's remediation, and the scheduler's placement
+  error, both say so.
 - **Consoles are unchanged.** The domain document binds the serial,
   virtio-console, guest-agent and VNC sockets at the same paths under the VM's
   directory, so `ConsoleSocketManager` and the noVNC relay need no libvirt
   knowledge.
 - **Guest observation is a libvirt call.** `domainGetGuestInfo` and
   `domainInterfaceAddresses(source: AGENT)` reach the same
-  `org.qemu.guest_agent.0` channel `QGAClient` opens directly, and
+  `org.qemu.guest_agent.0` channel a direct qga client would open, and
   `domainMemoryStats` replaces the third QMP monitor that only existed because
   a QMP server socket admits one client. What the control plane is told does not
   change with the driver, which is why `guestInfo`/`memoryStats` are
@@ -224,14 +245,14 @@ durable store rather than a process the agent has to remember:
 `createVM` defines a domain and nothing redefines it. That single fact shapes
 every in-place mutation (STR-134), and the rule it produces is worth stating on
 its own: **hot-plug and resize are sent with `AFFECT_LIVE|AFFECT_CONFIG`**, so
-they land on the running guest *and* in the persistent definition. The QEMU
+they land on the running guest *and* in the persistent definition. A process
 driver can leave the definition alone because it respawns from a stored
-configuration the agent keeps in step (`updateRecordedVolumes`) and re-reads the
-spec at every boot; here the next boot reads libvirt's definition, so a
-live-only change silently un-happens at the guest's next power cycle. The same
-correction applies to a resize the QEMU path "defers to the next reboot" — a
-vCPU shrink, or a memory change on a VM with no virtio-mem device — which is
-written to `CONFIG` alone rather than left for a boot that would not pick it up.
+configuration the agent keeps in step and re-reads the spec at every boot; here
+the next boot reads libvirt's definition, so a live-only change silently
+un-happens at the guest's next power cycle. The same correction applies to a
+resize that would otherwise be "deferred to the next reboot" — a vCPU shrink, or
+a memory change on a VM with no virtio-mem device — which is written to `CONFIG`
+alone rather than left for a boot that would not pick it up.
 
 Two consequences follow:
 
@@ -240,57 +261,46 @@ Two consequences follow:
   `pcie-root-port`s (libvirt adds one port per PCI device present at define
   time, so a domain that reserves none has nowhere to plug a disk) and whatever
   virtio-mem region the spec asked for. Growing past either is libvirt's error
-  to report, not bookkeeping the agent keeps — which is why `SpawnSizing` and
-  `vmSpawnSizing` have no counterpart here.
+  to report, not bookkeeping the agent keeps — which is why a process driver's
+  spawn-sizing table has no counterpart here.
 - **A volume names itself in the document.** Each volume-backed `<disk>` carries
-  `<serial>vol-<uuid></serial>`, minted by the same `QEMUDiskIdentity` the QEMU
-  driver names its QMP device with, so a detach resolves exactly that disk on a
-  domain the agent keeps no model of (STR-129). `hasLiveSession` returns true
-  for *any* domain here for a related reason: its false branch means "recording
-  the attachment realizes it", which is true of the QEMU driver's
+  `<serial>vol-<uuid></serial>`, minted by `QEMUDiskIdentity`, so a detach
+  resolves exactly that disk on a domain the agent keeps no model of (STR-129).
+  `hasLiveSession` returns true for *any* domain here for a related reason: its
+  false branch means "recording the attachment realizes it", which is true of a
   respawn-from-configuration path and false of this one.
 
 Checkpoints are libvirt **system checkpoints** — `domainSnapshotCreateXML` /
 `domainRevertToSnapshot` / `domainSnapshotDelete`, with libvirt choosing the
-disks in place of `VMCheckpointTargets`. Two host preconditions make them work,
+disks in place of a hand-computed block-node list. Two host preconditions make
+them work,
 and both are established elsewhere: the NVRAM varstore is qcow2 rather than raw
 (`DomainXMLBuilder`), and the host runs libvirt ≥ 11.5 — below which
 `snapshot-create-as` refuses a pflash guest outright, since internal snapshots
 only moved onto the modern job API in 10.9. `LibvirtProbe.minimumVersion` gates
 `.qemu` on that floor, so a node too old to checkpoint stops advertising QEMU at
-all rather than advertising a capture it cannot take. Unlike the QEMU path, a
-checkpoint delete works on a stopped VM.
+all rather than advertising a capture it cannot take. A checkpoint delete works
+on a stopped VM.
 
-With STR-134 and STR-135 in, a libvirt node is a full-capability QEMU node and
-nothing in its lifecycle path needs a raw monitor, so no domain it manages is
-ever tainted by `qemuDomainMonitorCommand`. What is left is removing the driver
-it replaces, along with the QMP sockets, the QGA transport and the swtpm
-supervision that only ever existed because the agent spawned QEMU itself
-(STR-136).
+A libvirt node is a full-capability QEMU node (STR-134, STR-135), and nothing in
+its lifecycle path needs a raw monitor, so no domain it manages is ever tainted
+by `qemuDomainMonitorCommand`.
 
-### Diagnosing a failed QEMU spawn
+### Diagnosing a failed domain start
 
-QEMU reports a rejected argument or an unreadable disk image on stderr and
-exits during setup — but only *after* opening its first `-qmp` socket, so a
-misconfigured spawn used to look like a socket that appeared and then refused
-the connection: a bare QMP timeout naming nothing, which is how issue #740
-hid an invalid `virtio-balloon` line that was killing every VM on the host.
+A domain libvirt rejects fails at `domainDefineXML` or `domainCreate`, and
+libvirt's own error is what the driver propagates — untranslated, so the message
+naming the element or the file at fault is what lands in the reconciler's
+`lastError` and the degraded condition the UI shows. There is no stderr tail to
+drain and no environment variable to set first: the agent does not launch QEMU.
 
-SwiftQEMU drains QEMU's stderr into a bounded (16KB) tail buffer and gives up
-on the socket wait as soon as the process exits, throwing
-`QMPError.processExited(exitCode:killedBySignal:stderr:)`. QEMU's own message
-therefore reaches the operator on three paths, with no environment variable to
-set first:
-
-- the error's description carries the stderr tail, so it lands in the
-  reconciler's `lastError` and the failed operation the UI shows;
-- SwiftQEMU logs `qemuStderr` metadata on the logger the agent injected;
-- `QEMUService` logs `QEMU VM creation failed` with the binary and the
-  arguments it asked for — the case where QEMU exited too early to say
-  anything at all.
-
-`ENABLE_QEMU_PROCESS_LOG_FILES=true` still tees QEMU's *stdout* to
-`/tmp/qemu-*.log`; stderr no longer depends on it.
+Where libvirt's message is too terse to act on — "internal error: process exited
+while connecting to monitor" is the usual shape — QEMU's own output is on the
+host at **`/var/log/libvirt/qemu/<domain>.log`**, one file per domain, named by
+VM id. libvirtd writes the full command line it used at the top of each start,
+followed by whatever QEMU printed before exiting. `journalctl -u virtqemud` (or
+`libvirtd` on a monolithic install) carries the daemon's side of the same
+failure.
 
 ## Firmware and the machine profile
 
@@ -321,75 +331,72 @@ since booting without Secure Boot would quietly contradict what the API says
 the VM has. macOS hosts ship no signed EDK2 build, so Secure Boot is a
 Linux-hypervisor-node feature.
 
-`StratoAgentCore/SwtpmSupervisor.swift` runs the vTPM: one `swtpm socket
---tpm2` process per VM, state in `<vmdir>/tpm`, control socket at
-`<vmdir>/swtpm.sock`, pid file alongside it, attached to QEMU as
-`-chardev socket,id=chrtpm,... -tpmdev emulator,id=tpm0,chardev=chrtpm
--device tpm-tis,tpmdev=tpm0` (`tpm-tis-device` on the ARM `virt` machine).
-swtpm is spawned with `--daemon`, so it reparents to init and outlives the
-agent exactly as QEMU does — a re-adopted VM keeps talking to the swtpm it was
-started with. The converse does not hold: a swtpm that died under a live QEMU
-cannot be reattached mid-flight and needs a VM stop/start. The state directory
-persists across that, so anything the guest sealed to the TPM (BitLocker keys)
-is not lost.
+**libvirt runs the vTPM.** The domain document carries
+`<tpm model='tpm-tis'><backend type='emulator' version='2.0'/></tpm>` and
+libvirtd starts, supervises and restarts one `swtpm` per domain, keeping its
+state under `/var/lib/libvirt/swtpm/<domain-uuid>/` — outside the VM's own
+directory, which is why the undefine on delete carries the `TPM` flag. The agent
+neither spawns swtpm nor names a socket for it, and a swtpm that dies under a
+running guest is libvirt's to notice. The state persists across a stop/start, so
+anything the guest sealed to the TPM (BitLocker keys) is not lost.
 
-Whether the host has a usable `swtpm` is what the agent advertises as
-`tpmCapable` at registration (plus a `vtpm` capability string), and the host
-preflight reports its absence as an advisory — a host without swtpm is
-perfectly useful, it just never receives a TPM placement.
+What the agent advertises as `tpmCapable` at registration (plus a `vtpm`
+capability string) is **libvirt's own answer**: `virsh domcapabilities` reporting
+a `<tpm>` element with an `emulator` backend, parsed by
+`StratoAgentCore/DomainCapabilities.swift`. A `passthrough`-only host has a
+physical TPM to hand through and cannot serve the emulated one Strato asks for,
+so it does not count. Asking libvirt rather than looking for an `swtpm` binary
+matters on a containerized agent, which sees its own image rather than the
+host's filesystem — and it means libvirtd has to be **restarted** after
+installing swtpm, since it caches host capabilities. The host preflight reports
+the absence as an advisory (with that restart in the remediation): a host
+without a vTPM is perfectly useful, it just never receives a TPM placement.
 
 ## Graphics console (VNC)
 
-A VM whose spec carries `ConsoleSpec.graphics == .vnc` (issue #566) is spawned
-with a display device and a VNC server on a Unix socket, so its framebuffer can
-be relayed to noVNC in the web UI. Headless is the default and its command line
-is unchanged.
+A VM whose spec carries `ConsoleSpec.graphics == .vnc` (issue #566) gets a
+display device and a VNC server on a Unix socket, so its framebuffer can be
+relayed to noVNC in the web UI. Headless is the default and its document is
+unchanged.
 
-`StratoAgentCore/QEMUGraphicsDevice.swift` builds the arguments — in the core
-library, not beside the rest of the command line in `QEMUService`, for the same
-reason as `QEMUBalloonDevice`: that file links SwiftQEMU and so has no unit
-tests, and a device line QEMU rejects surfaces only as a QMP connect timeout.
+`DomainXMLBuilder` writes the elements, and `DomainXMLBuilderTests` is where the
+reasoning behind each is asserted — a device libvirt or QEMU rejects fails the
+create with a message that routinely names neither the element at fault nor the
+feature that pulled it in.
 
-- `-display none` plus `-vnc unix:<vmDir>/vnc.sock`. In current QEMU `-vnc` *is*
-  a display backend, so the VNC server is what exports the framebuffer and no
-  local window is ever opened. `-nographic` is correspondingly **not** passed
-  for these VMs — its whole job is to force `-display none` and redirect the
-  *default* serial and monitor to stdio. The VM's serial console is unaffected,
-  because it is an explicit `-serial unix:…`, which is what `-nographic` defers
-  to anyway. (A side effect worth knowing: dropping `-nographic` also moves
-  QEMU's HMP monitor off the agent process's stdio.)
-- **Standard VGA on x86** (`-vga std`), not virtio. The point of this console is
-  pre-driver output — UEFI, GRUB, Windows Setup, a panic screen — and
-  `virtio-vga` needs a guest driver for anything past its VGA-compat mode.
-  virtio-gpu is also a separate QEMU module that some distribution builds omit
-  entirely, while `std` is always present. Passing `-vga std` *selects* the
-  default adapter rather than adding a second one, which is what keeps QEMU from
-  refusing to start with two VGA devices.
-- **`virtio-gpu-pci` on arm64**, where the `virt` machine creates no display
-  device at all and there is no `-vga` to select one. EDK2 drives it at firmware
-  time through `VirtioGpuDxe`.
-- `qemu-xhci` + `usb-tablet`, for **absolute** pointer positioning. Without it
-  the guest sees relative motion and its cursor drifts away from the browser's,
-  which makes a graphical installer unclickable. `q35` starts with USB off and
-  `virt` has no controller at all, so both the controller and the tablet's
-  `bus=` are explicit.
-- `usb-kbd`, on every architecture. It looks redundant on x86 — `q35` keeps the
-  default i8042 PS/2 controller, so a guest there types without it and this just
-  becomes a second keyboard — but arm64's `virt` has no PS/2 and creates no
-  input devices at all. Without it an aarch64 guest renders and accepts clicks
-  while dropping every keystroke, which breaks precisely the installer this
-  console exists to drive.
+- `<graphics type='vnc'>` with a `<listen type='socket' socket='<vmDir>/vnc.sock'/>`.
+- **Standard VGA on x86** (`<video><model type='vga'/>`), not virtio. The point
+  of this console is pre-driver output — UEFI, GRUB, Windows Setup, a panic
+  screen — and virtio needs a guest driver for anything past its VGA-compat
+  mode. virtio-gpu is also a separate QEMU module that some distribution builds
+  omit entirely, while standard VGA is always present.
+- **`virtio` video on arm64**, where the `virt` machine creates no display
+  device at all. EDK2 drives virtio-gpu at firmware time through `VirtioGpuDxe`.
+- A `qemu-xhci` USB controller plus `<input type='tablet' bus='usb'/>`, for
+  **absolute** pointer positioning. Without it the guest sees relative motion and
+  its cursor drifts away from the browser's, which makes a graphical installer
+  unclickable. `q35` starts with USB off and `virt` has no controller at all, so
+  the controller is declared explicitly.
+- `<input type='keyboard' bus='usb'/>`, on every architecture. It looks
+  redundant on x86 — `q35` keeps the default i8042 PS/2 controller, so a guest
+  there types without it and this just becomes a second keyboard — but arm64's
+  `virt` has no PS/2 and creates no input devices at all. Without it an aarch64
+  guest renders and accepts clicks while dropping every keystroke, which breaks
+  precisely the installer this console exists to drive.
+- A headless VM states `<video><model type='none'/>` rather than omitting the
+  element, so no libvirt version auto-adds a framebuffer to a VM whose console
+  is the serial port.
 
 **There is no RFB password.** The socket's file mode inside the VM directory,
 plus the control plane's `view_console` authorization in front of the relay, are
-the security boundary — the same trust model as the QMP and serial sockets
+the security boundary — the same trust model as the serial and console sockets
 beside it. It must never become a TCP listener.
 
-The socket path is deterministic, so a VM re-adopted after an agent restart
-resolves its console from `vmStoragePath + vmId` alone; the listener belongs to
-the surviving QEMU process, not to the agent. Conversely, a VM created headless
-can never gain a display without being recreated — the device is fixed in the
-QEMU process's arguments, and a stop/start respawns from those same arguments.
+The socket path is deterministic (`QEMUGraphicsDevice.socketPath`), so a VM
+re-adopted after an agent restart resolves its console from
+`vmStoragePath + vmId` alone; the listener belongs to libvirt's QEMU process,
+not to the agent. Conversely, a VM created headless can never gain a display
+without being recreated — the domain document is written once.
 
 `ConsoleSocketManager` relays whichever socket a session asked for as opaque
 bytes, so nothing agent-side understands RFB. Reads are handed to the control
@@ -463,120 +470,70 @@ console setup travels as a script part).
 
 ## QEMU guest agent (qga)
 
-`StratoAgentCore/QGA/` holds `QGAClient` (issue #563): a testable JSON-over-
-unix-socket client for the guest agent, sitting in Core behind a `QGATransport`
-seam so its framing and resync logic unit-test against an in-memory fake, with
-`NIOQGATransport` the real unix-socket transport. Unlike QMP there is no
-greeting or `qmp_capabilities` handshake — every operation opens a channel,
-resynchronizes the stream with `guest-sync-delimited` (a `0xFF` marker frames
-the reply so stale bytes are discarded, and its success is the guest-is-alive
-proof), issues its command(s), and closes.
+Every VM's domain document binds a `virtserialport` named
+`org.qemu.guest_agent.0` at `<vmStoragePath>/<vmId>/qga.sock` (issue #563).
+libvirtd owns that socket: the transport, the JSON framing and the
+`guest-sync-delimited` resync that reaching a guest agent needs are its problem,
+and it multiplexes, so the agent never speaks qga itself. The driver reaches the
+guest through `domainGetGuestInfo`, `domainInterfaceAddresses(source: AGENT)`
+and `domainShutdownFlags`, mapped by `StratoAgentCore/LibvirtGuestInfo.swift`.
 
-Every VM already carries a `virtio-serial-pci` bus for the console channel, so
-`QEMUService.convertToQEMUConfiguration` just adds one more `virtserialport`
-named `org.qemu.guest_agent.0` on a deterministic `<vmStoragePath>/<vmId>/qga.sock`
-(so re-adopted VMs reconnect too). qga is **unresponsive whenever the guest is
-not running the agent**, so every call is bounded by a short `StageBudget` and a
+qga is **unresponsive whenever the guest is not running the agent**, so every
+call that reaches it is bounded by a short `StageBudget.guestAgentSeconds` and a
 timeout is the *normal* path, not the error path — each use site degrades to
 pre-qga behavior:
 
-- **Verified shutdown**: `shutdownVM` tries `guest-shutdown` first; its success
-  confirms the guest heard us, and it falls back to the universal ACPI powerdown
-  when qga doesn't answer.
-- **fs-freeze snapshots** (withdrawn in issue #747): the volume-snapshot
-  handler used to freeze the attached guest's filesystems around overlay
-  creation. Nothing made that overlay the guest's active layer, so the freeze
-  only lent an inconsistent snapshot a consistency signal. The capture now
-  refuses any artifact whose entry names an attached VM
-  (`DesiredSnapshotCapture.attachedVMId`); `QGAClient` keeps the freeze/thaw
-  verbs for the eventual QMP-based live snapshot. See
-  [storage](./storage.md#snapshots).
+- **Verified shutdown**: `shutdownVM` sends `SHUTDOWN_DEFAULT`, so libvirt tries
+  the guest agent first and falls back to the ACPI power button when it does not
+  answer. The 60s escalation to a destroy is what bounds the whole thing.
 - **Guest info**: a throttled slow poll (folded into the heartbeat cadence)
   probes running QEMU VMs for hostname and configured addresses off the report's
   hot path, caching the result the observed-state report reads. This is the only
   way DHCP/SLAAC addresses the control plane never allocated become visible.
+- **fs-freeze snapshots** (withdrawn in issue #747): the volume-snapshot handler
+  used to freeze the attached guest's filesystems around overlay creation.
+  Nothing made that overlay the guest's active layer, so the freeze only lent an
+  inconsistent snapshot a consistency signal. The capture now refuses any
+  artifact whose entry names an attached VM
+  (`DesiredSnapshotCapture.attachedVMId`). See
+  [storage](./storage.md#snapshots).
 
-### Running commands in a guest (`guest-exec`)
-
-`QGAClient.runCommand` executes a `GuestCommand` in the guest and returns its
-exit status with captured stdout/stderr. qga models exec as **spawn-and-poll**:
-`guest-exec` returns a PID, and `guest-exec-status` reports completion, handing
-over each captured stream base64-encoded and *whole* in the reply that first
-says `exited: true`. There is no completion notification, no PTY, no way to
-write further stdin, and no way to signal a running process — which is why this
-is a run-a-command primitive and can never back an interactive session.
-
-Three consequences shape the implementation:
-
-- **Polling is bounded by a caller-supplied deadline** (`StageBudget.guestExecSeconds`
-  by default) and is an ordinary backoff loop over cancellable awaits, not a
-  background task, so a timed-out or cancelled call leaves nothing running
-  agent-side. It does *not* stop the guest process — qga cannot signal it — so
-  the thrown `executionTimedOut` carries the PID. For the same reason the spawn
-  is never retried; only the polls are, and only on transport-level failures —
-  a reply the agent gave us (an error object, an undecodable shape) will not
-  read differently next time. `spawnCommand`/`commandStatus` are public
-  alongside `runCommand` so a caller can drive the waiting itself: that is what
-  modelling a long guest command as an async operation needs, and it is the
-  only way to collect a command `runCommand` abandoned at its deadline —
-  collecting the status is also what frees qga's in-guest entry and the output
-  it pins.
-- **Captured output is capped per stream** (1 MiB by default, clamped to qga's
-  own 16 MiB in-guest cap). Since the whole stream arrives in one JSON object,
-  the cap is enforced by sizing that read's framer budget: an oversized reply is
-  refused mid-stream as `responseTooLarge` rather than buffered and then
-  rejected. qga's own truncation surfaces separately as the result's
-  `stdoutTruncated`/`stderrTruncated`. Replies at this size are also why
-  `QGAObjectFramer` carries its scan cursor across appends — re-scanning the
-  buffer per socket chunk was free for a few-hundred-byte reply and quadratic
-  for a megabyte one.
-- **Each round trip opens its own channel**, so a long-running command doesn't
-  hold the one-client-at-a-time chardev away from shutdown and guest-info
-  probes. A poll that loses that race is retried until the deadline.
-
-Exec is not universally available: distros filter the RPC set, and the RHEL
-family ships an `--allow-rpcs` allowlist that omits `guest-exec` (Ubuntu,
-Debian, and Fedora do not filter — see issue #803). `queryCapabilities`
-(`guest-info`) reports which commands the agent will answer, so a caller can
-say "this guest can't run commands" up front; attempting it anyway comes back
-as `commandUnavailable` rather than a generic failure.
+There is **no guest-exec path**. The agent's own qga client and its
+`guest-exec` spawn-and-poll implementation went with the process driver
+(STR-136): nothing called them, and qga's exec model — a PID plus polling, with
+no completion notification, no PTY, no further stdin and no way to signal a
+running process — could never have backed an interactive session anyway. Sandbox
+exec goes through the Firecracker guest agent instead.
 
 ## Balloon memory stats (virtio-balloon)
 
-Every QEMU VM gets a `virtio-balloon-pci` device with `free-page-hint=on`
-(issue #567): inert until the guest's virtio_balloon driver binds it, after
-which free-page hinting lets KVM drop guest-freed pages (shrinking host RSS
-with no policy work) and the device's `guest-stats` expose real guest memory
-usage.
+Every QEMU VM's domain document carries
+`<memballoon model='virtio' freePageReporting='on'/>` (issue #567): inert until
+the guest's virtio_balloon driver binds it, after which free-page reporting lets
+KVM drop guest-freed pages (shrinking host RSS with no policy work) and the
+device's `guest-stats` expose real guest memory usage.
 
-`free-page-hint=on` also requires a per-VM `iothread` — QEMU processes the
-hints off the main loop and refuses to start the device without one. The
-`-object iothread,…` / `-device virtio-balloon-pci,…,iothread=…` pair is
-assembled by `StratoAgentCore/QEMUBalloonDevice` so it stays under test:
-because the device is attached to *every* VM, an invalid line there stops all
-VM boots on the host (issue #740).
+Free-page **reporting**, not the hinting a hand-built QEMU command line used.
+They solve the same problem, and reporting is the newer mechanism; the practical
+difference here is that hinting requires a per-VM `iothread` (QEMU processes the
+hints off the main loop and refuses to start the device without one) while
+reporting does not — so the device that made an extra object mandatory, and the
+argv builder that assembled the pair, both disappear with the process driver.
 
-Stats travel over QMP (`qom-set` to enable guest-stats polling, `qom-get` to
-read), which SwiftQEMU's closed command enum doesn't speak — and each QMP
-server socket admits one client at a time, with the spawning `QEMUManager`
-holding its private monitor and re-adoption owning `qmp.sock`. So every VM
-gets a *third* monitor at `<vmStoragePath>/<vmId>/qmp-stats.sock`, and
-`StratoAgentCore/QMP/QMPProbeClient` — a minimal QMP client reusing the QGA
-byte-channel/framer seam, so it unit-tests against the same in-memory fake —
-connects per probe, negotiates the greeting/`qmp_capabilities` handshake,
-and collects the stats. The same guest-info slow poll caches the result as
-`VMMemoryStats`, attached to each `ObservedVMState` (wire v16). Guests
-without the driver, or not yet reporting (`last-update == 0`, `-1`
-sentinels), yield nil — never a fabricated zero. The same probe also reads
-`query-balloon`'s `actual` on that open channel (issue #567 phase 2) — QEMU's
-own view of how much memory the balloon currently leaves the guest, reported
-even when the guest driver never binds.
+Stats come from `domainMemoryStats`, mapped by
+`StratoAgentCore/LibvirtDomain.swift` — no second monitor socket and no QMP
+client, because libvirtd owns the monitor and multiplexes access to it. The
+guest-info slow poll caches the result as `VMMemoryStats`, attached to each
+`ObservedVMState` (wire v16). Guests without the driver, or not yet reporting,
+yield nil — never a fabricated zero. The same call carries the balloon's
+`actual` (issue #567 phase 2) — QEMU's own view of how much memory the balloon
+currently leaves the guest, reported even when the guest driver never binds.
 
 ### Operator balloon targets
 
 An operator can ask a running guest to give memory back: `VMSpec.balloonTargetBytes`
 (wire v19) names the memory the guest may keep, and the agent inflates the
-balloon to the difference with QMP `balloon <target>`. The grant itself does
+balloon to the difference with `domainSetMemoryFlags`. The grant itself does
 not move — the quota charge and the scheduler's reservation stay at what was
 committed — so this is reclaim, not resize; growing a guest is still
 `memoryBytes` and virtio-mem.
@@ -586,7 +543,7 @@ Like a resize this is declarative, and it rides the same `.resize` step:
 target differs plans convergence. Two things it does *not* share with a
 resize:
 
-- A fresh QEMU process starts with a fully deflated balloon, so `bootVM`
+- A freshly started domain has a fully deflated balloon, so `bootVM`
   re-applies a spec's target after start. The reconciler cannot see that
   difference on its own — its notion of applied sizing is the spec the VM was
   created with.
@@ -598,36 +555,33 @@ resize:
 ## CPU/memory hot-add (resize without a reboot)
 
 A VM created with headroom — `maxCpus > cpus` or `maxMemoryBytes >
-memoryBytes` in its spec (issue #568) — spawns with the extra QEMU
-arguments that make it resizable: `-smp cpus=<n>,maxcpus=<max>` for the
-vCPU hotplug slots, and `-m <base>M,slots=1,maxmem=<max>M` plus a
-`memory-backend-ram` + `virtio-mem-pci` pair for memory. Without headroom
-none of that is emitted, so the overwhelming majority of VMs spawn with
-exactly the argument vector they did before the feature existed.
+memoryBytes` in its spec (issue #568) — is defined with the elements that make
+it resizable: `<vcpu current='n'>max</vcpu>` for the vCPU hotplug slots, and a
+`<maxMemory slots='1'>` plus a `<memory model='virtio-mem'>` device for memory.
+Without headroom none of that is emitted, so the overwhelming majority of VMs
+are defined exactly as they were before the feature existed.
 
 Resizing is **declarative, not an RPC**: the control plane writes the new
 sizing into the VM's desired state and bumps its generation, and the
 reconciler's planner — comparing each running VM's manifest sizing against
 the sync's spec — emits a `.resize` step. That survives dropped syncs by
 construction, since the next level-triggered sync re-derives the same diff.
-The step reaches `QEMUService.resizeVM`, which drives the same
-`qmp-stats.sock` monitor the balloon probe uses:
+The step reaches `LibvirtService.resizeVM`:
 
-- **vCPUs**: `query-hotpluggable-cpus` enumerates the machine's slots
-  (realized ones carry a `qom-path`), and free slots are realized with
-  `device_add` in ascending topology order until the target is met.
-- **Memory**: `qom-set requested-size` on the virtio-mem device, aligned
-  down to the device's block size, asks the guest to plug (or unplug) the
+- **vCPUs**: `domainSetVcpusFlags` with `AFFECT_LIVE|AFFECT_CONFIG`, so the
+  count lands on the running guest and in the definition the next boot reads.
+- **Memory**: `domainUpdateDeviceFlags` raising `<requested>` on the virtio-mem
+  device, aligned down to its block size, asks the guest to plug (or unplug) the
   region above boot memory.
 
 Hot-*remove* of vCPUs is deliberately not attempted — guest support for CPU
 unplug is unreliable — and memory never shrinks below the boot size; both
-smaller figures apply at the next reboot, which re-spawns from the whole
-spec anyway. Growing past the ceilings the process spawned with is a
-permanent failure on the agent and a `422` at the API: `maxcpus`/`maxmem`
-are fixed for the life of a QEMU process. Hot-plugged resources arrive
-offline, so the cloud-init provisioning installs udev rules that online
-them (modern distros already ship equivalents).
+smaller figures are written to `CONFIG` alone and apply at the next reboot.
+Growing past the ceilings the domain was defined with is a permanent failure on
+the agent and a `422` at the API: the document is written once, so `<vcpu>`'s
+maximum and `<maxMemory>` are fixed for the life of the VM. Hot-plugged
+resources arrive offline, so the cloud-init provisioning installs udev rules
+that online them (modern distros already ship equivalents).
 
 The manifest entry is rewritten only after the driver reports success, so a
 failed resize is re-planned by the next sync rather than looking applied.
@@ -724,33 +678,30 @@ deletes never reach that removal, and both used to leave the directory on the
 host permanently (STR-179):
 
 - **An orphan that cannot be re-adopted.** `reconcileDelete` re-adopts first,
-  so a surviving process is really destroyed rather than abandoned. The failure
+  so a surviving workload is really destroyed rather than abandoned. The failure
   is then classified by `OrphanDeleteAdoption.classify` (in `StratoAgentCore`,
-  so the table is unit-tested): only `adoptionTargetGone` — no live process
-  behind the VM's control socket — reaches the driver's `reclaimVMDirectory`,
-  and it runs *before* the manifest entry is released, since that entry is the
-  host's last record the VM existed. Every other failure is ambiguous (the VM
-  may be alive and merely unreachable) and keeps the older contract: release
-  the entry, log, leave the files for manual cleanup.
-- **A VM the driver holds no session for.** `QEMUService.deleteVM` used to
-  throw `vmNotFound` and leave the directory behind on every retry; the
-  Firecracker driver had the same shape, one layer down, where
-  `FirecrackerClient.destroyVM` throws for a VM it does not track. Both now ask
-  the VM's deterministic control socket whether anything is still running from
-  that directory: a socket that answers is torn down for real (so the delete
+  so the table is unit-tested): only `adoptionTargetGone` — nothing behind the
+  VM's name on the host — reaches the driver's `reclaimVMDirectory`, and it runs
+  *before* the manifest entry is released, since that entry is the host's last
+  record the VM existed. Every other failure is ambiguous (the VM may be alive
+  and merely unreachable) and keeps the older contract: release the entry, log,
+  leave the files for manual cleanup.
+- **A VM the driver holds no session for.** For QEMU this case is gone with the
+  process driver: libvirtd is the durable record, so `deleteVM` looks the domain
+  up by name and a `SHUTOFF` or absent one is simply undefined and reclaimed.
+  The Firecracker driver still has the shape, one layer down, where
+  `FirecrackerClient.destroyVM` throws for a VM it does not track; it asks the
+  VM's deterministic API socket whether anything is still running from that
+  directory: a socket that answers is torn down for real (so the delete
   converges), one that refuses outlived its process, and only a connect that
   hangs is ambiguous enough to fail the delete and be retried by the next sync.
 
-The evidence is the socket, not the process, so an *absent* socket is the weak
-case — it is the ordinary trace of a hypervisor that exited and unlinked it,
-but also what a still-running VM created before deterministic sockets (#260 /
-#433) looks like. Both drivers treat it as gone and log it at `warning`,
-matching what `Agent.adoptVM` already does with the same error (it re-creates
-from the manifest spec, over the very same disks). Where a live process *is*
-found, `AdoptedQEMUVM.destroy` now waits for the QMP socket to stop accepting
-connections before returning: `quit` cannot report an exit — it legitimately
-errors when QEMU exits before replying — so without that wait a wedged guest
-could keep running from unlinked inodes.
+For Firecracker the evidence is the socket, not the process, so an *absent*
+socket is the weak case — it is the ordinary trace of a VMM that exited and
+unlinked it, but also what a still-running VM created before deterministic
+sockets (#260 / #433) looks like. The driver treats it as gone and logs it at
+`warning`, matching what `Agent.adoptVM` already does with the same error (it
+re-creates from the manifest spec, over the very same disks).
 
 Directories leaked before this are not reclaimed by either path. A startup
 sweep would have to distinguish a leaked directory from one belonging to a
@@ -808,8 +759,8 @@ once, rather than ordering work that must all happen). The cache is LRU-evicted 
 `VMManifestStore` is the durable JSON record of which backend owns each
 workload and its resource-reserving spec. It survives restarts: previously
 managed workloads load as **orphans**, keep reserving capacity, and are
-re-adopted by the reconciler where the backend supports it (QEMU via QMP
-socket, Firecracker via API socket).
+re-adopted by the reconciler where the backend supports it (QEMU by asking
+libvirtd for the domain, Firecracker via its API socket).
 
 ### When the manifest can't be read (STR-138)
 

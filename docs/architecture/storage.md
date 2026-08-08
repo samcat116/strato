@@ -137,7 +137,7 @@ instead of assuming qcow2.
 
 `materializeDisk(at:from:format:)` is the single image → disk path, used by:
 
-- `QEMUService` for boot disks (`<vmStoragePath>/<vmId>/disk.qcow2`),
+- `LibvirtService` for boot disks (`<vmStoragePath>/<vmId>/disk.qcow2`),
 - `FirecrackerService` for root drives (`<vmStoragePath>/<vmId>/rootfs.raw`),
 - `createVolumeFromImage` for image-backed volumes.
 
@@ -155,9 +155,9 @@ reused.
 A materialized boot disk has no volume row, so nothing in the volume lifecycle
 reclaims it; the hypervisor driver's delete does, by removing
 `<vmStoragePath>/<vmId>` recursively (`VMDirectoryLayout.removeDirectory`)
-once the hypervisor process is torn down and swtpm is stopped. Everything the
-VM owns on the host lives there — boot disk, cloud-init ISO, UEFI varstore,
-TPM state, sockets — and removing the directory rather than a list of known
+once the hypervisor session is torn down. Everything the VM owns on the host
+lives there — boot disk, cloud-init ISO, UEFI varstore, sockets — and removing
+the directory rather than a list of known
 filenames is deliberate: the earlier file-by-file cleanup grew one unlink per
 feature and never included the boot disk, leaking it on every delete. Attached
 volumes are unaffected: they live under `volume_storage_path` and are reclaimed

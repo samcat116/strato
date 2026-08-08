@@ -281,19 +281,14 @@ actor Agent {
     // Root of the managed-volume tree for the filesystem storage backend and
     // the host preflight's writability probe.
     private let volumeStoragePath: String
-    private let qemuBinaryPath: String
-    // How this node realizes a QEMU placement (issue #902): by spawning QEMU
-    // itself, or through libvirtd. Not a `HypervisorType` — `.qemu` on the wire
-    // means "QEMU node" either way — so the choice is the agent's alone and a
-    // fleet rolls over one node at a time. Ignored on macOS, which has no
-    // libvirt.
-    private let qemuDriver: QEMUDriver
     // Operator-configured EDK2 firmware paths (issue #565): the split
     // CODE/VARS pairs and the legacy monolithic image.
     private let firmware: FirmwareOverrides
-    // `swtpm`, when this host has it. Nil keeps the TPM capability dark at
-    // registration, so the scheduler never places a vTPM VM here.
-    private let swtpmBinaryPath: String?
+    // The QEMU driver, kept typed as well as in `hypervisorServices` so the
+    // registration path can hand it what only the host preflight knows: whether
+    // this host's libvirt can back a guest vTPM. Nil off Linux, where the
+    // registered `.qemu` backend is a mock.
+    private var libvirtService: LibvirtService?
     private let firecrackerBinaryPath: String
     private let firecrackerSocketDir: String
     // Where the sandbox guest base image (issue #419) is installed; its
@@ -384,10 +379,7 @@ actor Agent {
         sandboxImageCacheMaxSizeBytes: Int64? = nil,
         vmStoragePath: String,
         volumeStoragePath: String = FileSystemStorageBackend.defaultStoragePath,
-        qemuBinaryPath: String,
-        qemuDriver: QEMUDriver = .process,
         firmware: FirmwareOverrides = FirmwareOverrides(),
-        swtpmBinaryPath: String? = nil,
         firecrackerBinaryPath: String = "/usr/bin/firecracker",
         firecrackerSocketDir: String = "/tmp/firecracker",
         sandboxGuestImagePath: String? = nil,
@@ -421,10 +413,7 @@ actor Agent {
         self.sandboxImageCacheMaxSizeBytes = sandboxImageCacheMaxSizeBytes
         self.vmStoragePath = vmStoragePath
         self.volumeStoragePath = volumeStoragePath
-        self.qemuBinaryPath = qemuBinaryPath
-        self.qemuDriver = qemuDriver
         self.firmware = firmware
-        self.swtpmBinaryPath = swtpmBinaryPath
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
         self.sandboxGuestImagePath = sandboxGuestImagePath
@@ -616,46 +605,35 @@ actor Agent {
                 logInterval: simulation?.resolvedSandboxLogInterval
             )
         } else {
-            // Both drivers answer to `.qemu`; which one is registered is this
-            // node's own decision (issue #902) and is invisible to the control
-            // plane. The key is Linux-only because libvirt is: on macOS the
-            // existing registration stands.
+            // `.qemu` means libvirtd now — there is no second driver to choose
+            // between (STR-136). Nothing gates checkpoints away from it either:
+            // `LibvirtService` realizes a capture as a libvirt system checkpoint
+            // (STR-134). The preconditions that make that work — a qcow2 NVRAM
+            // varstore and libvirt >= 11.5 — belong to the domain builder and
+            // the host preflight, and a node failing the version floor stops
+            // advertising `.qemu` at all rather than advertising a checkpoint it
+            // cannot take.
             #if os(Linux)
-            let useLibvirt = qemuDriver == .libvirt
+            logger.info(
+                "Initializing libvirt hypervisor service", metadata: ["uri": .string(LibvirtProbe.systemURI)])
+            let libvirt = LibvirtService(
+                logger: logger, storage: storageBackend,
+                vmStoragePath: vmStoragePath, firmware: firmware,
+                hardwareAccelerationEnabled: hardwareAccelerationEnabled)
+            libvirtService = libvirt
+            hypervisorServices[.qemu] = libvirt
             #else
-            let useLibvirt = false
+            // A deliberate, temporary regression (STR-136): the QEMU driver is
+            // libvirt, and libvirt is Linux-only. A native
+            // Virtualization.framework driver is separate work. Said plainly so
+            // a mock cannot be mistaken for a hypervisor — and the host reports
+            // `.qemu` as unavailable to match (`HypervisorProbe.qemuReport`), so
+            // nothing is ever scheduled onto it.
+            logger.warning(
+                "No hypervisor on this platform: registering a MOCK QEMU backend. "
+                    + "This host cannot run VMs — the QEMU driver is libvirtd, which is Linux-only.")
+            hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
             #endif
-
-            if useLibvirt {
-                // Nothing gates checkpoints away from this driver any more:
-                // `LibvirtService` realizes a capture as a libvirt system
-                // checkpoint (STR-134). The preconditions that make that work —
-                // a qcow2 NVRAM varstore and libvirt >= 11.5 — belong to the
-                // domain builder and the host preflight, and a node failing the
-                // version floor stops advertising `.qemu` at all rather than
-                // advertising a checkpoint it cannot take.
-                logger.info(
-                    "Initializing libvirt hypervisor service", metadata: ["uri": .string(LibvirtProbe.systemURI)])
-                hypervisorServices[.qemu] = LibvirtService(
-                    logger: logger, storage: storageBackend,
-                    vmStoragePath: vmStoragePath, firmware: firmware,
-                    // libvirt starts and supervises swtpm itself; the agent only
-                    // needs to know whether this host has it at all, which is
-                    // the same fact that gates the TPM capability.
-                    hasSwtpm: swtpmBinaryPath != nil,
-                    hardwareAccelerationEnabled: hardwareAccelerationEnabled)
-            } else {
-                logger.info("Initializing QEMU service")
-                #if canImport(SwiftQEMU)
-                hypervisorServices[.qemu] = QEMUService(
-                    logger: logger, storage: storageBackend,
-                    vmStoragePath: vmStoragePath, qemuBinaryPath: qemuBinaryPath, firmware: firmware,
-                    swtpmBinaryPath: swtpmBinaryPath,
-                    hardwareAccelerationEnabled: hardwareAccelerationEnabled)
-                #else
-                hypervisorServices[.qemu] = MockHypervisorService(logger: logger, hypervisorType: .qemu)
-                #endif
-            }
 
             #if os(Linux)
             logger.info("Initializing Firecracker service (Linux only)")
@@ -1202,21 +1180,33 @@ actor Agent {
         let hypervisors: [HypervisorSupport]
         // Whether this host can back a guest TPM 2.0 (issue #565). Simulation
         // mode asserts it for the same reason it asserts the sandbox runtime:
-        // the host artifact it checks for is meaningless to a mock backend, and
+        // the host fact it checks for is meaningless to a mock backend, and
         // withholding it would make simulated fleets unusable for scale-testing
         // Windows-shaped placement.
-        var swtpmAvailable = isSimulationMode
+        var tpmAvailable = isSimulationMode
         if isSimulationMode {
             hypervisors = simulatedHypervisorSupport()
         } else {
-            let preflight = runHostPreflight(libvirt: await probeLibvirt())
-            swtpmAvailable = preflight.swtpmAvailable
+            // One `virsh` call answers reachability and version together; the
+            // vTPM question is a second one, and it is only worth asking of a
+            // daemon that answered the first. Skipping it on a broken host
+            // saves a subprocess per reconnect and, more importantly, keeps the
+            // preflight from printing an "install swtpm" remedy underneath the
+            // gating "libvirt is not usable" one.
+            let libvirt = await probeLibvirt()
+            let preflight = runHostPreflight(
+                libvirt: libvirt, tpmSupport: await probeTPMSupport(libvirt: libvirt))
+            tpmAvailable = preflight.tpmAvailable
             logHostPreflight(preflight)
+            // The domain builder refuses a `<tpm>` element this host cannot
+            // back, and this is the only place that fact is known — it comes
+            // from libvirt, on the same cadence as every other probe, so a host
+            // that gains swtpm advertises it on the next reconnect rather than
+            // after a restart.
+            await libvirtService?.setTPMSupported(tpmAvailable)
             let probed = preflight.gate(
                 HypervisorProbe.probeAll(
-                    qemuBinaryPath: qemuBinaryPath,
-                    firecrackerBinaryPath: firecrackerBinaryPath
-                ))
+                    libvirt: libvirt, firecrackerBinaryPath: firecrackerBinaryPath))
             // Firecracker's binary version rides the registration (issue
             // #428): snapshot mobility keys cross-agent restore placement on
             // version equality, so the control plane needs to know what each
@@ -1275,7 +1265,7 @@ actor Agent {
 
         // vTPM capability: the typed flag is what the scheduler gates on; the
         // capability string is display-only, matching the sandbox pattern.
-        if swtpmAvailable {
+        if tpmAvailable {
             capabilities.append(Self.vtpmCapabilityName)
         }
 
@@ -1290,7 +1280,7 @@ actor Agent {
             hypervisors: hypervisors,
             networkCapability: networkCapability,
             sandboxCapable: sandboxCapable,
-            tpmCapable: swtpmAvailable,
+            tpmCapable: tpmAvailable,
             operatingSystem: OperatingSystem.current,
             hostInfo: HostInfoProbe.gather(),
             // Declared up front so the control plane can stop pushing to this
@@ -1593,7 +1583,7 @@ actor Agent {
                     "QEMU unusable; not advertising qemu capability",
                     metadata: [
                         "reason": .string(hypervisor.unavailabilityReason ?? "unknown"),
-                        "qemuBinaryPath": .string(qemuBinaryPath),
+                        "libvirtURI": .string(LibvirtProbe.systemURI),
                     ])
             } else {
                 #if os(Linux)
@@ -1627,9 +1617,9 @@ actor Agent {
 
         if !HypervisorType.allCases.contains(where: { capabilities.contains($0.rawValue) }) {
             logger.error(
-                "No usable hypervisor backend on this host; the agent will register but never be eligible for VM placement. Check qemu_binary_path (and firecracker_binary_path on Linux) in the agent configuration.",
+                "No usable hypervisor backend on this host; the agent will register but never be eligible for VM placement. Check that libvirtd is reachable at \(LibvirtProbe.systemURI) and new enough (and firecracker_binary_path on Linux).",
                 metadata: [
-                    "qemuBinaryPath": .string(qemuBinaryPath)
+                    "libvirtURI": .string(LibvirtProbe.systemURI)
                 ])
         }
 
@@ -1681,10 +1671,30 @@ actor Agent {
         #endif
     }
 
+    /// Whether libvirt can back a guest vTPM (issue #565).
+    ///
+    /// Asked only of a daemon that already answered `probeLibvirt()`. Off Linux
+    /// there is no daemon at all, and on a host whose libvirt is missing or
+    /// unreachable the answer is decided by that failure rather than by
+    /// anything a second `virsh` invocation would find.
+    private func probeTPMSupport(libvirt: LibvirtProbe.Status?) async -> LibvirtProbe.TPMSupport {
+        #if os(Linux)
+        guard case .reachable = libvirt else {
+            return .unknown(libvirt?.summary ?? "libvirt was not probed")
+        }
+        return await LibvirtProbe.probeTPM()
+        #else
+        return .unknown("libvirt is only supported on Linux")
+        #endif
+    }
+
     /// Runs the host-readiness checks against this agent's resolved
     /// configuration. Called at every registration (initial and reconnect) so
     /// the reported capabilities always reflect the host as it is now.
-    private func runHostPreflight(libvirt: LibvirtProbe.Status? = nil) -> HostPreflight.Report {
+    private func runHostPreflight(
+        libvirt: LibvirtProbe.Status? = nil,
+        tpmSupport: LibvirtProbe.TPMSupport = .unknown("not probed")
+    ) -> HostPreflight.Report {
         #if os(Linux)
         let firecrackerSocketDirectory: String? = firecrackerSocketDir
         let qemuFirmwareDescriptorPath: String? = "/usr/share/qemu/firmware"
@@ -1693,9 +1703,9 @@ actor Agent {
         let qemuFirmwareDescriptorPath: String? = nil
         #endif
 
-        // Mirror QEMUService's firmware resolution so the preflight reports
+        // Mirror the driver's firmware resolution so the preflight reports
         // what a VM would actually boot with: the split pair's CODE image when
-        // one resolves, else the monolithic `-bios` fallback (issue #565).
+        // one resolves, else the monolithic fallback (issue #565).
         let resolvedFirmwarePath: String?
         switch try? FirmwareResolver.resolve(secureBoot: false, overrides: firmware) {
         case .pflash(let code, _):
@@ -1714,14 +1724,9 @@ actor Agent {
                 qemuImgPath: FileSystemStorageBackend.defaultQemuImgPath,
                 firecrackerSocketDirectory: firecrackerSocketDirectory,
                 firmwarePath: resolvedFirmwarePath,
-                swtpmBinaryPath: swtpmBinaryPath,
+                tpmSupport: tpmSupport,
                 qemuFirmwareDescriptorPath: qemuFirmwareDescriptorPath,
                 libvirt: libvirt,
-                // Gating only where the node actually drives VMs through
-                // libvirtd. A node still on the process driver runs perfectly
-                // well without libvirt, and telling it otherwise on every
-                // reconnect would be a fleet-wide non-problem.
-                libvirtRequired: qemuDriver == .libvirt,
                 ovnMode: effectiveNetworkMode == .ovn,
                 ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
                 ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? []
@@ -1741,12 +1746,6 @@ actor Agent {
                 logger.error("Host preflight failed: \(detail)", metadata: metadata)
             case .advisory:
                 logger.warning("Host preflight failed: \(detail)", metadata: metadata)
-            case .informational:
-                // Not a fault with this host: a dependency this build does not
-                // use yet. Both the level and the wording stay calm — warning
-                // "failed" here would have every node in every fleet reporting a
-                // non-problem on every reconnect.
-                logger.info("Host preflight note: \(detail)", metadata: metadata)
             }
         }
     }
@@ -3055,7 +3054,7 @@ extension Agent {
     /// Routed through the driver registry rather than a downcast to
     /// `LibvirtService`, for the same reason `refreshGuestInfoCacheIfDue` is:
     /// which backend a VM runs under is not this loop's business. A backend
-    /// with nothing to push (`QEMUService`, Firecracker, the mock, and every
+    /// with nothing to push (Firecracker, the mock, and every
     /// backend on macOS) reports nil and is skipped before a task is spawned or
     /// its subscription is ever started.
     private func startLifecycleObservation() async {

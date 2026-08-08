@@ -14,12 +14,12 @@ struct OrphanDeleteAdoptionTests {
 
     @Test("A gone adoption target is the one failure that permits reclaiming the directory")
     func adoptionTargetGoneIsProcessGone() {
-        let error = HypervisorServiceError.adoptionTargetGone("no QMP socket at /vms/abc/qmp.sock")
+        let error = HypervisorServiceError.adoptionTargetGone("no domain named abc")
         #expect(OrphanDeleteAdoption.classify(adoptionFailure: error) == .processGone)
     }
 
     /// A re-adoption that timed out is the case the classification exists for:
-    /// the VM may be alive and merely unreachable, and QEMUService raises
+    /// the VM may be alive and merely unreachable, so a driver raises
     /// `.timeout` rather than `.adoptionTargetGone` for exactly that reason.
     @Test(
         "Every other hypervisor failure leaves the VM's files alone",
@@ -37,15 +37,15 @@ struct OrphanDeleteAdoptionTests {
         #expect(OrphanDeleteAdoption.classify(adoptionFailure: error) == .indeterminate)
     }
 
-    /// Drivers throw their own error types too (`QEMUServiceError`,
-    /// `FirecrackerError`, NIO's), and a bare `catch` sees them all.
+    /// Drivers throw their own error types too (libvirt's, `FirecrackerError`,
+    /// NIO's), and a bare `catch` sees them all.
     @Test("An error from outside the hypervisor vocabulary is indeterminate")
     func foreignErrorsAreIndeterminate() {
         struct Boom: Error {}
         #expect(OrphanDeleteAdoption.classify(adoptionFailure: Boom()) == .indeterminate)
         #expect(OrphanDeleteAdoption.classify(adoptionFailure: CancellationError()) == .indeterminate)
         #expect(
-            OrphanDeleteAdoption.classify(adoptionFailure: StageBudgetError.exceeded(stage: "qmp-adopt", seconds: 30))
+            OrphanDeleteAdoption.classify(adoptionFailure: StageBudgetError.exceeded(stage: "adopt", seconds: 30))
                 == .indeterminate)
     }
 }

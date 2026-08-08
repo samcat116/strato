@@ -14,7 +14,12 @@ struct HostPreflightTests {
     }
 
     /// Inputs where everything passes: directories under a writable temp
-    /// root, `/bin/ls` standing in for qemu-img, no OVN, no free-space floor.
+    /// root, `/bin/ls` standing in for qemu-img, a libvirt above the floor, no
+    /// OVN, no free-space floor.
+    ///
+    /// `libvirt` has to be set for this to be a genuinely passing baseline: the
+    /// vTPM check reports "not checked" without a usable daemon, because on such
+    /// a host nothing asked it.
     private func passingInputs(root: String) -> HostPreflight.Inputs {
         HostPreflight.Inputs(
             vmStoragePath: "\(root)/vms",
@@ -22,7 +27,8 @@ struct HostPreflightTests {
             imageCachePath: "\(root)/images",
             qemuImgPath: "/bin/ls",
             firmwarePath: "/bin/ls",
-            swtpmBinaryPath: "/bin/ls",
+            tpmSupport: .supported,
+            libvirt: .reachable(LibvirtProbe.minimumVersion),
             minimumFreeDiskBytes: 0
         )
     }
@@ -232,34 +238,83 @@ struct HostPreflightTests {
 
     // MARK: - Advisory checks
 
-    @Test("Missing swtpm is advisory and only withholds the TPM capability")
-    func missingSwtpmIsAdvisory() throws {
+    @Test(
+        "No vTPM backend is advisory and only withholds the TPM capability",
+        arguments: [LibvirtProbe.TPMSupport.unsupported, .unknown("virsh not found on PATH")])
+    func missingTPMSupportIsAdvisory(_ support: LibvirtProbe.TPMSupport) throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
 
         var inputs = passingInputs(root: root)
-        inputs.swtpmBinaryPath = nil
+        inputs.tpmSupport = support
         let report = HostPreflight.run(inputs)
 
-        let check = try #require(report.check(.swtpmBinary))
+        let check = try #require(report.check(.vtpmSupport))
         #expect(!check.passed)
         #expect(check.severity == .advisory)
-        // A host without swtpm runs every VM that doesn't ask for a TPM
-        // exactly as before, so nothing about it may gate the hypervisor.
-        #expect(!report.swtpmAvailable)
+        // The remedy is the same either way, and it includes the restart:
+        // libvirtd caches its capabilities, so installing the package alone
+        // leaves the host still refusing to advertise a TPM.
+        #expect(check.detail?.contains("apt install swtpm swtpm-tools") == true)
+        #expect(check.detail?.contains("restart libvirtd") == true)
+        // A host with no vTPM runs every VM that doesn't ask for one exactly as
+        // before, so nothing about it may gate the hypervisor.
+        #expect(!report.tpmAvailable)
         #expect(report.storageReady)
 
         let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
         #expect(report.gate([qemu]) == [qemu])
     }
 
-    @Test("A present swtpm binary lights up the TPM capability")
-    func presentSwtpmIsReported() throws {
+    /// A host whose libvirt is unusable was never asked about a vTPM, and the
+    /// gating libvirt failure directly above already says what to fix. Telling
+    /// that operator to install swtpm would be a second message contradicting
+    /// the first.
+    @Test("an unusable libvirt suppresses the swtpm remedy rather than adding to it")
+    func unusableLibvirtSuppressesTheTPMRemedy() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.libvirt = .clientMissing
+        inputs.tpmSupport = .unknown("virsh not found on PATH")
+        let report = HostPreflight.run(inputs)
+
+        let check = try #require(report.check(.vtpmSupport))
+        #expect(!check.passed)
+        #expect(check.severity == .advisory)
+        #expect(check.detail?.contains("not checked") == true)
+        #expect(check.detail?.contains("apt install swtpm") == false)
+        // And the gating failure it defers to is in the report, ahead of it.
+        let kinds = report.checks.map(\.kind)
+        #expect(kinds.firstIndex(of: .libvirtConnection)! < kinds.firstIndex(of: .vtpmSupport)!)
+    }
+
+    /// The two failures are not the same fact, and an operator told to install
+    /// swtpm on a host whose libvirtd simply never answered would go after the
+    /// wrong thing.
+    @Test("'libvirt says no' and 'we could not ask' read differently")
+    func tpmFailuresAreDistinguishable() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.tpmSupport = .unsupported
+        #expect(HostPreflight.run(inputs).check(.vtpmSupport)?.detail?.contains("reports no emulated TPM") == true)
+
+        inputs.tpmSupport = .unknown("virsh exited 1")
+        let unknown = try #require(HostPreflight.run(inputs).check(.vtpmSupport))
+        #expect(unknown.detail?.contains("could not ask libvirt") == true)
+        #expect(unknown.detail?.contains("virsh exited 1") == true)
+    }
+
+    @Test("An emulated TPM backend lights up the TPM capability")
+    func supportedTPMIsReported() throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
 
         let report = HostPreflight.run(passingInputs(root: root))
-        #expect(report.swtpmAvailable)
+        #expect(report.tpmAvailable)
     }
 
     @Test("Missing firmware is advisory: logged, not gating")
@@ -351,13 +406,22 @@ struct HostPreflightTests {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
 
-        let report = HostPreflight.run(passingInputs(root: root))
+        // Nil is the non-Linux case, where libvirt cannot exist.
+        var inputs = passingInputs(root: root)
+        inputs.libvirt = nil
+        let report = HostPreflight.run(inputs)
 
         #expect(report.check(.libvirtConnection) == nil)
         #expect(report.check(.libvirtVersion) == nil)
-        // A host that was never asked about libvirt must not read as broken.
+        // A host that was never asked about libvirt must not read as broken:
+        // `HypervisorProbe.qemuReport` already reports `.qemu` unavailable
+        // there, so there is nothing left for the gate to do.
         #expect(report.libvirtReady)
         #expect(report.libvirtFailureDetail == nil)
+        // The vTPM answer is still unknown, and says why without sending anyone
+        // after swtpm on a host that has no libvirt to run it.
+        #expect(report.check(.vtpmSupport)?.detail?.contains("not checked") == true)
+        #expect(!report.tpmAvailable)
     }
 
     @Test("A libvirt new enough to drive passes both checks")
@@ -443,29 +507,22 @@ struct HostPreflightTests {
         }
     }
 
-    @Test("libvirt failures are informational on a node that does not drive libvirt")
-    func libvirtSeverityFollowsDriver() throws {
+    /// There is no second QEMU driver to hedge for (STR-136): a host that
+    /// cannot reach libvirtd cannot run a VM, so the check is gating outright
+    /// and the message reads as a live fault rather than a heads-up.
+    @Test("libvirt failures are gating, with no not-yet-required wording left")
+    func libvirtFailuresAreGating() throws {
         let root = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: root) }
 
         var inputs = passingInputs(root: root)
         inputs.libvirt = .clientMissing
-        inputs.libvirtRequired = false
-        let notYet = HostPreflight.run(inputs)
-        // Informational, not advisory: a node on `qemu_driver = "process"` runs
-        // perfectly well with no libvirt, and warning about a dependency it does
-        // not use would have it reporting a non-problem on every reconnect.
-        #expect(notYet.check(.libvirtConnection)?.severity == .informational)
-        #expect(notYet.check(.libvirtConnection)?.detail?.contains("this node does not use") == true)
-        // Nothing about libvirt may gate placement on such a node.
-        let qemu = HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
-        #expect(notYet.gate([qemu]) == [qemu])
+        let report = HostPreflight.run(inputs)
 
-        inputs.libvirtRequired = true
-        let required = HostPreflight.run(inputs)
-        #expect(required.check(.libvirtConnection)?.severity == .gating)
-        // Once it is a real requirement the message drops the hedge.
-        #expect(required.check(.libvirtConnection)?.detail?.contains("this node does not use") == false)
+        let check = try #require(report.check(.libvirtConnection))
+        #expect(check.severity == .gating)
+        #expect(check.detail?.contains("this node does not use") == false)
+        #expect(check.detail?.contains("apt install libvirt-daemon-system") == true)
     }
 
     /// A node whose QEMU placements are realized through libvirtd cannot serve
@@ -481,7 +538,6 @@ struct HostPreflightTests {
             type: .firecracker, available: true, accelerated: true, capabilities: .firecracker)
 
         var inputs = passingInputs(root: root)
-        inputs.libvirtRequired = true
         inputs.libvirt = .reachable(LibvirtProbe.Version(major: 10, minor: 0, patch: 0))
         let gated = HostPreflight.run(inputs).gate([qemu, firecracker])
 

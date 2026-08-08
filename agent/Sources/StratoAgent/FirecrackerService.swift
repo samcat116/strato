@@ -305,9 +305,8 @@ actor FirecrackerService: HypervisorService {
     /// directory.
     ///
     /// The client throws `vmNotFound` for a VM it does not track, which used to
-    /// abort the delete before its removal and leak the rootfs on every retry —
-    /// the same defect `QEMUService.destroyWithoutSession` fixes for QEMU
-    /// (STR-179). The deterministic API socket answers the same question here:
+    /// abort the delete before its removal and leak the rootfs on every retry
+    /// (STR-179). The deterministic API socket answers the question here:
     /// re-adoption over it registers the VM with the client (and verifies the
     /// pid it finds), so a successful one turns this back into an ordinary
     /// teardown, and a failure means there is no live VMM to tear down.
@@ -361,7 +360,7 @@ actor FirecrackerService: HypervisorService {
 
     func getVMStatus(vmId: String) async throws -> VMStatus {
         // An absent entry means this service does not manage the VM at all; report
-        // that honestly instead of fabricating `.shutdown` (see QEMUService).
+        // that honestly instead of fabricating `.shutdown`.
         guard let manager = vmManagers[vmId] else {
             throw HypervisorServiceError.vmNotFound(vmId)
         }

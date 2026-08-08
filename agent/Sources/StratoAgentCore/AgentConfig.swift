@@ -8,22 +8,6 @@ public enum NetworkMode: String, Codable {
     case user
 }
 
-/// How this node realizes a QEMU placement (issue #902).
-///
-/// **Not a `HypervisorType`.** `.qemu` on the wire keeps meaning "QEMU node":
-/// the control plane's capability gating, the scheduler and the wire protocol
-/// are untouched, and the agent alone decides which driver serves a placement.
-/// That is what lets a fleet roll over one node at a time.
-public enum QEMUDriver: String, Codable, Sendable, CaseIterable {
-    /// `QEMUService`: the agent spawns `qemu-system-*` itself and drives it
-    /// over QMP. The default, and what every node has run until now.
-    case process
-    /// `LibvirtService`: domains defined and driven through libvirtd at
-    /// `qemu:///system`. Linux only, and the host needs libvirt ≥ 11.5 — which
-    /// the host preflight makes a *gating* check on nodes that select it.
-    case libvirt
-}
-
 /// Simulation ("dummy agent") configuration. When enabled the agent registers
 /// and speaks the full control-plane protocol but drives a no-op hypervisor and
 /// no real networking/storage, reporting configurable fake host capacity. This
@@ -285,11 +269,6 @@ public struct AgentConfig: Codable {
     /// Size budget for the sandbox rootfs cache in GB, enforced the same way
     /// (on top of the idle-TTL eviction that cache always applies).
     public let sandboxImageCacheMaxSizeGB: Int?
-    public let qemuBinaryPath: String?
-    /// Which QEMU driver this node runs (issue #902). Nil means
-    /// `QEMUDriver.process`, so an existing config keeps today's behaviour
-    /// exactly. Ignored on macOS, which has no libvirt.
-    public let qemuDriver: QEMUDriver?
     /// Legacy monolithic firmware images, attached with `-bios`. Still honored
     /// as the fallback when no split CODE/VARS pair resolves, so hosts that
     /// boot today keep booting — but such VMs have no persistent UEFI variable
@@ -307,9 +286,6 @@ public struct AgentConfig: Codable {
     /// it.
     public let secureBootFirmwareCodePath: String?
     public let secureBootFirmwareVarsTemplate: String?
-    /// The `swtpm` binary backing guest vTPMs. Its presence is what makes the
-    /// agent advertise the TPM capability at registration (issue #565).
-    public let swtpmBinaryPath: String?
     public let spiffe: SPIFFEConfig?
     public let firecrackerBinaryPath: String?
     public let firecrackerSocketDir: String?
@@ -414,15 +390,12 @@ public struct AgentConfig: Codable {
         case imageCacheMaxSizeGB = "image_cache_max_size_gb"
         case sandboxImageCacheDir = "sandbox_image_cache_dir"
         case sandboxImageCacheMaxSizeGB = "sandbox_image_cache_max_size_gb"
-        case qemuBinaryPath = "qemu_binary_path"
-        case qemuDriver = "qemu_driver"
         case firmwarePathARM64 = "firmware_path_arm64"
         case firmwarePathX86_64 = "firmware_path_x86_64"
         case firmwareCodePath = "firmware_code_path"
         case firmwareVarsTemplate = "firmware_vars_template"
         case secureBootFirmwareCodePath = "secure_boot_firmware_code_path"
         case secureBootFirmwareVarsTemplate = "secure_boot_firmware_vars_template"
-        case swtpmBinaryPath = "swtpm_binary_path"
         case spiffe
         case firecrackerBinaryPath = "firecracker_binary_path"
         case firecrackerSocketDir = "firecracker_socket_dir"
@@ -463,15 +436,12 @@ public struct AgentConfig: Codable {
         imageCacheMaxSizeGB: Int? = nil,
         sandboxImageCacheDir: String? = nil,
         sandboxImageCacheMaxSizeGB: Int? = nil,
-        qemuBinaryPath: String? = nil,
-        qemuDriver: QEMUDriver? = nil,
         firmwarePathARM64: String? = nil,
         firmwarePathX86_64: String? = nil,
         firmwareCodePath: String? = nil,
         firmwareVarsTemplate: String? = nil,
         secureBootFirmwareCodePath: String? = nil,
         secureBootFirmwareVarsTemplate: String? = nil,
-        swtpmBinaryPath: String? = nil,
         spiffe: SPIFFEConfig? = nil,
         firecrackerBinaryPath: String? = nil,
         firecrackerSocketDir: String? = nil,
@@ -510,15 +480,12 @@ public struct AgentConfig: Codable {
         self.imageCacheMaxSizeGB = imageCacheMaxSizeGB
         self.sandboxImageCacheDir = sandboxImageCacheDir
         self.sandboxImageCacheMaxSizeGB = sandboxImageCacheMaxSizeGB
-        self.qemuBinaryPath = qemuBinaryPath
-        self.qemuDriver = qemuDriver
         self.firmwarePathARM64 = firmwarePathARM64
         self.firmwarePathX86_64 = firmwarePathX86_64
         self.firmwareCodePath = firmwareCodePath
         self.firmwareVarsTemplate = firmwareVarsTemplate
         self.secureBootFirmwareCodePath = secureBootFirmwareCodePath
         self.secureBootFirmwareVarsTemplate = secureBootFirmwareVarsTemplate
-        self.swtpmBinaryPath = swtpmBinaryPath
         self.spiffe = spiffe
         self.firecrackerBinaryPath = firecrackerBinaryPath
         self.firecrackerSocketDir = firecrackerSocketDir
@@ -639,20 +606,18 @@ public struct AgentConfig: Codable {
         // time" — an operator who wants no cache bound should omit the key.
         let imageCacheMaxSizeGB = try Self.positiveInt(tomlData, key: "image_cache_max_size_gb")
         let sandboxImageCacheMaxSizeGB = try Self.positiveInt(tomlData, key: "sandbox_image_cache_max_size_gb")
-        let qemuBinaryPath = tomlData.string("qemu_binary_path")
-        // Which QEMU driver this node runs (issue #902). Validated here rather
-        // than defaulted, so a typo takes the node out of service loudly
-        // instead of quietly leaving it on the driver the operator was trying
-        // to move it off.
-        let qemuDriver: QEMUDriver?
-        if let driverString = tomlData.string("qemu_driver") {
-            guard let driver = QEMUDriver(rawValue: driverString) else {
-                throw AgentConfigError.invalidConfiguration(
-                    "qemu_driver must be 'process' or 'libvirt', got '\(driverString)'")
-            }
-            qemuDriver = driver
-        } else {
-            qemuDriver = nil
+        // Keys retired with the process QEMU driver (STR-136). Read only to
+        // say so: unknown keys are otherwise ignored, and a node whose config
+        // still says `qemu_driver = "process"` would change behaviour in
+        // silence — which is the one outcome an operator must not discover from
+        // a VM that started somewhere unexpected. Warned rather than rejected,
+        // so an unattended fleet upgrade is not a fleet-wide outage.
+        for (key, note) in [
+            ("qemu_driver", "the agent always drives QEMU through libvirtd now"),
+            ("qemu_binary_path", "libvirt selects the emulator from its own capabilities"),
+            ("swtpm_binary_path", "libvirt starts and supervises swtpm per domain"),
+        ] where tomlData.string(key) != nil {
+            logger?.warning("\(key) is no longer used and will be ignored: \(note) (STR-136)")
         }
         let firmwarePathARM64 = tomlData.string("firmware_path_arm64")
         let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
@@ -672,7 +637,6 @@ public struct AgentConfig: Codable {
             throw AgentConfigError.invalidConfiguration(
                 "secure_boot_firmware_code_path and secure_boot_firmware_vars_template must be set together")
         }
-        let swtpmBinaryPath = tomlData.string("swtpm_binary_path")
         let firecrackerBinaryPath = tomlData.string("firecracker_binary_path")
         let firecrackerSocketDir = tomlData.string("firecracker_socket_dir")
         let sandboxGuestImagePath = tomlData.string("sandbox_guest_image_path")
@@ -891,28 +855,11 @@ public struct AgentConfig: Codable {
         if enableKVM == true {
             logger?.warning("enable_kvm is not supported on macOS, will be ignored")
         }
-        if qemuDriver == .libvirt {
-            // Warned rather than rejected: the macOS agent is a dev/test host,
-            // and refusing to start over a key that means nothing here would
-            // make a shared config file unusable across a mixed fleet.
-            logger?.warning("qemu_driver = \"libvirt\" is not supported on macOS, will be ignored")
-        }
         #elseif os(Linux)
         if enableHVF == true {
             logger?.warning("enable_hvf is only supported on macOS, will be ignored")
         }
         #endif
-
-        // libvirt selects the emulator from its own capabilities, so a domain
-        // never names one and `qemu_binary_path` has no effect. Said out loud
-        // because the startup banner echoes the path back either way, and an
-        // operator who pointed this node at a custom QEMU build would otherwise
-        // see it accepted and get a different binary.
-        if qemuDriver == .libvirt, let qemuBinaryPath {
-            logger?.warning(
-                "qemu_binary_path is ignored under qemu_driver = \"libvirt\"; libvirt selects the emulator itself",
-                metadata: ["qemuBinaryPath": .string(qemuBinaryPath)])
-        }
 
         return AgentConfig(
             controlPlaneURL: controlPlaneURL,
@@ -933,15 +880,12 @@ public struct AgentConfig: Codable {
             imageCacheMaxSizeGB: imageCacheMaxSizeGB,
             sandboxImageCacheDir: sandboxImageCacheDir,
             sandboxImageCacheMaxSizeGB: sandboxImageCacheMaxSizeGB,
-            qemuBinaryPath: qemuBinaryPath,
-            qemuDriver: qemuDriver,
             firmwarePathARM64: firmwarePathARM64,
             firmwarePathX86_64: firmwarePathX86_64,
             firmwareCodePath: firmwareCodePath,
             firmwareVarsTemplate: firmwareVarsTemplate,
             secureBootFirmwareCodePath: secureBootFirmwareCodePath,
             secureBootFirmwareVarsTemplate: secureBootFirmwareVarsTemplate,
-            swtpmBinaryPath: swtpmBinaryPath,
             spiffe: spiffeConfig,
             firecrackerBinaryPath: firecrackerBinaryPath,
             firecrackerSocketDir: firecrackerSocketDir,
@@ -1033,8 +977,7 @@ public struct AgentConfig: Codable {
             networkMode: networkMode,
             enableHVF: enableHVF,
             enableKVM: enableKVM,
-            vmStoragePath: defaultVMStoragePath,
-            qemuBinaryPath: defaultQemuBinaryPath
+            vmStoragePath: defaultVMStoragePath
         )
     }
 
@@ -1055,31 +998,6 @@ public struct AgentConfig: Codable {
         return "\(home)/Library/Application Support/strato/qemu-sockets"
         #else
         return "/var/run/qemu"
-        #endif
-    }
-
-    /// Default QEMU binary path (platform and architecture-specific)
-    public static var defaultQemuBinaryPath: String {
-        #if os(macOS)
-        // Homebrew's prefix differs by hardware: /opt/homebrew on Apple
-        // Silicon, /usr/local on Intel. Probe both (native prefix first)
-        // so the default works on either, and fall back to the native
-        // prefix when QEMU isn't installed yet.
-        #if arch(arm64)
-        let binary = "qemu-system-aarch64"
-        let prefixes = ["/opt/homebrew/bin", "/usr/local/bin"]
-        #else
-        let binary = "qemu-system-x86_64"
-        let prefixes = ["/usr/local/bin", "/opt/homebrew/bin"]
-        #endif
-        let candidates = prefixes.map { "\($0)/\(binary)" }
-        return candidates.first { FileManager.default.fileExists(atPath: $0) } ?? candidates[0]
-        #else
-        #if arch(arm64)
-        return "/usr/bin/qemu-system-aarch64"
-        #else
-        return "/usr/bin/qemu-system-x86_64"
-        #endif
         #endif
     }
 
@@ -1115,18 +1033,6 @@ public struct AgentConfig: Codable {
         ]
         return paths.first { FileManager.default.fileExists(atPath: $0) }
         #endif
-    }
-
-    /// Default `swtpm` binary path, or nil when none is installed. Nil is what
-    /// makes the agent withhold the TPM capability at registration, so the
-    /// scheduler never places a vTPM VM on this host (issue #565).
-    public static var defaultSwtpmBinaryPath: String? {
-        let paths = [
-            "/usr/bin/swtpm",
-            "/usr/local/bin/swtpm",
-            "/opt/homebrew/bin/swtpm",
-        ]
-        return paths.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
     /// Default Firecracker binary path (Linux only)

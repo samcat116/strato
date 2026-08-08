@@ -7,7 +7,7 @@ import Testing
 /// The sizing a domain was *defined* with, which is what an online resize has
 /// to work against (STR-134).
 ///
-/// `QEMUService` keeps the equivalent in `vmSpawnSizing`, a dictionary the
+/// The process driver kept the equivalent in `vmSpawnSizing`, a dictionary the
 /// agent loses on every restart; here the domain document is the record. Every
 /// number below is load-bearing arithmetic: a `<requested>` that is not a whole
 /// number of blocks is refused outright by QEMU, and one computed from the

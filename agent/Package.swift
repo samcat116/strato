@@ -12,7 +12,6 @@ let package = Package(
         .package(path: "../shared"),
         // SwiftFirecracker for Firecracker microVM support (Linux only)
         .package(path: "../SwiftFirecracker"),
-        .package(url: "https://github.com/samcat116/swift-qemu", branch: "main"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
         // 2.37.1+ leads its default TLS group list with X25519MLKEM768, so the
         // agent's outbound mTLS negotiates hybrid post-quantum key exchange
@@ -60,7 +59,7 @@ let package = Package(
         .package(url: "https://github.com/samcat116/swift-libvirt.git", from: "0.1.0"),
     ],
     targets: [
-        // Core library with testable code (no SwiftQEMU dependency)
+        // Core library with testable code (no native-library dependencies)
         .target(
             name: "StratoAgentCore",
             dependencies: [
@@ -69,10 +68,6 @@ let package = Package(
                 .product(name: "Toml", package: "swift-toml"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIOCore", package: "swift-nio"),
-                // Unix-socket client transport for the QEMU guest agent
-                // (QGAClient, issue #563). Already a transitive dependency via
-                // AsyncHTTPClient, so declaring it does not move Package.resolved.
-                .product(name: "NIOPosix", package: "swift-nio"),
                 // Streams download bodies to disk off the cooperative pool.
                 // NonBlockingFileIO is deprecated in favor of this.
                 .product(name: "_NIOFileSystem", package: "swift-nio"),
@@ -127,8 +122,6 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Crypto", package: "swift-crypto"),
-                // SwiftQEMU: both Linux (KVM) and macOS (HVF).
-                .product(name: "SwiftQEMU", package: "swift-qemu"),
                 // libvirt RPC client backing `LibvirtService` (issue #902).
                 .product(name: "Libvirt", package: "swift-libvirt"),
                 // Linux-only backends. Declared here for every host so the package graph

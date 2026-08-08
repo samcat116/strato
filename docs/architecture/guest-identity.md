@@ -306,9 +306,10 @@ Why this shape:
   `currentVersion = 3`), guest PID 1 is ours (`sandbox-guest/init/`, Rust), and
   `supportsReidentify(_:)` is the established precedent for version-gating a new
   capability. Adding a v4 identity port plus the forwarder is a contained change.
-- **VMs: one device short.** `QEMUService` attaches `virtio-serial-pci` (console
-  and QGA) but no vsock. Attaching `vhost-vsock-pci` is the single blocker for
-  parity. The CID half is done (STR-72): `VsockCIDAllocator` allocates from the
+- **VMs: one device short.** `DomainXMLBuilder` writes a `virtio-serial`
+  controller (console and qga) but no vsock. Adding a `<vsock model='virtio'>`
+  element is the single blocker for parity — and, because the domain document is
+  written once, only VMs created after that lands would have one. The CID half is done (STR-72): `VsockCIDAllocator` allocates from the
   host-global namespace and the VM manifest persists each assignment, so
   collisions across re-adoption and restart are handled — see
   [agent](./agent.md#vsock-context-ids-str-72).

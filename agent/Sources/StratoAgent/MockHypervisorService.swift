@@ -6,8 +6,10 @@ import StratoShared
 /// A no-op hypervisor backend that behaves like a real driver without ever
 /// touching a hypervisor. It serves two purposes:
 ///
-/// 1. A build fallback when a real driver's native library is unavailable (for
-///    example, SwiftQEMU cannot be compiled without its system dependencies).
+/// 1. A stand-in on a platform where no real driver exists: the QEMU driver is
+///    libvirtd, which is Linux-only, so a macOS agent registers this instead
+///    (STR-136). Such a host reports `.qemu` as *unavailable*, so nothing is
+///    ever scheduled onto it — see `HypervisorProbe.qemuReport`.
 /// 2. The backend behind the agent's simulation mode (`simulation_mode` in the
 ///    config), which lets a fleet of dummy agents be scale-tested against a
 ///    control plane without the compute to run real VMs.

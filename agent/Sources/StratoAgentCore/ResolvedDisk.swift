@@ -6,7 +6,7 @@ import Foundation
 /// consumes after image materialization and volume resolution have run, so the
 /// driver never has to know how the path was arrived at.
 ///
-/// `QEMUService` carries an identical private struct of its own; it is left
+/// The process driver carried an identical private struct of its own; it was left
 /// alone so the libvirt work stays additive, and the `LibvirtService` issue
 /// collapses the two.
 public struct ResolvedDisk: Sendable, Equatable {

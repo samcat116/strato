@@ -280,7 +280,9 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
         case .vtpmUnsatisfied(let eligibleAgents):
             return
                 "No eligible agent can provide a TPM 2.0 (\(eligibleAgents) agent(s) checked) — install swtpm on a "
-                + "hypervisor node (Debian/Ubuntu: `apt install swtpm swtpm-tools`) and let its agent re-register"
+                + "hypervisor node (Debian/Ubuntu: `apt install swtpm swtpm-tools`), restart libvirtd there "
+                + "(it caches host capabilities, so installing the package alone changes nothing), and let its "
+                + "agent re-register"
         case .machineProfileUnsatisfied(let eligibleAgents):
             return
                 "No eligible agent is new enough to realize Secure Boot or a TPM (\(eligibleAgents) agent(s) "

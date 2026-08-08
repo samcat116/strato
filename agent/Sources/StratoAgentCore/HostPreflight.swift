@@ -31,7 +31,7 @@ public enum HostPreflight {
         case qemuImgBinary = "qemu-img"
         case uefiFirmware = "uefi_firmware"
         case qemuFirmwareDescriptors = "qemu_firmware_descriptors"
-        case swtpmBinary = "swtpm"
+        case vtpmSupport = "vtpm"
         case libvirtConnection = "libvirtd"
         case libvirtVersion = "libvirt_version"
         case ovnDatabaseSocket = "ovn_nb_socket"
@@ -51,13 +51,6 @@ public enum HostPreflight {
         /// Worth a loud log with remediation, but does not gate placement
         /// (e.g. missing UEFI firmware only affects disk-boot VMs).
         case advisory
-        /// A dependency this build does not use yet: worth stating once per
-        /// registration so an operator can get ahead of it, but not a problem
-        /// with the host as it stands, so it is logged at info rather than
-        /// warning. Every node in every fleet would otherwise report libvirt
-        /// missing on every reconnect for a requirement that isn't one until
-        /// issue #902.
-        case informational
     }
 
     public struct Check: Sendable, Equatable {
@@ -91,11 +84,11 @@ public enum HostPreflight {
         /// image of the split pair when one resolved, else the monolithic
         /// image — or nil when no candidate exists.
         public var firmwarePath: String?
-        /// The configured `swtpm` binary, or nil when none was found. Its
-        /// presence is what makes the agent advertise the TPM capability
-        /// (issue #565); its absence is advisory, since only VMs that ask for
-        /// a vTPM are affected.
-        public var swtpmBinaryPath: String?
+        /// What libvirt reports about backing a guest vTPM (issue #565).
+        /// `.supported` is what makes the agent advertise the TPM capability;
+        /// anything else is advisory, since only VMs that ask for a vTPM are
+        /// affected.
+        public var tpmSupport: LibvirtProbe.TPMSupport
         /// Directory holding QEMU's firmware descriptors
         /// (`/usr/share/qemu/firmware/*.json`), which is what lets libvirt
         /// autoselect UEFI firmware from `<os firmware='efi'>`. nil skips the
@@ -106,14 +99,6 @@ public enum HostPreflight {
         public var libvirt: LibvirtProbe.Status?
         /// The oldest libvirt this agent will drive.
         public var minimumLibvirtVersion: LibvirtProbe.Version
-        /// Whether this *node* manages VMs through libvirt, which is what makes
-        /// the libvirt checks gating rather than advisory.
-        ///
-        /// Per node, not per build: both QEMU drivers ship, and a node still on
-        /// `qemu_driver = "process"` runs perfectly well with no libvirt at all.
-        /// The agent passes its resolved driver; the default is the harmless
-        /// one, so a caller that forgets can only under-report.
-        public var libvirtRequired: Bool
         /// Whether the agent runs with OVN networking (enables the OVN/OVS
         /// socket and tool checks).
         public var ovnMode: Bool
@@ -139,11 +124,10 @@ public enum HostPreflight {
             qemuImgPath: String,
             firecrackerSocketDirectory: String? = nil,
             firmwarePath: String? = nil,
-            swtpmBinaryPath: String? = nil,
+            tpmSupport: LibvirtProbe.TPMSupport = .unknown("not probed"),
             qemuFirmwareDescriptorPath: String? = nil,
             libvirt: LibvirtProbe.Status? = nil,
             minimumLibvirtVersion: LibvirtProbe.Version = LibvirtProbe.minimumVersion,
-            libvirtRequired: Bool = false,
             ovnMode: Bool = false,
             ovnNBConnection: String = "unix:/var/run/ovn/ovnnb_db.sock",
             ovnNBTLSFilePaths: [String] = [],
@@ -158,11 +142,10 @@ public enum HostPreflight {
             self.qemuImgPath = qemuImgPath
             self.firecrackerSocketDirectory = firecrackerSocketDirectory
             self.firmwarePath = firmwarePath
-            self.swtpmBinaryPath = swtpmBinaryPath
+            self.tpmSupport = tpmSupport
             self.qemuFirmwareDescriptorPath = qemuFirmwareDescriptorPath
             self.libvirt = libvirt
             self.minimumLibvirtVersion = minimumLibvirtVersion
-            self.libvirtRequired = libvirtRequired
             self.ovnMode = ovnMode
             self.ovnNBConnection = ovnNBConnection
             self.ovnNBTLSFilePaths = ovnNBTLSFilePaths
@@ -176,14 +159,9 @@ public enum HostPreflight {
 
     public struct Report: Sendable {
         public let checks: [Check]
-        /// Whether this node drives VMs through libvirt, carried through from
-        /// `Inputs` so `gate(_:)` can tell a libvirt failure that takes the
-        /// host out of service from one that is merely a note.
-        public let libvirtRequired: Bool
 
-        public init(checks: [Check], libvirtRequired: Bool = false) {
+        public init(checks: [Check]) {
             self.checks = checks
-            self.libvirtRequired = libvirtRequired
         }
 
         public var failures: [Check] {
@@ -221,14 +199,14 @@ public enum HostPreflight {
 
         /// Whether this host can back a guest TPM 2.0 — the signal the agent
         /// reports as `AgentRegisterMessage.tpmCapable` (issue #565).
-        public var swtpmAvailable: Bool {
-            check(.swtpmBinary)?.passed ?? false
+        public var tpmAvailable: Bool {
+            check(.vtpmSupport)?.passed ?? false
         }
 
         /// Whether this host's libvirt is usable: reachable at
         /// `qemu:///system` and new enough. True when the libvirt checks were
-        /// skipped, so callers that don't yet require libvirt are unaffected —
-        /// ask `check(.libvirtConnection)` when the distinction matters.
+        /// skipped, which is the non-Linux case — there the QEMU probe already
+        /// reports unavailable, so nothing is left for this to gate.
         public var libvirtReady: Bool {
             !failed(.libvirtConnection) && !failed(.libvirtVersion)
         }
@@ -261,15 +239,12 @@ public enum HostPreflight {
                 var reason: String?
                 if !storageReady {
                     reason = "host storage not ready: \(storageFailureDetail ?? "unknown storage failure")"
-                } else if hypervisor.type == .qemu, libvirtRequired, !libvirtReady {
-                    // This node realizes QEMU placements through libvirtd
-                    // (`qemu_driver = "libvirt"`), so a daemon it cannot reach —
-                    // or one too old to serve the operations it will be asked
-                    // for — makes it ineligible for them. Gated only where the
-                    // driver is actually in use: a node on the process driver
-                    // needs no libvirt at all, and demoting it over an
-                    // informational check would take a healthy host out of
-                    // service.
+                } else if hypervisor.type == .qemu, !libvirtReady {
+                    // A QEMU placement *is* a libvirt domain (STR-136), so a
+                    // daemon this node cannot reach — or one too old to serve
+                    // the operations it will be asked for — makes it ineligible.
+                    // This is the whole of the QEMU availability check now:
+                    // `HypervisorProbe` has no binary left to look for.
                     reason = "libvirt not usable: \(libvirtFailureDetail ?? "unknown libvirt failure")"
                 } else if hypervisor.type == .firecracker, let check = check(.firecrackerSocketDirectory),
                     !check.passed
@@ -312,15 +287,20 @@ public enum HostPreflight {
 
         checks.append(checkQemuImg(inputs.qemuImgPath))
         checks.append(checkFirmware(inputs.firmwarePath))
-        checks.append(checkSwtpm(inputs.swtpmBinaryPath))
+
+        // libvirt before the vTPM check, and not only for reading order: a host
+        // whose daemon is unusable was never asked about a vTPM, and saying so
+        // depends on knowing that the check above already failed. Every
+        // remaining check is independent of both.
+        var libvirtUsable = false
+        if let libvirt = inputs.libvirt {
+            let libvirtChecks = checkLibvirt(libvirt, minimumVersion: inputs.minimumLibvirtVersion)
+            libvirtUsable = libvirtChecks.allSatisfy(\.passed)
+            checks.append(contentsOf: libvirtChecks)
+        }
+        checks.append(checkTPMSupport(inputs.tpmSupport, libvirtUsable: libvirtUsable))
         if let descriptorPath = inputs.qemuFirmwareDescriptorPath {
             checks.append(checkFirmwareDescriptors(descriptorPath))
-        }
-        if let libvirt = inputs.libvirt {
-            checks.append(
-                contentsOf: checkLibvirt(
-                    libvirt, minimumVersion: inputs.minimumLibvirtVersion,
-                    severity: inputs.libvirtRequired ? .gating : .informational))
         }
 
         if inputs.ovnMode {
@@ -377,7 +357,7 @@ public enum HostPreflight {
 
         checks.append(checkFreeSpace(inputs.vmStoragePath, minimum: inputs.minimumFreeDiskBytes))
 
-        return Report(checks: checks, libvirtRequired: inputs.libvirtRequired)
+        return Report(checks: checks)
     }
 
     // MARK: - Individual checks
@@ -439,19 +419,51 @@ public enum HostPreflight {
         return .pass(.uefiFirmware, severity: .advisory)
     }
 
-    /// swtpm backs guest vTPMs (issue #565). Advisory, not gating: a host
-    /// without it runs every VM that doesn't ask for a TPM exactly as before,
-    /// and the scheduler keeps vTPM VMs away via the reported capability.
-    static func checkSwtpm(_ path: String?) -> Check {
-        guard let path, FileManager.default.isExecutableFile(atPath: path) else {
+    /// Whether libvirt can back a guest vTPM (issue #565). Advisory, not
+    /// gating: a host without one runs every VM that doesn't ask for a TPM
+    /// exactly as before, and the scheduler keeps vTPM VMs away via the
+    /// reported capability.
+    ///
+    /// The question goes to libvirt rather than to the filesystem (STR-136).
+    /// libvirt starts and supervises swtpm per domain, so an `swtpm` binary the
+    /// agent can see says nothing about whether *libvirtd* can use it — a
+    /// containerized agent sees its own image, not the host's.
+    static func checkTPMSupport(_ support: LibvirtProbe.TPMSupport, libvirtUsable: Bool) -> Check {
+        // `libvirtUsable` suppresses the remedy rather than the check. On a host
+        // with no usable libvirt the vTPM answer is unknown *because* of the
+        // gating failure right above it, and telling that operator to install
+        // swtpm would send them after the wrong thing — the second message they
+        // read would contradict the first.
+        guard libvirtUsable else {
             return .fail(
-                .swtpmBinary, severity: .advisory,
-                "swtpm not found\(path.map { " at \($0)" } ?? "") — this host cannot run VMs with a TPM 2.0 "
-                    + "(Windows 11 and Server 2025 require one). Install it "
-                    + "(Debian/Ubuntu: `apt install swtpm swtpm-tools`) or set swtpm_binary_path "
-                    + "in the agent configuration.")
+                .vtpmSupport, severity: .advisory,
+                "not checked: libvirt is not usable on this host (see the libvirt check), so it could not "
+                    + "be asked whether it can back a guest TPM 2.0. Fix libvirt first; this answers itself.")
         }
-        return .pass(.swtpmBinary, severity: .advisory)
+
+        // Shared, because the remedy is the same either way and only the lede
+        // differs. The restart matters: libvirtd caches its capabilities, so
+        // installing swtpm under a running daemon changes nothing until it is
+        // restarted — which is the failure mode where an operator installs the
+        // package and the host still refuses to advertise a TPM.
+        let remedy =
+            " — this host cannot run VMs with a TPM 2.0 (Windows 11 and Server 2025 require one). "
+            + "Install swtpm (Debian/Ubuntu: `apt install swtpm swtpm-tools`) and restart libvirtd "
+            + "(`systemctl restart virtqemud.socket virtqemud`, or libvirtd on a monolithic install), "
+            + "which caches its capabilities."
+
+        switch support {
+        case .supported:
+            return .pass(.vtpmSupport, severity: .advisory)
+        case .unsupported:
+            return .fail(
+                .vtpmSupport, severity: .advisory,
+                "libvirt reports no emulated TPM backend at \(LibvirtProbe.systemURI)" + remedy)
+        case .unknown(let detail):
+            return .fail(
+                .vtpmSupport, severity: .advisory,
+                "could not ask libvirt whether it can back a vTPM: \(detail)" + remedy)
+        }
     }
 
     /// QEMU's firmware descriptors are what libvirt reads to autoselect a
@@ -475,33 +487,22 @@ public enum HostPreflight {
 
     /// libvirtd reachability and its version floor.
     ///
-    /// `severity` follows the node's `qemu_driver`: gating where the agent
-    /// really manages VMs through libvirt — a host that cannot reach
-    /// `qemu:///system`, or runs a libvirt too old to snapshot UEFI guests,
-    /// cannot then serve the VM operations it is asked for — and merely
-    /// informational on a node still driving QEMU directly, which runs fine
-    /// without libvirt and must not be told it is broken.
-    ///
-    /// The wording follows the same split: where the dependency is unused, each
-    /// message says so rather than reading as a live fault.
+    /// Always gating (STR-136): a QEMU placement *is* a libvirt domain, so a
+    /// host that cannot reach `qemu:///system`, or runs a libvirt too old to
+    /// snapshot UEFI guests, cannot serve the VM operations it would be asked
+    /// for. These checks only run at all where `Inputs.libvirt` is non-nil,
+    /// which is Linux.
     static func checkLibvirt(
-        _ status: LibvirtProbe.Status, minimumVersion: LibvirtProbe.Version, severity: Severity
+        _ status: LibvirtProbe.Status, minimumVersion: LibvirtProbe.Version
     ) -> [Check] {
-        // Prefix, not a whole second set of strings: the remediation is
-        // identical either way, only its urgency changes.
-        let lede =
-            severity == .gating
-            ? ""
-            : "libvirt is required by `qemu_driver = \"libvirt\"` (issue #902), which this node does not use, "
-                + "and is not usable here: "
+        let severity = Severity.gating
 
         switch status {
         case .clientMissing:
             return [
                 .fail(
                     .libvirtConnection, severity: severity,
-                    lede
-                        + "libvirt is not installed on this host (no `virsh` on PATH) — the agent manages VMs "
+                    "libvirt is not installed on this host (no `virsh` on PATH) — the agent manages VMs "
                         + "through libvirtd. Install it (Debian/Ubuntu: "
                         + "`apt install libvirt-daemon-system libvirt-clients`) and start "
                         + "virtqemud.socket (or libvirtd.socket on a monolithic install); re-running "
@@ -511,7 +512,7 @@ public enum HostPreflight {
             return [
                 .fail(
                     .libvirtConnection, severity: severity,
-                    lede + "cannot connect to \(LibvirtProbe.systemURI): \(detail). Start the daemon "
+                    "cannot connect to \(LibvirtProbe.systemURI): \(detail). Start the daemon "
                         + "(`systemctl start virtqemud.socket`, or libvirtd.socket on a monolithic "
                         + "install); if it is running, the agent's account needs access to its socket — "
                         + "run the agent as root, or add its user to the `libvirt` group.")
@@ -523,7 +524,7 @@ public enum HostPreflight {
             return [
                 .fail(
                     .libvirtConnection, severity: severity,
-                    lede + "connected to \(LibvirtProbe.systemURI), but could not read the daemon version "
+                    "connected to \(LibvirtProbe.systemURI), but could not read the daemon version "
                         + "from `virsh version --daemon` — it printed \"\(detail)\". The version floor "
                         + "cannot be checked without it: confirm `virsh -c \(LibvirtProbe.systemURI) "
                         + "version --daemon` prints a `Running against daemon:` line, and that virsh and "
@@ -536,8 +537,7 @@ public enum HostPreflight {
                     connection,
                     .fail(
                         .libvirtVersion, severity: severity,
-                        lede
-                            + "libvirt \(version) is older than the required \(minimumVersion) — VM checkpoints "
+                        "libvirt \(version) is older than the required \(minimumVersion) — VM checkpoints "
                             + "need internal snapshots of UEFI guests, which libvirt supports only from "
                             + "10.9 and reliably only from 11.5. Ubuntu 24.04 ships 10.0.0 and is not a "
                             + "supported hypervisor host; use Ubuntu 26.04 (libvirt 12.0.0) or another "

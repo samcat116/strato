@@ -58,7 +58,7 @@ public struct VMCheckpointReport: Sendable {
 }
 
 /// Protocol defining the interface for hypervisor services
-/// Both QEMUService and FirecrackerService conform to this protocol
+/// Both LibvirtService and FirecrackerService conform to this protocol
 public protocol HypervisorService: Actor, Sendable {
     /// The type of hypervisor
     var hypervisorType: HypervisorType { get }
@@ -265,9 +265,8 @@ public protocol HypervisorService: Actor, Sendable {
     ///
     /// A backend requirement rather than a concrete driver's method because the
     /// guest-agent channel is a property of the *guest*, not of who launched
-    /// it: QEMU-under-libvirt exposes the same `org.qemu.guest_agent.0` channel
-    /// QEMU-under-the-agent does. Reading it through an `as? QEMUService`
-    /// downcast made the whole observation invisible to any other backend.
+    /// it. Reading it through a downcast to one concrete driver made the whole
+    /// observation invisible to every other backend.
     ///
     /// Nil is the normal "no usable channel" answer — a VM this backend does
     /// not manage, one with no agent socket, or a guest that did not respond

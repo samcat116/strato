@@ -9,17 +9,26 @@ import Glibc
 
 /// Probes the host for actually-usable hypervisors, instead of assuming them
 /// from the platform. Availability means "a VM could be created right now":
-/// the hypervisor binary exists and is executable, and (for Firecracker) the
-/// hardware virtualization it depends on is accessible.
+/// for QEMU, libvirtd is reachable at `qemu:///system`; for Firecracker, its
+/// binary is executable and the hardware virtualization it depends on is
+/// accessible.
 ///
 /// The probe results are reported to the control plane at registration so the
 /// scheduler can filter placement by what each host can really run.
 public enum HypervisorProbe {
 
     /// Probe every hypervisor this agent could manage on the current host.
-    public static func probeAll(qemuBinaryPath: String, firecrackerBinaryPath: String) -> [HypervisorSupport] {
+    ///
+    /// `libvirt` is what `LibvirtProbe.probe()` found, or nil on a platform
+    /// where libvirt cannot exist. It is a parameter rather than something this
+    /// probe goes and looks up because the caller has already paid for it: the
+    /// host preflight needs the same answer, and asking twice would mean two
+    /// `virsh` invocations per registration.
+    public static func probeAll(
+        libvirt: LibvirtProbe.Status?, firecrackerBinaryPath: String
+    ) -> [HypervisorSupport] {
         let acceleration = probeAcceleration()
-        var reports = [qemuReport(binaryPath: qemuBinaryPath, acceleration: acceleration)]
+        var reports = [qemuReport(libvirt: libvirt, acceleration: acceleration)]
 
         #if os(Linux)
         reports.append(firecrackerReport(binaryPath: firecrackerBinaryPath, acceleration: acceleration))
@@ -73,18 +82,57 @@ public enum HypervisorProbe {
         #endif
     }
 
-    /// QEMU is available when its binary is executable; without KVM/HVF it can
-    /// still run VMs under TCG emulation, so acceleration only affects the
-    /// `accelerated` flag, not availability.
-    public static func qemuReport(binaryPath: String, acceleration: AccelerationProbe) -> HypervisorSupport {
-        let binaryUsable = FileManager.default.isExecutableFile(atPath: binaryPath)
+    /// QEMU availability is a **libvirt** fact, not a binary one (STR-136): the
+    /// agent no longer spawns `qemu-system-*` itself, and libvirtd picks the
+    /// emulator from its own capabilities, so there is no path here to check.
+    /// A daemon the host cannot reach is a host that cannot run a VM, so that is
+    /// what this reports on.
+    ///
+    /// The **version floor** is deliberately not applied here — it belongs to
+    /// `HostPreflight`, which owns the check and the remediation that goes with
+    /// it, and duplicating the comparison would give two places to get it wrong.
+    /// `HostPreflight.gate` demotes this entry for a too-old daemon (and for
+    /// unusable storage). This function answers the cruder question so that a
+    /// caller which never reaches the gate cannot come away believing a host
+    /// with no libvirt can run VMs.
+    ///
+    /// Off Linux there is no libvirt at all and the registered backend is a
+    /// mock, so it reports unavailable rather than letting real placements land
+    /// on it. Without KVM a host can still run VMs under TCG emulation, so
+    /// acceleration only affects the `accelerated` flag.
+    public static func qemuReport(
+        libvirt: LibvirtProbe.Status?, acceleration: AccelerationProbe
+    ) -> HypervisorSupport {
+        #if os(Linux)
+        guard let libvirt else {
+            return HypervisorSupport(
+                type: .qemu, available: false, accelerated: false,
+                unavailabilityReason: "libvirt was not probed, so QEMU cannot be reported as usable",
+                capabilities: .qemu)
+        }
+        guard case .reachable = libvirt else {
+            return HypervisorSupport(
+                type: .qemu, available: false, accelerated: false,
+                unavailabilityReason:
+                    "libvirtd is not usable at \(LibvirtProbe.systemURI): \(libvirt.summary)",
+                capabilities: .qemu)
+        }
         return HypervisorSupport(
             type: .qemu,
-            available: binaryUsable,
-            accelerated: binaryUsable && acceleration.available,
-            unavailabilityReason: binaryUsable ? nil : "QEMU binary not found or not executable at \(binaryPath)",
+            available: true,
+            accelerated: acceleration.available,
+            unavailabilityReason: nil,
             capabilities: .qemu
         )
+        #else
+        return HypervisorSupport(
+            type: .qemu,
+            available: false,
+            accelerated: false,
+            unavailabilityReason: "QEMU is driven through libvirtd, which is only supported on Linux",
+            capabilities: .qemu
+        )
+        #endif
     }
 
     /// Firecracker has no emulation fallback: it needs both its binary and KVM.

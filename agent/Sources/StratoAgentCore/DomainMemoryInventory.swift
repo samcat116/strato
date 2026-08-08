@@ -17,7 +17,7 @@ import FoundationXML
 ///   different one;
 /// - whether there is a memory device at all.
 ///
-/// `QEMUService` keeps the equivalent in `vmSpawnSizing`, a dictionary keyed by
+/// The process driver kept the equivalent in `vmSpawnSizing`, a dictionary keyed by
 /// VM id that is lost whenever the agent restarts. Here the domain document is
 /// the record, so this is a query — which is also why a VM defined by an older
 /// spec resizes correctly against the headroom it really has instead of the
