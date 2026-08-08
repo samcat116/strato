@@ -884,6 +884,14 @@ public actor Reconciler {
         var generation: Int64
         var attempts: Int
         var lastError: String
+        /// How many times a `blocked` item has now re-reported the same reason.
+        ///
+        /// Blocked items burn no attempt, so `attempts` cannot say how long one
+        /// has been stuck — it reads 0 forever. This is what a periodic re-log
+        /// counts, so an operator who starts tailing after the first refusal
+        /// still learns, at error level, that a volume has been waiting hours
+        /// on a guest nobody stopped.
+        var blockedRepeats: Int = 0
     }
 
     private let actuator: any ReconcileActuator
@@ -1570,22 +1578,30 @@ public actor Reconciler {
             }
             let reason = error.localizedDescription
             // A blocked item is re-driven on every sync for as long as the
-            // block holds, so only the *transition* is worth an error line;
-            // repeating one every sync forever would bury the failures that
-            // are actually new. Everything else logs each attempt, as before —
-            // their attempts are capped, so there are at most three.
+            // block holds, so an error line per sync would bury the failures
+            // that are actually new. It logs on the transition and then every
+            // `blockedRelogInterval` repeats after that — often enough that an
+            // operator who starts tailing mid-block still sees it at error
+            // level, rarely enough to stay readable. Everything else logs each
+            // attempt, as before: their attempts are capped at three.
             let repeating = classification == .blocked && failure.lastError == reason
+            failure.blockedRepeats = repeating ? failure.blockedRepeats + 1 : 0
             failure.lastError = reason
             failures[ref] = failure
-            let metadata: Logger.Metadata = [
+            var metadata: Logger.Metadata = [
                 "kind": .string(item.kind.rawValue),
                 "workloadId": .string(item.id),
                 "generation": .stringConvertible(item.generation),
                 "attempt": .stringConvertible(failure.attempts),
                 "error": .string(reason),
             ]
+            if classification == .blocked {
+                // `attempt` reads 0 for these by design; this is the field that
+                // says how long the block has held.
+                metadata["blockedRepeats"] = .stringConvertible(failure.blockedRepeats)
+            }
             let message = Self.failureLogMessage(classification)
-            if repeating {
+            if repeating, failure.blockedRepeats % Self.blockedRelogInterval != 0 {
                 logger.debug(message, metadata: metadata)
             } else {
                 logger.error(message, metadata: metadata)
@@ -1602,6 +1618,12 @@ public actor Reconciler {
         }
         await actuator.convergenceDidChange()
     }
+
+    /// How many repeats of an unchanged `blocked` reason pass between error
+    /// lines. Roughly a quarter-hour at the periodic sync floor, sooner on a
+    /// doorbell-driven agent — the point is that a stuck volume keeps saying so
+    /// rather than falling silent after its first refusal.
+    static let blockedRelogInterval = 20
 
     /// What a failed convergence says in the log, by classification.
     private static func failureLogMessage(_ classification: FailureClassification) -> Logger.Message {
@@ -2161,11 +2183,15 @@ public actor Reconciler {
     /// (STR-148). Empty when it already matches.
     ///
     /// At most one step is ever planned, and the order below is the reason:
-    /// a grow must land before the attachment moves (the resize path wants the
-    /// volume detached), and an attachment that is merely *wrong* has to be
+    /// a grow must land before the attachment *moves* (the resize path wants
+    /// the volume detached), and an attachment that is merely *wrong* has to be
     /// unplugged before it can be re-plugged elsewhere. The next
     /// level-triggered sync plans the following step, which is exactly how the
     /// VM planner sequences a boot behind a create.
+    ///
+    /// A desired *removal* of the attachment is the one inversion, and it
+    /// inverts because the detach is what makes the grow possible (STR-199) —
+    /// see the clause below.
     ///
     /// A shrink and a format change are deliberately *not* steps. Neither is
     /// something the agent can converge — one destroys data, the other is a
@@ -2173,6 +2199,18 @@ public actor Reconciler {
     /// permanent failures from the actuator rather than as work that silently
     /// never completes.
     public static func volumeSteps(desired: DesiredVolumeState, observed: ObservedVolumeFacts) -> [ReconcileStep] {
+        // Unplug before growing when the attachment is being *removed*, not
+        // moved. The agent refuses to grow an image a guest may still hold
+        // open and names two remedies — stop the guest, or detach — and with
+        // the grow planned first only the *first* of them could ever run: the
+        // refused resize was the only step planned, so the detach that would
+        // lift the refusal was never reached and the volume retried a doomed
+        // grow on every sync. Growing first still holds for an attachment that
+        // is merely moving, where the resize is the thing that has to land
+        // before the slot changes underneath it.
+        if desired.attachment == nil, observed.attachedVMId != nil {
+            return [.detach]
+        }
         if let size = observed.sizeBytes, desired.sizeBytes > size {
             return [.resize]
         }
@@ -2183,12 +2221,14 @@ public actor Reconciler {
         // *permanent* failure, degrading a volume whose only problem was a
         // leftover field.
         guard let attachment = desired.attachment else {
-            return observed.attachedVMId == nil ? [] : [.detach]
+            // Detached and desired detached — the clause above already handled
+            // the case where it is still plugged in.
+            return unconfirmedSizeSteps(observed)
         }
         if observed.attachedVMId == attachment.vmId.uuidString,
             observed.deviceName == attachment.deviceName.rawValue
         {
-            return []
+            return unconfirmedSizeSteps(observed)
         }
         // Attached to the wrong VM or in the wrong slot: unplug first, and let
         // the next sync plan the attach against the observation that follows.
@@ -2196,6 +2236,26 @@ public actor Reconciler {
             return [.detach]
         }
         return [.attach]
+    }
+
+    /// What to do about a volume whose size the agent could not read, once
+    /// every other difference is settled.
+    ///
+    /// A nil `sizeBytes` used to plan nothing at all. That was right about never
+    /// growing on a guess and wrong about what planning nothing *means*: the
+    /// item is still emitted whenever the generation is newer, and an item that
+    /// runs no steps records its generation as applied. So a resize whose
+    /// current size was never successfully read reported as converged — the
+    /// exact "a grow that never happened reads as one that did" failure STR-199
+    /// exists to remove, surviving on the probe-failure path.
+    ///
+    /// Planning `.resize` hands the question to the actuator, which refuses it
+    /// as `blocked` naming the unreadable image rather than growing anything,
+    /// so the generation stays unapplied and every sync retries until the probe
+    /// works. It sits *last* on purpose: an unreadable size must not starve the
+    /// attach and detach work above it, which needs no size at all.
+    private static func unconfirmedSizeSteps(_ observed: ObservedVolumeFacts) -> [ReconcileStep] {
+        observed.sizeBytes == nil ? [.resize] : []
     }
 
     public static func sandboxStatusSteps(desired: DesiredSandboxStatus, observed: SandboxStatus) -> [ReconcileStep] {

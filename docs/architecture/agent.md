@@ -677,11 +677,23 @@ exists before a VM referencing it is built; then VM items; then volume
 own lane rather than racing it into a dependency wait; then sandboxes.
 
 The convergence steps for a volume are planned one at a time, on purpose: a
-grow lands before an attachment moves, and an attachment that is merely *wrong*
-is unplugged before it is re-plugged elsewhere. Two things are deliberately not
-steps at all — a shrink and a format change — because neither is something the
-agent can converge, so they surface as permanent failures rather than as work
-that silently never completes.
+grow lands before an attachment *moves*, and an attachment that is merely
+*wrong* is unplugged before it is re-plugged elsewhere. A desired **removal** of
+the attachment is the one inversion and outranks a pending grow, because the
+detach is what makes the grow possible: the agent refuses to grow an image a
+guest may still hold open and names two remedies, and with the resize planned
+first only "stop the guest" could ever run — the refused resize was the only
+step planned, so the detach that would lift it was never reached (STR-199). Two
+things are deliberately not steps at all — a shrink and a format change —
+because neither is something the agent can converge, so they surface as
+permanent failures rather than as work that silently never completes.
+
+A size the agent could not read plans a `.resize` too, last, after every other
+difference is settled. It never grows anything — the actuator refuses it as
+`blocked` naming the unreadable image — but planning *nothing* was worse than
+it looked: the item is still emitted whenever the generation is newer, and an
+item that runs no steps records its generation as applied, so a resize whose
+current size was never successfully probed reported as converged.
 
 After every item the agent sends a full `ObservedStateReport` — live status
 plus `observedGeneration`, `convergencePhase`, and error/failed-generation

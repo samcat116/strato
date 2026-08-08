@@ -307,6 +307,15 @@ The two are still distinct classifications, because most permanent failures
 name no remedy that a retry would notice. A shrink is permanent: no state of
 the host makes truncating a filesystem safe.
 
+Both halves of the remedy have to be reachable for any of this to be true, and
+the *detach* half was not. `volumeSteps` planned the grow before it looked at
+the attachment, so a volume detached while a grow was outstanding got `.resize`
+— refused — as its only step, forever, and the detach that would have lifted
+the refusal was never planned. A desired **removal** of an attachment now
+outranks a pending grow; an attachment that is merely *moving* keeps the
+original order, since there the resize really does have to land before the slot
+changes underneath it.
+
 The refusal is a check rather than a hope, and that distinction is the point.
 Left to itself, `qemu-img resize` on an open image is turned back by the image
 lock — but `locking=auto` gives up *quietly* wherever OFD locks do not work,

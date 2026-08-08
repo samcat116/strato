@@ -9,21 +9,26 @@ import type { Volume } from "@/types/api";
  * refused until the guest stops. Rendering `size` alone is how a grow that
  * never happened reads as one that did, so an outstanding grow shows as
  * `1 GiB → 3 GiB` instead.
+ *
+ * Only a *grow* gets the arrow. A volume larger than its requested size is the
+ * ordinary result of a clone or image-backed create inheriting its source's
+ * size, and a shrink is refused permanently at both ends — neither is a pending
+ * change, so neither should be drawn as one about to land.
  */
 export function VolumeSize({ volume }: { volume: Volume }) {
-  const outstanding =
-    volume.observedSize !== undefined &&
-    volume.observedSizeFormatted !== undefined &&
-    volume.observedSize !== volume.size;
-
-  if (!outstanding) {
+  const observed = volume.observedSizeFormatted;
+  if (observed == null || volume.observedSize == null) {
     return <>{volume.sizeFormatted}</>;
   }
 
-  return (
-    <span title={`Resize to ${volume.sizeFormatted} has not been applied yet`}>
-      {volume.observedSizeFormatted}
-      <span className="text-muted-foreground"> → {volume.sizeFormatted}</span>
-    </span>
-  );
+  if (volume.observedSize < volume.size) {
+    return (
+      <span title={`Resize to ${volume.sizeFormatted} has not been applied yet`}>
+        {observed}
+        <span className="text-muted-foreground"> → {volume.sizeFormatted}</span>
+      </span>
+    );
+  }
+
+  return <>{observed}</>;
 }

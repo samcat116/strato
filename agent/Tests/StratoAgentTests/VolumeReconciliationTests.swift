@@ -173,16 +173,90 @@ struct VolumeReconciliationTests {
         #expect(plan.items.first?.steps == [.resize])
     }
 
-    /// A size the agent could not probe plans nothing, rather than a resize on
-    /// a guess: leaving an unreadable volume alone beats growing it repeatedly.
-    @Test("An unprobeable size plans no resize")
-    func unknownSizePlansNoResize() {
+    /// A size the agent could not probe never grows anything on a guess — but
+    /// it must not pass *silently* either. Planning nothing let the item run
+    /// with no steps, and an empty run records its generation as applied, so a
+    /// resize whose current size was never read reported as converged
+    /// (STR-199). It plans `.resize`, which the actuator refuses as blocked.
+    @Test("An unprobeable size plans a resize the actuator will refuse")
+    func unknownSizePlansARefusableResize() {
         let id = UUID()
         let plan = Reconciler.planVolumes(
-            desired: [Self.desired(id, sizeBytes: 20 << 30)],
+            desired: [Self.desired(id, generation: 2, sizeBytes: 20 << 30)],
             present: [id.uuidString: .managed(Self.facts(sizeBytes: nil))],
             lastApplied: [id.uuidString: 1])
-        #expect(plan.items.isEmpty)
+        #expect(plan.items.first?.steps == [.resize])
+    }
+
+    /// The same rule with nothing outstanding: an unreadable size is unreadable
+    /// whether or not anyone asked for a new one, because "it already matches"
+    /// is exactly the claim the agent cannot make.
+    @Test("An unprobeable size is not reported as a matching size")
+    func unknownSizeIsNotTreatedAsMatching() {
+        let id = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id, generation: 2)],
+            present: [id.uuidString: .managed(Self.facts(sizeBytes: nil))],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.resize])
+    }
+
+    /// An unreadable size must not starve the attachment work above it, which
+    /// needs no size at all.
+    @Test("An unprobeable size still lets an attach be planned")
+    func unknownSizeDoesNotStarveAttach() {
+        let id = UUID()
+        let vmId = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [
+                Self.desired(
+                    id, attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: .disk(1)))
+            ],
+            present: [id.uuidString: .managed(Self.facts(sizeBytes: nil))],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.attach])
+    }
+
+    /// The other half of STR-199's remedy. The grow guard tells an operator to
+    /// stop the guest *or detach*, and with `.resize` planned ahead of a desired
+    /// removal only the first of those could ever run: the refused resize was
+    /// the only step planned, so the detach that would lift the refusal was
+    /// never reached. A removal outranks a pending grow for that reason.
+    @Test("A desired detach is planned ahead of a pending grow")
+    func desiredDetachOutranksAPendingGrow() {
+        let id = UUID()
+        let vmId = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [Self.desired(id, generation: 2, sizeBytes: 20 << 30, attachment: nil)],
+            present: [
+                id.uuidString: .managed(
+                    Self.facts(
+                        sizeBytes: 10 << 30, attachedVMId: vmId.uuidString, deviceName: "disk1"))
+            ],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.detach])
+    }
+
+    /// An attachment that is *moving* keeps the original order: the grow lands
+    /// before the slot changes underneath it.
+    @Test("A grow still precedes an attachment that is only moving")
+    func growStillPrecedesAMovingAttachment() {
+        let id = UUID()
+        let wanted = UUID()
+        let actual = UUID()
+        let plan = Reconciler.planVolumes(
+            desired: [
+                Self.desired(
+                    id, generation: 2, sizeBytes: 20 << 30,
+                    attachment: DesiredVolumeAttachment(vmId: wanted, deviceName: .disk(1)))
+            ],
+            present: [
+                id.uuidString: .managed(
+                    Self.facts(
+                        sizeBytes: 10 << 30, attachedVMId: actual.uuidString, deviceName: "disk1"))
+            ],
+            lastApplied: [id.uuidString: 1])
+        #expect(plan.items.first?.steps == [.resize])
     }
 
     @Test("A volume whose desired attachment is unrealized is attached")
