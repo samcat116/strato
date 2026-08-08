@@ -132,6 +132,41 @@ struct LibvirtDomainTests {
         #expect(flags & 64 == 0, "VIR_DOMAIN_UNDEFINE_KEEP_TPM must not be set")
     }
 
+    // MARK: - Lifecycle events
+
+    @Test("Every virDomainEventType has a label")
+    func labelsEveryLifecycleEvent() {
+        let expected: [LibvirtDomain.LifecycleEvent: String] = [
+            .defined: "defined",
+            .undefined: "undefined",
+            .started: "started",
+            .suspended: "suspended",
+            .resumed: "resumed",
+            .stopped: "stopped",
+            .shutdown: "shutdown",
+            .pmSuspended: "pm-suspended",
+            .crashed: "crashed",
+        ]
+        for event in LibvirtDomain.LifecycleEvent.allCases {
+            #expect(event.label == expected[event], "event \(event)")
+        }
+        #expect(LibvirtDomain.LifecycleEvent.allCases.count == expected.count)
+        // The raw values are libvirt's, not ours: a transposition here would
+        // mislabel every log line about a guest that powered itself off.
+        #expect(LibvirtDomain.lifecycleEventLabel(forRawEvent: 5) == "stopped")
+        #expect(LibvirtDomain.lifecycleEventLabel(forRawEvent: 2) == "started")
+    }
+
+    /// The deliberate opposite of `unknownStateIsNotGuessed`. A *state* this
+    /// build cannot read must become `.unknown` so nothing acts on a guess; an
+    /// *event* it cannot read must still be delivered, because the only thing
+    /// an event does is schedule a re-reading of the truth.
+    @Test("An unrecognised event is named, never swallowed")
+    func unknownLifecycleEventIsStillDelivered() {
+        #expect(LibvirtDomain.lifecycleEventLabel(forRawEvent: 42) == "event-42")
+        #expect(LibvirtDomain.lifecycleEventLabel(forRawEvent: -1) == "event--1")
+    }
+
     // MARK: - Domain naming
 
     @Test("Only UUID-named domains are read as this agent's")

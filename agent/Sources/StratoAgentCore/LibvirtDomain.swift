@@ -130,6 +130,57 @@ public enum LibvirtDomain {
         State(rawValue: raw)?.isRunningOrPaused ?? false
     }
 
+    // MARK: - Lifecycle events
+
+    /// `virDomainEventType`, as delivered by `VIR_DOMAIN_EVENT_ID_LIFECYCLE`
+    /// (STR-135).
+    ///
+    /// Present only so an event can be *named* in a log line. Deliberately no
+    /// mapping to `VMStatus` and deliberately no "does this one matter" filter:
+    /// an event means "re-read the truth", nothing more. Deriving a status from
+    /// one would put a second, racing source of truth next to the observed-state
+    /// report that follows it, and filtering one out would be a bet that this
+    /// build knows which transitions can change what the report says.
+    public enum LifecycleEvent: Int32, Sendable, CaseIterable {
+        case defined = 0
+        case undefined = 1
+        case started = 2
+        case suspended = 3
+        case resumed = 4
+        case stopped = 5
+        case shutdown = 6
+        case pmSuspended = 7
+        case crashed = 8
+
+        public var label: String {
+            switch self {
+            case .defined: return "defined"
+            case .undefined: return "undefined"
+            case .started: return "started"
+            case .suspended: return "suspended"
+            case .resumed: return "resumed"
+            case .stopped: return "stopped"
+            case .shutdown: return "shutdown"
+            case .pmSuspended: return "pm-suspended"
+            case .crashed: return "crashed"
+            }
+        }
+    }
+
+    /// A label for a raw `virDomainEventType`, naming an event this build has
+    /// never heard of rather than discarding it.
+    ///
+    /// The mirror image of `vmStatus(forRawState:)`, and the asymmetry is
+    /// deliberate rather than an inconsistency. An unrecognised *state* must
+    /// become `.unknown`, because acting on a guessed status is how a newer
+    /// libvirt would drive the reconciler by a fiction. An unrecognised *event*
+    /// must still be delivered, because the only thing an event does is
+    /// schedule a re-reading — so the sole way to be wrong here is to swallow
+    /// one. Hence a `String` that is never nil.
+    public static func lifecycleEventLabel(forRawEvent raw: Int32) -> String {
+        LifecycleEvent(rawValue: raw)?.label ?? "event-\(raw)"
+    }
+
     // MARK: - Flags
 
     /// `virDomainCreateFlags.VIR_DOMAIN_NONE` — start the domain and run it.
