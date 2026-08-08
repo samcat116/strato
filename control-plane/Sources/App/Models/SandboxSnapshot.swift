@@ -383,8 +383,8 @@ extension SandboxSnapshot: SnapshotArtifactResource {
 
 // MARK: - Request/Response DTOs
 
-struct CreateSandboxSnapshotRequest: Content {
-    let name: String?
+struct CreateSandboxSnapshotRequest: Content, ValidatedRequestBody {
+    var name: String?
     /// `true` checkpoints-and-stops: the sandbox converges to `stopped` after
     /// the snapshot instead of resuming. Defaults to `false` (resume).
     let stop: Bool?
@@ -392,6 +392,10 @@ struct CreateSandboxSnapshotRequest: Content {
     /// default (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it
     /// until someone deletes it, overriding that default.
     let ttlSeconds: Int?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+    }
 }
 
 struct SandboxSnapshotResponse: Content {

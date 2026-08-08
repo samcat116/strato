@@ -251,8 +251,8 @@ extension Image {
 
 // MARK: - Request/Response DTOs
 
-struct CreateImageRequest: Content {
-    let name: String
+struct CreateImageRequest: Content, ValidatedRequestBody {
+    var name: String
     let description: String?
     let sourceURL: String?
     let architecture: CPUArchitecture?
@@ -286,10 +286,19 @@ struct CreateImageRequest: Content {
         self.defaultDisk = defaultDisk
         self.defaultCmdline = defaultCmdline
     }
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+        // The same ceiling `VMController` holds a request's own `cmdline` to.
+        // An image's default is nobody's to fix at VM-create time, which is
+        // exactly why it has to be bounded where it is authored.
+        try Validate.text(defaultCmdline, "defaultCmdline")
+    }
 }
 
-struct UpdateImageRequest: Content {
-    let name: String?
+struct UpdateImageRequest: Content, ValidatedRequestBody {
+    var name: String?
     let description: String?
     let architecture: CPUArchitecture?
     let defaultCpu: Int?
@@ -313,6 +322,12 @@ struct UpdateImageRequest: Content {
         self.defaultMemory = defaultMemory
         self.defaultDisk = defaultDisk
         self.defaultCmdline = defaultCmdline
+    }
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+        try Validate.text(defaultCmdline, "defaultCmdline")
     }
 }
 

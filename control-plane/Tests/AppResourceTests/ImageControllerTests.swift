@@ -1856,4 +1856,97 @@ final class ImageControllerTests {
             #expect(stored == "second kernel")
         }
     }
+
+    // MARK: - Input bounds on the multipart upload path (STR-195)
+
+    /// The multipart form reaches the same `POST /api/projects/:id/images` as
+    /// the JSON body, so it has to be held to the same ceilings — and it is the
+    /// harder half, because by the time the fields are readable the temporary
+    /// image row exists and the bytes are already in the object store. A
+    /// rejection has to take both back out (`failUpload`), or a 400 leaves an
+    /// orphaned row pointing at bytes nobody will finish describing.
+    @Test("An oversized name on the multipart upload path is refused and leaves nothing behind")
+    func testMultipartUploadRejectsOversizedNameAndCleansUp() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: String(repeating: "n", count: Validate.nameLength + 1),
+                description: nil,
+                filename: "oversized.qcow2",
+                fileContent: Self.createQCOW2Buffer())
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            // The temporary row is gone...
+            let remaining = try await Image.query(on: app.db).count()
+            #expect(remaining == 0)
+
+            // ...and so are the bytes it was pointing at. Empty directories may
+            // remain — `delete(key:)` removes the object, not its parents — so
+            // the assertion is about files, not entries.
+            let projectDirectory = "\(tempStoragePath)/\(project.id!)"
+            let subpaths =
+                (try? FileManager.default.subpathsOfDirectory(atPath: projectDirectory)) ?? []
+            let files = subpaths.filter { subpath in
+                var isDirectory: ObjCBool = false
+                let exists = FileManager.default.fileExists(
+                    atPath: "\(projectDirectory)/\(subpath)", isDirectory: &isDirectory)
+                return exists && !isDirectory.boolValue
+            }
+            #expect(files.isEmpty)
+        }
+    }
+
+    @Test("An oversized description on the multipart upload path is refused the same way")
+    func testMultipartUploadRejectsOversizedDescription() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "fine-name",
+                description: String(repeating: "d", count: Validate.textLength + 1),
+                filename: "oversized-description.qcow2",
+                fileContent: Self.createQCOW2Buffer())
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let remaining = try await Image.query(on: app.db).count()
+            #expect(remaining == 0)
+        }
+    }
+
+    @Test("A name at the ceiling still uploads")
+    func testMultipartUploadAcceptsNameAtCeiling() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            let atLimit = String(repeating: "n", count: Validate.nameLength)
+            let (body, boundary) = Self.createMultipartFormData(
+                name: atLimit,
+                description: nil,
+                filename: "at-limit.qcow2",
+                fileContent: Self.createQCOW2Buffer())
+
+            try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                req.headers.contentType = HTTPMediaType(
+                    type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
+                req.body = ByteBuffer(data: body)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            let stored = try await Image.query(on: app.db).first()
+            #expect(stored?.name == atLimit)
+        }
+    }
 }

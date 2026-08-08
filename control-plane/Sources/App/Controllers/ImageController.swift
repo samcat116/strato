@@ -140,7 +140,7 @@ struct ImageController: RouteCollection {
         projectID: UUID,
         userID: UUID
     ) async throws -> ImageResponse {
-        let createRequest = try req.content.decode(CreateImageRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateImageRequest.self)
 
         // No source URL means "create an empty image shell" — a metadata-only
         // image whose artifacts (kernel/rootfs/initramfs or a disk-image) are
@@ -350,8 +350,21 @@ struct ImageController: RouteCollection {
         let checksum = upload.checksum
         let size = upload.size
 
-        let name = upload.field("name") ?? "Unnamed Image"
-        let description = upload.field("description") ?? ""
+        // Held to the same ceilings as the JSON path's `CreateImageRequest`:
+        // this is the same create endpoint reached through a different content
+        // type, so it must not be the one that persists an unbounded name.
+        // Rejections go through `failUpload` — the row and its bytes already
+        // exist by now, and a 400 must not leave either behind.
+        let name: String
+        let description: String
+        let defaultCmdline: String?
+        do {
+            name = try Validate.name(upload.field("name") ?? "Unnamed Image")
+            description = try Validate.text(upload.field("description")) ?? ""
+            defaultCmdline = try Validate.text(upload.field("defaultCmdline"), "defaultCmdline")
+        } catch {
+            throw await failUpload(error)
+        }
 
         var architecture: CPUArchitecture = .x86_64
         if let archString = upload.field("architecture") {
@@ -365,7 +378,6 @@ struct ImageController: RouteCollection {
         let defaultCpu = upload.field("defaultCpu").flatMap(Int.init)
         let defaultMemory = upload.field("defaultMemory").flatMap(Int64.init)
         let defaultDisk = upload.field("defaultDisk").flatMap(Int64.init)
-        let defaultCmdline = upload.field("defaultCmdline")
 
         // Detect the format from the file header; an explicit claim overrides it,
         // but only where detection can't contradict it. Two ways it can:
@@ -773,7 +785,7 @@ struct ImageController: RouteCollection {
             throw Abort(.forbidden, reason: "Access denied to update image")
         }
 
-        let updateRequest = try req.content.decode(UpdateImageRequest.self)
+        let updateRequest = try req.content.decodeValidated(UpdateImageRequest.self)
 
         if let name = updateRequest.name {
             image.name = name

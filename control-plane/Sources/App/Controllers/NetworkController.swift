@@ -115,7 +115,7 @@ struct NetworkController: RouteCollection {
     @Sendable
     func createNetwork(req: Request) async throws -> NetworkResponse {
         let user = try req.auth.require(User.self)
-        let request = try req.content.decode(CreateNetworkRequest.self)
+        let request = try req.content.decodeValidated(CreateNetworkRequest.self)
 
         // Determine project (same resolution as volumes)
         let projectId: UUID
@@ -140,10 +140,8 @@ struct NetworkController: RouteCollection {
             throw Abort(.forbidden, reason: "You don't have permission to create networks in this project")
         }
 
-        let name = request.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty else {
-            throw Abort(.badRequest, reason: "Network name must not be empty")
-        }
+        // Trimmed and bounded by `CreateNetworkRequest.validate()`.
+        let name = request.name
 
         let (subnet, gateway) = try Self.validateAddressing(subnet: request.subnet, gateway: request.gateway)
         // Dual-stack by default: absent an explicit /64 (or an explicit
@@ -272,7 +270,7 @@ struct NetworkController: RouteCollection {
     func updateNetwork(req: Request) async throws -> NetworkResponse {
         let user = try req.auth.require(User.self)
         let network = try await fetchNetworkWithPermission(req: req, user: user, permission: "update")
-        let request = try req.content.decode(UpdateNetworkRequest.self)
+        let request = try req.content.decodeValidated(UpdateNetworkRequest.self)
 
         let interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
 
@@ -284,14 +282,11 @@ struct NetworkController: RouteCollection {
         // echoes the current name back doesn't get held to the collision guard.
         var renamedTo: String?
         if let newName = request.name, newName != network.name {
-            let trimmed = newName.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw Abort(.badRequest, reason: "Network name must not be empty")
-            }
             // Renaming *into* a collision is the same hazard as creating one;
-            // the guard runs with the save, under the name lock.
-            network.name = trimmed
-            renamedTo = trimmed
+            // the guard runs with the save, under the name lock. Trimmed and
+            // bounded already by `UpdateNetworkRequest.validate()`.
+            network.name = newName
+            renamedTo = newName
         }
 
         // Track changes that alter how agents realize the network's L3, so the

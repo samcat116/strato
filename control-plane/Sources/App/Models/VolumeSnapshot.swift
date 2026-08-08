@@ -270,13 +270,18 @@ extension VolumeSnapshot: SnapshotArtifactResource {
 
 // MARK: - Request/Response DTOs
 
-struct CreateSnapshotRequest: Content {
-    let name: String
+struct CreateSnapshotRequest: Content, ValidatedRequestBody {
+    var name: String
     let description: String?
     /// How long to keep the snapshot, in seconds. Omitted uses the fleet
     /// default (`SNAPSHOT_DEFAULT_TTL_SECONDS`, unset by default); `0` keeps it
     /// until someone deletes it, overriding that default.
     let ttlSeconds: Int?
+
+    mutating func validate() throws {
+        name = try Validate.name(name)
+        try Validate.text(description)
+    }
 }
 
 struct SnapshotResponse: Content {

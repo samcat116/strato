@@ -51,9 +51,16 @@ public struct DomainXMLInput: Sendable {
     /// assertable from one host (the `QEMUGraphicsDevice` convention).
     public var architecture: CPUArchitecture
     public var accelerator: DomainAccelerator
-    /// An explicitly resolved firmware set, from an operator override or the
-    /// spec's per-VM firmware path. **Nil is the normal case** and selects
-    /// libvirt's own firmware autoselection; see `DomainXMLBuilder`.
+    /// The firmware set this host resolved, from `FirmwareResolver`. **The
+    /// normal case is a `.pflash` pair**; nil falls back to libvirt's own
+    /// autoselection and only happens where the resolver matched nothing at all
+    /// (`FirmwareResolver.domainFirmware`).
+    ///
+    /// A `.pflash` set carries an obligation the builder cannot check and does
+    /// not try to: **the varstore at `VMDirectoryLayout.nvram(vmDirectory:)`
+    /// must already exist** by the time the domain starts, because the document
+    /// names it with no `template` to seed from. `UEFIVarstore` is what puts it
+    /// there; `LibvirtService.createVM` is where the two are sequenced.
     public var firmware: FirmwareSet?
     /// `<emulator>` override. Omitted when nil, letting libvirt choose from its
     /// own capabilities.
@@ -320,7 +327,10 @@ public enum DomainXMLBuilder {
         }
 
         // `firmware='efi'` asks libvirt to pick a firmware from its installed
-        // descriptors; it is mutually exclusive with naming one ourselves.
+        // descriptors; it is mutually exclusive with naming one ourselves. It
+        // is also the *fallback* rather than the norm — see
+        // `DomainXMLInput.firmware`, and the `.none` branch below for what it
+        // costs on a host whose descriptors declare a raw varstore.
         let autoselectFirmware = kernelBoot == nil && input.firmware == nil
         var os = DomainXMLNode("os", [("firmware", autoselectFirmware ? "efi" : nil)])
         os.append(
@@ -370,19 +380,36 @@ public enum DomainXMLBuilder {
             // No `template`: the selected descriptor names the variable store
             // to seed from. libvirt creates the file itself, which is why the
             // builder can emit a path that does not exist yet.
+            //
+            // The format stays qcow2 even here, where it is the reason this
+            // branch cannot be satisfied on Debian or Ubuntu — libvirt matches
+            // the requested format against its descriptors at define time, and
+            // every EDK2 descriptor those ship declares `raw` (STR-188).
+            // Dropping it would make the define succeed and disable VM
+            // checkpoints, which is the trade this whole path exists to avoid;
+            // reaching this branch at all means the resolver found no pair to
+            // name, so there is nothing better available.
             os.append(
                 DomainXMLNode(
                     "nvram", [("format", "qcow2")],
                     text: VMDirectoryLayout.nvram(vmDirectory: input.vmDirectory)))
-        case .pflash(let code, let varsTemplate):
+        case .pflash(let code, _):
             os.append(
                 DomainXMLNode(
                     "loader",
                     [("readonly", "yes"), ("secure", secureLoader ? "yes" : nil), ("type", "pflash")],
                     text: code))
+            // **No `template`, and the varstore must already exist** — see
+            // `DomainXMLInput.firmware`. Naming the set's `varsTemplate` here
+            // is what the document used to do, and it defines but does not
+            // start on any host whose template is raw: libvirt seeds the
+            // varstore at start and refuses to change its format on the way
+            // ("conversion of the nvram template to another target format is
+            // not supported"). A file that is already there is never seeded, so
+            // it is never converted (STR-188).
             os.append(
                 DomainXMLNode(
-                    "nvram", [("template", varsTemplate), ("format", "qcow2")],
+                    "nvram", [("format", "qcow2")],
                     text: VMDirectoryLayout.nvram(vmDirectory: input.vmDirectory)))
         case .monolithic(let path):
             // libvirt's `-bios`: no writable varstore, so the guest's UEFI

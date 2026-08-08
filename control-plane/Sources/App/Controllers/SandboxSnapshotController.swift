@@ -40,7 +40,7 @@ extension SandboxController {
         if req.body.data == nil {
             request = CreateSandboxSnapshotRequest(name: nil, stop: nil, ttlSeconds: nil)
         } else {
-            request = try req.content.decode(CreateSandboxSnapshotRequest.self)
+            request = try req.content.decodeValidated(CreateSandboxSnapshotRequest.self)
         }
         let stopAfterSnapshot = request.stop ?? false
 

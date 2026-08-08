@@ -467,10 +467,14 @@ public enum HostPreflight {
     }
 
     /// QEMU's firmware descriptors are what libvirt reads to autoselect a
-    /// CODE/VARS pair for `<os firmware='efi'>`. Advisory: without them libvirt
-    /// cannot autoselect, and the agent has to name firmware paths explicitly
-    /// (which `FirmwareResolver` can already do), so a host missing them still
-    /// boots VMs.
+    /// CODE/VARS pair for `<os firmware='efi'>`.
+    ///
+    /// Advisory, and *more* advisory since STR-188: the agent names the pair
+    /// itself on every host `FirmwareResolver` can resolve one for, so the
+    /// descriptors matter only where it cannot and the document falls back to
+    /// autoselection. They arrive with the same package as the firmware, so a
+    /// host missing them is usually a host missing EDK2 — which `uefi_firmware`
+    /// reports separately, and with the remedy.
     static func checkFirmwareDescriptors(_ directory: String) -> Check {
         let descriptors =
             (try? FileManager.default.contentsOfDirectory(atPath: directory))?
@@ -479,7 +483,7 @@ public enum HostPreflight {
             return .fail(
                 .qemuFirmwareDescriptors, severity: .advisory,
                 "no QEMU firmware descriptors (*.json) in \(directory) — libvirt cannot autoselect UEFI "
-                    + "firmware, so VMs boot with the explicitly configured firmware paths instead. "
+                    + "firmware, which is the fallback for a host whose EDK2 build the agent cannot find. "
                     + "Install EDK2 firmware (Debian/Ubuntu: `apt install ovmf qemu-efi-aarch64`).")
         }
         return .pass(.qemuFirmwareDescriptors, severity: .advisory)

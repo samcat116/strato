@@ -186,8 +186,8 @@ struct SandboxController: RouteCollection {
     func create(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Creating a sandbox")
 
-        struct CreateSandboxRequest: Content {
-            let name: String
+        struct CreateSandboxRequest: Content, ValidatedRequestBody {
+            var name: String
             /// OCI image reference, e.g. `ghcr.io/acme/worker:v3`.
             let image: String?
             /// Ready sandbox snapshot to restore into a new identity (issue
@@ -219,14 +219,70 @@ struct SandboxController: RouteCollection {
             /// Only meaningful alongside a network, since without one there is
             /// no NIC to attach them to.
             let securityGroupIds: [UUID]?
+
+            mutating func validate() throws {
+                name = try Validate.name(name)
+                try Validate.text(image, "image", max: Self.maxImageReferenceLength)
+                try Validate.text(cpuTemplate, "cpuTemplate", max: Validate.nameLength)
+                try Validate.text(workingDir, "workingDir")
+                // The process fields ride the desired-state sync to the agent
+                // and become the guest's argv and environment, so they get the
+                // same treatment as the names — bounded in cardinality *and*
+                // per element, since either dimension alone leaves the total
+                // open-ended.
+                try Validate.stringList(entrypoint, "entrypoint", maxEntries: Self.maxProcessArguments)
+                try Validate.stringList(cmd, "cmd", maxEntries: Self.maxProcessArguments)
+                try Validate.stringMap(env, "env", maxEntries: Self.maxEnvironmentVariables)
+                try validateProcessConfigurationSize()
+                try Validate.list(securityGroupIds, "securityGroupIds", max: SecurityGroup.maxGroupsPerNIC)
+            }
+
+            /// Bounds the process fields *together*, not just individually.
+            ///
+            /// Per-element and per-count ceilings alone leave the product
+            /// unbounded: 256 arguments of 4096 characters is a megabyte, and so
+            /// is the environment beside it. That matters more here than at any
+            /// other create site, because unlike a name this payload is not
+            /// written once and read on demand — it rides `DesiredStateMessage`
+            /// to the agent on every reconcile, for the life of the sandbox.
+            private func validateProcessConfigurationSize() throws {
+                func length(of strings: [String]) -> Int {
+                    strings.reduce(into: 0) { $0 += Validate.length($1) }
+                }
+                var total = length(of: entrypoint ?? [])
+                total += length(of: cmd ?? [])
+                for (key, value) in env ?? [:] {
+                    total += Validate.length(key) + Validate.length(value)
+                }
+                guard total <= Self.maxProcessConfigurationLength else {
+                    throw Abort(
+                        .badRequest,
+                        reason: "'entrypoint', 'cmd' and 'env' must total "
+                            + "\(Self.maxProcessConfigurationLength) characters or fewer")
+                }
+            }
+
+            /// An OCI reference is bounded by its own spec well below this —
+            /// 255 for a repository path, 128 for a tag, plus a registry host
+            /// and an optional digest — so this refuses only what no registry
+            /// could resolve anyway.
+            static let maxImageReferenceLength = 512
+
+            /// Generous enough that no real entrypoint or environment hits
+            /// them, small enough that one create cannot hand an agent an
+            /// unbounded argv.
+            static let maxProcessArguments = 256
+            static let maxEnvironmentVariables = 256
+
+            /// Combined ceiling on the process configuration. 64 KiB is far
+            /// past any real container's argv and environment and far under the
+            /// 1 MiB request body, so the field bound — not the transport — is
+            /// what decides.
+            static let maxProcessConfigurationLength = 64 * 1024
         }
 
-        let createRequest = try req.content.decode(CreateSandboxRequest.self)
-
-        let requestedName = createRequest.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !requestedName.isEmpty else {
-            throw Abort(.badRequest, reason: "'name' must be non-empty")
-        }
+        let createRequest = try req.content.decodeValidated(CreateSandboxRequest.self)
+        let requestedName = createRequest.name
 
         var restoreSnapshot: SandboxSnapshot?
         var restoreSource: Sandbox?
@@ -703,12 +759,16 @@ struct SandboxController: RouteCollection {
         _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "update")
 
-        struct UpdateSandboxRequest: Content {
-            let name: String?
+        struct UpdateSandboxRequest: Content, ValidatedRequestBody {
+            var name: String?
             let ttlSeconds: Int?
+
+            mutating func validate() throws {
+                name = try Validate.name(name)
+            }
         }
 
-        let updateRequest = try req.content.decode(UpdateSandboxRequest.self)
+        let updateRequest = try req.content.decodeValidated(UpdateSandboxRequest.self)
 
         // Only metadata is updatable: image/resources/process changes would
         // need a re-converge story that phase 1 doesn't have.

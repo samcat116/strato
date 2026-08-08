@@ -34,10 +34,13 @@ import StratoShared
 /// - re-adoption is `connectListAllDomains` plus a state read: libvirtd owns the
 ///   monitor and survives the agent, so orphan re-adoption is a query rather
 ///   than a mechanism.
-/// - libvirt owns swtpm and the UEFI varstore, so the agent supervises neither,
-///   and whether a vTPM is possible at all is libvirt's answer to give
+/// - libvirt owns swtpm, so the agent supervises none of it, and whether a
+///   vTPM is possible at all is libvirt's answer to give
 ///   (`virsh domcapabilities`, via `DomainCapabilities`) rather than a binary
-///   the agent looks for.
+///   the agent looks for. The UEFI varstore is the one artifact that came
+///   back: libvirt will seed one but not convert it, and Strato's has to be
+///   qcow2 for checkpoints, so `createVM` writes it before defining the domain
+///   (STR-188).
 ///
 /// The two caches below (`lastKnownVMIds`, `lastKnownReservations`) are the only
 /// retained state, they hold *the last answer libvirtd gave* rather than a model
@@ -86,8 +89,14 @@ actor LibvirtService: HypervisorService {
     /// The daemon this host manages VMs through.
     private let uri: String
     /// Operator-configured EDK2 firmware paths (issue #565). Empty is the
-    /// normal case and means libvirt autoselects — see `resolveFirmware`.
+    /// normal case and falls through to this platform's candidate pairs — see
+    /// `resolveFirmware`.
     private let firmware: FirmwareOverrides
+    /// Seeds each VM's UEFI variable store before its domain is defined, in the
+    /// qcow2 form checkpoints require. libvirt would do this from an
+    /// `<nvram template=…>` but cannot change the template's format on the way,
+    /// which is what makes it the agent's job (STR-188).
+    private let varstore: UEFIVarstore
     /// Whether libvirt on this host can back a guest vTPM. libvirt runs swtpm
     /// itself, but a host whose daemon reports no emulator backend never
     /// advertises the TPM capability, so a spec asking for one here means the
@@ -171,13 +180,15 @@ actor LibvirtService: HypervisorService {
         vmStoragePath: String,
         uri: String = LibvirtProbe.systemURI,
         firmware: FirmwareOverrides = FirmwareOverrides(),
-        hardwareAccelerationEnabled: Bool = true
+        hardwareAccelerationEnabled: Bool = true,
+        varstore: UEFIVarstore? = nil
     ) {
         self.logger = logger
         self.storage = storage
         self.vmStoragePath = vmStoragePath
         self.uri = uri
         self.firmware = firmware
+        self.varstore = varstore ?? UEFIVarstore(logger: logger)
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
         (self.lifecycleStream, self.lifecycleContinuation) = AsyncStream.makeStream(
             of: VMLifecycleChange.self, bufferingPolicy: .bufferingNewest(64))
@@ -590,6 +601,13 @@ actor LibvirtService: HypervisorService {
             let disks = try await resolveDisks(vmId: vmId, spec: spec, imageInfo: imageInfo)
             try makeVMDirectory(vmDirectory, vmId: vmId)
 
+            // Before the document is built, not merely before it is defined:
+            // what the builder emits for a resolved pair is an nvram element
+            // with no `template`, which is a promise that this file is already
+            // there (STR-188).
+            let firmwareSet = resolveFirmware(spec: spec, machine: machine)
+            try await materializeVarstore(firmwareSet, vmId: vmId, vmDirectory: vmDirectory)
+
             // Guest provisioning. The seed ISO must carry the control plane's
             // hostname, because the same value is what the VM's DNS zone is
             // assembled from (STR-177).
@@ -612,7 +630,7 @@ actor LibvirtService: HypervisorService {
                 networks: networkAttachments,
                 architecture: .current,
                 accelerator: accelerator,
-                firmware: try resolveFirmware(spec: spec, machine: machine))
+                firmware: firmwareSet)
             let xml = try DomainXMLBuilder.build(input)
 
             // A VM with enough devices of its own to reach the root-port ceiling
@@ -1785,25 +1803,67 @@ actor LibvirtService: HypervisorService {
         }
     }
 
-    /// The firmware set to name explicitly, or **nil to let libvirt choose**.
+    /// The firmware set to name explicitly, or nil to let libvirt autoselect.
     ///
-    /// Nil is the normal case and the whole reason the host preflight checks
-    /// `/usr/share/qemu/firmware`: `<os firmware='efi'>` plus the Secure Boot
-    /// feature flags lets libvirt rank its installed descriptors and pick a
-    /// matching CODE/VARS pair, seeding the varstore itself. `FirmwareResolver`
-    /// is consulted only when the operator named paths or the spec carries a
-    /// per-VM firmware, because it falls back to *its own* platform candidate
-    /// list — which would quietly take the choice away from libvirt on every
-    /// VM.
-    private func resolveFirmware(spec: VMSpec, machine: MachineProfile) throws -> FirmwareSet? {
+    /// Naming it is the normal case (STR-188): autoselection cannot produce the
+    /// qcow2 varstore VM checkpoints need on any host whose EDK2 descriptors
+    /// declare a raw nvram template, which is every host Debian and Ubuntu
+    /// ship. `FirmwareResolver.domainFirmware` carries the reasoning; this is
+    /// only where its verdict is logged, because an autoselect fallback is the
+    /// one outcome whose consequences land later, on a define this method
+    /// cannot see.
+    private func resolveFirmware(spec: VMSpec, machine: MachineProfile) -> FirmwareSet? {
         guard case .disk(let perVMPath) = spec.boot else { return nil }
-        guard firmware.hasExplicitPaths || perVMPath != nil else { return nil }
+        switch FirmwareResolver.domainFirmware(
+            secureBoot: machine.secureBoot, perVMPath: perVMPath, overrides: firmware)
+        {
+        case .explicit(let set):
+            return set
+        case .autoselect(let unresolved):
+            logger.warning(
+                "No UEFI firmware resolved on this host; falling back to libvirt's own autoselection",
+                metadata: [
+                    "reason": .string(unresolved.description),
+                    "detail": .string(
+                        "the domain will ask for a qcow2 variable store, which libvirt can only satisfy from a "
+                            + "descriptor that declares one — the define fails with \"Unable to find 'efi' "
+                            + "firmware that is compatible with the current configuration\" where none does. "
+                            + "Set firmware_code_path and firmware_vars_template in the agent configuration to "
+                            + "name this host's EDK2 build."),
+                ])
+            return nil
+        }
+    }
+
+    /// Seeds the VM's UEFI variable store, for the firmware sets whose document
+    /// names one.
+    ///
+    /// Sequenced before the define rather than left to libvirt because libvirt
+    /// will not convert a raw VARS template into the qcow2 varstore checkpoints
+    /// require; `UEFIVarstore` explains the bind in full. Failing the create is
+    /// deliberate — without the file the define still succeeds and only the
+    /// *boot* fails, with an error naming a format rather than the VM.
+    private func materializeVarstore(
+        _ firmwareSet: FirmwareSet?, vmId: String, vmDirectory: String
+    ) async throws {
+        guard case .pflash(_, let varsTemplate) = firmwareSet else { return }
+        let path = VMDirectoryLayout.nvram(vmDirectory: vmDirectory)
+        let varstore = self.varstore
         do {
-            return try FirmwareResolver.resolve(
-                secureBoot: machine.secureBoot, perVMPath: perVMPath, overrides: firmware)
+            _ = try await StageBudget.run(
+                seconds: StageBudget.varstoreMaterializationSeconds, stage: "UEFI varstore materialization"
+            ) {
+                try await varstore.materialize(at: path, from: varsTemplate)
+            }
+        } catch let error as UEFIVarstoreError {
+            // Rethrown as itself, not wrapped: it is a `ClassifiableError` and
+            // says `permanent`, and the reconciler reads that off the thrown
+            // error. Its message already names the varstore path, which carries
+            // the VM id, and `perform` logs the id alongside.
+            throw error
         } catch {
-            throw HypervisorServiceError.invalidConfiguration(
-                "firmware for VM could not be resolved: \(error)")
+            throw HypervisorServiceError.diskError(
+                "could not create the UEFI variable store for VM \(vmId) at \(path): \(error)")
         }
     }
 

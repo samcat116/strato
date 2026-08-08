@@ -209,8 +209,8 @@ struct VMController: RouteCollection {
     func create(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Creating a VM")
 
-        struct CreateVMRequest: Content {
-            let name: String
+        struct CreateVMRequest: Content, ValidatedRequestBody {
+            var name: String
             /// The VM's DNS label (issue #770). Defaults to a slugified
             /// `name`, disambiguated against whatever already registers into
             /// the target network's primary zone.
@@ -231,7 +231,7 @@ struct VMController: RouteCollection {
             let networkId: UUID?
             let networkName: String?
             // SSH public key authorized for the guest's default user (cloud-init).
-            let sshPublicKey: String?
+            var sshPublicKey: String?
             // Cloud-init user data, verbatim (#cloud-config, #! script, MIME
             // multipart, ...). Combined with Strato's built-in provisioning
             // config on the agent; a full MIME document replaces it.
@@ -254,9 +254,21 @@ struct VMController: RouteCollection {
             // project's default group — every NIC must belong to at least one
             // group.
             let securityGroupIds: [UUID]?
+
+            mutating func validate() throws {
+                name = try Validate.name(name)
+                try Validate.text(description)
+                sshPublicKey = try Validate.sshPublicKey(sshPublicKey)
+                // The same ceiling the attach endpoint enforces, applied to the
+                // list as sent. `SecurityGroupService.resolveRequestedGroupIDs`
+                // already caps the *deduplicated* set, but it reaches that cap
+                // through an O(n²) dedupe, so an unbounded list is work done
+                // before the guard rather than instead of it.
+                try Validate.list(securityGroupIds, "securityGroupIds", max: SecurityGroup.maxGroupsPerNIC)
+            }
         }
 
-        let createRequest = try req.content.decode(CreateVMRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateVMRequest.self)
 
         // An image is required to create a VM.
         guard let imageId = createRequest.imageId else {
@@ -422,10 +434,10 @@ struct VMController: RouteCollection {
                     + (available.isEmpty ? "none" : available))
         }
 
-        // Guest login: authorize the caller-provided SSH public key via cloud-init.
-        vm.sshPublicKey = createRequest.sshPublicKey?.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
+        // Guest login: authorize the caller-provided SSH public key via
+        // cloud-init. Already trimmed, bounded and parsed by
+        // `CreateVMRequest.validate()`; empty input arrived here as nil.
+        vm.sshPublicKey = createRequest.sshPublicKey
 
         // Guest provisioning: caller-supplied cloud-init user data, stored
         // verbatim (leading bytes are the format header cloud-init dispatches
@@ -761,8 +773,8 @@ struct VMController: RouteCollection {
         // Decodable rather than Content: `balloonTarget` needs to tell an
         // absent key from an explicit null, which needs a hand-written decode,
         // and Content's Encodable half has nothing to encode here.
-        struct UpdateVMRequest: Decodable {
-            let name: String?
+        struct UpdateVMRequest: Decodable, ValidatedRequestBody {
+            var name: String?
             /// The VM's DNS label (issue #770). Set explicitly: renaming the
             /// VM deliberately does *not* move its records, so this is the
             /// only way its name in DNS changes.
@@ -794,9 +806,14 @@ struct VMController: RouteCollection {
                     c.contains(.balloonTarget)
                     ? .some(try c.decodeIfPresent(Int64.self, forKey: .balloonTarget)) : .none
             }
+
+            mutating func validate() throws {
+                name = try Validate.name(name)
+                try Validate.text(description)
+            }
         }
 
-        let updateRequest = try req.content.decode(UpdateVMRequest.self)
+        let updateRequest = try req.content.decodeValidated(UpdateVMRequest.self)
 
         if let name = updateRequest.name {
             existingVM.name = name

@@ -101,7 +101,7 @@ struct OrganizationController: RouteCollection {
         // middleware's handler assertion knows this is deliberate.
         try await req.markRowScopedAuthorization()
 
-        let createRequest = try req.content.decode(CreateOrganizationRequest.self)
+        let createRequest = try req.content.decodeValidated(CreateOrganizationRequest.self)
 
         // Check if organization name already exists
         let existingOrg = try await Organization.query(on: req.db)
@@ -205,7 +205,7 @@ struct OrganizationController: RouteCollection {
         // Org-admin check through the Cedar evaluator (`org:update`).
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
-        let updateRequest = try req.content.decode(UpdateOrganizationRequest.self)
+        let updateRequest = try req.content.decodeValidated(UpdateOrganizationRequest.self)
 
         if let name = updateRequest.name {
             // Check if new name conflicts with existing organization
