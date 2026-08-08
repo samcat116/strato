@@ -811,6 +811,10 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddConvergenceToSnapshots())
     app.migrations.add(AddSnapshotOperationKinds())
 
+    // ADR 0001 stage 9 (STR-151): reboot and restore become edge-nonces on the
+    // desired entry, retiring the last three durable-resource agent RPCs.
+    app.migrations.add(AddEdgeNoncesToWorkloads())
+
     try await app.autoMigrate()
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side

@@ -65,10 +65,11 @@ export const vmsApi = {
     return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/stop`);
   },
 
-  // Restart alone still answers with an Operation: it is an imperative agent
-  // command with no generation to converge on, until backend STR-151.
-  restart(id: string): Promise<Operation> {
-    return api.post<Operation>(`/api/vms/${id}/restart`);
+  // Restart joined the rest at backend STR-151: a reboot rides the sync as a
+  // monotonic nonce on the VM's desired entry, so it has a generation to
+  // converge on like every other mutation.
+  restart(id: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/restart`);
   },
 
   pause(id: string): Promise<AcceptedMutation<VM>> {
@@ -120,8 +121,10 @@ export const vmsApi = {
     );
   },
 
-  restoreSnapshot(id: string, snapshotId: string): Promise<Operation> {
-    return api.post<Operation>(
+  // A restore acts on the VM, not on the checkpoint, so its 202 carries the VM
+  // and the generation to wait for (backend STR-151).
+  restoreSnapshot(id: string, snapshotId: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(
       `/api/vms/${id}/snapshots/${snapshotId}/restore`
     );
   },

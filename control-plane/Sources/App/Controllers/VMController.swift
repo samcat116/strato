@@ -967,7 +967,10 @@ struct VMController: RouteCollection {
     /// The full detail DTO rather than a bare id — a client that just resized
     /// or started a VM re-renders from this and only then starts polling, which
     /// is one fewer round trip than the operation object ever gave it.
-    private static func acceptedResponse(
+    /// Internal, not private: the checkpoint handlers in
+    /// `VMSnapshotController.swift` extend this same type from another file and
+    /// answer a restore with the VM's own accepted-mutation shape (STR-151).
+    static func acceptedResponse(
         for vm: VM, _ accepted: ResourceMutation.Accepted, on req: Request,
         resolvingEnforcement: Bool = true
     ) async throws -> Response {
@@ -1187,16 +1190,73 @@ struct VMController: RouteCollection {
             throw Abort(.badRequest, reason: "VM must be running to restart. Current state: \(vm.status.rawValue)")
         }
 
-        // A reboot starts and ends `.running`, so no status change on any
-        // outcome; it is an action, not a state, so it awaits an imperative
-        // agent response rather than riding the desired-state sync. A failure
-        // is visible on the operation record.
-        let vmID = try vm.requireID()
-        let userID = try user.requireID()
-        let operation = try await req.resourceOperationCoordinator.perform(
-            .reboot, resourceKind: .virtualMachine, resourceID: vmID, userID: userID,
-            dispatch: .awaitingResponse(.vmReboot), on: req.db, app: req.application)
+        // A reboot starts and ends `.running`, so `desiredStatus` cannot carry
+        // it — which is why this was the last VM verb still dispatched as an
+        // imperative RPC. It rides the sync as a *nonce* now (ADR 0001 stage 9,
+        // STR-151): `requestReboot` bumps a monotonic counter the agent applies
+        // once against its own durable record, and the generation bump beside it
+        // carries the mutation through the same conditions, sweep and webhook
+        // path as every other one. Strictly better than what it replaces — a
+        // socket dropped mid-flight used to lose the reboot silently; the nonce
+        // survives and converges.
+        try await Self.requireEdgeNonceCapableAgent(vm.hypervisorId, app: req.application)
 
-        return try operation.acceptedResponse()
+        let userID = try user.requireID()
+        let accepted = try await req.resourceMutation.accept(
+            .reboot, on: vm, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable _ in
+            vm.requestReboot()
+        }
+
+        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+    }
+
+    /// Refuse an edge-nonce mutation whose agent could not converge it
+    /// (STR-151).
+    ///
+    /// With `vm_reboot` and `vm_restore` gone there is no fallback, and a
+    /// pre-v34 agent fails *silently*: it decodes the sync, ignores the field it
+    /// has no case for, plans no work, and reports the bumped generation as
+    /// converged — so the API would tell the user their VM restarted when it
+    /// never did. `409` up front is the `supportsSnapshotSync` posture applied
+    /// to a verb, and it names the remedy.
+    ///
+    /// `capability` is the second of the two signals issue #415 established, for
+    /// the callers that need it: the version proves the agent *reads* the nonce,
+    /// the capability proves a backend that can realize it is usable on that
+    /// host. A restore needs both — admitting one against a QEMU-less host
+    /// surfaces as a `degraded` condition half an hour later instead of a `409`
+    /// naming the remedy — while a restart needs no snapshot backend and passes
+    /// nil.
+    ///
+    /// Deliberately *not* checked: `status == .online`. The old
+    /// `requireCapableAgent` preflight refused an offline agent because its RPC
+    /// had nowhere to go; a nonce is desired state, so it converges when the
+    /// agent comes back, exactly like start and stop.
+    static func requireEdgeNonceCapableAgent(
+        _ agentId: String?, requiring capability: String? = nil, app: Application
+    ) async throws {
+        guard let agentId else {
+            throw Abort(.conflict, reason: "VM is not placed on any agent")
+        }
+        guard let agent = await app.agentService.getAgentInfo(agentId) else {
+            throw Abort(.conflict, reason: "Agent '\(agentId)' is unknown")
+        }
+        guard WireProtocol.supportsEdgeNonces(agent.wireProtocolVersion ?? 0) else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(agentId)' is too old to apply restarts and restores from the desired-state "
+                    + "sync (wire protocol v\(WireProtocol.edgeNonceMinimumVersion) required). Upgrade the agent."
+            )
+        }
+        if let capability, !agent.capabilities.contains(capability) {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Agent '\(agentId)' cannot realize this request (capability '\(capability)' not "
+                    + "advertised); upgrade the agent, or place the VM on a host with a backend that can.")
+        }
     }
 }

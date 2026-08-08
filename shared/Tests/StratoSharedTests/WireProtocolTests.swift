@@ -8,14 +8,14 @@ struct WireProtocolTests {
 
     @Test("envelope stamps the current wire version")
     func envelopeStampsVersion() throws {
-        let envelope = try MessageEnvelope(message: VMOperationMessage(type: .vmReboot, vmId: "vm-1"))
+        let envelope = try MessageEnvelope(message: Fixtures.consoleConnect(vmId: "vm-1"))
         #expect(envelope.version == WireProtocol.currentVersion)
         #expect(envelope.senderVersion == WireProtocol.currentVersion)
     }
 
     @Test("version survives the envelope round trip")
     func versionRoundTrips() throws {
-        let envelope = try MessageEnvelope(message: VMOperationMessage(type: .vmReboot, vmId: "vm-1"))
+        let envelope = try MessageEnvelope(message: Fixtures.consoleConnect(vmId: "vm-1"))
         let decoded = try decodeJSON(MessageEnvelope.self, from: encodeJSON(envelope))
         #expect(decoded.version == WireProtocol.currentVersion)
     }
@@ -23,19 +23,13 @@ struct WireProtocolTests {
     @Test("an envelope without a version field decodes as legacy version 0")
     func legacyEnvelopeDefaultsToZero() throws {
         // A peer that predates versioning sends only `type` + `payload`.
-        let inner = try encodeJSON(
-            VMOperationMessage(
-                type: .vmReboot,
-                requestId: Fixtures.requestId,
-                timestamp: Fixtures.timestamp,
-                vmId: "vm-1"
-            ))
-        let json = #"{"type":"vm_reboot","payload":"\#(inner.base64EncodedString())"}"#
+        let inner = try encodeJSON(Fixtures.consoleConnect(vmId: "vm-1"))
+        let json = #"{"type":"console_connect","payload":"\#(inner.base64EncodedString())"}"#
         let envelope = try decodeJSON(MessageEnvelope.self, from: json)
         #expect(envelope.version == nil)
         #expect(envelope.senderVersion == 0)
         // The payload still decodes normally.
-        #expect(try envelope.decode(as: VMOperationMessage.self).vmId == "vm-1")
+        #expect(try envelope.decode(as: ConsoleConnectMessage.self).vmId == "vm-1")
     }
 
     @Test("declarative agent-update gate starts at wire protocol v7")
@@ -69,15 +63,17 @@ struct WireProtocolTests {
         #expect(WireProtocol.supportsProjectNetworkIsolation(WireProtocol.currentVersion))
     }
 
-    @Test("VM checkpoint gate starts at wire protocol v22")
-    func vmCheckpointGate() {
-        // The trio adds new MessageType cases, so a pre-v22 agent fails the
-        // envelope decode and drops the frame — the request would burn its
-        // whole budget against silence (issue #564).
-        #expect(WireProtocol.vmCheckpointMinimumVersion == 22)
-        #expect(!WireProtocol.supportsVMCheckpoint(21))
-        #expect(WireProtocol.supportsVMCheckpoint(22))
-        #expect(WireProtocol.supportsVMCheckpoint(WireProtocol.currentVersion))
+    @Test("edge-nonce gate starts at wire protocol v34")
+    func edgeNonceGate() {
+        // Reboot and both restores ride the sync as counters now (STR-151), and
+        // their frames are gone — so a pre-v34 agent does not fail loudly, it
+        // decodes the sync, ignores the field, and reports the bumped
+        // generation as converged. The API would claim a restart that never
+        // happened, which is why the gate refuses the mutation at admission.
+        #expect(WireProtocol.edgeNonceMinimumVersion == 34)
+        #expect(!WireProtocol.supportsEdgeNonces(33))
+        #expect(WireProtocol.supportsEdgeNonces(34))
+        #expect(WireProtocol.supportsEdgeNonces(WireProtocol.currentVersion))
     }
 
     @Test("graphics console gate starts at wire protocol v23")
@@ -146,17 +142,13 @@ struct WireProtocolTests {
         // this work — which decodes with a bare JSONDecoder — can still read our
         // timestamps. The encoder flips to ISO-8601 only once every peer is known
         // to read both forms (see WireProtocol's migration note).
-        let message = VMOperationMessage(
-            type: .vmReboot,
-            requestId: Fixtures.requestId,
-            timestamp: Fixtures.timestamp,
-            vmId: "vm-1"
-        )
+        let message = Fixtures.consoleConnect(vmId: "vm-1")
         let object = try JSONSerialization.jsonObject(with: encodeJSON(message)) as? [String: Any]
         let json = try #require(object)
         #expect(json["timestamp"] is NSNumber)
         // A bare JSONDecoder (what an un-upgraded peer uses) must still read it.
-        let decodedByLegacyPeer = try JSONDecoder().decode(VMOperationMessage.self, from: encodeJSON(message))
+        let decodedByLegacyPeer = try JSONDecoder().decode(
+            ConsoleConnectMessage.self, from: encodeJSON(message))
         #expect(decodedByLegacyPeer.timestamp == Fixtures.timestamp)
     }
 
@@ -166,19 +158,13 @@ struct WireProtocolTests {
         // the 2001 reference date — the current wire form. The shared decoder
         // must accept it.
         let legacyEncoder = JSONEncoder()  // default deferredToDate strategy
-        let message = VMOperationMessage(
-            type: .vmReboot,
-            requestId: Fixtures.requestId,
-            timestamp: Fixtures.timestamp,
-            vmId: "vm-1"
-        )
-        let legacyData = try legacyEncoder.encode(message)
+        let legacyData = try legacyEncoder.encode(Fixtures.consoleConnect(vmId: "vm-1"))
 
         // Sanity check: the form really is a bare number, not a string.
         let object = try JSONSerialization.jsonObject(with: legacyData) as? [String: Any]
         #expect(object?["timestamp"] is NSNumber)
 
-        let decoded = try decodeJSON(VMOperationMessage.self, from: legacyData)
+        let decoded = try decodeJSON(ConsoleConnectMessage.self, from: legacyData)
         #expect(decoded.timestamp == Fixtures.timestamp)
         #expect(decoded.vmId == "vm-1")
     }
@@ -188,17 +174,18 @@ struct WireProtocolTests {
         // Forward compatibility: nothing emits ISO-8601 yet, but the decoder must
         // already read it so the eventual encoder flip needs no rollout window.
         // 2023-11-14T22:13:20Z == Fixtures.timestamp (1_700_000_000 since 1970).
-        let json = #"{"type":"vm_reboot","requestId":"r","timestamp":"2023-11-14T22:13:20Z","vmId":"vm-1"}"#
-        let decoded = try decodeJSON(VMOperationMessage.self, from: json)
+        let json =
+            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","vmId":"vm-1","sessionId":"s"}"#
+        let decoded = try decodeJSON(ConsoleConnectMessage.self, from: json)
         #expect(decoded.timestamp == Fixtures.timestamp)
         #expect(decoded.vmId == "vm-1")
     }
 
     @Test("a malformed date string is a decode error, not a silent zero date")
     func malformedDateStringThrows() {
-        let json = #"{"type":"vm_reboot","requestId":"r","timestamp":"not-a-date","vmId":"vm-1"}"#
+        let json = #"{"requestId":"r","timestamp":"not-a-date","vmId":"vm-1","sessionId":"s"}"#
         #expect(throws: DecodingError.self) {
-            try decodeJSON(VMOperationMessage.self, from: json)
+            try decodeJSON(ConsoleConnectMessage.self, from: json)
         }
     }
 }

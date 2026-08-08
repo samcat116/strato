@@ -109,29 +109,36 @@ against a *stale* placement and serve stale credentials.
 
 ## Remaining imperative exchanges
 
-Some agent exchanges are actions rather than states, so they cannot ride the
-level-triggered sync and remain correlated request/response:
+**No durable-resource exchange is imperative any more.** Volume operations left
+this list in STR-148 (wire v31), every snapshot artifact's capture, delete and
+export in STR-150 (v33) — including `sandbox_snapshot_export`, which is a
+placement fact now rather than a verb — and the last three in STR-151 (v34):
+VM reboot, VM restore and sandbox restore.
 
-- **Reboot** (a VM that is `running` before and after has no state delta)
-- **Restore** — `vm_restore` (wire v22, issue #564) and `sandbox_restore`
-  (v9). Loading a captured image back over a live guest is an *edge*: "this VM
-  should be at checkpoint C" cannot be re-converged on, because the guest starts
-  writing the moment it resumes.
+Those three were the hard ones, because they genuinely are *actions*: a VM that
+is `running` before and after has no state delta, and "this VM should be at
+checkpoint C" cannot be re-converged on, since the guest starts writing the
+moment it resumes. What converted them was not a re-description but a **count**
+— `kubectl rollout restart`'s trick of making the edge a state by recording how
+many times it was asked for. The agent applies a nonce once, against a record it
+keeps in its own durable manifest, so the exchange needs neither a reply nor a
+socket.
 
-Volume operations left this list in STR-148 (wire v31) and every snapshot
-artifact's capture, delete and export in STR-150 (v33) — including
-`sandbox_snapshot_export`, which is a placement fact now rather than a verb.
+Live byte streams — console, exec, log forwarding — do stay imperative by
+design (ADR 0001: session lifetime is a browser tab, not cluster intent), but
+they are **not** correlated request/response and never travelled this path:
+`ConsoleSessionManager` and `SandboxExecSessionManager` write straight to the
+local socket and fail if this replica does not hold it, which is the
+single-replica limitation `docs/architecture/sandboxes.md` records.
 
-When the serving replica doesn't hold the agent's socket, the exchange is
-forwarded to the holding replica over `replica:{id}:rpc` and the verdict comes
-back on the requester's `replica:{id}:rpc-replies` channel. Timeouts and
-agent errors propagate; an unroutable agent fails fast.
-
-This is the one path that still needs `agent:{name}:replica`, and the reason it
-was not deleted alongside the nudge channel: an exchange needs a *reply*, and it
-needs "nobody holds this socket" to be an immediate error rather than a 30s
-timeout. Broadcasting cannot express either. The key retires with the last
-imperative verb (STR-152).
+So as of v34 the forwarding path has no sender at all.
+`AgentService.sendMessageToAgentWithResponse`, `ReplicaMessageBridge.call`, the
+`replica:{id}:rpc` / `rpc-replies` channels, the pending-request continuations
+behind them, and the `agent:{name}:replica` routing key that told the requester
+where to forward are all reachable only from each other. Deleting them is
+STR-152 (ADR stage 11) rather than part of this stage, so the conversion and the
+removal land as separate, separately revertable changes — but nothing in the
+product depends on them today.
 
 ## Failure and deploy behavior
 

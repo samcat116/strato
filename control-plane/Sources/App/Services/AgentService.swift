@@ -2777,36 +2777,10 @@ actor AgentService {
         return siteIDs.first
     }
 
-    /// Dispatch a correlated VM command (reboot — an action, not a state, so
-    /// it cannot ride the level-triggered sync) and await the agent's
-    /// success/error response, routing through the socket-holding replica if
-    /// it isn't us. The agent replies only after the operation ran on the
-    /// hypervisor, so `timeout` should be the operation kind's full completion
-    /// budget. Callers record the verdict on the operation row (issue #259).
-    func performVMOperationAwaitingResponse(
-        _ operation: MessageType,
-        vmId: String,
-        timeout: Duration
-    ) async throws -> AgentServiceResponse {
-        guard let vmUUID = UUID(uuidString: vmId),
-            let vm = try await VM.find(vmUUID, on: app.db),
-            let agentId = vm.hypervisorId
-        else {
-            throw AgentServiceError.vmNotMapped(vmId)
-        }
-
-        let message = VMOperationMessage(type: operation, vmId: vmId)
-
-        app.logger.info(
-            "VM operation dispatched",
-            metadata: [
-                "operation": .string(operation.rawValue),
-                "vmId": .string(vmId),
-                "agentId": .string(agentId),
-            ])
-
-        return try await sendMessageToAgentWithResponse(message, agentId: agentId, timeout: timeout)
-    }
+    // `performVMOperationAwaitingResponse` went with `vm_reboot` at wire v34
+    // (ADR 0001 stage 9, STR-151). It was the last VM-shaped correlated
+    // request/response on a durable resource; what remains of this apparatus
+    // serves console, exec and log streams, which stay imperative by design.
 
     // MARK: - Agent Selection
 

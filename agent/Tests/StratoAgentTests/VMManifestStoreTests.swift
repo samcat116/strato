@@ -148,6 +148,21 @@ struct VMManifestStoreTests {
         #expect(resized.kind == .vm)
     }
 
+    /// The other field that made copying necessary (STR-151): the record of
+    /// what this host has already *done* to the workload. Losing it to a resize
+    /// or a volume attach would make the next sync read "no record" and quietly
+    /// discard a reboot or restore the user had asked for.
+    @Test("Re-specing an entry keeps its applied edge nonces")
+    func withSpecKeepsAppliedEdges() {
+        let entry = VMManifestEntry(
+            hypervisorType: .qemu, spec: makeSpec(cpus: 2),
+            appliedEdges: AppliedEdgeNonces(reboot: 3, restore: 1))
+        let resized = entry.with(spec: makeSpec(cpus: 8))
+
+        #expect(resized.appliedEdges == AppliedEdgeNonces(reboot: 3, restore: 1))
+        #expect(resized.spec.cpus == 8)
+    }
+
     @Test("A sandbox entry keeps its spec and CID through a re-spec")
     func withSpecKeepsSandboxShape() {
         let sandboxSpec = SandboxSpec(image: "alpine:3", cpus: 2, memoryBytes: 2048)

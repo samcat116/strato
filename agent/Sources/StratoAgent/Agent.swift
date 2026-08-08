@@ -2182,14 +2182,9 @@ extension Agent {
             case .agentRegisterResponse:
                 let message = try envelope.decode(as: AgentRegisterResponseMessage.self)
                 await handleRegistrationResponse(message)
-            case .vmReboot:
-                let message = try envelope.decode(as: VMOperationMessage.self)
-                await handleVMReboot(message)
-            // Full-VM restore (issue #564). Capture and delete are desired
-            // state since wire v33 (STR-150).
-            case .vmRestore:
-                let message = try envelope.decode(as: VMRestoreMessage.self)
-                await handleVMRestore(message)
+            // No VM frames remain: reboot and restore became edge-nonces on the
+            // desired entry at wire v34 (STR-151), joining capture and delete,
+            // which became desired artifacts at v33 (STR-150).
             case .desiredState:
                 let message = try envelope.decode(as: DesiredStateMessage.self)
                 // Realize logical networks (per-project routers, SNAT uplinks)
@@ -2287,11 +2282,9 @@ extension Agent {
             case .sandboxExecClose:
                 let message = try envelope.decode(as: SandboxExecCloseMessage.self)
                 await handleSandboxExecClose(message)
-            // Sandbox checkpoint-resume (issue #426). Capture, delete and
-            // export are desired state since wire v33 (STR-150).
-            case .sandboxRestore:
-                let message = try envelope.decode(as: SandboxRestoreMessage.self)
-                await handleSandboxRestore(message)
+            // No sandbox lifecycle frames remain either: `sandbox_restore`
+            // became `DesiredSandboxState.restore` at wire v34 (STR-151), and
+            // capture/delete/export became desired artifacts at v33 (STR-150).
             // No volume frames remain: create/delete/attach/detach/resize/clone
             // became desired state at wire v31 (STR-148), `volume_info` was
             // deleted at v32 as a read that was never an action (STR-149), and
@@ -2506,55 +2499,6 @@ extension Agent {
         logger.warning(
             "VM manifest became readable again; this host is no longer quarantined and will converge and advertise capacity normally"
         )
-    }
-
-    private func handleVMReboot(_ message: VMOperationMessage) async {
-        logger.info("Rebooting VM", metadata: ["vmId": .string(message.vmId)])
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            return
-        }
-
-        do {
-            try await service.rebootVM(vmId: message.vmId)
-            await sendSuccess(for: message.requestId, message: "VM rebooted successfully")
-            logger.info("VM rebooted successfully", metadata: ["vmId": .string(message.vmId)])
-        } catch {
-            await sendError(for: message.requestId, error: "Failed to reboot VM: \(error.localizedDescription)")
-            logger.error(
-                "Failed to reboot VM",
-                metadata: ["vmId": .string(message.vmId), "error": .string(error.localizedDescription)])
-        }
-    }
-
-    // MARK: - Full-VM restore (issue #564)
-
-    private func handleVMRestore(_ message: VMRestoreMessage) async {
-        logger.info(
-            "VM restore request received",
-            metadata: ["vmId": .string(message.vmId), "snapshotId": .string(message.snapshotId)])
-
-        guard let service = getHypervisorServiceForVM(vmId: message.vmId) else {
-            await sendError(for: message.requestId, error: "Hypervisor service not available for VM")
-            return
-        }
-
-        do {
-            try await service.restoreVM(vmId: message.vmId, snapshotId: message.snapshotId)
-            await sendSuccess(for: message.requestId, message: "VM restored from checkpoint")
-        } catch {
-            await sendError(
-                for: message.requestId,
-                error: "Failed to restore VM: \(error.localizedDescription)")
-            logger.error(
-                "Failed to restore VM from checkpoint",
-                metadata: [
-                    "vmId": .string(message.vmId),
-                    "snapshotId": .string(message.snapshotId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
     }
 
     /// Self-update (issue #434): converge on the desired agent build carried by
@@ -3039,40 +2983,6 @@ extension Agent {
         }
     }
 
-    // MARK: - Sandbox checkpoint-resume (issue #426)
-
-    private func handleSandboxRestore(_ message: SandboxRestoreMessage) async {
-        logger.info(
-            "Sandbox restore request received",
-            metadata: [
-                "sandboxId": .string(message.sandboxId),
-                "snapshotId": .string(message.snapshotId),
-            ])
-
-        guard let runtime = sandboxRuntime else {
-            await sendError(for: message.requestId, error: "this agent has no sandbox runtime")
-            return
-        }
-
-        do {
-            try await runtime.restoreSandbox(
-                sandboxId: message.sandboxId, snapshotId: message.snapshotId,
-                artifacts: message.artifacts)
-            await sendSuccess(for: message.requestId, message: "Sandbox restored from snapshot")
-        } catch {
-            await sendError(
-                for: message.requestId,
-                error: "Failed to restore sandbox: \(error.localizedDescription)")
-            logger.error(
-                "Failed to restore sandbox from snapshot",
-                metadata: [
-                    "sandboxId": .string(message.sandboxId),
-                    "snapshotId": .string(message.snapshotId),
-                    "error": .string(error.localizedDescription),
-                ])
-        }
-    }
-
     private func handleSandboxExecInput(_ message: SandboxExecInputMessage) async {
         guard let runtime = sandboxRuntime else {
             await sendSandboxExecClosed(
@@ -3266,6 +3176,59 @@ extension Agent: ReconcileActuator {
         }
     }
 
+    /// What this host has already applied for each workload's edges (STR-151),
+    /// read from the manifest entries — the same durable record that survives
+    /// the restart the nonces exist to be safe across.
+    ///
+    /// Orphans are included alongside managed workloads. They are exactly the
+    /// case the invariant is written for: an orphan carries a record from a
+    /// previous incarnation of the agent, and omitting it would read as "no
+    /// record" the moment the workload matters most.
+    func observedEdgeNonces() async -> [String: AppliedEdgeNonces] {
+        var nonces: [String: AppliedEdgeNonces] = [:]
+        // Managed entries first, so an id somehow in both maps resolves to the
+        // live one. Assigning a nil `appliedEdges` through the subscript stores
+        // nothing, which is exactly the contract the planner reads: an entry
+        // that has no record is *absent* from this map, never present-and-empty.
+        for map in [managedVMs, managedSandboxes, orphanedVMs, orphanedSandboxes] {
+            for (id, entry) in map where nonces[id] == nil {
+                nonces[id] = entry.appliedEdges
+            }
+        }
+        return nonces
+    }
+
+    /// Write the edge nonces the planner decided this item applied into its
+    /// manifest entry.
+    ///
+    /// Cheap when nothing moved — this runs for every converged workload of
+    /// every sync, and the manifest write is a whole-file atomic replace, so an
+    /// unconditional `persistManifest()` here would rewrite it once per workload
+    /// per sync forever. The equality check is also what bounds the one-time
+    /// adoption sweep after an upgrade to a single write per workload.
+    func recordAppliedEdges(_ item: ReconcileWorkItem, _ applied: AppliedEdgeNonces) async {
+        var changed = false
+        switch item.kind {
+        case .vm:
+            if var entry = managedVMs[item.id], entry.appliedEdges != applied {
+                entry.appliedEdges = applied
+                managedVMs[item.id] = entry
+                changed = true
+            }
+        case .sandbox:
+            if var entry = managedSandboxes[item.id], entry.appliedEdges != applied {
+                entry.appliedEdges = applied
+                managedSandboxes[item.id] = entry
+                changed = true
+            }
+        case .volume, .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot:
+            // Bytes have no edges; the reconciler never calls this for them.
+            return
+        }
+        guard changed else { return }
+        persistManifest()
+    }
+
     func adoptVM(_ item: ReconcileWorkItem) async throws -> VMStatus {
         guard let entry = orphanedVMs[item.vmId] else {
             // A replayed sync may race re-adoption; if the VM is already
@@ -3300,6 +3263,9 @@ extension Agent: ReconcileActuator {
             return .created
         }
 
+        // `with(spec:)`, not a fresh entry: re-adoption rewrites what the VM is
+        // running, never the vsock CID it holds (STR-72) nor the record of what
+        // has been applied to it (STR-151).
         managedVMs[item.vmId] = entry.with(spec: spec)
         orphanedVMs.removeValue(forKey: item.vmId)
         persistManifest()
@@ -3530,12 +3496,38 @@ extension Agent: ReconcileActuator {
             try await reconcileService(for: item.vmId).shutdownVM(vmId: item.vmId)
         case .delete:
             try await reconcileDelete(item)
+        case .reboot:
+            try await reconcileService(for: item.vmId).rebootVM(vmId: item.vmId)
+            await sendVMLog(
+                vmId: item.vmId, level: .info, eventType: .operation,
+                message: "VM restarted by reconciliation", operation: "reboot")
+        case .restore:
+            try await reconcileRestore(item)
         case .attach, .detach, .export:
             // Volume- and snapshot-only steps; both kinds were handled above
             // and the planner never emits these for a VM or sandbox.
             throw HypervisorServiceError.invalidConfiguration(
                 "step \(step) is not applicable to a \(item.kind.rawValue) workload")
         }
+    }
+
+    /// Load a checkpoint back into an existing VM (STR-151).
+    ///
+    /// Reached only while the VM's desired `restore` nonce outranks the one this
+    /// host recorded, and only for a VM the agent is managing — so unlike the
+    /// RPC it replaces, a replayed or re-driven sync cannot rewind the guest a
+    /// second time. The checkpoint lives inside the VM's own disks, so there is
+    /// nothing to stage and nothing that can expire in the entry.
+    private func reconcileRestore(_ item: ReconcileWorkItem) async throws {
+        guard let restore = item.desired?.restore else {
+            throw HypervisorServiceError.invalidConfiguration("restore work item without a restore nonce")
+        }
+        try await reconcileService(for: item.vmId).restoreVM(
+            vmId: item.vmId, snapshotId: restore.snapshotId.uuidString)
+        await sendVMLog(
+            vmId: item.vmId, level: .info, eventType: .operation,
+            message: "VM restored from checkpoint \(restore.snapshotId.uuidString)",
+            operation: "restore")
     }
 
     func convergenceDidChange() async {
@@ -3556,9 +3548,9 @@ extension Agent: ReconcileActuator {
             try await volumeReconcileAttach(item)
         case .detach:
             try await volumeReconcileDetach(item)
-        case .adopt, .boot, .pause, .resume, .shutdown, .export:
-            // A volume has no run state and nowhere to be exported to; the
-            // planner never emits these.
+        case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore:
+            // A volume has no run state, nowhere to be exported to, and no
+            // edges to apply; the planner never emits these.
             throw VolumeConvergenceError.unsupported("step \(step) is not applicable to a volume")
         }
     }
@@ -3573,10 +3565,11 @@ extension Agent: ReconcileActuator {
             try await snapshotReconcileDelete(item)
         case .export:
             try await snapshotReconcileExport(item)
-        case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach:
+        case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach, .reboot, .restore:
             // An artifact is frozen bytes: it has no run state, no size that
-            // can change, and nothing to plug in. The planner never emits any
-            // of these.
+            // can change, nothing to plug in, and no edges of its own — a
+            // restore acts on the artifact's *parent*. The planner never emits
+            // any of these.
             throw SnapshotConvergenceError.unsupported(
                 "step \(step) is not applicable to a snapshot artifact")
         }
@@ -4084,8 +4077,23 @@ extension Agent: ReconcileActuator {
             throw error
         }
 
+        // An existing edge record survives the rewrite. This path is reached for
+        // a genuinely new VM (where there is none, and `recordAppliedEdges`
+        // writes the first one right after) *and* for an orphan whose hypervisor
+        // process turned out to be gone — where dropping it would read as "no
+        // record" next sync and quietly discard a restore the user asked for.
+        //
+        // A workload that arrives on a *different* host has no record here to
+        // carry, so it adopts its nonces rather than applying them: a pending
+        // restore issued before the move is dropped. For a VM that is right —
+        // the checkpoint lives inside the disks that did not move — and a
+        // sandbox's placement is pinned today, so it is unreachable rather than
+        // merely rare. It stops being unreachable the day a sandbox can move
+        // with a restore outstanding.
+        let appliedEdges = (managedVMs[item.vmId] ?? orphanedVMs[item.vmId])?.appliedEdges
         managedVMs[item.vmId] = VMManifestEntry(
-            hypervisorType: desired.hypervisorType, spec: desired.spec, vsockCID: lease.cid)
+            hypervisorType: desired.hypervisorType, spec: desired.spec, vsockCID: lease.cid,
+            appliedEdges: appliedEdges)
         orphanedVMs.removeValue(forKey: item.vmId)
         persistManifest()
         await sendVMLog(
@@ -4241,12 +4249,36 @@ extension Agent: ReconcileActuator {
             try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
         case .delete:
             try await sandboxReconcileDelete(item)
-        case .pause, .resume, .resize, .attach, .detach, .export:
+        case .restore:
+            try await sandboxReconcileRestore(item)
+        case .pause, .resume, .resize, .reboot, .attach, .detach, .export:
             // Not in the sandbox step vocabulary (v1); the planner never
-            // emits these for sandbox items. `.export` acts on a sandbox's
-            // *snapshot*, not on the sandbox, and arrives as a snapshot item.
+            // emits these for sandbox items. `.reboot` in particular is a VM
+            // edge only: `POST /api/sandboxes/:id/restart` is expressed as a
+            // fresh desired-running generation rather than a nonce, so a
+            // sandbox entry carries no `rebootGeneration` to plan from.
+            // `.export` acts on a sandbox's *snapshot*, not on the sandbox, and
+            // arrives as a snapshot item.
             throw SandboxRuntimeError.unsupportedStep(String(describing: step))
         }
+    }
+
+    /// Load a checkpoint back over an existing sandbox (STR-151): tear down the
+    /// current microVM, load the checkpointed memory + rootfs, resume. Same
+    /// sandbox, same identity, same addresses.
+    ///
+    /// `artifacts` is present when the sandbox no longer lives on the agent that
+    /// captured the snapshot; the runtime stages the exported archive from
+    /// object storage before loading it (issue #428). The descriptors are
+    /// resolved fresh at sync assembly, so an entry that sat in the desired
+    /// state for a while still carries usable locators.
+    private func sandboxReconcileRestore(_ item: ReconcileWorkItem) async throws {
+        guard let restore = item.desiredSandbox?.restore else {
+            throw SandboxRuntimeError.unsupportedStep("restore work item without a restore nonce")
+        }
+        try await requireSandboxRuntime().restoreSandbox(
+            sandboxId: item.id, snapshotId: restore.snapshotId.uuidString,
+            artifacts: restore.artifacts)
     }
 
     /// Where this host realizes a sandbox's NIC (issue STR-100).
@@ -4318,7 +4350,12 @@ extension Agent: ReconcileActuator {
             throw error
         }
 
-        managedSandboxes[item.id] = VMManifestEntry(sandboxSpec: desired.spec)
+        // Carried over for `reconcileCreate`'s reason: this path also rebuilds
+        // an orphan whose Firecracker process is gone, and its record of what
+        // has already been applied to it is not the spec's to discard.
+        managedSandboxes[item.id] = VMManifestEntry(
+            sandboxSpec: desired.spec,
+            appliedEdges: (managedSandboxes[item.id] ?? orphanedSandboxes[item.id])?.appliedEdges)
         orphanedSandboxes.removeValue(forKey: item.id)
         persistManifest()
     }

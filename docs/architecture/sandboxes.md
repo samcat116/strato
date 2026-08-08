@@ -54,12 +54,13 @@ A sandbox is described by `SandboxSpec`
   [Quotas, TTL, and expiry](#quotas-ttl-and-expiry)), and the reported exit
   code (#413).
 - `/api/sandboxes` (`SandboxController`): list/create/show/update/delete +
-  start/stop/restart + status + operations. Mutations insert a
-  `resource_operations` row (`resource_kind = sandbox`) and bump desired state
-  in one transaction, returning **202 Accepted** — the machinery generalized
-  in #412. Restart is expressed as a fresh desired-`running` generation (there
-  is no imperative sandbox reboot message); the runtime (#421) interprets it
-  agent-side.
+  start/stop/restart + status + operations. Mutations write the desired-state
+  change plus an append-only `resource_events` row in one transaction and
+  return **202 Accepted** with `{resource, targetGeneration, mutationId}`; the
+  client refetches the sandbox and reads its `conditions` (ADR 0001 stage 4,
+  STR-147). Restart is expressed as a fresh desired-`running` generation (there
+  is no sandbox reboot nonce — unlike a VM's, whose reboot became one in
+  STR-151); the runtime (#421) interprets it agent-side.
 - `sandbox` is an IAM node type of its own: the same action families as
   `virtual_machine` minus console/pause/promote, plus `exec`.
   `AuthorizationMiddleware` guards `/api/sandboxes` through the same
@@ -470,7 +471,7 @@ jailed VMM writes them) and the runtime moves them out to the host-owned
 archive at `<sandbox storage>/<id>/snapshots/<snapshotId>/` — agent-owned
 paths beside the sandbox (the volume-snapshot precedent), removed with it.
 
-**Restore in place** (`sandbox_restore`, same agent, same identity): drain →
+**Restore in place** (`DesiredSandboxState.restore`, same identity): drain →
 destroy the current Firecracker process → re-stage the layout from the
 archive (for a jailed sandbox the whole chroot is rebuilt; kernel/initramfs
 are deliberately absent — a snapshot load never reads the boot source) →
@@ -507,10 +508,15 @@ would last exactly until the next level-triggered pass. And the source host's
 about the *agent*, which the agent's own report has no reason to carry, and an
 un-templated snapshot needs it to be mobile at all.
 
-`restore` is still an imperative operation (kind `restore`, capability-gated
-on `snapshot:SandboxSnapshot`, wire v9): loading a checkpoint back over a live
-microVM is an edge rather than a state, and converts to a nonce in ADR stage 9.
-Restore pins to the snapshot's agent — until the snapshot is exported (see
+`restore` is an **edge-nonce** on the sandbox's desired entry (wire v34, ADR
+stage 9, STR-151). Loading a checkpoint back over a live microVM is genuinely an
+edge rather than a state, so it became one by being counted:
+`DesiredSandboxState.restore` carries a monotonic generation and the snapshot to
+load, and the agent applies it once against the record it keeps in its own
+durable manifest — a dropped or replayed sync converges rather than rewinding
+the guest twice. It is refused with `409` when the sandbox's agent predates v34,
+since such an agent would ignore the field and report the bumped generation as
+converged. Restore pins to the snapshot's agent — until the snapshot is exported (see
 [Snapshot mobility](#snapshot-mobility)) — and flips desired state to
 `running` in the same transaction (IPAM allocations stay held while
 checkpointed, so the sandbox keeps its addresses). Snapshot storage draws
@@ -709,8 +715,9 @@ An exported snapshot unlocks:
 - **Cross-agent fork** — fork placement widens from the pinned agent to
   every compatible agent, and survives losing the snapshot's home agent
   entirely. Sync assembly injects checksummed download descriptors into
-  `restoreFrom` (relative paths the agent fetches over SVID mTLS); the
-  restore RPC carries the same descriptors. The target agent stages the
+  `restoreFrom` (relative paths the agent fetches over SVID mTLS); the restore
+  nonce carries the same descriptors, minted at assembly rather than stored so a
+  nonce that waits in the desired state never goes stale. The target agent stages the
   archive into an LRU-swept import cache
   (`<sandbox storage>/snapshot-imports/`, sharing the warm-cache byte
   budget), verifying each artifact's size and SHA-256 before the atomic

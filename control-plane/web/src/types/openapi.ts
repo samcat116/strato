@@ -208,7 +208,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Restart a virtual machine */
+        /**
+         * Restart a virtual machine
+         * @description Restarts the guest in place. A reboot starts and ends `running`, so it rides the desired-state sync as a monotonic nonce the agent applies once rather than as a command — a dropped connection costs latency, not the restart. Asynchronous — refetch the VM.
+         */
         post: operations["restartVM"];
         delete?: never;
         options?: never;
@@ -370,7 +373,7 @@ export interface paths {
         put?: never;
         /**
          * Restore a virtual machine from a checkpoint
-         * @description Loads the captured memory and device state back into the VM and resumes it. The checkpoint lives inside the VM's disks, so this only works on the agent that took it. Asynchronous — poll the returned operation.
+         * @description Loads the captured memory and device state back into the VM and resumes it. The checkpoint lives inside the VM's disks, so this only works on the agent that took it. Asynchronous — refetch the VM and read its `conditions`.
          */
         post: operations["restoreVMSnapshot"];
         delete?: never;
@@ -614,7 +617,10 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Restore a sandbox from a snapshot */
+        /**
+         * Restore a sandbox from a snapshot
+         * @description Rewinds the sandbox in place to the snapshot — same id, same addresses. Asynchronous — refetch the sandbox and read its `conditions`.
+         */
         post: operations["restoreSandboxSnapshot"];
         delete?: never;
         options?: never;
@@ -9005,15 +9011,6 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description The mutation was accepted; poll the returned operation to completion. */
-        AcceptedOperation: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["ResourceOperation"];
-            };
-        };
         /** @description The mutation was accepted. Refetch the VM until its `conditions` report `observedGeneration >= targetGeneration` with `converged` true. */
         AcceptedVMMutation: {
             headers: {
@@ -9562,7 +9559,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -9759,7 +9756,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
@@ -10129,7 +10126,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            202: components["responses"]["AcceptedOperation"];
+            202: components["responses"]["AcceptedSandboxMutation"];
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
