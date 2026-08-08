@@ -10,30 +10,23 @@ extension ResourceOperation {
     public var succeeded: Bool { status == .succeeded }
 }
 
-/// What a `202` leaves the CLI to follow.
+/// What a `202` leaves the CLI to follow: an id, and nothing else.
 ///
-/// One shape now (STR-151): every mutation answers with its resource and a
-/// `mutationId`, and the id is what `GET /api/operations/{id}` answers for —
-/// synthesized from the mutation's audit record and the resource's conditions.
-/// The `ResourceOperation`-returning variant went with VM restart, the last
-/// verb dispatched as an imperative agent command.
-///
-/// The seed survives because the façade can still answer from a real row: an
-/// operation begun by a previous build and swept to a verdict after the upgrade.
+/// One shape since STR-151 — every mutation answers with its resource and a
+/// `mutationId`, and that id is what `GET /api/operations/{id}` answers for.
+/// It carried a `seed` as well, an operation the mutation had already returned
+/// in a terminal state, which the façade could serve from a real row; STR-152
+/// dropped the table, so every answer is synthesized on read and the first
+/// poll is the only way to get one.
 public struct AcceptedMutation: Sendable {
     public let id: String
-    /// The operation as the mutation returned it, when it returned one. Lets
-    /// an already-terminal response short-circuit the first poll.
-    public let seed: ResourceOperation?
 
     public init(id: String) {
         self.id = id
-        self.seed = nil
     }
 
     public init(_ operation: ResourceOperation) {
         self.id = operation.id ?? ""
-        self.seed = operation
     }
 }
 
@@ -64,7 +57,7 @@ public struct OperationWaiter: Sendable {
         guard !accepted.id.isEmpty else {
             throw CLIError.api(status: 0, message: "Server accepted the mutation without an id")
         }
-        var current = accepted.seed
+        var current: ResourceOperation?
         let deadline = Date().addingTimeInterval(timeout)
 
         while current?.isTerminal != true {
@@ -73,9 +66,8 @@ public struct OperationWaiter: Sendable {
                     "Timed out after \(Int(timeout))s waiting for operation \(accepted.id); "
                         + "check it later with 'strato operation get \(accepted.id)'.")
             }
-            // Nothing was seeded on the first pass for a lifecycle mutation, so
-            // the sleep goes first only when there is already a pending answer
-            // to re-read.
+            // The first pass reads immediately; the sleep only separates one
+            // pending answer from the next.
             if current != nil {
                 try await sleeper(pollInterval)
             }

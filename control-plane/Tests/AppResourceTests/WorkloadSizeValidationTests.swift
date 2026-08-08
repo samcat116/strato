@@ -254,7 +254,7 @@ final class WorkloadSizeValidationTests {
 
             // The background create dispatch fails (no agents run in tests);
             // let it reach a terminal state before teardown.
-            try await waitForNoPendingOperations(resourceID: vmID, on: app.db)
+            try await waitForCreateToSettle(resourceID: vmID, on: app.db)
         }
     }
 
@@ -367,22 +367,22 @@ final class WorkloadSizeValidationTests {
             #expect(created.cpus == WorkloadSizeLimits.maxVCPUs)
             #expect(created.memory == WorkloadSizeLimits.maxMemoryBytes)
 
-            try await waitForNoPendingOperations(resourceID: sandboxID, on: app.db)
+            try await waitForCreateToSettle(resourceID: sandboxID, on: app.db)
         }
     }
 
     /// Waits for the background create dispatch to fail (no agents run in
-    /// tests), so an in-flight task can't outlive the test app.
-    private func waitForNoPendingOperations(resourceID: UUID, on db: any Database) async throws {
+    /// tests), so an in-flight task can't outlive the test app. The failure
+    /// lands as `degraded` on the workload itself since STR-152 — there is no
+    /// operation row left to poll — so the workload is both the subject and the
+    /// evidence, and either kind may be the one under test.
+    private func waitForCreateToSettle(resourceID: UUID, on db: any Database) async throws {
         for _ in 0..<100 {
-            let pending = try await ResourceOperation.query(on: db)
-                .filter(\.$resourceID == resourceID)
-                .filter(\.$status == .pending)
-                .count()
-            if pending == 0 { return }
+            if try await VM.find(resourceID, on: db)?.failedGeneration != nil { return }
+            if try await Sandbox.find(resourceID, on: db)?.failedGeneration != nil { return }
             try await Task.sleep(for: .milliseconds(50))
         }
-        Issue.record("operations for \(resourceID) never reached a terminal state")
+        Issue.record("the create dispatch for \(resourceID) never settled")
     }
 
     // MARK: - Fixture

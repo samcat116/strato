@@ -468,17 +468,18 @@ final class OrgTrustDomainTests {
 
             let row = try #require(try await Agent.find(agentID, on: app.db))
 
-            // Registration publishes the agent's presence/route under its
-            // identity key; the operator teardown path must clear the same key.
-            // Passing the bare name here silently did nothing, because nothing
-            // is keyed by name any more — which is exactly the regression this
-            // guards. `forceUnregisterAgent` now takes an `AgentIdentity`, so
-            // repeating the mistake is a compile error.
-            #expect(await app.coordination.agentRoute(agentKey: row.identity.key) != nil)
+            // Registration publishes the agent's presence under its identity
+            // key; the operator teardown path must clear the same key, or the
+            // stale-agent sweep keeps skipping a node the operator just tore
+            // down. Passing the bare name here silently did nothing, because
+            // nothing is keyed by name any more — which is exactly the
+            // regression this guards. `forceUnregisterAgent` now takes an
+            // `AgentIdentity`, so repeating the mistake is a compile error.
+            #expect(await app.coordination.isAgentPresent(agentKey: row.identity.key) == true)
 
             await app.agentService.forceUnregisterAgent(row.identity)
 
-            #expect(await app.coordination.agentRoute(agentKey: row.identity.key) == nil)
+            #expect(await app.coordination.isAgentPresent(agentKey: row.identity.key) == false)
         }
     }
 

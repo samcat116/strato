@@ -107,30 +107,14 @@ final class WebSocketManager: @unchecked Sendable {
 actor AgentService {
     private let app: Application
 
-    /// In-flight request/response exchanges on *this process's* sockets, keyed
-    /// by request ID. This is per-connection correlation state, not a registry:
-    /// requests are only ever armed for locally socketed agents, and every
-    /// entry dies with its socket (or its timeout). Cross-replica callers reach
-    /// it through the RPC bridge below, never directly.
-    private var pendingRequests: [String: PendingRequest] = [:]
-
-    /// Exchange IDs whose awaiting task was cancelled before the exchange was
-    /// armed (the arming runs in a separate task, so cancellation can win the
-    /// race). Consumed at arming time so the continuation resumes immediately
-    /// instead of suspending until its timeout. Entries that miss both the
-    /// pending map and the arming (cancellation racing a normal completion)
-    /// linger, but the only canceller of these waits is shutdown's
-    /// background-task drain, so the set is bounded to process teardown.
-    private var cancelledExchanges: Set<String> = []
-
     private var heartbeatTask: Task<Void, Never>?
 
-    /// Last successful paired presence/route refresh per local socket. The
-    /// wire sends both a heartbeat and an observed report every 20 seconds;
-    /// refreshing on every frame doubles Valkey traffic without extending
-    /// liveness. Half the TTL leaves a full retry window after a failed write.
-    private var livenessRefreshedAt: [String: ContinuousClock.Instant] = [:]
-    private static let livenessRefreshInterval: Duration =
+    /// Last successful presence refresh per local socket. The wire sends both a
+    /// heartbeat and an observed report every 20 seconds; refreshing on every
+    /// frame doubles Valkey traffic without extending liveness. Half the TTL
+    /// leaves a full retry window after a failed write.
+    private var presenceRefreshedAt: [String: ContinuousClock.Instant] = [:]
+    private static let presenceRefreshInterval: Duration =
         .seconds(Int64(CoordinationService.presenceTTLSeconds / 2))
 
     /// Keep the durable heartbeat comfortably inside the same 60-second
@@ -152,7 +136,7 @@ actor AgentService {
     /// not listening for them and a redundant push would assemble the whole
     /// sync a second time for nothing.
     ///
-    /// Replica-local and socket-scoped, like `livenessRefreshedAt`: it records
+    /// Replica-local and socket-scoped, like `presenceRefreshedAt`: it records
     /// what an agent said when it registered *here*, so it is populated on
     /// registration and dropped on unregister. A replica that never saw the
     /// registration defaults to push mode, which is the safe direction — an
@@ -178,17 +162,6 @@ actor AgentService {
     /// Interval between heartbeat-monitor ticks. Injectable so tests can
     /// exercise the loop (and its shutdown race) without waiting 30s.
     private let heartbeatInterval: Duration
-
-    /// A request awaiting a response from a specific agent.
-    /// Tracking the agent lets us fail all of an agent's in-flight requests when it disconnects.
-    private struct PendingRequest {
-        let agentId: String
-        let continuation: CheckedContinuation<AgentServiceResponse, Error>
-        /// The timeout armed for this request, cancelled whenever the request
-        /// is removed (normal response, disconnect, or the timeout firing itself)
-        /// so a completed request never leaves a timer sleeping to no purpose.
-        var timeoutTask: Task<Void, Never>?
-    }
 
     /// Set at application shutdown. Guards against the init task arming the
     /// heartbeat monitor after `shutdown()` already ran.
@@ -594,10 +567,9 @@ actor AgentService {
             protocolVersion: protocolVersion,
             claimsPull: message.pullsDesiredState ?? false)
 
-        // Publish liveness and socket location to the coordination store so
-        // every control-plane process — not just the one holding this socket —
-        // can see the agent and route mutations to it.
-        await refreshAgentLivenessIfNeeded(agentKey: agentKey, force: true)
+        // Publish presence to the coordination store so every control-plane
+        // process — not just the one holding this socket — can see the agent.
+        await refreshAgentPresenceIfNeeded(agentKey: agentKey, force: true)
 
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
@@ -704,8 +676,6 @@ actor AgentService {
         try await agent.save(on: db)
         let agentKey = agent.identity.key
 
-        // Fail any in-flight requests waiting on this agent before we drop it
-        failPendingRequests(for: agentId)
         pullModeAgents.remove(agentId)
 
         app.websocketManager.removeConnection(agentKey: agentKey)
@@ -715,7 +685,8 @@ actor AgentService {
         // path.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.sandboxExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        await app.replicaBridge.clearRoute(agentKey: agentKey)
+        presenceRefreshedAt.removeValue(forKey: agentKey)
+        await app.coordination.clearAgentPresence(agentKey: agentKey)
 
         Telemetry.agentDisconnected(reason: "unregister")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
@@ -740,8 +711,6 @@ actor AgentService {
             return
         }
 
-        // Fail any in-flight requests waiting on this agent before we drop it
-        failPendingRequests(for: agentId)
         pullModeAgents.remove(agentId)
 
         app.websocketManager.removeConnection(agentKey: agentKey)
@@ -749,36 +718,58 @@ actor AgentService {
         // not run its cleanup once the connection entry is gone.
         app.consoleSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
         app.sandboxExecSessionManager.closeAllSessions(forAgent: agentKey, reason: "agent unregistered")
-        await app.replicaBridge.clearRoute(agentKey: agentKey)
+        // Drop the cluster-visible claim that this agent is alive, so the
+        // stale-agent sweep stops skipping it. This used to fall out of
+        // clearing the socket-route key, which shared a write with presence;
+        // with the route gone (STR-152) presence is cleared on its own.
+        presenceRefreshedAt.removeValue(forKey: agentKey)
+        await app.coordination.clearAgentPresence(agentKey: agentKey)
 
         app.logger.info(
             "Agent force unregistered",
             metadata: ["agentId": .string(agentId), "agentKey": .string(agentKey)])
     }
 
-    /// Socket-close cleanup. The agent may have already reconnected to another
-    /// replica: its route key then names that replica, and this (delayed)
-    /// close must not mark the agent offline underneath a live connection.
+    /// Socket-close cleanup. Only reached when this socket was still the
+    /// agent's current *local* connection — `removeConnection(ifCurrent:)` in
+    /// the close handler already drops a delayed close superseded by a
+    /// same-replica reconnect.
+    ///
+    /// This used to consult the `agent:{name}:replica` routing key and also
+    /// skip the offline mark when the agent had reconnected to *another*
+    /// replica. The key existed for the cross-replica RPC bridge and went with
+    /// it (STR-152), so a close delayed past such a reconnect now writes
+    /// `offline` under a live connection until the holding replica's next
+    /// frame writes `.online` back — bounded by the agent's heartbeat interval,
+    /// about 20 seconds.
+    ///
+    /// **That window is not cosmetic**, and it is worth being precise about the
+    /// cost: `status == .online` is an admission gate, not just a badge.
+    /// `SnapshotArtifactMutation.requireCaptureCapableAgent` refuses a capture
+    /// with `409 Agent is offline`, and `selectVolumeAgent` and the scheduler's
+    /// `filterEligibleAgents` both skip the host. So a capture aimed at that
+    /// agent is *rejected* rather than delayed, and new placements route around
+    /// a healthy node.
+    ///
+    /// Presence is deliberately not used as a stand-in. `agent:{name}:presence`
+    /// is a single fleet-wide key with no owner attribution — this replica
+    /// refreshed it within the last half-TTL too — so "presence is live" cannot
+    /// distinguish another replica's claim from our own, and skipping the
+    /// offline mark whenever it is live would leave a genuinely dead agent
+    /// `online` for up to a full TTL on the single-replica deployments that are
+    /// the common case. That inverts the failure into the more damaging
+    /// direction: admitting placements onto a host that is gone, rather than
+    /// refusing them onto one that is live. Closing the window properly needs a
+    /// signal that says *which* connection is current, which is the directory
+    /// this change deleted.
     func removeAgent(_ agentKey: String) async {
-        livenessRefreshedAt.removeValue(forKey: agentKey)
+        presenceRefreshedAt.removeValue(forKey: agentKey)
 
-        // Local pending requests die with the local socket regardless of
-        // where the agent lives now.
+        // The pull-mode claim came with the socket and goes with it. If the
+        // agent reconnects here it re-declares its transport at registration.
         if let agentId = await agentId(forKey: agentKey) {
-            failPendingRequests(for: agentId)
-            // The claim came with the socket and goes with it. If the agent
-            // reconnects here it re-declares its transport at registration.
             pullModeAgents.remove(agentId)
         }
-
-        if case .forward = await app.replicaBridge.remoteRoute(agentKey: agentKey) {
-            app.logger.debug(
-                "Agent socket closed here but agent is routed to another replica; skipping offline mark",
-                metadata: ["agentKey": .string(agentKey)])
-            return
-        }
-
-        await app.replicaBridge.clearRoute(agentKey: agentKey)
 
         Telemetry.agentDisconnected(reason: "connection_closed")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
@@ -836,17 +827,16 @@ actor AgentService {
             try await agent.save(on: db)
         }
 
-        // Refresh the agent's presence and socket-route keys so liveness and
-        // routing stay visible cluster-wide. The heartbeat arrived over this
-        // process's socket, so the route is ours to claim.
-        await refreshAgentLivenessIfNeeded(agentKey: agentKey)
+        // Refresh the agent's presence key so its liveness stays visible
+        // cluster-wide, not just to the process holding this socket.
+        await refreshAgentPresenceIfNeeded(agentKey: agentKey)
 
         app.logger.debug("Agent heartbeat updated", metadata: ["agentId": .string(message.agentId)])
     }
 
     /// Apply the mutable fields from a periodic agent report. A real state
     /// change always persists and refreshes `lastHeartbeat`; otherwise the
-    /// timestamp advances at half the liveness TTL.
+    /// timestamp advances at half the presence TTL.
     private func applyPeriodicAgentState(_ resources: AgentResources, to agent: Agent) -> Bool {
         var changed = agent.updateAvailableResources(resources)
         if agent.status != .online {
@@ -866,22 +856,19 @@ actor AgentService {
         return false
     }
 
-    /// Refresh presence and route together at most once per half TTL. Failed
+    /// Refresh the agent's presence key at most once per half TTL. Failed
     /// attempts are deliberately not recorded so the next incoming frame
     /// retries instead of allowing a previously live key to expire.
-    private func refreshAgentLivenessIfNeeded(agentKey: String, force: Bool = false) async {
+    private func refreshAgentPresenceIfNeeded(agentKey: String, force: Bool = false) async {
         let now = ContinuousClock.now
-        if !force, let lastRefresh = livenessRefreshedAt[agentKey],
-            lastRefresh.duration(to: now) < Self.livenessRefreshInterval
+        if !force, let lastRefresh = presenceRefreshedAt[agentKey],
+            lastRefresh.duration(to: now) < Self.presenceRefreshInterval
         {
             return
         }
 
-        if await app.coordination.recordAgentLiveness(
-            agentKey: agentKey,
-            replicaId: app.replicaID
-        ) {
-            livenessRefreshedAt[agentKey] = now
+        if await app.coordination.recordAgentPresence(agentKey: agentKey) {
+            presenceRefreshedAt[agentKey] = now
         }
     }
 
@@ -947,9 +934,9 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
-                    // Fail operations stuck pending past their budget and resolve
-                    // VMs stuck in a transitional state
-                    await sweepStuckOperations()
+                    // Release volumes still naming a VM that no longer exists
+                    // (STR-129).
+                    await sweepStrandedVolumeAttachments()
 
                     try self.checkTickPreconditions()
 
@@ -1025,11 +1012,10 @@ actor AgentService {
                 )
             }
 
-            // Not gated on a sweep lock even though the state is shared:
-            // in-flight requests on this process's sockets can only be failed
-            // here, the offline write is idempotent, and the presence check
-            // keeps replicas from disagreeing — an agent heartbeating through
-            // any replica keeps a live presence key and is skipped.
+            // Not gated on a sweep lock even though the state is shared: the
+            // offline write is idempotent, and the presence check keeps
+            // replicas from disagreeing — an agent heartbeating through any
+            // replica keeps a live presence key and is skipped.
             for agent in onlineAgents {
                 let heartbeatAge = agent.lastHeartbeat.map { now.timeIntervalSince($0) } ?? .infinity
                 guard heartbeatAge > staleThreshold else { continue }
@@ -1043,10 +1029,6 @@ actor AgentService {
                         "Agent heartbeat is stale in the database but presence key is live; skipping",
                         metadata: ["agentName": .string(agent.name)])
                     continue
-                }
-
-                if let agentId = agent.id?.uuidString {
-                    failPendingRequests(for: agentId)
                 }
 
                 agent.status = .offline
@@ -1201,112 +1183,45 @@ actor AgentService {
         }
     }
 
-    /// Fails operations stuck `pending` past their per-kind budget and resolves the
-    /// affected VM's in-flight status (issue #259). This is the restart backstop:
-    /// while the dispatching process lives, the awaited agent response (or its
-    /// timeout) completes the operation; after a crash, only this sweep does.
-    /// It also broadens the old stuck-VM sweep — transitional VMs with no pending
-    /// operation (e.g. a lost statusUpdate after a completed operation) still
-    /// resolve to `.error`.
+    /// Releases volumes left holding an attachment to a VM that no longer
+    /// exists (STR-129).
     ///
-    /// Since STR-147 the operation half covers only what still writes rows —
-    /// VM reboot and the snapshot verbs — while lifecycle mutations are handled
-    /// by `sweepStuckConvergence`. The transitional-resource and volume halves
-    /// are unchanged: neither ever depended on an operation row. The
-    /// cluster-singleton lock stays for the same reason it was taken, and
-    /// retires with the last operation kind.
+    /// This was the third and last half of the stuck-operation sweep, and the
+    /// only one that never had anything to do with operations. The other two —
+    /// failing rows past their per-kind budget, and marking transitional VMs
+    /// and sandboxes `.error` — went with the table in STR-152: a mutation's
+    /// deadline and the resource's own `conditions.degraded` say both things
+    /// now, and `sweepStuckConvergence` writes them without a cluster lock.
+    ///
+    /// The VM reap releases volumes inside the delete transaction, so this
+    /// should never fire — it is the backstop for a replica still running an
+    /// older build during a rolling upgrade, and for any future path that
+    /// removes a VM without going through the reap.
+    ///
+    /// No age budget, unlike the convergence sweep: nothing is in flight that
+    /// could still land, and until the columns are cleared the volume names a
+    /// device on a VM that does not exist. The generation bump is what makes
+    /// the agent act on it — a desired entry no newer than the last one applied
+    /// is dropped, so clearing the columns alone would leave the disk plugged
+    /// into a guest the control plane no longer describes.
     ///
     /// Internal rather than private so tests can drive a pass directly.
-    func sweepStuckOperations() async {
+    func sweepStrandedVolumeAttachments() async {
         // Never touch app.db (a fatal error, not a throw, after core
         // teardown) once shutdown has begun — this was the crashing frame of
         // the recurring "Core not configured" CI crash.
         guard !isShutDown, !app.didShutdown else { return }
-        // Cluster-singleton: with multiple replicas, only one may sweep per interval.
-        guard await app.coordination.acquireSweepLock("stuck_operations") else {
-            app.logger.debug("Skipping stuck-operation sweep; lock held by another control-plane instance")
+        // Cluster-singleton: the repair is idempotent, but each pass bumps a
+        // generation, so two replicas racing would churn the agent's sync for
+        // nothing.
+        guard await app.coordination.acquireSweepLock("stranded_attachments") else {
+            app.logger.debug("Skipping stranded-attachment sweep; lock held by another control-plane instance")
             return
         }
 
         let db = app.db
-        let now = Date()
 
         do {
-            let pending = try await ResourceOperation.query(on: db)
-                .filter(\.$status == .pending)
-                .all()
-
-            for operation in pending {
-                // A missing creation timestamp yields age 0 and is left for a
-                // later sweep (it is set on insert, so this is a safety net).
-                let age = now.timeIntervalSince(operation.createdAt ?? now)
-                let budget = operation.completionBudgetSeconds
-                guard age > budget else { continue }
-
-                // The shared verdict path marks the operation failed (iff still
-                // pending) and resolves whatever in-flight state it left on its
-                // resource — each resource kind's own `resolveForStuckOperation`.
-                // `recordVerdict` logs the failure (the timeout error names the
-                // budget), so no separate "stuck past budget" warning here.
-                guard let operationID = operation.id else { continue }
-                _ = await app.resourceOperationCoordinator.recordVerdict(
-                    operationID: operationID, as: .failed,
-                    error: "Operation timed out: no completion after \(Int(budget))s",
-                    telemetryReason: "stuck_operation", on: app)
-            }
-
-            // Transitional VMs with no pending operation: the operation completed
-            // (or predates the operations table) but the confirming statusUpdate
-            // never landed. Same 120s timeout as the old stuck-VM sweep.
-            let timeout: TimeInterval = 120
-            let stuckBefore = now.addingTimeInterval(-timeout)
-            let transitional = try await VM.query(on: db)
-                .filter(\.$status ~~ [.starting, .stopping])
-                .filterAged(before: stuckBefore, by: \.$statusChangedAt, fallingBackTo: \.$updatedAt)
-                .all()
-
-            try await markStuckTransitionalResources(
-                transitional.compactMap { vm -> StuckTransitionalResource? in
-                    guard let vmID = vm.id else { return nil }
-                    return StuckTransitionalResource(id: vmID, stuckStatus: vm.status.rawValue) {
-                        vm.setStatus(.error)
-                        try await vm.save(on: db)
-                    }
-                },
-                kind: .virtualMachine, timeout: timeout, on: db,
-                telemetry: { Telemetry.vmEnteredError(reason: "stuck_transition") })
-
-            // Same backstop for sandboxes: transitional with no pending
-            // operation means the confirming report never landed.
-            let transitionalSandboxes = try await Sandbox.query(on: db)
-                .filter(\.$status ~~ [.starting, .stopping])
-                .filterAged(before: stuckBefore, by: \.$statusChangedAt, fallingBackTo: \.$updatedAt)
-                .all()
-
-            try await markStuckTransitionalResources(
-                transitionalSandboxes.compactMap { sandbox -> StuckTransitionalResource? in
-                    guard let sandboxID = sandbox.id else { return nil }
-                    return StuckTransitionalResource(id: sandboxID, stuckStatus: sandbox.status.rawValue) {
-                        sandbox.setStatus(.error)
-                        try await sandbox.save(on: db)
-                    }
-                },
-                kind: .sandbox, timeout: timeout, on: db)
-
-            // Stranded attachments (STR-129): a row that lost its VM but kept
-            // the rest of the attachment. The VM reap releases volumes inside
-            // the delete transaction, so this should never fire — it is the
-            // backstop for a replica still running an older build during a
-            // rolling upgrade, and for any future path that removes a VM
-            // without going through the reap.
-            //
-            // No age budget, unlike the convergence sweeps above: nothing is in
-            // flight that could still land, and until the columns are cleared
-            // the volume names a device on a VM that does not exist. The
-            // generation bump is what makes the agent act on it — a desired
-            // entry no newer than the last one applied is dropped, so clearing
-            // the columns alone would leave the disk plugged into a guest the
-            // control plane no longer describes.
             // The same predicate `NormalizeVolumeAttachments` repairs on, column
             // for column: they describe one state, so they must agree or a row
             // the one-off repair fixes is one this backstop never sees again.
@@ -1333,7 +1248,7 @@ actor AgentService {
                     ])
             }
         } catch {
-            app.logger.error("Stuck-operation sweep failed: \(error)")
+            app.logger.error("Stranded-attachment sweep failed: \(error)")
         }
     }
 
@@ -1447,67 +1362,14 @@ actor AgentService {
         }
     }
 
-    /// One resource the stuck sweep found in a transitional status: enough to
-    /// decide on it (`id`), to log it (`stuckStatus`, captured before the
-    /// transition to `.error`), and to resolve it (`markError`).
-    private struct StuckTransitionalResource {
-        let id: UUID
-        let stuckStatus: String
-        let markError: () async throws -> Void
-    }
-
-    /// Marks resources stuck in a transitional status past `timeout` as
-    /// `.error`, skipping any whose resolution a pending operation still owns
-    /// via its own budget. Shared by the VM and sandbox backstops, which differ
-    /// only in the model queried, the `resourceKind` filter, and the VM-only
-    /// telemetry counter.
-    private func markStuckTransitionalResources(
-        _ resources: [StuckTransitionalResource],
-        kind: OperationResourceKind,
-        timeout: TimeInterval,
-        on db: Database,
-        telemetry: (() -> Void)? = nil
-    ) async throws {
-        // Deliberately not `kind.displayName`: that is a mid-sentence noun
-        // ("sandbox"), and these labels open the log message, so reusing it
-        // would lowercase the sentence-initial word on the sandbox path.
-        let (label, idKey): (String, String) =
-            switch kind {
-            case .virtualMachine: ("VM", "vmId")
-            case .sandbox: ("Sandbox", "sandboxId")
-            // Unreachable: volumes have no transitional-status backstop —
-            // `convergence_deadline` and `sweepStuckConvergence` replaced it
-            // wholesale in STR-148.
-            case .volume: ("Volume", "volumeId")
-            // Unreachable for the same reason as volumes: snapshot artifacts
-            // have only the convergence backstop (STR-150).
-            case .volumeSnapshot: ("Volume snapshot", "snapshotId")
-            case .vmCheckpoint: ("Checkpoint", "snapshotId")
-            case .sandboxSnapshot: ("Sandbox snapshot", "snapshotId")
-            }
-
-        for resource in resources {
-            let hasPendingOperation =
-                try await ResourceOperation.query(on: db)
-                .filter(\.$resourceKind == kind)
-                .filter(\.$resourceID == resource.id)
-                .filter(\.$status == .pending)
-                .count() > 0
-            // A pending operation owns this resource's resolution via its own budget.
-            guard !hasPendingOperation else { continue }
-
-            try await resource.markError()
-            telemetry?()
-
-            app.logger.warning(
-                "\(label) stuck in transitional state past timeout; marking as error",
-                metadata: [
-                    idKey: .string(resource.id.uuidString),
-                    "stuckStatus": .string(resource.stuckStatus),
-                    "timeoutSeconds": .string("\(Int(timeout))"),
-                ])
-        }
-    }
+    // The transitional-status backstop — VMs and sandboxes sitting in
+    // `.starting`/`.stopping` past 120s with no pending operation, marked
+    // `.error` — went with the operations table (STR-152). It predated
+    // generations: with no `observedGeneration` to compare against, "stuck" had
+    // to be inferred from a status and a clock, and the pending-operation query
+    // existed only to stop the two backstops fighting. `sweepStuckConvergence`
+    // says the same thing from the deadline every accepted mutation stamps, and
+    // resolves through the same per-kind `resolveForStuckOperation`.
 
     // MARK: - Sandbox expiry (issue #424)
 
@@ -2313,9 +2175,9 @@ actor AgentService {
             }
         }
 
-        // The report arrived over this process's socket: refresh liveness and
-        // routing alongside, mirroring the heartbeat path.
-        await refreshAgentLivenessIfNeeded(agentKey: agentKey)
+        // The report arrived over this process's socket: refresh presence
+        // alongside, mirroring the heartbeat path.
+        await refreshAgentPresenceIfNeeded(agentKey: agentKey)
 
         do {
             let outcome = try await app.observedStateApplier.apply(report)
@@ -2892,237 +2754,13 @@ actor AgentService {
         websocket.send(data)
     }
 
-    private func sendMessageToLocalAgent<T: WebSocketMessage>(_ message: T, agentKey: String) async throws {
-        try sendEnvelope(MessageEnvelope(message: message), toLocalAgent: agentKey)
-    }
-
-    /// Send a message to an agent and await the correlated success/error
-    /// response, wherever the agent's socket lives: a locally armed
-    /// continuation when this process holds it, or an exchange forwarded to
-    /// the socket-holding replica over the coordination store's RPC channels
-    /// otherwise. This is the path for the few remaining imperative exchanges
-    /// — volume operations and reboot, which are actions rather than states
-    /// and so cannot ride the level-triggered sync. The timeout should be
-    /// sized to the operation: metadata ops finish in seconds, while
-    /// image-backed volume creation or a clone can copy gigabytes.
-    func sendMessageToAgentWithResponse<T: WebSocketMessage>(
-        _ message: T,
-        agentId: String,
-        timeout: Duration = .seconds(30)
-    ) async throws -> AgentServiceResponse {
-        let envelope = try MessageEnvelope(message: message)
-
-        if let localName = app.websocketManager.agentKey(agentId: agentId) {
-            return try await sendEnvelopeAwaitingLocalResponse(
-                envelope, requestId: message.requestId, agentId: agentId,
-                agentKey: localName, timeout: timeout)
-        }
-
-        guard let name = await agentKey(forId: agentId) else {
-            throw AgentServiceError.agentNotFound(agentId)
-        }
-        guard case .forward(let replicaId) = await app.replicaBridge.remoteRoute(agentKey: name) else {
-            // No route: the agent is offline everywhere. A route naming this
-            // replica without a local socket is a stale claim from a torn-down
-            // connection — the agent is equally unreachable from here.
-            throw AgentServiceError.agentNotFound(agentId)
-        }
-
-        return try await app.replicaBridge.call(
-            envelope, requestId: message.requestId, agentId: agentId,
-            agentKey: name, toReplica: replicaId, timeout: timeout)
-    }
-
-    /// Arm a pending-request continuation, push the envelope over the local
-    /// socket, and await the agent's correlated response (or the timeout).
-    ///
-    /// Cancellation-aware: cancelling the awaiting task resumes the
-    /// continuation with `CancellationError` instead of leaving it suspended
-    /// until the timeout — shutdown's background-task drain relies on this to
-    /// cut multi-minute agent-response budgets short.
-    private func sendEnvelopeAwaitingLocalResponse(
-        _ envelope: MessageEnvelope,
-        requestId: String,
-        agentId: String,
-        agentKey: String,
-        timeout: Duration
-    ) async throws -> AgentServiceResponse {
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                Task {
-                    guard !self.consumeExchangeCancellation(requestId) else {
-                        continuation.resume(throwing: CancellationError())
-                        return
-                    }
-                    do {
-                        // Store continuation for response handling
-                        self.storePendingRequest(requestId, agentId: agentId, continuation: continuation)
-
-                        // Send message
-                        try self.sendEnvelope(envelope, toLocalAgent: agentKey)
-
-                        // Arm a timeout, tracking its handle so a normal response can
-                        // cancel it instead of leaving a task dangling per request.
-                        let timeoutTask = Task {
-                            try? await Task.sleep(for: timeout)
-                            guard !Task.isCancelled else { return }
-                            self.timeoutRequest(requestId)
-                        }
-                        self.attachTimeout(timeoutTask, to: requestId)
-                    } catch {
-                        _ = self.removePendingRequest(requestId)
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
-        } onCancel: {
-            Task { await self.cancelPendingExchange(requestId) }
-        }
-    }
-
-    /// Resume a pending local exchange's continuation with `CancellationError`,
-    /// or record a tombstone if the exchange hasn't been armed yet (the arming
-    /// task consumes it and resumes immediately). Cross-replica RPC waits carry
-    /// their own equivalent inside `ReplicaMessageBridge`.
-    private func cancelPendingExchange(_ requestId: String) {
-        if let continuation = removePendingRequest(requestId) {
-            continuation.resume(throwing: CancellationError())
-        } else {
-            cancelledExchanges.insert(requestId)
-        }
-    }
-
-    /// Whether the awaiting task was cancelled before the exchange was armed;
-    /// consumes the tombstone.
-    private func consumeExchangeCancellation(_ requestId: String) -> Bool {
-        cancelledExchanges.remove(requestId) != nil
-    }
-
-    private func storePendingRequest(
-        _ requestId: String, agentId: String, continuation: CheckedContinuation<AgentServiceResponse, Error>
-    ) {
-        pendingRequests[requestId] = PendingRequest(agentId: agentId, continuation: continuation)
-    }
-
-    /// Associates a timeout task with a still-pending request. If the request has
-    /// already resolved (a fast response beat the timeout being armed), the task is
-    /// cancelled immediately so it doesn't linger.
-    private func attachTimeout(_ task: Task<Void, Never>, to requestId: String) {
-        guard pendingRequests[requestId] != nil else {
-            task.cancel()
-            return
-        }
-        pendingRequests[requestId]?.timeoutTask = task
-    }
-
-    private func removePendingRequest(_ requestId: String) -> CheckedContinuation<AgentServiceResponse, Error>? {
-        guard let request = pendingRequests.removeValue(forKey: requestId) else { return nil }
-        request.timeoutTask?.cancel()
-        return request.continuation
-    }
-
-    /// Like `removePendingRequest`, but only consumes the pending request when
-    /// it was actually dispatched to `agentId`. A correlated `success`/`error`
-    /// is the one agent→control-plane message that isn't otherwise validated
-    /// against the reporting connection, so without this check a compromised
-    /// agent that learned another agent's in-flight `requestId` could resolve
-    /// that exchange (e.g. spoof a volume-op or reboot result for a VM it does
-    /// not host). Mirrors the ownership guards on heartbeat/observed-state.
-    private func removePendingRequest(_ requestId: String, ifOwnedBy agentId: String)
-        -> CheckedContinuation<AgentServiceResponse, Error>?
-    {
-        guard let request = pendingRequests[requestId] else { return nil }
-        guard request.agentId == agentId else {
-            app.logger.warning(
-                "Dropping agent response whose requestId is owned by a different agent",
-                metadata: [
-                    "requestId": .string(requestId),
-                    "reportingAgentId": .string(agentId),
-                    "ownerAgentId": .string(request.agentId),
-                ])
-            return nil
-        }
-        pendingRequests.removeValue(forKey: requestId)
-        request.timeoutTask?.cancel()
-        return request.continuation
-    }
-
-    private func timeoutRequest(_ requestId: String) {
-        if let continuation = removePendingRequest(requestId) {
-            continuation.resume(throwing: AgentServiceError.requestTimeout)
-        }
-    }
-
-    /// Fail all in-flight requests targeting an agent that has gone away, so callers
-    /// get a prompt error instead of waiting for the per-request timeout.
-    private func failPendingRequests(for agentId: String, reason: AgentServiceError = .connectionLost) {
-        let affected = pendingRequests.filter { $0.value.agentId == agentId }
-        guard !affected.isEmpty else { return }
-
-        for (requestId, request) in affected {
-            pendingRequests.removeValue(forKey: requestId)
-            request.timeoutTask?.cancel()
-            request.continuation.resume(throwing: reason)
-        }
-
-        app.logger.info(
-            "Failed \(affected.count) in-flight request(s) for disconnected agent",
-            metadata: [
-                "agentId": .string(agentId)
-            ])
-    }
-
-    // MARK: - Response Handling
-
-    func handleAgentResponse(_ envelope: MessageEnvelope, fromAgentKey agentKey: String) {
-        Task {
-            // Extract the original request's ID from the typed payload so we can
-            // correlate the response with the continuation that is waiting for it.
-            let requestId: String
-            do {
-                switch envelope.type {
-                case .success:
-                    requestId = try envelope.decode(as: SuccessMessage.self).requestId
-                case .error:
-                    requestId = try envelope.decode(as: ErrorMessage.self).requestId
-                default:
-                    // Other message types are not request/response correlated.
-                    return
-                }
-            } catch {
-                app.logger.error("Failed to decode agent response envelope: \(error)")
-                return
-            }
-
-            // Resolve the reporting connection's agent id so the response can
-            // only resolve a request that was dispatched to *this* agent.
-            guard let senderAgentId = await self.agentId(forKey: agentKey) else {
-                app.logger.warning(
-                    "Dropping agent response from a connection with no resolvable agent id",
-                    metadata: ["agentKey": .string(agentKey), "requestId": .string(requestId)])
-                return
-            }
-
-            guard let continuation = self.removePendingRequest(requestId, ifOwnedBy: senderAgentId) else {
-                return
-            }
-
-            do {
-                switch envelope.type {
-                case .success:
-                    let message = try envelope.decode(as: SuccessMessage.self)
-                    continuation.resume(returning: .success(message.data))
-                case .error:
-                    let message = try envelope.decode(as: ErrorMessage.self)
-                    continuation.resume(returning: .error(message.error, message.details))
-                default:
-                    continuation.resume(throwing: AgentServiceError.invalidResponse("Unexpected response type"))
-                }
-            } catch {
-                continuation.resume(throwing: error)
-            }
-        }
-    }
+    // There is no request/response path here any more (ADR 0001 stage 11,
+    // STR-152). `sendMessageToAgentWithResponse` and the continuation
+    // bookkeeping behind it — pending map, per-request timeout tasks,
+    // disconnect cleanup, the `requestId` ownership check — served the
+    // imperative verbs, and the last of those became desired state at wire v34.
+    // Console and exec are streams with their own session managers and their
+    // own `sessionId` correlation; nothing else ever asked an agent a question.
 
     // MARK: - Agent Status
 
@@ -3146,22 +2784,10 @@ actor AgentService {
 
 // MARK: - ReplicaBridgeDelegate
 
-extension AgentService: ReplicaBridgeDelegate {
-    /// Holder half of a cross-replica RPC (`ReplicaMessageBridge` hook): run the
-    /// forwarded exchange over the locally held socket and await the agent's
-    /// correlated response. `deliverDoorbell` — the delegate's other half —
-    /// lives with the desired-state sync code above.
-    func runLocalExchange(
-        _ envelope: MessageEnvelope,
-        requestId: String,
-        agentId: String,
-        agentKey: String,
-        timeout: Duration
-    ) async throws -> AgentServiceResponse {
-        try await sendEnvelopeAwaitingLocalResponse(
-            envelope, requestId: requestId, agentId: agentId, agentKey: agentKey, timeout: timeout)
-    }
-}
+/// The delegate is `deliverDoorbell` alone, declared with the desired-state
+/// sync code above. Its other half, `runLocalExchange`, went with the
+/// cross-replica RPC bridge (STR-152).
+extension AgentService: ReplicaBridgeDelegate {}
 
 // MARK: - Application Extension
 

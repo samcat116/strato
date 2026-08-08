@@ -67,13 +67,6 @@ info:
     issue `stop` while a `pause` is in flight, both are recorded and the stop's
     `targetGeneration` is the higher one.
 
-    The exceptions are the verbs still dispatched as imperative agent commands
-    — VM restart, and VM/sandbox *restore* — which answer with a
-    `ResourceOperation` to poll to a terminal `status`, and which do reject a
-    second mutation on the same resource with `409`. Restore is an edge rather
-    than a state: "this VM should be at checkpoint C" is not something an agent
-    can re-converge on, because the guest starts writing the moment it resumes.
-
     **Deletion** is the one case where the resource cannot answer for itself:
     once the row is removed, polling it returns a `404` indistinguishable from
     never-existed and not-authorized. Poll
@@ -143,9 +136,14 @@ tags:
   - name: Documentation
     description: The served OpenAPI document and its viewer.
   - name: Virtual Machines
-    description: VM lifecycle. Mutations are asynchronous (202 + operation).
+    description: >-
+      VM lifecycle. Mutations are asynchronous (202 + a generation to converge
+      on).
   - name: Operations
-    description: Poll the status of asynchronous resource operations.
+    description: >-
+      A read-only view of asynchronous resource mutations, synthesized from the
+      mutation's audit record and the resource's conditions. The supported way
+      to follow a **delete**; for everything else, refetch the resource.
   - name: Sandboxes
     description: OCI-image Firecracker microVMs. Mutations are asynchronous.
   - name: Sandbox Snapshots
@@ -622,7 +620,9 @@ paths:
     get:
       operationId: getOperation
       summary: Get an operation
-      description: Poll this until `status` is terminal (`succeeded` or `failed`).
+      description: >-
+        Poll this until `status` is terminal (`succeeded` or `failed`). Answers
+        for the `mutationId` any `202` returned.
       tags: [Operations]
       responses:
         "200":
@@ -8612,7 +8612,7 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
     Conflict:
-      description: The request conflicts with current state (e.g. a pending operation).
+      description: The request conflicts with current state.
       content:
         application/json:
           schema:
@@ -8626,7 +8626,8 @@ components:
     # `AcceptedOperation` went with the last mutation that answered in it: VM
     # restart and the two restores became generation-backed at ADR 0001 stage 9
     # (STR-151). Every accepted mutation now returns its resource plus the
-    # generation to wait for; `GET /api/operations/{id}` survives as a façade.
+    # generation to wait for; `GET /api/operations/{id}` survives as a façade
+    # over the audit trail, the table behind it having been dropped in STR-152.
     AcceptedVMMutation:
       description: >-
         The mutation was accepted. Refetch the VM until its `conditions` report
@@ -8823,16 +8824,15 @@ components:
     ResourceOperation:
       type: object
       description: >-
-        A durable record of one asynchronous resource lifecycle mutation. Poll
-        it until `status` is terminal.
+        The operation view of one asynchronous resource lifecycle mutation.
+        Poll it until `status` is terminal.
 
 
-        Served from two sources. The verbs still dispatched as imperative agent
-        commands — VM restart, and VM/sandbox restore — have real operation
-        records. Everything else is synthesized on read from the mutation's
-        audit record and the resource's `conditions`, so a client written
-        against the older contract keeps working; those responses report no
-        `completedAt` except for a completed delete.
+        Synthesized on read from the mutation's audit record and the resource's
+        `conditions` — there is no operations table behind it — so a client
+        written against the older contract keeps working. `completedAt` is
+        reported only for a completed delete, which is the one outcome recorded
+        rather than derived.
       required: [vmId, resourceKind, resourceId, kind, status]
       properties:
         id:
@@ -8864,7 +8864,7 @@ components:
 
     OperationResourceKind:
       type: string
-      description: Which kind of resource an operation acts on.
+      description: Which kind of resource a mutation acts on.
       enum: [virtual_machine, sandbox]
     OperationKind:
       type: string

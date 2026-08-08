@@ -374,16 +374,27 @@ struct AgentWebSocketController: RouteCollection {
                 }
 
             case .success, .error:
-                // Correlated responses to control-plane-initiated requests.
-                // Pass the authenticated connection's agent name so the service
-                // only resolves a request it actually dispatched to this agent.
-                Task {
-                    await req.agentService.handleAgentResponse(envelope, fromAgentKey: agentKey)
-                }
+                // Dropped, not correlated: the pending-request apparatus went
+                // in STR-152, and the agent stopped sending these with the same
+                // change. They are control-plane → agent frames now.
+                //
+                // An explicit arm rather than the `default:` below, because
+                // that one *replies* with an error. A pre-STR-152 agent still
+                // sends `error` from its console-connect failure path, so
+                // during a rolling upgrade every failed console open would cost
+                // a warning here and an error-level "control plane reported an
+                // error" on the agent — noise about a frame we deliberately
+                // ignore.
+                req.logger.debug(
+                    "Ignoring an uncorrelated response frame from an agent",
+                    metadata: [
+                        "agentName": .string(agentName),
+                        "type": .string(envelope.type.rawValue),
+                    ])
 
             case .observedState:
                 // Full observed-state report from a state-sync agent: updates
-                // observed status/generation, completes operations, confirms
+                // observed status/generation, settles convergence, confirms
                 // deletions by absence (issue #260). Enqueued rather than
                 // applied directly so same-agent reports apply in send order.
                 Task {
@@ -619,12 +630,11 @@ struct AgentWebSocketController: RouteCollection {
                     forAgent: agentKey, reason: "agent reconnected")
             }
 
-            // Advertise which replica holds this agent's socket so other
-            // replicas can forward imperative RPCs here (issue #261). Refreshed
-            // by every heartbeat; a crashed replica's claim expires by TTL.
-            Task {
-                await req.application.replicaBridge.recordRoute(agentKey: agentKey)
-            }
+            // Nothing advertises which replica holds this socket any more: the
+            // `agent:{name}:replica` claim existed so other replicas could
+            // forward imperative RPCs here, and both went in STR-152. Desired
+            // state reaches the agent through the broadcast doorbell, which
+            // needs no directory.
 
             // Switch from buffering to routing, replaying any frames that
             // arrived while authentication was in flight.

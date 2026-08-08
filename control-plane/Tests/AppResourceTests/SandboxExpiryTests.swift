@@ -380,22 +380,25 @@ final class SandboxExpiryTests {
             sandbox.ttlSeconds = 60
             try await backdateCreation(sandbox, bySeconds: 120, on: app.db)
 
-            // A checkpoint in flight — still an operation row, because it is an
-            // imperative agent RPC with no generation to converge on.
-            let userID = try user.requireID()
-            let pending = try await ResourceOperation.begin(
-                .snapshot, resourceKind: .sandbox, resourceID: sandboxID,
-                userID: userID, on: app.db)
+            // A capture in flight: its own resource, with its own generation
+            // (STR-150), so it neither blocks nor is blocked by the sandbox's
+            // expiry.
+            let snapshot = SandboxSnapshot(
+                name: "in-flight",
+                sandboxID: sandboxID,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: nil,
+                createdByID: try user.requireID())
+            try await snapshot.save(on: app.db)
 
             await app.agentService.sweepExpiredSandboxes()
 
             // The `409` that used to defer the expiry went with the lifecycle
             // operation row (STR-147), and is not missed: marking `.absent` is
             // idempotent and level-triggered, so the expiry proceeds and the
-            // snapshot's own verdict path is untouched.
+            // capture's own convergence is untouched.
             try await pollSandboxDeleted(sandboxID, on: app.db)
-            let stillPending = try #require(await ResourceOperation.find(pending.id, on: app.db))
-            #expect(stillPending.status == .pending)
             let events = try await deletionEvents(for: sandboxID, on: app.db)
             #expect(events.requested?.actorType == .system)
         }

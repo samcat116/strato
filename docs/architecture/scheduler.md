@@ -262,11 +262,11 @@ The scheduler throws specific errors for different failure scenarios:
 
 ### How placement failures surface
 
-VM create is asynchronous: the controller answers **202 Accepted** with a
-`ResourceOperation` before placement runs, and scheduling happens in the
-background dispatch. A `SchedulerError` there is wrapped so its reason
-survives, and it fails the pending operation — the client sees it by polling
-the operation, never as a synchronous 503:
+VM create is asynchronous: the controller answers **202 Accepted** with the VM
+and the generation it is converging on before placement runs, and scheduling
+happens in the background dispatch. A `SchedulerError` there is wrapped so its
+reason survives, and it marks the VM `degraded` — the client sees it in the
+VM's `conditions`, never as a synchronous 503:
 
 ```swift
 // AgentService.createVM — preserve the scheduler's reason (unsupported

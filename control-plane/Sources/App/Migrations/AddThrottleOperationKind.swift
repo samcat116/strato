@@ -1,39 +1,28 @@
 import Fluent
 import SQLKit
 
-/// Widens the `kind`/`mutation` `CHECK` constraints for `VMOperationKind.throttle`
-/// (STR-19).
+/// Widens the `resource_events.mutation` `CHECK` constraint for
+/// `VMOperationKind.throttle` (STR-19).
 ///
-/// The same two-table, two-mechanism dance `AddVolumeOperationKinds` documents,
-/// and it has to be both halves. `resource_operations` goes through
-/// `EnforcePersistedEnumValues.prepare`, which normalizes existing rows before
-/// re-installing the constraint. `resource_events` cannot: that normalizing
-/// `UPDATE` is exactly what its append-only trigger exists to reject, so its
-/// constraint is re-installed with a plain `ALTER TABLE`, the way
+/// It widened the matching `resource_operations.kind` constraint too, until
+/// that table was dropped in STR-152. What is left is the `resource_events`
+/// half, and its mechanism is the interesting one: the constraint cannot go
+/// through `EnforcePersistedEnumValues.prepare`, because its normalizing
+/// `UPDATE` is exactly what the table's append-only trigger exists to reject.
+/// It is re-installed with a plain `ALTER TABLE`, the way
 /// `CreateResourceEvent` installs it.
 ///
-/// Missing either half fails `PersistedEnumConstraintTests` or
-/// `ResourceEventEnumConstraintTests` — which is what those suites are for,
-/// since nothing in the type system can catch it.
+/// Missing it fails `ResourceEventEnumConstraintTests` — which is what that
+/// suite is for, since nothing in the type system can catch it.
 ///
-/// Idempotent on both paths (drop-if-exists first), so a database whose base
-/// migrations already carried the wider lists is unaffected.
+/// Idempotent (drop-if-exists first), so a database whose base migrations
+/// already carried the wider list is unaffected.
 struct AddThrottleOperationKind: AsyncMigration {
-    private static var operationConstraints: [PersistedEnumConstraint] {
-        EnforcePersistedEnumValues.constraints.filter {
-            $0.table == "resource_operations" && $0.column == "kind"
-        }
-    }
-
     private static var eventConstraints: [PersistedEnumConstraint] {
         CreateResourceEvent.enumConstraints.filter { $0.column == "mutation" }
     }
 
     func prepare(on database: any Database) async throws {
-        for constraint in Self.operationConstraints {
-            try await EnforcePersistedEnumValues.prepare(constraint, on: database)
-        }
-
         let sql = try PostgresMigrationSQL.database(database)
         for constraint in Self.eventConstraints {
             let name = PostgresMigrationSQL.identifier(constraint.name)

@@ -20,42 +20,16 @@ private actor MessageCollector {
     }
 }
 
-/// Store- and service-level tests for the phase-3 primitives (issue #261):
-/// value-carrying keys, compare-and-delete, pub/sub, and the agent route keys
-/// built on them.
+/// Store-level tests for what is left of the phase-3 primitives (issue #261)
+/// once STR-152 removed the socket-route key and the value-carrying store
+/// operations that existed to serve it: pub/sub, and the doorbell payloads
+/// built on it.
 @Suite("Replica Routing Primitive Tests")
 struct ReplicaRoutingPrimitiveTests {
 
     private func makeService() -> (CoordinationService, InMemoryCoordinationStore) {
         let store = InMemoryCoordinationStore()
         return (CoordinationService(store: store, logger: Logger(label: "routing-test")), store)
-    }
-
-    @Test("Values round-trip and expire by TTL")
-    func valueRoundTripAndTTL() async throws {
-        let (_, store) = makeService()
-
-        #expect(await store.getValue("k") == nil)
-        await store.setValue("k", value: "v1", ttlSeconds: 60)
-        #expect(await store.getValue("k") == "v1")
-
-        // Overwrite replaces value and TTL.
-        await store.setValue("k", value: "v2", ttlSeconds: 1)
-        #expect(await store.getValue("k") == "v2")
-        try await Task.sleep(for: .milliseconds(1200))
-        #expect(await store.getValue("k") == nil)
-    }
-
-    @Test("Compare-and-delete removes only a matching value")
-    func compareAndDelete() async {
-        let (_, store) = makeService()
-
-        await store.setValue("k", value: "mine", ttlSeconds: 60)
-        await store.deleteValue("k", ifEquals: "theirs")
-        #expect(await store.getValue("k") == "mine")
-
-        await store.deleteValue("k", ifEquals: "mine")
-        #expect(await store.getValue("k") == nil)
     }
 
     @Test("Published messages reach every subscriber of the channel")
@@ -80,24 +54,6 @@ struct ReplicaRoutingPrimitiveTests {
         #expect(await collectorA.waitFor(count: 1) == ["hello"])
         #expect(await collectorB.waitFor(count: 1) == ["hello"])
         #expect(await other.waitFor(count: 1, timeoutMilliseconds: 200).isEmpty)
-    }
-
-    @Test("Agent routes record, read back, and clear only for their owner")
-    func agentRouteLifecycle() async {
-        let (service, _) = makeService()
-
-        #expect(await service.agentRoute(agentKey: agentKey("agent-a")) == nil)
-
-        await service.recordAgentRoute(agentKey: agentKey("agent-a"), replicaId: "replica-1")
-        #expect(await service.agentRoute(agentKey: agentKey("agent-a")) == "replica-1")
-
-        // A stale owner (delayed close on another replica) cannot clear a
-        // successor's claim.
-        await service.clearAgentRoute(agentKey: agentKey("agent-a"), replicaId: "replica-0")
-        #expect(await service.agentRoute(agentKey: agentKey("agent-a")) == "replica-1")
-
-        await service.clearAgentRoute(agentKey: agentKey("agent-a"), replicaId: "replica-1")
-        #expect(await service.agentRoute(agentKey: agentKey("agent-a")) == nil)
     }
 
     @Test("Doorbells land on the one fleet-wide channel, tagged with the publisher")
@@ -135,9 +91,13 @@ struct ReplicaRoutingPrimitiveTests {
     }
 }
 
-/// AgentService-level routing tests (issue #261): registration claims the
-/// route, mutations ring the broadcast doorbell, socket close respects a
-/// foreign route, and the RPC bridge forwards correlated exchanges.
+/// AgentService-level doorbell tests (issue #261, STR-146): a mutation rings
+/// the fleet-wide broadcast without consulting any directory, an offline agent
+/// is rung anyway, and a socket close marks the agent offline.
+///
+/// The route-key half of this suite — registration claiming
+/// `agent:{name}:replica`, a close deferring to a foreign claim, and the two
+/// cross-replica RPC round trips — went with the directory itself in STR-152.
 @Suite("Replica Routing AgentService Tests", .serialized)
 final class ReplicaRoutingAgentServiceTests {
 
@@ -198,28 +158,16 @@ final class ReplicaRoutingAgentServiceTests {
         return agentUUID.uuidString
     }
 
-    @Test("Registration claims the socket route and presence for this replica")
-    func registrationClaimsRoute() async throws {
-        try await withApp { app, coordination, _ in
-            _ = try await self.registerAgent(app: app)
-
-            #expect(await coordination.agentRoute(agentKey: agentKey("routed-agent")) == app.replicaID)
-            #expect(await coordination.isAgentPresent(agentKey: agentKey("routed-agent")) == true)
-        }
-    }
-
     /// The point of the broadcast: a mutation publishes without consulting
     /// any routing key, so wherever the agent's poll or socket happens to live
     /// is not this replica's problem.
     @Test("A sync rings the broadcast doorbell regardless of where the agent is")
     func syncRingsBroadcastDoorbell() async throws {
-        try await withApp { app, coordination, store in
+        try await withApp { app, _, store in
             let agentId = try await self.registerAgent(app: app)
 
-            // The agent's socket lives on another replica (no local socket
-            // exists in this test, and the route names the other replica).
-            await coordination.recordAgentRoute(agentKey: agentKey("routed-agent"), replicaId: "replica-b")
-
+            // The agent's socket lives elsewhere — this test holds none — and
+            // nothing here says where, which is the point.
             let collector = MessageCollector()
             await store.subscribe(channel: CoordinationService.doorbellChannel) { message in
                 Task { await collector.append(message) }
@@ -239,10 +187,8 @@ final class ReplicaRoutingAgentServiceTests {
     /// broadcast exists to remove. What matters is that nothing waits on it.
     @Test("A sync for an offline agent still rings, and nothing blocks on it")
     func syncForOfflineAgentStillRings() async throws {
-        try await withApp { app, coordination, store in
+        try await withApp { app, _, store in
             let agentId = try await self.registerAgent(app: app)
-            // No socket anywhere: clear the route registration wrote.
-            await coordination.clearAgentRoute(agentKey: agentKey("routed-agent"), replicaId: app.replicaID)
 
             let collector = MessageCollector()
             await store.subscribe(channel: CoordinationService.doorbellChannel) { message in
@@ -280,27 +226,13 @@ final class ReplicaRoutingAgentServiceTests {
         }
     }
 
-    @Test("Socket close does not mark an agent offline when another replica holds its route")
-    func closeRespectsForeignRoute() async throws {
-        try await withApp { app, coordination, _ in
-            let agentId = try await self.registerAgent(app: app)
-
-            // The agent reconnected to another replica before our close ran.
-            await coordination.recordAgentRoute(agentKey: agentKey("routed-agent"), replicaId: "replica-b")
-            await app.agentService.removeAgent(agentKey("routed-agent"))
-
-            // Give the (would-be) async offline write a moment, then confirm
-            // it never happened.
-            try await Task.sleep(for: .milliseconds(200))
-            let stillOnline = await app.agentService.getAgentInfo(agentId)
-            #expect(stillOnline?.status == .online)
-            #expect(await coordination.agentRoute(agentKey: agentKey("routed-agent")) == "replica-b")
-        }
-    }
-
-    @Test("Socket close marks the agent offline when this replica owns the route")
-    func closeMarksOfflineWhenRouteIsOurs() async throws {
-        try await withApp { app, coordination, _ in
+    /// Unconditionally, since STR-152: the close used to defer to a route key
+    /// naming another replica, and with no directory left it always writes.
+    /// A close delayed past a cross-replica reconnect therefore marks the agent
+    /// offline until the holding replica's next heartbeat writes `.online`.
+    @Test("Socket close marks the agent offline")
+    func closeMarksOffline() async throws {
+        try await withApp { app, _, _ in
             let agentId = try await self.registerAgent(app: app)
 
             await app.agentService.removeAgent(agentKey("routed-agent"))
@@ -313,97 +245,6 @@ final class ReplicaRoutingAgentServiceTests {
                 try await Task.sleep(for: .milliseconds(20))
             }
             #expect(status == .offline)
-            #expect(await coordination.agentRoute(agentKey: agentKey("routed-agent")) == nil)
-        }
-    }
-
-    @Test("A correlated request for an unrouted agent fails fast")
-    func requestForOfflineAgentThrows() async throws {
-        try await withApp { app, coordination, _ in
-            let agentId = try await self.registerAgent(app: app)
-            await coordination.clearAgentRoute(agentKey: agentKey("routed-agent"), replicaId: app.replicaID)
-
-            await #expect(throws: AgentServiceError.self) {
-                _ = try await app.agentService.sendMessageToAgentWithResponse(
-                    ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"),
-                    agentId: agentId,
-                    timeout: .seconds(1)
-                )
-            }
-        }
-    }
-
-    @Test("An RPC forwarded to a replica without the socket is answered unreachable")
-    func rpcWithoutSocketRepliesUnreachable() async throws {
-        try await withApp { app, _, store in
-            let agentId = try await self.registerAgent(app: app)
-
-            let collector = MessageCollector()
-            let replyChannel = "replica:test-requester:rpc-replies"
-            await store.subscribe(channel: replyChannel) { message in
-                Task { await collector.append(message) }
-            }
-
-            let envelope = try MessageEnvelope(
-                message: ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"))
-            let request = ReplicaMessageBridge.AgentRPCRequest(
-                rpcId: "rpc-1",
-                replyChannel: replyChannel,
-                agentId: agentId,
-                agentKey: agentKey("routed-agent"),
-                envelope: envelope,
-                timeoutSeconds: 1
-            )
-            let payload = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
-
-            await app.replicaBridge.handleRPCRequest(payload)
-
-            let replies = await collector.waitFor(count: 1)
-            let reply = try JSONDecoder().decode(
-                ReplicaMessageBridge.AgentRPCReply.self, from: Data(try #require(replies.first).utf8))
-            #expect(reply.rpcId == "rpc-1")
-            #expect(reply.outcome == .unreachable)
-        }
-    }
-
-    @Test("An RPC to the holder replica resolves the requester's await")
-    func rpcRoundTrip() async throws {
-        try await withApp { app, coordination, store in
-            let agentId = try await self.registerAgent(app: app)
-
-            // Route the agent to a fictitious second replica whose RPC channel
-            // the test itself services, standing in for the holder process.
-            await coordination.recordAgentRoute(agentKey: agentKey("routed-agent"), replicaId: "replica-b")
-
-            await store.subscribe(
-                channel: CoordinationService.rpcChannel(replicaId: "replica-b")
-            ) { payload in
-                Task {
-                    guard
-                        let request = try? JSONDecoder().decode(
-                            ReplicaMessageBridge.AgentRPCRequest.self, from: Data(payload.utf8))
-                    else { return }
-                    let reply = ReplicaMessageBridge.AgentRPCReply(
-                        rpcId: request.rpcId, outcome: .success, data: nil, error: nil, details: nil)
-                    guard let encodedData = try? JSONEncoder().encode(reply) else { return }
-                    // Resolve through the requester's reply handler directly:
-                    // deterministic regardless of when the service's own
-                    // channel subscription lands.
-                    await app.replicaBridge.handleRPCReply(String(decoding: encodedData, as: UTF8.self))
-                }
-            }
-
-            let response = try await app.agentService.sendMessageToAgentWithResponse(
-                ConsoleConnectMessage(vmId: UUID().uuidString, sessionId: "sess-1"),
-                agentId: agentId,
-                timeout: .seconds(5)
-            )
-
-            if case .success = response {
-                // expected
-            } else {
-                Issue.record("Expected success response, got \(response)")
-            }
         }
     }
 

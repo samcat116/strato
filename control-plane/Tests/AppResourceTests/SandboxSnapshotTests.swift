@@ -240,9 +240,11 @@ final class SandboxSnapshotTests {
         try await withSnapshotTestApp { app, _, _, sandbox, token in
             _ = try await placeOnCapableAgent(app: app, sandbox: sandbox, status: .running)
 
-            let pending = ResourceOperation(
-                sandboxID: sandbox.id!, userID: UUID(), kind: .boot)
-            try await pending.save(on: app.db)
+            // An unconverged boot on the sandbox: desired state moved, the
+            // agent has not caught up.
+            sandbox.setDesiredStatus(.running)
+            sandbox.extendConvergenceDeadline(by: 600)
+            try await sandbox.save(on: app.db)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -276,14 +278,14 @@ final class SandboxSnapshotTests {
                 #expect(res.body.string.lowercased().contains("quota"))
             }
 
-            // The rejection rolled the whole transaction back: no snapshot
-            // row and no pending operation survive.
+            // The rejection rolled the whole transaction back: no snapshot row
+            // and no recorded mutation survive.
             let snapshots = try await SandboxSnapshot.query(on: app.db).count()
             #expect(snapshots == 0)
-            let pending = try await ResourceOperation.query(on: app.db)
-                .filter(\.$status == .pending)
+            let requested = try await ResourceEvent.query(on: app.db)
+                .filter(\.$resourceKind == .sandboxSnapshot)
                 .count()
-            #expect(pending == 0)
+            #expect(requested == 0)
         }
     }
 
@@ -1076,9 +1078,11 @@ final class SandboxSnapshotTests {
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
-            // No operation row: admission refused before anything was started.
-            let operations = try await ResourceOperation.query(on: app.db).count()
-            #expect(operations == 0)
+            // Nothing was recorded: admission refused before anything started.
+            let requested = try await ResourceEvent.query(on: app.db)
+                .filter(\.$resourceKind == .sandboxSnapshot)
+                .count()
+            #expect(requested == 0)
         }
     }
 

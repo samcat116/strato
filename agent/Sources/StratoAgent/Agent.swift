@@ -2731,23 +2731,12 @@ extension Agent {
         }
     }
 
-    private func sendSuccess(for requestId: String, message: String? = nil, data: AnyCodableValue? = nil) async {
-        let successMessage = SuccessMessage(requestId: requestId, message: message, data: data)
-        do {
-            try await websocketClient?.sendMessage(successMessage)
-        } catch {
-            logger.error("Failed to send success message: \(error)")
-        }
-    }
-
-    private func sendError(for requestId: String, error: String, details: String? = nil) async {
-        let errorMessage = ErrorMessage(requestId: requestId, error: error, details: details)
-        do {
-            try await websocketClient?.sendMessage(errorMessage)
-        } catch {
-            logger.error("Failed to send error message: \(error)")
-        }
-    }
+    // The agent sends no `success`/`error` frames at all since STR-152.
+    // `sendSuccess` had already lost its last caller when the imperative verbs
+    // converted, and `sendError`'s two remaining console call sites wrote into
+    // a control plane with nothing to correlate against, so both were dropped
+    // rather than left as protocol symmetry that delivers nothing. Console
+    // failures route as `ConsoleDisconnectedMessage`, keyed by `sessionId`.
 
     /// Send a VM log message to the control plane for storage in Loki
     private func sendVMLog(
@@ -2780,16 +2769,16 @@ extension Agent {
 
     // MARK: - Console Message Handlers
 
-    /// Report a console that could not be opened, both ways.
+    /// Report a console that could not be opened.
     ///
-    /// The correlated `ErrorMessage` is for logs and protocol symmetry, but it
-    /// cannot reach the browser: console connects are sent fire-and-forget, so
-    /// the control plane has no pending request to match a `requestId` against
-    /// and drops it. `ConsoleDisconnectedMessage` is a stream event keyed by
-    /// `sessionId`, which does route — and is what stops the tab waiting on a
-    /// console that is never going to open.
+    /// One frame, not two: this used to also send a correlated `ErrorMessage`,
+    /// which never reached the browser — console connects are fire-and-forget,
+    /// so the control plane had no pending request to match a `requestId`
+    /// against and dropped it (and since STR-152 has no correlation at all).
+    /// `ConsoleDisconnectedMessage` is a stream event keyed by `sessionId`,
+    /// which does route, and is what stops the tab waiting on a console that is
+    /// never going to open.
     private func failConsoleConnect(_ message: ConsoleConnectMessage, reason: String) async {
-        await sendError(for: message.requestId, error: reason)
         await sendConsoleDisconnected(vmId: message.vmId, sessionId: message.sessionId, reason: reason)
     }
 
@@ -2965,7 +2954,12 @@ extension Agent {
             ])
 
         guard let consoleManager = consoleSocketManager else {
-            await sendError(for: message.requestId, error: "Console manager not available")
+            // No manager means no session to tear down, so the disconnect the
+            // browser asked for has already happened. Confirm it on the stream
+            // rather than on a correlated `error` nothing reads (STR-152) —
+            // otherwise the tab waits out a socket that will never close.
+            await sendConsoleDisconnected(
+                vmId: message.vmId, sessionId: message.sessionId, reason: "Console manager not available")
             return
         }
 

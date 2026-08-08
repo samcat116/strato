@@ -3,21 +3,39 @@ import SQLKit
 import StratoShared
 import Vapor
 
+/// Why a convergence write could not be attempted at all — as opposed to
+/// losing a compare-and-swap, which is an ordinary `false` return.
+///
+/// Inherited from the retired `ResourceOperation.completeIfPending`, whose
+/// verdict guard had the same requirement and the same reason for stating it.
+enum ConvergenceWriteError: Error, CustomStringConvertible, Sendable {
+    /// The claims below are conditional `UPDATE`s and a `SELECT ... FOR UPDATE`,
+    /// so they need the SQL interface. Every supported deployment is
+    /// PostgreSQL; this exists so a database that cannot express them fails
+    /// loudly instead of silently letting two writers both win.
+    case unsupportedDatabase
+
+    var description: String {
+        switch self {
+        case .unsupportedDatabase:
+            return "Recording resource convergence requires an SQL database"
+        }
+    }
+}
+
 /// How far a resource is from the state the API was last asked to put it in
-/// (ADR 0001 stage 1, STR-142) — the answer clients currently get only by
-/// polling the `ResourceOperation` a mutation returned.
+/// (ADR 0001 stage 1, STR-142) — and, since STR-152, the only answer there is:
+/// a mutation's `202` hands back a target generation, and the client refetches
+/// the resource until its conditions settle.
 ///
 /// Every field is derived on read — from the resource's generation counters
 /// and the convergence progress `ObservedStateApplier` mirrors off each agent
 /// report. Nothing is stored in this shape and no mutation writes it. That is
-/// deliberate: operation completion is *already* this derivation
+/// deliberate: operation completion was *already* this derivation
 /// (`ObservedStateApplier`: succeeded ⇔ `observedGeneration >= generation` ∧
 /// the desired status is satisfied; failed ⇔ `failedGeneration == generation`),
-/// so projecting it onto the resource replaces a hand-maintained side-table
-/// with a view of the reconciliation loop's own state. A client that refetches
-/// the resource until `converged` is true needs no operation at all.
-///
-/// The operations API is untouched here — this is additive.
+/// so projecting it onto the resource replaced a hand-maintained side-table
+/// with a view of the reconciliation loop's own state.
 struct ResourceConditions: Content, Equatable {
     /// True once the owning agent has confirmed converging to
     /// `targetGeneration` *and* what it observes satisfies the desired state.
@@ -185,17 +203,6 @@ protocol ConvergingResource: Model, ConvergenceObservable, Sendable where IDValu
 }
 
 extension ConvergingResource {
-    /// Claims the right to declare this resource's outstanding convergence
-    /// timed out, by clearing the deadline in a conditional `UPDATE`.
-    ///
-    /// This is what makes the stuck-convergence sweep safe to run on every
-    /// replica *and* exactly-once per deadline (STR-147). Marking degraded is
-    /// idempotent and convergent on its own — the state two replicas write is
-    /// the same — but the completion webhook is not, so the claim decides which
-    /// pass gets to emit it. `AND convergence_deadline IS NOT NULL` is
-    /// evaluated by PostgreSQL under the row lock, so of two racing sweeps
-    /// exactly one updates a row: the same compare-and-swap technique as
-    /// `ResourceOperation.completeIfPending`, without the cluster lock.
     /// Locks this resource's row for the rest of the caller's transaction and
     /// refreshes the reconciliation-owned columns from what is committed.
     ///
@@ -207,7 +214,7 @@ extension ConvergingResource {
     /// mutation as succeeded. Returns false when the row is gone.
     func lockAndRefresh(on db: any Database) async throws -> Bool {
         guard let sql = db as? any SQLDatabase else {
-            throw OperationCompletionError.unsupportedDatabase
+            throw ConvergenceWriteError.unsupportedDatabase
         }
         let id = try requireID()
         let locked = try await sql.raw(
@@ -222,9 +229,20 @@ extension ConvergingResource {
         return true
     }
 
+    /// Claims the right to declare this resource's outstanding convergence
+    /// timed out, by clearing the deadline in a conditional `UPDATE`.
+    ///
+    /// This is what makes the stuck-convergence sweep safe to run on every
+    /// replica *and* exactly-once per deadline (STR-147). Marking degraded is
+    /// idempotent and convergent on its own — the state two replicas write is
+    /// the same — but the completion webhook is not, so the claim decides which
+    /// pass gets to emit it. `AND convergence_deadline IS NOT NULL` is
+    /// evaluated by PostgreSQL under the row lock, so of two racing sweeps
+    /// exactly one updates a row — the compare-and-swap the retired
+    /// stuck-operation sweep needed a cluster lock to approximate.
     func claimConvergenceTimeout(on db: any Database) async throws -> Bool {
         guard let sql = db as? any SQLDatabase else {
-            throw OperationCompletionError.unsupportedDatabase
+            throw ConvergenceWriteError.unsupportedDatabase
         }
         let claimed = try await sql.raw(
             """

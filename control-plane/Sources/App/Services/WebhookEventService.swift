@@ -165,49 +165,12 @@ enum WebhookEvents {
 
     // MARK: - Operation completion (the chokepoint sources)
 
-    /// Enqueue `operation.completed`/`operation.failed` for a just-completed
-    /// operation. Called from `ResourceOperation.completeIfPending` — the one
-    /// funnel every completion path (agent report, post-202 task, stuck sweep)
-    /// goes through — so individual sources need no wiring.
-    ///
-    /// Context (org/project/name) comes from the operation row itself, where
-    /// `begin` captured it — the resource may already be gone by completion
-    /// time (a successful delete removes the row first). Operations without
-    /// stamped context (pre-migration rows, direct-construction sites) fall
-    /// back to resolving from the live resource; only when both are missing
-    /// is there genuinely no organization to deliver to, and the event is
-    /// skipped.
-    static func enqueueOperationCompletion(
-        for operation: ResourceOperation, on db: Database
-    ) async throws {
-        var context: (organizationID: UUID, projectID: UUID?, resourceName: String?)?
-        if let organizationID = operation.organizationID {
-            context = (organizationID, operation.projectID, operation.resourceName)
-        } else {
-            context = try await resourceContext(
-                kind: operation.resourceKind, id: operation.resourceID, on: db)
-        }
-        guard let context else { return }
-
-        var data: [String: CodableValue] = [
-            "operationId": .string(operation.id?.uuidString ?? ""),
-            "operationKind": .string(operation.kind.rawValue),
-            "status": .string(operation.status.rawValue),
-        ]
-        if let error = operation.error {
-            data["error"] = .string(error)
-        }
-
-        let event = WebhookEvent(
-            type: operation.status == .succeeded ? .operationCompleted : .operationFailed,
-            organizationID: context.organizationID,
-            projectID: context.projectID,
-            resource: WebhookEvent.Resource(
-                kind: operation.resourceKind.rawValue, id: operation.resourceID,
-                name: context.resourceName),
-            data: data)
-        try await enqueue(event, on: db)
-    }
+    // There were three sources; there are two. `enqueueOperationCompletion`
+    // hung off `ResourceOperation.completeIfPending` and went with it
+    // (STR-152). The two below are the same guarantee moved to where the
+    // outcome is now decided — a resource's convergence, and the finalizer
+    // reap — and both still commit their outbox row in the transaction that
+    // writes the transition, which is what makes the event fire exactly once.
 
     /// Enqueue `operation.completed`/`operation.failed` for a lifecycle
     /// mutation whose outcome is now settled by the resource's own conditions
@@ -295,14 +258,13 @@ enum WebhookEvents {
         try await enqueue(event, on: db)
     }
 
-    /// Resolves the owning organization/project and display name for an
-    /// operation's resource. Nil when the resource row no longer exists, or
+    /// Resolves the owning organization/project and display name for a
+    /// mutation's resource. Nil when the resource row no longer exists, or
     /// sits under no organization — there is nowhere to deliver to either way.
     ///
     /// The lookup itself is `ResourceEvent.scope`, which the mutation path
-    /// already runs to stamp the same context onto the operation row; this is
-    /// the delivery-shaped view of it, for operations that carry none (rows
-    /// predating the columns, or begun outside `ResourceOperation.begin`).
+    /// already runs to stamp the same context onto the event row; this is the
+    /// delivery-shaped view of it, for the events that carry none.
     static func resourceContext(
         kind: OperationResourceKind, id: UUID, on db: Database
     ) async throws -> (organizationID: UUID, projectID: UUID?, resourceName: String?)? {

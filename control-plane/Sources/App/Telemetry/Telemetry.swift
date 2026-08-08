@@ -96,8 +96,11 @@ enum Telemetry {
 
     /// A VM transitioned into the `.error` state. `reason` records which mechanism
     /// caught it: `reconciliation` (missing from an agent heartbeat),
-    /// `stuck_transition` (timed out mid start/stop), or `agent_reported` (the
-    /// agent pushed an error status, e.g. a failed create/boot).
+    /// `convergence_failed` (the agent reported a failure at the current
+    /// generation), `stuck_convergence` (the convergence deadline passed
+    /// unconverged), or `mutation_failed` (the accept path's background dispatch
+    /// threw). `stuck_transition` and `stuck_operation` went with the
+    /// stuck-operation sweep in STR-152.
     static func vmEnteredError(reason: String) {
         Counter(label: "strato_vm_errors_total", dimensions: [("reason", reason)]).increment()
     }

@@ -367,49 +367,6 @@ struct WebhookSubscriptionAPITests {
 @Suite("Webhook Outbox Tests", .serialized)
 struct WebhookOutboxTests {
 
-    @Test("Operation completion enqueues exactly one delivery per subscription")
-    func operationCompletionEnqueues() async throws {
-        try await withTestApp { app in
-            let fixture = try await makeFixture(app)
-            let subscription = try await makeSubscription(app, fixture: fixture)
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "hook-vm", project: fixture.project)
-
-            let operation = ResourceOperation(vmID: vm.id!, userID: fixture.user.id!, kind: .boot)
-            try await operation.save(on: app.db)
-
-            // A second completion path's view of the row, loaded while it is
-            // still pending — the shape that used to enqueue a duplicate,
-            // contradictory event below (issue #733).
-            let staleView = try #require(try await ResourceOperation.find(operation.id, on: app.db))
-
-            let won = try await operation.completeIfPending(as: .succeeded, error: nil, on: app.db)
-            #expect(won)
-
-            let deliveries = try await WebhookDelivery.query(on: app.db).all()
-            #expect(deliveries.count == 1)
-            let delivery = try #require(deliveries.first)
-            #expect(delivery.eventType == "operation.completed")
-            #expect(delivery.$subscription.id == subscription.id!)
-            #expect(delivery.payload.contains(fixture.organization.id!.uuidString))
-            #expect(delivery.payload.contains(vm.id!.uuidString))
-            #expect(delivery.payload.contains("\"operationKind\":\"boot\""))
-
-            // The losing (second) completion path must not enqueue again —
-            // neither from a freshly reloaded row nor from the stale instance it
-            // loaded while the operation was still pending.
-            let reloaded = try #require(try await ResourceOperation.find(operation.id, on: app.db))
-            let wonAgain = try await reloaded.completeIfPending(as: .failed, error: "x", on: app.db)
-            #expect(!wonAgain)
-            let staleWon = try await staleView.completeIfPending(as: .failed, error: "x", on: app.db)
-            #expect(!staleWon)
-            let countAfter = try await WebhookDelivery.query(on: app.db).count()
-            #expect(countAfter == 1)
-        }
-    }
-
-    // MARK: - Convergence transitions (STR-147)
-
     @Test("Converging emits operation.completed once, naming the recorded mutation")
     func convergenceTransitionEnqueuesCompletion() async throws {
         try await withTestApp { app in
@@ -500,53 +457,6 @@ struct WebhookOutboxTests {
         }
     }
 
-    @Test("A successful delete emits completion after the resource row is gone")
-    func deleteCompletionSurvivesRowRemoval() async throws {
-        try await withTestApp { app in
-            let fixture = try await makeFixture(app)
-            _ = try await makeSubscription(app, fixture: fixture)
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "doomed-vm", project: fixture.project)
-
-            // `begin` stamps the delivery context while the VM row exists.
-            let operation = try await ResourceOperation.begin(
-                .delete, resourceKind: .virtualMachine, resourceID: vm.requireID(),
-                userID: fixture.user.requireID(), on: app.db)
-            #expect(operation.organizationID == fixture.organization.id)
-            #expect(operation.resourceName == "doomed-vm")
-
-            // The deletion paths remove the row before the completion lands.
-            try await vm.delete(on: app.db)
-
-            let won = try await operation.completeIfPending(as: .succeeded, error: nil, on: app.db)
-            #expect(won)
-
-            let delivery = try #require(try await WebhookDelivery.query(on: app.db).first())
-            #expect(delivery.eventType == "operation.completed")
-            #expect(delivery.payload.contains("\"operationKind\":\"delete\""))
-            #expect(delivery.payload.contains("doomed-vm"))
-            #expect(delivery.payload.contains(fixture.organization.id!.uuidString))
-        }
-    }
-
-    @Test("Failed operations map to operation.failed with the error in the payload")
-    func operationFailureEnqueues() async throws {
-        try await withTestApp { app in
-            let fixture = try await makeFixture(app)
-            _ = try await makeSubscription(app, fixture: fixture)
-            let builder = TestDataBuilder(db: app.db)
-            let vm = try await builder.createVM(name: "hook-vm", project: fixture.project)
-
-            let operation = ResourceOperation(vmID: vm.id!, userID: fixture.user.id!, kind: .create)
-            try await operation.save(on: app.db)
-            _ = try await operation.completeIfPending(as: .failed, error: "agent exploded", on: app.db)
-
-            let delivery = try #require(try await WebhookDelivery.query(on: app.db).first())
-            #expect(delivery.eventType == "operation.failed")
-            #expect(delivery.payload.contains("agent exploded"))
-        }
-    }
-
     @Test("Event-type selection and project scope filter the fan-out")
     func fanOutFilters() async throws {
         try await withTestApp { app in
@@ -571,9 +481,15 @@ struct WebhookOutboxTests {
                 app, fixture: fixture, projectID: fixture.project.id)
 
             let vm = try await builder.createVM(name: "hook-vm", project: fixture.project)
-            let operation = ResourceOperation(vmID: vm.id!, userID: fixture.user.id!, kind: .boot)
-            try await operation.save(on: app.db)
-            _ = try await operation.completeIfPending(as: .succeeded, error: nil, on: app.db)
+            vm.setDesiredStatus(.running)
+            vm.extendConvergenceDeadline(by: 180)
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
+                actor: .user(fixture.user.requireID()), on: app.db)
+            vm.observedGeneration = vm.generation
+            vm.setStatus(.running)
+            try await ResourceConvergence.recordSuccess(vm, on: app.db)
 
             let deliveries = try await WebhookDelivery.query(on: app.db).all()
             let recipients = Set(deliveries.map { $0.$subscription.id })

@@ -23,11 +23,12 @@ struct OperationWaiterTests {
             resourceId: Self.operationID, kind: .boot, status: status, error: error)
     }
 
-    private static func json(status: String) -> String {
-        """
-        {"id": "\(operationID)", "vmId": "\(operationID)", "resourceKind": "virtual_machine",
-         "resourceId": "\(operationID)", "kind": "boot", "status": "\(status)"}
-        """
+    private static func json(status: String, error: String? = nil) -> String {
+        let errorField = error.map { ", \"error\": \"\($0)\"" } ?? ""
+        return """
+            {"id": "\(operationID)", "vmId": "\(operationID)", "resourceKind": "virtual_machine",
+             "resourceId": "\(operationID)", "kind": "boot", "status": "\(status)"\(errorField)}
+            """
     }
 
     private func client(transport: MockTransport, directory: URL) throws -> any APIProtocol {
@@ -59,12 +60,14 @@ struct OperationWaiterTests {
     @Test("A failed operation throws with its error message")
     func testFailure() async throws {
         try await withTemporaryDirectoryAsync { directory in
-            let transport = MockTransport(responses: [])
+            let transport = MockTransport(responses: [
+                .init(statusCode: 200, json: Self.json(status: "failed", error: "no capacity"))
+            ])
             let waiter = OperationWaiter(pollInterval: 0, timeout: 60, sleeper: { _ in })
 
             do {
                 try await waiter.wait(
-                    for: operation(status: .failed, error: "no capacity"),
+                    for: operation(status: .pending),
                     client: try client(transport: transport, directory: directory))
                 Issue.record("Expected operationFailed")
             } catch let error as CLIError {
@@ -78,25 +81,31 @@ struct OperationWaiterTests {
         }
     }
 
-    @Test("An already-terminal operation returns without polling")
-    func testTerminalShortCircuit() async throws {
+    /// A terminal operation handed to the waiter used to short-circuit the
+    /// first poll. It cannot any more: STR-152 dropped the operation table, so
+    /// the façade synthesizes every answer at read time and the value the
+    /// caller is holding is a snapshot, not the row. One read, always.
+    @Test("An already-terminal operation is still re-read from the server")
+    func testTerminalIsStillPolled() async throws {
         try await withTemporaryDirectoryAsync { directory in
-            let transport = MockTransport(responses: [])
+            let transport = MockTransport(responses: [
+                .init(statusCode: 200, json: Self.json(status: "succeeded"))
+            ])
             let waiter = OperationWaiter(pollInterval: 0, timeout: 60, sleeper: { _ in })
             let final = try await waiter.wait(
                 for: operation(status: .succeeded),
                 client: try client(transport: transport, directory: directory))
             #expect(final.succeeded)
-            #expect(transport.recordedRequests.isEmpty)
+            #expect(transport.recordedRequests.count == 1)
         }
     }
 
     @Test("A lifecycle mutation id is polled from the first pass, with no sleep")
     func testWaitsOnAMutationIdWithNoSeed() async throws {
         // A generation-backed lifecycle mutation answers with the resource and
-        // a `mutationId`, not an operation (STR-147), so the waiter has nothing
-        // to short-circuit on and must read the operations endpoint straight
-        // away rather than sleeping a poll interval first.
+        // a `mutationId`, not an operation (STR-147), so the waiter must read
+        // the operations endpoint straight away rather than sleeping a poll
+        // interval first.
         try await withTemporaryDirectoryAsync { directory in
             let transport = MockTransport(responses: [
                 .init(statusCode: 200, json: Self.json(status: "succeeded"))

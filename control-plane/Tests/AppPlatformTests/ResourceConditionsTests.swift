@@ -271,8 +271,6 @@ final class ResourceConditionsTests {
             vm.hypervisorId = agentId
             vm.setDesiredStatus(.running)  // generation 1
             try await vm.save(on: app.db)
-            let operation = ResourceOperation(vmID: vm.id!, userID: user.id!, kind: .boot)
-            try await operation.save(on: app.db)
 
             let envelope = try self.report(
                 agentId: agentId,

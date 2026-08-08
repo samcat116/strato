@@ -143,10 +143,9 @@ final class VMResizeTests {
             #expect(refreshed.maxMemory == sixteenGB)
             #expect(refreshed.generation > vm.generation)
 
-            // No agent work is involved, so no operation is recorded.
-            let operations = try await ResourceOperation.query(on: app.db)
-                .filter(\.$resourceID == vm.id!).all()
-            #expect(operations.isEmpty)
+            // No agent work is involved, so nothing is left outstanding for the
+            // stuck-convergence sweep to judge.
+            #expect(refreshed.convergenceDeadline == nil)
         }
     }
 

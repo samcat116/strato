@@ -106,7 +106,14 @@ extension MessageEnvelope {
             // and the sandbox's own lifecycle work — proceed concurrently.
             raws = [fields?.sessionId.map { "exec:\($0)" }]
         default:
-            // VM actions and network detach carry vmId.
+            // Any other frame that names a VM shares that VM's lane. No inbound
+            // frame does today — the imperative VM and network messages went by
+            // wire v34 (STR-151), and the `success`/`error` ACKs that outlived
+            // them carry no resource and stopped being correlated at all
+            // (STR-152) — so this arm is currently reached only by frames with
+            // no `vmId`, which fall through to the unkeyed lane. It is kept
+            // because it is the rule for the *next* such frame, not a leftover
+            // of the last one.
             raws = [fields?.vmId]
         }
 

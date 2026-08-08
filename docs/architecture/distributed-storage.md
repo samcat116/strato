@@ -369,12 +369,11 @@ image.
 
 **Progress reporting: conditions, not an operations side-table.** Cluster
 bootstrap, OSD provisioning, and backfill are slow, and the instinct is to
-give them `ResourceOperation` rows. ADR 0001 is retiring that table, so the
-correct home is the same one VMs are moving to: `generation` /
-`observedGeneration` / `convergencePhase` / `lastError` on the cluster
-resource, projected as a conditions block, with the stuck-*convergence*
-sweep flipping `degraded` past budget. Ceph should not be the one resource
-kind that adds rows to a table being deleted.
+give them rows in an operations side-table. ADR 0001 deleted that table
+(STR-152), so the correct home is the one every other resource uses:
+`generation` / `observedGeneration` / `convergencePhase` / `lastError` on the
+cluster resource, projected as a conditions block, with the
+stuck-*convergence* sweep flipping `degraded` past budget.
 
 This is the sharpest sequencing constraint in the whole roadmap, so it is
 worth stating plainly: **anything here that touches the volume wire messages

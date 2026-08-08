@@ -5,13 +5,13 @@ import SQLKit
 /// STR-150 adds: `OperationResourceKind.volumeSnapshot`, `.vmCheckpoint` and
 /// `.sandboxSnapshot`.
 ///
-/// **Three** tables, and three different install mechanisms.
-/// `resource_operations` goes through `EnforcePersistedEnumValues.prepare`,
-/// which normalizes existing rows before re-installing. `resource_events`
-/// cannot: that normalizing `UPDATE` is what its append-only trigger exists to
-/// reject, so its constraints are re-installed with a plain `ALTER TABLE`.
-/// And `agent_workload_claims` installs its own guard inline in
-/// `CreateAgentWorkloadClaim`, which is why it was missed twice.
+/// Two tables, and two different install mechanisms. (It was three until
+/// STR-152 dropped `resource_operations`.) `resource_events` cannot go through
+/// `EnforcePersistedEnumValues.prepare`: that normalizing `UPDATE` is what its
+/// append-only trigger exists to reject, so its constraints are re-installed
+/// with a plain `ALTER TABLE`. And `agent_workload_claims` installs its own
+/// guard inline in `CreateAgentWorkloadClaim`, which is why it was missed
+/// twice.
 ///
 /// That third table is not a completeness exercise. `AgentWorkloadClaim` is
 /// where a tombstoned teardown is *recorded*, and its `CHECK` still listed only
@@ -34,12 +34,6 @@ import SQLKit
 ///
 /// Idempotent on every path (drop-if-exists first).
 struct AddSnapshotOperationKinds: AsyncMigration {
-    private static var operationConstraints: [PersistedEnumConstraint] {
-        EnforcePersistedEnumValues.constraints.filter {
-            $0.table == "resource_operations" && $0.column == "resource_kind"
-        }
-    }
-
     private static var eventConstraints: [PersistedEnumConstraint] {
         CreateResourceEvent.enumConstraints.filter { $0.column == "resource_kind" }
     }
@@ -56,12 +50,8 @@ struct AddSnapshotOperationKinds: AsyncMigration {
     )
 
     func prepare(on database: any Database) async throws {
-        for constraint in Self.operationConstraints {
-            try await EnforcePersistedEnumValues.prepare(constraint, on: database)
-        }
-        // Same mechanism as `resource_operations`: the table has no append-only
-        // trigger, so the normalizing pass is safe and existing rows are
-        // already within the widened list.
+        // The claims table has no append-only trigger, so the normalizing pass
+        // is safe and existing rows are already within the widened list.
         try await EnforcePersistedEnumValues.prepare(Self.claimConstraint, on: database)
 
         let sql = try PostgresMigrationSQL.database(database)
