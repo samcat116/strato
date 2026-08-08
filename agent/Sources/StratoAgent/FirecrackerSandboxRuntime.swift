@@ -1854,6 +1854,21 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// matters, and a guest this cannot reach is a guest the next status poll
     /// will report on. What it must not do is leave a workload the operator
     /// never asked to stop wedged at a pause nothing will lift.
+    ///
+    /// The `getInstanceInfo()` below is load-bearing twice over, and the second
+    /// way is invisible here: besides answering the question, it refreshes the
+    /// manager's cached `vmState` as a side effect. A failed `pause()` leaves
+    /// that cache reading `.running`, and `resume()` guards on
+    /// `requireState(.paused)` — so without the read having happened first, the
+    /// resume would refuse itself rather than act.
+    ///
+    /// This is a fast path, not the only safety net, and deliberately does not
+    /// retry. A timeout means the request was abandoned host-side, so the pause
+    /// can still land at an arbitrary later moment — after this samples
+    /// `.running` and returns. The backstop is reconciliation: `mappedStatus`
+    /// folds a paused instance into `stopped`, a `mode: resume` checkpoint
+    /// leaves `desiredStatus == .running`, and the next observed report
+    /// re-drives a boot, which resumes a paused microVM.
     private func resumeAfterFailedPause(managed: Managed, sandboxId: String) async {
         guard let info = try? await managed.manager.getInstanceInfo(), info.state == .paused else {
             return

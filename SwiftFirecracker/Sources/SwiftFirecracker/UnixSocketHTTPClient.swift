@@ -41,6 +41,16 @@ public actor UnixSocketHTTPClient {
     /// one that arrives first.
     public static let defaultRequestTimeout: TimeInterval = 60
 
+    /// Ceiling for a read that only asks the VMM what it already knows.
+    ///
+    /// `GET /` never waits on the vCPUs — it is answered from the VMM thread's
+    /// own event loop — so it has no reason to inherit a budget sized for an
+    /// action that does. Kept short on purpose: these are the calls whose whole
+    /// job is to find out quickly that the VMM has stopped answering, and they
+    /// are the ones that run *before* an action in the same convergence step,
+    /// where the two budgets add up against the mutation's deadline.
+    public static let defaultReadTimeout: TimeInterval = 15
+
     private let socketPath: String
     private let logger: Logger
     private let group: EventLoopGroup
@@ -50,9 +60,14 @@ public actor UnixSocketHTTPClient {
     /// Whether this client has ever completed a `connect()`. Gates the
     /// reconnect in ``ensureConnected()`` so it only ever *re*-dials.
     private var everConnected = false
-    /// The reconnect in flight, shared by every caller that finds the channel
-    /// dead at the same moment.
-    private var reconnect: Task<Void, Error>?
+    /// The redial in flight, shared by every caller that finds the channel dead
+    /// at the same moment, tagged so its owner clears only its own entry.
+    private var reconnect: (id: UInt64, task: Task<Void, Error>)?
+    private var nextRedialID: UInt64 = 0
+    /// Bumped by every explicit ``disconnect()``. A redial that was in flight
+    /// across one compares this against the value it started with, which is the
+    /// only way it can tell that its result is no longer wanted.
+    private var teardownEpoch: UInt64 = 0
 
     public init(
         socketPath: String,
@@ -124,39 +139,67 @@ public actor UnixSocketHTTPClient {
         if let channel, channel.isActive { return }
         guard everConnected else { return }
 
+        // Sampled before the redial suspends: a `disconnect()` that lands while
+        // it is in flight cannot see the channel it has not installed yet, so
+        // the redial has to be the one that notices and undoes itself.
+        let epoch = teardownEpoch
+
         if let reconnect {
             // Ride the redial already in flight rather than closing the channel
             // it is about to install.
-            try await reconnect.value
-            return
+            try await reconnect.task.value
+        } else {
+            logger.warning(
+                "Firecracker API connection is down; reconnecting",
+                metadata: ["path": "\(socketPath)"])
+            nextRedialID += 1
+            let id = nextRedialID
+            let task = Task { try await self.connect() }
+            reconnect = (id: id, task: task)
+            // Compare-and-clear: this frame can exit while its task is still
+            // running (the *caller* being cancelled aborts the await, not the
+            // unstructured task), and clearing someone else's entry would let a
+            // second `connect()` start — two of which close each other's freshly
+            // installed channel, since `connect()` opens with `closeChannel()`.
+            defer { if reconnect?.id == id { reconnect = nil } }
+            try await task.value
         }
 
-        logger.warning(
-            "Firecracker API connection is down; reconnecting", metadata: ["path": "\(socketPath)"])
-        let task = Task { try await self.connect() }
-        reconnect = task
-        defer { reconnect = nil }
-        try await task.value
+        guard teardownEpoch != epoch else { return }
+        logger.debug(
+            "Discarding a reconnect that raced an explicit disconnect",
+            metadata: ["path": "\(socketPath)"])
+        await closeChannel()
+        everConnected = false
     }
 
     /// Disconnects from the socket.
     ///
     /// A deliberate teardown, unlike the channel dying under a request: this
-    /// also revokes the reconnect, so a stray later request cannot redial a
-    /// socket path that teardown may since have handed to a different VM.
+    /// also revokes the redial, so a stray later request cannot reach a socket
+    /// path that teardown may since have handed to a different VM. Revoking is
+    /// the epoch bump rather than cancelling the redial task — `connect()`
+    /// suspends inside NIO futures that do not observe cancellation, so the only
+    /// reliable point to refuse its result is after it has produced one.
     public func disconnect() async {
+        teardownEpoch += 1
         await closeChannel()
         everConnected = false
         logger.debug("Disconnected from socket")
     }
 
-    /// Drops the current channel without touching the reconnect permission.
+    /// Drops the current channel without touching the redial permission.
+    ///
+    /// Loops rather than closing once: `channel` is cleared *before* the await,
+    /// so a redial that installs its own channel while this one is closing is
+    /// caught by the next turn instead of being silently unreferenced and left
+    /// open.
     private func closeChannel() async {
-        if let channel {
+        while let channel {
+            self.channel = nil
+            self.roundTrip = nil
             try? await channel.close().get()
         }
-        channel = nil
-        roundTrip = nil
     }
 
     /// Sends an HTTP request and returns the response.
@@ -164,10 +207,14 @@ public actor UnixSocketHTTPClient {
     /// Safe to call concurrently: each round trip is queued in pipeline order,
     /// so a response is always delivered to the caller that sent the matching
     /// request.
+    /// - Parameter timeout: Overrides this client's default ceiling for one
+    ///   request. Use it to give a call a budget matched to what it actually
+    ///   waits on — see ``defaultReadTimeout``.
     public func request(
         method: HTTPMethod,
         path: String,
-        body: Data? = nil
+        body: Data? = nil,
+        timeout: TimeInterval? = nil
     ) async throws -> HTTPResponse {
         try await ensureConnected()
         guard let channel, let roundTrip, channel.isActive else {
@@ -200,7 +247,7 @@ public actor UnixSocketHTTPClient {
 
         let response = try await roundTrip.send(
             head: head, body: buffer, on: channel.eventLoop,
-            timeout: .clamping(seconds: requestTimeout)
+            timeout: .clamping(seconds: timeout ?? requestTimeout)
         ).get()
 
         logger.debug(

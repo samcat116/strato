@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import NIOPosix
 import Testing
 
 @testable import SwiftFirecracker
@@ -37,9 +38,12 @@ struct HTTPConcurrencyTests {
     /// fire-and-forget — the channel could outlive the test and the fake server
     /// it is talking to.
     private func withClient<T>(
-        socketPath: String, _ body: (UnixSocketHTTPClient) async throws -> T
+        socketPath: String,
+        requestTimeout: TimeInterval = UnixSocketHTTPClient.defaultRequestTimeout,
+        _ body: (UnixSocketHTTPClient) async throws -> T
     ) async throws -> T {
-        let client = UnixSocketHTTPClient(socketPath: socketPath, logger: Logger(label: "test"))
+        let client = UnixSocketHTTPClient(
+            socketPath: socketPath, logger: Logger(label: "test"), requestTimeout: requestTimeout)
         try await client.connect()
         do {
             let result = try await body(client)
@@ -144,13 +148,14 @@ struct HTTPConcurrencyTests {
         server.start()
         defer { server.stop() }
 
-        let client = UnixSocketHTTPClient(
-            socketPath: socketPath, logger: Logger(label: "test"), requestTimeout: 0.5)
-        try await client.connect()
-        defer { Task { await client.disconnect() } }
-
-        await #expect(throws: FirecrackerError.self) {
-            _ = try await client.request(method: .GET, path: "/never-answered")
+        // Cleanup goes through `withClient` rather than a `defer` firing an
+        // unstructured `Task`: that task can outlive the test body — and the
+        // `defer` that removes the socket directory — which is harmless only for
+        // as long as teardown touches no filesystem.
+        try await withClient(socketPath: socketPath, requestTimeout: 0.5) { client in
+            await #expect(throws: FirecrackerError.self) {
+                _ = try await client.request(method: .GET, path: "/never-answered")
+            }
         }
     }
 
@@ -172,19 +177,71 @@ struct HTTPConcurrencyTests {
         server.start()
         defer { server.stop() }
 
-        let client = UnixSocketHTTPClient(
-            socketPath: socketPath, logger: Logger(label: "test"), requestTimeout: 0.5)
-        try await client.connect()
-        defer { Task { await client.disconnect() } }
-
-        await #expect(throws: FirecrackerError.self) {
-            _ = try await client.request(method: .PATCH, path: "/vm", body: Data("{}".utf8))
+        let response = try await withClient(socketPath: socketPath, requestTimeout: 0.5) { client in
+            await #expect(throws: FirecrackerError.self) {
+                _ = try await client.request(method: .PATCH, path: "/vm", body: Data("{}".utf8))
+            }
+            return try await client.request(method: .GET, path: "/after-timeout")
         }
 
-        let response = try await client.request(method: .GET, path: "/after-timeout")
         #expect(response.statusCode == 200)
         #expect(
             response.body.map { String(decoding: $0, as: UTF8.self) } == "{\"path\":\"/after-timeout\"}")
+    }
+
+    /// `disconnect()` must win against a redial that is already in flight. It
+    /// cannot close a channel that does not exist yet, so the redial has to be
+    /// the one that notices the teardown and undoes itself — otherwise the
+    /// client comes back up after a deliberate teardown, pointed at a socket
+    /// path that by then may belong to a different microVM.
+    ///
+    /// The window is opened deterministically rather than raced for: the client
+    /// runs on a single-threaded loop group, and occupying that one loop parks
+    /// the redial inside NIO's channel registration while leaving the actor free
+    /// for the `disconnect()` to land. Without the epoch check this ends with a
+    /// connected client and the final request *succeeding*, which is why the
+    /// server answers after the first swallowed request — a silent server would
+    /// make the wrong outcome throw a timeout and look like a pass.
+    @Test("a disconnect racing an in-flight redial still leaves the client down")
+    func disconnectBeatsAnInFlightRedial() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let socketPath = "\(dir)/api.sock"
+
+        let server = try EchoingAPIServer(socketPath: socketPath, silentRequests: 1)
+        server.start()
+        defer { server.stop() }
+
+        let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+        let client = UnixSocketHTTPClient(
+            socketPath: socketPath, logger: Logger(label: "test"), group: group,
+            requestTimeout: 0.3)
+        try await client.connect()
+
+        // Kills the channel, leaving the client redial-eligible. The loop must
+        // be free here — the request's deadline is scheduled on it.
+        _ = try? await client.request(method: .GET, path: "/wedged")
+
+        // Occupy the loop so the redial below parks in `withConnectedSocket`.
+        group.next().execute { Thread.sleep(forTimeInterval: 1.0) }
+
+        async let redialing: Void = {
+            _ = try? await client.request(method: .GET, path: "/racing-the-teardown")
+        }()
+        // Long enough for the redial to be created and suspended, short enough
+        // to stay well inside the loop's occupancy.
+        try await Task.sleep(for: .milliseconds(200))
+        await client.disconnect()
+        await redialing
+
+        var refused = false
+        do {
+            _ = try await client.request(method: .GET, path: "/after-teardown")
+        } catch FirecrackerError.notConnected {
+            refused = true
+        }
+        #expect(refused, "the client reconnected across an explicit disconnect")
+        try await group.shutdownGracefully()
     }
 
     /// The redial is for a channel that died under a request, not for one the
