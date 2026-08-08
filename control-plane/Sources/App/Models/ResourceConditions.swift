@@ -38,9 +38,22 @@ enum ConvergenceWriteError: Error, CustomStringConvertible, Sendable {
 /// with a view of the reconciliation loop's own state.
 struct ResourceConditions: Content, Equatable {
     /// True once the owning agent has confirmed converging to
-    /// `targetGeneration` *and* what it observes satisfies the desired state.
-    /// Both halves matter: an agent can acknowledge a generation while the
-    /// workload is still, say, `error`.
+    /// `targetGeneration`, what it observes satisfies the desired state, and no
+    /// attempt at *that same generation* is on record as having failed. All
+    /// three matter: an agent can acknowledge a generation while the workload is
+    /// still, say, `error`, and it can acknowledge one and then fail a second
+    /// work item at the very same number.
+    ///
+    /// That third clause makes this and `degraded` **mutually exclusive** at the
+    /// target generation (STR-191), so a client always has exactly one verdict.
+    /// Without it both could be true at once: the agent advances its applied
+    /// generation only when a whole work item succeeds, but it plans more than
+    /// one item per generation — a boot converges and stamps the number, then
+    /// the drift-correcting resize planned at the same number fails. The rest of
+    /// the control plane already called that a failure (`ObservedStateApplier`
+    /// records it; the operations façade and the frontend's watcher both read
+    /// `degraded` first), so this states the rule the system was following
+    /// rather than leaving each reader to guess it.
     ///
     /// Always false for a resource whose desired state is `absent`: a
     /// terminating row is on its way out, not converging on anything. The
@@ -85,7 +98,6 @@ struct ResourceConditions: Content, Equatable {
         lastError: String?,
         failedGeneration: Int64?
     ) {
-        self.converged = observedGeneration >= targetGeneration && desiredSatisfied
         self.targetGeneration = targetGeneration
         self.observedGeneration = observedGeneration
         self.phase = phase
@@ -96,6 +108,17 @@ struct ResourceConditions: Content, Equatable {
         } else {
             self.degraded = nil
         }
+        // Derived *from* `degraded` rather than alongside it: the two fields are
+        // one verdict, and reading the assigned condition is what makes
+        // "converged ∧ degraded at the target" unrepresentable instead of merely
+        // unlikely. Reading `degraded?.sinceGeneration` rather than the
+        // `failedGeneration` argument matters for the same reason — a failure
+        // with no reason is not reportable and so is not a verdict, which keeps
+        // this exactly the negation of "degraded names the target".
+        self.converged =
+            observedGeneration >= targetGeneration
+            && desiredSatisfied
+            && self.degraded?.sinceGeneration != targetGeneration
     }
 }
 
@@ -137,6 +160,50 @@ extension VM: ConvergenceObservable {}
 extension Sandbox: ConvergenceObservable {}
 extension Volume: ConvergenceObservable {}
 
+/// A resource whose `conditions` block and `isConverged` predicate are one
+/// derivation over one set of columns.
+///
+/// Both used to be written out per family — four `isConverged` bodies and six
+/// `conditions` properties — with doc comments asserting the pair could not
+/// disagree. They could, and did (STR-191). The failure clause was in neither,
+/// and the `desiredSatisfied` term had already drifted: a volume's `conditions`
+/// omitted the `desiredStatus == .present` its `isConverged` required, and the
+/// three snapshot families' omitted both that and `exportSatisfied`. Each
+/// family now supplies only the term that genuinely differs, and everything
+/// derived from it is written once.
+protocol ConvergenceDerived: ConvergenceObservable {
+    var generation: Int64 { get }
+    var observedGeneration: Int64 { get }
+
+    /// Whether what the owning agent observes satisfies what the desired state
+    /// asks for — the one term the families do not share, because a VM's is a
+    /// status predicate, a volume's is a resting status, and a snapshot
+    /// artifact's is presence plus its export.
+    var desiredSatisfied: Bool { get }
+}
+
+extension ConvergenceDerived {
+    /// Derived on read — the client-facing answer to "is this mutation done?".
+    var conditions: ResourceConditions {
+        ResourceConditions(
+            targetGeneration: generation,
+            observedGeneration: observedGeneration,
+            desiredSatisfied: desiredSatisfied,
+            phase: convergencePhase,
+            lastError: lastError,
+            failedGeneration: failedGeneration
+        )
+    }
+
+    /// `conditions.converged` in the shape the reconciliation paths want it —
+    /// the same value by construction rather than by assertion.
+    ///
+    /// Deliberately not a protocol *requirement*: a family free to supply its
+    /// own witness is a family free to disagree with its own `conditions`, which
+    /// is the bug this shape exists to make unrepresentable.
+    var isConverged: Bool { conditions.converged }
+}
+
 /// A workload whose API mutations are accepted asynchronously and judged by
 /// the reconciliation loop rather than by an operation row (ADR 0001 stage 4,
 /// STR-147).
@@ -146,7 +213,7 @@ extension Volume: ConvergenceObservable {}
 /// kinds instead of switching on `OperationResourceKind` at every step.
 /// Everything on it already existed on `VM` and `Sandbox`; only
 /// `convergenceDeadline` is new.
-protocol ConvergingResource: Model, ConvergenceObservable, Sendable where IDValue == UUID {
+protocol ConvergingResource: Model, ConvergenceDerived, Sendable where IDValue == UUID {
     static var operationResourceKind: OperationResourceKind { get }
 
     var name: String { get }
@@ -155,18 +222,7 @@ protocol ConvergingResource: Model, ConvergenceObservable, Sendable where IDValu
     /// The agent this workload is placed on, or nil if it never reached one.
     var hypervisorId: String? { get }
 
-    var generation: Int64 { get }
-    var observedGeneration: Int64 { get }
     var convergenceDeadline: Date? { get set }
-
-    /// The owning agent has confirmed the current generation and what it
-    /// observes satisfies the desired state — `conditions.converged`, in the
-    /// shape the reconciliation paths want it.
-    var isConverged: Bool { get }
-
-    /// Derived on read from the columns above — the client-facing answer to
-    /// "is this mutation done?".
-    var conditions: ResourceConditions { get }
 
     /// Resolves the in-flight state a failed mutation left behind. Returns
     /// whether anything changed; does not persist.
@@ -403,45 +459,21 @@ extension Volume: ConvergingResource {
     }
 }
 
+// MARK: - The one term each family supplies
+
 extension VM {
-    var conditions: ResourceConditions {
-        ResourceConditions(
-            targetGeneration: generation,
-            observedGeneration: observedGeneration,
-            desiredSatisfied: desiredStatus.isSatisfied(by: status),
-            phase: convergencePhase,
-            lastError: lastError,
-            failedGeneration: failedGeneration
-        )
-    }
+    var desiredSatisfied: Bool { desiredStatus.isSatisfied(by: status) }
 }
 
 extension Sandbox {
-    var conditions: ResourceConditions {
-        ResourceConditions(
-            targetGeneration: generation,
-            observedGeneration: observedGeneration,
-            desiredSatisfied: desiredStatus.isSatisfied(by: status),
-            phase: convergencePhase,
-            lastError: lastError,
-            failedGeneration: failedGeneration
-        )
-    }
+    var desiredSatisfied: Bool { desiredStatus.isSatisfied(by: status) }
 }
 
 extension Volume {
-    var conditions: ResourceConditions {
-        ResourceConditions(
-            targetGeneration: generation,
-            observedGeneration: observedGeneration,
-            // A volume has no `DesiredVolumeStatus.isSatisfied(by:)` because
-            // `.absent` is confirmed by omission from the observed report and
-            // `.present` is confirmed by a resting status — the same rule
-            // `isConverged` states, reused so the two cannot disagree.
-            desiredSatisfied: status == .available || status == .attached,
-            phase: convergencePhase,
-            lastError: errorMessage,
-            failedGeneration: failedGeneration
-        )
-    }
+    /// A volume has no `DesiredVolumeStatus.isSatisfied(by:)` because `.absent`
+    /// is confirmed by omission from the observed report and `.present` is
+    /// confirmed by a resting status. The generation clause on its own would
+    /// call a volume converged whose file had been deleted out of band, since
+    /// nothing would have bumped the generation to notice.
+    var desiredSatisfied: Bool { bytesAtRest }
 }

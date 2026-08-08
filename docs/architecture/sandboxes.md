@@ -58,7 +58,8 @@ A sandbox is described by `SandboxSpec`
   change plus an append-only `resource_events` row in one transaction and
   return **202 Accepted** with `{resource, targetGeneration, mutationId}`; the
   client refetches the sandbox and reads its `conditions` (ADR 0001 stage 4,
-  STR-147). Restart is expressed as a fresh desired-`running` generation (there
+  STR-147), where `converged` and a `degraded` naming the target generation are
+  mutually exclusive, so exactly one answers. Restart is expressed as a fresh desired-`running` generation (there
   is no sandbox reboot nonce — unlike a VM's, whose reboot became one in
   STR-151); the runtime (#421) interprets it agent-side.
 - `sandbox` is an IAM node type of its own: the same action families as
@@ -519,8 +520,9 @@ v33): capture, delete and export are desired state the owning agent converges
 on, and the row is a `ConvergingResource` with its own generation and
 finalizer. `POST /api/sandboxes/:id/snapshots` and `DELETE` answer `202
 {resource, targetGeneration, mutationId}`; the client polls the snapshot's
-`conditions`. The delete's row survives until the agent's full-list report
-omits the artifact. See
+`conditions`, where `converged` and a `degraded` naming the target generation
+are mutually exclusive. The delete's row survives until the agent's full-list
+report omits the artifact. See
 [the storage doc](./storage.md#snapshots-and-checkpoints-as-desired-artifacts)
 for the shared shape, including retention.
 

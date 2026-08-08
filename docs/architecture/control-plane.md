@@ -250,12 +250,31 @@ with no restart remedy to offer, since the target only exists on a live guest.
 answer lives on the resource, as a `conditions` block
 (`Models/ResourceConditions.swift`, STR-142) — converged / targetGeneration /
 observedGeneration / phase / degraded. Nothing stores it: `converged` is
-`observedGeneration >= generation ∧ desiredStatus.isSatisfied(by: status)`, and
-`phase`/`degraded` read the `convergence_phase` / `last_error` /
-`failed_generation` columns that `ObservedStateApplier` mirrors from each
-report (clearing them when an attempt finally succeeds). A client refetches the
-resource: done is `converged` at or past its `targetGeneration`; failed is a
-`degraded` whose `sinceGeneration` equals it.
+`observedGeneration >= generation ∧ desiredStatus.isSatisfied(by: status) ∧
+failedGeneration ≠ generation`, and `phase`/`degraded` read the
+`convergence_phase` / `last_error` / `failed_generation` columns that
+`ObservedStateApplier` mirrors from each report (clearing them when an attempt
+finally succeeds). A client refetches the resource: done is `converged` at or
+past its `targetGeneration`; failed is a `degraded` whose `sinceGeneration`
+equals it.
+
+That third clause is what makes the two answers **mutually exclusive**
+(STR-191). Without it both could hold at once, because the agent advances its
+applied generation per *work item* and plans more than one item per generation:
+a boot converges and stamps the number, then the drift-correcting resize
+planned at the same number fails. `converged` is derived *from* the assigned
+`degraded` rather than alongside it, so the exclusion is structural.
+
+The same derivation answers both readers. `conditions.converged` is what a
+client polls and `isConverged` is what the reconciliation paths read — the
+convergence webhook edge, the stuck sweep — and since STR-191 the second is
+literally the first, supplied by one protocol extension
+(`ConvergenceDerived`) over a per-family `desiredSatisfied`. They were six
+`conditions` properties and four `isConverged` bodies before, with doc comments
+asserting they could not disagree; they had already drifted. The one deliberate
+exception is `Volume.bytesAtRest`, which `canSnapshot`/`canClone` read instead:
+those verbs need "nothing is mid-write", not "the last change landed", and a
+volume whose resize failed has nothing to clear its `failed_generation`.
 
 **Both outcomes are transitions, and both commit in one transaction**
 (`ResourceConvergence.recordSuccess` / `recordFailure`). The write that closes

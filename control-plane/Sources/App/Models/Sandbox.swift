@@ -271,12 +271,6 @@ extension Sandbox {
         setDesiredStatus(.running)
     }
 
-    /// True once the owning agent has confirmed converging to the current
-    /// generation and the observed status satisfies the desired one.
-    var isConverged: Bool {
-        observedGeneration >= generation && desiredStatus.isSatisfied(by: status)
-    }
-
     /// Realigns desired state with observed reality after a failed operation,
     /// bumping the generation — same rationale as `VM.revertDesiredToObserved`:
     /// a failed operation's unachieved intent must not linger and replay on a

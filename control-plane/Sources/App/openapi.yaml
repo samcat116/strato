@@ -60,7 +60,9 @@ info:
     its `conditions`: done is `converged` with
     `observedGeneration >= targetGeneration`; failed is
     `degraded.sinceGeneration == targetGeneration`, carrying the agent's
-    reason. Overlapping mutations are accepted rather than refused — desired
+    reason. The two are **mutually exclusive** — a failure recorded at the
+    target generation makes `converged` false — so exactly one of them ever
+    answers and you never have to break a tie. Overlapping mutations are accepted rather than refused — desired
     state is level-triggered, so the last write wins and the agent converges on
     it. They are serialized on the resource, so each one's change is applied on
     top of the last rather than overwriting it with a stale snapshot: if you
@@ -8631,7 +8633,9 @@ components:
     AcceptedVMMutation:
       description: >-
         The mutation was accepted. Refetch the VM until its `conditions` report
-        `observedGeneration >= targetGeneration` with `converged` true.
+        `observedGeneration >= targetGeneration` with `converged` true, or
+        `degraded.sinceGeneration == targetGeneration` — the failure, with the
+        agent's reason. Exactly one of the two ever holds.
       content:
         application/json:
           schema:
@@ -8639,7 +8643,9 @@ components:
     AcceptedSandboxMutation:
       description: >-
         The mutation was accepted. Refetch the sandbox until its `conditions`
-        report `observedGeneration >= targetGeneration` with `converged` true.
+        report `observedGeneration >= targetGeneration` with `converged` true,
+        or `degraded.sinceGeneration == targetGeneration` — the failure, with
+        the agent's reason. Exactly one of the two ever holds.
       content:
         application/json:
           schema:
@@ -8647,7 +8653,9 @@ components:
     AcceptedVolumeMutation:
       description: >-
         The mutation was accepted. Refetch the volume until its `conditions`
-        report `observedGeneration >= targetGeneration` with `converged` true.
+        report `observedGeneration >= targetGeneration` with `converged` true,
+        or `degraded.sinceGeneration == targetGeneration` — the failure, with
+        the agent's reason. Exactly one of the two ever holds.
       content:
         application/json:
           schema:
@@ -8655,7 +8663,9 @@ components:
     AcceptedVMSnapshotMutation:
       description: >-
         The mutation was accepted. Refetch the checkpoint until its `conditions`
-        report `observedGeneration >= targetGeneration` with `converged` true.
+        report `observedGeneration >= targetGeneration` with `converged` true,
+        or `degraded.sinceGeneration == targetGeneration` — the failure, with
+        the agent's reason. Exactly one of the two ever holds.
         A delete's completion is the checkpoint's absence — poll
         `GET /api/operations/{mutationId}` for that one.
       content:
@@ -8665,7 +8675,9 @@ components:
     AcceptedSandboxSnapshotMutation:
       description: >-
         The mutation was accepted. Refetch the snapshot until its `conditions`
-        report `observedGeneration >= targetGeneration` with `converged` true.
+        report `observedGeneration >= targetGeneration` with `converged` true,
+        or `degraded.sinceGeneration == targetGeneration` — the failure, with
+        the agent's reason. Exactly one of the two ever holds.
       content:
         application/json:
           schema:
@@ -8673,7 +8685,9 @@ components:
     AcceptedVolumeSnapshotMutation:
       description: >-
         The mutation was accepted. Refetch the snapshot until its `conditions`
-        report `observedGeneration >= targetGeneration` with `converged` true.
+        report `observedGeneration >= targetGeneration` with `converged` true,
+        or `degraded.sinceGeneration == targetGeneration` — the failure, with
+        the agent's reason. Exactly one of the two ever holds.
       content:
         application/json:
           schema:
@@ -8717,7 +8731,8 @@ components:
         Done means the VM's `conditions` report `converged` with
         `observedGeneration >= targetGeneration`; failed means
         `conditions.degraded.sinceGeneration == targetGeneration`, with the
-        agent's reason. Both are readable from `GET /api/vms/{vmID}` — no
+        agent's reason. The two are mutually exclusive, so exactly one of them
+        ever answers. Both are readable from `GET /api/vms/{vmID}` — no
         operation object is involved.
 
 
@@ -9191,10 +9206,14 @@ components:
           type: boolean
           description: >-
             Whether the owning agent has confirmed converging to
-            `targetGeneration` *and* what it observes satisfies the desired
-            state. Always false once a delete is in flight: a terminating
-            resource is on its way out, not converging on anything, and it
-            disappears when the last finalizer clears rather than settling.
+            `targetGeneration`, what it observes satisfies the desired state,
+            and no attempt at that same generation is on record as having
+            failed. False whenever `degraded.sinceGeneration` equals
+            `targetGeneration` — the two are mutually exclusive, so a client
+            always has exactly one verdict. Always false once a delete is in
+            flight: a terminating resource is on its way out, not converging on
+            anything, and it disappears when the last finalizer clears rather
+            than settling.
         targetGeneration:
           type: integer
           format: int64
@@ -9233,7 +9252,9 @@ components:
           description: >-
             The generation whose convergence produced `reason`. Compare with
             `targetGeneration` to tell a failure of the state currently being
-            pursued from one a newer mutation has already superseded.
+            pursued from one a newer mutation has already superseded. Equal to
+            `targetGeneration` means this is the current state's verdict, and
+            `converged` is false alongside it.
     VMStatus:
       type: string
       description: The observed VM state (tolerant decoding; unknown values map to Unknown).
