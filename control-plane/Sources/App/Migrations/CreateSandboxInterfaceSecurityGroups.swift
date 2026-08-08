@@ -18,8 +18,8 @@ import SQLKit
 /// pre-existing ones, `SecurityGroupService.ensureDefaultGroup` at project
 /// create), and the `NOT EXISTS` guard keeps a re-run idempotent.
 ///
-/// Note that none of this is enforced yet: sandbox NICs are still omitted from
-/// the wire entirely (`SandboxSpecBuilder.guestNetworkingSupported`). See
+/// Whether any of it is enforced is per host: a sandbox NIC reaches the wire
+/// only on an agent that advertises sandbox networking (STR-103). See
 /// `SandboxInterfaceSecurityGroup`.
 struct CreateSandboxInterfaceSecurityGroups: AsyncMigration {
     func prepare(on database: Database) async throws {

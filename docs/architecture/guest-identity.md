@@ -289,9 +289,10 @@ guest, a small forwarder pipes vsock ↔ `/run/spire/sockets/agent.sock`.
 
 Why this shape:
 
-- **vsock is the only channel that generalizes.** Sandboxes have no guest network
-  at all today (`SandboxSpecBuilder.guestNetworkingSupported = false`), which
-  eliminates every IP-based option outright. Firecracker has no virtio-serial,
+- **vsock is the only channel that generalizes.** A sandbox's guest network is
+  optional and host-gated (STR-103) — it has none unless its project asked for
+  one and its host can realize one — so no IP-based option works for every
+  sandbox. Firecracker has no virtio-serial,
   which eliminates the channel QEMU VMs already have. vsock is the one transport
   both hypervisors can carry.
 - **Attestation is free** — see step 4 above.
