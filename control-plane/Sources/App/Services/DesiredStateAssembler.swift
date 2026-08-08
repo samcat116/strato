@@ -388,8 +388,15 @@ struct DesiredStateAssembler {
                 securityGroupIds: interface?.id.flatMap { sandboxSecurityGroupsByInterface[$0] },
                 sendsMetadataPort: sendMetadataPort,
                 agentRealizesSandboxNICs: sendSandboxNetwork)
+            // Debug, not warning, despite being worth knowing: assembly runs on
+            // every sync for every agent, so during a fleet upgrade this is one
+            // line per networked sandbox per poll — thousands of them, all
+            // saying the same thing. The operator-facing signals are the ones
+            // that fire once: the agent's own warning at registration naming
+            // the specific blocker, and `securityGroupsEnforced` reading false
+            // on the sandbox itself.
             if interface != nil && !sendSandboxNetwork {
-                app.logger.warning(
+                app.logger.debug(
                     "Withholding a sandbox's NIC: its host does not advertise sandbox networking",
                     metadata: [
                         "sandboxId": .string(sandboxId.uuidString),
