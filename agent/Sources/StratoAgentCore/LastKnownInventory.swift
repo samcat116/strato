@@ -3,10 +3,10 @@
 ///
 /// Everything here exists because, for host inventory, **the empty answer is
 /// the dangerous one**. An empty VM list is not "no information", it is the
-/// claim that this host manages nothing, and the control plane reads it as
-/// every VM here being gone. Zero reservations are not "unknown", they are the
-/// claim that this host is idle, and the scheduler places against it. A driver
-/// that could not reach its daemon is in no position to make either claim.
+/// claim that this host manages nothing, which is how an inventory consumer
+/// will read it. Zero reservations are not "unknown", they are the claim that
+/// this host is idle, and the scheduler places against it. A driver that could
+/// not reach its daemon is in no position to make either claim.
 ///
 /// Two decisions live here, and both are the sort that read identically to a
 /// correct answer at the point they are served:
@@ -59,9 +59,6 @@ public struct LastKnownInventory<Value: Sendable>: Sendable {
     public init(staleThreshold: Duration) {
         self.staleThreshold = staleThreshold
     }
-
-    /// Whether this driver has ever answered.
-    public var hasAnswer: Bool { answer != nil }
 
     /// Record a live answer, replacing any earlier one and restarting its clock.
     public mutating func record(_ value: Value, at now: ContinuousClock.Instant = ContinuousClock.now) {

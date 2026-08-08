@@ -44,7 +44,6 @@ struct LastKnownInventoryTests {
     func neverAnsweredIsNotAnIdleHost() {
         let inventory = Self.reservations()
 
-        #expect(inventory.hasAnswer == false)
         guard case .neverAnswered = inventory.fallback() else {
             Issue.record("a driver with no answer must report not knowing, never (0, 0)")
             return
@@ -58,7 +57,6 @@ struct LastKnownInventoryTests {
     func neverAnsweredIsNotAnEmptyHost() {
         let inventory = Self.vmIds()
 
-        #expect(inventory.hasAnswer == false)
         guard case .neverAnswered = inventory.fallback() else {
             Issue.record("a driver with no answer must report not knowing, never []")
             return
@@ -78,7 +76,6 @@ struct LastKnownInventoryTests {
         let recordedAt = ContinuousClock.now
         inventory.record((vcpus: 0, memoryBytes: 0), at: recordedAt)
 
-        #expect(inventory.hasAnswer)
         guard case .lastKnown(let reserved, _, let badlyStale) = inventory.fallback(now: recordedAt) else {
             Issue.record("an answer that was recorded must be served, zero or not")
             return

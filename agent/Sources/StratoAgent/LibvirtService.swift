@@ -141,15 +141,16 @@ actor LibvirtService: HypervisorService {
     /// computed from it.
     ///
     /// Both exist because for host inventory the empty answer is actively
-    /// harmful rather than merely uninformative. An empty VM list makes the
-    /// control plane treat every VM on this host as lost, and zero reservations
-    /// advertise capacity the host does not have and invite the scheduler to
-    /// over-place it. The agent's own manifest fallback only covers a query that
-    /// *times out*, so a libvirtd that answers with an error has to be covered
-    /// here. What neither cache can cover — the sweep that has never once
-    /// succeeded — is why both methods return optionals (STR-196); the
-    /// never-answered and staleness decisions belong to `LastKnownInventory`, in
-    /// a package tests can import, because this target has none.
+    /// harmful rather than merely uninformative. An empty VM list claims every
+    /// VM on this host is gone, which is how an inventory consumer will read it,
+    /// and zero reservations advertise capacity the host does not have and
+    /// invite the scheduler to over-place it. The agent's own manifest fallback
+    /// only covers a query that *times out*, so a libvirtd that answers with an
+    /// error has to be covered here. What neither cache can cover — the sweep
+    /// that has never once succeeded — is why both methods return optionals
+    /// (STR-196). The never-answered and staleness decisions belong to
+    /// `LastKnownInventory`, in a package tests can import, because this target
+    /// has none.
     private var lastKnownVMIds = LastKnownInventory<[String]>(
         staleThreshold: LibvirtService.staleInventoryThreshold)
     private var lastKnownReservations = LastKnownInventory<(vcpus: Int, memoryBytes: Int64)>(
@@ -1080,12 +1081,12 @@ actor LibvirtService: HypervisorService {
     /// the log as it ages.
     ///
     /// Serving the last answer beats serving an empty one — an empty VM list
-    /// makes the control plane mark every VM here lost, and zero reservations
-    /// invite the scheduler to over-place the host. What deserved a bound is the
-    /// *indefiniteness*: without one, "these are this second's figures" and
-    /// "these are from an hour ago" differ only by a log line nobody reads,
-    /// while the host goes on looking healthy. Past the threshold this says so
-    /// at error level on every heartbeat.
+    /// claims every VM here is gone, which is how an inventory consumer will
+    /// read it, and zero reservations invite the scheduler to over-place the
+    /// host. What deserved a bound is the *indefiniteness*: without one, "these
+    /// are this second's figures" and "these are from an hour ago" differ only
+    /// by a log line nobody reads, while the host goes on looking healthy. Past
+    /// the threshold this says so at error level on every heartbeat.
     ///
     /// The nil this returns for a driver that has never answered travels all the
     /// way to the agent, which substitutes its durable manifest (STR-196). What
