@@ -26,10 +26,10 @@ Platform notes for running VMs:
   `qemu-utils`, and for real networking `ovn-host` / `openvswitch-switch`
   (hypervisors run only the chassis side — see `deploy/ovn-central/`)
 - **macOS**: macOS 14+, Xcode Command Line Tools, `brew install qemu` for
-  `qemu-img` (without libvirt the agent registers a mock QEMU driver and
-  reports the backend unavailable). Networking is QEMU user-mode only
-  (outbound NAT, no VM-to-VM), so macOS is suitable for development but not
-  production.
+  `qemu-img`. Best-effort only: no CI builds the agent for macOS, and without
+  libvirt it registers a mock QEMU driver and reports the backend
+  unavailable — control-plane and frontend development is the supported use;
+  running real VMs is not.
 
 ## Build and test
 
@@ -202,8 +202,8 @@ swift run --package-path agent StratoAgent --config-file ./config.toml
 ```
 
 CLI arguments override config-file values. `control_plane_url` is required;
-other common options are `log_level`, `network_mode`
-(`ovn` or `user`), and `firecracker_binary_path`. See
+other common options are `log_level`, `network_mode` (`ovn` or `user`), and
+`firecracker_binary_path`. See
 [Deploying agents](/deployment/agents) for the full reference.
 
 ## Kubernetes

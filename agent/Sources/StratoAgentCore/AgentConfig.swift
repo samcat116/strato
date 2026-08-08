@@ -338,13 +338,6 @@ public struct AgentConfig: Codable {
     /// control-plane database must not be able to empty a host, while a real
     /// drain can afford the flag.
     public let allowBulkTeardown: Bool?
-    /// Whether to fetch desired state from the control plane's long-poll
-    /// endpoint instead of waiting for pushed syncs (STR-146). Default true;
-    /// falls back to push mode automatically against a control plane too old
-    /// to serve the endpoint, so this only exists to pin an agent to the old
-    /// transport during a rollout. Nothing else about the agent changes — the
-    /// WebSocket still carries streams, heartbeats, and observed state.
-    public let desiredStatePull: Bool?
     /// How often the poller must fetch *without* `If-None-Match`, in seconds.
     /// Default 300. This is the correctness invariant of the pull transport,
     /// not a tuning knob: conditional requests are a bandwidth optimization,
@@ -364,9 +357,6 @@ public struct AgentConfig: Codable {
     /// and exists only for a topology that puts a router between guest and host,
     /// which Strato's does not.
     public let metadataResponseHopLimit: Int?
-
-    /// Whether this agent should drive itself by long-poll.
-    public var wantsDesiredStatePull: Bool { desiredStatePull ?? true }
 
     /// Whether this host answers guests' metadata requests.
     public var servesInstanceMetadata: Bool { metadataService ?? true }
@@ -434,7 +424,6 @@ public struct AgentConfig: Codable {
         case reconcileTeardownMinimum = "reconcile_teardown_minimum"
         case reconcileTeardownPercent = "reconcile_teardown_percent"
         case allowBulkTeardown = "allow_bulk_teardown"
-        case desiredStatePull = "desired_state_pull"
         case desiredStateFullRefetchSeconds = "desired_state_full_refetch_seconds"
         case metadataService = "metadata_service"
         case metadataResponseHopLimit = "metadata_response_hop_limit"
@@ -482,7 +471,6 @@ public struct AgentConfig: Codable {
         reconcileTeardownMinimum: Int? = nil,
         reconcileTeardownPercent: Int? = nil,
         allowBulkTeardown: Bool? = nil,
-        desiredStatePull: Bool? = nil,
         desiredStateFullRefetchSeconds: Int? = nil,
         metadataService: Bool? = nil,
         metadataResponseHopLimit: Int? = nil
@@ -528,7 +516,6 @@ public struct AgentConfig: Codable {
         self.reconcileTeardownMinimum = reconcileTeardownMinimum
         self.reconcileTeardownPercent = reconcileTeardownPercent
         self.allowBulkTeardown = allowBulkTeardown
-        self.desiredStatePull = desiredStatePull
         self.desiredStateFullRefetchSeconds = desiredStateFullRefetchSeconds
         self.metadataService = metadataService
         self.metadataResponseHopLimit = metadataResponseHopLimit
@@ -646,6 +633,13 @@ public struct AgentConfig: Codable {
         ] where tomlData.string(key) != nil {
             logger?.warning("\(key) is no longer used and will be ignored: \(note) (STR-136)")
         }
+        // The pull transport became the only one at wire v38; the pin existed
+        // for the push-era rollout.
+        if tomlData.bool("desired_state_pull") != nil {
+            logger?.warning(
+                "desired_state_pull is no longer used and will be ignored: the long-poll is the only desired-state transport now"
+            )
+        }
         let firmwarePathARM64 = tomlData.string("firmware_path_arm64")
         let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
         // Split EDK2 firmware (issue #565). CODE and VARS only mean anything as
@@ -710,7 +704,6 @@ public struct AgentConfig: Codable {
         let allowBulkTeardown = tomlData.bool("allow_bulk_teardown")
 
         // Desired-state transport (STR-146).
-        let desiredStatePull = tomlData.bool("desired_state_pull")
         let desiredStateFullRefetchSeconds = tomlData.int("desired_state_full_refetch_seconds")
         let metadataService = tomlData.bool("metadata_service")
         let metadataResponseHopLimit = tomlData.int("metadata_response_hop_limit")
@@ -962,7 +955,6 @@ public struct AgentConfig: Codable {
             reconcileTeardownMinimum: reconcileTeardownMinimum,
             reconcileTeardownPercent: reconcileTeardownPercent,
             allowBulkTeardown: allowBulkTeardown,
-            desiredStatePull: desiredStatePull,
             desiredStateFullRefetchSeconds: desiredStateFullRefetchSeconds,
             metadataService: metadataService,
             metadataResponseHopLimit: metadataResponseHopLimit

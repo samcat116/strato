@@ -325,16 +325,7 @@ struct SandboxController: RouteCollection {
             } else {
                 pinnedAgent = nil
             }
-            let pinnedAgentForkCapable =
-                pinnedAgent.map { WireProtocol.supportsSandboxFork($0.wireProtocolVersion ?? 0) } ?? false
-            guard pinnedAgentForkCapable || snapshot.isExported else {
-                if let pinnedAgent {
-                    throw Abort(
-                        .conflict,
-                        reason:
-                            "Agent '\(pinnedAgent.name)' is too old for sandbox forks (wire protocol \(pinnedAgent.wireProtocolVersion ?? 0), need >= \(WireProtocol.sandboxForkMinimumVersion)) and the snapshot is not exported"
-                    )
-                }
+            guard pinnedAgent != nil || snapshot.isExported else {
                 throw Abort(
                     .conflict,
                     reason:
@@ -901,15 +892,6 @@ struct SandboxController: RouteCollection {
 
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.internalServerError, reason: "Agent not found for sandbox")
-        }
-
-        let agentWireVersion = agent.wireProtocolVersion ?? 0
-        guard WireProtocol.supportsSandboxExec(agentWireVersion) else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Agent '\(agent.name)' is too old for sandbox exec (wire protocol \(agentWireVersion), need >= \(WireProtocol.sandboxExecMinimumVersion)). Upgrade the agent."
-            )
         }
 
         // Exec frames flow over the agent's WebSocket, which only this

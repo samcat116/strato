@@ -80,8 +80,8 @@ default) funnels into `launchAgent`.
   registration-rejected error is terminal (the node's SPIRE identity is no
   longer accepted — re-enroll it).
 - **Desired state arrives by long-poll** (`DesiredStatePoller` in
-  `StratoAgentCore`, STR-146). Against a control plane at wire v29+, and unless
-  `desired_state_pull = false` pins it back, the agent starts a loop over
+  `StratoAgentCore`, STR-146) — the only sync transport since wire v38. The
+  agent starts a loop over
   `GET /agent/desired-state` after registration — over
   `MTLSArtifactDownloader` with the `.longPoll` timeout profile, so the same
   SVID mTLS transport as image downloads, resolved fresh per request so a
@@ -1170,11 +1170,8 @@ would be wrong:
   exactly that guard. A VM the sync merely *omits* keeps its metadata
   (STR-98: omission is not an instruction).
 
-The payload half is gated on `supportsInstanceMetadata(senderVersion)` for
-the `networks`/`sandboxes` reason: from a v26+ control plane a nil `metadata`
-is authoritative and withdraws what we serve, while from an older one it is
-silence, and reading it as an instruction would empty every VM's metadata the
-moment a control plane is rolled back.
+A nil `metadata` on a desired entry is authoritative and withdraws what we
+serve for that VM.
 
 ### Instance metadata server (the guest-facing listener)
 

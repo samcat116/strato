@@ -228,9 +228,8 @@ struct VolumeController: RouteCollection {
                     let agentId = agent.id?.uuidString
                 else {
                     throw ResourceMutation.WorkError(
-                        "No agent available to host this volume: it needs an online, QEMU-capable "
-                            + "agent in the volume's pool speaking wire protocol "
-                            + "\(WireProtocol.volumeSyncMinimumVersion) or later.")
+                        "No agent available to host this volume: it needs an online, "
+                            + "QEMU-capable agent in the volume's pool.")
                 }
                 guard let placed = try await Volume.find(volumeId, on: db) else { return }
                 placed.hypervisorId = agentId
@@ -450,8 +449,6 @@ struct VolumeController: RouteCollection {
             }
         }
 
-        try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
-
         // A device name from the request body becomes a hypervisor object id,
         // so it is validated here rather than at the point it would otherwise
         // fail — an opaque hot-plug rejection, or a recorded attachment that
@@ -527,8 +524,6 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
-
         let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(
             .detach, on: volume, actor: .user(userID), dispatch: .stateSync,
@@ -598,7 +593,6 @@ struct VolumeController: RouteCollection {
         guard volume.hypervisorId != nil else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
-        try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
 
         let previousSize = volume.size
         let userID = try user.requireID()
@@ -675,7 +669,6 @@ struct VolumeController: RouteCollection {
         guard volume.hypervisorId != nil else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
-        try await Self.requireVolumeSyncCapableAgent(volume.hypervisorId, app: req.application)
 
         let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(
@@ -822,7 +815,6 @@ struct VolumeController: RouteCollection {
         guard let sourceAgentId = sourceVolume.hypervisorId else {
             throw Abort(.conflict, reason: "Source volume is not provisioned on any hypervisor")
         }
-        try await Self.requireVolumeSyncCapableAgent(sourceAgentId, app: req.application)
 
         // The clone is materialized on the source's agent — a clone reads the
         // source's file, so the two must be co-located — and therefore lives in
@@ -969,35 +961,9 @@ struct VolumeController: RouteCollection {
     private static func agentConvergesVolumes(_ agentId: String?, app: Application) async throws -> Bool {
         guard let agentId, await app.agentService.agentIsOnline(agentId: agentId) else { return false }
         guard let agentUUID = UUID(uuidString: agentId),
-            let agent = try await Agent.find(agentUUID, on: app.db)
+            try await Agent.find(agentUUID, on: app.db) != nil
         else { return false }
-        return WireProtocol.supportsVolumeSync(agent.wireProtocolVersion ?? 0)
-    }
-
-    /// Refuses a mutation whose volume sits on an agent that cannot converge
-    /// it, at accept time.
-    ///
-    /// Deliberately *not* applied to delete, which must keep working against a
-    /// stranded volume by force-clearing its finalizer — otherwise upgrading
-    /// the control plane before the fleet would make those volumes permanently
-    /// undeletable. An offline agent is allowed through here: it is expected to
-    /// come back and converge, which is the whole point of level-triggering.
-    /// A lookup failure propagates rather than passing the check silently: the
-    /// point of the guard is to refuse a mutation that can never converge, and
-    /// a `try?` here would wave one through on a transient database error.
-    private static func requireVolumeSyncCapableAgent(_ agentId: String?, app: Application) async throws {
-        guard let agentId, let agentUUID = UUID(uuidString: agentId),
-            let agent = try await Agent.find(agentUUID, on: app.db)
-        else { return }
-        guard WireProtocol.supportsVolumeSync(agent.wireProtocolVersion ?? 0) else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Agent '\(agent.name)' speaks wire protocol \(agent.wireProtocolVersion ?? 0) and cannot "
-                    + "manage volumes; upgrade it to an agent speaking "
-                    + "\(WireProtocol.volumeSyncMinimumVersion) or later and retry."
-            )
-        }
+        return true
     }
 
     /// Fetch a volume and check permission, mirroring

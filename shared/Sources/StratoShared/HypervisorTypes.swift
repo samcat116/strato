@@ -31,7 +31,6 @@ public enum HypervisorType: String, Codable, CaseIterable, Sendable {
             return "Firecracker"
         }
     }
-
 }
 
 /// Networking capability of an agent host, as reported at registration.

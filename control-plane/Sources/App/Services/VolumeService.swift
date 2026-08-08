@@ -52,15 +52,9 @@ enum VolumeService {
     /// restricts candidates to those members; an empty list (the default
     /// local pool) leaves all agents eligible.
     ///
-    /// The wire-version filter is new with STR-148 and is the one placement
-    /// gate in this file that refuses rather than degrades: with the imperative
-    /// volume frames gone, an agent below v31 has no way to hear about a volume
-    /// at all, so placing one there would produce a resource that could never
-    /// converge and could only be deleted by force-clearing its finalizer.
     static func selectVolumeAgent(from agents: [Agent], memberAgentIds: [String] = []) -> Agent? {
         agents.first {
             $0.status == .online && $0.supportedHypervisors.contains(.qemu)
-                && WireProtocol.supportsVolumeSync($0.wireProtocolVersion ?? 0)
                 && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
         }
     }

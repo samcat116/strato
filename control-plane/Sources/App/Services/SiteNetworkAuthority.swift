@@ -62,10 +62,6 @@ enum SiteNetworkAuthority {
         /// No heartbeat for longer than `controllerOfflineGrace`. `staleFor` is
         /// nil for an agent that has never heartbeated at all.
         case offline(staleFor: TimeInterval?)
-        /// Re-registered below `WireProtocol.siteAuthorityMinimumVersion`, so
-        /// assembly drops it to legacy per-node scoping and it writes its own
-        /// local NB while its peers wait on the shared one.
-        case protocolTooOld(Int)
         /// Re-registered in user-mode (SLIRP): no OVN service to reconcile
         /// with at all.
         case noOverlayNetworking
@@ -78,11 +74,6 @@ enum SiteNetworkAuthority {
             case .offline(let staleFor):
                 guard let staleFor else { return "is offline (it has never sent a heartbeat)" }
                 return "is offline (no heartbeat for \(SiteNetworkAuthority.compactAge(staleFor)))"
-            case .protocolTooOld(let version):
-                return """
-                    re-registered on wire protocol v\(version), too old for site topology authority \
-                    (v\(WireProtocol.siteAuthorityMinimumVersion)+ required)
-                    """
             case .noOverlayNetworking:
                 return "re-registered without overlay (OVN) networking capability"
             }
@@ -93,7 +84,6 @@ enum SiteNetworkAuthority {
         var primaryRemedy: String {
             switch self {
             case .offline: return "Bring it back online"
-            case .protocolTooOld: return "Roll it forward"
             case .noOverlayNetworking: return "Restore its OVN networking configuration"
             }
         }
@@ -122,9 +112,6 @@ enum SiteNetworkAuthority {
     /// and boots that assembly would have carried through.
     static func resolve(forAgent agent: Agent, on db: any Database) async throws -> Authority {
         guard let siteID = agent.$site.id, let site = try await Site.find(siteID, on: db) else {
-            return .selfAuthored(agent)
-        }
-        guard WireProtocol.supportsSiteAuthority(agent.wireProtocolVersion ?? 0) else {
             return .selfAuthored(agent)
         }
         return try await resolve(forSite: site, on: db)
@@ -171,20 +158,17 @@ enum SiteNetworkAuthority {
     }
 
     /// Whether the sync path would actually honor `agent` as a topology
-    /// author — the same two conditions `SiteController.updateSite` enforces on
-    /// an explicit designation. A pre-v4 agent is kept on legacy per-node
-    /// scoping by assembly, and a non-overlay (user-mode/SLIRP) agent has no
-    /// OVN network service to reconcile with; either way the site's networks
-    /// would still be realized nowhere.
+    /// author — the same condition `SiteController.updateSite` enforces on an
+    /// explicit designation: a non-overlay (user-mode/SLIRP) agent has no OVN
+    /// network service to reconcile with, so the site's networks would be
+    /// realized nowhere.
     static func canAuthorTopology(_ agent: Agent) -> Bool {
         capabilityFault(agent) == nil
     }
 
     /// `canAuthorTopology` as a fault, so the designation bar is written once
-    /// and the refusal can still name which half of it the agent fails.
+    /// and the refusal can still name what the agent fails.
     private static func capabilityFault(_ agent: Agent) -> ControllerFault? {
-        let version = agent.wireProtocolVersion ?? 0
-        guard WireProtocol.supportsSiteAuthority(version) else { return .protocolTooOld(version) }
         guard agent.supportsInterVMNetworking else { return .noOverlayNetworking }
         return nil
     }

@@ -19,10 +19,10 @@ struct ImageInfoArtifactTests {
             architecture: .arm64,
             artifacts: [
                 ArtifactInfo(
-                    kind: .kernel, format: nil, filename: "vmlinux", checksum: "k1",
+                    kind: .kernel, filename: "vmlinux", checksum: "k1",
                     size: 10, downloadURL: "https://cp/kernel"),
                 ArtifactInfo(
-                    kind: .rootfs, format: "raw", filename: "rootfs.img", checksum: "r1",
+                    kind: .rootfs, filename: "rootfs.img", checksum: "r1",
                     size: 20, downloadURL: "https://cp/rootfs"),
             ]
         )
@@ -34,7 +34,6 @@ struct ImageInfoArtifactTests {
         #expect(decoded.architecture == .arm64)
         #expect(decoded.artifacts.count == 2)
         #expect(decoded.artifact(ofKind: .kernel)?.checksum == "k1")
-        #expect(decoded.artifact(ofKind: .rootfs)?.format == "raw")
         #expect(decoded.artifact(ofKind: .diskImage) == nil)
     }
 

@@ -510,8 +510,8 @@ struct VMSpecBuilderTests {
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
-        #expect(spec.console?.console == .pty)
-        #expect(spec.console?.serial == .tty)
+        #expect(spec.console != nil)
+        #expect(spec.console?.effectiveGraphics == .headless)
     }
 
     // MARK: - Image-Based Tests

@@ -281,7 +281,6 @@ private func launchAgent(options: AgentOptions) async throws {
         simulation: finalSimulation,
         spiffeConfig: config.spiffe,
         teardownGuard: config.teardownGuard,
-        desiredStatePull: config.wantsDesiredStatePull,
         desiredStateFullRefetchInterval: config.desiredStateFullRefetchInterval,
         metadataServiceEnabled: config.servesInstanceMetadata,
         metadataHopLimit: config.metadataHopLimit

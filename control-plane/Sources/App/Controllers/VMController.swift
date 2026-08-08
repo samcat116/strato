@@ -907,24 +907,6 @@ struct VMController: RouteCollection {
                 reason: "This VM was started with a maximum of \(existingVM.maxMemory) bytes of memory; "
                     + "restart it to grow beyond that")
         }
-        if newCPU != existingVM.cpu || newMemory != existingVM.memory {
-            guard await Self.agentSupportsOnlineResize(vm: existingVM, app: req.application) else {
-                throw Abort(
-                    .unprocessableEntity,
-                    reason: "This VM's agent is too old to resize a running VM; restart the VM to apply a new size")
-            }
-        }
-        if balloonChanged {
-            // No "restart to apply" remedy to offer here, unlike a resize: a
-            // balloon target only exists on a running guest, so an agent that
-            // ignores the field can't realize it at any later point either.
-            guard await Self.agentSupportsBalloonTarget(vm: existingVM, app: req.application) else {
-                throw Abort(
-                    .unprocessableEntity,
-                    reason: "This VM's agent is too old to set a memory balloon target; upgrade the agent")
-            }
-        }
-
         let existingVMID = try existingVM.requireID()
         let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(
@@ -1001,26 +983,6 @@ struct VMController: RouteCollection {
     /// where a mis-sized target stops being aggressive and starts being an
     /// OOM — so the API refuses it rather than reclaiming a guest to death.
     static let minimumBalloonTargetBytes: Int64 = 128 * 1024 * 1024
-
-    /// Whether the VM's agent speaks the reconciler resize step. A pre-v17
-    /// agent reports the bumped generation as converged without touching the
-    /// guest, so the operation would succeed having changed nothing.
-    private static func agentSupportsOnlineResize(vm: VM, app: Application) async -> Bool {
-        guard let agentId = vm.hypervisorId,
-            let agent = await app.agentService.getAgentInfo(agentId)
-        else { return false }
-        return WireProtocol.supportsVMResize(agent.wireProtocolVersion ?? 0)
-    }
-
-    /// Whether the VM's agent realizes `VMSpec.balloonTargetBytes`. A pre-v19
-    /// agent reports the bumped generation as converged without touching the
-    /// balloon, so the operation would succeed having reclaimed nothing.
-    private static func agentSupportsBalloonTarget(vm: VM, app: Application) async -> Bool {
-        guard let agentId = vm.hypervisorId,
-            let agent = await app.agentService.getAgentInfo(agentId)
-        else { return false }
-        return WireProtocol.supportsBalloonTarget(agent.wireProtocolVersion ?? 0)
-    }
 
     /// The VM detail DTO with its NIC children loaded. The DTO, not the model:
     /// the raw `VM` encoding would expose fields that must stay server-side
@@ -1337,14 +1299,6 @@ struct VMController: RouteCollection {
         }
         guard let agent = await app.agentService.getAgentInfo(agentId) else {
             throw Abort(.conflict, reason: "Agent '\(agentId)' is unknown")
-        }
-        guard WireProtocol.supportsEdgeNonces(agent.wireProtocolVersion ?? 0) else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Agent '\(agentId)' is too old to apply restarts and restores from the desired-state "
-                    + "sync (wire protocol v\(WireProtocol.edgeNonceMinimumVersion) required). Upgrade the agent."
-            )
         }
         if let capability, !agent.capabilities.contains(capability) {
             throw Abort(

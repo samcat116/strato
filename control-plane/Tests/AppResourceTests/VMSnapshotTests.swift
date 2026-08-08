@@ -471,31 +471,6 @@ final class VMSnapshotTests {
         }
     }
 
-    /// With `vm_restore` gone there is no fallback frame, and a pre-v34 agent
-    /// fails *silently*: it decodes the sync, ignores the nonce, and reports the
-    /// bumped generation as converged — so the API would claim a rewind that
-    /// never happened. Refused at admission instead.
-    @Test("Restore is refused when the VM's agent predates edge nonces")
-    func restoreRefusesPreV34Agent() async throws {
-        try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(
-                app: app, vm: vm, wireProtocolVersion: WireProtocol.edgeNonceMinimumVersion - 1)
-            let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
-
-            try await app.test(
-                .POST, "/api/vms/\(vm.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
-            ) { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-                #expect(res.body.string.contains("too old"))
-            }
-
-            let stored = try await VM.find(vm.id, on: app.db)
-            #expect(stored?.restoreGeneration == 0)
-        }
-    }
-
     /// The second of the two signals issue #415 established. A v34 agent on a
     /// host with no usable QEMU reads the nonce and can do nothing with it, so
     /// admitting the restore would surface as a `degraded` condition half an

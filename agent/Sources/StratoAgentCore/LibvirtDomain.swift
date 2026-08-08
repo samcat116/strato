@@ -589,7 +589,6 @@ public enum LibvirtMemoryStats {
         return VMMemoryStats(
             totalBytes: total,
             availableBytes: available,
-            freeBytes: bytes(byTag[Tag.unused.rawValue]),
             balloonActualBytes: bytes(byTag[Tag.actualBalloon.rawValue]))
     }
 

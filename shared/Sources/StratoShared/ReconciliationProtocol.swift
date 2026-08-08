@@ -532,11 +532,7 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// The full authoritative set of sandboxes that should exist on the
     /// receiving agent (full-list, same semantics as `vms`: a sandbox omitted
     /// here should not exist — and, like a VM, is held and reported rather
-    /// than destroyed until a tombstone says otherwise). Decodes to `[]` from
-    /// control planes older than the sandbox protocol; sandbox reconciliation
-    /// is gated on `WireProtocol.supportsSandboxSync(envelope.senderVersion)`
-    /// so such a sync isn't mistaken for "this host should have no
-    /// sandboxes", exactly like the `networks` list before it.
+    /// than destroyed until a tombstone says otherwise).
     public let sandboxes: [DesiredSandboxState]
     /// The full authoritative set of logical networks that should exist on the
     /// receiving agent (full-list, same semantics as `vms`: a network omitted
@@ -884,7 +880,7 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// guests are told at their next lease.
     ///
     /// The control plane withholds `true` unless *every* agent in the site
-    /// reports `resolverCapable` — see `WireProtocol.supportsNetworkResolver`.
+    /// reports `AgentRegisterMessage.resolverCapable`.
     public let resolverEnabled: Bool?
     /// This network's own resolver addresses, v4 first (STR-40).
     ///
@@ -1203,16 +1199,12 @@ public struct ObservedVolumeState: Codable, Sendable {
     /// direction a volume path travels: the control plane stores what it is
     /// told and never derives one.
     public let storagePath: String?
-    /// The format the volume actually has on disk ("qcow2"/"raw"), as detected
-    /// rather than assumed.
-    public let format: String?
     /// The VM this volume is attached to, from the agent's *durable attachment
     /// record* rather than a live hypervisor query. A powered-off guest has no
-    /// QMP device list, and reporting "detached" for it would plan an attach
+    /// live device list, and reporting "detached" for it would plan an attach
     /// against a dead control channel on every sync and degrade the volume for
     /// the crime of having a stopped VM.
     public let attachedVMId: UUID?
-    public let deviceName: String?
     /// The desired-state generation this observation reflects (0 if none yet).
     public let observedGeneration: Int64
     /// Human-readable convergence stage ("creating", "cloning", ...) while the
@@ -1243,9 +1235,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         volumeId: UUID,
         present: Bool,
         storagePath: String? = nil,
-        format: String? = nil,
         attachedVMId: UUID? = nil,
-        deviceName: String? = nil,
         observedGeneration: Int64,
         convergencePhase: String? = nil,
         lastError: String? = nil,
@@ -1255,9 +1245,7 @@ public struct ObservedVolumeState: Codable, Sendable {
         self.volumeId = volumeId
         self.present = present
         self.storagePath = storagePath
-        self.format = format
         self.attachedVMId = attachedVMId
-        self.deviceName = deviceName
         self.observedGeneration = observedGeneration
         self.convergencePhase = convergencePhase
         self.lastError = lastError
@@ -1318,9 +1306,9 @@ public struct UnrecognizedWorkload: Codable, Sendable, Equatable {
     /// generation that outranks it rather than one the agent would drop as
     /// stale.
     public let observedGeneration: Int64
-    /// The workload's observed status, for the operator-facing log on the
-    /// control plane ("holding a *running* VM nothing describes" reads very
-    /// differently from holding a stopped one). Purely diagnostic.
+    /// The workload's observed status, persisted onto the control plane's
+    /// `AgentWorkloadClaim` and logged — "holding a *running* VM nothing
+    /// describes" reads very differently from holding a stopped one.
     public let status: String?
 
     public init(kind: WorkloadKind, workloadId: UUID, observedGeneration: Int64, status: String? = nil) {
@@ -1379,22 +1367,18 @@ public struct ObservedManifestStatus: Codable, Sendable, Equatable {
     /// until an agent that understands them runs here.
     public let quarantinedEntries: Int
     /// Operator-facing explanation, surfaced on the agent's API resource.
+    /// (The unreadable manifest itself is preserved beside the original on
+    /// the host for post-mortem; the agent logs where.)
     public let reason: String
-    /// Where the unreadable manifest was copied for post-mortem, when the copy
-    /// succeeded. The original is left in place — the agent refuses to write
-    /// over a manifest it could not read.
-    public let preservedCopyPath: String?
 
     public init(
         inventoryComplete: Bool,
         quarantinedEntries: Int,
-        reason: String,
-        preservedCopyPath: String? = nil
+        reason: String
     ) {
         self.inventoryComplete = inventoryComplete
         self.quarantinedEntries = quarantinedEntries
         self.reason = reason
-        self.preservedCopyPath = preservedCopyPath
     }
 }
 

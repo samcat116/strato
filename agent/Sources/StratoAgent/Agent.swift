@@ -127,7 +127,6 @@ actor Agent {
     // Whether the control plane we registered with speaks state sync (wire
     // protocol >= 2). Gates observed-state reports so an old control plane
     // isn't sent envelopes it logs as unknown.
-    private var controlPlaneSupportsStateSync = false
 
     // Durable, backend-agnostic record of the VMs this agent owns, keyed by vmId.
     // `managedVMs` are actively managed by this process; `orphanedVMs` were managed
@@ -354,10 +353,8 @@ actor Agent {
     // How much of this host one sync's confirmed teardowns may remove (STR-98).
     private let teardownGuard: TeardownGuard
 
-    // Desired-state transport (STR-146). `desiredStatePullEnabled` is what the
-    // operator asked for; the poller only actually starts once a registration
-    // response confirms the control plane serves the endpoint.
-    private let desiredStatePullEnabled: Bool
+    // Desired-state transport (STR-146): the long-poll loop, started once
+    // registration confirms the control plane.
     private let desiredStateFullRefetchInterval: Duration
     private var desiredStatePoller: DesiredStatePoller?
 
@@ -413,7 +410,6 @@ actor Agent {
         simulation: SimulationConfig? = nil,
         spiffeConfig: SPIFFEConfig? = nil,
         teardownGuard: TeardownGuard = TeardownGuard(),
-        desiredStatePull: Bool = true,
         desiredStateFullRefetchInterval: Duration = DesiredStatePoller.defaultFullRefetchInterval,
         metadataServiceEnabled: Bool = true,
         metadataHopLimit: Int = 1
@@ -449,7 +445,6 @@ actor Agent {
         self.simulation = simulation
         self.spiffeConfig = spiffeConfig
         self.teardownGuard = teardownGuard
-        self.desiredStatePullEnabled = desiredStatePull
         self.desiredStateFullRefetchInterval = desiredStateFullRefetchInterval
         self.manifestStore = VMManifestStore(
             path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
@@ -1386,7 +1381,6 @@ actor Agent {
             version: BuildInfo.version,
             capabilities: capabilities,
             resources: resources,
-            hypervisorType: hypervisorType,
             architecture: CPUArchitecture.current,
             hypervisors: hypervisors,
             networkCapability: networkCapability,
@@ -1395,12 +1389,6 @@ actor Agent {
             tpmCapable: tpmAvailable,
             operatingSystem: OperatingSystem.current,
             hostInfo: HostInfoProbe.gather(),
-            // Declared up front so the control plane can stop pushing to this
-            // agent from the moment it registers. Claiming pull mode here does
-            // not commit us to it — if the control plane turns out to predate
-            // the endpoint we never start the poller, and it never stopped
-            // pushing either, because it applies the same version gate.
-            pullsDesiredState: desiredStatePullEnabled,
             // Speaking wire v37 is not the same as being able to answer on the
             // resolver address, so this is reported separately — the
             // `sandboxCapable`/`tpmCapable` shape. The control plane folds it
@@ -1424,12 +1412,10 @@ actor Agent {
         self.assignedAgentID = assignedId
         logger.info("Registration complete, assigned ID: \(assignedId)")
 
-        // Give a state-sync control plane a fresh baseline right away — it
-        // will also send us its desired state on registration, and the two
-        // together converge any drift accumulated while disconnected.
-        if controlPlaneSupportsStateSync {
-            await sendObservedStateReport()
-        }
+        // Give the control plane a fresh baseline right away — it will also
+        // serve us its desired state on the first poll, and the two together
+        // converge any drift accumulated while disconnected.
+        await sendObservedStateReport()
 
         // Resume sandbox log shipping suspended while disconnected (issue
         // #423): follows pick up from their seq checkpoints, so output the
@@ -1484,10 +1470,11 @@ actor Agent {
     /// Handle registration response from control plane
     func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
         let controlPlaneProtocolVersion = response.protocolVersion ?? 0
-        guard WireProtocol.supportsStateSync(controlPlaneProtocolVersion) else {
+        guard controlPlaneProtocolVersion >= WireProtocol.minimumSupportedVersion else {
             let reason =
-                "Control plane wire protocol version \(controlPlaneProtocolVersion) predates desired-state sync; "
-                + "the imperative VM lifecycle protocol has been removed. Upgrade the control plane."
+                "Control plane wire protocol version \(controlPlaneProtocolVersion) is below this agent's floor "
+                + "(\(WireProtocol.minimumSupportedVersion)); Strato deploys both sides in lockstep. "
+                + "Upgrade the control plane."
             logger.error("Registration rejected: \(reason)")
             if let continuation = takeRegistrationContinuation() {
                 continuation.resume(throwing: AgentError.registrationRejected(reason))
@@ -1503,8 +1490,7 @@ actor Agent {
                     "agentProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
                 ])
         }
-        controlPlaneSupportsStateSync = WireProtocol.supportsStateSync(controlPlaneProtocolVersion)
-        await startDesiredStatePollerIfSupported(controlPlaneVersion: controlPlaneProtocolVersion)
+        await startDesiredStatePoller()
 
         guard let continuation = takeRegistrationContinuation() else {
             logger.warning("Received registration response but no continuation waiting")
@@ -1513,23 +1499,13 @@ actor Agent {
         continuation.resume(returning: response.agentId)
     }
 
-    /// Start the desired-state long-poll loop, if both sides want it
-    /// (STR-146). Called from every registration response, initial and
+    /// Start the desired-state long-poll loop — the only sync transport since
+    /// v38 (STR-146 introduced it; the pushed transport went with the skew
+    /// window). Called from every registration response, initial and
     /// reconnect; `DesiredStatePoller.start()` is idempotent, so a reconnect
     /// keeps the existing loop and its ETag rather than restarting from a full
     /// fetch.
-    ///
-    /// A control plane too old to serve the endpoint leaves the agent on the
-    /// pushed transport, which is exactly what that control plane is still
-    /// doing — it ignores the `pullsDesiredState` field it has never heard of.
-    private func startDesiredStatePollerIfSupported(controlPlaneVersion: Int) async {
-        guard desiredStatePullEnabled else { return }
-        guard WireProtocol.supportsDesiredStatePull(controlPlaneVersion) else {
-            logger.notice(
-                "Control plane predates the desired-state pull endpoint; staying on pushed syncs",
-                metadata: ["controlPlaneProtocolVersion": .stringConvertible(controlPlaneVersion)])
-            return
-        }
+    private func startDesiredStatePoller() async {
         guard desiredStatePoller == nil else {
             await desiredStatePoller?.start()
             return
@@ -1746,10 +1722,7 @@ actor Agent {
     }
 
     private func unregisterFromControlPlane() async throws {
-        let message = AgentUnregisterMessage(
-            agentId: effectiveAgentID,
-            reason: "Agent shutdown"
-        )
+        let message = AgentUnregisterMessage(agentId: effectiveAgentID)
 
         if let client = websocketClient {
             try await client.sendMessage(message)
@@ -2068,12 +2041,10 @@ actor Agent {
         }
 
         let resources = await getAgentResources()
-        let runningVMs = await getRunningVMList()
 
         let message = AgentHeartbeatMessage(
             agentId: effectiveAgentID,
-            resources: resources,
-            runningVMs: runningVMs
+            resources: resources
         )
 
         if let client = websocketClient {
@@ -2084,14 +2055,15 @@ actor Agent {
         // Refresh the guest-agent view on the slow-poll cadence before the
         // report reads it (issue #563). Throttled and bounded, so most
         // heartbeats skip it and a slow probe can never stall the beat.
-        if controlPlaneSupportsStateSync {
+        if assignedAgentID != nil {
             await refreshGuestInfoCacheIfDue()
         }
 
-        // On the same cadence, re-assert full observed state to a state-sync
-        // control plane. The heartbeat keeps liveness/presence; the report is
-        // the periodic correctness backstop for VM state (issue #260).
-        if controlPlaneSupportsStateSync {
+        // On the same cadence, re-assert full observed state. The heartbeat
+        // keeps liveness/presence; the report is the periodic correctness
+        // backstop for VM state (issue #260). Skipped before the first
+        // registration completes — there is no agent id to report under.
+        if assignedAgentID != nil {
             // Bounded as a whole: the report walks every VM, and it runs on the
             // heartbeat's own task, so an overlong report delays the *next*
             // beat. Skipping one is harmless — it is a periodic backstop and
@@ -2308,32 +2280,6 @@ actor Agent {
         )
     }
 
-    private func getRunningVMList() async -> [String] {
-        var vmList: [String] = []
-
-        for (type, service) in hypervisorServices {
-            // Falls back to the manifest rather than omitting the hypervisor.
-            // This list is not advisory: the control plane treats a VM absent
-            // from the heartbeat as lost and sets it to `.error`
-            // (`reconcileVMs`), so reporting a *short* list because a poll
-            // timed out would corrupt the state of healthy VMs.
-            let vms =
-                await observe(type, "list-vms") {
-                    await service.listVMs()
-                } ?? manifestVMIds(for: type)
-            vmList.append(contentsOf: vms)
-        }
-
-        return vmList
-    }
-
-    /// VMs this agent manages on `type`, from the durable manifest. Matches
-    /// what a hypervisor's `listVMs()` reports (its managed set), so it stands
-    /// in faithfully when the live query does not answer.
-    private func manifestVMIds(for type: HypervisorType) -> [String] {
-        managedVMs.compactMap { $0.value.hypervisorType == type ? $0.key : nil }
-    }
-
     /// Reservations for `type` from the durable manifest, which carries every
     /// managed VM's sizing — authoritative, not a guess.
     private func manifestReservations(for type: HypervisorType) -> (vcpus: Int, memoryBytes: Int64) {
@@ -2416,14 +2362,11 @@ extension Agent {
                 // before its NIC attaches (issue #342). Level-triggered and
                 // idempotent, like the VM reconcile that follows.
                 //
-                // Only a control plane that speaks network sync (v3+) sends an
-                // authoritative `networks` list. An older control plane omits it
-                // (decoded as []); that absence must NOT be read as "tear down
-                // all L3" — skip network reconciliation and fall back to VM-only.
-                // Declared out here because the guest-facing listeners below
-                // are driven from the same list, after the reconciler has run.
-                var metadataNetworks: [UUID]?
-                if WireProtocol.supportsNetworkSync(envelope.senderVersion) {
+                // `metadataNetworks` is declared out here because the
+                // guest-facing listeners below are driven from the same list,
+                // after the reconciler has run.
+                let metadataNetworks: [UUID]
+                do {
                     // This host's own workload ports' desired security-group
                     // membership, derived from each NIC's spec (nicIndex is
                     // the NIC's position in the spec list, matching the LSP
@@ -2452,13 +2395,10 @@ extension Agent {
                     // - `sandboxPortName`, not `vmPortName`: `sbx-` and `vm-`
                     //   are deliberately separate namespaces (see OVNNaming).
                     //
-                    // No `supportsSandboxSync` gate, unlike `metadataNetworks`
-                    // below, and the asymmetry is the point: a control plane
-                    // that omits `sandboxes` decodes to [], which yields no
-                    // memberships, and membership convergence never removes a
-                    // port it wasn't given — silence is already inert. For
-                    // `metadataNetworks` an empty list is an instruction, and
-                    // acting on it would tear down live namespaces.
+                    // Membership convergence never removes a port it wasn't
+                    // given, so an empty sandbox list is inert here — unlike
+                    // `metadataNetworks` below, where an empty list is an
+                    // instruction.
                     portMemberships += message.sandboxes.compactMap { sandbox in
                         sandbox.spec.network.map { spec in
                             DesiredPortMembership(
@@ -2474,17 +2414,14 @@ extension Agent {
                     // list by design, yet its guests need the service just the
                     // same. Same derivation as `portMemberships` above, and the
                     // same "this host owns it without topology authority"
-                    // reason. Nil for a control plane that predates the field,
-                    // so silence is never read as "tear every namespace down".
-                    if WireProtocol.supportsMetadataPort(envelope.senderVersion) {
-                        var ids = Set(
-                            message.vms.flatMap { $0.spec.networks }
-                                .filter { $0.metadataEnabled == true }.map(\.networkId))
-                        ids.formUnion(
-                            message.sandboxes.compactMap { $0.spec.network }
-                                .filter { $0.metadataEnabled == true }.map(\.networkId))
-                        metadataNetworks = ids.sorted { $0.uuidString < $1.uuidString }
-                    }
+                    // reason.
+                    var ids = Set(
+                        message.vms.flatMap { $0.spec.networks }
+                            .filter { $0.metadataEnabled == true }.map(\.networkId))
+                    ids.formUnion(
+                        message.sandboxes.compactMap { $0.spec.network }
+                            .filter { $0.metadataEnabled == true }.map(\.networkId))
+                    metadataNetworks = ids.sorted { $0.uuidString < $1.uuidString }
                     // The resolver's twin of the list above (STR-40), derived
                     // the same way from the same specs. Kept separate rather
                     // than merged here because the two gates are different
@@ -2498,62 +2435,50 @@ extension Agent {
                     // so the first wins — they are two copies of one row's
                     // columns, not two opinions.
                     //
-                    // **The version gate is not sufficient here, and that is the
-                    // difference from `metadataNetworks` above.** A v37 sender
+                    // **Field presence decides here, and that is the
+                    // difference from `metadataNetworks` above.** The sender
                     // always emits `metadataEnabled`, so its per-NIC nil never
                     // arises; `resolverEnabled` genuinely can be nil on every
-                    // spec of a v37 sync — the control plane withholds it for a
+                    // spec of a sync — the control plane withholds it for a
                     // host it cannot describe, precisely so as not to disable a
-                    // live service. Deriving the list from the version alone
-                    // would turn that silence into a non-nil *empty* list, which
-                    // `ResolverSupervisionPolicy` reads as an instruction and
+                    // live service. Reading that silence as a non-nil *empty*
+                    // list would be an instruction `ResolverSupervisionPolicy`
                     // obeys: every CoreDNS stopped and every resolver address
                     // dropped, restored on the next sync. A DNS outage per
                     // occurrence, on the one path built to stay quiet.
                     //
-                    // So field presence decides, not the version — with one
-                    // exception that has to stay an opinion. A host running *no
+                    // One exception has to stay an opinion. A host running *no
                     // workloads* has no specs to carry the field, and that is a
                     // statement rather than a silence: it serves nothing, so it
                     // should serve no resolvers either. Without that arm the
                     // last VM leaving a host would leak its resolvers forever.
                     let resolverNetworks: [ResolverNetworkConfig]?
-                    if WireProtocol.supportsNetworkResolver(envelope.senderVersion) {
-                        let specs =
-                            message.vms.flatMap { $0.spec.networks }
-                            + message.sandboxes.compactMap { $0.spec.network }
-                        if !specs.isEmpty, specs.allSatisfy({ $0.resolverEnabled == nil }) {
-                            resolverNetworks = nil
-                        } else {
-                            var byNetwork: [UUID: ResolverNetworkConfig] = [:]
-                            for spec in specs
-                            where spec.resolverEnabled == true
-                                && !(spec.resolverAddresses ?? []).isEmpty
-                            {
-                                guard byNetwork[spec.networkId] == nil else { continue }
-                                byNetwork[spec.networkId] = ResolverNetworkConfig(
-                                    networkId: spec.networkId,
-                                    addresses: spec.resolverAddresses ?? [],
-                                    upstreams: spec.dnsServers,
-                                    searchDomain: spec.domainName)
-                            }
-                            resolverNetworks = byNetwork.values.sorted {
-                                $0.networkId.uuidString < $1.networkId.uuidString
-                            }
-                        }
-                    } else {
+                    let specs =
+                        message.vms.flatMap { $0.spec.networks }
+                        + message.sandboxes.compactMap { $0.spec.network }
+                    if !specs.isEmpty, specs.allSatisfy({ $0.resolverEnabled == nil }) {
                         resolverNetworks = nil
+                    } else {
+                        var byNetwork: [UUID: ResolverNetworkConfig] = [:]
+                        for spec in specs
+                        where spec.resolverEnabled == true
+                            && !(spec.resolverAddresses ?? []).isEmpty
+                        {
+                            guard byNetwork[spec.networkId] == nil else { continue }
+                            byNetwork[spec.networkId] = ResolverNetworkConfig(
+                                networkId: spec.networkId,
+                                addresses: spec.resolverAddresses ?? [],
+                                upstreams: spec.dnsServers,
+                                searchDomain: spec.domainName)
+                        }
+                        resolverNetworks = byNetwork.values.sorted {
+                            $0.networkId.uuidString < $1.networkId.uuidString
+                        }
                     }
-                    // DNS zones (STR-39) carry the same "silence is not an
-                    // instruction" contract as volumes, and for a sharper
-                    // reason: these rows are switch-scoped topology whose
-                    // *contents* come from every agent in the site, so reading
-                    // a pre-v36 control plane's absent field as "no zones"
-                    // would unpublish every internal name in the site. The
-                    // field's own nil is the belt; the version gate is the
-                    // braces.
-                    let dnsZones =
-                        WireProtocol.supportsDNSZones(envelope.senderVersion) ? message.dnsZones : nil
+                    // DNS zones (STR-39): nil means this agent is not the
+                    // topology authority — leave every managed `DNS` row
+                    // alone. Only an explicit list is an instruction.
+                    let dnsZones = message.dnsZones
                     await networkService?.reconcileNetworks(
                         message.networks, authoritative: message.networksAuthoritative,
                         securityGroups: message.securityGroups,
@@ -2562,23 +2487,12 @@ extension Agent {
                         resolverNetworks: resolverNetworks,
                         dnsZones: dnsZones)
                 }
-                // Sandbox reconciliation is likewise gated on the sender: a
-                // control plane older than the sandbox protocol (v5) omits
-                // `sandboxes` (decoded as []), which must not be mistaken for
-                // an authoritative "this host should have no sandboxes".
-                // Volumes carry the same gate, plus a stricter one inside
-                // `apply`: a nil `volumes` field skips the half whatever the
-                // version says, because misreading silence there destroys the
-                // only copy of user data (STR-148). Instance metadata (STR-52)
-                // is gated for the same "silence is not an instruction" reason:
-                // a rolled-back control plane must not empty what this host's
-                // metadata service serves.
-                await reconciler?.apply(
-                    message,
-                    includeSandboxes: WireProtocol.supportsSandboxSync(envelope.senderVersion),
-                    includeVolumes: WireProtocol.supportsVolumeSync(envelope.senderVersion),
-                    includeSnapshots: WireProtocol.supportsSnapshotSync(envelope.senderVersion),
-                    includeMetadata: WireProtocol.supportsInstanceMetadata(envelope.senderVersion))
+                // One belt survives the version gates' retirement inside
+                // `apply`: a nil `volumes` field skips the volume half
+                // entirely, because misreading silence there destroys the only
+                // copy of user data (STR-148). Snapshots carry the same nil
+                // contract.
+                await reconciler?.apply(message)
                 // The guest-facing listeners, after the reconciler rather than
                 // beside the network reconcile above (STR-56). Both orderings
                 // are needed and only this one has both: `reconcileNetworks`
@@ -2965,10 +2879,7 @@ extension Agent {
         level: VMLogLevel,
         eventType: VMEventType,
         message: String,
-        operation: String? = nil,
-        details: String? = nil,
-        previousStatus: VMStatus? = nil,
-        newStatus: VMStatus? = nil
+        operation: String? = nil
     ) async {
         let logMessage = VMLogMessage(
             vmId: vmId,
@@ -2976,10 +2887,7 @@ extension Agent {
             source: .agent,
             eventType: eventType,
             message: message,
-            operation: operation,
-            details: details,
-            previousStatus: previousStatus,
-            newStatus: newStatus
+            operation: operation
         )
         do {
             try await websocketClient?.sendMessage(logMessage)
@@ -3320,11 +3228,10 @@ extension Agent {
     /// full-list semantics require and what keeps events an accelerant rather
     /// than a second, racing source of truth.
     private func handleLifecycleChange(_ change: VMLifecycleChange, from type: HypervisorType) async {
-        // Same gate the heartbeat's report uses: a control plane that does not
-        // speak state sync must not be sent one. Before registration there is
-        // no agent id to send it under, and the post-registration baseline
-        // report covers whatever happened in the meantime.
-        guard controlPlaneSupportsStateSync, assignedAgentID != nil else { return }
+        // Before registration there is no agent id to send a report under,
+        // and the post-registration baseline report covers whatever happened
+        // in the meantime.
+        guard assignedAgentID != nil else { return }
 
         // And not while the socket is down. `assignedAgentID` is set once at
         // registration and never cleared, so it does not answer this on its
@@ -3481,10 +3388,10 @@ extension Agent {
             switch event {
             case .started:
                 try await websocketClient.sendMessage(
-                    SandboxExecStartedMessage(sandboxId: sandboxId, sessionId: sessionId))
-            case .output(let stream, let data):
+                    SandboxExecStartedMessage(sessionId: sessionId))
+            case .output(_, let data):
                 try await websocketClient.sendMessage(
-                    SandboxExecOutputMessage(sessionId: sessionId, stream: stream, rawData: data))
+                    SandboxExecOutputMessage(sessionId: sessionId, rawData: data))
             case .exited(let code):
                 try await websocketClient.sendMessage(
                     SandboxExecExitMessage(sessionId: sessionId, exitCode: code))
@@ -4089,7 +3996,6 @@ extension Agent: ReconcileActuator {
                 // never "empty" — the control plane keeps its estimate.
                 sizeBytes: report.vmStateSizeBytes,
                 architecture: CPUArchitecture.current,
-                deviceNodes: report.deviceNodes,
                 qemuVersion: report.hypervisorVersion)
 
         case .sandboxSnapshot:
@@ -4103,9 +4009,6 @@ extension Agent: ReconcileActuator {
                 sizeBytes: result.totalSizeBytes,
                 storagePath: result.storagePath,
                 architecture: CPUArchitecture.current,
-                memorySizeBytes: result.memorySizeBytes,
-                vmstateSizeBytes: result.vmstateSizeBytes,
-                rootfsSizeBytes: result.rootfsSizeBytes,
                 firecrackerVersion: result.firecrackerVersion,
                 guestControlProtocolVersion: result.guestControlProtocolVersion,
                 forkLayoutVersion: result.forkLayoutVersion,
@@ -4589,7 +4492,7 @@ extension Agent: ReconcileActuator {
         persistManifest()
         await sendVMLog(
             vmId: item.vmId, level: .info, eventType: .statusChange,
-            message: "VM created by reconciliation", operation: "create", newStatus: .created)
+            message: "VM created by reconciliation", operation: "create")
     }
 
     /// Applies a running VM's new vCPU/memory sizing (issue #568) and records
@@ -5097,8 +5000,7 @@ extension Agent: ReconcileActuator {
             return ObservedManifestStatus(
                 inventoryComplete: false,
                 quarantinedEntries: quarantinedWorkloads.count,
-                reason: reason,
-                preservedCopyPath: failure.preservedCopyPath
+                reason: reason
             )
         }
 
@@ -5328,9 +5230,7 @@ extension Agent: ReconcileActuator {
                     volumeId: uuid,
                     present: true,
                     storagePath: facts.path,
-                    format: facts.format.rawValue,
                     attachedVMId: facts.attachedVMId.flatMap { UUID(uuidString: $0) },
-                    deviceName: facts.deviceName,
                     observedGeneration: await reconciler.observedGeneration(for: volumeId, kind: .volume),
                     convergencePhase: await reconciler.convergencePhase(for: volumeId, kind: .volume),
                     lastError: await reconciler.lastError(for: volumeId, kind: .volume),
@@ -5461,7 +5361,7 @@ extension Agent {
     /// started or stopped, matching what the chassis reconcile does with the
     /// same value. The store is still persisted, since a sync that says nothing
     /// about metadata ports may still have carried metadata.
-    func reconcileMetadataServers(networks: [UUID]?) async {
+    func reconcileMetadataServers(networks: [UUID]) async {
         await metadataPersistTrigger?.signal()
 
         guard let metadataServers else { return }
