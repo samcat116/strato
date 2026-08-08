@@ -2344,11 +2344,22 @@ extension Agent {
                     } else {
                         metadataNetworks = nil
                     }
+                    // DNS zones (STR-39) carry the same "silence is not an
+                    // instruction" contract as volumes, and for a sharper
+                    // reason: these rows are switch-scoped topology whose
+                    // *contents* come from every agent in the site, so reading
+                    // a pre-v36 control plane's absent field as "no zones"
+                    // would unpublish every internal name in the site. The
+                    // field's own nil is the belt; the version gate is the
+                    // braces.
+                    let dnsZones =
+                        WireProtocol.supportsDNSZones(envelope.senderVersion) ? message.dnsZones : nil
                     await networkService?.reconcileNetworks(
                         message.networks, authoritative: message.networksAuthoritative,
                         securityGroups: message.securityGroups,
                         portMemberships: portMemberships,
-                        metadataNetworks: metadataNetworks)
+                        metadataNetworks: metadataNetworks,
+                        dnsZones: dnsZones)
                 }
                 // Sandbox reconciliation is likewise gated on the sender: a
                 // control plane older than the sandbox protocol (v5) omits

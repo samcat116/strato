@@ -1324,7 +1324,7 @@ extension NetworkServiceLinux {
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
         securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
-        metadataNetworks: [UUID]?
+        metadataNetworks: [UUID]?, dnsZones: [DesiredDNSZone]?
     ) async {
         topologyAuthority = authoritative
 
@@ -1406,6 +1406,26 @@ extension NetworkServiceLinux {
         for network in current {
             guard let dhcpEnabled = network.dhcpEnabled else { continue }
             await attemptDHCPConvergence(for: network, dhcpEnabled: dhcpEnabled)
+        }
+
+        // DNS zones (STR-39), converged here for the DHCP rows' reason and on
+        // the same terms: records change when a VM anywhere in the site is
+        // created, renamed, or deleted, none of which bumps this network's
+        // generation, so the level-triggered network reconcile is the only path
+        // that reaches them. After the topology pass, because a zone attaches
+        // to switches that pass is what creates. Nil means the control plane
+        // has no DNS opinion — leave every managed row alone, exactly like a
+        // nil `dhcpEnabled`.
+        if let dnsZones {
+            do {
+                try await DNSZoneReconciler.reconcile(zones: dnsZones, actuator: self, logger: logger)
+            } catch {
+                // The row snapshot couldn't be read, so teardown can't be
+                // computed safely; the periodic sync retries.
+                logger.error(
+                    "DNS zone reconciliation could not complete",
+                    metadata: ["error": .string(error.localizedDescription)])
+            }
         }
 
         // Security groups (authority side): converge port groups + ACLs, then
@@ -1782,6 +1802,120 @@ extension NetworkServiceLinux: NetworkActuator {
     func removeMetadataPort(name: String) async throws {
         #if os(Linux)
         try? await ovnManager?.deleteLogicalSwitchPort(named: name)
+        #endif
+    }
+
+    /// The managed `DNS` rows and the switches referencing each (STR-39).
+    ///
+    /// Ownership keys off the `strato-managed` + `dns-zone-id` external-ids
+    /// this agent stamps, never the row's contents: the `DNS` table is a root
+    /// table shared with whatever else runs against this northbound database,
+    /// and an operator's own rows must be invisible to the teardown diff.
+    func observeDNSZones() async throws -> [ObservedDNSZone] {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let rows = try await ovnManager.getDNS()
+        // The attachment lives on the switch, so the reverse index is built
+        // from the switch side. Unmanaged switches are included deliberately:
+        // a managed row attached to a switch this agent doesn't author is
+        // still an attachment it has to be able to see (and detach).
+        var switchesByRow: [String: Set<String>] = [:]
+        for logicalSwitch in try await ovnManager.getLogicalSwitches() {
+            for uuid in logicalSwitch.dnsRecords ?? [] {
+                switchesByRow[uuid, default: []].insert(logicalSwitch.name)
+            }
+        }
+        return rows.compactMap { row in
+            guard let uuid = row.uuid, let zoneId = DNSRowIdentity.ownedZoneID(row.external_ids) else {
+                return nil
+            }
+            return ObservedDNSZone(
+                uuid: uuid,
+                zoneId: zoneId,
+                recordsHash: row.external_ids?[DNSRowIdentity.recordsHashKey],
+                zoneName: row.external_ids?[DNSRowIdentity.zoneNameKey],
+                records: row.records,
+                switchNames: switchesByRow[uuid] ?? [])
+        }
+        #else
+        return []
+        #endif
+    }
+
+    /// Apply one zone's decided convergence. The write says what changed, so a
+    /// zone whose records are unchanged costs no OVSDB transaction at all —
+    /// which is the whole point of the stamp, since a zone's record map is
+    /// O(VMs on its networks) and ships on every sync.
+    func ensureDNSZone(_ write: DNSZoneWrite) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        let desired = OVNDNS(records: write.plan.records, external_ids: write.plan.externalIDs)
+        let uuid: String
+        if let existing = write.existingUUID {
+            uuid = existing
+            if write.rewriteRecords {
+                try await ovnManager.updateDNS(uuid: existing, desired)
+                logger.info(
+                    "Updated DNS zone records",
+                    metadata: [
+                        "zone": .string(write.plan.zoneName),
+                        "records": .stringConvertible(write.plan.records.count),
+                    ])
+            }
+        } else {
+            uuid = try await ovnManager.createDNS(desired)
+            logger.info(
+                "Realized DNS zone",
+                metadata: [
+                    "zone": .string(write.plan.zoneName),
+                    "records": .stringConvertible(write.plan.records.count),
+                ])
+        }
+
+        // Per-switch tolerance: the switch may not exist yet (its network's
+        // reconcile step failed this pass), and one unattachable switch must
+        // not cost the zone its other attachments. Retried by the next
+        // level-triggered sync, which recomputes the diff from observation.
+        for switchName in write.attach {
+            do {
+                try await ovnManager.attachDNS(uuid: uuid, toSwitch: switchName)
+            } catch {
+                logger.warning(
+                    "Could not attach DNS zone to switch (retried next sync)",
+                    metadata: [
+                        "zone": .string(write.plan.zoneName),
+                        "switch": .string(switchName),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+        for switchName in write.detach {
+            do {
+                try await ovnManager.detachDNS(uuid: uuid, fromSwitch: switchName)
+            } catch {
+                logger.warning(
+                    "Could not detach DNS zone from switch (retried next sync)",
+                    metadata: [
+                        "zone": .string(write.plan.zoneName),
+                        "switch": .string(switchName),
+                        "error": .string(error.localizedDescription),
+                    ])
+            }
+        }
+        #endif
+    }
+
+    func removeDNSZone(uuid: String) async throws {
+        #if os(Linux)
+        guard let ovnManager else {
+            throw NetworkError.notConnected("OVN manager not connected")
+        }
+        try await ovnManager.deleteDNS(uuid: uuid)
+        logger.info("Removed DNS zone row", metadata: ["row": .string(uuid)])
         #endif
     }
 

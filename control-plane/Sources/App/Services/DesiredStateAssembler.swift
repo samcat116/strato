@@ -432,6 +432,22 @@ struct DesiredStateAssembler {
             snapshots = nil
         }
 
+        // The DNS zones the topology authority realizes into the OVN `DNS`
+        // table (STR-39). Nil — not `[]` — for a non-authoritative agent, on
+        // `securityGroups`' terms and one sharper one: these rows are
+        // switch-scoped, so an empty list sent to a peer would have it read the
+        // controller's live rows as garbage to sweep. Skipped entirely for an
+        // agent that would discard the field, which is worth more here than
+        // elsewhere: assembling a zone reads every VM registered in it.
+        let dnsZones: [DesiredDNSZone]?
+        if scope.authoritative,
+            agent.map({ WireProtocol.supportsDNSZones($0.wireProtocolVersion ?? 0) }) ?? true
+        {
+            dnsZones = try await desiredDNSZones(networkIDs: scope.networkIDs, on: db)
+        } else {
+            dnsZones = nil
+        }
+
         return DesiredStateMessage(
             vms: entries, sandboxes: sandboxEntries, networks: networkStates,
             networksAuthoritative: scope.authoritative,
@@ -439,7 +455,59 @@ struct DesiredStateAssembler {
             securityGroups: securityGroups,
             tombstones: try await tombstones(agentId: agentId, on: db),
             volumes: volumes,
-            snapshots: snapshots)
+            snapshots: snapshots,
+            dnsZones: dnsZones)
+    }
+
+    /// The DNS zones this sync's topology authority should realize (STR-39):
+    /// every zone attached to a network whose topology the receiving agent
+    /// authors, with the zone's full effective contents.
+    ///
+    /// **The records are assembled fleet-wide, not from the receiving agent's
+    /// own VMs.** That is the load-bearing difference between this and every
+    /// other list in the sync. A zone's names span every VM on every network
+    /// that registers into it — a VM created on agent A changes a zone realized
+    /// by agent B — and `DNSZoneAssembler` reads those rows directly rather
+    /// than from anything scoped to `agentId`. What the scope decides here is
+    /// only *which zones* this agent is responsible for, never whose records
+    /// they contain.
+    ///
+    /// A consequence worth naming: a zone attached to networks in two sites is
+    /// realized identically in both, so site A answers for site B's VMs. That
+    /// is DNS behaving as DNS — a name resolving is not a claim that the
+    /// address is reachable — and the alternative (per-site subsets of one
+    /// zone) would make a zone's contents depend on where you asked, which is
+    /// what split-horizon views exist to express deliberately.
+    private func desiredDNSZones(networkIDs: Set<UUID>, on db: any Database) async throws
+        -> [DesiredDNSZone]
+    {
+        guard !networkIDs.isEmpty else { return [] }
+        let attachments = try await DNSZoneNetwork.query(on: db)
+            .filter(\.$logicalNetwork.$id ~~ Array(networkIDs))
+            .all()
+        guard !attachments.isEmpty else { return [] }
+
+        var networksByZone: [UUID: [UUID]] = [:]
+        for attachment in attachments {
+            networksByZone[attachment.$zone.id, default: []].append(attachment.$logicalNetwork.id)
+        }
+        let zones = try await DNSZone.query(on: db)
+            .filter(\.$id ~~ Array(networksByZone.keys))
+            .all()
+
+        // One assembly per zone, and each is a handful of queries. Bounded by
+        // the number of zones attached to this site's networks rather than by
+        // anything that grows with the fleet, and it runs only for the one
+        // agent per site that is the authority — but it does run on every poll,
+        // so it is the first thing to batch if zone counts ever get large.
+        var entries: [DesiredDNSZone] = []
+        for zone in zones {
+            guard let zoneID = zone.id else { continue }
+            let assembled = try await DNSZoneAssembler.assemble(zone: zone, on: db)
+            entries.append(
+                DNSZoneAssembler.desiredZone(assembled, networkIDs: networksByZone[zoneID] ?? []))
+        }
+        return entries.sorted { $0.zoneId.uuidString < $1.zoneId.uuidString }
     }
 
     /// Every snapshot artifact this agent holds, as desired entries (STR-150).

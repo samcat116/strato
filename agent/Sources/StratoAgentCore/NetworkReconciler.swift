@@ -784,6 +784,18 @@ public protocol NetworkActuator: Sendable {
     func removeRouterPort(name: String) async throws
     func removeExternalSwitch(name: String) async throws
     func removeRouter(name: String) async throws
+    /// The Strato-managed `DNS` rows in the northbound database, with the
+    /// switches currently referencing each (STR-39). Rows without the managed
+    /// marker are never reported: an operator's own rows in the shared `DNS`
+    /// table are not this reconciler's to converge.
+    func observeDNSZones() async throws -> [ObservedDNSZone]
+    /// Apply one zone's decided convergence: create or update its row, then
+    /// attach and detach the switches named in the write. The write already
+    /// says what changed, so this must not re-derive the diff.
+    func ensureDNSZone(_ write: DNSZoneWrite) async throws
+    /// Delete a managed `DNS` row. `Logical_Switch.dns_records` is a weak
+    /// reference set, so no detach is needed first.
+    func removeDNSZone(uuid: String) async throws
 }
 
 extension NetworkReconciler {

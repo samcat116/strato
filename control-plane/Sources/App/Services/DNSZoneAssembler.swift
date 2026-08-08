@@ -1,4 +1,6 @@
+import Crypto
 import Fluent
+import Foundation
 import StratoShared
 import Vapor
 
@@ -232,5 +234,66 @@ enum DNSZoneAssembler {
             ($0.name, $0.type.rawValue, $0.ttl, $0.view.rawValue, $0.values.joined(separator: ","))
                 < ($1.name, $1.type.rawValue, $1.ttl, $1.view.rawValue, $1.values.joined(separator: ","))
         }
+    }
+}
+
+// MARK: - Wire projection (STR-39)
+
+extension DNSZoneAssembler {
+    /// The desired-state entry for an assembled zone: what the topology
+    /// authority realizes, and where.
+    ///
+    /// Records travel typed rather than pre-flattened into the map OVN's `DNS`
+    /// table takes, so the receiving driver decides what it can express — see
+    /// `DesiredDNSRecord`. TTL does not travel at all: OVN's responder has no
+    /// per-record TTL, and a field no driver reads would be a thing that
+    /// changes the digest without changing anything realized.
+    ///
+    /// `.external`-view records are dropped here rather than on the agent.
+    /// Split horizon is a control-plane concept (roadmap phase 6) and the
+    /// internal resolver is by definition the internal side; sending records
+    /// marked for publication elsewhere would make the agent responsible for a
+    /// distinction it has no other reason to know about.
+    static func desiredZone(_ assembled: AssembledDNSZone, networkIDs: [UUID]) -> DesiredDNSZone {
+        let records = assembled.records
+            .filter { $0.view != .external }
+            .map { DesiredDNSRecord(name: $0.name, type: $0.type.rawValue, values: $0.values) }
+        return DesiredDNSZone(
+            zoneId: assembled.zoneId,
+            zoneName: assembled.zoneName,
+            networkIds: networkIDs.sorted { $0.uuidString < $1.uuidString },
+            records: records,
+            recordsHash: recordsHash(records))
+    }
+
+    /// A digest of a zone's wire records, so the agent can skip an OVSDB
+    /// transaction for a zone that hasn't changed.
+    ///
+    /// Over the *whole* projected set, including the types the OVN backend
+    /// cannot express: the stamp means "this row was written from this version
+    /// of the zone", and a hash that ignored the unrealizable records would
+    /// leave a row claiming to be current after an edit it deliberately didn't
+    /// realize. `AssembledDNSZone` is already totally ordered, and both tiers
+    /// emit one entry per `(name, type)`, so the input here is canonical
+    /// without re-sorting.
+    ///
+    /// Fields are length-prefixed rather than joined with a separator: a TXT
+    /// record's value is arbitrary text, so any delimiter is one an operator
+    /// can author, and two different zones hashing equal is the one failure
+    /// mode a change detector must not have.
+    static func recordsHash(_ records: [DesiredDNSRecord]) -> String {
+        var hasher = SHA256()
+        func update(_ field: String) {
+            let bytes = Data(field.utf8)
+            withUnsafeBytes(of: UInt32(bytes.count).bigEndian) { hasher.update(data: Data($0)) }
+            hasher.update(data: bytes)
+        }
+        for record in records {
+            update(record.name)
+            update(record.type)
+            withUnsafeBytes(of: UInt32(record.values.count).bigEndian) { hasher.update(data: Data($0)) }
+            for value in record.values { update(value) }
+        }
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }

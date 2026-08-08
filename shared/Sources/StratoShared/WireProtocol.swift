@@ -684,7 +684,41 @@ public enum WireProtocol {
     /// peer decoding one with it ignores the key. Every other bump in this
     /// changelog protects a misreading of silence; this one has none to
     /// protect, so a gate would be a version floor with no behavior behind it.
-    public static let currentVersion = 35
+    ///
+    /// Version 36: internal name resolution in the datapath (STR-39, roadmap
+    /// #769). `DesiredStateMessage` gains `dnsZones: [DesiredDNSZone]?`, each
+    /// carrying a zone's id, name, attached network ids, effective record set
+    /// and a `recordsHash`. No frame is added or removed, and nothing is
+    /// deleted — this is a pure addition.
+    ///
+    /// The field rides the **network carrier, not `NetworkSpec`**, which is the
+    /// only structural decision in the bump: DNS edits deliberately don't bump
+    /// VM generations (see `DesiredNetworkState.dhcpEnabled` for the same
+    /// argument about DHCP), so a converged VM never re-realizes its NICs and a
+    /// per-NIC field would reach nobody. The level-triggered network reconcile
+    /// converges these rows.
+    ///
+    /// Absence is the v31/v33 asymmetric shape and is read strictly: nil means
+    /// "the sender has no opinion", never "delete every DNS row". That reading
+    /// is load-bearing in a way it is not for a VM list, because a zone's rows
+    /// are switch-scoped topology written by *one* agent — the site's network
+    /// controller — while the records themselves come from VMs on every agent
+    /// in the site. A non-authority agent is therefore sent nil rather than
+    /// `[]`, so a controller handover can never have two writers reading each
+    /// other's rows as garbage. `[]` is an opinion and does remove managed
+    /// rows, which is what makes detaching the last zone from a network work.
+    ///
+    /// `supportsDNSZones` gates only the *field*, never placement or
+    /// admission, and that is the honest posture rather than an omission: a
+    /// pre-v36 agent decodes the key and discards it, so the failure mode is a
+    /// name that doesn't resolve — visible, non-destructive, and repaired by
+    /// upgrading the agent. Nothing reports a DNS zone as converged, so unlike
+    /// v34's reboot nonce there is no false success to refuse at the API.
+    ///
+    /// Skew in the other direction is inert: a pre-v36 control plane sends no
+    /// key at all, a v36 agent reads nil, and every managed row stays exactly
+    /// as the last v36 sync left it.
+    public static let currentVersion = 36
 
     /// The lowest protocol version that speaks reconciliation state sync
     /// (see `currentVersion` version 2 notes).
@@ -1044,6 +1078,29 @@ public enum WireProtocol {
     /// `supportsSnapshotSync` posture applied to a verb rather than an artifact.
     public static func supportsEdgeNonces(_ version: Int) -> Bool {
         version >= edgeNonceMinimumVersion
+    }
+
+    /// The lowest protocol version that realizes DNS zones into the OVN `DNS`
+    /// table (see `currentVersion` version 36 notes).
+    public static let dnsZoneMinimumVersion = 36
+
+    /// Whether a peer at `version` speaks DNS zones on the sync.
+    ///
+    /// Read in two places, both send-side-ish and neither a refusal. Sync
+    /// assembly omits the field — and skips assembling the zones at all — for
+    /// an agent that would discard it, which matters more here than for most
+    /// gates: a zone's records are assembled from every VM in the site, so
+    /// building them for a receiver that cannot use them is real query load on
+    /// every poll. Agent-side it is the belt to the `dnsZones`-is-nil braces,
+    /// so silence from an older control plane is never planned against.
+    ///
+    /// There is deliberately no admission gate. Attaching a zone to a network
+    /// whose site controller is pre-v36 leaves names unresolved until the
+    /// agent is upgraded — a visible, non-destructive failure that heals on
+    /// its own, unlike the silent false "converged" that makes
+    /// `supportsEdgeNonces` and `supportsSnapshotSync` refuse at the API.
+    public static func supportsDNSZones(_ version: Int) -> Bool {
+        version >= dnsZoneMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and
