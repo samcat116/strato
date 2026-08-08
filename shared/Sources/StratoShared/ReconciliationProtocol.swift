@@ -601,6 +601,17 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// the families; only the backend that captures the bytes differs, and the
     /// entry's own `kind` says which.
     public let snapshots: [DesiredSnapshotState]?
+    /// The DNS zones the receiving agent should realize into the OVN `DNS`
+    /// table (STR-39): every zone attached to a network whose topology this
+    /// agent authors, with the zone's full effective record set.
+    ///
+    /// Nil is "the sender has no opinion about DNS" and the agent leaves every
+    /// managed row alone — what a pre-v36 control plane and a *non-authority*
+    /// agent both get, since realizing switch-scoped rows from two writers
+    /// would have them fight over teardown. `[]` is an opinion and means "no
+    /// zone reaches any network you author": managed rows are removed, which
+    /// is what makes detaching the last zone from a network take effect.
+    public let dnsZones: [DesiredDNSZone]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -614,7 +625,8 @@ public struct DesiredStateMessage: WebSocketMessage {
         securityGroups: [DesiredSecurityGroup]? = nil,
         tombstones: [DesiredWorkloadTombstone]? = nil,
         volumes: [DesiredVolumeState]? = nil,
-        snapshots: [DesiredSnapshotState]? = nil
+        snapshots: [DesiredSnapshotState]? = nil,
+        dnsZones: [DesiredDNSZone]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -628,6 +640,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.tombstones = tombstones
         self.volumes = volumes
         self.snapshots = snapshots
+        self.dnsZones = dnsZones
     }
 
     // Custom decode so `networks` and `sandboxes` tolerate absence: a sync
@@ -651,6 +664,7 @@ public struct DesiredStateMessage: WebSocketMessage {
         tombstones = try c.decodeIfPresent([DesiredWorkloadTombstone].self, forKey: .tombstones)
         volumes = try c.decodeIfPresent([DesiredVolumeState].self, forKey: .volumes)
         snapshots = try c.decodeIfPresent([DesiredSnapshotState].self, forKey: .snapshots)
+        dnsZones = try c.decodeIfPresent([DesiredDNSZone].self, forKey: .dnsZones)
     }
 }
 
@@ -887,6 +901,92 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.metadataEnabled = metadataEnabled
         self.generation = generation
         self.floatingIPs = floatingIPs
+    }
+}
+
+// MARK: - Desired DNS zones
+
+/// One resource record set inside a zone: an owner name, a type, and every
+/// value published at that name for that type (STR-39).
+///
+/// Typed rather than pre-flattened into the `name → addresses` map OVN's `DNS`
+/// table takes, for two reasons. Realization is meant to be a swappable driver
+/// — the OVN writer joins a name's A and AAAA values into one space-separated
+/// string, while a zone file keeps them apart — and only the *receiver* can say
+/// which types its backend can express, which is what lets the agent report the
+/// ones it had to skip instead of the control plane silently dropping them.
+///
+/// `type` is a string, not an enum, on the `DesiredSecurityGroupRule.direction`
+/// precedent: a record type from a newer control plane must decode into an
+/// entry this agent ignores, never fail the whole sync.
+public struct DesiredDNSRecord: Codable, Sendable, Equatable {
+    /// Fully-qualified owner name, lowercased and without a trailing dot. For
+    /// a `PTR` this is the `in-addr.arpa` / `ip6.arpa` name.
+    public let name: String
+    /// `A`, `AAAA`, `PTR`, `CNAME`, `TXT`, `SRV` — uppercase, as zone files
+    /// spell them.
+    public let type: String
+    /// The RRset's values, deduplicated and sorted by the control plane so two
+    /// assemblies of the same data compare (and hash) equal.
+    public let values: [String]
+
+    public init(name: String, type: String, values: [String]) {
+        self.name = name
+        self.type = type
+        self.values = values
+    }
+}
+
+/// A DNS zone the receiving agent should realize for the networks it is the
+/// topology authority for (STR-39, roadmap #769).
+///
+/// This rides the **network-level carrier, not `NetworkSpec`**: DNS and DHCP
+/// edits deliberately don't bump VM generations, so a converged VM never
+/// re-realizes its NICs and would never see a record change. The
+/// level-triggered network reconcile is what converges these rows, exactly as
+/// it does `DHCP_Options`.
+///
+/// A zone's contents span every VM on every attached network across *all*
+/// agents, so `records` is assembled from the whole fleet rather than from the
+/// receiving agent's own workloads — which is precisely why only the topology
+/// authority is sent zones at all: `Logical_Switch.dns_records` is
+/// switch-scoped topology, and two level-triggered writers would fight over it.
+public struct DesiredDNSZone: Codable, Sendable, Equatable {
+    public let zoneId: UUID
+    /// The zone's fully-qualified name, lowercased with no trailing dot. Not
+    /// an identifier — zone names are unique only within a project — and used
+    /// only as a human label on the realized row.
+    public let zoneName: String
+    /// The networks whose switches should answer from this zone, restricted to
+    /// the ones this agent authors. The agent derives switch names from the
+    /// ids (`OVNNaming.switchName`), so user-chosen names never enter the OVN
+    /// namespace.
+    public let networkIds: [UUID]
+    /// The zone's effective contents, derived ∪ authored, in a stable order.
+    public let records: [DesiredDNSRecord]
+    /// A digest of the `records` carried here — which is the zone minus its
+    /// `.external`-view entries, since those are for publication elsewhere and
+    /// never reach an agent. Computed by the control plane. The agent stamps it
+    /// on the realized row's `external_ids` and compares it on the next sync,
+    /// so an unchanged zone costs no OVSDB transaction: records are
+    /// O(VMs on the network) and ship on every sync, and rewriting the whole
+    /// map every cycle is what level-triggering must not degenerate into.
+    ///
+    /// Never load-bearing for correctness — a stamp that disagrees with the
+    /// row's actual contents (a hand-edited row, an agent whose realization
+    /// changed across an upgrade) still heals, because the agent also compares
+    /// the records it would write against the ones the row carries.
+    public let recordsHash: String
+
+    public init(
+        zoneId: UUID, zoneName: String, networkIds: [UUID], records: [DesiredDNSRecord],
+        recordsHash: String
+    ) {
+        self.zoneId = zoneId
+        self.zoneName = zoneName
+        self.networkIds = networkIds
+        self.records = records
+        self.recordsHash = recordsHash
     }
 }
 

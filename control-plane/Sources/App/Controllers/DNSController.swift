@@ -10,10 +10,19 @@ import Vapor
 /// Records hang off their zone in the resource tree, so a binding on a zone
 /// carries its records.
 ///
-/// Nothing here is realized anywhere. Phase 1 is the record *model* — the one
-/// hard-to-reverse decision in the DNS work — and every later phase is a
-/// driver reading `DNSZoneAssembler`'s output. That is why no route touches
-/// `agentService`: there is no desired state to nudge yet.
+/// Phase 1 was the record *model* — the one hard-to-reverse decision in the
+/// DNS work — and every later phase is a driver reading `DNSZoneAssembler`'s
+/// output. The first of those drivers landed in STR-39: a zone attached to a
+/// network is realized into the OVN `DNS` table by that network's topology
+/// authority, so the writes below ring the fleet doorbell.
+///
+/// Fleet-wide rather than per-agent, on `SecurityGroupController`'s terms: a
+/// zone's blast radius is every network it is attached to, which may span
+/// sites, so the affected agents aren't known at the mutation site. Purely a
+/// latency optimization either way — a lost doorbell is caught by the agent's
+/// own periodic re-fetch. Routes that cannot change anything realized (a zone
+/// created or deleted with no attachments — an unattached zone is never sent
+/// to any agent) deliberately don't ring.
 struct DNSController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
         let zones = routes.grouped("api", "dns-zones").grouped(User.guardMiddleware())
@@ -142,6 +151,7 @@ struct DNSController: RouteCollection {
     func updateZone(req: Request) async throws -> DNSZoneResponse {
         let zone = try await fetchZone(req: req, permission: "update")
         let request = try req.content.decode(UpdateDNSZoneRequest.self)
+        let originalName = zone.name
 
         if let requestedName = request.name {
             let name = try DNSName.normalizedZoneName(requestedName)
@@ -160,6 +170,11 @@ struct DNSController: RouteCollection {
             try await zone.save(on: req.db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A DNS zone named '\(zone.name)' already exists in this project")
+        }
+        // A rename moves every name in the zone; a description edit realizes
+        // nothing, so only the former is worth a fleet-wide re-assembly.
+        if zone.name != originalName {
+            await req.application.agentService.syncDesiredStateToFleet()
         }
         return try await Self.responses(for: [zone], on: req.db)[0]
     }
@@ -276,6 +291,7 @@ struct DNSController: RouteCollection {
                 reason: "A \(request.type.rawValue) record with that value already exists at "
                     + "'\(DNSName.qualified(name: name, inZone: zone.name))'")
         }
+        await req.application.agentService.syncDesiredStateToFleet()
         return try DNSRecordResponse(from: record, zoneName: zone.name)
     }
 
@@ -328,6 +344,7 @@ struct DNSController: RouteCollection {
                 reason: "A \(record.type.rawValue) record with that value already exists at "
                     + "'\(DNSName.qualified(name: record.name, inZone: zone.name))'")
         }
+        await req.application.agentService.syncDesiredStateToFleet()
         return try DNSRecordResponse(from: record, zoneName: zone.name)
     }
 
@@ -336,6 +353,7 @@ struct DNSController: RouteCollection {
     func deleteRecord(req: Request) async throws -> HTTPStatus {
         let (_, record) = try await fetchRecord(req: req, permission: "delete")
         try await record.delete(on: req.db)
+        await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
     }
 
@@ -383,6 +401,8 @@ struct DNSController: RouteCollection {
             try await network.save(on: req.db)
         }
 
+        await req.application.agentService.syncDesiredStateToFleet()
+
         req.logger.info(
             "DNS zone attached to network",
             metadata: [
@@ -422,6 +442,7 @@ struct DNSController: RouteCollection {
             return .noContent
         }
         try await attachment.delete(on: req.db)
+        await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
             "DNS zone detached from network",

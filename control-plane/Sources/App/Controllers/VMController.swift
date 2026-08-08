@@ -802,12 +802,20 @@ struct VMController: RouteCollection {
             existingVM.name = name
         }
 
+        let originalHostname = existingVM.hostname
         if let hostname = updateRequest.hostname {
             let vmID = try existingVM.requireID()
             let zones = try await DNSZoneService.registrationZones(vmID: vmID, on: req.db)
             existingVM.hostname = try await DNSZoneService.validatedExplicitHostname(
                 hostname, forVM: vmID, in: zones, on: req.db)
         }
+        // A hostname edit moves this VM's derived records, which are realized
+        // by a topology authority that may not be this VM's own agent — and,
+        // for a zone attached across sites, not even in its site (STR-39). So
+        // it rings the fleet rather than the placement, like a zone edit. The
+        // change never bumps the VM's generation: nothing about the VM itself
+        // is re-realized, only the network-carried zone it registers into.
+        let hostnameChanged = existingVM.hostname != originalHostname
 
         if let description = updateRequest.description {
             existingVM.description = description
@@ -819,6 +827,7 @@ struct VMController: RouteCollection {
         let balloonChanged = newBalloonTarget != existingVM.balloonTarget
         guard newCPU != existingVM.cpu || newMemory != existingVM.memory || balloonChanged else {
             try await existingVM.save(on: req.db)
+            if hostnameChanged { await req.application.agentService.syncDesiredStateToFleet() }
             return try await Self.detailResponse(for: existingVM, on: req)
         }
 
@@ -884,6 +893,7 @@ struct VMController: RouteCollection {
                 existingVM.bumpGeneration()
                 try await existingVM.save(on: db)
             }
+            if hostnameChanged { await req.application.agentService.syncDesiredStateToFleet() }
             return try await Self.detailResponse(for: existingVM, on: req)
         }
 
@@ -953,6 +963,9 @@ struct VMController: RouteCollection {
             // reusing its number.
             existingVM.bumpGeneration()
         }
+        // The resize's own dispatch reaches this VM's agent and its site
+        // controller; a hostname edge riding along needs the wider ring.
+        if hostnameChanged { await req.application.agentService.syncDesiredStateToFleet() }
         return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
     }
 

@@ -54,11 +54,17 @@ protocol NetworkServiceProtocol: Sendable {
     /// guests to serve. Nil ≙ a control plane with no opinion — converge
     /// nothing, rather than reading silence as "tear every namespace down".
     ///
+    /// `dnsZones` is the authority's DNS desired state (STR-39): every zone
+    /// attached to a network whose topology this agent authors, with the
+    /// zone's full effective record set — assembled fleet-wide, since a zone's
+    /// names span every agent's VMs. Nil ≙ no opinion (a pre-v36 control plane,
+    /// or a non-authoritative agent): leave every managed `DNS` row alone.
+    ///
     /// Default no-op so platforms without a real SDN (macOS user-mode) ignore it.
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
         securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
-        metadataNetworks: [UUID]?
+        metadataNetworks: [UUID]?, dnsZones: [DesiredDNSZone]?
     ) async
 }
 
@@ -83,7 +89,7 @@ extension NetworkServiceProtocol {
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
         securityGroups: [DesiredSecurityGroup]?, portMemberships: [DesiredPortMembership],
-        metadataNetworks: [UUID]?
+        metadataNetworks: [UUID]?, dnsZones: [DesiredDNSZone]?
     ) async {}
 }
 

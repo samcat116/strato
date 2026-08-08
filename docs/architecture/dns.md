@@ -5,11 +5,13 @@ model** with swappable realization. This document describes that model — what 
 zone is, where records come from, and how a zone's contents are assembled — and
 sketches the layers that will realize it.
 
-Status: **phase 1 (the record model) is implemented.** Zones, attachments,
-records, and hostnames are fully manageable through the API and CLI, and the
-assembler produces a correct record set for a zone. Nothing is realized
-anywhere yet: no agent sees any of this, and no guest can resolve a Strato-owned
-name. That arrives with phase 3.
+Status: **phases 1 and 3 are implemented.** Zones, attachments, records, and
+hostnames are fully manageable through the API and CLI; the assembler produces a
+correct record set for a zone; and the A/AAAA/PTR subset of that set is realized
+into the OVN `DNS` table by each network's topology authority, so a guest
+resolves its peers by `<hostname>.<zone>` in the datapath. The full record
+vocabulary (CNAME, TXT, SRV) and external forwarding wait for the per-network
+resolver in phase 4.
 
 ## What exists before this
 
@@ -188,7 +190,11 @@ Two consequences to settle before the driver phases, rather than in them:
   into a forward zone, so the write-time conflict check — careful everywhere
   else — has a blind spot here. Nothing today realizes either, so nothing is
   broken yet; closing it means deciding whether reverse space is a zone of its
-  own at all, which is phase 3's business.
+  own at all. Phase 3 did not settle it: the OVN driver realizes derived PTRs
+  from the forward zone and authored PTRs in a hand-made reverse zone alike, as
+  co-tenants of the same flat name → value space, so the two can still shadow
+  each other. Settling it is now phase 4's business, where a zone file forces
+  the question.
 
 ### Conflict handling
 
@@ -228,15 +234,20 @@ resolver settings and the primary-zone pointer.
 
 ## Realization: the layers above this
 
-Four layers sit over the one record model. Only the model exists today.
+Four layers sit over the one record model; the first two exist today. The
+layers are **not** the roadmap's phases — there are four of these and six of
+those, because phase 2 was a dependency (`swift-ovn`'s `DNS` CRUD) that added no
+layer of its own. Each layer names the phase that built it:
 
-1. **Control plane owns zones and records.** (This document. Implemented.)
+1. **Control plane owns zones and records** (phase 1). This document.
+   Implemented.
 2. **OVN `DNS` table** for internal A/AAAA/PTR, answered in the datapath by
-   `ovn-controller`. No server process, no HA story, no failure domain.
+   `ovn-controller` (phase 3). No server process, no HA story, no failure
+   domain. Implemented — see "Realizing a zone into OVN" below.
 3. **Per-network link-local CoreDNS** for the full record vocabulary, external
-   forwarding, and isolated networks.
+   forwarding, and isolated networks (phase 4).
 4. **Control-plane resolver / external publication** for ops-facing inbound
-   resolution and public names.
+   resolution and public names (phases 5 and 6).
 
 Layers 2 and 3 compose without the guest knowing. OVN's `dns_lookup()`
 intercepts UDP/53 *regardless of destination IP* and spoofs a reply; misses and
@@ -246,16 +257,65 @@ safe to run without HA: if CoreDNS were the only resolver, losing an agent would
 be a DNS outage; with OVN in front it degrades to "internal names still resolve,
 external ones don't."
 
-Two consequences for how records get written, when that time comes:
+## Realizing a zone into OVN (phase 3, wire v36)
+
+Each zone attached to a network becomes one row in the OVN Northbound `DNS`
+table, referenced from `Logical_Switch.dns_records` on every attached network's
+switch. `ovn-controller` answers `dns_lookup()` from those rows in the
+datapath, so there is no resolver process to run and nothing to make highly
+available.
+
+Two decisions govern how the rows get written, and both were settled by the
+model above rather than by the driver:
 
 - **Records live on the network carrier, not the VM spec.** DHCP/DNS edits
   deliberately do not bump VM generations, so converged VMs never re-realize
-  their NICs. The level-triggered network reconcile is what converges DNS rows,
-  exactly as it does `DHCP_Options`.
+  their NICs. `DesiredStateMessage.dnsZones` — not `NetworkSpec` — is what
+  carries them, and the level-triggered network reconcile is what converges the
+  rows, exactly as it does `DHCP_Options`.
 - **DNS rows are written by the topology authority, not the VM's host.**
   `Logical_Switch.dns_records` is switch-scoped topology, so under
   `SiteNetworkAuthority` it belongs to the site's designated network controller
-  agent — but a zone's records span every VM on the network across *all* agents.
+  agent — but a zone's records span every VM on the network across *all*
+  agents. So `DesiredStateAssembler` scopes *which zones* an agent is sent by
+  its topology authority, and assembles each zone's records fleet-wide. It is
+  the one list in the sync whose contents are not the receiving agent's own
+  workloads. A non-authoritative agent is sent `nil`, never `[]`, so a
+  controller handover cannot produce two writers reading each other's rows as
+  garbage.
+
+Because a VM created on agent A changes a zone realized by agent B, VM
+lifecycle mutations already ring the doorbell for the site's network controller
+alongside the VM's own agent (`AgentService.syncDesiredState`). Edits to the DNS
+model itself — records, attachments, a zone rename, a VM's hostname — ring the
+fleet-wide doorbell instead: a zone's blast radius is every network it is
+attached to, which may span sites, so the affected agents are not known at the
+mutation site. Every ring is a latency optimization; the agent's own periodic
+re-fetch is the correctness backstop.
+
+Agent-side (`agent/Sources/StratoAgentCore/DNSZoneRealization.swift`):
+
+- **Ownership** is `(strato-managed, dns-zone-id)` in `external_ids` — never the
+  row's contents and never the zone *name*, which is unique only within a
+  project. An operator's own rows in the shared `DNS` table carry no marker, so
+  they are never adopted, rewritten, or torn down. Same convention as
+  `DHCPRowIdentity`.
+- **Only A/AAAA/PTR are realized.** A name's A and AAAA values are joined into
+  the one space-separated string OVN's map takes; a PTR's reverse name maps to
+  its target. CNAME, TXT, and SRV produce a non-fatal diagnostic naming the
+  types that were not realized, rather than failing the sync — they are phase
+  4's job. Values are re-validated against their type for `DHCPOptions`'
+  reason: the whole zone is one OVSDB row, so one unparseable value would
+  otherwise cost every name in it.
+- **An unchanged zone costs no OVSDB transaction.** The control plane's
+  `recordsHash` is stamped on the row and compared on the next sync, because a
+  zone's record map is O(VMs on its networks) and ships on every sync. The
+  stamp is never load-bearing for correctness: the flattened records are
+  compared too, so a hand-edited row or an agent whose realization changed
+  across an upgrade still heals.
+- **Teardown is `observed − desired`** over managed rows, and deleting a `DNS`
+  row is enough to unpublish it — `Logical_Switch.dns_records` is a weak
+  reference set, so ovsdb-server drops the UUID from every switch naming it.
 
 ## Open questions
 
@@ -276,5 +336,9 @@ Two consequences for how records get written, when that time comes:
 - Assembly: `control-plane/Sources/App/Services/DNSZoneAssembler.swift`
 - Write rules: `control-plane/Sources/App/Services/DNSZoneService.swift`
 - API: `control-plane/Sources/App/Controllers/DNSController.swift`
+- Sync assembly: `DesiredStateAssembler.desiredDNSZones`; wire types in
+  `shared/Sources/StratoShared/ReconciliationProtocol.swift`
+- OVN realization: `agent/Sources/StratoAgentCore/DNSZoneRealization.swift`,
+  driven through `NetworkActuator` by `NetworkServiceLinux`
 - Networking design (the L2/L3 substrate): [networking](./networking.md)
 - IAM vocabulary: [iam](./iam.md)

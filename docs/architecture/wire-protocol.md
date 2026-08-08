@@ -50,7 +50,7 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 34), stamped on
+`WireProtocol.swift` holds the protocol version (currently 36), stamped on
 every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
@@ -83,6 +83,7 @@ ad-hoc checks scattered through the code:
 | `supportsVolumeSync` | 31 | Volumes in the desired-state sync — and a **placement** gate, not just a field gate: with the imperative volume frames gone there is no fallback path |
 | `supportsSnapshotSync` | 33 | Snapshot artifacts in the desired-state sync — and a **capture-admission** gate: an artifact has no placement decision to gate, so a capture requested against a pre-v33 agent is refused instead |
 | `supportsEdgeNonces` | 34 | Reboot and restore as monotonic nonces on the desired entry — and an **admission** gate: with the imperative frames gone, a pre-v34 agent would ignore the field and report the bumped generation as converged, so the API would claim a restart that never happened |
+| `supportsDNSZones` | 36 | `DesiredStateMessage.dnsZones` — the zones the topology authority realizes into the OVN `DNS` table. A *field* gate only: a pre-v36 agent leaves names unresolved, which is visible and self-healing, so there is nothing to refuse at the API |
 
 The v9 `supportsSandboxSnapshots` and v22 `supportsVMCheckpoint` gates were
 removed with the last frames they guarded (v33 and v34): every question either
@@ -332,6 +333,42 @@ It defends the *request*: with no fallback frame left, a reboot aimed at a
 pre-v34 agent would be accepted into a field that agent ignores and then
 reported as converged, so it is refused with `409` at admission.
 
+Version 35 adds online volume grow and per-volume I/O ceilings (STR-19):
+`ioLimits` on `DesiredVolumeState`, `VolumeSpec` and `ObservedVolumeState`. No
+frame changes and no gate — the first bump since v23 without one. The observed
+echo is what carries the skew instead: nil means "this agent does not report
+applied limits", while a present-but-empty `VolumeIOLimits` means "applied, and
+the answer is uncapped", so a fleet mid-upgrade shows caps requested rather
+than done.
+
+Version 36 realizes internal names in the datapath (STR-39, roadmap #769).
+`DesiredStateMessage` gains `dnsZones`: for each zone attached to a network the
+receiving agent authors, its id, name, attached network ids, effective record
+set and a `recordsHash`. The agent writes them to the OVN Northbound `DNS`
+table and references them from `Logical_Switch.dns_records`, so `ovn-controller`
+answers `dns_lookup()` in the datapath — no daemon, no HA story, no failure
+domain.
+
+Two structural decisions are worth reading before extending it. The field rides
+the **network carrier, not `NetworkSpec`**, for `dhcpEnabled`'s reason: DNS
+edits don't bump VM generations, so a converged VM never re-realizes its NICs
+and a per-NIC field would reach nobody. And records travel **typed**
+(`name`/`type`/`values`) rather than pre-flattened into OVN's `name → addresses`
+map, so realization stays a swappable driver and the *receiver* decides what its
+backend can express — the OVN driver joins a name's A and AAAA values and skips
+CNAME/TXT/SRV with a diagnostic.
+
+Absence is v31's asymmetric shape, and the reading matters more than usual
+because these rows are switch-scoped topology written by *one* agent while
+their contents come from every agent in the site: nil is "no opinion" and a
+**non-authoritative agent is sent nil, not `[]`**, so a controller handover can
+never have two writers reading each other's rows as garbage. `[]` is an opinion
+and does remove managed rows, which is what makes detaching the last zone from
+a network take effect. `supportsDNSZones` gates only the field (and lets
+assembly skip the fleet-wide record queries for an agent that would discard
+them); unlike v33 and v34 there is no admission gate, because nothing reports a
+zone as converged, so there is no false success to refuse.
+
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
 wire type (see `DesiredVMStatus` below) also requires a version bump and a
@@ -409,6 +446,13 @@ design; the short version:
   optional `floatingIPs` list — external→fixed address mappings plus
   `vmId`/`nicIndex` for the NIC's port, realized as `dnat_and_snat` rules,
   issue #344); `DesiredAgentUpdate` is the declarative agent-update target.
+- `DesiredDNSZone` (v36+) is the DNS half of the network carrier: a zone's id,
+  name, attached network ids, its effective records as
+  `DesiredDNSRecord(name, type, values)`, and a `recordsHash` the agent stamps
+  on the realized row so an unchanged zone costs no OVSDB transaction. Sent
+  only to the topology authority, and its records are assembled fleet-wide —
+  a zone's names span every agent's VMs, which is the one list in the sync
+  that is not scoped to the receiving agent's own workloads.
 
 ### Desired volumes (wire v31)
 
