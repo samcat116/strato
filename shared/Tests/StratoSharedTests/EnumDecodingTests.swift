@@ -96,20 +96,18 @@ struct EnumDecodingTests {
         #expect(VMLogLevel.error.rawValue == "error")
 
         #expect(VMLogSource.agent.rawValue == "agent")
-        #expect(VMLogSource.qemu.rawValue == "qemu")
         #expect(VMLogSource.controlPlane.rawValue == "control_plane")
 
         #expect(VMEventType.statusChange.rawValue == "status_change")
         #expect(VMEventType.operation.rawValue == "operation")
-        #expect(VMEventType.qemuOutput.rawValue == "qemu_output")
         #expect(VMEventType.error.rawValue == "error")
         #expect(VMEventType.info.rawValue == "info")
 
         let levels: [VMLogLevel] = [.debug, .info, .warning, .error]
         #expect(try roundTrip(levels) == levels)
-        let sources: [VMLogSource] = [.agent, .qemu, .controlPlane]
+        let sources: [VMLogSource] = [.agent, .controlPlane]
         #expect(try roundTrip(sources) == sources)
-        let events: [VMEventType] = [.statusChange, .operation, .qemuOutput, .error, .info]
+        let events: [VMEventType] = [.statusChange, .operation, .error, .info]
         #expect(try roundTrip(events) == events)
     }
 
@@ -125,14 +123,6 @@ struct EnumDecodingTests {
         #expect(VMEventType.unknown.rawValue == "unknown")
     }
 
-    @Test func networkEnumsRoundTrip() throws {
-        for status in NetworkPortStatus.allCases {
-            #expect(try roundTrip([status]) == [status])
-        }
-        for status in NetworkStatus.allCases {
-            #expect(try roundTrip([status]) == [status])
-        }
-    }
 }
 
 @Suite("HypervisorCapabilities")

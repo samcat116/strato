@@ -55,8 +55,6 @@ public actor MetadataResponder {
         await tokens.retain(servable: Set(byVM.keys))
     }
 
-    public func currentOrigin() -> MetadataSnapshotOrigin { snapshot.origin }
-
     /// The response to `request`.
     ///
     /// The order of the checks is load-bearing, and each step says why it is

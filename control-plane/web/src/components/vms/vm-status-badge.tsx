@@ -1,14 +1,12 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
-import { pendingMutationLabel } from "@/lib/operation-labels";
-import { usePendingMutation } from "@/lib/stores/mutations-store";
+import {
+  StatusBadge,
+  type StatusBadgeConfig,
+} from "@/components/ui/status-badge";
 import type { VMStatus } from "@/types/api";
 
-const statusConfig: Record<
-  VMStatus,
-  { label: string; className: string }
-> = {
+const statusConfig: Record<VMStatus, StatusBadgeConfig> = {
   Running: {
     label: "Running",
     className: "bg-green-500/20 text-green-600 border-green-500/30",
@@ -52,24 +50,5 @@ export function VMStatusBadge({
   /** When provided, an in-flight mutation on this VM overrides the status label. */
   vmId?: string;
 }) {
-  const pendingMutation = usePendingMutation(vmId);
-
-  if (pendingMutation) {
-    return (
-      <Badge
-        variant="outline"
-        className="bg-blue-500/20 text-blue-600 border-blue-500/30 animate-pulse"
-      >
-        {pendingMutationLabel(pendingMutation.kind)}
-      </Badge>
-    );
-  }
-
-  const config = statusConfig[status] || statusConfig.Unknown;
-
-  return (
-    <Badge variant="outline" className={config.className}>
-      {config.label}
-    </Badge>
-  );
+  return <StatusBadge status={status} config={statusConfig} resourceId={vmId} />;
 }

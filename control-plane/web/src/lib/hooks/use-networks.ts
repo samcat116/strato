@@ -8,14 +8,6 @@ export function useNetworks(projectId?: string) {
   });
 }
 
-export function useNetwork(id: string) {
-  return useQuery({
-    queryKey: ["networks", id],
-    queryFn: () => networksApi.get(id),
-    enabled: !!id,
-  });
-}
-
 export function useInvalidateNetworks() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries({ queryKey: ["networks"] });

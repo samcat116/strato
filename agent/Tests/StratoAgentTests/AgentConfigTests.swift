@@ -25,7 +25,6 @@ struct AgentConfigTests {
     func agentConfigInitialization() {
         let config = AgentConfig(
             controlPlaneURL: "ws://localhost:8080/agent/ws",
-            qemuSocketDir: "/var/run/qemu",
             logLevel: "debug",
             networkMode: .ovn,
             enableHVF: false,
@@ -33,7 +32,6 @@ struct AgentConfigTests {
         )
 
         #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
-        #expect(config.qemuSocketDir == "/var/run/qemu")
         #expect(config.logLevel == "debug")
         #expect(config.networkMode == .ovn)
         #expect(config.enableHVF == false)
@@ -47,7 +45,6 @@ struct AgentConfigTests {
         )
 
         #expect(config.controlPlaneURL == "ws://test:8080/ws")
-        #expect(config.qemuSocketDir == nil)
         #expect(config.logLevel == nil)
         #expect(config.networkMode == nil)
         #expect(config.enableHVF == nil)
@@ -459,7 +456,6 @@ struct AgentConfigTests {
         try withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
-                qemu_socket_dir = "/var/run/qemu"
                 log_level = "info"
                 network_mode = "ovn"
                 enable_hvf = false
@@ -472,7 +468,6 @@ struct AgentConfigTests {
             let config = try AgentConfig.load(from: configPath)
 
             #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
-            #expect(config.qemuSocketDir == "/var/run/qemu")
             #expect(config.logLevel == "info")
             #expect(config.networkMode == .ovn)
             #expect(config.enableHVF == false)
@@ -752,7 +747,6 @@ struct AgentConfigTests {
             let config = try AgentConfig.load(from: configPath)
 
             #expect(config.controlPlaneURL == "ws://minimal:8080/ws")
-            #expect(config.qemuSocketDir == nil)
             #expect(config.logLevel == nil)
             #expect(config.networkMode == nil)
         }
@@ -790,7 +784,6 @@ struct AgentConfigTests {
     func loadConfigMissingRequiredField() throws {
         try withTempDirectory { tempDirectory in
             let tomlContent = """
-                qemu_socket_dir = "/var/run/qemu"
                 log_level = "debug"
                 """
 
@@ -861,7 +854,6 @@ struct AgentConfigTests {
         // for an unset key — a divergent copy here silently wins, because it
         // leaves the field non-nil and the `?? AgentConfig.default*` fallback
         // in StratoAgent is never reached.
-        #expect(config.qemuSocketDir == AgentConfig.defaultQemuSocketDir)
         #expect(config.vmStoragePath == AgentConfig.defaultVMStoragePath)
     }
 
@@ -910,7 +902,6 @@ struct AgentConfigTests {
     func agentConfigEncodingDecoding() throws {
         let originalConfig = AgentConfig(
             controlPlaneURL: "ws://test:9000/ws",
-            qemuSocketDir: "/custom/qemu",
             logLevel: "trace",
             networkMode: .user,
             enableHVF: true,
@@ -924,7 +915,6 @@ struct AgentConfigTests {
         let decodedConfig = try decoder.decode(AgentConfig.self, from: data)
 
         #expect(decodedConfig.controlPlaneURL == originalConfig.controlPlaneURL)
-        #expect(decodedConfig.qemuSocketDir == originalConfig.qemuSocketDir)
         #expect(decodedConfig.logLevel == originalConfig.logLevel)
         #expect(decodedConfig.networkMode == originalConfig.networkMode)
         #expect(decodedConfig.enableHVF == originalConfig.enableHVF)
@@ -937,9 +927,6 @@ struct AgentConfigTests {
     func agentConfigErrorDescriptions() {
         let fileNotFoundError = AgentConfigError.configFileNotFound("/test/path")
         #expect(fileNotFoundError.errorDescription?.contains("/test/path") == true)
-
-        let invalidTOMLError = AgentConfigError.invalidTOMLFormat("syntax error")
-        #expect(invalidTOMLError.errorDescription?.contains("syntax error") == true)
 
         let missingFieldError = AgentConfigError.missingRequiredField("test_field")
         #expect(missingFieldError.errorDescription?.contains("test_field") == true)

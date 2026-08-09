@@ -74,39 +74,55 @@ struct BoundResourceTextColumns: AsyncMigration {
     }()
 
     func prepare(on database: Database) async throws {
+        try await Self.bound(Self.columns, on: database)
+    }
+
+    func revert(on database: Database) async throws {
+        try await Self.unbound(Self.columns, on: database)
+    }
+
+    /// Install the length `CHECK` for each column, as described on the type.
+    ///
+    /// Static and taking its columns as an argument so a later migration
+    /// bounding a table this one predates (`BoundDNSTextColumns`) inherits the
+    /// pre-scan, the `NOT VALID` two-step and the retry-safe drop rather than
+    /// re-deriving them — the parts of this that are easy to get subtly wrong.
+    static func bound(_ columns: [BoundedColumn], on database: Database) async throws {
         let sql = try PostgresMigrationSQL.database(database)
 
-        for column in Self.columns {
-            try await Self.assertRowsFit(column, on: sql)
+        for column in columns {
+            try await assertRowsFit(column, on: sql)
             // Drop-then-add so a retry after an interrupted, non-transactional
             // run is safe.
             try await PostgresMigrationSQL.execute(
-                "ALTER TABLE \(Self.quoted(column.table)) DROP CONSTRAINT IF EXISTS \(Self.quoted(column.constraintName))",
+                "ALTER TABLE \(quoted(column.table)) DROP CONSTRAINT IF EXISTS \(quoted(column.constraintName))",
                 on: sql)
             // A NULL fails no CHECK — `char_length(NULL)` is NULL, and only an
             // outright FALSE rejects a row — so the nullable columns here need
             // no `IS NULL` arm.
             try await PostgresMigrationSQL.execute(
                 """
-                ALTER TABLE \(Self.quoted(column.table)) ADD CONSTRAINT \(Self.quoted(column.constraintName)) \
-                CHECK (char_length(\(Self.quoted(column.column))) <= \(column.limit)) NOT VALID
+                ALTER TABLE \(quoted(column.table)) ADD CONSTRAINT \(quoted(column.constraintName)) \
+                CHECK (char_length(\(quoted(column.column))) <= \(column.limit)) NOT VALID
                 """,
                 on: sql)
             // The scan, under a lock ordinary traffic does not contend with.
             try await PostgresMigrationSQL.execute(
                 """
-                ALTER TABLE \(Self.quoted(column.table)) \
-                VALIDATE CONSTRAINT \(Self.quoted(column.constraintName))
+                ALTER TABLE \(quoted(column.table)) \
+                VALIDATE CONSTRAINT \(quoted(column.constraintName))
                 """,
                 on: sql)
         }
     }
 
-    func revert(on database: Database) async throws {
+    /// Drop those constraints again. `IF EXISTS`, so reverting a partially
+    /// applied run is not itself a failure.
+    static func unbound(_ columns: [BoundedColumn], on database: Database) async throws {
         let sql = try PostgresMigrationSQL.database(database)
-        for column in Self.columns {
+        for column in columns {
             try await PostgresMigrationSQL.execute(
-                "ALTER TABLE \(Self.quoted(column.table)) DROP CONSTRAINT IF EXISTS \(Self.quoted(column.constraintName))",
+                "ALTER TABLE \(quoted(column.table)) DROP CONSTRAINT IF EXISTS \(quoted(column.constraintName))",
                 on: sql)
         }
     }

@@ -701,46 +701,6 @@ final class FloatingIPControllerTests {
         }
     }
 
-    @Test("Attach is refused when the realizing agent predates the floating IP protocol")
-    func attachOldAgentGate() async throws {
-        try await withFloatingIPTestApp { app, _, org, project, token in
-            let pool = try await self.createPool(app: app, org: org, token: token)
-            let network = LogicalNetwork(
-                name: "old-agent-net", subnet: "10.80.0.0/24", gateway: "10.80.0.1",
-                projectID: try project.requireID(), externalAccess: true)
-            try await network.save(on: app.db)
-            let (vm, _) = try await self.createVMWithNIC(
-                app: app, org: org, project: project, network: network, fixedIP: "10.80.0.5")
-            try await self.placeVM(vm, app: app, org: org, protocolVersion: 11, named: "old-fip-agent")
-
-            var fipId: UUID?
-            try await app.test(.POST, "/api/floating-ips") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(["poolId": pool.id.uuidString, "projectId": project.id!.uuidString])
-            } afterResponse: { res in
-                fipId = try res.content.decode(FloatingIPResponse.self).id
-            }
-
-            try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(["vmId": vm.id!.uuidString])
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-            }
-
-            // The same attach succeeds once the agent speaks the protocol.
-            let agent = try await Agent.query(on: app.db).filter(\.$name == "old-fip-agent").first()
-            agent?.wireProtocolVersion = WireProtocol.currentVersion
-            try await agent?.save(on: app.db)
-            try await app.test(.POST, "/api/floating-ips/\(fipId!)/attach") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(["vmId": vm.id!.uuidString])
-            } afterResponse: { res in
-                #expect(res.status == .ok)
-            }
-        }
-    }
-
     @Test("Attach requires update permission on the target VM")
     func attachRequiresVMPermission() async throws {
         try await withFloatingIPTestApp { app, _, org, project, token in

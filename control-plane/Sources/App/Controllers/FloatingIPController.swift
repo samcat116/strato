@@ -496,21 +496,10 @@ struct FloatingIPController: RouteCollection {
                     reason: "Pool '\(pool.name)' is pinned to a different site than network '\(network.name)'")
             }
         }
-        // Rolling-upgrade gate: a pre-v12 realizing agent decodes the sync but
-        // silently ignores `floatingIPs`, so the API would report an attached
-        // address that no NAT rule ever backs. Refuse rather than strand — and
-        // refuse *unplaced* VMs outright, because the scheduler has no
-        // floating-IP capability requirement: an attach accepted now could
-        // land the VM on a pre-v12 agent later, reopening the same hole
-        // behind the gate's back.
-        let realizer = try await Self.requireNATRealizingAgent(for: vm, on: req.db)
-        guard WireProtocol.supportsFloatingIPs(realizer.wireProtocolVersion ?? 0) else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Agent '\(realizer.name)' registered with a protocol too old for floating IPs; upgrade it first"
-            )
-        }
+        // Refuse *unplaced* VMs outright: an attach accepted now has no
+        // realizing agent to carry the NAT rule, and the API would report an
+        // attached address nothing backs.
+        _ = try await Self.requireNATRealizingAgent(for: vm, on: req.db)
         // One floating IP per NIC: two rules would fight over the NIC's
         // outbound SNAT. This read is the friendly-error fast path; the
         // partial unique index on interface_id is the authority — two

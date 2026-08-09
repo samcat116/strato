@@ -265,12 +265,6 @@ final class VM: Model, @unchecked Sendable {
     @Enum(key: "serial_mode")
     var serialMode: ConsoleMode
 
-    @OptionalField(key: "console_socket")
-    var consoleSocket: String?
-
-    @OptionalField(key: "serial_socket")
-    var serialSocket: String?
-
     // Timestamps
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?

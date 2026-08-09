@@ -92,7 +92,7 @@ struct DNSController: RouteCollection {
     @Sendable
     func createZone(req: Request) async throws -> DNSZoneResponse {
         let user = try req.auth.require(User.self)
-        let request = try req.content.decode(CreateDNSZoneRequest.self)
+        let request = try req.content.decodeValidated(CreateDNSZoneRequest.self)
 
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
@@ -146,7 +146,7 @@ struct DNSController: RouteCollection {
     @Sendable
     func updateZone(req: Request) async throws -> DNSZoneResponse {
         let zone = try await fetchZone(req: req, permission: "update")
-        let request = try req.content.decode(UpdateDNSZoneRequest.self)
+        let request = try req.content.decodeValidated(UpdateDNSZoneRequest.self)
         let originalName = zone.name
 
         if let requestedName = request.name {
@@ -240,7 +240,7 @@ struct DNSController: RouteCollection {
         let user = try req.auth.require(User.self)
         let zone = try await fetchZone(req: req, permission: "create")
         let zoneID = try zone.requireID()
-        let request = try req.content.decode(CreateDNSRecordRequest.self)
+        let request = try req.content.decodeValidated(CreateDNSRecordRequest.self)
 
         let name = try DNSName.normalizedRecordName(request.name ?? DNSName.apex)
         let value = try DNSZoneService.validatedValue(request.value, type: request.type)
@@ -311,7 +311,7 @@ struct DNSController: RouteCollection {
     func updateRecord(req: Request) async throws -> DNSRecordResponse {
         let (zone, record) = try await fetchRecord(req: req, permission: "update")
         let zoneID = try zone.requireID()
-        let request = try req.content.decode(UpdateDNSRecordRequest.self)
+        let request = try req.content.decodeValidated(UpdateDNSRecordRequest.self)
 
         if let value = request.value {
             record.value = try DNSZoneService.validatedValue(value, type: record.type)

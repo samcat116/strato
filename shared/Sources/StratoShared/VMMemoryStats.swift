@@ -23,10 +23,6 @@ public struct VMMemoryStats: Codable, Sendable, Equatable {
     /// is actually using.
     public let availableBytes: Int64
 
-    /// Strictly free pages (`stat-free-memory`), excluding reclaimable caches,
-    /// when the guest driver reports it. Nil when unreported.
-    public let freeBytes: Int64?
-
     /// Memory the balloon currently leaves to the guest (`query-balloon`'s
     /// `actual`), in bytes — the host-side view of an operator's balloon
     /// target (issue #567 phase 2). Equal to the VM's memory grant on a VM
@@ -43,12 +39,10 @@ public struct VMMemoryStats: Codable, Sendable, Equatable {
     public init(
         totalBytes: Int64,
         availableBytes: Int64,
-        freeBytes: Int64? = nil,
         balloonActualBytes: Int64? = nil
     ) {
         self.totalBytes = totalBytes
         self.availableBytes = availableBytes
-        self.freeBytes = freeBytes
         self.balloonActualBytes = balloonActualBytes
     }
 }

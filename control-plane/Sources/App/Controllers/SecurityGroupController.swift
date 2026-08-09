@@ -613,16 +613,8 @@ struct SecurityGroupController: RouteCollection {
             return
         case .unauthored(let refusal):
             throw refusal
-        case .realizers(let agents):
-            for agent in agents {
-                guard WireProtocol.supportsSecurityGroups(agent.wireProtocolVersion ?? 0) else {
-                    throw Abort(
-                        .conflict,
-                        reason:
-                            "Agent '\(agent.name)' registered with a protocol too old for security groups; upgrade it first"
-                    )
-                }
-            }
+        case .realizers:
+            return
         }
     }
 

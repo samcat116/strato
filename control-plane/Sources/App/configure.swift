@@ -850,12 +850,24 @@ public func configure(_ app: Application) async throws {
     // for, so a grow the agent has refused stops reading as one that landed.
     app.migrations.add(AddVolumeObservedSize())
 
+    // STR-198: the same backstop for the DNS model's text columns, which the
+    // STR-195 cut left out. A follow-on rather than four more entries in
+    // `BoundResourceTextColumns`, which has already run on every existing
+    // deployment — see `BoundDNSTextColumns`.
+    app.migrations.add(BoundDNSTextColumns())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.
     app.migrations.add(DropResourceOperations())
 
     try await app.autoMigrate()
+
+    // STR-186 prevents new tenant IPv6 subnets from overlapping the ULA space
+    // used by metadata and per-network resolvers. Existing rows cannot be
+    // renumbered safely in place, so name every collision at each startup until
+    // its operator remediates it.
+    try await NetworkServiceSpaceAudit.warnAboutCollidingNetworks(on: app.db, logger: app.logger)
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
     // curated registry. Runs every startup so registry changes land with the

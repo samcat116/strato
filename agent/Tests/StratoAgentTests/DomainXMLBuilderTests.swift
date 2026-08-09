@@ -87,7 +87,7 @@ struct DomainXMLBuilderTests {
         VMSpec(
             cpus: cpus, maxCpus: maxCpus, memoryBytes: memoryBytes, maxMemoryBytes: maxMemoryBytes,
             boot: boot, machine: machine,
-            console: ConsoleSpec(console: .socket, serial: .socket, graphics: graphics))
+            console: ConsoleSpec(graphics: graphics))
     }
 
     static func input(

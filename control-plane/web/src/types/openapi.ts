@@ -6280,6 +6280,7 @@ export interface components {
             /** @description Owner name relative to the zone; omitted means the apex (`@`). A leftmost `*` label is a wildcard, including a bare `*` for the zone-apex wildcard. */
             name?: string;
             type: components["schemas"]["DNSRecordType"];
+            /** @description Bounded far above what any record type accepts — each type's real ceiling comes from its own grammar (255 bytes for TXT, a domain name for CNAME/PTR/SRV, an address for A/AAAA). */
             value: string;
             /** @default 300 */
             ttl: number;

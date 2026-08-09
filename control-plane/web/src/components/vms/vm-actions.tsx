@@ -27,12 +27,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { vmsApi } from "@/lib/api/vms";
-import { friendlyErrorMessage } from "@/lib/errors";
-import {
-  acceptedMutation,
-  usePendingMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
+import { usePendingMutation } from "@/lib/stores/mutations-store";
 import { toast } from "sonner";
 import type { VM, OperationKind } from "@/types/api";
 
@@ -82,10 +78,12 @@ const kindToAction: Record<OperationKind, VMAction | null> = {
 };
 
 export function VMActions({ vm, onActionComplete }: VMActionsProps) {
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submittingAction, setSubmittingAction] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const watch = useMutationsStore((state) => state.watch);
+  const {
+    isLoading: isSubmitting,
+    busyKey: submittingAction,
+    run,
+  } = useAcceptedMutation();
   const pendingMutation = usePendingMutation(vm.id);
 
   // Busy while the request is in flight OR while an accepted mutation is still
@@ -95,50 +93,43 @@ export function VMActions({ vm, onActionComplete }: VMActionsProps) {
     submittingAction ??
     (pendingMutation ? kindToAction[pendingMutation.kind] : null);
 
-  const handleAction = async (action: VMAction) => {
-    setIsSubmitting(true);
-    setSubmittingAction(action);
-
-    try {
-      // Each call returns 202; the MutationWatcher follows it to a terminal
-      // state and toasts the outcome.
-      watch(
-        acceptedMutation(await vmsApi[action](vm.id), {
-          kind: actionToKind[action],
-          resourceKind: "virtual_machine",
-          resourceName: vm.name,
-        })
-      );
-
-      switch (action) {
-        case "start":
-          toast.success(`Starting ${vm.name}`);
-          break;
-        case "stop":
-          toast.success(`Stopping ${vm.name}`);
-          break;
-        case "restart":
-          toast.success(`Restarting ${vm.name}`);
-          break;
-        case "pause":
-          toast.success(`Pausing ${vm.name}`);
-          break;
-        case "resume":
-          toast.success(`Resuming ${vm.name}`);
-          break;
-        case "delete":
-          setShowDeleteConfirm(false);
-          toast.success(`Deleting ${vm.name}`);
-          break;
-      }
-      onActionComplete?.();
-    } catch (error) {
-      toast.error(friendlyErrorMessage(error, `Failed to ${action} VM`));
-    } finally {
-      setIsSubmitting(false);
-      setSubmittingAction(null);
-    }
-  };
+  const handleAction = (action: VMAction) =>
+    // Each call returns 202; the MutationWatcher follows it to a terminal
+    // state and toasts the outcome.
+    run({
+      busyKey: action,
+      request: () => vmsApi[action](vm.id),
+      watch: {
+        kind: actionToKind[action],
+        resourceKind: "virtual_machine",
+        resourceName: vm.name,
+      },
+      errorMessage: `Failed to ${action} VM`,
+      onSuccess: () => {
+        switch (action) {
+          case "start":
+            toast.success(`Starting ${vm.name}`);
+            break;
+          case "stop":
+            toast.success(`Stopping ${vm.name}`);
+            break;
+          case "restart":
+            toast.success(`Restarting ${vm.name}`);
+            break;
+          case "pause":
+            toast.success(`Pausing ${vm.name}`);
+            break;
+          case "resume":
+            toast.success(`Resuming ${vm.name}`);
+            break;
+          case "delete":
+            setShowDeleteConfirm(false);
+            toast.success(`Deleting ${vm.name}`);
+            break;
+        }
+        onActionComplete?.();
+      },
+    });
 
   // Mirrors the backend's VM.canStart: `Error` is startable so an operator can
   // recover a VM whose state could not be confirmed (e.g. a lost start).

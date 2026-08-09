@@ -126,6 +126,23 @@ support it.
 split-horizon isn't a retrofit onto a column that doesn't exist. Nothing
 consumes it until external publication.
 
+### Text bounds
+
+Zone and record text is bounded at the request boundary and again by a `CHECK`
+constraint on the column (STR-198, `BoundDNSTextColumns`), on the terms
+`docs/api-reference.md` describes for every other resource. Names take the
+*grammar's* ceiling rather than the generic 128 — `DNSName.maxNameLength`, RFC
+1035's 253 — because a name held to 128 would refuse zones that resolve today. A
+record's `value` is bounded by its type in `DNSZoneService.validatedValue`, and
+the column carries only the generic free-text ceiling above it, deliberately
+loose: a backstop that refused RDATA the API accepted would turn a caller's
+success into a 500.
+
+This matters more here than for a name that stays in a table. A zone name is
+rendered into every FQDN the zone answers on, realized into the OVN `DNS` table
+and into a per-network CoreDNS zone, and compared on every reconcile through the
+`recordsHash` in `external_ids`.
+
 ## Assembly: derived ∪ authored
 
 A zone's record set is computed on demand and **never stored**

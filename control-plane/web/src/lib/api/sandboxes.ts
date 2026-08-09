@@ -5,7 +5,6 @@ import { buildLogQueryString } from "./logs";
 import type {
   Sandbox,
   CreateSandboxRequest,
-  UpdateSandboxRequest,
   SandboxExecRequest,
   SandboxExecSession,
   SandboxLogEntry,
@@ -42,10 +41,6 @@ export const sandboxesApi = {
     return api.post<AcceptedMutation<Sandbox>>("/api/sandboxes", data);
   },
 
-  update(id: string, data: UpdateSandboxRequest): Promise<Sandbox> {
-    return api.put<Sandbox>(`/api/sandboxes/${id}`, data);
-  },
-
   delete(id: string): Promise<AcceptedMutation<Sandbox>> {
     return api.delete<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}`);
   },
@@ -60,10 +55,6 @@ export const sandboxesApi = {
 
   restart(id: string): Promise<AcceptedMutation<Sandbox>> {
     return api.post<AcceptedMutation<Sandbox>>(`/api/sandboxes/${id}/restart`);
-  },
-
-  getStatus(id: string): Promise<Sandbox> {
-    return api.get<Sandbox>(`/api/sandboxes/${id}/status`);
   },
 
   listSnapshots(id: string): Promise<SandboxSnapshot[]> {

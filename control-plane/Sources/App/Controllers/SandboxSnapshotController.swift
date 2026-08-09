@@ -243,23 +243,10 @@ extension SandboxController {
         guard let targetAgent = await req.application.agentService.getAgentInfo(agentId) else {
             throw Abort(.conflict, reason: "Sandbox's agent '\(agentId)' is unknown")
         }
-        // Both signals, the issue #415 rule the capture path also follows: the
-        // wire version proves the agent applies the nonce, the capability proves
-        // a backend that can load a checkpoint is usable on that host.
-        //
-        // With `sandbox_restore` gone (STR-151) there is no fallback path, and a
-        // pre-v34 agent would ignore the nonce and report the bumped generation
-        // as converged — the API claiming a rewind that never happened. A host
-        // with no sandbox-snapshot backend fails later still, as a `degraded`
-        // condition an hour after admission. Both are refused here instead.
-        guard WireProtocol.supportsEdgeNonces(targetAgent.wireProtocolVersion ?? 0) else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Agent '\(agentId)' is too old to apply restores from the desired-state sync "
-                    + "(wire protocol v\(WireProtocol.edgeNonceMinimumVersion) required). Upgrade the agent."
-            )
-        }
+        // The issue #415 rule the capture path also follows: the capability
+        // proves a backend that can load a checkpoint is usable on that host.
+        // A host without one fails later still, as a `degraded` condition an
+        // hour after admission — refused here instead.
         guard targetAgent.capabilities.contains(SnapshotArtifactKind.sandboxSnapshot.agentCapability)
         else {
             throw Abort(

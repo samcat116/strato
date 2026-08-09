@@ -6,7 +6,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Cpu, Rows3, Search, type LucideIcon } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { agentsApi, vmsApi } from "@/lib/api";
+import { agentsApi } from "@/lib/api/agents";
+import { vmsApi } from "@/lib/api/vms";
 import { useAuth, useOrganization } from "@/providers";
 import { flattenNav } from "./nav";
 

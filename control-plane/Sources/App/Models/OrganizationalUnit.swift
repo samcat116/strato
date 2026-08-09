@@ -36,9 +36,6 @@ final class OrganizationalUnit: Model, @unchecked Sendable {
     var updatedAt: Date?
 
     // Relationships
-    @Children(for: \.$parentOU)
-    var childOUs: [OrganizationalUnit]
-
     @Children(for: \.$organizationalUnit)
     var projects: [Project]
 

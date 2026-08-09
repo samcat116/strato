@@ -46,9 +46,6 @@ final class DNSZone: Model, @unchecked Sendable {
     @Children(for: \.$zone)
     var records: [DNSRecord]
 
-    @Children(for: \.$zone)
-    var networkAttachments: [DNSZoneNetwork]
-
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -76,9 +73,15 @@ extension DNSZone: Content {}
 
 // MARK: - Request/Response DTOs
 
-struct CreateDNSZoneRequest: Content {
+struct CreateDNSZoneRequest: Content, ValidatedRequestBody {
     /// Fully-qualified zone name, e.g. `acme.internal` or `corp.example.com`.
-    let name: String
+    ///
+    /// Bounded here as well as parsed by `DNSName.normalizedZoneName` (STR-198),
+    /// because this name leaves the database: `DNSZoneAssembler` renders it into
+    /// every FQDN in the zone, the topology authority writes those into the OVN
+    /// `DNS` table referenced from `Logical_Switch.dns_records`, and the network
+    /// resolver serves them. The ceiling is the *grammar's* — see `validate()`.
+    var name: String
     let description: String?
     /// Required: there is no default project (issue #1059). Optional here so
     /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
@@ -90,15 +93,43 @@ struct CreateDNSZoneRequest: Content {
         self.description = description
         self.projectId = projectId
     }
+
+    /// The zone name is held to `DNSName.maxNameLength`, not `Validate.nameLength`.
+    ///
+    /// `Validate`'s 128 was chosen so that adopting it fleet-wide could not make
+    /// something that already fits stop fitting, and a zone name is the case
+    /// where it would: RFC 1035 permits 253 characters, `normalizedZoneName`
+    /// accepts them today, and a deep subdomain zone is an ordinary thing to
+    /// serve. This is the "field with a grammar of its own" carve-out on
+    /// `Validate` — the ceiling comes from the grammar, and what the DTO adds is
+    /// that it is applied at decode, before a megabyte of name is lowercased and
+    /// split into labels, and that create and update cannot drift apart.
+    ///
+    /// Measured before `normalizedZoneName` strips the root dot, so a
+    /// 253-character name written with one is one character over. That is the
+    /// price of bounding ahead of the parser rather than behind it, and one
+    /// character at the RFC ceiling is a cheap thing to pay it with.
+    ///
+    /// `description` has no grammar and had no bound at all, which is the actual
+    /// hole this closes.
+    mutating func validate() throws {
+        name = try Validate.name(name, "name", max: DNSName.maxNameLength)
+        try Validate.text(description)
+    }
 }
 
-struct UpdateDNSZoneRequest: Content {
-    let name: String?
+struct UpdateDNSZoneRequest: Content, ValidatedRequestBody {
+    var name: String?
     let description: String?
 
     init(name: String? = nil, description: String? = nil) {
         self.name = name
         self.description = description
+    }
+
+    mutating func validate() throws {
+        name = try Validate.name(name, "name", max: DNSName.maxNameLength)
+        try Validate.text(description)
     }
 }
 

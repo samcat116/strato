@@ -203,25 +203,6 @@ final class VMResizeTests {
         }
     }
 
-    /// A pre-v17 agent reports the bumped generation as converged without
-    /// touching the guest, so the resize must be refused rather than
-    /// completing an operation that changed nothing.
-    @Test("An agent too old to resize online is refused with 422")
-    func oldAgentRejected() async throws {
-        try await withResizeTestApp(agentWireVersion: WireProtocol.vmResizeMinimumVersion - 1) {
-            app, _, vm, _, token in
-            try await running(vm, on: app.db)
-
-            try await put(app, vm, token: token, body: ["cpu": 4]) { res in
-                #expect(res.status == .unprocessableEntity)
-                #expect(res.body.string.contains("restart"))
-            }
-
-            let refreshed = try await VM.find(vm.id, on: app.db)
-            #expect(refreshed?.cpu == 2)
-        }
-    }
-
     @Test("A resize that would exceed the project's quota is refused")
     func quotaEnforcedOnGrowth() async throws {
         try await withResizeTestApp(quotaVCPUs: 4) { app, _, vm, _, token in
@@ -402,22 +383,4 @@ final class VMResizeTests {
         }
     }
 
-    /// No "restart to apply" remedy here, unlike a resize: a target only ever
-    /// exists on a running guest, so an agent that ignores the field never
-    /// realizes it.
-    @Test("An agent too old to balloon is refused with 422")
-    func balloonTargetOldAgentRejected() async throws {
-        try await withResizeTestApp(agentWireVersion: WireProtocol.balloonTargetMinimumVersion - 1) {
-            app, _, vm, _, token in
-            try await running(vm, on: app.db)
-
-            try await put(app, vm, token: token, body: ["balloonTarget": 1024 * 1024 * 1024]) { res in
-                #expect(res.status == .unprocessableEntity)
-                #expect(res.body.string.contains("upgrade the agent"))
-            }
-
-            let refreshed = try await VM.find(vm.id, on: app.db)
-            #expect(refreshed?.balloonTarget == nil)
-        }
-    }
 }

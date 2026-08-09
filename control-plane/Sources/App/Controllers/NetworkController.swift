@@ -195,13 +195,6 @@ struct NetworkController: RouteCollection {
             // same transaction as the row (issue #477).
             let creatorID = user.id!
             try await req.db.transaction { db in
-                // Inside the transaction, under a name lock: two concurrent
-                // cross-project creates of the same name would otherwise both
-                // observe "no collision" and both commit, since the unique
-                // index is per project.
-                try await LogicalNetworkService.lockName(name, on: db)
-                try await Self.assertNameSafeForFleet(
-                    name: name, projectId: projectId, siteId: request.siteId, on: db)
                 // Inside the same transaction as the row: the allocator's
                 // advisory lock is transaction-scoped, so allocating outside it
                 // would release the lock before the index it chose was durable.
@@ -497,13 +490,6 @@ struct NetworkController: RouteCollection {
             let pendingRename = renamedTo
             let pendingResolverIndex = allocatesResolverIndex
             try await req.db.transaction { db in
-                // A rename into a cross-project collision needs the same
-                // in-transaction check under the same name lock as create.
-                if let renamedTo = pendingRename {
-                    try await LogicalNetworkService.lockName(renamedTo, on: db)
-                    try await Self.assertNameSafeForFleet(
-                        name: renamedTo, projectId: network.$project.id, siteId: network.$site.id, on: db)
-                }
                 if pendingResolverIndex {
                     _ = try await ResolverAddressAllocator.ensureIndex(for: network, on: db)
                 }
@@ -579,50 +565,6 @@ struct NetworkController: RouteCollection {
             .join(parent: \.$interface)
             .filter(VMNetworkInterface.self, \.$logicalNetwork.$id == networkID)
             .count()
-    }
-
-    /// Refuses a network name that another project already uses, when any agent
-    /// that would realize it is too old to tell the two apart.
-    ///
-    /// A pre-v21 agent keys its managed `DHCP_Options` rows on
-    /// `(network-name, cidr)` rather than on the network's id, so two
-    /// same-named networks would share one row: DNS or lease edits on one would
-    /// land on the other, and disabling DHCP on one would delete the other's.
-    /// The check lives at *create* rather than at VM placement because topology
-    /// convergence programs DHCP for every network the authority realizes,
-    /// whether or not a VM ever lands on it.
-    ///
-    /// Scoped to the fleet that could realize the network: its site's agents
-    /// when pinned, otherwise every agent (an unpinned network can be realized
-    /// on any host a VM lands on).
-    ///
-    /// This is one half of the guard. It cannot see an agent that joins *later*
-    /// — a rollback to an older binary, or a newly-enrolled one — so
-    /// `AgentService.registerAgent` runs the mirror check and refuses such a
-    /// registration.
-    static func assertNameSafeForFleet(
-        name: String, projectId: UUID, siteId: UUID?, on db: Database
-    ) async throws {
-        let collides = try await LogicalNetwork.query(on: db)
-            .filter(\.$name == name)
-            .filter(\.$project.$id != projectId)
-            .count()
-        guard collides > 0 else { return }
-
-        var query = Agent.query(on: db)
-        if let siteId { query = query.filter(\.$site.$id == siteId) }
-        let stale = try await query.all()
-            .filter { !WireProtocol.supportsProjectNetworkIsolation($0.wireProtocolVersion ?? 0) }
-        guard let oldest = stale.min(by: { ($0.wireProtocolVersion ?? 0) < ($1.wireProtocolVersion ?? 0) })
-        else { return }
-
-        throw Abort(
-            .conflict,
-            reason: "Another project already has a network named '\(name)', and agent "
-                + "'\(oldest.name)' speaks protocol v\(oldest.wireProtocolVersion ?? 0) — too old to keep "
-                + "two same-named networks' DHCP configuration apart (needs "
-                + "v\(WireProtocol.projectNetworkIsolationMinimumVersion)). Upgrade the agent or choose "
-                + "a different name.")
     }
 
     /// Whether two CIDRs overlap. For CIDRs, ranges are either disjoint or one
@@ -764,6 +706,23 @@ struct NetworkController: RouteCollection {
                 .badRequest,
                 reason: "Invalid IPv6 subnet '\(subnet6)': multicast, link-local, loopback, and "
                     + "unspecified prefixes are not routable tenant networks")
+        }
+        // The v4 metadata address is link-local and can never collide with a
+        // tenant subnet; its v6 counterpart is a ULA drawn from the same space
+        // tenant subnets are (STR-186). A network overlapping it would publish
+        // the service localport inside its own address space and — worse —
+        // inherit the metadata and resolver security-group carve-outs, which
+        // sit above every rule-derived ACL, as non-overridable allows to a
+        // *tenant* address. Reject the whole documented `/32` rather than the
+        // containing /64: it is how the space is described everywhere else,
+        // and it covers the per-network resolvers as well.
+        if NetworkResolverEndpoint.v6SpaceCIDR.overlaps(cidr) {
+            throw Abort(
+                .badRequest,
+                reason: "IPv6 subnet '\(trimmed)' overlaps \(NetworkResolverEndpoint.v6Space), which is "
+                    + "reserved for Strato's own link-local services (instance metadata at "
+                    + "\(InstanceMetadataEndpoint.addressV6) and the per-network DNS resolvers); "
+                    + "choose a different ULA prefix, or omit subnet6 to have one generated")
         }
 
         let resolvedGateway: IPv6Address

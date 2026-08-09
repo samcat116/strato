@@ -150,8 +150,8 @@ struct CoordinationServiceTests {
             await service.reserveCapacity(
                 agentId: "agent-a", vmId: "vm-1", amounts: wholeAgent, capacity: capacity) == true)
 
-        let reserved = await service.activeReservations(agentId: "agent-a")
-        #expect(reserved == wholeAgent)
+        let reserved = await service.activeReservations(agentIds: ["agent-a"])
+        #expect(reserved["agent-a"] == wholeAgent)
     }
 
     @Test("Reservations expire after their TTL")
@@ -186,8 +186,8 @@ struct CoordinationServiceTests {
         // vm-1's reservation is released; vm-2's placement is still in flight.
         await service.releaseReservations(agentId: "agent-a", vmIds: ["vm-1", "vm-9"])
 
-        let reserved = await service.activeReservations(agentId: "agent-a")
-        #expect(reserved == half)
+        let reserved = await service.activeReservations(agentIds: ["agent-a"])
+        #expect(reserved["agent-a"] == half)
     }
 
     @Test("Active reservations sum across VMs and are scoped per agent")
@@ -198,11 +198,9 @@ struct CoordinationServiceTests {
         _ = await service.reserveCapacity(agentId: "agent-a", vmId: "vm-1", amounts: half, capacity: capacity)
         _ = await service.reserveCapacity(agentId: "agent-a", vmId: "vm-2", amounts: half, capacity: capacity)
 
-        let reservedA = await service.activeReservations(agentId: "agent-a")
-        #expect(reservedA == ReservationAmounts(cpu: 4, memory: 8192, disk: 50000))
-
-        let reservedB = await service.activeReservations(agentId: "agent-b")
-        #expect(reservedB == .zero)
+        let reserved = await service.activeReservations(agentIds: ["agent-a", "agent-b"])
+        #expect(reserved["agent-a"] == ReservationAmounts(cpu: 4, memory: 8192, disk: 50000))
+        #expect(reserved["agent-b"] == .zero)
     }
 
     @Test("Reservation totals for eligible agents are returned as one batch")

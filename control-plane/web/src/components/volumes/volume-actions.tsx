@@ -28,13 +28,9 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { volumesApi } from "@/lib/api/volumes";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { volumeBytesAtRest } from "@/lib/volume-guards";
-import { toast } from "sonner";
-import {
-  acceptedMutation,
-  usePendingMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
+import { usePendingMutation } from "@/lib/stores/mutations-store";
 import type { Volume } from "@/types/api";
 import { AttachVolumeDialog } from "./attach-volume-dialog";
 import { ResizeVolumeDialog } from "./resize-volume-dialog";
@@ -49,56 +45,41 @@ interface VolumeActionsProps {
 type VolumeDialog = "attach" | "resize" | "snapshot" | "clone" | "delete";
 
 export function VolumeActions({ volume, onActionComplete }: VolumeActionsProps) {
-  const [isLoading, setIsLoading] = useState(false);
   const [openDialog, setOpenDialog] = useState<VolumeDialog | null>(null);
-  const watch = useMutationsStore((state) => state.watch);
+  const { isLoading, run } = useAcceptedMutation();
   const pendingMutation = usePendingMutation(volume.id);
 
   // Detach and delete are accepted, not performed (backend STR-148): the toast
   // comes from MutationWatcher once the volume's `conditions` say the agent
   // converged, not from the 202 that only says the request was recorded.
-  const handleDetach = async () => {
-    setIsLoading(true);
-    try {
-      watch(
-        acceptedMutation(await volumesApi.detach(volume.id!), {
-          kind: "detach",
-          resourceKind: "volume",
-          resourceId: volume.id!,
-          resourceName: volume.name,
-        })
-      );
-      onActionComplete?.();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to detach volume"
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const handleDetach = () =>
+    run({
+      request: () => volumesApi.detach(volume.id!),
+      watch: {
+        kind: "detach",
+        resourceKind: "volume",
+        resourceId: volume.id!,
+        resourceName: volume.name,
+      },
+      errorMessage: "Failed to detach volume",
+      onSuccess: () => onActionComplete?.(),
+    });
 
-  const handleDelete = async () => {
-    setIsLoading(true);
-    try {
-      watch(
-        acceptedMutation(await volumesApi.delete(volume.id!), {
-          kind: "delete",
-          resourceKind: "volume",
-          resourceId: volume.id!,
-          resourceName: volume.name,
-        })
-      );
-      setOpenDialog(null);
-      onActionComplete?.();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to delete volume"
-      );
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  const handleDelete = () =>
+    run({
+      request: () => volumesApi.delete(volume.id!),
+      watch: {
+        kind: "delete",
+        resourceKind: "volume",
+        resourceId: volume.id!,
+        resourceName: volume.name,
+      },
+      errorMessage: "Failed to delete volume",
+      onSuccess: () => {
+        setOpenDialog(null);
+        onActionComplete?.();
+      },
+    });
 
   // Mirror the backend's guards so we don't offer a mutation it would answer
   // 409 to. They are about *attachment* now, not about an observed status

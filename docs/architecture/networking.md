@@ -613,9 +613,7 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
 - Both fields are additive and nil-tolerant. Nil `securityGroups` is "no
   opinion", never "tear down all port groups"; a nil per-NIC list marks the
   port unmanaged (it joins no groups, drop group included), which is what
-  keeps legacy traffic flowing during a mixed-version rollout. The control
-  plane refuses attach/detach for VMs placed on pre-v20 agents and omits both
-  fields from their syncs (`WireProtocol.supportsSecurityGroups`).
+  keeps legacy traffic flowing for ports created before the feature.
 - **The API says when filtering is inert.** `VMDetail.securityGroupsEnforced`
   is false when a realizing agent — the host, or its site's network
   controller — registered pre-v20, *or* when nothing would author the site's
@@ -708,13 +706,38 @@ nothing listened; with STR-56's listener answering it is real, and it is
 tracked as issue #1013 / STR-185. The reserved ACL space above 1003 is where
 such a deny would go.
 
-One collision to keep in mind while that is open: the v4 address is link-local
-and can never overlap a tenant subnet, but `fd00:ec2::254` is a ULA drawn from
-the same space as generated IPv6 subnets. A network whose subnet overlapped it
-would turn this into a non-overridable allow to a *tenant* address on TCP/80.
-The localport (STR-49) already collides in that scenario, so it isn't new —
-only newly un-counterable by policy. Issue #1014 tracks rejecting such subnets
-at network-create time.
+The v6 collision that made these carve-outs dangerous is prevented on new
+writes and surfaced for old ones (STR-186). `fd00:ec2::254` is a ULA drawn from
+the same space as tenant IPv6 subnets, and a network overlapping it would turn
+this into a non-overridable allow to a *tenant* address on TCP/80 — the
+localport (STR-49) already collides in that scenario, so it was not new, only
+newly un-counterable by policy. So **no new tenant IPv6 subnet may overlap
+`NetworkResolverEndpoint.v6SpaceCIDR`** (`fd00:ec2::/32`):
+`validateAddressing6` rejects one an operator types (as does
+`STRATO_DEFAULT_NETWORK_SUBNET6`), and `makeULASubnet64` nudges a generated one
+— a ~1-in-2^24 draw — into the neighbouring prefix. The reservation is a typed,
+non-optional CIDR so a spelling error cannot make all three checks fail open.
+It covers the whole documented `/32` rather than the containing `/64`, because
+that is how the space is described everywhere else and it includes the
+per-network resolvers as well as metadata. The realistic vector was always the
+typed subnet, not the drawn one: `fd00:ec2::/64` is a plausible thing for
+someone to enter precisely because it looks tidy.
+
+An existing `logical_networks.subnet6` can still overlap the reservation if an
+operator entered it before STR-186, or supplied it through
+`STRATO_DEFAULT_NETWORK_SUBNET6` before the validation existed. The control
+plane cannot safely renumber that network behind its guests' backs, so every
+startup logs a warning naming each colliding network until an operator moves
+it. Those rows continue to run, but any IPv6 edit — including a gateway-only
+change or a bare `ipv6Enabled: true` — revalidates the stored subnet and returns
+`400` until it is moved. This is deliberate: an unrelated edit must not bless
+an address range whose service carve-outs point into tenant space.
+
+The v4 side is *not* symmetric, and deliberately so: `169.254.0.0/16` is
+link-local (RFC 3927), so a tenant subnet drawn from it is a misconfiguration
+in its own right rather than a plausible allocation, and nothing rejects one
+today. An operator who insists on numbering a network out of link-local space
+inherits both carve-outs pointed at their own addresses.
 
 The step above 1002 buys nothing *today* — a security-group rule can only
 allow, so nothing at rule priority could contradict this one. It is there
