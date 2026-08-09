@@ -2191,7 +2191,11 @@ actor Agent {
         for (type, service) in hypervisorServices {
             // Falls back to the manifest, never to nothing: under-reporting
             // reservations advertises capacity this host does not have and
-            // invites the scheduler to over-place.
+            // invites the scheduler to over-place. Since STR-196 that covers
+            // the case this was always written for — a backend that *answers*
+            // without knowing, not merely one that runs out of time. A driver
+            // returning a synthesized zero was indistinguishable from an idle
+            // host, which is how STR-190 stayed invisible in the field.
             let reserved =
                 await observe(type, "reserved-resources") {
                     await service.reservedResources()
@@ -2287,17 +2291,25 @@ actor Agent {
     }
 
     /// Query a hypervisor for reporting purposes under a short budget,
-    /// returning nil if it does not answer in time.
+    /// returning nil if it does not answer in time — or answers that it cannot
+    /// say.
     ///
     /// These calls exist only to describe the host, but they run on the
     /// hypervisor's actor alongside real work. Before issue #516 the heartbeat
     /// awaited them unbounded, so one stuck hypervisor call stopped every
     /// subsequent heartbeat and the control plane marked a live agent offline.
     /// A stale-but-recent answer is far better than no heartbeat at all.
+    ///
+    /// Two nils are flattened into one deliberately (STR-196): the budget
+    /// overran, or the backend could not find out. The agent's response to both
+    /// is the same manifest substitution, and each is already logged by whoever
+    /// produced it — so nothing is lost by conflating them, and the caller's
+    /// fallback covers a backend that answers *wrongly* rather than only one
+    /// that answers *slowly*.
     private func observe<T: Sendable>(
         _ type: HypervisorType,
         _ stage: String,
-        _ query: @escaping @Sendable () async -> T
+        _ query: @escaping @Sendable () async -> T?
     ) async -> T? {
         do {
             return try await StageBudget.run(
@@ -2374,11 +2386,21 @@ extension Agent {
                     // agent; port groups + ACLs themselves are authored only
                     // by the topology authority from `message.securityGroups`.
                     var portMemberships = message.vms.flatMap { vm in
-                        vm.spec.networks.enumerated().map { index, spec in
+                        // The VM's metadata kill switch (STR-185) is a property
+                        // of the instance, so it lands on every one of its
+                        // ports. Read off the served document rather than the
+                        // spec because that is where the switch travels — see
+                        // `InstanceMetadata.serviceEnabled` for why it rides
+                        // with the payload it governs. A VM with no `metadata`
+                        // at all is not denied: absence is "nobody was opted
+                        // out", never a denial.
+                        let metadataDenied = vm.metadata.map { !$0.isServiceEnabled } ?? false
+                        return vm.spec.networks.enumerated().map { index, spec in
                             DesiredPortMembership(
                                 portName: OVNNaming.vmPortName(
                                     vmId: vm.vmId.uuidString, nicIndex: index),
-                                securityGroupIds: spec.securityGroupIds)
+                                securityGroupIds: spec.securityGroupIds,
+                                metadataDenied: metadataDenied)
                         }
                     }
                     // The sandbox arm (STR-102). Three things here are exact
@@ -2399,6 +2421,13 @@ extension Agent {
                     // given, so an empty sandbox list is inert here — unlike
                     // `metadataNetworks` below, where an empty list is an
                     // instruction.
+                    //
+                    // No `metadataDenied` either: the kill switch is per VM
+                    // because the document is, and a sandbox has none — the
+                    // listener serves `InstanceMetadata`, which only
+                    // `DesiredVMState` carries. A sandbox's port is left out of
+                    // the deny group because there is nothing on the other end
+                    // of the address for it to be denied.
                     portMemberships += message.sandboxes.compactMap { sandbox in
                         sandbox.spec.network.map { spec in
                             DesiredPortMembership(
@@ -4488,7 +4517,8 @@ extension Agent: ReconcileActuator {
         let attachments: [ResolvedNetworkAttachment]
         do {
             attachments = try await networkOrchestrator.prepareAttachments(
-                vmId: item.vmId, networks: desired.spec.networks)
+                vmId: item.vmId, networks: desired.spec.networks,
+                metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
         } catch {
             vsockCIDs.rollBack(lease)
             throw error

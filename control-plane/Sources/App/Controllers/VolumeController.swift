@@ -110,7 +110,7 @@ struct VolumeController: RouteCollection {
         let request = try req.content.decodeValidated(CreateVolumeRequest.self)
 
         let project = try await req.authorizedProjectForCreate(
-            requested: request.projectId, user: user,
+            requested: request.projectId,
             action: "create_volume", resourceKind: "volumes")
         let projectId = try project.requireID()
 

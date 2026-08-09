@@ -366,7 +366,9 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         // on DependencyPendingError (the missing-switch semantics above); the
         // per-sync membership pass keeps the port converged afterwards.
         if let groupIds = config.securityGroupIds {
-            try await joinSecurityGroups(portName: portName, portUUID: portUUID, groupIds: groupIds)
+            try await joinSecurityGroups(
+                portName: portName, portUUID: portUUID, groupIds: groupIds,
+                metadataDenied: config.metadataDenied)
         }
 
         // Realize the device and bind it to the logical port. A VM's VMM runs in
@@ -423,8 +425,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             portName: "mock-vm-\(vmId)",
             portUUID: UUID().uuidString,
             attachment: .tap(interface: "tap-\(vmId)"),
-            macAddress: mockAttachment.macAddress,
-            ipAddress: mockAttachment.ipAddress
+            macAddress: config.macAddress ?? "02:00:00:00:00:01",
+            ipAddress: config.ipAddress ?? "192.168.1.100"
         )
         #endif
     }
@@ -718,12 +720,19 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// retries, so a managed NIC can never come up filtered by nothing. The
     /// drop group joins first: if a later add fails, the port is already
     /// default-deny rather than allow-only.
-    private func joinSecurityGroups(portName: String, portUUID: String?, groupIds: [UUID]) async throws {
+    private func joinSecurityGroups(
+        portName: String, portUUID: String?, groupIds: [UUID], metadataDenied: Bool
+    ) async throws {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
         }
-        let groups =
-            [OVNNaming.dropPortGroupName] + groupIds.map { OVNNaming.portGroupName(securityGroupId: $0) }.sorted()
+        // Deny groups first, for the reason the call site gives and in the
+        // order `SecurityGroupReconciler.additionRank` uses: whatever this loop
+        // gets through before a `DependencyPendingError` parks it must never be
+        // the permissive half.
+        let denyGroups =
+            [OVNNaming.dropPortGroupName] + (metadataDenied ? [OVNNaming.metadataDenyPortGroupName] : [])
+        let groups = denyGroups + groupIds.map { OVNNaming.portGroupName(securityGroupId: $0) }.sorted()
         for group in groups {
             guard let portGroup = try await ovnManager.getPortGroup(named: group) else {
                 throw DependencyPendingError(

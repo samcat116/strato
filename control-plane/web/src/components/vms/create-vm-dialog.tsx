@@ -19,7 +19,7 @@ import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useImages } from "@/lib/hooks/use-images";
 import { useNetworks } from "@/lib/hooks/use-networks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
-import { useProjectContext } from "@/providers";
+import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { MAX_SECURITY_GROUPS_PER_NIC } from "@/types/api";
 import { toast } from "sonner";
 
@@ -55,6 +55,10 @@ export function CreateVMDialog({
   // cheaper, and most guests are reached over SSH — but it cannot be turned on
   // later, so this is the only chance to ask for it.
   const [graphicsConsole, setGraphicsConsole] = useState(false);
+  // On by default, unlike its neighbours: the metadata service is how a guest
+  // reads its own cloud-init configuration, so this is an escape hatch rather
+  // than a feature to opt into.
+  const [metadataEnabled, setMetadataEnabled] = useState(true);
   // Security groups for the VM's NIC (max 5). Empty → the server falls back
   // to the project's default group.
   const [securityGroupIds, setSecurityGroupIds] = useState<string[]>([]);
@@ -115,6 +119,14 @@ export function CreateVMDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Required: there is no default project to fall back to (issue #1059).
+    // Without this the body would go out with the key dropped by
+    // JSON.stringify and come back a 400 the user cannot act on.
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
+
     if (!formData.name.trim()) {
       toast.error("Please enter a VM name");
       return;
@@ -153,6 +165,11 @@ export function CreateVMDialog({
           // Same omit-unless-on rule (issue #566); Firecracker emulates no
           // display device and the API rejects the combination.
           graphicsConsole: !isFirecracker && graphicsConsole ? true : undefined,
+          // Omitted unless *off*, the inverse of the three above, because this
+          // one defaults on: sending `true` would only say what the server
+          // already assumes, while pinning a pre-STR-185 control plane to a key
+          // it does not know.
+          metadataEnabled: metadataEnabled ? undefined : false,
           // Omitted when empty → the server uses the project's default group.
           securityGroupIds:
             securityGroupIds.length > 0 ? securityGroupIds : undefined,
@@ -182,6 +199,7 @@ export function CreateVMDialog({
         setSecureBoot(false);
         setTpm(false);
         setGraphicsConsole(false);
+        setMetadataEnabled(true);
         setSecurityGroupIds([]);
         setQuotaError(null);
       },
@@ -245,7 +263,9 @@ export function CreateVMDialog({
         <DialogHeader>
           <DialogTitle>Create Virtual Machine</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Configure your new virtual machine
+            {currentProject
+              ? `Configure your new virtual machine in ${currentProject.name}`
+              : NO_PROJECT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -529,6 +549,39 @@ export function CreateVMDialog({
               )}
             </div>
 
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">
+                  Instance metadata
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  The link-local service at 169.254.169.254 that a guest reads
+                  its own configuration and identity from.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  id="metadataEnabled"
+                  type="checkbox"
+                  checked={metadataEnabled}
+                  onChange={(e) => setMetadataEnabled(e.target.checked)}
+                  disabled={isLoading}
+                  className="h-4 w-4 rounded border-input bg-background accent-blue-600"
+                />
+                Serve instance metadata to this VM
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Turning it off denies this VM the service outright, even where
+                its security groups would allow it — the lever for a workload
+                you want an SSRF bug to find nothing behind.{" "}
+                <strong>
+                  It is also how cloud-init configures the guest
+                </strong>
+                , so a VM created without it may not finish provisioning. This
+                one can be changed later.
+              </p>
+            </div>
+
             <div className="space-y-2">
               <Label htmlFor="userData" className="text-foreground">
                 Cloud-init user data{" "}
@@ -570,7 +623,7 @@ export function CreateVMDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading}
+              disabled={isLoading || !projectId}
             >
               {isLoading ? (
                 <>

@@ -27,4 +27,4 @@ export function Providers({ children }: { children: ReactNode }) {
 
 export { useAuth } from "./auth-provider";
 export { useOrganization } from "./organization-provider";
-export { useProjectContext } from "./project-provider";
+export { useProjectContext, NO_PROJECT_DESCRIPTION } from "./project-provider";

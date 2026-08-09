@@ -78,7 +78,16 @@ extension InstanceMetadata {
             userData: vm.userData,
             vendorData: nil,
             tags: [:],
-            identity: instanceSPIFFEID.map { IdentityPolicy(spiffeId: $0) }
+            identity: instanceSPIFFEID.map { IdentityPolicy(spiffeId: $0) },
+            // The per-instance kill switch (STR-185). Sent as the column's
+            // literal value rather than folded with the network's
+            // `metadataEnabled`: the two are enforced at different layers — the
+            // network's by whether the localport exists at all, this one by the
+            // listener and the deny ACL — and folding them here would put a
+            // network's setting into a per-VM field that outlives it, so
+            // turning the network's switch back on would leave every VM on it
+            // still refused.
+            serviceEnabled: vm.metadataEnabled
         )
     }
 }

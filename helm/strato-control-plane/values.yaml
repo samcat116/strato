@@ -219,7 +219,9 @@ resources:
 # finish, which on a large database can outlast a liveness threshold. While a
 # startupProbe is pending, Kubernetes suspends the liveness and readiness
 # probes, so this is what decides how long a slow boot is allowed to take
-# (periodSeconds × failureThreshold = 5 minutes by default).
+# (periodSeconds × failureThreshold = 5 minutes by default). Keep this budget
+# above SchemaMigrator's lock timeout (4 minutes by default) so its actionable
+# timeout error reaches the logs before kubelet restarts the process.
 startupProbe:
   enabled: true
   path: /health/live

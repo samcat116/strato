@@ -198,6 +198,45 @@ struct InstanceMetadataTests {
         #expect(decoded.vendorData == nil)
         // No policy means no identity is vended — the conservative reading.
         #expect(decoded.identity == nil)
+        // The one field whose absence reads the *other* way (STR-185): a
+        // control plane that predates the kill switch has opted nobody out, and
+        // taking its silence for a denial would blackhole IMDS fleet-wide on
+        // upgrade. `isServiceEnabled` is the form callers use.
+        #expect(decoded.serviceEnabled == nil)
+        #expect(decoded.isServiceEnabled)
+    }
+
+    @Test("The kill switch round-trips, and only an explicit false switches the service off")
+    func serviceEnabledRoundTrip() throws {
+        for (json, enabled) in [("false", false), ("true", true)] {
+            let payload = """
+                {"instanceId":"\(Fixtures.uuidA.uuidString)","projectId":"\(Fixtures.uuidB.uuidString)",\
+                "serviceEnabled":\(json)}
+                """
+            let decoded = try decodeJSON(InstanceMetadata.self, from: payload)
+            #expect(decoded.serviceEnabled == enabled)
+            #expect(decoded.isServiceEnabled == enabled)
+        }
+
+        // …and it survives the encoder both sides share, so a switch thrown in
+        // the control plane is a switch the agent reads.
+        let off = InstanceMetadata(
+            instanceId: Fixtures.uuidA, projectId: Fixtures.uuidB, serviceEnabled: false)
+        let encoded = try WireProtocol.makeEncoder().encode(off)
+        let round = try WireProtocol.makeDecoder().decode(InstanceMetadata.self, from: encoded)
+        #expect(round.serviceEnabled == false)
+        #expect(!round.isServiceEnabled)
+    }
+
+    @Test("Metadata opt-out support is keyed on protocol version 39")
+    func metadataOptOutVersionGate() {
+        // An admission gate, unlike the two below: a pre-v39 agent ignores the
+        // field and serves a guest whose API record says the switch is thrown,
+        // so the control plane refuses to set it rather than reporting a kill
+        // switch that killed nothing.
+        #expect(!WireProtocol.supportsMetadataOptOut(38))
+        #expect(WireProtocol.supportsMetadataOptOut(39))
+        #expect(WireProtocol.supportsMetadataOptOut(WireProtocol.currentVersion))
     }
 
     @Test("Metadata without an identifying id fails rather than describing nothing")

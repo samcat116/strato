@@ -2110,60 +2110,84 @@ actor AgentService {
         image: Image? = nil
     ) async throws {
         let schedulableAgents = await schedulableAgentsFromDatabase()
-        let vmId = vm.id?.uuidString ?? ""
+        let vmId = try vm.requireID().uuidString
+        let imageArchitecture = image?.architecture
+        let reservedAgentId = NIOLockedValueBox<String?>(nil)
 
-        // A network pinned to a site exists only in that site's OVN
-        // deployment, so it pins the VM's placement (issue #343).
-        let requiredSiteID = try await pinnedSiteID(for: vm, on: db)
-
-        // Use scheduler to select the best agent and atomically reserve the
-        // VM's resources on it, so a concurrent create can't place against
-        // the same capacity (issue #258).
+        // Placement and API updates both take this row lock before deciding
+        // from or saving the VM. The create request's `vm` is only the snapshot
+        // captured before background dispatch: an immediate update may have
+        // switched metadata off while this task was waiting to run. Reloading
+        // under the lock makes that committed intent the scheduler input and
+        // prevents the placement save from writing the captured value back.
         let agentId: String
         do {
-            agentId = try await app.scheduler.selectAndReserveAgent(
-                requirements: SchedulerService.placementRequirements(
-                    for: vm, architecture: image?.architecture, siteID: requiredSiteID),
-                vmId: vmId,
-                from: schedulableAgents,
-                coordination: app.coordination,
-                strategy: strategy,
-                vmName: vm.name
-            )
-        } catch let error as SchedulerError {
-            app.logger.error("Scheduler failed to find suitable agent: \(error)")
-            // Preserve the scheduler's reason (unsupported hypervisor, arch
-            // mismatch, insufficient resources, ...) instead of collapsing
-            // every placement failure into a generic "no agent available".
-            throw AgentServiceError.schedulingFailed(error.description)
-        }
+            agentId = try await db.transaction { [self] tx in
+                guard try await vm.lockAndRefresh(on: tx),
+                    let currentVM = try await VM.find(vm.id, on: tx)
+                else {
+                    throw Abort(.notFound, reason: "VM no longer exists")
+                }
 
-        try await requireNetworkAuthority(
-            forAgentId: agentId, workloadId: vmId,
-            consequence: "the VM's network would never be realized and it would never boot", on: db)
+                // A network pinned to a site exists only in that site's OVN
+                // deployment, so it pins the VM's placement (issue #343).
+                let requiredSiteID = try await pinnedSiteID(for: currentVM, on: tx)
 
-        do {
-            // Persist the placement, then sync: from here the VM is part of
-            // the agent's desired state and every path (nudge now, periodic
-            // timer later, reconnect sync) will carry it.
-            vm.hypervisorId = agentId
-            try await vm.save(on: db)
+                // Use the freshly locked row for every placement requirement,
+                // including the v39 metadata opt-out gate. The reservation is
+                // still atomic in the coordination store (issue #258).
+                let selectedAgentId: String
+                do {
+                    selectedAgentId = try await app.scheduler.selectAndReserveAgent(
+                        requirements: SchedulerService.placementRequirements(
+                            for: currentVM, architecture: imageArchitecture, siteID: requiredSiteID),
+                        vmId: vmId,
+                        from: schedulableAgents,
+                        coordination: app.coordination,
+                        strategy: strategy,
+                        vmName: currentVM.name
+                    )
+                } catch let error as SchedulerError {
+                    app.logger.error("Scheduler failed to find suitable agent: \(error)")
+                    // Preserve the scheduler's reason (unsupported hypervisor,
+                    // arch mismatch, insufficient resources, ...) instead of
+                    // collapsing every placement failure into a generic one.
+                    throw AgentServiceError.schedulingFailed(error.description)
+                }
+                reservedAgentId.withLockedValue { $0 = selectedAgentId }
 
-            app.logger.info(
-                "VM creation dispatched via desired-state sync",
-                metadata: [
-                    "vmId": .string(vmId),
-                    "agentId": .string(agentId),
-                ])
+                try await requireNetworkAuthority(
+                    forAgentId: selectedAgentId, workloadId: vmId,
+                    consequence: "the VM's network would never be realized and it would never boot", on: tx)
 
-            await syncDesiredState(agentId: agentId)
+                // Persist only from the current row. From here the VM is part
+                // of the agent's desired state and every sync path carries it.
+                currentVM.hypervisorId = selectedAgentId
+                try await currentVM.save(on: tx)
+                return selectedAgentId
+            }
         } catch {
             // The placement never became desired state, so nothing will ever
             // account for the reservation — release it rather than pinning
             // capacity until the TTL.
-            await app.coordination.releaseReservation(agentId: agentId, vmId: vmId)
+            if let reservedAgentId = reservedAgentId.withLockedValue({ $0 }) {
+                await app.coordination.releaseReservation(agentId: reservedAgentId, vmId: vmId)
+            }
             throw error
         }
+
+        // Keep the caller's instance coherent for call sites that inspect it
+        // after this method; persistence above deliberately used the reload.
+        vm.hypervisorId = agentId
+
+        app.logger.info(
+            "VM creation dispatched via desired-state sync",
+            metadata: [
+                "vmId": .string(vmId),
+                "agentId": .string(agentId),
+            ])
+
+        await syncDesiredState(agentId: agentId)
     }
 
     /// Places a sandbox on a Firecracker-capable agent, persists the

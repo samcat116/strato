@@ -2161,7 +2161,7 @@ export interface paths {
         put?: never;
         /**
          * Create an organization
-         * @description Creates the organization, makes the caller an admin, and provisions a "Default Project" beneath it. Organization names are globally unique.
+         * @description Creates the organization, makes the caller an admin, and provisions a first project named "Default Project" beneath it — a starting point, not a default: every create names the project it lands in, and nothing resolves a project by that name. Organization names are globally unique.
          */
         post: operations["createOrganization"];
         delete?: never;
@@ -5267,7 +5267,7 @@ export interface components {
              */
             imageId?: string;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
             environment?: string;
             cpu?: number;
             /**
@@ -5316,6 +5316,11 @@ export interface components {
             graphicsConsole: boolean;
             /** @description Security groups for the VM's NIC (same project, at most 5). Omitted or empty means the project's default group — every NIC belongs to at least one group. */
             securityGroupIds?: string[];
+            /**
+             * @description Whether the instance metadata service answers this VM. Turning it off denies the guest `169.254.169.254` and `[fd00:ec2::254]` outright — the listener refuses it and an OVN ACL drops its packets — which is what hardening one workload against SSRF needs, and what the per-network `metadataEnabled` is too coarse to give. Note that the metadata service is also how a guest reads its cloud-init configuration, so a VM created with this off may not finish provisioning. Requires an agent new enough to honour it; placement is constrained to such agents.
+             * @default true
+             */
+            metadataEnabled: boolean;
         };
         UpdateVMRequest: {
             name?: string;
@@ -5329,6 +5334,8 @@ export interface components {
              * @description Target memory in bytes. On a running VM it must not exceed `maxMemory`.
              */
             memory?: number;
+            /** @description Whether the instance metadata service answers this VM. Editable on a running VM and applied without a restart. Switching it *off* is refused with `409` when the VM sits on an agent too old to honour it, rather than reported as applied while the guest keeps reading its metadata. */
+            metadataEnabled?: boolean;
         };
         VMDetail: {
             /** Format: uuid */
@@ -5366,6 +5373,8 @@ export interface components {
             tpmEnabled?: boolean;
             /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
             graphicsConsole?: boolean;
+            /** @description Whether the instance metadata service answers this VM. This is the VM's own switch, not the effective answer: a VM on a network with metadata turned off still reports `true` here unless someone turned it off for this VM. */
+            metadataEnabled?: boolean;
             /** @description Whether the guest agent is responding. Absent until the agent's slow poll has seen the guest once. */
             qgaAvailable?: boolean;
             /** @description What the guest OS calls itself, when it reported one. Distinct from `hostname`, which is the DNS label Strato registers it under. */
@@ -5493,7 +5502,7 @@ export interface components {
              */
             restoreFrom?: string;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
             environment?: string;
             cpus?: number;
             /**
@@ -5789,7 +5798,7 @@ export interface components {
             name: string;
             description?: string;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
             sizeGB: number;
             format?: components["schemas"]["VolumeFormat"];
             volumeType?: components["schemas"]["VolumeType"];
@@ -5957,7 +5966,7 @@ export interface components {
             gateway6?: string;
             ipv6Enabled?: boolean;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
             dhcpEnabled?: boolean;
             /** @description The network's resolvers. With `resolverEnabled` (the default) these are the upstream forwarders the network's built-in resolver sends misses to; with it off they are advertised to guests over DHCP verbatim. */
             dnsServers?: string[];
@@ -6030,6 +6039,8 @@ export interface components {
              * @description The DNS zone this network's VMs auto-register into, if any.
              */
             primaryDnsZoneId?: string;
+            /** @description Why this network's guests will not resolve the DNS zones attached to it, with the remedy, or absent when they will — the network's resolver is off, its site cannot run one, or it has no address yet. Absent for a network with no attached zone, which has nothing to fail to deliver. */
+            zoneResolutionWarning?: string;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -6072,7 +6083,7 @@ export interface components {
             /** Format: uuid */
             poolId: string;
             /** Format: uuid */
-            projectId?: string;
+            projectId: string;
         };
         AttachFloatingIPRequest: {
             /** Format: uuid */
@@ -6162,9 +6173,9 @@ export interface components {
             description?: string;
             /**
              * Format: uuid
-             * @description Defaults to the caller's default project when omitted.
+             * @description The project the resource belongs to. Required; there is no default project.
              */
-            projectId?: string;
+            projectId: string;
         };
         UpdateSecurityGroupRequest: {
             name?: string;
@@ -6216,6 +6227,8 @@ export interface components {
             networkName: string;
             /** @description Whether this zone is the network's primary — i.e. whether the network's VMs auto-register their derived records here. */
             isPrimary: boolean;
+            /** @description Why this network's guests will not resolve the DNS zones attached to it, with the remedy, or absent when they will. A property of the network rather than of this zone, so every entry for one network repeats it. */
+            zoneResolutionWarning?: string;
         };
         DNSZone: {
             /** Format: uuid */
@@ -6240,9 +6253,9 @@ export interface components {
             description?: string;
             /**
              * Format: uuid
-             * @description Defaults to the caller's default project when omitted.
+             * @description The project the resource belongs to. Required; there is no default project.
              */
-            projectId?: string;
+            projectId: string;
         };
         UpdateDNSZoneRequest: {
             name?: string;
@@ -6280,6 +6293,7 @@ export interface components {
             /** @description Owner name relative to the zone; omitted means the apex (`@`). A leftmost `*` label is a wildcard, including a bare `*` for the zone-apex wildcard. */
             name?: string;
             type: components["schemas"]["DNSRecordType"];
+            /** @description Bounded far above what any record type accepts — each type's real ceiling comes from its own grammar (255 bytes for TXT, a domain name for CNAME/PTR/SRV, an address for A/AAAA). */
             value: string;
             /** @default 300 */
             ttl: number;

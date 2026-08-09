@@ -122,7 +122,7 @@ struct VMCommand: AsyncParsableCommand {
                     body: .json(
                         .init(
                             name: name, description: description, imageId: image,
-                            projectId: project ?? env.context.project,
+                            projectId: try resolveProject(project, environment: env),
                             environment: environment, cpu: cpu, memory: memory, disk: disk,
                             networkId: network, sshPublicKey: sshPublicKey))
                 ).accepted.body.json

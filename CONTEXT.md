@@ -4,6 +4,28 @@ Ubiquitous language for Strato's control plane. Terms here are the names we
 use in code, tests, docs, and review. Architecture-level maps live in
 `docs/architecture/`; this file pins the vocabulary those maps assume.
 
+## Tenancy
+
+- **Project** — the unit every resource belongs to, and the node authorization
+  hangs from. **Every create names its project**; there is no default and
+  nothing infers one. An organization is provisioned with a first project so it
+  is not empty, but that project is not privileged — it is the first row, and
+  organizations accumulate more.
+
+  Two create paths used to guess when told nothing, and they guessed
+  differently: VM and sandbox creation took the project literally *named*
+  "Default Project", the five infrastructure creates took the organization's
+  oldest. Neither answer was one anybody chose — the first is a string an
+  organization can rename out from under, the second only became *repeatable*
+  (never right) when a sort was added to it — and both were blind to projects
+  held inside a folder. So the question was withdrawn rather than settled
+  (STR-200), the same way networks lost their implicit fallback in #765.
+
+  The phrase "the default project" outlives the thing: new organizations still
+  get one called that, the UI still pre-selects a project in its switcher, and a
+  migration names the string forever. None of those resolve anything. If someone
+  says "the default project", they mean a label, a UI convenience, or a habit.
+
 ## Resource mutations
 
 - **Resource mutation** — one durable, asynchronous lifecycle change to a VM,
@@ -316,6 +338,17 @@ use in code, tests, docs, and review. Architecture-level maps live in
   security model. The **resolver** terminates in the **host** namespace, because
   it has to forward and that namespace has no egress.
 
+- **Service ULA space** — `fd00:ec2::/32`, the IPv6 range every link-local
+  service address is drawn from: instance metadata at `fd00:ec2::254`, and every
+  network's resolver from `fd00:ec2:1::/48`. Reserved *against tenants*, which is
+  the whole point of naming it: unlike its v4 counterpart it is ordinary ULA
+  space, indistinguishable from what a network's own subnet is drawn from, so a
+  tenant subnet overlapping it would inherit the service carve-outs — ACLs no
+  security-group rule can override — pointed at tenant addresses. A subnet an
+  operator types is rejected; a generated one is nudged clear. Networks that
+  predate the reservation are named in a warning at every control-plane
+  startup until an operator renumbers them.
+
 - **Resolver** — the DNS server a network's guests are pointed at, answering on
   a link-local pair of the network's own derived from its `resolver_index`. One
   CoreDNS process per *hypervisor*, with a server block per network. It serves
@@ -340,3 +373,17 @@ use in code, tests, docs, and review. Architecture-level maps live in
   told directly. One field, two readings, and which applies is
   `resolverEnabled`. An empty list is not a fallback to anything: internal names
   resolve and everything else is refused.
+
+- **Search domain** — what a guest appends to an unqualified name, delivered as
+  the DHCP `domain_name`/`domain_search` option or as cloud-init's
+  `nameservers.search`, and stored as `LogicalNetwork.domainName`. Guest-side
+  config, which is the whole point: no resolver can supply one, so pointing a
+  guest at the resolver that answers `alpha.corp.internal` still leaves `alpha`
+  unresolvable until this is set.
+
+  It **follows the primary zone while the operator has not claimed it** (STR-201)
+  — promotion sets it, re-pointing or renaming the zone moves it, demotion
+  clears it — and stops following the moment someone sets a value of their own.
+  `primaryDNSZone` already means "the zone this network's VMs register into", and
+  "and resolve through" is the same intent; making the operator say it twice is
+  what left a correctly realized zone inert.

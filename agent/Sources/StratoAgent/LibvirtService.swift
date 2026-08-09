@@ -139,17 +139,23 @@ actor LibvirtService: HypervisorService {
     /// The last domain list libvirtd answered with, and the last reservations
     /// computed from it.
     ///
-    /// Both exist because `listVMs()` and `reservedResources()` cannot express
-    /// failure — and for both, the empty answer is actively harmful rather than
-    /// merely uninformative. An empty VM list makes the control plane treat
-    /// every VM on this host as lost, and zero reservations advertise capacity
-    /// the host does not have and invite the scheduler to over-place it. The
-    /// agent's own manifest fallback only covers a query that *times out*, so a
-    /// libvirtd that answers with an error has to be covered here. Nil means
-    /// this driver has never had an answer, which is the one case where empty
-    /// is the truth.
-    private var lastKnownVMIds: Cached<[String]>?
-    private var lastKnownReservations: Cached<(vcpus: Int, memoryBytes: Int64)>?
+    /// Both exist because for host inventory the empty answer is actively
+    /// harmful rather than merely uninformative. An empty VM list claims every
+    /// VM on this host is gone, which is how an inventory consumer will read it,
+    /// and zero reservations advertise capacity the host does not have and
+    /// invite the scheduler to over-place it. The reservation caller's manifest
+    /// fallback previously covered only a query that *timed out*, so a libvirtd
+    /// error has to remain explicit too. `listVMs()` preserves the same
+    /// unknown-versus-empty distinction at the driver boundary even though the
+    /// current heartbeat no longer carries that inventory. What neither cache
+    /// can cover — the sweep that has never once succeeded — is why both methods
+    /// return optionals (STR-196). The never-answered and staleness decisions
+    /// belong to `LastKnownInventory`, in a package tests can import, because
+    /// this target has none.
+    private var lastKnownVMIds = LastKnownInventory<[String]>(
+        staleThreshold: LibvirtService.staleInventoryThreshold)
+    private var lastKnownReservations = LastKnownInventory<(vcpus: Int, memoryBytes: Int64)>(
+        staleThreshold: LibvirtService.staleInventoryThreshold)
 
     /// The lifecycle subscription's hand-off to the agent (STR-135), created in
     /// `init` so the stream exists before anyone attaches to it. `nonisolated`
@@ -167,19 +173,6 @@ actor LibvirtService: HypervisorService {
     /// stream that just ended was our own doing rather than a dead daemon.
     private var eventTask: Task<Void, Never>?
     private var stoppingObservation = false
-
-    /// An answer libvirtd gave, with when it gave it — the timestamp being the
-    /// only thing that distinguishes a fresh reading from an indefinitely stale
-    /// one at the point it is served.
-    private struct Cached<Value> {
-        let value: Value
-        let at: ContinuousClock.Instant
-
-        init(_ value: Value) {
-            self.value = value
-            self.at = ContinuousClock.now
-        }
-    }
 
     init(
         logger: Logger,
@@ -1004,12 +997,15 @@ actor LibvirtService: HypervisorService {
 
     // MARK: - Host inventory
 
-    /// Every Strato domain libvirtd knows about, running or not.
+    /// Every Strato domain libvirtd knows about, running or not — or nil if the
+    /// daemon could not be read and this driver has never had an answer to
+    /// serve.
     ///
     /// Includes stopped domains deliberately: a defined-but-off VM holds its
-    /// disks and its placement, and omitting it would make the control plane
-    /// treat it as lost.
-    func listVMs() async -> [String] {
+    /// disks and its placement, and omitting it from an inventory says it is
+    /// gone. For exactly that reason the failure path never manufactures `[]`,
+    /// which says the same thing about every domain at once.
+    func listVMs() async -> [String]? {
         do {
             let ids = try await call(
                 "libvirt-list", vmId: Self.hostScope, seconds: StageBudget.statusQuerySeconds
@@ -1019,14 +1015,21 @@ actor LibvirtService: HypervisorService {
                     needResults: 1, flags: LibvirtDomain.listAllDomains, deadline: deadline
                 ).domains.map(\.name)
             }.filter(LibvirtDomain.isStratoDomainName)
-            lastKnownVMIds = Cached(ids)
+            lastKnownVMIds.record(ids)
             return ids
         } catch {
-            return stale(lastKnownVMIds, "the VM list", error) ?? []
+            return stale(lastKnownVMIds, "the VM list", error)
         }
     }
 
-    /// vCPUs and memory committed to the domains on this host.
+    /// vCPUs and memory committed to the domains on this host — or nil if the
+    /// daemon could not be read and this driver has never had an answer to
+    /// serve.
+    ///
+    /// Nil rather than `(0, 0)` because the two are indistinguishable once they
+    /// reach the scheduler, and STR-190 is what that cost: a decoder broken from
+    /// the first sweep synthesized a zero here, the agent's manifest fallback
+    /// never fired, and the node advertised its full capacity while running VMs.
     ///
     /// A query, not mirrored state — which is the point. `maxMem` is used
     /// rather than the live `memory` figure for two reasons: `memory` is the
@@ -1036,7 +1039,7 @@ actor LibvirtService: HypervisorService {
     /// headroom at any moment, so reserving it is the correct answer rather
     /// than a conservative one. For the overwhelmingly common VM with no
     /// headroom the two are the same number.
-    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64) {
+    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)? {
         do {
             // One `call`, not one per domain: the whole sweep shares a budget so
             // a host with many VMs cannot spend N budgets inside one heartbeat.
@@ -1068,10 +1071,10 @@ actor LibvirtService: HypervisorService {
                     return LibvirtDomain.reservation(from: infos)
                 }
             }
-            lastKnownReservations = Cached(reserved)
+            lastKnownReservations.record(reserved)
             return reserved
         } catch {
-            return stale(lastKnownReservations, "host reservations", error) ?? (vcpus: 0, memoryBytes: 0)
+            return stale(lastKnownReservations, "host reservations", error)
         }
     }
 
@@ -1079,35 +1082,45 @@ actor LibvirtService: HypervisorService {
     /// the log as it ages.
     ///
     /// Serving the last answer beats serving an empty one — an empty VM list
-    /// makes the control plane mark every VM here lost, and zero reservations
-    /// invite the scheduler to over-place the host. What deserved a bound is the
-    /// *indefiniteness*: without one, "these are this second's figures" and
-    /// "these are from an hour ago" differ only by a log line nobody reads,
-    /// while the host goes on looking healthy. Past the threshold this says so
-    /// at error level on every heartbeat.
-    private func stale<T>(_ cached: Cached<T>?, _ what: String, _ error: any Error) -> T? {
-        guard let cached else {
+    /// claims every VM here is gone, which is how an inventory consumer will
+    /// read it, and zero reservations invite the scheduler to over-place the
+    /// host. What deserved a bound is the *indefiniteness*: without one, "these
+    /// are this second's figures" and "these are from an hour ago" differ only
+    /// by a log line nobody reads, while the host goes on looking healthy. Past
+    /// the threshold this says so at error level on every heartbeat.
+    ///
+    /// For reservations, the nil this returns when the driver has never answered
+    /// travels to the agent, which substitutes its durable manifest (STR-196).
+    /// For a VM-list caller it remains an explicit unknown. What it must never
+    /// become is `[]` or `(0, 0)` here: those are claims about the host, and a
+    /// sweep that has never once succeeded has no standing to make one.
+    private func stale<T: Sendable>(
+        _ inventory: LastKnownInventory<T>, _ what: String, _ error: any Error
+    ) -> T? {
+        switch inventory.fallback() {
+        case .neverAnswered:
             logger.error(
                 "Could not read \(what) from libvirt, and have never had an answer to fall back on",
                 metadata: ["error": .string(error.localizedDescription)])
             return nil
+        case .lastKnown(let value, let age, let badlyStale):
+            let metadata: Logger.Metadata = [
+                "error": .string(error.localizedDescription),
+                "ageSeconds": .stringConvertible(age.components.seconds),
+            ]
+            if badlyStale {
+                logger.error(
+                    """
+                    Still reporting \(what) from a libvirt answer that is now badly out of date; \
+                    this host's advertised capacity and VM list cannot be trusted
+                    """,
+                    metadata: metadata)
+            } else {
+                logger.warning(
+                    "Could not read \(what) from libvirt; reporting the last known answer", metadata: metadata)
+            }
+            return value
         }
-        let age = ContinuousClock.now - cached.at
-        let metadata: Logger.Metadata = [
-            "error": .string(error.localizedDescription),
-            "ageSeconds": .stringConvertible(age.components.seconds),
-        ]
-        if age > Self.staleInventoryThreshold {
-            logger.error(
-                """
-                Still reporting \(what) from a libvirt answer that is now badly out of date; \
-                this host's advertised capacity and VM list cannot be trusted
-                """,
-                metadata: metadata)
-        } else {
-            logger.warning("Could not read \(what) from libvirt; reporting the last known answer", metadata: metadata)
-        }
-        return cached.value
     }
 
     // MARK: - Guest observation

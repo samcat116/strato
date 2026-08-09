@@ -137,6 +137,16 @@ console endpoints, disk hot-(de)attach, `reservedResources()`, an
 opt-in `adoptVM` for orphan re-adoption, and `reclaimVMDirectory` for the
 delete path that has no session to tear down (below).
 
+The two driver host-inventory queries — `listVMs()` and
+`reservedResources()` — return **optionals** (STR-196). Nil means the backend
+could not answer and must not be coerced to an empty list or zero reservation.
+The agent substitutes its durable manifest for unknown reservations;
+`listVMs()` has no live reporting consumer since the v38 heartbeat stopped
+carrying that inventory, but preserves the same contract for future callers.
+The distinction is load-bearing because a synthesized zero reads exactly like
+an idle host to the scheduler, which is how STR-190 stayed invisible in the
+field.
+
 The registry is a dictionary on the `Agent` actor keyed by
 `HypervisorType`, populated once at `start()`. That dictionary and
 `getHypervisorService(for:)` are the **only** places message handling
@@ -1269,9 +1279,22 @@ constant-time comparison is needed: nothing here ever compares a secret.
 **Verdicts.** 503 + `Retry-After` while the store is `.cold` (checked *before*
 identification: with no knowledge, 404 would assert something the agent cannot
 know); 404 for an unresolvable or ambiguous caller, and for a withdrawn
-instance; 401 for a missing, expired, or wrong-instance token; 404 for an
-unserved path, but only *after* authentication, so nothing that merely reaches
-the address can map the tree.
+instance; 404 for an instance whose metadata kill switch is thrown; 401 for a
+missing, expired, or wrong-instance token; 404 for an unserved path, but only
+*after* authentication, so nothing that merely reaches the address can map the
+tree.
+
+**The kill switch is checked after identification and before the handshake**
+(STR-185). After, because there is no way to know whose switch to read until
+the caller has a name; before, because a switched-off instance must not be able
+to mint a session it could never spend. Its 404 is `.unknown`'s answer verbatim,
+so a guest cannot learn that it was singled out. Note what this is *not*: the
+control plane keeps sending the document and the instance stays in
+`MetadataCallerIndex`, because dropping it from the servable set would take its
+addresses out of the index — and the collision that resolves `.ambiguous` today
+would then resolve to the neighbour whose identity it was hardened away from.
+Throwing the switch also retires the instance's live sessions on the next push
+rather than leaving them to expire.
 
 **Responses carry a hop limit of 1** (`IP_TTL` / `IPV6_UNICAST_HOPS`, set on
 the listener and on each accepted child). The guest is one L2 hop away — both

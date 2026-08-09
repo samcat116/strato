@@ -40,12 +40,12 @@ final class IAMRequestAuthState: Sendable {
     /// Whether any decision this request was allowed by the
     /// `platform-system-admin` policy — the audit trail's admin-bypass marker,
     /// now derived from the evaluator instead of a code short-circuit.
-    let adminPolicyUsed = NIOLockedValueBox(false)
+    let adminPolicyUsed: NIOLockedValueBox<Bool>
     /// Whether any authorization decision was evaluated for this request at
     /// all. The default-deny middleware asserts this on handler-checked routes
     /// so a handler that forgets its check fails loudly instead of silently
     /// serving.
-    let decisionEvaluated = NIOLockedValueBox(false)
+    let decisionEvaluated: NIOLockedValueBox<Bool>
     /// What the credential this request arrived on permits (STR-115). Rides
     /// here rather than as a parameter on `authorize` because it has exactly
     /// this object's lifetime — per-request, ambient, set once — and because a
@@ -72,6 +72,8 @@ final class IAMRequestAuthState: Sendable {
     var credential: CredentialReference? { credentialBox.withLockedValue { $0 } }
 
     init(restriction: CredentialRestriction = .unrestricted, credential: CredentialReference? = nil) {
+        self.adminPolicyUsed = NIOLockedValueBox(false)
+        self.decisionEvaluated = NIOLockedValueBox(false)
         self.restrictionBox = NIOLockedValueBox(restriction)
         self.credentialBox = NIOLockedValueBox(credential)
     }
@@ -82,6 +84,59 @@ final class IAMRequestAuthState: Sendable {
     ) {
         restrictionBox.withLockedValue { $0 = restriction }
         credentialBox.withLockedValue { $0 = credential }
+    }
+
+    /// This state with the credential ceiling suspended (STR-203) — for the one
+    /// kind of check an enforcement point *substitutes* for the question it is
+    /// really gating, because at that moment it has nothing to gate yet.
+    ///
+    /// `GET /api/vms` is answered by `vm:read` on each row, but the middleware
+    /// has no rows, so it asks "are you anyone in this organization at all"
+    /// instead and leaves the per-row work to the handler. A restriction,
+    /// though, is stated in the vocabulary of the *act* — `vm:read`, in project
+    /// P — and neither half of that can be true of `org:read` on an
+    /// organization: a project never appears in an organization's ancestor
+    /// chain, and `vm:read` does not cover `org:read`. Intersecting the ceiling
+    /// with the substituted question therefore denied it twice over, and a
+    /// project-scoped token 403'd on the list while succeeding on every item
+    /// route beneath it.
+    ///
+    /// So the ceiling is suspended for the probe and applied in full
+    /// downstream, where there is an act to apply it to: `canFilter("vm:read")`
+    /// on the list, `create_resources` on the resolved project for a create.
+    /// **This is not a bypass** — the bindings half is decided exactly as
+    /// before, so a non-member is refused here as it always was; what changes
+    /// is that a *member* holding a narrowed token reaches the handler and gets
+    /// a filtered, possibly empty page, which is what `/api/volumes` has always
+    /// done for the same caller.
+    ///
+    /// Two things are deliberately *not* suspended. The audit flags are the
+    /// same boxes, not copies: a probe allowed by `platform-system-admin` is
+    /// still an admin bypass this request made, and a probe is still a decision
+    /// the default-deny backstop must see. And the credential reference rides
+    /// along, so the probe's decision row is attributed like any other —
+    /// suspending the ceiling does not make the check anonymous.
+    ///
+    /// Do not reach for this at a site that is the *last* check before a
+    /// resource is served.
+    func membershipProbe() -> IAMRequestAuthState {
+        // An unrestricted request asks the identical question either way, so it
+        // keeps the identical object: the common session/user path is
+        // byte-for-byte what it was.
+        guard !restriction.isUnrestricted else { return self }
+        return IAMRequestAuthState(suspendingCeilingOf: self)
+    }
+
+    /// The derived probe state. Frozen rather than refreshed, and that is safe
+    /// here for the reason it would not be on the stored state: this object is
+    /// built at the call site from a state the `Request.iamAuthState` accessor
+    /// has just refreshed, used for exactly one check, and dropped. It never
+    /// reaches request storage, so `refreshCredential` never sees it.
+    private init(suspendingCeilingOf other: IAMRequestAuthState) {
+        self.adminPolicyUsed = other.adminPolicyUsed
+        self.decisionEvaluated = other.decisionEvaluated
+        self.restrictionBox = NIOLockedValueBox(.unrestricted)
+        self.credentialBox = NIOLockedValueBox(other.credential)
     }
 
     /// The state for a check that is not serving a request: `WhoCanService`'s
@@ -178,7 +233,8 @@ enum IAMAuthorizer {
             span.attributes["iam.action"] = action
             span.attributes["iam.resource_type"] = node.type.rawValue
             span.attributes["iam.principal"] = principal.subject
-            let key = IAMRequestCache.DecisionKey(principal: principal, action: action, node: node)
+            let key = IAMRequestCache.DecisionKey(
+                principal: principal, action: action, node: node, restriction: state.restriction)
             if let memoized = cache?.decision(for: key) {
                 span.attributes["iam.cache_hit"] = true
                 span.attributes["iam.decision"] = memoized.allowed ? "allow" : "deny"
@@ -249,7 +305,8 @@ enum IAMAuthorizer {
             var decisions: [IAMNode: CedarCheckDecision] = [:]
             var pending: [IAMNode] = []
             for node in Set(nodes) {
-                let key = IAMRequestCache.DecisionKey(principal: principal, action: action, node: node)
+                let key = IAMRequestCache.DecisionKey(
+                    principal: principal, action: action, node: node, restriction: state.restriction)
                 if let memoized = cache?.decision(for: key) {
                     markAuditState(memoized, state: state)
                     decisions[node] = memoized
@@ -368,7 +425,8 @@ enum IAMAuthorizer {
             markAuditState(outcome.verdict, state: state)
             cache?.store(
                 decision: outcome.verdict,
-                for: IAMRequestCache.DecisionKey(principal: principal, action: action, node: node))
+                for: IAMRequestCache.DecisionKey(
+                    principal: principal, action: action, node: node, restriction: state.restriction))
             decisions[node] = outcome.verdict
             records.append(
                 IAMDecisionRecord(
@@ -548,6 +606,29 @@ extension Request {
             resourceID: id,
             context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: self.id),
             state: iamAuthState,
+            cache: iamCache,
+            app: application,
+            db: db
+        )
+    }
+
+    /// `can(_:on:id:)` for a **membership probe** — a check that stands in for
+    /// the question actually being gated, decided with this request's
+    /// credential ceiling suspended (STR-203).
+    ///
+    /// See `IAMRequestAuthState.membershipProbe()` for why the substitution and
+    /// the ceiling cannot both be applied, and for when this is emphatically
+    /// the wrong spelling: it belongs only where a per-resource decision on the
+    /// same request stands behind it.
+    func canAsMembershipProbe(_ permission: String, on resourceType: String, id: String) async throws -> Bool {
+        let principal = try requireActingPrincipal()
+        return try await IAMAuthorizer.checkLegacyVocabulary(
+            principal: principal,
+            permission: permission,
+            resourceType: resourceType,
+            resourceID: id,
+            context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: self.id),
+            state: iamAuthState.membershipProbe(),
             cache: iamCache,
             app: application,
             db: db

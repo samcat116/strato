@@ -16,7 +16,7 @@ import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
 import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useImages } from "@/lib/hooks/use-images";
-import { useProjectContext } from "@/providers";
+import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { toast } from "sonner";
 
 import type { VolumeFormat, VolumeType } from "@/types/api";
@@ -69,6 +69,14 @@ export function CreateVolumeDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Required: there is no default project to fall back to (issue #1059).
+    // Without this the body would go out with the key dropped by
+    // JSON.stringify and come back a 400 the user cannot act on.
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
+
     const name = formData.name.trim();
     if (!name) {
       toast.error("Please enter a volume name");
@@ -112,7 +120,7 @@ export function CreateVolumeDialog({
           <DialogDescription className="text-muted-foreground">
             {currentProject
               ? `Create a new volume in ${currentProject.name}`
-              : "Create a new volume"}
+              : NO_PROJECT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -252,7 +260,7 @@ export function CreateVolumeDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading}
+              disabled={isLoading || !projectId}
             >
               {isLoading ? (
                 <>

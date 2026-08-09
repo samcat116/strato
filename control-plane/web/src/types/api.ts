@@ -189,6 +189,15 @@ export interface VM {
    */
   graphicsConsole?: boolean;
   /**
+   * Whether the instance metadata service answers this VM (backend STR-185) —
+   * the per-instance kill switch, editable on a running VM. This is the VM's
+   * own switch, not the effective answer: a VM on a network whose metadata is
+   * turned off still reads `true` here unless someone turned it off for this
+   * VM. Optional only because older control planes omit it; treat `undefined`
+   * as on.
+   */
+  metadataEnabled?: boolean;
+  /**
    * Observed guest-agent (qga) view (issue #563). `qgaAvailable` is undefined
    * until the agent's slow poll first sees a responsive guest agent;
    * `observedHostname` is the guest OS's own hostname when it reported one.
@@ -1057,7 +1066,8 @@ export interface CreateVMRequest {
   name: string;
   description?: string;
   imageId: string;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   environment?: string;
   cpu?: number;
   memory?: number;
@@ -1098,6 +1108,14 @@ export interface CreateVMRequest {
    * Omitted → the project's default group.
    */
   securityGroupIds?: string[];
+  /**
+   * Whether the instance metadata service answers this VM. Defaults to true.
+   * Creating a VM with it off denies the guest `169.254.169.254` outright, and
+   * only agents new enough to honour that are schedulable — but note the
+   * metadata service is also how a guest reads its cloud-init configuration,
+   * so a VM created this way may not finish provisioning.
+   */
+  metadataEnabled?: boolean;
 }
 
 // Async VM operations: lifecycle mutations return 202 Accepted with an
@@ -1324,7 +1342,8 @@ export interface CreateSandboxRequest {
   image?: string;
   /** Ready sandbox snapshot to restore as a new sandbox identity. */
   restoreFrom?: string;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   environment?: string;
   cpus?: number;
   /** Guest memory in bytes. */
@@ -1717,7 +1736,8 @@ export interface VolumeSnapshot {
 export interface CreateVolumeRequest {
   name: string;
   description?: string;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   sizeGB: number;
   format?: VolumeFormat;
   volumeType?: VolumeType;
@@ -1944,6 +1964,12 @@ export interface Network {
   metadataEnabled: boolean;
   resolverEnabled: boolean;
   resolverAddresses?: string[];
+  /**
+   * Why this network's guests will not resolve the DNS zones attached to it,
+   * with the remedy — absent when they will, and absent for a network with no
+   * attached zone, which has nothing to fail to deliver.
+   */
+  zoneResolutionWarning?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -1957,7 +1983,8 @@ export interface CreateNetworkRequest {
   gateway6?: string;
   /** false → v4-only network. */
   ipv6Enabled?: boolean;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   dhcpEnabled?: boolean;
   dnsServers?: string[];
   domainName?: string;
@@ -2029,8 +2056,8 @@ export interface SecurityGroup {
 export interface CreateSecurityGroupRequest {
   name: string;
   description?: string;
-  /** Defaults to the caller's default project when omitted. */
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
 }
 
 export interface UpdateSecurityGroupRequest {

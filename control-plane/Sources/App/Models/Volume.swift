@@ -478,6 +478,9 @@ extension Volume {
 struct CreateVolumeRequest: Content, ValidatedRequestBody {
     var name: String
     let description: String?
+    /// Required: there is no default project (issue #1059). Optional here so
+    /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
+    /// rather than a `Codable` decode failure that names neither.
     let projectId: UUID?
     let sizeGB: Int  // Size in GB for user convenience
     let format: String?  // "qcow2" or "raw", defaults to qcow2

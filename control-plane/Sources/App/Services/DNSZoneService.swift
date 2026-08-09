@@ -350,6 +350,41 @@ enum DNSZoneService {
         }
     }
 
+    /// The search domain a network should carry once its primary zone moves
+    /// from `previousZoneName` to `nextZoneName` (nil for a demotion).
+    ///
+    /// `primaryDNSZone` already means "the zone this network's VMs register
+    /// into", and resolving through it is the same intent — but the *search
+    /// domain* is the only thing that makes the unqualified half of that work.
+    /// It is the sole source of the DHCP `domain_name`/`domain_search` option
+    /// and of cloud-init's `nameservers.search`, so without it a guest resolves
+    /// `alpha.corp.internal` and not `alpha` (STR-201).
+    ///
+    /// The domain **follows the zone while the operator has not spoken** — it is
+    /// unset, or still spells the outgoing primary — and is left exactly as it
+    /// is once they have. That is what makes this safe to apply on a demotion
+    /// too: clearing a domain nobody chose restores the network to the state
+    /// promotion found it in, while a hand-set search domain survives a zone
+    /// being swapped out from under it.
+    static func searchDomainFollowingPrimaryZone(
+        current: String?, previousZoneName: String?, nextZoneName: String?
+    ) -> String? {
+        guard current == nil || current == previousZoneName else { return current }
+        return nextZoneName
+    }
+
+    /// The name of the zone this network currently registers into, if any — the
+    /// `previousZoneName` half of `searchDomainFollowingPrimaryZone`. Callers
+    /// moving the primary pointer need the live name; the zone-rename path has
+    /// the old spelling captured separately and moves following domains in the
+    /// same transaction as the rename.
+    static func primaryZoneName(of network: LogicalNetwork, on db: any Database) async throws
+        -> String?
+    {
+        guard let zoneID = network.$primaryDNSZone.id else { return nil }
+        return try await DNSZone.find(zoneID, on: db)?.name
+    }
+
     /// Enforce an explicitly requested hostname: valid label, free everywhere
     /// the VM registers.
     static func validatedExplicitHostname(

@@ -90,7 +90,7 @@ struct SecurityGroupController: RouteCollection {
         let request = try req.content.decodeValidated(CreateSecurityGroupRequest.self)
 
         let project = try await req.authorizedProjectForCreate(
-            requested: request.projectId, user: user,
+            requested: request.projectId,
             action: "create_security_group", resourceKind: "security groups")
         let projectId = try project.requireID()
 

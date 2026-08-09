@@ -192,6 +192,9 @@ struct SandboxController: RouteCollection {
             /// Ready sandbox snapshot to restore into a new identity (issue
             /// #427). Mutually exclusive with image/machine/process fields.
             let restoreFrom: UUID?
+            /// Required: there is no default project (issue #1059). Optional here so
+            /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
+            /// rather than a `Codable` decode failure that names neither.
             let projectId: UUID?
             let environment: String?
             let cpus: Int?

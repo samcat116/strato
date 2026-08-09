@@ -400,14 +400,23 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // Collection-level operations (list, create) gate on the caller's
         // organization — bare membership grants `org:read`, so this is "are you
         // anyone here at all"; the handler does the real project-scoped check
-        // for creates. A user's comes from their current organization; a
-        // machine principal's from where it was registered (issue #495) — it
-        // holds nothing by membership, so this only narrows which org's
-        // collection it is talking about.
+        // for creates and the real per-row check for lists. A user's comes from
+        // their current organization; a machine principal's from where it was
+        // registered (issue #495) — it holds nothing by membership, so this
+        // only narrows which org's collection it is talking about.
+        //
+        // Because that question is *substituted* rather than asked, it is a
+        // membership probe and does not carry the credential's own ceiling
+        // (STR-203): a restriction is stated as `vm:read` in project P, and
+        // neither half of that can be true of `org:read` on an organization, so
+        // intersecting it here 403'd the list while every item route beneath it
+        // succeeded. The ceiling applies in full where there is an act to apply
+        // it to — `canFilter("vm:read")` in the handler, `create_resources` on
+        // the resolved project for a create.
         let check: (permission: String, resourceType: String, resourceID: String)
-        if (permission == "read" && resourceId == "*")
-            || (permission == "create" && resourceId == "*")
-        {
+        let isMembershipProbe =
+            resourceId == "*" && (permission == "read" || permission == "create")
+        if isMembershipProbe {
             guard let currentOrgId = try await request.actingOrganizationID() else {
                 throw Abort(.forbidden, reason: "No current organization set")
             }
@@ -425,7 +434,8 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             resourceID: check.resourceID,
             context: IAMCheckContext(
                 path: request.url.path, method: request.method.rawValue, requestID: request.id),
-            state: request.iamAuthState,
+            state: isMembershipProbe
+                ? request.iamAuthState.membershipProbe() : request.iamAuthState,
             cache: request.iamCache,
             app: request.application,
             db: request.db

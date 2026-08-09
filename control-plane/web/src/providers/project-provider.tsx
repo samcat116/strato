@@ -23,6 +23,17 @@ interface ProjectContextType {
 
 const ProjectContext = createContext<ProjectContextType | undefined>(undefined);
 
+/**
+ * What a create dialog says when there is no project to create into.
+ *
+ * It names a blocker rather than describing the form, because that is what it
+ * now is: every create names its project and the API has no default to fall
+ * back on (issue #1059), so with no project selected there is nothing the
+ * dialog can submit.
+ */
+export const NO_PROJECT_DESCRIPTION =
+  "No project selected — create or select a project first";
+
 /** localStorage key namespacing the remembered project per organization. */
 function storageKey(orgId: string) {
   return `strato.selectedProject.${orgId}`;
@@ -50,7 +61,19 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
   const { currentOrg } = useOrganization();
 
   const orgId = currentOrg?.id;
-  const { data: projects = [], isLoading } = useProjectsForOrganization(orgId);
+  const { data: unsortedProjects = [], isLoading } =
+    useProjectsForOrganization(orgId);
+
+  // One global name order, because the API's is two orders concatenated:
+  // `listOrganizationProjects` returns the organization's own projects sorted
+  // by name, then every folder-held project sorted by name. So an
+  // alphabetically-first project could never be picked below just for living in
+  // a folder. Sorting here makes the pick depend on the set of projects rather
+  // than on where in the hierarchy they hang.
+  const projects = useMemo(
+    () => [...unsortedProjects].sort((a, b) => a.name.localeCompare(b.name)),
+    [unsortedProjects]
+  );
 
   // User's explicit selection for the current org, seeded from persisted state.
   // When the org changes we re-derive the selection during render (the React-
@@ -64,7 +87,13 @@ export function ProjectProvider({ children }: { children: ReactNode }) {
     setSelectedProjectId(orgId ? readStoredProject(orgId) : null);
   }
 
-  // Derive the active project: explicit selection > first project in the org.
+  // Derive the active project: explicit selection > first project by name.
+  //
+  // This is a UI convenience with no server-side counterpart. The API has no
+  // default project (issue #1059) — every create names the project it lands in
+  // — so what this picks is only ever a pre-filled selection the user can see
+  // in the switcher and change, never an answer sent on their behalf. Create
+  // dialogs name it for that reason.
   const currentProject = useMemo(() => {
     if (projects.length === 0) return null;
     if (selectedProjectId) {

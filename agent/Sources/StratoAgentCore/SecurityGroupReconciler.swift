@@ -37,6 +37,22 @@ extension OVNNaming {
     /// `neutron_pg_drop`.
     public static let dropPortGroupName = "pg_strato_drop"
 
+    /// The site-singleton *metadata deny* port group (STR-185): the ports of
+    /// VMs whose per-instance metadata switch is off, carrying one drop ACL per
+    /// family above the drop group's metadata allow.
+    ///
+    /// A second site-wide group rather than a per-network or per-VM one, for
+    /// the reason `metadataEgressACLs` gives for putting the allow on
+    /// `pg_strato_drop`: an object whose lifetime is the site's costs nothing
+    /// to keep, while one per network or per workload is a lifetime to create,
+    /// converge and reap. Membership is per-VM and already has a mechanism —
+    /// the same `reconcileMembership` pass that joins a port to its security
+    /// groups — so the per-VM part needs no new machinery at all.
+    ///
+    /// Empty on almost every site, and that is fine: a port group with no
+    /// members matches nothing, and its two ACLs cost one NB row each.
+    public static let metadataDenyPortGroupName = "pg_strato_no_metadata"
+
     /// The OVN-generated address set carrying a port group's member addresses
     /// for one family, as referenced from ACL matches (`$<name>`).
     public static func addressSetReference(portGroup: String, ethertype: String) -> String {
@@ -108,6 +124,18 @@ public enum SecurityGroupACLBuilder {
     /// would make "non-overridable" a property of today's rule model rather
     /// than of this ACL. One number makes it a property of the ACL.
     public static let metadataAllowPriority = 1003
+
+    /// The per-instance metadata kill switch's deny, one step above the allow
+    /// it cancels (STR-185) — the reserved space `metadataAllowPriority`'s note
+    /// set aside, now occupied.
+    ///
+    /// The deny has to be strictly higher rather than equal for exactly the
+    /// reason the allow sits above rule allows: two ACLs matching at equal
+    /// priority resolve arbitrarily in OVN, so a same-priority deny would
+    /// silence IMDS *usually*. It also means the kill switch is as
+    /// non-overridable as the carve-out — nothing a tenant can write reaches
+    /// 1004, so a security group with an allow-all egress rule does not undo it.
+    public static let metadataDenyPriority = 1004
 
     /// Bumped when the drop-group ACL set below changes shape, so existing
     /// deployments replace it on upgrade (the generation mechanism reused).
@@ -268,12 +296,13 @@ public enum SecurityGroupACLBuilder {
     /// later should find this rule and understand that it, not the group's
     /// permissiveness, is what keeps metadata reachable.
     ///
-    /// The AWS parallel stops short of AWS's per-instance kill switch
-    /// (`HttpEndpoint: disabled`): the only lever here is the per-*network*
-    /// `metadataEnabled`, so a single workload cannot yet be denied the
-    /// service. Academic while nothing listens; a real gap once STR-56 lands
-    /// (issue #1013), and the space above `metadataAllowPriority` is where such
-    /// a deny goes.
+    /// **Not overridable by a rule; overridable by the operator.** STR-185
+    /// filled in the half of the AWS parallel this once lacked: a VM whose
+    /// `metadataEnabled` is off has its ports in `metadataDenyPortGroupName`,
+    /// whose drop at `metadataDenyPriority` outranks these two. So "the tenant's
+    /// rules cannot reach IMDS" and "the operator can take IMDS away from one
+    /// workload" are both true, which is the pair AWS ships and the pair an
+    /// operator hardening a single VM against SSRF needs.
     ///
     /// Egress only, and stateful (`allow-related`), so the service's replies
     /// come back on the connection's conntrack state rather than through a
@@ -313,6 +342,50 @@ public enum SecurityGroupACLBuilder {
                     "inport == @\(pg) && ip6 && ip6.dst == \(InstanceMetadataEndpoint.addressV6) "
                     + "&& tcp && tcp.dst == \(port)",
                 action: "allow-related", externalIDs: ids),
+        ]
+    }
+
+    /// Bumped when the metadata deny group's ACL set below changes shape, the
+    /// `dropGroupRevision` mechanism applied to the second site-singleton group.
+    /// 1: the kill switch itself (STR-185).
+    public static let metadataDenyGroupRevision: Int64 = 1
+
+    /// The per-instance kill switch, realized (STR-185): egress to the metadata
+    /// service dropped for every port in `metadataDenyPortGroupName`.
+    ///
+    /// `metadataEgressACLs`' negation, and it differs from it in exactly two
+    /// ways worth stating.
+    ///
+    /// **Not scoped to the port.** The allow is deliberately narrowed to TCP/80
+    /// because a wider allow would only widen what a guest may probe; the deny
+    /// wants the opposite and matches the whole address, so a switched-off guest
+    /// cannot ping it, scan it, or find out from a refused connection that the
+    /// chassis has anything there at all. Nothing else Strato runs lives at
+    /// these addresses — `NetworkResolverEndpoint.reservedIndexes` keeps a
+    /// resolver from ever being allocated `169.254.169.254`, and the resolvers'
+    /// `fd00:ec2:1::/48` is disjoint from this address by construction — so the
+    /// wider match cannot shadow the resolver carve-out that shares the
+    /// enclosing `169.254.0.0/16` and `fd00:ec2::/32`.
+    ///
+    /// **`drop`, not `reject`.** OVN can send an RST; a blackhole is what AWS's
+    /// disabled endpoint looks like, and it is what a guest's IMDS client
+    /// already knows how to time out of. A refused connection would also tell a
+    /// probe that something is deliberately in the way.
+    ///
+    /// Egress only, mirroring the allow, and no `to-lport` twin is needed:
+    /// nothing returns from a connection that was never established.
+    public static func metadataDenyACLs() -> [ACLSpec] {
+        let pg = OVNNaming.metadataDenyPortGroupName
+        let ids = [managedKey: managedValue]
+        return [
+            ACLSpec(
+                direction: "from-lport", priority: metadataDenyPriority,
+                match: "inport == @\(pg) && ip4 && ip4.dst == \(InstanceMetadataEndpoint.address)",
+                action: "drop", externalIDs: ids),
+            ACLSpec(
+                direction: "from-lport", priority: metadataDenyPriority,
+                match: "inport == @\(pg) && ip6 && ip6.dst == \(InstanceMetadataEndpoint.addressV6)",
+                action: "drop", externalIDs: ids),
         ]
     }
 
@@ -474,18 +547,36 @@ public struct ObservedPortGroup: Equatable, Sendable {
 public struct DesiredPortMembership: Equatable, Sendable {
     public let portName: String
     public let securityGroupIds: [UUID]?
+    /// Whether this port's workload has its per-instance metadata switch off
+    /// (STR-185), which puts it in `OVNNaming.metadataDenyPortGroupName`.
+    ///
+    /// Read off the workload rather than the NIC because the switch is a
+    /// property of the instance: every port a switched-off VM owns is denied,
+    /// not just the one whose network happens to publish the endpoint.
+    ///
+    /// **Only reaches a managed port.** An unmanaged NIC (`securityGroupIds`
+    /// nil) is in no port group at all, so there is nothing for this to join
+    /// and `desiredGroups` still answers nil — converging membership for a port
+    /// this pass is meant to leave alone would strip it out of whatever an
+    /// operator put it in. The switch is not weaker for it: the listener refuses
+    /// the caller regardless of any ACL, and this ACL is the layer that keeps
+    /// the packet off the chassis, not the layer that decides.
+    public let metadataDenied: Bool
 
-    public init(portName: String, securityGroupIds: [UUID]?) {
+    public init(portName: String, securityGroupIds: [UUID]?, metadataDenied: Bool = false) {
         self.portName = portName
         self.securityGroupIds = securityGroupIds
+        self.metadataDenied = metadataDenied
     }
 
     /// The port-group names this port should be a member of: every attached
-    /// group plus the drop group (default-deny). Nil for an unmanaged port.
+    /// group, the drop group (default-deny), and the metadata deny group when
+    /// the workload's kill switch is thrown. Nil for an unmanaged port.
     public var desiredGroups: Set<String>? {
         guard let securityGroupIds else { return nil }
         var groups = Set(securityGroupIds.map { OVNNaming.portGroupName(securityGroupId: $0) })
         groups.insert(OVNNaming.dropPortGroupName)
+        if metadataDenied { groups.insert(OVNNaming.metadataDenyPortGroupName) }
         return groups
     }
 }
@@ -507,7 +598,18 @@ public enum SecurityGroupReconciler {
             PortGroupPlan(
                 name: OVNNaming.dropPortGroupName,
                 generation: SecurityGroupACLBuilder.dropGroupRevision,
-                acls: SecurityGroupACLBuilder.dropGroupACLs())
+                acls: SecurityGroupACLBuilder.dropGroupACLs()),
+            // Unconditional, like the drop group and for the same two reasons:
+            // `teardownNames` reaps every managed group a plan omits, so a
+            // conditional one would be created and destroyed as the last
+            // switched-off VM on the site came and went; and a port cannot join
+            // a group that does not exist yet, so realizing it only once
+            // something needs it guarantees that the first thing to need it
+            // waits a sync (STR-185).
+            PortGroupPlan(
+                name: OVNNaming.metadataDenyPortGroupName,
+                generation: SecurityGroupACLBuilder.metadataDenyGroupRevision,
+                acls: SecurityGroupACLBuilder.metadataDenyACLs()),
         ]
         var unexpressed: [UUID] = []
 
@@ -533,8 +635,8 @@ public enum SecurityGroupReconciler {
     }
 
     /// Managed port groups present in the NB that the plan no longer wants.
-    /// The drop group is part of every plan, so it is never torn down while
-    /// security groups are in use.
+    /// The drop group and the metadata deny group are part of every plan, so
+    /// neither is ever torn down while security groups are in use.
     public static func teardownNames(
         desired: [PortGroupPlan], observed: [ObservedPortGroup]
     ) -> [String] {
@@ -622,8 +724,20 @@ extension SecurityGroupReconciler {
         }
     }
 
+    /// How early a port group is joined: the two site-singleton groups whose
+    /// ACLs only ever *narrow* what a port may do go before the rest, so a
+    /// partially converged port is never more permissive than a converged one.
+    /// Ties break on the name, keeping the order deterministic for tests.
+    static func additionRank(of group: String) -> Int {
+        switch group {
+        case OVNNaming.dropPortGroupName, OVNNaming.metadataDenyPortGroupName: return 0
+        default: return 1
+        }
+    }
+
     /// Every-agent membership convergence for this host's own VM ports:
-    /// each managed port joins its groups + the drop group and leaves managed
+    /// each managed port joins its groups + the drop group (+ the metadata deny
+    /// group when its workload's kill switch is thrown) and leaves managed
     /// groups it no longer belongs to. Ports whose NIC is unmanaged
     /// (`securityGroupIds == nil`) are left exactly as-is. A port group that
     /// doesn't exist yet (the authority's sync hasn't realized it) is logged
@@ -650,14 +764,17 @@ extension SecurityGroupReconciler {
         for membership in managed {
             guard let desired = membership.desiredGroups else { continue }
             let current = observed[membership.portName] ?? []
-            // The drop group joins FIRST: additions are one OVSDB round trip
+            // The deny groups join FIRST: additions are one OVSDB round trip
             // each, and a port that lands in an allow group before the drop
-            // group would spend the gap default-allow on live traffic. If the
-            // drop-group add fails, the port's allow-group adds are skipped
-            // entirely this pass (fail closed, retried next sync) — removals
-            // below still run, since they only ever narrow access.
+            // group would spend the gap default-allow on live traffic. The
+            // metadata deny group rides in the same rank for the same reason —
+            // a port switched off IMDS should not be reachable to it for the
+            // width of a round trip either. If the drop-group add fails, the
+            // port's allow-group adds are skipped entirely this pass (fail
+            // closed, retried next sync) — removals below still run, since they
+            // only ever narrow access.
             let additions = desired.subtracting(current).sorted {
-                ($0 == OVNNaming.dropPortGroupName ? 0 : 1, $0) < ($1 == OVNNaming.dropPortGroupName ? 0 : 1, $1)
+                (Self.additionRank(of: $0), $0) < (Self.additionRank(of: $1), $1)
             }
             var portPending = false
             for group in additions {
@@ -665,6 +782,12 @@ extension SecurityGroupReconciler {
                 do {
                     try await actuator.addPort(named: membership.portName, toGroup: group)
                 } catch {
+                    // Only the drop group's failure abandons the port. A failed
+                    // metadata-deny add leaves IMDS reachable at the network
+                    // layer for a sync, which the listener's own refusal already
+                    // covers; abandoning the port would instead leave a working
+                    // workload with no allow groups at all, which is a real
+                    // outage traded for a redundant layer.
                     if group == OVNNaming.dropPortGroupName { portPending = true }
                     logger.warning(
                         "Could not add port to security-group port group (retried next sync)",

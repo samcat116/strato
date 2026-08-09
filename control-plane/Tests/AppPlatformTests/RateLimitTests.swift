@@ -12,6 +12,8 @@ struct RateLimitTests {
     /// database or the full middleware stack.
     private func withRateLimitedApp(
         config: RateLimitConfig,
+        valkeyStore: (any RateLimitStore)? = nil,
+        backendDeadline: Duration = RateLimitMiddleware.backendDeadline,
         _ test: (Application) async throws -> Void
     ) async throws {
         let app = try await Application.make(.testing)
@@ -19,7 +21,9 @@ struct RateLimitTests {
             app.middleware.use(
                 RateLimitMiddleware(
                     config: config,
-                    fallbackStore: InMemoryRateLimitStore()
+                    fallbackStore: InMemoryRateLimitStore(),
+                    valkeyStore: valkeyStore,
+                    backendDeadline: backendDeadline
                 ))
             // General API route (scope: api).
             app.get("api", "things") { _ in "ok" }
@@ -137,6 +141,39 @@ struct RateLimitTests {
                 }
             }
         }
+    }
+
+    @Test("An unavailable Valkey rate-limit backend fails open")
+    func testBackendFailureFailsOpen() async throws {
+        try await withRateLimitedApp(
+            config: baseConfig(apiLimit: 1),
+            valkeyStore: UnavailableRateLimitStore()
+        ) { app in
+            try await app.test(.GET, "/api/things") { res async throws in
+                #expect(res.status == .ok)
+                #expect(res.body.string == "ok")
+                #expect(res.headers.first(name: "X-RateLimit-Limit") == nil)
+            }
+        }
+    }
+
+    @Test("A stalled Valkey rate-limit backend fails open before the request deadline")
+    func testBackendStallFailsOpenPromptly() async throws {
+        let clock = ContinuousClock()
+        let started = clock.now
+
+        try await withRateLimitedApp(
+            config: baseConfig(apiLimit: 1),
+            valkeyStore: StalledRateLimitStore(),
+            backendDeadline: .milliseconds(10)
+        ) { app in
+            try await app.test(.GET, "/api/things") { res async throws in
+                #expect(res.status == .ok)
+                #expect(res.body.string == "ok")
+            }
+        }
+
+        #expect(started.duration(to: clock.now) < .seconds(1))
     }
 
     @Test("Repeated auth failures trigger an exponential lockout")
@@ -264,6 +301,39 @@ struct RateLimitTests {
             }
         }
     }
+}
+
+private enum TestRateLimitStoreError: Error {
+    case unavailable
+}
+
+private struct UnavailableRateLimitStore: RateLimitStore {
+    func hit(_ key: String, window: Int) async throws -> RateLimitCount {
+        throw TestRateLimitStoreError.unavailable
+    }
+
+    func readInt(_ key: String) async throws -> Int? {
+        throw TestRateLimitStoreError.unavailable
+    }
+
+    func writeInt(_ key: String, value: Int, ttl: Int) async throws {
+        throw TestRateLimitStoreError.unavailable
+    }
+
+    func reset(_ key: String) async throws {
+        throw TestRateLimitStoreError.unavailable
+    }
+}
+
+private struct StalledRateLimitStore: RateLimitStore {
+    func hit(_ key: String, window: Int) async throws -> RateLimitCount {
+        try await Task.sleep(for: .seconds(60))
+        return RateLimitCount(count: 1, ttl: window)
+    }
+
+    func readInt(_ key: String) async throws -> Int? { nil }
+    func writeInt(_ key: String, value: Int, ttl: Int) async throws {}
+    func reset(_ key: String) async throws {}
 }
 
 private extension RateLimitConfig {

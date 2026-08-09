@@ -112,10 +112,20 @@ final class IAMRequestCache: Sendable {
     /// The identity of a decided check. Two checks with the same triple in one
     /// request are the same question — the middleware's and the handler's, for
     /// the object routes that deliberately ask twice.
+    ///
+    /// The credential restriction is part of that identity (STR-203), not
+    /// decoration. A membership probe decides its question with the ceiling
+    /// suspended (`IAMRequestAuthState.membershipProbe`), so its answer is to a
+    /// *different* question than the same triple asked under the ceiling —
+    /// keyed on the triple alone, a probe's `org:read` allow would silently
+    /// answer a later restricted `view_organization` check for free. Within an
+    /// ordinary request this field holds one constant value, so the memo
+    /// behaves exactly as it always has.
     struct DecisionKey: Hashable, Sendable {
         let principal: IAMPrincipal
         let action: String
         let node: IAMNode
+        let restriction: CredentialRestriction
     }
 
     /// The identity of one principal's bindings at one node (#735). Bindings

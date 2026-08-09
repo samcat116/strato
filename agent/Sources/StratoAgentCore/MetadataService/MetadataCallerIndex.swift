@@ -70,6 +70,16 @@ public enum MetadataCallerResolution: Sendable, Equatable {
 /// in ordinary operation: a VM is deleted, IPAM hands its address to the next
 /// one, and the withdrawal has not landed on this host yet. First-wins and
 /// last-wins are both a guess, and the guess is wrong half the time.
+///
+/// This is why an instance whose metadata kill switch is thrown (STR-185) is
+/// still indexed here, and refused a step later by `MetadataResponder` instead.
+/// Dropping it would look like a tidier way to say "do not serve this VM", and
+/// it would quietly convert exactly the collision above from a refusal into a
+/// disclosure — the switched-off instance's address would resolve to whoever
+/// else claims it, which is the neighbour whose identity it was hardened away
+/// from. What belongs in this index is every address a live instance may
+/// legitimately source from; whether it gets an answer is not this type's
+/// question.
 public struct MetadataCallerIndex: Sendable {
     private let byAddress: [MetadataCallerAddress: [UUID]]
 

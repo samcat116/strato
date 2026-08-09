@@ -219,11 +219,18 @@ public func configure(_ app: Application) async throws {
         try ImageObjectStoreFactory.configure(app)
     }
 
-    // Configure user authentication with sessions
-    app.middleware.use(User.sessionAuthenticator())
-
-    // Configure API key authentication (for Bearer tokens)
+    // Authenticate bearer credentials before installing the session
+    // authenticator. Vapor's SessionAuthenticator persists any User that a
+    // downstream middleware authenticated into the session on the response
+    // path. With the opposite order, every API-key request silently created a
+    // browser session and therefore depended on the session Valkey even when
+    // it arrived without a cookie (STR-206). A bearer credential is already
+    // self-contained; it must never be promoted into a browser session.
     app.middleware.use(BearerAuthorizationHeaderAuthenticator())
+
+    // Configure browser-session authentication after bearer auth. Cookie-only
+    // requests still restore and refresh their session exactly as before.
+    app.middleware.use(User.sessionAuthenticator())
 
     // Put the task-local `ServiceContext` back after the last future-based
     // middleware in the stack. Vapor's `SessionsMiddleware` and
@@ -259,8 +266,8 @@ public func configure(_ app: Application) async throws {
                 config: rateLimitConfig,
                 fallbackStore: rateLimitFallbackStore,
                 // Coordination, not sessions: these are cross-replica counters
-                // that fail open to the in-memory store, which is exactly the
-                // coordination contract.
+                // whose backend errors fail open without rejecting the request,
+                // which is exactly the coordination contract.
                 valkeyStore: valkeyRateLimitStore
             ))
         app.logger.info(
@@ -861,12 +868,39 @@ public func configure(_ app: Application) async throws {
     // for, so a grow the agent has refused stops reading as one that landed.
     app.migrations.add(AddVolumeObservedSize())
 
+    // STR-201: hand an address to the networks `AddResolverEnabledToLogicalNetwork`
+    // switched the resolver on for, which never got one because an index is only
+    // allocated by a network create or update.
+    app.migrations.add(BackfillResolverIndexes())
+
+    // STR-198: the same backstop for the DNS model's text columns, which the
+    // STR-195 cut left out. A follow-on rather than four more entries in
+    // `BoundResourceTextColumns`, which has already run on every existing
+    // deployment — see `BoundDNSTextColumns`.
+    app.migrations.add(BoundDNSTextColumns())
+
+    // STR-185: the per-instance metadata kill switch, so hardening one workload
+    // against SSRF no longer means moving it to a network of its own.
+    app.migrations.add(AddMetadataEnabledToVM())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.
     app.migrations.add(DropResourceOperations())
 
-    try await app.autoMigrate()
+    // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
+    // wraps no transaction around a migration and the `_fluent_migrations` row
+    // that records it, so concurrent replica boots race the same migration and a
+    // crash mid-migration leaves a half-state no later boot can get past.
+    // `SchemaMigrator` serializes the phase on a Postgres advisory lock and
+    // commits each migration with its log row.
+    try await SchemaMigrator.run(on: app)
+
+    // STR-186 prevents new tenant IPv6 subnets from overlapping the ULA space
+    // used by metadata and per-network resolvers. Existing rows cannot be
+    // renumbered safely in place, so name every collision at each startup until
+    // its operator remediates it.
+    try await NetworkServiceSpaceAudit.warnAboutCollidingNetworks(on: app.db, logger: app.logger)
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
     // curated registry. Runs every startup so registry changes land with the

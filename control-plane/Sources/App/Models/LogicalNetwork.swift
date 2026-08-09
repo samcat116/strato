@@ -291,7 +291,9 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
     let gateway6: String?
     /// Pass false for a v4-only network (subnet6 must then be omitted).
     let ipv6Enabled: Bool?
-    /// Defaults to the caller's default project when omitted.
+    /// Required: there is no default project (issue #1059). Optional here so
+    /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
+    /// rather than a `Codable` decode failure that names neither.
     let projectId: UUID?
     /// Whether agents program OVN DHCP for this network. Defaults true.
     let dhcpEnabled: Bool?
@@ -445,10 +447,19 @@ struct NetworkResponse: Content {
     let siteId: UUID?
     /// The zone this network's VMs auto-register into, if any (issue #770).
     let primaryDnsZoneId: UUID?
+    /// Why this network's guests will not resolve the DNS zones attached to it,
+    /// or nil when they will (STR-201). Derived on read from the resolver's
+    /// state and the site's capability — see
+    /// `ResolverCapability.zoneResolutionWarning`.
+    ///
+    /// A required init parameter rather than a defaulted one, so none of the
+    /// handlers building this can silently omit the one field that reports a
+    /// misconfiguration.
+    let zoneResolutionWarning: String?
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from network: LogicalNetwork, attachedInterfaceCount: Int) {
+    init(from network: LogicalNetwork, attachedInterfaceCount: Int, zoneResolutionWarning: String?) {
         self.id = network.id
         self.name = network.name
         self.subnet = network.subnet
@@ -472,6 +483,7 @@ struct NetworkResponse: Content {
         }
         self.siteId = network.$site.id
         self.primaryDnsZoneId = network.$primaryDNSZone.id
+        self.zoneResolutionWarning = zoneResolutionWarning
         self.createdAt = network.createdAt
         self.updatedAt = network.updatedAt
     }

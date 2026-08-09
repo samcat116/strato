@@ -228,6 +228,85 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("POST /api/networks rejects an IPv6 subnet overlapping the reserved service space (400)")
+    func createRejectsSubnet6OverlappingServiceSpace() async throws {
+        try await withNetworkTestApp { app, _, project, token in
+            // The whole documented /32, not just the /64 holding fd00:ec2::254:
+            // it also covers the per-network resolvers at fd00:ec2:1::<index>.
+            for subnet6 in ["fd00:ec2::/64", "fd00:ec2:1::/64", "fd00:ec2:ffff::/64", "FD00:0EC2:0:0::/64"] {
+                try await app.test(.POST, "/api/networks") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateNetworkRequest(
+                            name: "metadata-clash-net", subnet: "10.31.0.0/24", gateway: nil,
+                            subnet6: subnet6, projectId: project.id!))
+                } afterResponse: { res in
+                    #expect(res.status == .badRequest, "subnet6 '\(subnet6)' should be rejected")
+                    // The JSON body escapes the CIDR's slashes, so match the prose.
+                    #expect(res.body.string.contains("reserved for Strato's own link-local services"))
+                }
+            }
+
+            // The neighbouring prefixes are ordinary tenant space.
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "metadata-neighbour-net", subnet: "10.32.0.0/24", gateway: nil,
+                        subnet6: "fd00:ec3::/64", projectId: project.id!))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
+
+    @Test("PUT /api/networks rejects an IPv6 subnet overlapping the reserved service space (400)")
+    func updateRejectsSubnet6OverlappingServiceSpace() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            let network = LogicalNetwork(
+                name: "metadata-update-net", subnet: "10.33.0.0/24", gateway: "10.33.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+
+            try await app.test(.PUT, "/api/networks/\(network.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(subnet6: "fd00:ec2::/64"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("reserved for Strato's own link-local services"))
+            }
+
+            let reloaded = try await LogicalNetwork.find(network.id!, on: app.db)
+            #expect(reloaded?.subnet6 == nil)
+        }
+    }
+
+    @Test("STRATO_DEFAULT_NETWORK_SUBNET6 rejects the reserved service space")
+    func defaultNetworkSubnet6RejectsServiceSpace() throws {
+        let error = #expect(throws: Abort.self) {
+            try AddIPv6ToLogicalNetwork.resolveDefaultSubnet6(configured: "fd00:ec2::/64")
+        }
+        #expect(error?.status == .internalServerError)
+        #expect(error?.reason.contains("STRATO_DEFAULT_NETWORK_SUBNET6") == true)
+        #expect(
+            try AddIPv6ToLogicalNetwork.resolveDefaultSubnet6(configured: "fd00:ec3::/64").description
+                == "fd00:ec3::/64")
+    }
+
+    @Test("Startup audit finds networks that predate the service-space reservation")
+    func startupAuditFindsExistingServiceSpaceCollision() async throws {
+        try await withNetworkTestApp { app, user, project, _ in
+            let colliding = LogicalNetwork(
+                name: "legacy-service-space-net", subnet: "10.34.0.0/24", gateway: "10.34.0.1",
+                subnet6: "fd00:ec2:abcd::/64", gateway6: "fd00:ec2:abcd::1",
+                projectID: project.id!, createdByID: user.id!)
+            try await colliding.save(on: app.db)
+
+            let found = try await NetworkServiceSpaceAudit.collidingNetworks(on: app.db)
+            #expect(found.map(\.id).contains(colliding.id))
+        }
+    }
+
     @Test("POST /api/networks rejects an IPv6 subnet overlapping a project sibling (409)")
     func createRejectsOverlappingSubnet6() async throws {
         try await withNetworkTestApp { app, user, project, token in
@@ -720,6 +799,150 @@ final class NetworkControllerTests {
             #expect(after?.resolverEnabled == true)
             // The list itself is unchanged in shape; only what consumes it moved.
             #expect(after?.dnsServers == ["9.9.9.9"])
+        }
+    }
+
+    @Test("The zone-resolution warning names whichever thing is withholding the resolver")
+    func zoneResolutionWarningBranches() {
+        let network = LogicalNetwork(
+            name: "warn", subnet: "10.90.0.0/24", projectID: UUID(), resolverIndex: 400)
+
+        // Nothing attached: nothing to fail to deliver, whatever the resolver
+        // is doing.
+        network.resolverEnabled = false
+        #expect(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 0, incapableAgentNames: ["old-host"]) == nil)
+
+        let off = try! #require(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 1, incapableAgentNames: []))
+        #expect(off.contains("resolver is off"))
+        #expect(off.contains("its attached DNS zone"))
+
+        network.resolverEnabled = true
+        #expect(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 2, incapableAgentNames: []) == nil)
+
+        let incapable = try! #require(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 2, incapableAgentNames: ["hv-1", "hv-2"]))
+        #expect(incapable.contains("hv-1, hv-2"))
+        // Plural, because the count is the operator's own attachment count.
+        #expect(incapable.contains("its 2 attached DNS zones"))
+
+        // The pre-STR-40 state the backfill exists to remove.
+        network.resolverIndex = nil
+        let unallocated = try! #require(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 1, incapableAgentNames: []))
+        #expect(unallocated.contains("no address allocated"))
+    }
+
+    @Test("The capability index answers per site, and from site-less agents when unpinned")
+    func capabilityIndexScopesBySite() {
+        let siteA = UUID()
+        let siteB = UUID()
+        func incapableAgent(named name: String, site: UUID?) -> Agent {
+            let agent = Agent(
+                name: name, hostname: name, version: "1.0", capabilities: [],
+                resources: AgentResources(
+                    totalCPU: 1, availableCPU: 1, totalMemory: 1, availableMemory: 1,
+                    totalDisk: 1, availableDisk: 1))
+            agent.$site.id = site
+            return agent
+        }
+        let index = ResolverCapability.Index(incapable: [
+            incapableAgent(named: "old-b", site: siteB),
+            incapableAgent(named: "old-a2", site: siteA),
+            incapableAgent(named: "old-a1", site: siteA),
+            incapableAgent(named: "unsited", site: nil),
+        ])
+
+        #expect(index.incapableAgentNames(forSite: siteA) == ["old-a1", "old-a2"])
+        #expect(index.incapableAgentNames(forSite: siteB) == ["old-b"])
+        // A site with nothing holding it back is capable, not unknown.
+        #expect(index.incapableAgentNames(forSite: UUID()).isEmpty)
+        // The sync path asks a site-less receiving agent's own flag, so agents
+        // assigned to other sites cannot be named as the cause here.
+        #expect(index.incapableAgentNames(forSite: nil) == ["unsited"])
+    }
+
+    @Test("The backfill gives an address to a resolver-enabled network that has none")
+    func backfillAllocatesMissingResolverIndexes() async throws {
+        try await withNetworkTestApp { app, _, project, _ in
+            let builder = TestDataBuilder(db: app.db)
+            // The shape `AddResolverEnabledToLogicalNetwork` left behind: the
+            // flag on by default, no index, and nothing that would ever
+            // allocate one.
+            let stranded = try await builder.createNetwork(name: "pre-str40", project: project)
+            #expect(stranded.resolverEnabled)
+            #expect(stranded.resolverIndex == nil)
+
+            let held = try await builder.createNetwork(name: "already-has-one", project: project)
+            held.resolverIndex = 500
+            try await held.save(on: app.db)
+
+            let optedOut = try await builder.createNetwork(name: "no-resolver", project: project)
+            optedOut.resolverEnabled = false
+            try await optedOut.save(on: app.db)
+
+            try await BackfillResolverIndexes().prepare(on: app.db)
+
+            let filled = try await LogicalNetwork.find(stranded.id, on: app.db)
+            let allocated = try #require(filled?.resolverIndex)
+            #expect(NetworkResolverEndpoint.isValidIndex(allocated))
+            #expect(allocated != 500)
+            // A live address is never moved — that would strand every lease
+            // already carrying it.
+            #expect(try await LogicalNetwork.find(held.id, on: app.db)?.resolverIndex == 500)
+            // The flag is off, so there is nothing to point guests at.
+            #expect(try await LogicalNetwork.find(optedOut.id, on: app.db)?.resolverIndex == nil)
+
+            // Idempotent: a second run allocates nothing further.
+            try await BackfillResolverIndexes().prepare(on: app.db)
+            #expect(try await LogicalNetwork.find(stranded.id, on: app.db)?.resolverIndex == allocated)
+        }
+    }
+
+    @Test("The backfill serializes with a concurrent live resolver allocation")
+    func backfillSerializesWithLiveAllocation() async throws {
+        try await withNetworkTestApp { app, _, project, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let stranded = try await builder.createNetwork(name: "backfill-race", project: project)
+
+            // Keep this row out of the backfill's pending set until its live
+            // allocation commits. Its transaction chooses an index, pauses,
+            // and gives the migration a chance to collide if the migration is
+            // not participating in the allocator's advisory lock.
+            let live = try await builder.createNetwork(name: "live-race", project: project)
+            live.resolverEnabled = false
+            try await live.save(on: app.db)
+            let liveID = try live.requireID()
+            let (selection, selected) = AsyncStream.makeStream(of: Void.self)
+
+            async let liveAllocation: Void = app.db.transaction { db in
+                let allocating = try #require(try await LogicalNetwork.find(liveID, on: db))
+                allocating.resolverEnabled = true
+                _ = try await ResolverAddressAllocator.ensureIndex(for: allocating, on: db)
+                selected.yield()
+                try await Task.sleep(for: .milliseconds(250))
+                try await allocating.save(on: db)
+            }
+
+            for await _ in selection {
+                break
+            }
+            async let backfill: Void = BackfillResolverIndexes().prepare(on: app.db)
+            _ = try await (liveAllocation, backfill)
+            selected.finish()
+
+            let filled = try #require(try await LogicalNetwork.find(stranded.id, on: app.db))
+            let allocatedLive = try #require(try await LogicalNetwork.find(liveID, on: app.db))
+            #expect(filled.resolverIndex != nil)
+            #expect(allocatedLive.resolverIndex != nil)
+            #expect(filled.resolverIndex != allocatedLive.resolverIndex)
         }
     }
 

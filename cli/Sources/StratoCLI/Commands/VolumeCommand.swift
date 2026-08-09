@@ -96,7 +96,7 @@ struct VolumeCommand: AsyncParsableCommand {
                     body: .json(
                         .init(
                             name: name, description: description,
-                            projectId: project ?? env.context.project, sizeGB: size))
+                            projectId: try resolveProject(project, environment: env), sizeGB: size))
                 ).accepted.body.json
                 try await handleMutation(
                     AcceptedMutation(id: accepted.mutationId), client: client, noWait: noWait,

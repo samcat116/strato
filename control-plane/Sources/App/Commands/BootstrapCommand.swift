@@ -133,6 +133,12 @@ struct BootstrapCommand: AsyncCommand {
         let username = try Self.resolveUsername(signature.username, adminEmail: adminEmail)
         let email = adminEmail ?? signature.email ?? "bootstrap@localhost"
         let orgName = signature.orgName ?? "Default Organization"
+        // A label, not a role: nothing resolves a project by name (issue #1059),
+        // so `--project-name` is free to be anything. It did matter once — VM
+        // and sandbox creates with no `projectId` looked for a project named
+        // exactly "Default Project", so bootstrapping with any other name left
+        // an installation where those two endpoints refused and the other five
+        // quietly worked.
         let projectName = signature.projectName ?? "Default Project"
         let keyName = signature.keyName ?? "bootstrap"
 

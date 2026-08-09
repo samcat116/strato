@@ -71,17 +71,45 @@ algorithm name as its prefix. List inputs are bounded by cardinality too —
 notably `securityGroupIds`, which is held to the same five-per-interface cap at
 create that the attach endpoint enforces.
 
+**DNS zones and records** are bounded on the same terms, at their own grammar's
+ceiling (STR-198). A zone's `name` and a record's `name` may be **253
+characters**, RFC 1035's limit for a domain name in text form, rather than the
+128 above — a deep subdomain zone is an ordinary thing to serve. A zone's
+`description` takes the 4096 free-text ceiling. A record's `value` is bounded by
+its type: an address for `A`/`AAAA`, a domain name for `CNAME`/`PTR`, 255 bytes
+for `TXT`, and `priority weight port target` for `SRV`. A zone also holds at
+most 1000 authored records.
+
 Characters are counted the way Postgres counts them, and the same ceilings are
 enforced by `CHECK` constraints on the columns, so the API and the database
 reject exactly the same values.
 
-Resources outside that set — DNS zones and records, security-group rules, sites,
+Resources outside that set — security-group rules, sites,
 floating-IP pools, webhook subscriptions, IAM policies and roles, guardrails,
 API keys, registry pull secrets, OIDC providers, and users — do not yet carry
 per-field ceilings. Independently of any field, though, a collected request body
 is capped at **1 MiB**, which bounds them all; the image-upload, artifact-upload
 and snapshot-transfer routes stream instead of collecting and carry their own,
 much larger limits.
+
+### Project scoping
+
+Every project-scoped create names the project it lands in. `projectId` is
+**required** on `POST /api/vms`, `/api/sandboxes`, `/api/volumes`,
+`/api/networks`, `/api/security-groups`, `/api/floating-ips` and
+`/api/dns-zones`; omitting it is a `400` reading
+`projectId is required — name the project to <verb> <kind> in.`
+
+**There is no default project.** Two of those endpoints used to infer one when a
+request named none, and they inferred differently — VM and sandbox creation took
+the project literally *named* "Default Project" in the caller's current
+organization, the other five took that organization's oldest project — so the
+same empty body could land in two different places. Neither answer was one an
+operator had chosen, and both were blind to projects held inside a folder, so
+the inference was removed rather than reconciled.
+
+A new organization is still provisioned with a first project named "Default
+Project", but nothing resolves a project by that name: rename it freely.
 
 ### Asynchronous mutations
 

@@ -151,7 +151,11 @@ struct OrganizationController: RouteCollection {
             try await user.save(on: req.db)
         }
 
-        // Create default project for the organization
+        // A first project, so a new organization can create something without
+        // hand-making one. The name is a label and nothing more: no resolution
+        // reads it (issue #1059 deleted the query that did), so renaming this
+        // project is safe and a create that names no project is refused rather
+        // than routed here.
         let defaultProject = Project(
             name: "Default Project",
             description: "Default project for \(organization.name)",
@@ -164,7 +168,7 @@ struct OrganizationController: RouteCollection {
         defaultProject.path = "/\(organization.id!.uuidString)/\(defaultProject.id!.uuidString)"
         try await defaultProject.save(on: req.db)
 
-        // Creator binding on the default project (project creation writes an
+        // Creator binding on that first project (project creation writes an
         // explicit, revocable binding for its creator).
         try await RoleBindingService.grant(
             principalType: .user,

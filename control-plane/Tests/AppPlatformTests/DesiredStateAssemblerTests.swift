@@ -272,6 +272,32 @@ final class DesiredStateAssemblerTests {
         }
     }
 
+    @Test("The per-instance kill switch rides the document it governs")
+    func metadataCarriesTheKillSwitch() async throws {
+        try await withAssemblerApp { app, _, project in
+            let agentId = try await self.registerAgent(app: app, named: "switch-agent")
+
+            let served = try await self.placeVM(
+                app: app, project: project, named: "served-vm", onAgent: agentId)
+            let hardened = try await self.placeVM(
+                app: app, project: project, named: "hardened-vm", onAgent: agentId)
+            hardened.metadataEnabled = false
+            try await hardened.save(on: app.db)
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+
+            let servedMetadata = try #require(sync.vms.first { $0.vmId == served.id }?.metadata)
+            #expect(servedMetadata.serviceEnabled == true)
+            #expect(servedMetadata.isServiceEnabled)
+
+            let hardenedMetadata = try #require(sync.vms.first { $0.vmId == hardened.id }?.metadata)
+            #expect(hardenedMetadata.serviceEnabled == false)
+            #expect(!hardenedMetadata.isServiceEnabled)
+            #expect(hardenedMetadata.instanceId == hardened.id)
+            #expect(hardenedMetadata.projectId == project.id)
+        }
+    }
+
     // MARK: - Edge nonces (ADR 0001 stage 9, STR-151)
 
     @Test("Edge nonces reach the sync only once they have been asked for")
