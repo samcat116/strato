@@ -1,0 +1,40 @@
+helm/strato-control-plane/values.yaml
+  s_3805ddcc2bf4a3::t_e838cd406f33f2 356-362,498-500
+helm/strato-control-plane/templates/migration-job.yaml
+  s_3805ddcc2bf4a3::t_e838cd406f33f2 59-62
+deploy/compose/.env.example
+  s_3805ddcc2bf4a3::t_e838cd406f33f2 62-65
+control-plane/Tests/AppPlatformTests/DatabaseStatementTimeoutConfigurationTests.swift
+  s_3805ddcc2bf4a3::t_a9e52ad4c8060a 95-97
+  s_3805ddcc2bf4a3::t_80f7603752a21e 1-2,4-5,7-94,98-141
+  s_3805ddcc2bf4a3::t_e838cd406f33f2 3,6
+helm/strato-control-plane/templates/deployment.yaml
+  s_3805ddcc2bf4a3::t_e838cd406f33f2 180-183
+docs/deployment/docker-compose.md
+  s_3805ddcc2bf4a3::t_e838cd406f33f2 195
+control-plane/Sources/App/configure.swift
+  s_3805ddcc2bf4a3::t_80f7603752a21e 332-346,349
+control-plane/Sources/App/DatabaseStatementTimeoutConfiguration.swift
+  s_3805ddcc2bf4a3::t_80f7603752a21e 1-61,66-68
+  s_3805ddcc2bf4a3::t_329e5d61eecba6 62-65
+deploy/compose/docker-compose.yml
+  s_3805ddcc2bf4a3::t_e838cd406f33f2 270-272
+helm/strato-control-plane/README.md
+  s_3805ddcc2bf4a3::t_e838cd406f33f2 121-128,146-147
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "d44ff21a0e3997d790f70f248cf8ddd747e99f43",
+  "prompts": {},
+  "sessions": {
+    "s_3805ddcc2bf4a3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4ae-e6d0-7543-9224-3e5f392b4ed8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
