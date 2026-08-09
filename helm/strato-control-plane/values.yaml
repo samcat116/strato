@@ -353,6 +353,13 @@ strato:
     username: vapor_username
     # password is stored in secret
 
+    # PostgreSQL statement_timeout for normal control-plane connections, in
+    # milliseconds. It is applied after authentication to each physical pooled
+    # connection. Must be a positive integer no greater than 2147483647. Five
+    # minutes is deliberately generous while still preventing a blocked query
+    # from pinning a pool slot forever.
+    statementTimeoutMs: 300000
+
     # TLS mode for the Postgres connection (DATABASE_TLS) — issue #56:
     #   require  - encrypt and fail if the server won't negotiate TLS
     #   prefer   - encrypt if offered, fall back to plaintext otherwise
@@ -488,6 +495,10 @@ externalDatabase:
 migration:
   enabled: true
   backoffLimit: 3
+  # Migrations may legitimately run longer than request-path queries, but they
+  # must still be bounded. SchemaMigrator applies this only to its pinned
+  # migration connection in both the Job and any serving process that migrates.
+  statementTimeoutMs: 900000
   
 # Init containers
 initContainers:

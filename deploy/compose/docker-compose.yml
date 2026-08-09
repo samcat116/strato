@@ -267,6 +267,12 @@ services:
       DATABASE_NAME: vapor_database
       DATABASE_USERNAME: vapor_username
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      # Bound every statement on every pooled connection. The application also
+      # defaults to five minutes when this variable is absent.
+      DATABASE_STATEMENT_TIMEOUT_MS: ${DATABASE_STATEMENT_TIMEOUT_MS:-300000}
+      # Allow schema changes more time only while SchemaMigrator owns its pinned
+      # connection, then restore the serving budget above.
+      DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS: ${DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS:-900000}
       # Postgres runs in this compose network and never leaves the host, so
       # plaintext is acceptable. Override with DATABASE_TLS=require (and
       # DATABASE_TLS_CA_CERT_PATH) if you point this at an external database.

@@ -56,6 +56,12 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+            # Keep the serving budget as the connection default. SchemaMigrator
+            # raises it only while this process holds the migration connection.
+            - name: DATABASE_STATEMENT_TIMEOUT_MS
+              value: "{{ .Values.strato.database.statementTimeoutMs }}"
+            - name: DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS
+              value: "{{ .Values.migration.statementTimeoutMs }}"
             # Encrypt the Postgres connection for the migration too (issue #56),
             # matching the control-plane deployment.
             - name: DATABASE_TLS

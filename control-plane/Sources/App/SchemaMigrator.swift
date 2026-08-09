@@ -84,6 +84,7 @@ enum SchemaMigrator {
         var runMigrations: Bool = true
         var lockTimeout: Double = SchemaMigrator.defaultLockTimeout
         var lockPoll: Double = SchemaMigrator.defaultLockPoll
+        var statementTimeouts: StatementTimeouts?
 
         static func fromEnvironment() -> Options {
             Options(
@@ -94,6 +95,14 @@ enum SchemaMigrator {
         }
     }
 
+    /// The normal serving budget and the temporary migration budget. They are
+    /// paired so cleanup can always restore an explicit value instead of
+    /// `RESET`-ing to a database or role default that may be unbounded.
+    struct StatementTimeouts: Sendable {
+        let normal: DatabaseStatementTimeout
+        let migration: DatabaseStatementTimeout
+    }
+
     // MARK: - Entry point
 
     /// Applies every unapplied migration, or verifies that none are outstanding
@@ -102,13 +111,19 @@ enum SchemaMigrator {
         let logger = app.logger
         let migrations = app.migrations
 
+        var optionMetadata: Logger.Metadata = [
+            "runMigrations": .stringConvertible(options.runMigrations),
+            "lockTimeoutSeconds": .stringConvertible(options.lockTimeout),
+            "lockPollSeconds": .stringConvertible(options.lockPoll),
+        ]
+        if let statementTimeouts = options.statementTimeouts {
+            optionMetadata["statementTimeoutMilliseconds"] = .stringConvertible(
+                statementTimeouts.migration.milliseconds
+            )
+        }
         logger.info(
             "[SchemaMigrator] Resolved migration options",
-            metadata: [
-                "runMigrations": .stringConvertible(options.runMigrations),
-                "lockTimeoutSeconds": .stringConvertible(options.lockTimeout),
-                "lockPollSeconds": .stringConvertible(options.lockPoll),
-            ]
+            metadata: optionMetadata
         )
 
         try await app.db.withConnection { connection in
@@ -123,32 +138,80 @@ enum SchemaMigrator {
                 return
             }
 
-            let lock = try await acquireLock(
-                on: connection,
-                timeout: options.lockTimeout,
-                poll: options.lockPoll,
-                logger: logger
-            )
+            let migrate = {
+                let lock = try await acquireLock(
+                    on: connection,
+                    timeout: options.lockTimeout,
+                    poll: options.lockPoll,
+                    logger: logger
+                )
 
-            try await whileHolding(lock, logger: logger) {
-                // Under the lock: create `_fluent_migrations` if it is missing,
-                // then read the unapplied list. Both have to happen here rather
-                // than before the lock — a list read outside it is exactly the
-                // stale read every replica acts on today.
-                try await migrator.setupIfNeeded().get()
-                let pending = try await migrator.previewPrepareBatch().get().map(\.0)
-                if pending.isEmpty {
-                    logger.info("[SchemaMigrator] Schema is up to date")
-                } else {
-                    let batch = try await nextBatchNumber(on: connection)
-                    logger.info(
-                        "[SchemaMigrator] Applying \(pending.count) migration(s)",
-                        metadata: ["batch": .stringConvertible(batch)]
-                    )
-                    try await applyBatch(pending, batch: batch, on: connection, logger: logger)
+                try await whileHolding(lock, logger: logger) {
+                    // Under the lock: create `_fluent_migrations` if it is missing,
+                    // then read the unapplied list. Both have to happen here rather
+                    // than before the lock — a list read outside it is exactly the
+                    // stale read every replica acts on today.
+                    try await migrator.setupIfNeeded().get()
+                    let pending = try await migrator.previewPrepareBatch().get().map(\.0)
+                    if pending.isEmpty {
+                        logger.info("[SchemaMigrator] Schema is up to date")
+                    } else {
+                        let batch = try await nextBatchNumber(on: connection)
+                        logger.info(
+                            "[SchemaMigrator] Applying \(pending.count) migration(s)",
+                            metadata: ["batch": .stringConvertible(batch)]
+                        )
+                        try await applyBatch(pending, batch: batch, on: connection, logger: logger)
+                    }
                 }
             }
+
+            if let statementTimeouts = options.statementTimeouts {
+                try await withMigrationStatementTimeout(
+                    statementTimeouts,
+                    on: connection,
+                    logger: logger,
+                    body: migrate
+                )
+            } else {
+                try await migrate()
+            }
         }
+    }
+
+    /// Raises the timeout only for the migration phase on its pinned
+    /// connection, then restores the serving budget on success or failure.
+    /// Keeping cleanup here covers both the dedicated migration Job and serving
+    /// processes, which still migrate by default outside that Job.
+    static func withMigrationStatementTimeout(
+        _ timeouts: StatementTimeouts,
+        on connection: any Database,
+        logger: Logger,
+        body: () async throws -> Void
+    ) async throws {
+        try await timeouts.migration.apply(on: connection).get()
+
+        var bodyError: (any Error)?
+        do {
+            try await body()
+        } catch {
+            bodyError = error
+        }
+
+        do {
+            try await timeouts.normal.apply(on: connection).get()
+        } catch {
+            guard let bodyError else { throw error }
+            logger.error(
+                "[SchemaMigrator] Failed to restore the serving statement timeout after migration failure",
+                metadata: [
+                    "migrationError": .string(String(reflecting: bodyError)),
+                    "restoreError": .string(String(reflecting: error)),
+                ]
+            )
+        }
+
+        if let bodyError { throw bodyError }
     }
 
     /// The `STRATO_RUN_MIGRATIONS=false` path: this process does not migrate, so

@@ -118,6 +118,18 @@ externalDatabase:
   password: external-db-password
 ```
 
+Every physical control-plane connection sets PostgreSQL `statement_timeout`
+immediately after authentication. This avoids nonstandard startup parameters,
+so it is compatible with PgBouncer's default session pooling. Transaction and
+statement pooling are not supported because they cannot preserve a session
+setting on one backend connection. The default serving budget is five minutes
+(`strato.database.statementTimeoutMs: 300000`). `SchemaMigrator` temporarily
+uses the narrowly scoped 15-minute `migration.statementTimeoutMs` budget on its
+pinned connection in either the migration Job or a serving pod, because schema
+changes can legitimately take longer. Both values are milliseconds and must be
+positive integers no greater than 2147483647; an invalid value makes the control
+plane fail during startup rather than run with an unbounded query.
+
 ## Values Reference
 
 | Key | Type | Default | Description |
@@ -135,6 +147,8 @@ externalDatabase:
 | `resources.requests.cpu` | string | `"500m"` | CPU request |
 | `resources.requests.memory` | string | `"512Mi"` | Memory request |
 | `strato.logLevel` | string | `"info"` | Log level (debug, info, warn, error) |
+| `strato.database.statementTimeoutMs` | int | `300000` | Maximum duration in milliseconds for statements on normal pooled control-plane connections |
+| `migration.statementTimeoutMs` | int | `900000` | Longer, still-bounded timeout used only on the pinned migration connection in any process that migrates |
 | `strato.webauthn.relyingPartyId` | string | `""` | WebAuthn relying party identifier; empty derives it from the gateway/ingress hostname (falling back to `localhost`) |
 | `strato.webauthn.relyingPartyName` | string | `"Strato"` | WebAuthn relying party name |
 | `strato.webauthn.relyingPartyOrigin` | string | `""` | WebAuthn relying party origin; empty derives it from the gateway/ingress settings (falling back to `http://localhost:8080`) |
