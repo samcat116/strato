@@ -3037,7 +3037,9 @@ paths:
       summary: Create an organization
       description: >-
         Creates the organization, makes the caller an admin, and provisions a
-        "Default Project" beneath it. Organization names are globally unique.
+        first project named "Default Project" beneath it — a starting point, not
+        a default: every create names the project it lands in, and nothing
+        resolves a project by that name. Organization names are globally unique.
       tags: [Organizations]
       requestBody:
         required: true
@@ -8916,7 +8918,7 @@ components:
 
     CreateVMRequest:
       type: object
-      required: [name]
+      required: [name, projectId]
       properties:
         name:
           type: string
@@ -9344,7 +9346,7 @@ components:
 
     CreateSandboxRequest:
       type: object
-      required: [name]
+      required: [name, projectId]
       properties:
         name:
           type: string
@@ -9925,7 +9927,7 @@ components:
 
     CreateVolumeRequest:
       type: object
-      required: [name, sizeGB]
+      required: [name, projectId, sizeGB]
       properties:
         name:
           type: string
@@ -10262,7 +10264,7 @@ components:
 
     CreateNetworkRequest:
       type: object
-      required: [name, subnet]
+      required: [name, projectId, subnet]
       properties:
         name:
           type: string
@@ -10461,6 +10463,14 @@ components:
           type: string
           format: uuid
           description: The DNS zone this network's VMs auto-register into, if any.
+        zoneResolutionWarning:
+          type: string
+          description: >-
+            Why this network's guests will not resolve the DNS zones attached to
+            it, with the remedy, or absent when they will — the network's
+            resolver is off, its site cannot run one, or it has no address yet.
+            Absent for a network with no attached zone, which has nothing to
+            fail to deliver.
         createdAt:
           type: string
           format: date-time
@@ -10525,7 +10535,7 @@ components:
           format: date-time
     CreateFloatingIPRequest:
       type: object
-      required: [poolId]
+      required: [poolId, projectId]
       properties:
         poolId:
           type: string
@@ -10663,7 +10673,7 @@ components:
           format: date-time
     CreateSecurityGroupRequest:
       type: object
-      required: [name]
+      required: [name, projectId]
       properties:
         name:
           type: string
@@ -10672,7 +10682,7 @@ components:
         projectId:
           type: string
           format: uuid
-          description: Defaults to the caller's default project when omitted.
+          description: The project the resource belongs to. Required; there is no default project.
     UpdateSecurityGroupRequest:
       type: object
       properties:
@@ -10756,6 +10766,13 @@ components:
           description: >-
             Whether this zone is the network's primary — i.e. whether the
             network's VMs auto-register their derived records here.
+        zoneResolutionWarning:
+          type: string
+          description: >-
+            Why this network's guests will not resolve the DNS zones attached to
+            it, with the remedy, or absent when they will. A property of the
+            network rather than of this zone, so every entry for one network
+            repeats it.
     DNSZone:
       type: object
       required: [id, name, projectId, networks, recordCount]
@@ -10792,24 +10809,28 @@ components:
           format: date-time
     CreateDNSZoneRequest:
       type: object
-      required: [name]
+      required: [name, projectId]
       properties:
         name:
           type: string
+          maxLength: 253
           description: Fully-qualified zone name, e.g. `acme.internal`.
         description:
           type: string
+          maxLength: 4096
         projectId:
           type: string
           format: uuid
-          description: Defaults to the caller's default project when omitted.
+          description: The project the resource belongs to. Required; there is no default project.
     UpdateDNSZoneRequest:
       type: object
       properties:
         name:
           type: string
+          maxLength: 253
         description:
           type: string
+          maxLength: 4096
     AttachDNSZoneRequest:
       type: object
       required: [networkId]
@@ -10863,6 +10884,7 @@ components:
       properties:
         name:
           type: string
+          maxLength: 253
           description: >-
             Owner name relative to the zone; omitted means the apex (`@`). A
             leftmost `*` label is a wildcard, including a bare `*` for the
@@ -10871,6 +10893,11 @@ components:
           $ref: "#/components/schemas/DNSRecordType"
         value:
           type: string
+          maxLength: 4096
+          description: >-
+            Bounded far above what any record type accepts — each type's real
+            ceiling comes from its own grammar (255 bytes for TXT, a domain
+            name for CNAME/PTR/SRV, an address for A/AAAA).
         ttl:
           type: integer
           default: 300
@@ -10886,6 +10913,7 @@ components:
       properties:
         value:
           type: string
+          maxLength: 4096
         ttl:
           type: integer
         view:

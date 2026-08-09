@@ -61,7 +61,7 @@ struct VMSpecTests {
                     netmask: "255.255.255.0", mtu: 9000),
                 NetworkSpec(network: "storage", networkId: UUID()),
             ],
-            console: ConsoleSpec(console: .off, serial: .null)
+            console: ConsoleSpec()
         )
         let decoded = try roundTrip(spec)
         #expect(decoded.cpus == 4)
@@ -85,8 +85,7 @@ struct VMSpecTests {
         #expect(decoded.networks[1].network == "storage")
         #expect(decoded.networks[1].macAddress == nil)
 
-        #expect(decoded.console?.console == .off)
-        #expect(decoded.console?.serial == .null)
+        #expect(decoded.console != nil)
     }
 
     @Test func minimalSpecRoundTrip() throws {
@@ -311,26 +310,25 @@ struct VMSpecTests {
     @Test func graphicsConsoleRoundTrip() throws {
         let spec = VMSpec(
             cpus: 2, memoryBytes: 1 << 32, boot: .disk(firmware: nil),
-            console: ConsoleSpec(console: .pty, serial: .pty, graphics: .vnc))
+            console: ConsoleSpec(graphics: .vnc))
         let decoded = try roundTrip(spec)
         #expect(decoded.console?.graphics == .vnc)
         #expect(decoded.console?.effectiveGraphics == .vnc)
     }
 
-    /// A console spec from a control plane that predates the graphics console
-    /// has no `graphics` key, and must read as headless rather than throwing.
+    /// A console spec with no `graphics` key must read as headless rather
+    /// than throwing.
     @Test func consoleSpecWithoutGraphicsDecodesToHeadless() throws {
-        let decoded = try decodeJSON(ConsoleSpec.self, from: #"{"console":"Pty","serial":"Pty"}"#)
+        let decoded = try decodeJSON(ConsoleSpec.self, from: #"{}"#)
         #expect(decoded.graphics == nil)
         #expect(decoded.effectiveGraphics == .headless)
     }
 
-    /// The other direction, and the reason `graphics` is Optional rather than a
-    /// defaulted `GraphicsMode`: a headless VM's spec must stay byte-identical
-    /// to what a pre-v23 agent already receives, so the key is absent — not
-    /// present as `"None"`.
+    /// The reason `graphics` is Optional rather than a defaulted
+    /// `GraphicsMode`: a headless VM's spec omits the key entirely, keeping it
+    /// out of the sync digest.
     @Test func headlessConsoleSpecOmitsGraphicsKey() throws {
-        let json = String(decoding: try encodeJSON(ConsoleSpec(console: .pty, serial: .pty)), as: UTF8.self)
+        let json = String(decoding: try encodeJSON(ConsoleSpec()), as: UTF8.self)
         #expect(!json.contains("graphics"))
     }
 

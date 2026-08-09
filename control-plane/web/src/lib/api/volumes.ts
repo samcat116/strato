@@ -6,7 +6,6 @@ import type {
   Volume,
   VolumeSnapshot,
   CreateVolumeRequest,
-  UpdateVolumeRequest,
   AttachVolumeRequest,
   ResizeVolumeRequest,
   CloneVolumeRequest,
@@ -22,8 +21,9 @@ import { LIST_PAGE_LIMIT } from "@/types/api";
 // say it converged — or, for a delete, polls operationsApi.get(mutationId),
 // because a deleted volume has nothing left to refetch.
 //
-// Snapshot verbs are the exception and still answer synchronously: they have
-// not converted to desired state yet (backend ADR 0001 stage 8).
+// Snapshot verbs are asynchronous too — snapshots became desired artifacts in
+// backend ADR 0001 stage 8 (STR-150), so capture and delete answer 202 like
+// every other mutation.
 export const volumesApi = {
   list(projectId?: string): Promise<Volume[]> {
     return api
@@ -40,10 +40,6 @@ export const volumesApi = {
 
   create(data: CreateVolumeRequest): Promise<AcceptedMutation<Volume>> {
     return api.post<AcceptedMutation<Volume>>("/api/volumes", data);
-  },
-
-  update(id: string, data: UpdateVolumeRequest): Promise<Volume> {
-    return api.put<Volume>(`/api/volumes/${id}`, data);
   },
 
   delete(id: string): Promise<AcceptedMutation<Volume>> {

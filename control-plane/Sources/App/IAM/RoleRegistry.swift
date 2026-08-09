@@ -386,16 +386,4 @@ extension IAMRole {
         case .viewer: return .viewer
         }
     }
-
-    /// The binding role for a legacy resource-level relation
-    /// (`owner`/`editor`/`viewer` on individual resources); `owner` maps to an
-    /// explicit, revocable `admin` binding on the resource.
-    static func fromResourceRelation(_ relation: String) -> IAMRole? {
-        switch relation {
-        case "owner": return .admin
-        case "editor": return .editor
-        case "viewer": return .viewer
-        default: return nil
-        }
-    }
 }

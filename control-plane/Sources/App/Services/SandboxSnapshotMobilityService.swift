@@ -34,15 +34,9 @@ enum SandboxSnapshotObjectKey {
 /// on the first unsupported instruction.
 enum SandboxSnapshotCompatibility {
     /// Whether `agent` can load `snapshot`, with a human-actionable reason
-    /// when it cannot. The agent must also speak wire v13 (it has to act on
-    /// the download descriptors) — callers check online/capability state
-    /// separately because they source it from the live agent registry, not
-    /// the row.
+    /// when it cannot. Callers check online/capability state separately
+    /// because they source it from the live agent registry, not the row.
     static func restoreBlocker(snapshot: SandboxSnapshot, target agent: Agent) -> String? {
-        guard WireProtocol.supportsSandboxSnapshotMobility(agent.wireProtocolVersion ?? 0) else {
-            return
-                "agent '\(agent.name)' is too old for snapshot mobility (wire protocol \(agent.wireProtocolVersion ?? 0), need >= \(WireProtocol.sandboxSnapshotMobilityMinimumVersion))"
-        }
         guard let snapshotArch = snapshot.architecture else {
             return "snapshot records no CPU architecture"
         }

@@ -18,11 +18,11 @@ let package = Package(
         ),
     ],
     dependencies: [
-        // Foundation only - minimal dependencies for shared code
+        // Both NIO packages serve SPIFFEVerification only — StratoShared
+        // itself stays Foundation-only. swift-nio-ssl 2.37.1+ leads its
+        // default TLS group list with X25519MLKEM768, giving hybrid
+        // post-quantum key exchange; do not lower that floor.
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.65.0"),
-        // SPIFFEVerification only (StratoShared itself stays dependency-light).
-        // 2.37.1+ leads its default TLS group list with X25519MLKEM768, giving
-        // hybrid post-quantum key exchange. Do not lower this floor.
         .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.37.1"),
         // Keep in lockstep with agent/ and control-plane/ — all three verify
         // SPIFFE SVID chains through this package.
@@ -32,10 +32,6 @@ let package = Package(
     targets: [
         .target(
             name: "StratoShared",
-            dependencies: [
-                .product(name: "NIOCore", package: "swift-nio"),
-                .product(name: "NIOWebSocket", package: "swift-nio"),
-            ],
             swiftSettings: [
                 .enableUpcomingFeature("InferIsolatedConformances"),
                 .enableUpcomingFeature("NonisolatedNonsendingByDefault"),

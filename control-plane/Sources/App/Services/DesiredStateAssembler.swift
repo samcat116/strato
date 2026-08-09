@@ -86,40 +86,14 @@ struct DesiredStateAssembler {
             ownVMNetworkIDs.union(sandboxNetworkIDs).union(scope.networkIDs)
         let networksByID = try await logicalNetworks(ids: requiredNetworkIDs, on: db)
 
-        // NIC → security-group membership for the specs (and, below, the
-        // group definitions the topology authority realizes). Omitted
-        // entirely for pre-v20 agents: they would decode and silently ignore
-        // the fields, so sending them only misstates what the sync achieved;
-        // the attach API refuses new attachments against such agents.
-        let sendSecurityGroups =
-            agent.map { WireProtocol.supportsSecurityGroups($0.wireProtocolVersion ?? 0) } ?? true
-        // Whether this agent understands the metadata port (STR-49). Omitted
-        // for older agents rather than sent-and-ignored, so a nil on the wire
-        // means exactly one thing on the receiving side: "the sender has no
-        // opinion", which is what keeps a rollback from sweeping live ports.
-        let sendMetadataPort =
-            agent.map { WireProtocol.supportsMetadataPort($0.wireProtocolVersion ?? 0) } ?? true
         // Whether this agent can realize a sandbox NIC at all (STR-103), which
         // is what decides if `SandboxSpec.network` goes on the wire to it.
         //
-        // Defaults to *false* for an unknown agent id, unlike the version gates
-        // above: those ask "how new is this peer", where assuming current is
-        // the useful answer, while this asks "did a host prove it has OVN, the
-        // jailer, and a guest image that configures an interface". Absence of
-        // proof is not proof, and the cost of guessing wrong is a sandbox that
-        // never boots on that host again.
-        //
-        // Folded with `sendSecurityGroups` so this gate cannot be weaker than
-        // the scheduler's, which requires the same two signals
-        // (`supportsSandboxNetworking`). Without the version arm a
-        // capable-but-pre-v20 agent would be refused at placement and sent the
-        // NIC anyway here — and it would arrive with `securityGroupIds: nil`,
-        // because the membership map above is empty under a false
-        // `sendSecurityGroups`, so the port would come up *unfiltered* while
-        // the API reports its groups. Unreachable with a stock agent (anything
-        // advertising the capability is built at `currentVersion`), but the two
-        // gates disagreeing is the defect, not the reachability.
-        let sendSandboxNetwork = (agent?.sandboxNetworkingCapable ?? false) && sendSecurityGroups
+        // Defaults to *false* for an unknown agent id: this asks "did a host
+        // prove it has OVN, the jailer, and a guest image that configures an
+        // interface". Absence of proof is not proof, and the cost of guessing
+        // wrong is a sandbox that never boots on that host again.
+        let sendSandboxNetwork = agent?.sandboxNetworkingCapable ?? false
 
         // The per-network resolver (STR-40). Nil for an agent that predates the
         // field — the `sendMetadataPort: false` posture — and otherwise whether
@@ -134,7 +108,7 @@ struct DesiredStateAssembler {
         // that looks like a flaky network rather than a missing dependency. So
         // the whole site converges or none of it does.
         let siteResolverCapable: Bool?
-        if let agent, WireProtocol.supportsNetworkResolver(agent.wireProtocolVersion ?? 0) {
+        if let agent {
             siteResolverCapable = try await resolverCapableSiteWide(agent: agent, site: site, on: db)
         } else {
             // Nil for an agent this assembly could not load at all — the
@@ -149,28 +123,11 @@ struct DesiredStateAssembler {
         }
         let securityGroupsByInterface: [UUID: [UUID]]
         let sandboxSecurityGroupsByInterface: [UUID: [UUID]]
-        if sendSecurityGroups {
-            securityGroupsByInterface = try await nicSecurityGroupMemberships(
-                interfaceIDs: vms.flatMap { $0.networkInterfaces.compactMap(\.id) }, on: db)
-            sandboxSecurityGroupsByInterface = try await sandboxNICSecurityGroupMemberships(
-                interfaceIDs: sandboxes.flatMap { $0.networkInterfaces.compactMap(\.id) }, on: db)
-        } else {
-            securityGroupsByInterface = [:]
-            sandboxSecurityGroupsByInterface = [:]
-        }
+        securityGroupsByInterface = try await nicSecurityGroupMemberships(
+            interfaceIDs: vms.flatMap { $0.networkInterfaces.compactMap(\.id) }, on: db)
+        sandboxSecurityGroupsByInterface = try await sandboxNICSecurityGroupMemberships(
+            interfaceIDs: sandboxes.flatMap { $0.networkInterfaces.compactMap(\.id) }, on: db)
 
-        // Instance metadata (STR-51): what each VM's link-local metadata
-        // service *serves*, as distinct from `sendMetadataPort` above, which is
-        // whether the agent can realize the port it is served *on* (STR-49).
-        // Two protocol versions because they shipped separately, and an agent
-        // can speak either without the other. Omitted entirely for pre-v26
-        // agents — they decode and discard it — following the v20
-        // `securityGroups` pattern, and unlike v18/v23 this gates only the
-        // field, never placement: an old agent still provisions its guests from
-        // the seed ISO, so a VM there loses mutable metadata, not its ability
-        // to boot.
-        let sendInstanceMetadata =
-            agent.map { WireProtocol.supportsInstanceMetadata($0.wireProtocolVersion ?? 0) } ?? true
         // Placement describes the receiving agent, not the VM, so it is
         // resolved once for the whole sync. The site's *name* names the coarse
         // half, not its advisory `regionCode`: that slug is operator-optional,
@@ -186,17 +143,7 @@ struct DesiredStateAssembler {
         // same reason: this runs for every agent on every sync, so a per-VM
         // lookup would be a fleet-wide load multiplier. Skipped entirely for an
         // agent that will not be sent metadata at all.
-        let spiffeIDsByVM =
-            sendInstanceMetadata
-            ? try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
-            : [:]
-
-        // Edge nonces (ADR 0001 stage 9, STR-151). Omitted for pre-v34 agents
-        // following the v20 `securityGroups` pattern — they decode and discard
-        // them — which costs nothing here, because the admission gate has
-        // already refused the mutation that would set one.
-        let sendEdgeNonces =
-            agent.map { WireProtocol.supportsEdgeNonces($0.wireProtocolVersion ?? 0) } ?? true
+        let spiffeIDsByVM = try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
 
         var entries: [DesiredVMState] = []
         for vm in vms {
@@ -214,7 +161,7 @@ struct DesiredStateAssembler {
                 volumes: vm.volumes,
                 resolvedInterfaces: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
-                sendsMetadataPort: sendMetadataPort,
+                sendsMetadataPort: true,
                 siteResolverCapable: siteResolverCapable
             )
 
@@ -249,22 +196,19 @@ struct DesiredStateAssembler {
                     metadata: ["vmId": .string(vmId.uuidString)])
             }
 
-            let metadata =
-                sendInstanceMetadata
-                ? InstanceMetadata.build(
-                    vm: vm, vmId: vmId, resolvedInterfaces: resolvedInterfaces,
-                    region: region, availabilityZone: availabilityZone,
-                    instanceSPIFFEID: spiffeIDsByVM[vmId])
-                : nil
+            let metadata = InstanceMetadata.build(
+                vm: vm, vmId: vmId, resolvedInterfaces: resolvedInterfaces,
+                region: region, availabilityZone: availabilityZone,
+                instanceSPIFFEID: spiffeIDsByVM[vmId])
 
             // A zero nonce is "never asked for", and sending it would be a
             // slightly different claim than sending nothing — so both are
             // omitted until the first request, which also keeps them out of the
             // sync's digest for every VM that has never been restarted or
             // restored (STR-151).
-            let rebootGeneration = sendEdgeNonces && vm.rebootGeneration > 0 ? vm.rebootGeneration : nil
+            let rebootGeneration = vm.rebootGeneration > 0 ? vm.rebootGeneration : nil
             var restore: DesiredRestore?
-            if sendEdgeNonces, vm.restoreGeneration > 0, let snapshotID = vm.restoreSnapshotID {
+            if vm.restoreGeneration > 0, let snapshotID = vm.restoreSnapshotID {
                 // A VM checkpoint lives inside the VM's own disks, so it never
                 // moves between hosts and there is nothing to stage: no
                 // artifacts, ever.
@@ -297,13 +241,8 @@ struct DesiredStateAssembler {
         // for pre-v12 agents — they would decode and silently ignore the
         // field, so sending it only misstates what the sync achieved; the
         // attach API refuses new attachments against such agents.
-        let floatingIPsByNetwork: [UUID: [DesiredFloatingIP]]
-        if agent.map({ WireProtocol.supportsFloatingIPs($0.wireProtocolVersion ?? 0) }) ?? true {
-            floatingIPsByNetwork = try await desiredFloatingIPs(
-                forAgentIDs: scope.floatingIPAgentIDs, on: db)
-        } else {
-            floatingIPsByNetwork = [:]
-        }
+        let floatingIPsByNetwork = try await desiredFloatingIPs(
+            forAgentIDs: scope.floatingIPAgentIDs, on: db)
         // Sorted by id: names are no longer unique, so only the id gives the
         // topology list a stable, total order.
         let networkStates =
@@ -324,7 +263,7 @@ struct DesiredStateAssembler {
                     dnsServers: network.dnsServers,
                     domainName: network.domainName,
                     leaseTime: network.leaseTime,
-                    metadataEnabled: sendMetadataPort ? network.metadataEnabled : nil,
+                    metadataEnabled: network.metadataEnabled,
                     resolverEnabled: siteResolverCapable.map { $0 && network.resolverEnabled },
                     resolverAddresses: network.resolverAddressesIfEnabled(
                         siteCapable: siteResolverCapable),
@@ -428,7 +367,7 @@ struct DesiredStateAssembler {
                 from: interface,
                 network: interface.flatMap { networksByID[$0.logicalNetworkID] },
                 securityGroupIds: interface?.id.flatMap { sandboxSecurityGroupsByInterface[$0] },
-                sendsMetadataPort: sendMetadataPort,
+                sendsMetadataPort: true,
                 siteResolverCapable: siteResolverCapable,
                 agentRealizesSandboxNICs: sendSandboxNetwork)
             // Debug, not warning, despite being worth knowing: assembly runs on
@@ -453,7 +392,7 @@ struct DesiredStateAssembler {
             // minted here rather than stored, so a nonce that sits in the
             // desired state for a week still carries usable locators.
             var restore: DesiredRestore?
-            if sendEdgeNonces, sandbox.restoreGeneration > 0, let snapshotID = sandbox.restoreSnapshotID {
+            if sandbox.restoreGeneration > 0, let snapshotID = sandbox.restoreSnapshotID {
                 var artifacts: [SandboxSnapshotArtifactDescriptor]?
                 if let snapshot = restoreSnapshots[snapshotID], snapshot.agentId != agentId {
                     artifacts = try? snapshot.exportedArtifactDescriptors()
@@ -489,34 +428,17 @@ struct DesiredStateAssembler {
         // references always resolve). Nil for non-authoritative agents — they
         // only consume the per-NIC membership above — and for pre-v20 agents.
         let securityGroups: [DesiredSecurityGroup]?
-        if sendSecurityGroups && scope.authoritative {
+        if scope.authoritative {
             securityGroups = try await desiredSecurityGroups(
                 forVMs: scope.coveredVMs, sandboxes: scope.coveredSandboxes, on: db)
         } else {
             securityGroups = nil
         }
 
-        // The agent's authoritative volume set (STR-148). Nil — not `[]` — for
-        // an agent that does not speak volume sync, and the query is skipped
-        // entirely for one: assembling entries a receiver will discard costs a
-        // join and, worse, records image-download grants for a fetch that will
-        // never happen.
-        let volumes: [DesiredVolumeState]?
-        if agent.map({ WireProtocol.supportsVolumeSync($0.wireProtocolVersion ?? 0) }) ?? true {
-            volumes = try await desiredVolumes(agentId: agentId, on: db)
-        } else {
-            volumes = nil
-        }
-
-        // The agent's authoritative snapshot-artifact set (STR-150), with the
-        // same nil-versus-empty contract and the same skip-the-query reasoning
-        // as volumes above.
-        let snapshots: [DesiredSnapshotState]?
-        if agent.map({ WireProtocol.supportsSnapshotSync($0.wireProtocolVersion ?? 0) }) ?? true {
-            snapshots = try await desiredSnapshots(agentId: agentId, on: db)
-        } else {
-            snapshots = nil
-        }
+        // The agent's authoritative volume set (STR-148) and snapshot-artifact
+        // set (STR-150).
+        let volumes = try await desiredVolumes(agentId: agentId, on: db)
+        let snapshots = try await desiredSnapshots(agentId: agentId, on: db)
 
         // The DNS zones this agent realizes. Two backends read one list:
         //
@@ -526,33 +448,25 @@ struct DesiredStateAssembler {
         //    NIC on the network, because CoreDNS answers where the guests are.
         //
         // So the zone selection is the union of "networks I author" and
-        // "networks I run something on". Before v37 only the first term existed
-        // and a non-authority agent was sent nil; it still is when it has no
-        // local NIC on an attached network, which keeps `[]`-as-teardown from
-        // ever reaching a peer of the controller. An agent that *is* sent zones
-        // without authority realizes only the resolver half — it already knows
-        // which half it may write from `networksAuthoritative`.
+        // "networks I run something on". A non-authority agent with no local
+        // NIC on an attached network is still sent nil, which keeps
+        // `[]`-as-teardown from ever reaching a peer of the controller. An
+        // agent that *is* sent zones without authority realizes only the
+        // resolver half — it already knows which half it may write from
+        // `networksAuthoritative`.
         //
-        // Skipped entirely for an agent that would discard the field, which is
-        // worth more here than elsewhere: assembling a zone reads every VM
-        // registered in it.
-        let dnsZones: [DesiredDNSZone]?
-        if agent.map({ WireProtocol.supportsDNSZones($0.wireProtocolVersion ?? 0) }) ?? true {
-            // Local NICs only count toward zone selection once the agent can
-            // actually run a resolver for them; without that this would widen
-            // the fan-out of a query that reads every VM in a zone, for nothing.
-            let resolverNetworkIDs =
-                (siteResolverCapable ?? false)
-                ? ownVMNetworkIDs.union(sandboxNetworkIDs) : []
-            let zoneNetworkIDs =
-                (scope.authoritative ? scope.networkIDs : []).union(resolverNetworkIDs)
-            dnsZones =
-                zoneNetworkIDs.isEmpty && !scope.authoritative
-                ? nil
-                : try await desiredDNSZones(networkIDs: zoneNetworkIDs, on: db)
-        } else {
-            dnsZones = nil
-        }
+        // Local NICs only count toward zone selection once the agent can
+        // actually run a resolver for them; without that this would widen
+        // the fan-out of a query that reads every VM in a zone, for nothing.
+        let resolverNetworkIDs =
+            (siteResolverCapable ?? false)
+            ? ownVMNetworkIDs.union(sandboxNetworkIDs) : []
+        let zoneNetworkIDs =
+            (scope.authoritative ? scope.networkIDs : []).union(resolverNetworkIDs)
+        let dnsZones: [DesiredDNSZone]? =
+            zoneNetworkIDs.isEmpty && !scope.authoritative
+            ? nil
+            : try await desiredDNSZones(networkIDs: zoneNetworkIDs, on: db)
 
         return DesiredStateMessage(
             vms: entries, sandboxes: sandboxEntries, networks: networkStates,
@@ -638,25 +552,14 @@ struct DesiredStateAssembler {
         guard let site, let siteID = site.id else {
             return agent.resolverCapable
         }
-        // Counted in the database rather than materialized: this runs once per
-        // sync per agent, and the question is an all-satisfy over rows this
-        // assembly has no other use for.
-        let incapable = try await Agent.query(on: db)
-            .filter(\.$site.$id == siteID)
-            .filter(\.$resolverCapable == false)
-            .count()
-        guard incapable == 0 else {
-            // The names cost a second query, but only on the path that is
-            // already withholding a service — and without them the operator is
-            // told a site is holding the feature back with no way to find which
-            // host. The remedy is in the message because it is not obvious: a
-            // decommissioned agent whose row was never deleted counts here
-            // forever, and looks identical to one that is merely un-upgraded.
-            let names = try await Agent.query(on: db)
-                .filter(\.$site.$id == siteID)
-                .filter(\.$resolverCapable == false)
-                .all()
-                .map(\.name).sorted()
+        // One query returning the offending names rather than a count plus a
+        // second lookup on failure: the common answer materializes zero rows, so
+        // this costs the hot path nothing, and the names are what makes the
+        // withholding actionable. The predicate itself lives on
+        // `ResolverCapability`, shared with the API surface that has to report
+        // the same verdict (STR-201).
+        let names = try await ResolverCapability.incapableAgentNames(inSite: siteID, on: db)
+        guard names.isEmpty else {
             app.logger.notice(
                 "Withholding the per-network DNS resolver: not every agent in the site can run it",
                 metadata: [
@@ -904,8 +807,7 @@ struct DesiredStateAssembler {
     private func desiredAgentUpdateForSync(agent: Agent?) async -> DesiredAgentUpdate? {
         guard let agent,
             let assigned = agent.updateDesiredVersion,
-            AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned),
-            WireProtocol.supportsDesiredAgentUpdate(agent.wireProtocolVersion ?? 0)
+            AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: assigned)
         else { return nil }
 
         if let override = agent.updateArtifactOverride {
@@ -1176,27 +1078,6 @@ struct DesiredStateAssembler {
             let siteID = agent.$site.id,
             let site, site.id == siteID
         else {
-            return NetworkAssemblyScope(
-                networkIDs: ownReferences,
-                authoritative: true,
-                floatingIPAgentIDs: [agentId],
-                coveredVMs: ownVMs,
-                coveredSandboxes: ownSandboxes)
-        }
-
-        // A pre-v4 agent doesn't know `networksAuthoritative` and would read
-        // the non-authoritative shape (networks: [] + false) as an
-        // authoritative teardown of its whole L3 topology. Keep it on the
-        // legacy per-node scoping — its binary predates `ovn_northbound`, so
-        // it is writing its own local NB anyway, not the site's shared one.
-        guard WireProtocol.supportsSiteAuthority(agent.wireProtocolVersion ?? 0) else {
-            app.logger.warning(
-                "Sited agent registered with a pre-site-authority protocol; syncing legacy per-node networks",
-                metadata: [
-                    "agentName": .string(agent.name),
-                    "site": .string(site.name),
-                    "protocolVersion": .stringConvertible(agent.wireProtocolVersion ?? 0),
-                ])
             return NetworkAssemblyScope(
                 networkIDs: ownReferences,
                 authoritative: true,

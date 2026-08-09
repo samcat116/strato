@@ -101,8 +101,8 @@ imperative verbs needed, were deleted in STR-152.
 
 Multiple control-plane replicas are supported. PostgreSQL is the only
 source of durable truth; **Valkey** holds ephemeral coordination state
-(agent presence, socket routing for the remaining imperative RPCs,
-placement reservations, singleton sweep locks) and the system fails open if
+(agent presence, placement reservations, singleton sweep locks) and the
+system fails open if
 it's unavailable — agents still converge on their own re-fetch. A mutation
 on any replica publishes a contentless **doorbell** on one fleet-wide
 channel; every replica checks whether it holds that agent's parked poll (or

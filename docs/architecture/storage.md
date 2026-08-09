@@ -353,34 +353,44 @@ that confirms the data is gone. A delete against an agent that cannot confirm
 (offline, or below wire v31) force-clears the token instead, because a dead
 agent must not make its volumes undeletable.
 
-### Attachment is desired state, realized at boot or by hot-plug
+### Attachment is desired state, realized live or in the domain definition
 
 An attachment is a fact the control plane records on the volume
-(`vm_id`/`device_name`/`boot_order`/`readonly`) and the agent realizes. Which
-way it realizes depends on the target VM:
+(`vm_id`/`device_name`/`boot_order`/`readonly`) and the agent realizes. The
+agent writes the attachment into the VM's manifest entry first, then asks the
+driver to attach. Record-first is deliberate: a crash between the two
+re-drives an idempotent attach on the next sync, whereas the other order
+would leave a plugged device nothing remembers. How the attach lands depends
+on the target VM:
 
-- **live hypervisor session** — the agent writes the attachment into the VM's
-  manifest entry first, then hot-plugs it over QMP, then updates the driver's
-  stored spawn configuration. Record-first is deliberate: a crash between the
-  two re-drives an idempotent hot-plug, whereas the other order would leave a
-  plugged device nothing remembers.
-- **present but powered off** — the record *is* the realization. The spawn path
-  rebuilds the guest's disk set from the recorded volumes, so the disk lands at
-  the next boot. Reporting "not attached" here would leave the volume
-  permanently unconverged and get it degraded for the crime of having a stopped
-  VM.
-- **not on this agent at all** — classified as waiting on a dependency, so it
-  burns no attempt and retries on the next sync. Only ever a race, since the
-  control plane emits an attachment only for a VM placed on this agent.
+- **domain defined on this host** — libvirt attaches with
+  `VIR_DOMAIN_AFFECT_LIVE | _CONFIG` (config-only when the guest is shut
+  off), so the disk reaches the running guest *and* the persistent domain
+  definition in one call; the next boot reads that definition, so there is no
+  separate spawn-configuration bookkeeping to keep in step. The attach is
+  idempotent by volume serial — a redelivered sync finds the serial already
+  in the domain and does nothing — and the guest device name is chosen from
+  the domain's own device inventory, never trusted from the control-plane
+  label. One fixed budget applies: a domain's spare PCIe root ports are
+  reserved when it is defined (STR-192), so a live attach with no free port
+  fails with guidance rather than succeeding on retry.
+- **not created on this host yet** — the record *is* the realization:
+  `createVM` builds the domain's disk set from the manifest, so the disk
+  lands when the VM does. A missing VM is classified as waiting on a
+  dependency, so it burns no attempt and retries on the next sync — only
+  ever a race, since the control plane emits an attachment only for a VM
+  placed on this agent.
 
-The observed attachment is read from that durable record, not from a live QMP
-query, for the same reason: a powered-off guest has no device list.
+The observed attachment is read from that durable record, not from a live
+device query, for the same reason: a VM that is not defined yet has no
+device list.
 
-This is also what fixed a live bug. `respawn` rebuilds a QEMU process from the
-configuration captured at create time, and an image-backed VM's spawn path used
-to treat `VMSpec.volumes` as a *fallback* it never reached — so a hot-plugged
-disk silently disappeared at the guest's next power cycle while the control
-plane still called the volume attached.
+The record-first shape is also what fixed a live bug in the deleted
+process-QEMU driver, whose spawn path treated `VMSpec.volumes` as a
+*fallback* it never reached — a hot-plugged disk silently disappeared at the
+guest's next power cycle while the control plane still called the volume
+attached. The libvirt driver closes that class of bug structurally: a device
+attached live is written to the definition in the same call.
 
 ### Snapshots
 
@@ -417,11 +427,13 @@ live-snapshot path can relax one without relaxing the other.
 
 This replaces the fs-freeze quiescing added in issue #563: freezing the guest
 around overlay creation produced an application-consistency *signal* for a
-snapshot that captured nothing, which is worse than refusing. `QGAClient` still
-speaks `guest-fsfreeze-freeze`/`-thaw` for whoever implements the real live
-snapshot — QMP `blockdev-snapshot-sync` (or `blockdev-backup`), which makes the
-overlay the guest's active layer and needs the volume's `storagePath`, the VM
-manifest, and snapshot deletion to follow the resulting backing chain.
+snapshot that captured nothing, which is worse than refusing. A real live
+snapshot remains future work: it would switch the guest's active layer onto
+the overlay (a libvirt external disk snapshot), and needs the volume's
+`storagePath`, the VM manifest, and snapshot deletion to follow the resulting
+backing chain. (The QGA freeze/thaw plumbing this section used to point at
+went with the process-QEMU driver in STR-136; a future implementation would
+drive quiescing through libvirt, which owns the guest-agent channel.)
 
 ### Full-VM checkpoints
 
@@ -431,56 +443,54 @@ behind "save this VM and bring it back exactly as it was" — and lives at
 `POST/GET/DELETE /api/vms/:id/snapshots` plus `.../restore`, in the
 `vm_snapshots` table.
 
-The mechanism is QEMU's `snapshot-save` / `snapshot-load` / `snapshot-delete`
-background jobs, driven over each VM's dedicated QMP stats monitor by
-`QMPProbeClient` and polled through `query-jobs` to `concluded`. The state goes
-into an *internal* snapshot of the VM's own qcow2 disks, tagged
+The mechanism is a libvirt **system checkpoint** (`DomainSnapshotXML`,
+STR-134): one `domainSnapshotCreateXML` call whose document names the tag and
+no disks — naming none lets libvirt capture every disk it can, which is the
+selection the old QMP-driven capture spent its rules arriving at. The state
+goes into an *internal* snapshot of the VM's own qcow2 disks, tagged
 `strato-<snapshotId>`, so there is no separate state file to track: the agent
-re-derives the tag from the ids on every call, which makes delete idempotent
-and lets a retried checkpoint rejoin a job its first attempt started.
+re-derives the tag from the ids on every call, which makes delete idempotent,
+and a create whose reply was lost is confirmed by asking the daemon whether
+the tag exists rather than failing every retry. Guest RAM is included only
+when the domain is running — libvirt rejects a memory snapshot of an inactive
+one, where the checkpoint is the disks alone.
 
 Consequences of "internal to the disks":
 
-- **Every writable disk must be qcow2.** A writable raw volume would run on
-  while the qcow2 disks were frozen, restoring to a machine whose memory and
-  disks disagree, so the agent refuses the whole checkpoint rather than
-  capturing part of it.
-- **The UEFI variable store is excluded on purpose.** It is a raw pflash image
-  and could not hold an internal snapshot anyway, but the exclusion is a
-  decision: boot order and enrolled Secure Boot keys are firmware
-  configuration, not guest run state, and refusing every UEFI VM over them
-  would rule out nearly all of them.
+- **Every writable disk must be qcow2.** A writable raw volume cannot hold
+  internal snapshot state, so the capture fails rather than freezing part of
+  the machine — restoring memory alongside disks that ran on would produce a
+  machine whose halves disagree.
+- **The UEFI variable store is included**, and that is a host precondition,
+  not an accident: libvirt refuses internal snapshots of a pflash-firmware VM
+  unless the varstore can hold one, so `DomainXMLBuilder` emits a **qcow2**
+  NVRAM varstore (STR-130/STR-188) and `LibvirtProbe.minimumVersion` gates
+  `.qemu` on libvirt ≥ 11.5, where the modern snapshot job API landed.
 - **Checkpoints do not move between hosts.** Restore is pinned to the agent
   that took it (`VMSnapshot.agentId`). Off-node export — either shared storage
   (#352/#353) or an object-storage copy like sandboxes got in #428 — is the
   follow-up.
 
-Restore loads the state back into the VM's live QEMU process and resumes it.
-The VM only has to *exist* on the agent, not be running: after an agent restart
-the desired-state sync re-creates a stopped VM's process (its disks, and the
-checkpoint inside them, never left the host) and the restore loads into that,
-which is what makes checkpoint → stop → restart-agent → restore work with no
-extra machinery.
-
-Machine state is written to the VM's **boot disk**, not to whichever qcow2 disk
-sorts first. A hot-plugged volume's QMP backend is anonymous, so a positional
-rule picks it over the VM's own root disk — and then detaching that volume
-silently makes a `ready` checkpoint unrestorable, while a volume clone quietly
-carries a copy of the guest's RAM. Restore does not re-derive the choice: it
-finds the vmstate node by the tag, so a checkpoint stays restorable across disk
-hot-plug.
+Restore is `domainRevertToSnapshot` with the running flag: reverting a
+`SHUTOFF` domain to a system checkpoint starts it, so the VM only has to
+*exist* on the agent, not be running. After an agent restart the desired-state
+sync re-defines a stopped VM's domain (its disks, and the checkpoint inside
+them, never left the host) and the restore reverts that, which is what makes
+checkpoint → stop → restart-agent → restore work with no extra machinery.
+Delete works on a **stopped** VM too — libvirt removes an internal snapshot
+through the disks rather than through a live monitor — so a delete no longer
+waits for the operator to start the VM again.
 
 Quota counts only the machine state (`VMSnapshot.size`), not the disks — those
 are already charged under the VM, and an internal snapshot does not copy them.
 
-One operational consequence is worth knowing before running this at scale:
-**a checkpoint holds the VM's QMP stats monitor for the whole job** (up to the
-1200s agent budget). That monitor is single-client and is also where
-balloon/guest-memory stats come from, so `memoryStats` returns nil for the
-duration — and it swallows the failure, so the metrics gap looks like a guest
-that stopped reporting rather than a self-inflicted hole.
+One old operational hazard is *gone* with the libvirt driver and worth
+recording as such: a checkpoint no longer occupies the VM's QMP stats monitor
+for the duration of the job, because there is no agent-owned monitor at all —
+balloon/guest-memory stats come from libvirt's own `domainMemoryStats`, so
+metrics keep flowing during a capture.
 
-A second one is *gone* as of STR-150 and worth recording as such. A checkpoint
+A second is gone as of STR-150 in the same way. A checkpoint
 used to occupy the VM's one pending operation slot, so a large one could block
 start/stop/delete on that VM for up to half an hour with no feedback beyond a
 bare `409`. A checkpoint is its own resource now, with its own generation and

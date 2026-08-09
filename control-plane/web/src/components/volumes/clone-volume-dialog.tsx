@@ -14,11 +14,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { toast } from "sonner";
-import {
-  acceptedMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
 
 import type { Volume } from "@/types/api";
 
@@ -35,8 +32,7 @@ export function CloneVolumeDialog({
   onOpenChange,
   onSuccess,
 }: CloneVolumeDialogProps) {
-  const [isLoading, setIsLoading] = useState(false);
-  const watch = useMutationsStore((state) => state.watch);
+  const { isLoading, run } = useAcceptedMutation();
   const [name, setName] = useState(`${volume.name}-clone`);
   const [description, setDescription] = useState("");
 
@@ -49,32 +45,26 @@ export function CloneVolumeDialog({
       return;
     }
 
-    setIsLoading(true);
-    try {
-      // The accepted mutation is a `create` on the *clone*, not an operation
-      // on the source: cloning is a create strategy on the new volume's
-      // desired entry (backend STR-148), so the source is only ever read.
-      const accepted = await volumesApi.clone(volume.id!, {
-        name: trimmedName,
-        description: description.trim() || undefined,
-      });
-      watch(
-        acceptedMutation(accepted, {
-          kind: "create",
-          resourceKind: "volume",
-          resourceId: accepted.resource.id!,
-          resourceName: trimmedName,
-        })
-      );
-      onOpenChange(false);
-      onSuccess?.();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to clone volume"
-      );
-    } finally {
-      setIsLoading(false);
-    }
+    // The accepted mutation is a `create` on the *clone*, not an operation
+    // on the source: cloning is a create strategy on the new volume's
+    // desired entry (backend STR-148), so the source is only ever read.
+    await run({
+      request: () =>
+        volumesApi.clone(volume.id!, {
+          name: trimmedName,
+          description: description.trim() || undefined,
+        }),
+      watch: {
+        kind: "create",
+        resourceKind: "volume",
+        resourceName: trimmedName,
+      },
+      errorMessage: "Failed to clone volume",
+      onSuccess: () => {
+        onOpenChange(false);
+        onSuccess?.();
+      },
+    });
   };
 
   return (

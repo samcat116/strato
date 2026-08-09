@@ -214,24 +214,6 @@ final class DesiredStateDNSZoneTests {
         }
     }
 
-    @Test("A pre-v36 agent is sent no DNS zones")
-    func oldAgentReceivesNoZones() async throws {
-        try await withDNSSyncApp { app, _, project in
-            let agentId = try await self.registerAgent(
-                app: app, named: "old", protocolVersion: WireProtocol.dnsZoneMinimumVersion - 1)
-            let network = try await TestDataBuilder(db: app.db).createNetwork(
-                name: "old-net", project: project, subnet: "10.63.0.0/24", gateway: "10.63.0.1")
-            let zone = DNSZone(name: "old.internal", projectID: try project.requireID())
-            try await zone.save(on: app.db)
-            try await self.attachZone(app: app, zone: zone, to: network, primary: true)
-            try await self.placeVM(
-                app: app, project: project, named: "vm-old", hostname: "old-vm",
-                onAgent: agentId, network: network, ipv4: "10.63.0.5")
-
-            #expect(try await app.desiredStateAssembler.assemble(agentId: agentId).dnsZones == nil)
-        }
-    }
-
     @Test("An agent whose networks attach no zone gets an empty, authoritative list")
     func noZonesIsAnOpinion() async throws {
         try await withDNSSyncApp { app, _, project in
@@ -514,29 +496,6 @@ final class DesiredStateDNSZoneTests {
             // opinion — and that opinion is "not yet".
             #expect(sync.networks.first?.resolverEnabled == false)
             #expect(sync.vms.first?.spec.networks.first?.resolverEnabled == false)
-        }
-    }
-
-    @Test("A pre-v37 agent is sent no resolver opinion at all")
-    func preV37AgentGetsNilResolver() async throws {
-        try await withDNSSyncApp { app, _, project in
-            let agentId = try await self.registerAgent(
-                app: app, named: "res-old",
-                protocolVersion: WireProtocol.networkResolverMinimumVersion - 1,
-                resolverCapable: true)
-            let network = try await TestDataBuilder(db: app.db).createNetwork(
-                name: "res-old-net", project: project, subnet: "10.74.0.0/24", gateway: "10.74.0.1")
-            network.resolverEnabled = true
-            try await network.save(on: app.db)
-            try await self.placeVM(
-                app: app, project: project, named: "vm", hostname: "vm", onAgent: agentId,
-                network: network, ipv4: "10.74.0.5")
-
-            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            // Nil rather than false, so the agent's own absence check and the
-            // version gate say the same thing: "no opinion", never "off".
-            #expect(sync.networks.first?.resolverEnabled == nil)
-            #expect(sync.vms.first?.spec.networks.first?.resolverEnabled == nil)
         }
     }
 

@@ -145,6 +145,16 @@ export function NetworkTable({
                         ? network.dnsServers.join(", ")
                         : "no DNS"}
                   </div>
+                  {/* A network with a DNS zone attached whose guests are not
+                      pointed at anything serving it (STR-201). Rendered in full
+                      rather than truncated: the string names the remedy, and
+                      the state is otherwise invisible — the zone realizes, the
+                      resolver would answer, and the guest simply never asks. */}
+                  {network.zoneResolutionWarning && (
+                    <div className="text-xs text-amber-700 dark:text-amber-500 max-w-xs text-pretty">
+                      {network.zoneResolutionWarning}
+                    </div>
+                  )}
                 </div>
               </TableCell>
               <TableCell className="text-foreground/80">

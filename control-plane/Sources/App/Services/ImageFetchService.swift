@@ -10,8 +10,6 @@ import Crypto
 /// Protocol for image fetch services (enables testing with mocks)
 protocol ImageFetchServiceProtocol: Sendable {
     func startFetch(imageId: UUID) async throws
-    func cancelFetch(imageId: UUID) async
-    func isFetchActive(imageId: UUID) async -> Bool
     /// Fetches a single typed artifact from its `sourceURL` in the background.
     func startArtifactFetch(artifactId: UUID) async throws
 }
@@ -43,19 +41,6 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         }
 
         activeFetches[imageId] = task
-    }
-
-    /// Cancels an active fetch
-    func cancelFetch(imageId: UUID) {
-        if let task = activeFetches[imageId] {
-            task.cancel()
-            activeFetches.removeValue(forKey: imageId)
-        }
-    }
-
-    /// Checks if a fetch is active
-    func isFetchActive(imageId: UUID) -> Bool {
-        return activeFetches[imageId] != nil
     }
 
     /// Performs the actual fetch operation

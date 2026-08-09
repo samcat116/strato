@@ -1,42 +1,42 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
-import { pendingMutationLabel } from "@/lib/operation-labels";
-import { usePendingMutation } from "@/lib/stores/mutations-store";
+import {
+  StatusBadge,
+  type StatusBadgeConfig,
+} from "@/components/ui/status-badge";
 import type { SandboxStatus } from "@/types/api";
 
-const statusConfig: Record<SandboxStatus, { label: string; className: string }> =
-  {
-    Running: {
-      label: "Running",
-      className: "bg-green-500/20 text-green-600 border-green-500/30",
-    },
-    Stopped: {
-      label: "Stopped",
-      className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
-    },
-    Exited: {
-      label: "Exited",
-      className: "bg-blue-500/20 text-blue-600 border-blue-500/30",
-    },
-    Starting: {
-      label: "Starting",
-      className:
-        "bg-green-500/20 text-green-600 border-green-500/30 animate-pulse",
-    },
-    Stopping: {
-      label: "Stopping",
-      className: "bg-red-500/20 text-red-600 border-red-500/30 animate-pulse",
-    },
-    Error: {
-      label: "Error",
-      className: "bg-red-500/20 text-red-600 border-red-500/30",
-    },
-    Unknown: {
-      label: "Unknown",
-      className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
-    },
-  };
+const statusConfig: Record<SandboxStatus, StatusBadgeConfig> = {
+  Running: {
+    label: "Running",
+    className: "bg-green-500/20 text-green-600 border-green-500/30",
+  },
+  Stopped: {
+    label: "Stopped",
+    className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
+  },
+  Exited: {
+    label: "Exited",
+    className: "bg-blue-500/20 text-blue-600 border-blue-500/30",
+  },
+  Starting: {
+    label: "Starting",
+    className:
+      "bg-green-500/20 text-green-600 border-green-500/30 animate-pulse",
+  },
+  Stopping: {
+    label: "Stopping",
+    className: "bg-red-500/20 text-red-600 border-red-500/30 animate-pulse",
+  },
+  Error: {
+    label: "Error",
+    className: "bg-red-500/20 text-red-600 border-red-500/30",
+  },
+  Unknown: {
+    label: "Unknown",
+    className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
+  },
+};
 
 export function SandboxStatusBadge({
   status,
@@ -49,41 +49,24 @@ export function SandboxStatusBadge({
   /** Shown alongside the "Exited" label; a non-zero code is styled as a failure. */
   exitCode?: number | null;
 }) {
-  const pendingMutation = usePendingMutation(sandboxId);
-
-  if (pendingMutation) {
-    return (
-      <Badge
-        variant="outline"
-        className="bg-blue-500/20 text-blue-600 border-blue-500/30 animate-pulse"
-      >
-        {pendingMutationLabel(pendingMutation.kind)}
-      </Badge>
-    );
-  }
-
-  const config = statusConfig[status] || statusConfig.Unknown;
-
   // A workload that exited non-zero reads as a failure; exit 0 stays neutral.
-  if (status === "Exited") {
-    const failed = exitCode != null && exitCode !== 0;
-    return (
-      <Badge
-        variant="outline"
-        className={
-          failed
-            ? "bg-red-500/20 text-red-600 border-red-500/30"
-            : config.className
+  // Folded into the config map (rather than short-circuiting the render) so an
+  // in-flight mutation still takes priority over the exit label.
+  const failed = exitCode != null && exitCode !== 0;
+  const config =
+    status === "Exited"
+      ? {
+          ...statusConfig,
+          Exited: {
+            label: exitCode != null ? `Exited (${exitCode})` : "Exited",
+            className: failed
+              ? "bg-red-500/20 text-red-600 border-red-500/30"
+              : statusConfig.Exited.className,
+          },
         }
-      >
-        {exitCode != null ? `Exited (${exitCode})` : "Exited"}
-      </Badge>
-    );
-  }
+      : statusConfig;
 
   return (
-    <Badge variant="outline" className={config.className}>
-      {config.label}
-    </Badge>
+    <StatusBadge status={status} config={config} resourceId={sandboxId} />
   );
 }

@@ -14,7 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { securityGroupsApi } from "@/lib/api/security-groups";
-import { useProjectContext } from "@/providers";
+import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { toast } from "sonner";
 
 interface CreateSecurityGroupDialogProps {
@@ -37,6 +37,14 @@ export function CreateSecurityGroupDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Required: there is no default project to fall back to (issue #1059).
+    // Without this the body would go out with the key dropped by
+    // JSON.stringify and come back a 400 the user cannot act on.
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
 
     const name = formData.name.trim();
     if (!name) {
@@ -74,7 +82,7 @@ export function CreateSecurityGroupDialog({
           <DialogDescription className="text-muted-foreground">
             {currentProject
               ? `Create a new security group in ${currentProject.name}`
-              : "Create a new security group"}
+              : NO_PROJECT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -131,7 +139,7 @@ export function CreateSecurityGroupDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading}
+              disabled={isLoading || !projectId}
             >
               {isLoading ? (
                 <>

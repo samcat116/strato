@@ -80,16 +80,6 @@ final class OrgTrustDomain: Model, @unchecked Sendable {
     @OptionalField(key: "org_bundle_pem")
     var orgBundlePEM: String?
 
-    /// When the platform trust domain last accepted this org's bundle
-    /// (platform → org federation).
-    @OptionalField(key: "platform_federation_at")
-    var platformFederationAt: Date?
-
-    /// When this org's server last accepted the platform bundle
-    /// (org → platform federation).
-    @OptionalField(key: "org_federation_at")
-    var orgFederationAt: Date?
-
     /// Last reconciliation failure, surfaced in the admin UI (phase 7).
     @OptionalField(key: "last_error")
     var lastError: String?

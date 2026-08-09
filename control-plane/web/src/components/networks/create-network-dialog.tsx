@@ -14,7 +14,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { networksApi } from "@/lib/api/networks";
-import { useProjectContext } from "@/providers";
+import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { toast } from "sonner";
 import {
   DHCPFields,
@@ -67,6 +67,14 @@ export function CreateNetworkDialog({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // Required: there is no default project to fall back to (issue #1059).
+    // Without this the body would go out with the key dropped by
+    // JSON.stringify and come back a 400 the user cannot act on.
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
 
     const name = formData.name.trim();
     if (!name) {
@@ -121,7 +129,7 @@ export function CreateNetworkDialog({
           <DialogDescription className="text-muted-foreground">
             {currentProject
               ? `Create a new network in ${currentProject.name}`
-              : "Create a new network"}
+              : NO_PROJECT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -243,7 +251,7 @@ export function CreateNetworkDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading}
+              disabled={isLoading || !projectId}
             >
               {isLoading ? (
                 <>

@@ -14,13 +14,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useImages } from "@/lib/hooks/use-images";
-import { useProjectContext } from "@/providers";
+import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { toast } from "sonner";
-import {
-  acceptedMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
 
 import type { VolumeFormat, VolumeType } from "@/types/api";
 
@@ -38,8 +35,7 @@ export function CreateVolumeDialog({
   onOpenChange,
   onCreated,
 }: CreateVolumeDialogProps) {
-  const [isLoading, setIsLoading] = useState(false);
-  const watch = useMutationsStore((state) => state.watch);
+  const { isLoading, run } = useAcceptedMutation();
   const [formData, setFormData] = useState({
     name: "",
     description: "",
@@ -73,6 +69,14 @@ export function CreateVolumeDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Required: there is no default project to fall back to (issue #1059).
+    // Without this the body would go out with the key dropped by
+    // JSON.stringify and come back a 400 the user cannot act on.
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
+
     const name = formData.name.trim();
     if (!name) {
       toast.error("Please enter a volume name");
@@ -85,37 +89,27 @@ export function CreateVolumeDialog({
       return;
     }
 
-    setIsLoading(true);
-    try {
-      const accepted = await volumesApi.create({
-        name,
-        description: formData.description.trim() || undefined,
-        projectId,
-        sizeGB,
-        format: formData.format,
-        volumeType: formData.volumeType,
-        sourceImageId: formData.sourceImageId || undefined,
-      });
-      // Accepted, not created: the agent still has to place and materialize
-      // it, and MutationWatcher toasts the outcome (backend STR-148).
-      watch(
-        acceptedMutation(accepted, {
-          kind: "create",
-          resourceKind: "volume",
-          resourceId: accepted.resource.id!,
-          resourceName: name,
-        })
-      );
-      onOpenChange(false);
-      onCreated?.();
-      resetForm();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to create volume"
-      );
-    } finally {
-      setIsLoading(false);
-    }
+    // Accepted, not created: the agent still has to place and materialize
+    // it, and MutationWatcher toasts the outcome (backend STR-148).
+    await run({
+      request: () =>
+        volumesApi.create({
+          name,
+          description: formData.description.trim() || undefined,
+          projectId,
+          sizeGB,
+          format: formData.format,
+          volumeType: formData.volumeType,
+          sourceImageId: formData.sourceImageId || undefined,
+        }),
+      watch: { kind: "create", resourceKind: "volume", resourceName: name },
+      errorMessage: "Failed to create volume",
+      onSuccess: () => {
+        onOpenChange(false);
+        onCreated?.();
+        resetForm();
+      },
+    });
   };
 
   return (
@@ -126,7 +120,7 @@ export function CreateVolumeDialog({
           <DialogDescription className="text-muted-foreground">
             {currentProject
               ? `Create a new volume in ${currentProject.name}`
-              : "Create a new volume"}
+              : NO_PROJECT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -266,7 +260,7 @@ export function CreateVolumeDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading}
+              disabled={isLoading || !projectId}
             >
               {isLoading ? (
                 <>

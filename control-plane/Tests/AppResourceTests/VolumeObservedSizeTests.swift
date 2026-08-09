@@ -134,7 +134,6 @@ final class VolumeObservedSizeTests {
                             volumeId: volume.id!,
                             present: true,
                             storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
-                            format: "qcow2",
                             sizeBytes: 3 << 30,
                             observedGeneration: 1)
                     ]))
@@ -168,7 +167,6 @@ final class VolumeObservedSizeTests {
                             volumeId: volume.id!,
                             present: true,
                             storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
-                            format: "qcow2",
                             sizeBytes: 1 << 30,
                             observedGeneration: 2,
                             lastError: "refusing to grow volume: it is attached to a running VM",
@@ -206,7 +204,6 @@ final class VolumeObservedSizeTests {
                             volumeId: volume.id!,
                             present: true,
                             storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
-                            format: "qcow2",
                             sizeBytes: nil,
                             observedGeneration: 1)
                     ]))

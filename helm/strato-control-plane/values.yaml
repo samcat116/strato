@@ -2,9 +2,9 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
-# Control-plane replicas. Counts above 1 are supported (issue #261): agent
-# WebSockets are routed between replicas via Valkey (`agent:{name}:replica`
-# keys + pub/sub nudges), all durable state lives in PostgreSQL, and rolling
+# Control-plane replicas. Counts above 1 are supported: mutations ring a
+# contentless doorbell over Valkey and whichever replica holds the agent's
+# parked poll acts on it, all durable state lives in PostgreSQL, and rolling
 # deploys just cause agents to reconnect to surviving replicas. Valkey is
 # required either way; see docs/architecture/multi-replica.md.
 replicaCount: 1
@@ -219,7 +219,9 @@ resources:
 # finish, which on a large database can outlast a liveness threshold. While a
 # startupProbe is pending, Kubernetes suspends the liveness and readiness
 # probes, so this is what decides how long a slow boot is allowed to take
-# (periodSeconds × failureThreshold = 5 minutes by default).
+# (periodSeconds × failureThreshold = 5 minutes by default). Keep this budget
+# above SchemaMigrator's lock timeout (4 minutes by default) so its actionable
+# timeout error reaches the logs before kubelet restarts the process.
 startupProbe:
   enabled: true
   path: /health/live

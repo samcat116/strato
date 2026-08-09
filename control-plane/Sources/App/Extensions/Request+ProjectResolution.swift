@@ -2,115 +2,60 @@ import Fluent
 import Vapor
 
 extension Request {
-    /// Resolve the target project and environment for a resource-create request,
-    /// enforcing organization membership, the `create_resources` permission, and
-    /// environment validity.
+    /// The refusal both create-side resolvers give a request that names no
+    /// project (issue #1059).
     ///
-    /// This is the shared spine behind VM and sandbox creation (issue #675): both
-    /// paths must scope a create identically, and any divergence between them is a
-    /// latent authorization bug. The logic:
+    /// **There is no default project.** There used to be two guesses at one, and
+    /// they disagreed: VM and sandbox creation took the project *named* "Default
+    /// Project", while the five infrastructure creates took the organization's
+    /// oldest. So `POST /api/vms` and `POST /api/volumes` with the same empty
+    /// body landed in different places, and neither answer was one anybody
+    /// chose — the first is a magic string an organization can rename out from
+    /// under (`strato bootstrap --project-name Foo` already produced an
+    /// installation where VM create refused and volume create quietly worked),
+    /// the second was `.first()` with no `ORDER BY` until issue #1049 sorted it,
+    /// and that sort only made the guess *repeatable*, not right. Both also
+    /// filtered on `organization_id`, so a project living under a folder was
+    /// invisible to them, and an organization whose projects were all foldered
+    /// could not create anything without naming one.
     ///
-    /// 1. If `requestedProjectId` is set, the project must exist and its root
-    ///    organization must match the user's current organization; otherwise fall
-    ///    back to the organization's "Default Project".
-    /// 2. Require `create_resources` on the resolved project — org membership alone
-    ///    is not enough, since `<resource>.create` resolves to
-    ///    `project->create_resources`.
-    /// 3. Resolve the environment (`requestedEnvironment ?? project.defaultEnvironment`)
-    ///    and validate it exists on the project.
+    /// What replaced them is not a third guess. A create says where it lands.
+    /// This is the same move networks made in issue #765 — "nothing provisions a
+    /// network with a project, and no network is privileged, so 'attach to
+    /// whatever is lying around' has no honest answer" — and the reasoning
+    /// transfers intact: nothing privileges the project an organization is
+    /// provisioned with either.
     ///
-    /// Distinct from `authorizedProjectForCreate(...)`, which is the spine
-    /// behind the project-scoped infrastructure creates (volume, network,
-    /// security group, floating IP, DNS zone): those have no environment and
-    /// each carries its own create action.
+    /// Rejected on the way here: an explicit `organizations.default_project_id`
+    /// column, which swaps one inferred answer for a nullable one that still
+    /// needs a rule for when it is unset; and adopting the sole project when an
+    /// organization holds exactly one, which makes the API's behavior depend on
+    /// how many rows a table happens to hold — the same request starts failing
+    /// the day somebody adds a second project.
     ///
-    /// **The two fallbacks disagree, and that is not by design.** This one
-    /// takes the project *named* "Default Project"; the other takes the
-    /// organization's oldest project. So in an organization holding more than
-    /// one project, `POST /api/vms` and `POST /api/volumes` with no `projectId`
-    /// can land in different places. Reconciling them is issue #1059 — until
-    /// then, do not read either as the installation's answer to "the default
-    /// project".
-    ///
-    /// - Parameter resourceKind: Plural noun for the resource being created
-    ///   (e.g. `"VMs"`, `"sandboxes"`), used only in the forbidden-permission message.
-    func resolveProjectForCreate(
-        requestedProjectId: UUID?,
-        requestedEnvironment: String?,
-        user: User,
-        resourceKind: String
-    ) async throws -> (project: Project, environment: String) {
-        // Determine project context.
-        let projectId: UUID
-        if let requestedProjectId {
-            // Verify user has access to the requested project.
-            guard let project = try await Project.find(requestedProjectId, on: db) else {
-                throw Abort(.badRequest, reason: "Project not found")
-            }
-
-            // Verify user belongs to the project's organization.
-            let rootOrgId = try await project.getRootOrganizationId(on: db)
-            guard let orgId = rootOrgId, user.currentOrganizationId == orgId else {
-                throw Abort(.forbidden, reason: "Access denied to project")
-            }
-
-            projectId = requestedProjectId
-        } else {
-            guard let currentOrgId = user.currentOrganizationId else {
-                throw Abort(.badRequest, reason: "No current organization set. Please specify a project.")
-            }
-
-            // Fall back to the organization's default project.
-            let defaultProject = try await Project.query(on: db)
-                .filter(\Project.$organization.$id, .equal, currentOrgId)
-                .filter(\Project.$name, .equal, "Default Project")
-                .first()
-
-            guard let project = defaultProject else {
-                throw Abort(.badRequest, reason: "No default project found. Please specify a project.")
-            }
-            projectId = project.id!
-        }
-
-        // Re-fetch the resolved project to validate the environment.
-        guard let project = try await Project.find(projectId, on: db) else {
-            throw Abort(.internalServerError, reason: "Project not found")
-        }
-
-        // Require create permission on the target project. Org membership alone
-        // (checked above) is not enough: `<resource>.create` resolves to
-        // `project->create_resources`, so a user who only inherits `view_project`
-        // as an org member — with no role in this project — must not be able to
-        // create resources here.
-        let canCreate = try await can("create_resources", on: "project", id: projectId.uuidString)
-        guard canCreate else {
-            throw Abort(.forbidden, reason: "You don't have permission to create \(resourceKind) in this project")
-        }
-
-        // Determine and validate the environment.
-        return (project, try project.resolveEnvironment(requestedEnvironment))
+    /// - Parameters:
+    ///   - verb: What the endpoint calls the act (floating IPs are *allocated*).
+    ///   - resourceKind: Plural noun for the resource being created.
+    static func projectIsRequired(verb: String = "create", _ resourceKind: String) -> Abort {
+        Abort(.badRequest, reason: "projectId is required — name the project to \(verb) \(resourceKind) in.")
     }
 
-    /// The project a project-scoped create lands in — resolved, authorized, and
-    /// confirmed to exist (issue #1049).
+    /// The project a project-scoped create lands in — named, authorized, and
+    /// confirmed to exist (issues #1049, #1059).
     ///
-    /// Five endpoints ask the same question: take the request's `projectId`,
-    /// else the first project in the caller's current organization, else refuse.
-    /// Four of them — volume, network, security-group and floating-IP create —
-    /// carried the same seventeen lines inline while DNS zone create had already
-    /// extracted a private copy of them, and what the copies had drifted over is
-    /// whether the resolved project must exist: DNS zone, security group and
-    /// floating IP confirmed it, network only when the request also pinned a
-    /// site, and `createVolume` never — it went from the permission check
-    /// straight to the insert and left a bad id to the foreign key. Route new
-    /// project-scoped creates through here rather than writing a sixth copy.
+    /// Every create routes through here: the five infrastructure creates
+    /// (volume, network, security group, floating IP, DNS zone) call it
+    /// directly, and `resolveProjectForCreate` — the VM/sandbox spine — is
+    /// built on it. Route new project-scoped creates through it too rather than
+    /// writing a copy; the four inline copies this replaced had already drifted
+    /// over whether the resolved project must exist.
     ///
-    /// **It asserts the project exists**, which is the per-controller question
-    /// this settles: no create is left handing an unbacked `project_id` to an
-    /// insert for the foreign key to reject. The three steps run in this order,
-    /// and the order is the load-bearing part:
+    /// **It asserts the project exists**, so no create hands an unbacked
+    /// `project_id` to an insert for the foreign key to reject. The three steps
+    /// run in this order, and the order is the load-bearing part:
     ///
-    /// 1. Resolve the id — no lookup, no decision.
+    /// 1. Read the id, refusing if there is none — a body-shape check that
+    ///    consults nothing, so it discloses nothing.
     /// 2. Authorize `action` on it.
     /// 3. *Then* confirm the row exists.
     ///
@@ -128,64 +73,36 @@ extension Request {
     /// `docs/architecture/iam.md` states — system admins included, since their
     /// reach is the tier-1 policy rather than a bypass, and a role binding
     /// pinned directly at the missing id does not rescue it either.
-    /// `ProjectResolutionTests` pins both, at all five endpoints: what a caller
+    /// `ProjectResolutionTests` pins both, at all seven endpoints: what a caller
     /// inventing a UUID actually gets is `403`.
     ///
-    /// Keeping a check nothing currently reaches is a trade, and it is not free
-    /// or uniform: the fallback path drops from two queries to one at all five
-    /// endpoints (the resolved row is reused), while a request that names its
-    /// project costs one `SELECT` more than it did at volume create and at
-    /// site-less network create — the two that were not already looking the
-    /// project up. That is worth paying for the failure it stands in front of,
-    /// which is an insert against a dangling foreign key surfacing as a `500`
-    /// mid-create rather than a `400` before anything is written.
-    ///
-    /// **The fallback is stable, not decided.** It used to be `.first()` with
-    /// no sort at all, so across an organization with more than one project two
-    /// identical requests by the same user could land in different projects —
-    /// Postgres is free to return a different row. The `created_at`/`id` sort
-    /// removes that, and nothing more: it makes the answer repeatable without
-    /// claiming the oldest project *ought* to be the default. Which project
-    /// should be — an explicit default-project field, or refusing when the
-    /// choice is ambiguous — is issue #1059, along with the fact that this
-    /// fallback and `resolveProjectForCreate`'s disagree.
+    /// Note what this function does *not* take: a `User`. It used to, for the
+    /// sole purpose of reading `currentOrganizationId` to pick a default
+    /// project. With the default gone the only principal this resolution has an
+    /// opinion about is the one the evaluator already holds, and keeping the
+    /// parameter would suggest otherwise. The `created_at`/`id` sort that made
+    /// the old fallback repeatable went with it — it was deleted rather than
+    /// moved, because with nothing being guessed there is nothing left to make
+    /// repeatable.
     ///
     /// - Parameters:
-    ///   - requestedProjectId: The project named by the request body, if any.
+    ///   - requestedProjectId: The project named by the request body. Required;
+    ///     `nil` is refused, since there is no default project to fall back to.
     ///   - action: The create permission to check on the resolved project
     ///     (e.g. `"create_volume"`).
     ///   - resourceKind: Plural noun for the resource being created
-    ///     (e.g. `"volumes"`), used only in the forbidden-permission message.
-    ///   - verb: The verb that message reads with, for the endpoints that don't
+    ///     (e.g. `"volumes"`), used in the permission and missing-project
+    ///     messages.
+    ///   - verb: The verb those messages read with, for the endpoints that don't
     ///     call it creating (floating IPs are *allocated*).
     func authorizedProjectForCreate(
         requested requestedProjectId: UUID?,
-        user: User,
         action: String,
         resourceKind: String,
         verb: String = "create"
     ) async throws -> Project {
-        // Resolved by fallback, so it exists by construction and needs no
-        // second lookup below.
-        var fallbackProject: Project?
-
-        let projectId: UUID
-        if let requestedProjectId {
-            projectId = requestedProjectId
-        } else if let currentOrgId = user.currentOrganizationId {
-            guard
-                let defaultProject = try await Project.query(on: db)
-                    .filter(\.$organization.$id == currentOrgId)
-                    .sort(\.$createdAt, .ascending)
-                    .sort(\.$id, .ascending)
-                    .first()
-            else {
-                throw Abort(.badRequest, reason: "No project specified and no default project found")
-            }
-            fallbackProject = defaultProject
-            projectId = try defaultProject.requireID()
-        } else {
-            throw Abort(.badRequest, reason: "No project specified and user has no current organization")
+        guard let projectId = requestedProjectId else {
+            throw Self.projectIsRequired(verb: verb, resourceKind)
         }
 
         let allowed = try await can(action, on: "project", id: projectId.uuidString)
@@ -194,10 +111,80 @@ extension Request {
                 .forbidden, reason: "You don't have permission to \(verb) \(resourceKind) in this project")
         }
 
-        if let fallbackProject { return fallbackProject }
         guard let project = try await Project.find(projectId, on: db) else {
             throw Abort(.badRequest, reason: "Project \(projectId) does not exist")
         }
         return project
+    }
+
+    /// Resolve the target project and environment for a VM or sandbox create,
+    /// enforcing the `create_resources` permission, the caller's current
+    /// organization, and environment validity.
+    ///
+    /// This is the shared spine behind VM and sandbox creation (issue #675):
+    /// both paths must scope a create identically, and any divergence between
+    /// them is a latent authorization bug.
+    ///
+    /// **It is now built on `authorizedProjectForCreate` rather than sitting
+    /// beside it.** The two used to be siblings because their fallbacks
+    /// disagreed and neither could stand on the other; with no fallback left,
+    /// this one is simply that resolution plus two extra steps. Composing them
+    /// is what makes the guarantee structural: the thing that must never drift
+    /// again — what a create does when it is told no project, and in what order
+    /// it checks things — now exists in exactly one place. The cost, stated
+    /// plainly: a future change to `authorizedProjectForCreate`'s policy reaches
+    /// VM and sandbox create silently. That is the point, but it is worth
+    /// knowing.
+    ///
+    /// Composition also **closed a disclosure leak here**. This function used to
+    /// look the project up first (`400 "Project not found"`), then check the
+    /// organization (`403 "Access denied to project"`), and only then ask the
+    /// evaluator — exactly the ordering `authorizedProjectForCreate` was written
+    /// to avoid, so `POST /api/vms` was an existence oracle over other tenants'
+    /// projects. It answers `403` now, like the other five. That is a visible
+    /// status change for a caller sending a project id nothing backs.
+    ///
+    /// **The current-organization check is kept, and kept here.** It could have
+    /// been dropped to make the seven identical, but that would be a *widening*:
+    /// a principal holding `create_resources` on a project in organization B
+    /// could create there while their current organization is A — and the
+    /// middleware, which gates the `/api/vms` and `/api/sandboxes` collections
+    /// against the current organization, would have admitted the request on
+    /// behalf of A. That may be the right end state; it is a separate decision
+    /// with its own blast radius, not one to smuggle into "remove the default
+    /// project". Behind the permission check it discloses nothing: its `403`
+    /// only ever reaches a caller the evaluator already agreed may create here.
+    /// One operator-facing consequence — the decision log shows an *allow*
+    /// followed by a `403`, which is the organization scope refusing a create
+    /// the evaluator would otherwise permit.
+    ///
+    /// Reading `user.currentOrganizationId` is now that check's only job. It
+    /// used to seed the default-project lookup as well, so after this nothing on
+    /// a create path *chooses* anything from request-scoped user state; it only
+    /// narrows.
+    ///
+    /// - Parameter resourceKind: Plural noun for the resource being created
+    ///   (e.g. `"VMs"`, `"sandboxes"`), used in the permission and
+    ///   missing-project messages.
+    func resolveProjectForCreate(
+        requestedProjectId: UUID?,
+        requestedEnvironment: String?,
+        user: User,
+        resourceKind: String
+    ) async throws -> (project: Project, environment: String) {
+        let project = try await authorizedProjectForCreate(
+            requested: requestedProjectId,
+            action: "create_resources",
+            resourceKind: resourceKind)
+
+        // Current-organization scope, deliberately *after* the permission
+        // check — ahead of it, "not found" told apart from "denied" is an
+        // existence oracle.
+        let rootOrgId = try await project.getRootOrganizationId(on: db)
+        guard let orgId = rootOrgId, user.currentOrganizationId == orgId else {
+            throw Abort(.forbidden, reason: "Access denied to project")
+        }
+
+        return (project, try project.resolveEnvironment(requestedEnvironment))
     }
 }

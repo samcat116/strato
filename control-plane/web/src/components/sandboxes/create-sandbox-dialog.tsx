@@ -15,13 +15,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sandboxesApi } from "@/lib/api/sandboxes";
-import {
-  acceptedMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useNetworks } from "@/lib/hooks/use-networks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
-import { useProjectContext } from "@/providers";
+import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { toast } from "sonner";
 import { MAX_SECURITY_GROUPS_PER_NIC } from "@/types/api";
 
@@ -73,8 +70,7 @@ export function CreateSandboxDialog({
   onOpenChange,
   onCreated,
 }: CreateSandboxDialogProps) {
-  const watch = useMutationsStore((state) => state.watch);
-  const [isLoading, setIsLoading] = useState(false);
+  const { isLoading, run } = useAcceptedMutation();
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [formData, setFormData] = useState(EMPTY_FORM);
   const [securityGroupIds, setSecurityGroupIds] = useState<string[]>([]);
@@ -96,6 +92,14 @@ export function CreateSandboxDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Required: there is no default project to fall back to (issue #1059).
+    // Without this the body would go out with the key dropped by
+    // JSON.stringify and come back a 400 the user cannot act on.
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
+
     if (!formData.name.trim()) {
       toast.error("Please enter a sandbox name");
       return;
@@ -105,62 +109,60 @@ export function CreateSandboxDialog({
       return;
     }
 
-    setIsLoading(true);
     setQuotaError(null);
-    try {
-      const GB = 1024 * 1024 * 1024; // 1 GiB in bytes; the API field is named `memory`
-      const env = parseEnv(formData.env);
-      const ttl = parseInt(formData.ttlSeconds, 10);
-      // Creation is asynchronous: the server accepts the request and returns
-      // the sandbox with the generation it is converging on, which the
-      // MutationWatcher follows and reports on completion.
-      const accepted = await sandboxesApi.create({
-        name: formData.name.trim(),
-        image: formData.image.trim(),
-        projectId,
-        cpus: parseInt(formData.cpus, 10) || 1,
-        memory: (parseInt(formData.memory, 10) || 1) * GB,
-        entrypoint: parseArgv(formData.entrypoint),
-        cmd: parseArgv(formData.cmd),
-        ...(Object.keys(env).length > 0 ? { env } : {}),
-        workingDir: formData.workingDir.trim() || undefined,
-        ...(Number.isFinite(ttl) && ttl > 0 ? { ttlSeconds: ttl } : {}),
-        // Both omitted without a network: the server rejects
-        // `securityGroupIds` with no NIC to attach them to, and omitting them
-        // *with* a network means the project's default group rather than none.
-        ...(formData.networkId
-          ? {
-              networkId: formData.networkId,
-              ...(securityGroupIds.length > 0 ? { securityGroupIds } : {}),
-            }
-          : {}),
-      });
-      watch(
-        acceptedMutation(accepted, {
-          kind: "create",
-          resourceKind: "sandbox",
-          resourceName: formData.name.trim(),
-        })
-      );
-      toast.success(`Creating sandbox "${formData.name.trim()}"`);
-      onOpenChange(false);
-      onCreated?.();
-      setFormData(EMPTY_FORM);
-      setSecurityGroupIds([]);
-      setQuotaError(null);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to create sandbox";
+    const GB = 1024 * 1024 * 1024; // 1 GiB in bytes; the API field is named `memory`
+    const env = parseEnv(formData.env);
+    const ttl = parseInt(formData.ttlSeconds, 10);
+    // Creation is asynchronous: the server accepts the request and returns
+    // the sandbox with the generation it is converging on, which the
+    // MutationWatcher follows and reports on completion.
+    await run({
+      request: () =>
+        sandboxesApi.create({
+          name: formData.name.trim(),
+          image: formData.image.trim(),
+          projectId,
+          cpus: parseInt(formData.cpus, 10) || 1,
+          memory: (parseInt(formData.memory, 10) || 1) * GB,
+          entrypoint: parseArgv(formData.entrypoint),
+          cmd: parseArgv(formData.cmd),
+          ...(Object.keys(env).length > 0 ? { env } : {}),
+          workingDir: formData.workingDir.trim() || undefined,
+          ...(Number.isFinite(ttl) && ttl > 0 ? { ttlSeconds: ttl } : {}),
+          // Both omitted without a network: the server rejects
+          // `securityGroupIds` with no NIC to attach them to, and omitting them
+          // *with* a network means the project's default group rather than none.
+          ...(formData.networkId
+            ? {
+                networkId: formData.networkId,
+                ...(securityGroupIds.length > 0 ? { securityGroupIds } : {}),
+              }
+            : {}),
+        }),
+      watch: {
+        kind: "create",
+        resourceKind: "sandbox",
+        resourceName: formData.name.trim(),
+      },
+      errorMessage: "Failed to create sandbox",
+      successMessage: `Creating sandbox "${formData.name.trim()}"`,
+      onSuccess: () => {
+        onOpenChange(false);
+        onCreated?.();
+        setFormData(EMPTY_FORM);
+        setSecurityGroupIds([]);
+        setQuotaError(null);
+      },
       // Quota rejections surface inline with a pointer to the quotas page,
       // since resolving them means editing a quota rather than the form.
-      if (/quota/i.test(message)) {
-        setQuotaError(message);
-      } else {
-        toast.error(message);
-      }
-    } finally {
-      setIsLoading(false);
-    }
+      onError: (message) => {
+        if (/quota/i.test(message)) {
+          setQuotaError(message);
+          return true;
+        }
+        return false;
+      },
+    });
   };
 
   return (
@@ -169,7 +171,9 @@ export function CreateSandboxDialog({
         <DialogHeader>
           <DialogTitle>Create Sandbox</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Boot a microVM from an OCI image
+            {currentProject
+              ? `Boot a microVM from an OCI image in ${currentProject.name}`
+              : NO_PROJECT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -454,7 +458,7 @@ export function CreateSandboxDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading}
+              disabled={isLoading || !projectId}
             >
               {isLoading ? (
                 <>

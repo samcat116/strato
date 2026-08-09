@@ -247,8 +247,7 @@ struct MetadataStoreTests {
             DesiredStateMessage(vms: [
                 Self.desired(first, metadata: Self.metadata(first, hostname: "web-1")),
                 Self.desired(second, metadata: Self.metadata(second, hostname: "web-2")),
-            ]),
-            includeMetadata: true)
+            ]))
 
         #expect(await store.metadata(for: first)?.hostname == "web-1")
         #expect(await store.metadata(for: second)?.hostname == "web-2")
@@ -263,27 +262,9 @@ struct MetadataStoreTests {
         await store.apply(Self.metadata(vmId, hostname: "stale"), generation: 1, for: vmId)
 
         await reconciler.apply(
-            DesiredStateMessage(vms: [Self.desired(vmId, generation: 2, metadata: nil)]),
-            includeMetadata: true)
+            DesiredStateMessage(vms: [Self.desired(vmId, generation: 2, metadata: nil)]))
 
         #expect(await store.metadata(for: vmId) == nil)
-    }
-
-    @Test("A control plane that predates the field leaves the store alone")
-    func silenceFromOldControlPlaneChangesNothing() async {
-        // The rollback case: a pre-v26 control plane sends no metadata at all,
-        // and reading that as authoritative would blind every guest on the host.
-        let store = MetadataStore()
-        let reconciler = makeReconciler(MockActuator(), store: store)
-        let vmId = UUID()
-        await store.apply(Self.metadata(vmId, hostname: "web-1"), generation: 1, for: vmId)
-
-        await reconciler.apply(
-            DesiredStateMessage(vms: [Self.desired(vmId, generation: 2, metadata: nil)]),
-            includeMetadata: false)
-
-        #expect(await store.metadata(for: vmId)?.hostname == "web-1")
-        #expect(await store.appliedGeneration(for: vmId) == 1)
     }
 
     @Test("A replayed older sync does not roll the served metadata back")
@@ -299,13 +280,13 @@ struct MetadataStoreTests {
 
         await reconciler.apply(
             DesiredStateMessage(vms: [Self.desired(vmId, generation: 5, metadata: Self.metadata(vmId, hostname: "old"))]
-            ), includeMetadata: true)
+            ))
         await reconciler.apply(
             DesiredStateMessage(vms: [Self.desired(vmId, generation: 6, metadata: Self.metadata(vmId, hostname: "new"))]
-            ), includeMetadata: true)
+            ))
         await reconciler.apply(
             DesiredStateMessage(vms: [Self.desired(vmId, generation: 5, metadata: Self.metadata(vmId, hostname: "old"))]
-            ), includeMetadata: true)
+            ))
 
         #expect(await store.metadata(for: vmId)?.hostname == "new")
         #expect(await reconciler.observedGeneration(for: vmId.uuidString) == 0)
@@ -325,8 +306,7 @@ struct MetadataStoreTests {
         await reconciler.apply(
             DesiredStateMessage(vms: [
                 Self.desired(vmId, status: .absent, generation: 2, metadata: Self.metadata(vmId, hostname: "web-1"))
-            ]),
-            includeMetadata: false)
+            ]))
 
         #expect(await store.metadata(for: vmId) == nil)
         #expect(await store.appliedGeneration(for: vmId) == 2)
@@ -346,13 +326,11 @@ struct MetadataStoreTests {
         await reconciler.apply(
             DesiredStateMessage(vms: [
                 Self.desired(vmId, status: .absent, generation: 4, metadata: Self.metadata(vmId, hostname: "web-1"))
-            ]),
-            includeMetadata: true)
+            ]))
         await reconciler.apply(
             DesiredStateMessage(vms: [
                 Self.desired(vmId, generation: 4, metadata: Self.metadata(vmId, hostname: "web-1"))
-            ]),
-            includeMetadata: true)
+            ]))
 
         #expect(await store.metadata(for: vmId) == nil)
     }
@@ -374,8 +352,7 @@ struct MetadataStoreTests {
         await reconciler.apply(
             DesiredStateMessage(vms: [
                 Self.desired(vmId, status: .absent, generation: 2, metadata: Self.metadata(vmId, hostname: "web-1"))
-            ]),
-            includeMetadata: true)
+            ]))
         _ = await actuator.waitForReports(1)
 
         #expect(await store.metadata(for: vmId) == nil)
@@ -395,7 +372,7 @@ struct MetadataStoreTests {
         let reconciler = makeReconciler(actuator, store: store)
         await store.apply(Self.metadata(vmId, hostname: "web-1"), generation: 1, for: vmId)
 
-        await reconciler.apply(DesiredStateMessage(vms: []), includeMetadata: true)
+        await reconciler.apply(DesiredStateMessage(vms: []))
 
         #expect(await store.metadata(for: vmId)?.hostname == "web-1")
     }
@@ -410,8 +387,7 @@ struct MetadataStoreTests {
 
         await reconciler.apply(
             DesiredStateMessage(
-                vms: [], tombstones: [DesiredWorkloadTombstone(kind: .vm, workloadId: vmId, generation: 2)]),
-            includeMetadata: true)
+                vms: [], tombstones: [DesiredWorkloadTombstone(kind: .vm, workloadId: vmId, generation: 2)]))
         _ = await actuator.waitForReports(1)
 
         #expect(await store.metadata(for: vmId) == nil)
@@ -435,8 +411,7 @@ struct MetadataStoreTests {
         await reconciler.apply(
             DesiredStateMessage(
                 vms: [],
-                tombstones: vmIds.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 2) }),
-            includeMetadata: true)
+                tombstones: vmIds.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 2) }))
 
         #expect(await reconciler.lastTeardownRefusal() != nil)
         for (index, vmId) in vmIds.enumerated() {
@@ -458,8 +433,7 @@ struct MetadataStoreTests {
         await reconciler.apply(
             DesiredStateMessage(vms: [
                 Self.desired(vmId, generation: 3, metadata: Self.metadata(vmId, hostname: "web-1"))
-            ]),
-            includeMetadata: true)
+            ]))
 
         #expect(await store.metadata(for: vmId)?.hostname == "web-1")
         #expect(await reconciler.observedGeneration(for: vmId.uuidString) == 0)

@@ -68,8 +68,9 @@ extension FloatingIP: Content {}
 
 struct CreateFloatingIPRequest: Content {
     let poolId: UUID
-    /// Defaults to the caller's default project when omitted, matching VM and
-    /// network creation.
+    /// Required: there is no default project (issue #1059). Optional here so
+    /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
+    /// rather than a `Codable` decode failure that names neither.
     let projectId: UUID?
 }
 

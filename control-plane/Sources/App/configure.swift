@@ -850,6 +850,17 @@ public func configure(_ app: Application) async throws {
     // for, so a grow the agent has refused stops reading as one that landed.
     app.migrations.add(AddVolumeObservedSize())
 
+    // STR-201: hand an address to the networks `AddResolverEnabledToLogicalNetwork`
+    // switched the resolver on for, which never got one because an index is only
+    // allocated by a network create or update.
+    app.migrations.add(BackfillResolverIndexes())
+
+    // STR-198: the same backstop for the DNS model's text columns, which the
+    // STR-195 cut left out. A follow-on rather than four more entries in
+    // `BoundResourceTextColumns`, which has already run on every existing
+    // deployment — see `BoundDNSTextColumns`.
+    app.migrations.add(BoundDNSTextColumns())
+
     // STR-181: volumes and volume snapshots become countable — an environment
     // to scope them by, the overlay footprint reported for visibility, and an
     // optional volume count limit.
@@ -860,7 +871,19 @@ public func configure(_ app: Application) async throws {
     // ever touched the table, and nothing is left to order after it.
     app.migrations.add(DropResourceOperations())
 
-    try await app.autoMigrate()
+    // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
+    // wraps no transaction around a migration and the `_fluent_migrations` row
+    // that records it, so concurrent replica boots race the same migration and a
+    // crash mid-migration leaves a half-state no later boot can get past.
+    // `SchemaMigrator` serializes the phase on a Postgres advisory lock and
+    // commits each migration with its log row.
+    try await SchemaMigrator.run(on: app)
+
+    // STR-186 prevents new tenant IPv6 subnets from overlapping the ULA space
+    // used by metadata and per-network resolvers. Existing rows cannot be
+    // renumbered safely in place, so name every collision at each startup until
+    // its operator remediates it.
+    try await NetworkServiceSpaceAudit.warnAboutCollidingNetworks(on: app.db, logger: app.logger)
 
     // Reconcile the iam_roles/iam_role_actions tables with the code-side
     // curated registry. Runs every startup so registry changes land with the

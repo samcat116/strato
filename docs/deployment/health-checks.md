@@ -114,6 +114,8 @@ startupProbe:
   enabled: true
   path: /health/live        # dependency-free; boot time is what it bounds
   periodSeconds: 5
+  # Keep this budget above the migration lock timeout (4 minutes by default)
+  # so the named timeout reaches logs before kubelet restarts the process.
   failureThreshold: 60      # allow 5 minutes for migrations on boot
 
 terminationDrain:

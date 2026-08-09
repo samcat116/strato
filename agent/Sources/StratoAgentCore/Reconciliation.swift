@@ -325,17 +325,6 @@ public struct ReconcileWorkItem: Sendable {
         return nil
     }
 
-    /// The edge nonces this item's desired entry asks for (STR-151), which a
-    /// completed item has by definition applied — whether by performing the
-    /// edge or by superseding it.
-    public var desiredEdges: DesiredEdges {
-        switch target {
-        case .vm(let entry): return entry.edges
-        case .sandbox(let entry): return entry.edges
-        case .volume, .snapshot, .tombstone: return .none
-        }
-    }
-
     /// Whether this item is a confirmed teardown of a workload with no
     /// control-plane row. These are the only items the blast-radius guard
     /// counts, and the only ones exempt from the attempt cap.
@@ -344,16 +333,13 @@ public struct ReconcileWorkItem: Sendable {
         return false
     }
 
-    /// Every serial lane this item must hold while it runs. VM items share
-    /// their lane with the imperative per-VM message handlers (the bare vmId),
-    /// so the two modes can never interleave operations on one VM; sandbox and
-    /// volume items get their own namespaces ("sandbox/" and "volume/" cannot
-    /// collide with a UUID string).
+    /// Every serial lane this item must hold while it runs. VM items key on
+    /// the bare vmId, so two items can never interleave operations on one VM;
+    /// sandbox and volume items get their own namespaces ("sandbox/" and
+    /// "volume/" cannot collide with a UUID string).
     ///
     /// A volume item that carries an attachment also holds the *VM's* lane,
-    /// because realizing it drives that VM's hypervisor session. This is the
-    /// same two-lane guarantee `MessageEnvelope.serializationKeys` gave the
-    /// imperative `volume_attach` frame, carried over rather than reinvented.
+    /// because realizing it drives that VM's hypervisor session.
     ///
     /// A snapshot item holds its own lane plus its **parent's**, for the same
     /// reason (STR-150): capturing a checkpoint pauses the guest and drives the
@@ -1004,41 +990,14 @@ public actor Reconciler {
     /// Diff a desired-state sync against reality and enqueue the work. Returns
     /// quickly — long convergence actions run on the per-workload lanes.
     ///
-    /// `includeSandboxes` gates the sandbox half of the sync: a control plane
-    /// older than the sandbox protocol omits `sandboxes` (decoded as `[]`).
-    /// Since STR-98 that is no longer a teardown hazard — an unlisted sandbox
-    /// is held, not destroyed — but it would still report every sandbox on the
-    /// host as unaccounted for, which is false: the sender simply doesn't speak
-    /// that half of the protocol. The caller passes
-    /// `WireProtocol.supportsSandboxSync(senderVersion)`.
-    ///
-    /// `includeVolumes` gates the volume half the same way, but the message's
-    /// own `volumes` field is the primary signal and the stricter one: nil
-    /// there means the sender said nothing about volumes, and the half is
-    /// skipped whatever the version claims (STR-148). Planning against an
-    /// empty desired list instead would report every volume on the host as
-    /// unaccounted for and invite a future reading of that silence as
-    /// teardown — of the only copy of a user's data.
-    /// `includeSnapshots` gates the snapshot half exactly like `includeVolumes`
-    /// gates the volume half, and the message's own `snapshots` field is the
-    /// primary and stricter signal for the same reason (STR-150): planning
-    /// against an empty desired list would report every checkpoint on the host
-    /// as unaccounted for, and invite a future reading of that silence as
-    /// teardown — of a point in time the user chose to keep and cannot recreate.
-    ///
-    /// `includeMetadata` gates the payload half of instance metadata (STR-52)
-    /// on `WireProtocol.supportsInstanceMetadata(senderVersion)`, for the
-    /// v3/v5 reason again: from a control plane that speaks the field a nil
-    /// `metadata` is authoritative and drops what this host serves, while from
-    /// an older one it is silence — reading that as an instruction would empty
-    /// every VM's metadata the moment a control plane is rolled back.
-    public func apply(
-        _ message: DesiredStateMessage,
-        includeSandboxes: Bool = false,
-        includeVolumes: Bool = false,
-        includeSnapshots: Bool = false,
-        includeMetadata: Bool = false
-    ) async {
+    /// The volume and snapshot halves key on their fields' own nil: nil means
+    /// the sender said nothing about that family and the half is skipped
+    /// (STR-148/STR-150) — planning against an empty desired list instead
+    /// would report every volume or checkpoint on the host as unaccounted for
+    /// and invite a future reading of that silence as teardown, of data or a
+    /// point in time that cannot be recreated. (The per-family version gates
+    /// that used to guard these halves went with the skew window at v38.)
+    public func apply(_ message: DesiredStateMessage) async {
         let tombstones = message.tombstones ?? []
 
         // Instance metadata is recorded before anything else this sync does,
@@ -1053,7 +1012,7 @@ public actor Reconciler {
         // (a hostname, an SSH key) changes no realization and so bumps no
         // generation — so routing it through actuation would drop exactly the
         // edits the metadata service exists to deliver.
-        await recordMetadata(message.vms, includeMetadata: includeMetadata)
+        await recordMetadata(message.vms)
 
         // An agent that cannot enumerate its own workloads converges nothing
         // (STR-138). Every item this sync could plan rests on the presence
@@ -1101,7 +1060,7 @@ public actor Reconciler {
 
         var volumePlan = ReconcilePlan()
         var presentVolumeCount = 0
-        if includeVolumes, let desiredVolumes = message.volumes {
+        if let desiredVolumes = message.volumes {
             // Nil is the storage backend saying it cannot enumerate the store —
             // not that the store is empty. Planning against `[:]` would create
             // every desired volume afresh, over (or under) bytes that are
@@ -1125,7 +1084,7 @@ public actor Reconciler {
 
         var snapshotPlan = ReconcilePlan()
         var presentSnapshotCounts: [WorkloadKind: Int] = [:]
-        if includeSnapshots, let desiredSnapshots = message.snapshots {
+        if let desiredSnapshots = message.snapshots {
             // Nil is the record store saying it cannot enumerate what this host
             // holds — not that it holds nothing. Planning against `[:]` would
             // re-capture every desired artifact, checkpointing live guests over
@@ -1152,7 +1111,7 @@ public actor Reconciler {
 
         var presentSandboxCount = 0
         var sandboxPlan = ReconcilePlan()
-        if includeSandboxes {
+        do {
             let presentSandboxes = await actuator.observedSandboxPresence()
             presentSandboxCount = presentSandboxes.count
             sandboxPlan = Self.planSandboxes(
@@ -1199,12 +1158,11 @@ public actor Reconciler {
                 "syncId": .string(message.syncId),
                 "desiredVMs": .stringConvertible(message.vms.count),
                 "presentVMs": .stringConvertible(presentVMs.count),
-                "desiredSandboxes": .stringConvertible(includeSandboxes ? message.sandboxes.count : 0),
+                "desiredSandboxes": .stringConvertible(message.sandboxes.count),
                 "presentSandboxes": .stringConvertible(presentSandboxCount),
-                "desiredVolumes": .stringConvertible(includeVolumes ? (message.volumes?.count ?? 0) : 0),
+                "desiredVolumes": .stringConvertible(message.volumes?.count ?? 0),
                 "presentVolumes": .stringConvertible(presentVolumeCount),
-                "desiredSnapshots": .stringConvertible(
-                    includeSnapshots ? (message.snapshots?.count ?? 0) : 0),
+                "desiredSnapshots": .stringConvertible(message.snapshots?.count ?? 0),
                 "presentSnapshots": .stringConvertible(presentSnapshotCounts.values.reduce(0, +)),
                 "unrecognized": .stringConvertible(plan.unrecognized.count),
                 "workItems": .stringConvertible(items.count),
@@ -1361,27 +1319,20 @@ public actor Reconciler {
     /// write is logged rather than swallowed — "the metadata the operator
     /// edited never took" is otherwise invisible in a service with no request
     /// log of its own.
-    private func recordMetadata(_ desired: [DesiredVMState], includeMetadata: Bool) async {
+    private func recordMetadata(_ desired: [DesiredVMState]) async {
         // Readiness first, and once for the whole sync rather than once per VM
         // (STR-56). A host that legitimately runs no VMs still becomes ready:
         // its listener must be able to answer "I do not serve that address"
         // rather than "I do not know anything yet", and looping over an empty
-        // list would never say so. Gated on `includeMetadata` because a control
-        // plane that predates the field has given this host nothing to serve,
-        // and claiming readiness on its behalf would turn every guest's 503 —
-        // which is retried — into a 404, which is not.
-        if includeMetadata {
-            await metadataStore.markSyncApplied()
-        }
+        // list would never say so.
+        await metadataStore.markSyncApplied()
         for entry in desired {
             let outcome: MetadataWriteOutcome
             if entry.wantsAbsent {
                 outcome = await metadataStore.withdraw(
                     entry.vmId, generation: entry.generation, because: .desiredAbsent)
-            } else if includeMetadata {
-                outcome = await metadataStore.apply(entry.metadata, generation: entry.generation, for: entry.vmId)
             } else {
-                continue
+                outcome = await metadataStore.apply(entry.metadata, generation: entry.generation, for: entry.vmId)
             }
             guard case .stale(let recorded) = outcome else { continue }
             logger.debug(
@@ -1399,7 +1350,6 @@ public actor Reconciler {
         // ever reach it, and the restored payload would stay servable for the
         // life of the host. Runs after the loop so this sync's own writes have
         // already cleared their records' provisional mark.
-        guard includeMetadata else { return }
         let retired = await metadataStore.confirmRestored(namedBy: Set(desired.map(\.vmId)))
         guard !retired.isEmpty else { return }
         logger.info(

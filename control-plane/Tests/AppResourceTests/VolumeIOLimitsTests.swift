@@ -316,26 +316,6 @@ final class VolumeIOLimitsTests {
         }
     }
 
-    /// The v31 volume-sync gate, not a v34 one: STR-19 adds no capability gate
-    /// of its own, so what refuses here is the same thing that refuses every
-    /// other volume mutation against an agent that cannot converge one.
-    @Test("A volume on a pre-v31 agent cannot be throttled")
-    func preV31AgentIsRefused() async throws {
-        try await withVolumeApp { app, user, project, token in
-            let agentId = try await self.registerAgent(
-                app: app, named: "io-old-agent", protocolVersion: 30)
-            let volume = try await self.makeVolume(
-                app: app, user: user, project: project, agentId: agentId)
-
-            try await app.test(.POST, "/api/volumes/\(volume.id!)/io-limits") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(SetVolumeIOLimitsRequest(iopsTotal: 500, bpsTotal: nil))
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-            }
-        }
-    }
-
     @Test("A terminating volume cannot be throttled")
     func terminatingVolumeIsRefused() async throws {
         try await withVolumeApp { app, user, project, token in
@@ -404,7 +384,6 @@ final class VolumeIOLimitsTests {
                             volumeId: volume.id!,
                             present: true,
                             storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
-                            format: "qcow2",
                             observedGeneration: 2,
                             ioLimits: nil)
                     ]))
@@ -438,7 +417,6 @@ final class VolumeIOLimitsTests {
                             volumeId: volume.id!,
                             present: true,
                             storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
-                            format: "qcow2",
                             observedGeneration: 2,
                             ioLimits: VolumeIOLimits(iopsTotal: nil, bpsTotal: nil))
                     ]))
@@ -465,7 +443,6 @@ final class VolumeIOLimitsTests {
                             volumeId: volume.id!,
                             present: true,
                             storagePath: "/var/lib/strato/volumes/v/volume.qcow2",
-                            format: "qcow2",
                             observedGeneration: 2,
                             ioLimits: VolumeIOLimits(iopsTotal: 500, bpsTotal: nil))
                     ]))

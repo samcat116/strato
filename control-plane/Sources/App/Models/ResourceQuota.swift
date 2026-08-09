@@ -179,23 +179,6 @@ extension ResourceQuota {
         return maxStorage - reservedStorage
     }
 
-    var availableVMs: Int {
-        return maxVMs - vmCount
-    }
-
-    var availableSandboxes: Int {
-        return maxSandboxes - sandboxCount
-    }
-
-    /// Nil when no volume count limit is set (STR-181).
-    var availableVolumes: Int? {
-        maxVolumes.map { $0 - volumeCount }
-    }
-
-    var availableNetworks: Int {
-        return maxNetworks - networkCount
-    }
-
     var cpuUtilizationPercent: Double {
         guard maxVCPUs > 0 else { return 0 }
         return Double(reservedVCPUs) / Double(maxVCPUs) * 100

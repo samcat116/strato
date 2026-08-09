@@ -382,20 +382,21 @@ actor FirecrackerService: HypervisorService {
         }
     }
 
-    func listVMs() async -> [String] {
+    /// Never nil, unlike `LibvirtService`: this driver mirrors every VM it
+    /// manages in its own memory, so there is no query that can fail and no
+    /// state in which it does not know what it holds. Nil is for a backend that
+    /// had to ask something else and got no reply (STR-196).
+    func listVMs() async -> [String]? {
         return Array(vmManagers.keys)
     }
 
     /// Sum of vCPUs and memory (in bytes) reserved by all VMs this service is managing.
     /// Used to compute accurate available-resource figures for the scheduler.
-    func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
-        var vcpus = 0
-        var memoryBytes: Int64 = 0
-        for spec in vmSpecs.values {
-            vcpus += spec.cpus
-            memoryBytes += spec.memoryBytes
-        }
-        return (vcpus, memoryBytes)
+    ///
+    /// Never nil, for the same reason as `listVMs()`: the specs are held here,
+    /// so a zero from this driver is always a real zero.
+    func reservedResources() -> (vcpus: Int, memoryBytes: Int64)? {
+        vmSpecs.values.reservedResources
     }
 
     // MARK: - Orphan Re-adoption (issue #433)
@@ -491,85 +492,4 @@ actor FirecrackerService: HypervisorService {
 
 }
 
-#else
-// Stub implementation for non-Linux platforms
-// Firecracker is only available on Linux
-
-/// Stub FirecrackerService for non-Linux platforms
-/// Always throws an error since Firecracker is Linux-only
-actor FirecrackerService: HypervisorService {
-    public let hypervisorType: HypervisorType = .firecracker
-
-    init(
-        logger: Logger,
-        storage: (any StorageBackend)? = nil,
-        vmStoragePath: String,
-        firecrackerBinaryPath: String = "/usr/bin/firecracker",
-        socketDirectory: String = "/tmp/firecracker"
-    ) {
-        // No-op for non-Linux
-    }
-
-    func createVM(
-        vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
-        networkAttachments: [ResolvedNetworkAttachment] = [],
-        metadata: InstanceMetadata? = nil
-    ) async throws {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func bootVM(vmId: String) async throws {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func shutdownVM(vmId: String) async throws {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func rebootVM(vmId: String) async throws {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func pauseVM(vmId: String) async throws {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func resumeVM(vmId: String) async throws {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func deleteVM(vmId: String) async throws {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func reclaimVMDirectory(vmId: String) async {
-        // This stub never created a VM here, so there is nothing on the host to
-        // reclaim — and unlike the calls above, cleanup has no failure to report.
-    }
-
-    func getVMStatus(vmId: String) async throws -> VMStatus {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func listVMs() async -> [String] {
-        return []
-    }
-
-    func consoleEndpoint(vmId: String) async throws -> ConsoleEndpoint? {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func attachDisk(vmId: String, volumeId: String, volumePath: String, deviceName: String, readonly: Bool) async throws
-    {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws {
-        throw HypervisorServiceError.notSupported("Firecracker is only available on Linux")
-    }
-
-    func reservedResources() -> (vcpus: Int, memoryBytes: Int64) {
-        return (0, 0)
-    }
-}
 #endif

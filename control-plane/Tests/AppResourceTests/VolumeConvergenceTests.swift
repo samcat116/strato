@@ -136,22 +136,6 @@ final class VolumeConvergenceTests {
         }
     }
 
-    /// The asymmetric-absence hazard, assembly side. A pre-v31 agent gets nil
-    /// rather than `[]`, because `[]` from a control plane that speaks the
-    /// field would be an authoritative "you should have no volumes".
-    @Test("A pre-v31 agent's sync carries no volumes field at all")
-    func preV30AgentGetsNilVolumes() async throws {
-        try await withVolumeApp { app, _, user, project in
-            let agentId = try await registerAgent(
-                app: app, named: "old-agent",
-                protocolVersion: WireProtocol.volumeSyncMinimumVersion - 1)
-            try await makeVolume(on: app, user: user, project: project, agentId: agentId)
-
-            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(message.volumes == nil)
-        }
-    }
-
     @Test("A desired attachment is projected from the VM link, not the status")
     func attachmentIsProjectedFromTheVMLink() async throws {
         try await withVolumeApp { app, builder, user, project in
@@ -217,7 +201,7 @@ final class VolumeConvergenceTests {
                     volumes: [
                         ObservedVolumeState(
                             volumeId: volumeID, present: true,
-                            storagePath: "/agent/chosen/path.qcow2", format: "qcow2",
+                            storagePath: "/agent/chosen/path.qcow2",
                             observedGeneration: 1)
                     ]))
 
@@ -252,8 +236,8 @@ final class VolumeConvergenceTests {
                     agentId: agentId,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/p", format: "qcow2",
-                            attachedVMId: vm.id, deviceName: "disk1", observedGeneration: 2)
+                            volumeId: volumeID, present: true, storagePath: "/p",
+                            attachedVMId: vm.id, observedGeneration: 2)
                     ]))
 
             let settled = try await #require(try await Volume.find(volumeID, on: app.db))
@@ -307,7 +291,7 @@ final class VolumeConvergenceTests {
                     agentId: agentId,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/p", format: "qcow2",
+                            volumeId: volumeID, present: true, storagePath: "/p",
                             observedGeneration: 3,
                             lastError: "no space left on device", failedGeneration: 3)
                     ]))
@@ -349,8 +333,8 @@ final class VolumeConvergenceTests {
                     agentId: agentId,
                     volumes: [
                         ObservedVolumeState(
-                            volumeId: volumeID, present: true, storagePath: "/p", format: "qcow2",
-                            attachedVMId: vm.id, deviceName: "disk7", observedGeneration: 2)
+                            volumeId: volumeID, present: true, storagePath: "/p",
+                            attachedVMId: vm.id, observedGeneration: 2)
                     ]))
 
             let after = try await #require(try await Volume.find(volumeID, on: app.db))

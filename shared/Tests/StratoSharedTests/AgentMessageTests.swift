@@ -13,7 +13,11 @@ struct AgentMessageTests {
             version: "1.2.3",
             capabilities: ["kvm", "ovn"],
             resources: Fixtures.resources,
-            hypervisorType: .firecracker
+            hypervisors: [
+                HypervisorSupport(
+                    type: .firecracker, available: true, accelerated: true,
+                    capabilities: .capabilities(for: .firecracker))
+            ]
         )
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .agentRegister)
@@ -23,7 +27,7 @@ struct AgentMessageTests {
         #expect(decoded.hostname == "hv-01.example")
         #expect(decoded.version == "1.2.3")
         #expect(decoded.capabilities == ["kvm", "ovn"])
-        #expect(decoded.hypervisorType == .firecracker)
+        #expect(decoded.effectiveHypervisors.map(\.type) == [.firecracker])
         #expect(decoded.resources.totalCPU == Fixtures.resources.totalCPU)
         #expect(decoded.resources.availableCPU == Fixtures.resources.availableCPU)
         #expect(decoded.resources.totalMemory == Fixtures.resources.totalMemory)
@@ -205,13 +209,11 @@ struct AgentMessageTests {
             requestId: Fixtures.requestId,
             timestamp: Fixtures.timestamp,
             agentId: "agent-1",
-            resources: Fixtures.resources,
-            runningVMs: ["vm-a", "vm-b"]
+            resources: Fixtures.resources
         )
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .agentHeartbeat)
         #expect(decoded.agentId == "agent-1")
-        #expect(decoded.runningVMs == ["vm-a", "vm-b"])
         #expect(decoded.resources.availableMemory == Fixtures.resources.availableMemory)
     }
 
@@ -219,13 +221,10 @@ struct AgentMessageTests {
         let message = AgentUnregisterMessage(
             requestId: Fixtures.requestId,
             timestamp: Fixtures.timestamp,
-            agentId: "agent-1",
-            reason: "shutting down"
-        )
+            agentId: "agent-1")
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .agentUnregister)
         #expect(decoded.agentId == "agent-1")
-        #expect(decoded.reason == "shutting down")
     }
 
     @Test func agentRegisterResponseRoundTrip() throws {

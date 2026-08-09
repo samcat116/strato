@@ -90,7 +90,7 @@ struct SecurityGroupController: RouteCollection {
         let request = try req.content.decodeValidated(CreateSecurityGroupRequest.self)
 
         let project = try await req.authorizedProjectForCreate(
-            requested: request.projectId, user: user,
+            requested: request.projectId,
             action: "create_security_group", resourceKind: "security groups")
         let projectId = try project.requireID()
 
@@ -613,16 +613,8 @@ struct SecurityGroupController: RouteCollection {
             return
         case .unauthored(let refusal):
             throw refusal
-        case .realizers(let agents):
-            for agent in agents {
-                guard WireProtocol.supportsSecurityGroups(agent.wireProtocolVersion ?? 0) else {
-                    throw Abort(
-                        .conflict,
-                        reason:
-                            "Agent '\(agent.name)' registered with a protocol too old for security groups; upgrade it first"
-                    )
-                }
-            }
+        case .realizers:
+            return
         }
     }
 

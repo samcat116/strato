@@ -103,7 +103,7 @@ enum ResolverAddressAllocator {
     }
 
     /// Postgres only, and transaction-scoped, matching `IPAMService`.
-    private static func lock(on db: any Database) async throws {
+    static func lock(on db: any Database) async throws {
         guard let sql = db as? any SQLDatabase, sql.dialect.name == "postgresql" else { return }
         try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: lockKey)))").run()
     }

@@ -372,7 +372,7 @@ final class SecurityGroupControllerTests {
             // Attached group: attach app to a NIC (v20 agent), then delete → 409.
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
             // Give the NIC a second group so `app` is not load-bearing later.
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: project.id!, on: app.db)
@@ -416,7 +416,7 @@ final class SecurityGroupControllerTests {
         try await withSecurityGroupTestApp { app, _, org, project, token in
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: project.id!, on: app.db)
             try await VMInterfaceSecurityGroup(
@@ -469,24 +469,13 @@ final class SecurityGroupControllerTests {
         }
     }
 
-    @Test("Attach is refused when the VM's agent predates security groups; unplaced VMs pass")
-    func attachVersionGate() async throws {
+    @Test("Attach works on an unplaced VM")
+    func attachUnplacedVM() async throws {
         try await withSecurityGroupTestApp { app, _, org, project, token in
             let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
 
-            // Placed on a v19 agent → 409.
-            let (oldVM, _) = try await self.createVMWithNIC(
-                app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion - 1)
-            try await app.test(.POST, "/api/security-groups/\(web.id)/attach") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(AttachSecurityGroupRequest(vmId: oldVM.id!))
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-            }
-
-            // Unplaced VM → allowed (the default group must be attachable
-            // before scheduling; assembly omits the fields for old agents).
+            // The default group must be attachable before scheduling, when the
+            // VM has no host yet.
             let (unplacedVM, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project, protocolVersion: nil)
             try await app.test(.POST, "/api/security-groups/\(web.id)/attach") { req in
@@ -507,7 +496,7 @@ final class SecurityGroupControllerTests {
             let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
 
             let site = Site(name: "SG Offline Site", organizationScope: .organization(org.id!))
             try await site.save(on: app.db)
@@ -707,7 +696,7 @@ final class SecurityGroupControllerTests {
             let group = try await self.createGroup(app: app, project: project, token: token, name: "private")
             let (vm, _) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
 
             // A real (non-system-admin) user in a different organization.
             let builder = TestDataBuilder(db: app.db)
@@ -782,7 +771,7 @@ final class SecurityGroupControllerTests {
             // Per-NIC cap: fill the NIC to maxGroupsPerNIC, then one more.
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
             var groups: [SecurityGroupResponse] = []
             for index in 0...SecurityGroup.maxGroupsPerNIC {
                 groups.append(
@@ -837,7 +826,7 @@ final class SecurityGroupControllerTests {
 
     // MARK: - Desired-state assembly
 
-    @Test("Assembly carries groups, the reference closure, and per-NIC ids for v20 agents only")
+    @Test("Assembly carries groups, the reference closure, and per-NIC ids")
     func assemblyScoping() async throws {
         try await withSecurityGroupTestApp { app, _, org, project, token in
             let web = try await self.createGroup(app: app, project: project, token: token, name: "web")
@@ -856,7 +845,7 @@ final class SecurityGroupControllerTests {
 
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
             try await VMInterfaceSecurityGroup(
                 interfaceID: nic.id!, securityGroupID: web.id
             ).save(on: app.db)
@@ -870,18 +859,6 @@ final class SecurityGroupControllerTests {
             #expect(webDesired?.rules.first?.remoteGroupId == db_.id)
             let nicSpec = try #require(message.vms.first?.spec.networks.first)
             #expect(nicSpec.securityGroupIds == [web.id])
-
-            // A v19 agent gets neither field.
-            let (oldVM, oldNIC) = try await self.createVMWithNIC(
-                app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion - 1)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: oldNIC.id!, securityGroupID: web.id
-            ).save(on: app.db)
-            let oldMessage = try await app.desiredStateAssembler.assemble(
-                agentId: oldVM.hypervisorId!)
-            #expect(oldMessage.securityGroups == nil)
-            #expect(oldMessage.vms.first?.spec.networks.first?.securityGroupIds == nil)
         }
     }
 
@@ -916,24 +893,9 @@ final class SecurityGroupControllerTests {
                 #expect(ids == ids.sorted { $0.uuidString < $1.uuidString })
             }
 
-            // On a pre-v20 host the API must say the groups aren't enforced.
-            let (stale, staleNIC) = try await self.createVMWithNIC(
-                app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion - 1)
-            try await VMInterfaceSecurityGroup(
-                interfaceID: staleNIC.id!, securityGroupID: web.id
-            ).save(on: app.db)
-            try await app.test(.GET, "/api/vms/\(stale.id!)") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                let detail = try res.content.decode(VMDetailResponse.self)
-                #expect(detail.securityGroupsEnforced == false)
-                #expect(detail.networkInterfaces.first?.securityGroupIds == [web.id])
-            }
-
             let (current, currentNIC) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
             try await VMInterfaceSecurityGroup(
                 interfaceID: currentNIC.id!, securityGroupID: web.id
             ).save(on: app.db)
@@ -951,7 +913,6 @@ final class SecurityGroupControllerTests {
                 let page = try res.content.decode(PagedResponse<VMDetailResponse>.self).items
                 let byID = Dictionary(uniqueKeysWithValues: page.compactMap { vm in vm.id.map { ($0, vm) } })
                 #expect(byID[unplaced.id!]?.securityGroupsEnforced == nil)
-                #expect(byID[stale.id!]?.securityGroupsEnforced == false)
                 #expect(byID[current.id!]?.securityGroupsEnforced == true)
                 #expect(byID[current.id!]?.networkInterfaces.first?.securityGroupIds == [web.id])
             }
@@ -991,7 +952,7 @@ final class SecurityGroupControllerTests {
 
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
             try await VMInterfaceSecurityGroup(
                 interfaceID: nic.id!, securityGroupID: web.id
             ).save(on: app.db)
@@ -1114,7 +1075,7 @@ final class SecurityGroupControllerTests {
             // this host with no groups and report nothing about the omission.
             let (sandbox, nic) = try await self.createSandboxWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion,
+                protocolVersion: WireProtocol.currentVersion,
                 sandboxNetworkingCapable: true)
             try await SandboxInterfaceSecurityGroup(
                 interfaceID: nic.requireID(), securityGroupID: web.id
@@ -1130,17 +1091,6 @@ final class SecurityGroupControllerTests {
             // port joins its groups before the veth goes live.
             #expect(message.sandboxes.count == 1)
             #expect(message.sandboxes.first?.spec.network?.securityGroupIds == [web.id])
-
-            // A pre-v20 agent gets neither half, exactly as on the VM path.
-            let (oldSandbox, oldNIC) = try await self.createSandboxWithNIC(
-                app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion - 1)
-            try await SandboxInterfaceSecurityGroup(
-                interfaceID: oldNIC.requireID(), securityGroupID: web.id
-            ).save(on: app.db)
-            let oldMessage = try await app.desiredStateAssembler.assemble(
-                agentId: try #require(oldSandbox.hypervisorId))
-            #expect(oldMessage.securityGroups == nil)
         }
     }
 
@@ -1248,28 +1198,20 @@ final class SecurityGroupControllerTests {
         }
     }
 
-    /// The placement-keyed half of the enforcement verdict, exercised directly:
-    /// the version arm, independent of the sandbox-networking capability that
-    /// `sandboxEnforcement` checks first.
-    @Test("Realization by hypervisor id distinguishes a pre-v20 host from a current one")
+    /// The placement-keyed half of the enforcement verdict, exercised directly.
+    @Test("Realization by hypervisor id distinguishes a placed host from an unplaced one")
     func realizationByHypervisorId() async throws {
         try await withSecurityGroupTestApp { app, _, org, project, _ in
-            for (version, expected) in [
-                (WireProtocol.securityGroupsMinimumVersion, true),
-                (WireProtocol.securityGroupsMinimumVersion - 1, false),
-            ] {
-                let (sandbox, _) = try await self.createSandboxWithNIC(
-                    app: app, org: org, project: project, protocolVersion: version)
-                let realization = try await SecurityGroupService.realization(
-                    forHypervisorId: sandbox.hypervisorId, on: app.db)
-                guard case .realizers(let agents) = realization else {
-                    Issue.record("expected a placed sandbox to have realizers")
-                    return
-                }
-                #expect(
-                    agents.allSatisfy { WireProtocol.supportsSecurityGroups($0.wireProtocolVersion ?? 0) }
-                        == expected)
+            let (sandbox, _) = try await self.createSandboxWithNIC(
+                app: app, org: org, project: project,
+                protocolVersion: WireProtocol.currentVersion)
+            let placed = try await SecurityGroupService.realization(
+                forHypervisorId: sandbox.hypervisorId, on: app.db)
+            guard case .realizers(let agents) = placed else {
+                Issue.record("expected a placed sandbox to have realizers")
+                return
             }
+            #expect(!agents.isEmpty)
 
             // An unplaced sandbox is "unknown", never "unenforced".
             let realization = try await SecurityGroupService.realization(
@@ -1292,7 +1234,7 @@ final class SecurityGroupControllerTests {
         try await withSecurityGroupTestApp { app, _, org, project, token in
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
 
             // Two groups on one NIC: exactly one detach may win.
             let first = try await self.createGroup(app: app, project: project, token: token, name: "race-a")
@@ -1341,7 +1283,7 @@ final class SecurityGroupControllerTests {
         try await withSecurityGroupTestApp { app, _, org, project, token in
             let (vm, nic) = try await self.createVMWithNIC(
                 app: app, org: org, project: project,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion)
+                protocolVersion: WireProtocol.currentVersion)
             let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                 projectID: project.id!, on: app.db)
             try await VMInterfaceSecurityGroup(

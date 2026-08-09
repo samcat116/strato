@@ -27,11 +27,4 @@ export const hierarchyApi = {
       params
     );
   },
-
-  // Search across all organizations the user belongs to
-  globalSearch(query: string, type?: string): Promise<HierarchySearchResponse> {
-    const params: Record<string, string> = { q: query };
-    if (type) params.type = type;
-    return api.get<HierarchySearchResponse>("/api/hierarchy/search", params);
-  },
 };

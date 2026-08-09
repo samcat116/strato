@@ -1,37 +1,21 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { sandboxesApi } from "@/lib/api/sandboxes";
 import { useOrganization } from "@/providers";
+import { makeResourceQueryHooks } from "./use-resource-queries";
+
+const hooks = makeResourceQueryHooks({
+  queryKey: "sandboxes",
+  scopeKey: "orgId",
+  list: (organizationId) => sandboxesApi.list(organizationId),
+  get: (id) => sandboxesApi.get(id),
+  listSnapshots: (id) => sandboxesApi.listSnapshots(id),
+  listRefetchInterval: 5000, // Poll every 5 seconds
+});
 
 export function useSandboxes() {
   const { currentOrg, isLoading: orgLoading } = useOrganization();
-  const organizationId = currentOrg?.id;
-
-  return useQuery({
-    queryKey: ["sandboxes", { orgId: organizationId ?? null }],
-    queryFn: () => sandboxesApi.list(organizationId),
-    enabled: !orgLoading,
-    refetchInterval: 5000, // Poll every 5 seconds
-  });
+  return hooks.useList(currentOrg?.id, { enabled: !orgLoading });
 }
 
-export function useSandbox(id: string) {
-  return useQuery({
-    queryKey: ["sandboxes", id],
-    queryFn: () => sandboxesApi.get(id),
-    enabled: !!id,
-  });
-}
-
-export function useSandboxSnapshots(id: string) {
-  return useQuery({
-    queryKey: ["sandboxes", id, "snapshots"],
-    queryFn: () => sandboxesApi.listSnapshots(id),
-    enabled: !!id,
-    refetchInterval: 5000,
-  });
-}
-
-export function useInvalidateSandboxes() {
-  const queryClient = useQueryClient();
-  return () => queryClient.invalidateQueries({ queryKey: ["sandboxes"] });
-}
+export const useSandbox = hooks.useDetail;
+export const useSandboxSnapshots = hooks.useSnapshots;
+export const useInvalidateSandboxes = hooks.useInvalidate;

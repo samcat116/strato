@@ -250,19 +250,12 @@ public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
 
     // VM checkpoints (issue #564).
 
-    /// The qcow2 block-node names the checkpoint spans, in snapshot order.
-    /// Diagnostics only — a restore re-derives the node list from the VM as it
-    /// is *then*, since disks may have been hot-plugged since.
-    public let deviceNodes: [String]?
-    /// `query-version` of the QEMU that took the checkpoint. A restore needs a
+    /// The version of the QEMU that took the checkpoint. A restore needs a
     /// compatible (in practice: identical) build and machine type.
     public let qemuVersion: String?
 
     // Sandbox snapshots (issues #426, #427, #428).
 
-    public let memorySizeBytes: Int64?
-    public let vmstateSizeBytes: Int64?
-    public let rootfsSizeBytes: Int64?
     /// `vmm_version` of the Firecracker that took the snapshot.
     public let firecrackerVersion: String?
     /// Version advertised by the guest frozen into this checkpoint. Nil is a
@@ -282,11 +275,7 @@ public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
         currentSizeBytes: Int64? = nil,
         storagePath: String? = nil,
         architecture: CPUArchitecture? = nil,
-        deviceNodes: [String]? = nil,
         qemuVersion: String? = nil,
-        memorySizeBytes: Int64? = nil,
-        vmstateSizeBytes: Int64? = nil,
-        rootfsSizeBytes: Int64? = nil,
         firecrackerVersion: String? = nil,
         guestControlProtocolVersion: Int? = nil,
         forkLayoutVersion: Int? = nil,
@@ -296,11 +285,7 @@ public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
         self.currentSizeBytes = currentSizeBytes
         self.storagePath = storagePath
         self.architecture = architecture
-        self.deviceNodes = deviceNodes
         self.qemuVersion = qemuVersion
-        self.memorySizeBytes = memorySizeBytes
-        self.vmstateSizeBytes = vmstateSizeBytes
-        self.rootfsSizeBytes = rootfsSizeBytes
         self.firecrackerVersion = firecrackerVersion
         self.guestControlProtocolVersion = guestControlProtocolVersion
         self.forkLayoutVersion = forkLayoutVersion

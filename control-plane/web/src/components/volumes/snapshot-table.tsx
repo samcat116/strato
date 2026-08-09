@@ -21,11 +21,7 @@ import {
 } from "@/components/ui/table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { volumesApi } from "@/lib/api/volumes";
-import {
-  acceptedSnapshotMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
-import { toast } from "sonner";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import type { Volume, VolumeSnapshot } from "@/types/api";
 import { SnapshotStatusBadge } from "./snapshot-status-badge";
 
@@ -45,9 +41,8 @@ export function SnapshotTable({
   onRefresh,
   showVolumeColumn = true,
 }: SnapshotTableProps) {
-  const watch = useMutationsStore((state) => state.watch);
   const [deleteTarget, setDeleteTarget] = useState<VolumeSnapshot | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
+  const { isLoading: isDeleting, run } = useAcceptedMutation();
 
   const volumesById = useMemo(
     () => new Map(volumes.filter((v) => v.id).map((v) => [v.id!, v])),
@@ -56,32 +51,25 @@ export function SnapshotTable({
 
   const handleDelete = async () => {
     if (!deleteTarget?.id || !deleteTarget.volumeId) return;
-    setIsDeleting(true);
-    try {
-      const accepted = await volumesApi.deleteSnapshot(
-        deleteTarget.volumeId,
-        deleteTarget.id
-      );
-      // The row survives until the owning agent confirms the overlay is gone
-      // (STR-150), so the toast names an accepted request rather than a
-      // finished one and the watcher reports the outcome.
-      watch(
-        acceptedSnapshotMutation(accepted, {
-          kind: "delete",
-          resourceKind: "volume_snapshot",
-          resourceName: deleteTarget.name,
-        })
-      );
-      toast.success(`Deleting snapshot ${deleteTarget.name}`);
-      setDeleteTarget(null);
-      onRefresh?.();
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to delete snapshot"
-      );
-    } finally {
-      setIsDeleting(false);
-    }
+    // The row survives until the owning agent confirms the overlay is gone
+    // (STR-150), so the toast names an accepted request rather than a
+    // finished one and the watcher reports the outcome.
+    await run({
+      request: () =>
+        volumesApi.deleteSnapshot(deleteTarget.volumeId!, deleteTarget.id!),
+      watch: {
+        snapshot: true,
+        kind: "delete",
+        resourceKind: "volume_snapshot",
+        resourceName: deleteTarget.name,
+      },
+      errorMessage: "Failed to delete snapshot",
+      successMessage: `Deleting snapshot ${deleteTarget.name}`,
+      onSuccess: () => {
+        setDeleteTarget(null);
+        onRefresh?.();
+      },
+    });
   };
 
   if (isLoading) {
