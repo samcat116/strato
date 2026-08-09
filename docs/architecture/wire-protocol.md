@@ -56,13 +56,12 @@ struct MessageEnvelope {
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
 is treated as version 0.
 
-**Strato deploys the control plane and its agents in lockstep.** Both sides
-refuse any peer below `WireProtocol.minimumSupportedVersion` at registration —
-the control plane with an `unsupported_protocol_version` error frame (which
-stops the agent's reconnect loop with an upgrade instruction), the agent by
-rejecting the registration response. By the time any other message crosses the
-wire, every field this build defines is known to both ends, so there are no
-per-feature version gates and no dual paths keyed on a peer's version.
+**Strato normally deploys the control plane and its agents in lockstep.** Both
+sides refuse any peer below `WireProtocol.minimumSupportedVersion` at
+registration. Wire v39 deliberately keeps v38 as that floor for one rolling
+window: `InstanceMetadata.serviceEnabled` is optional and
+`supportsMetadataOptOut` gates the only behavior an older agent could silently
+ignore. Every legacy dual path removed at v38 stays removed.
 
 Two consequences worth knowing:
 
@@ -87,6 +86,19 @@ of them (see the `minimumSupportedVersion` doc comment in
 `WireProtocol.swift`); if a supported skew window is ever reintroduced,
 resurrect the gates from git history rather than re-deriving them.
 
+Version 39 adds the per-instance metadata kill switch (STR-185):
+`InstanceMetadata.serviceEnabled` is EC2's `MetadataOptions.HttpEndpoint`,
+the per-workload lever for denying one VM the link-local service. The listener
+refuses an identified caller and a drop ACL on `pg_strato_no_metadata` keeps
+the packet off the chassis; the two layers cover unmanaged NICs, authority
+skew, and probe resistance.
+
+Absence means enabled because a v38 control plane opted nobody out. During the
+v38→v39 rollout, `supportsMetadataOptOut` refuses to throw the switch on a VM
+placed on an older agent and keeps an already-hardened VM off one. Turning the
+service back on is never refused. Once v38 agents have left the fleet, the
+minimum version can move to 39 and this sole feature gate can be retired.
+
 Nil-tolerance conventions survive the gates, because they defend against
 *absence within one version*, not skew: a nil `volumes` or `snapshots` list
 still means "the sender said nothing about that family" and is never planned
@@ -96,8 +108,9 @@ withholding an opinion about a host it cannot describe.
 
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
-wire type (see `DesiredVMStatus` below) requires a version bump and, under the
-lockstep policy, deploying both sides together.
+wire type (see `DesiredVMStatus` below) requires a version bump and an
+explicit rollout decision: move the floor with both sides, or add one narrowly
+scoped compatibility gate like v39's.
 
 ## Message catalog
 
@@ -425,6 +438,11 @@ The rest of the package is vocabulary used on both sides:
   `instanceId`/`projectId` are required keys: `DesiredVMState` decodes
   synthesized, so a missing required key inside `metadata` throws out of the
   whole `DesiredStateMessage` and stops that agent converging on everything.
+
+  `serviceEnabled` (v39) is the one field that is not published — it decides
+  whether the rest is served. It lives on the document so policy and payload
+  cannot drift and so `MetadataStore`'s durable restore brings both back after
+  a restart. Nil means enabled for the rolling-upgrade reason above.
 
   `userData`/`vendorData` are carried **inline**, unlike `imageInfo`'s fetched
   paths. That is deliberate — the agent must serve exactly what the last sync

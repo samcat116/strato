@@ -189,6 +189,15 @@ export interface VM {
    */
   graphicsConsole?: boolean;
   /**
+   * Whether the instance metadata service answers this VM (backend STR-185) —
+   * the per-instance kill switch, editable on a running VM. This is the VM's
+   * own switch, not the effective answer: a VM on a network whose metadata is
+   * turned off still reads `true` here unless someone turned it off for this
+   * VM. Optional only because older control planes omit it; treat `undefined`
+   * as on.
+   */
+  metadataEnabled?: boolean;
+  /**
    * Observed guest-agent (qga) view (issue #563). `qgaAvailable` is undefined
    * until the agent's slow poll first sees a responsive guest agent;
    * `observedHostname` is the guest OS's own hostname when it reported one.
@@ -1099,6 +1108,14 @@ export interface CreateVMRequest {
    * Omitted → the project's default group.
    */
   securityGroupIds?: string[];
+  /**
+   * Whether the instance metadata service answers this VM. Defaults to true.
+   * Creating a VM with it off denies the guest `169.254.169.254` outright, and
+   * only agents new enough to honour that are schedulable — but note the
+   * metadata service is also how a guest reads its cloud-init configuration,
+   * so a VM created this way may not finish provisioning.
+   */
+  metadataEnabled?: boolean;
 }
 
 // Async VM operations: lifecycle mutations return 202 Accepted with an

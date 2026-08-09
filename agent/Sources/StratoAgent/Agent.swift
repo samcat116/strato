@@ -2392,11 +2392,21 @@ extension Agent {
                     // agent; port groups + ACLs themselves are authored only
                     // by the topology authority from `message.securityGroups`.
                     var portMemberships = message.vms.flatMap { vm in
-                        vm.spec.networks.enumerated().map { index, spec in
+                        // The VM's metadata kill switch (STR-185) is a property
+                        // of the instance, so it lands on every one of its
+                        // ports. Read off the served document rather than the
+                        // spec because that is where the switch travels — see
+                        // `InstanceMetadata.serviceEnabled` for why it rides
+                        // with the payload it governs. A VM with no `metadata`
+                        // at all is not denied: absence is "nobody was opted
+                        // out", never a denial.
+                        let metadataDenied = vm.metadata.map { !$0.isServiceEnabled } ?? false
+                        return vm.spec.networks.enumerated().map { index, spec in
                             DesiredPortMembership(
                                 portName: OVNNaming.vmPortName(
                                     vmId: vm.vmId.uuidString, nicIndex: index),
-                                securityGroupIds: spec.securityGroupIds)
+                                securityGroupIds: spec.securityGroupIds,
+                                metadataDenied: metadataDenied)
                         }
                     }
                     // The sandbox arm (STR-102). Three things here are exact
@@ -2417,6 +2427,13 @@ extension Agent {
                     // given, so an empty sandbox list is inert here — unlike
                     // `metadataNetworks` below, where an empty list is an
                     // instruction.
+                    //
+                    // No `metadataDenied` either: the kill switch is per VM
+                    // because the document is, and a sandbox has none — the
+                    // listener serves `InstanceMetadata`, which only
+                    // `DesiredVMState` carries. A sandbox's port is left out of
+                    // the deny group because there is nothing on the other end
+                    // of the address for it to be denied.
                     portMemberships += message.sandboxes.compactMap { sandbox in
                         sandbox.spec.network.map { spec in
                             DesiredPortMembership(
@@ -4512,7 +4529,8 @@ extension Agent: ReconcileActuator {
         let attachments: [ResolvedNetworkAttachment]
         do {
             attachments = try await networkOrchestrator.prepareAttachments(
-                vmId: item.vmId, networks: desired.spec.networks)
+                vmId: item.vmId, networks: desired.spec.networks,
+                metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
         } catch {
             vsockCIDs.rollBack(lease)
             throw error

@@ -827,30 +827,47 @@ public enum WireProtocol {
     /// reinterpreted v38 snapshot observations as ~200 KB. A distinct optional
     /// field keeps that reporting honest: nil means "no re-measurement reported".
     /// Quota reservation remains the parent-sized admission bound either way.
+    ///
+    /// Version 39 also adds a per-instance metadata kill switch (STR-185).
+    /// `InstanceMetadata` gains `serviceEnabled`, EC2's
+    /// `MetadataOptions.HttpEndpoint` — the per-workload lever an operator
+    /// hardening a single VM against SSRF needs.
+    ///
+    /// A v39 agent enforces it twice: the listener refuses the identified
+    /// caller, and a drop ACL on `pg_strato_no_metadata` keeps the packet off
+    /// the chassis. Absence means enabled, because a v38 control plane opted
+    /// nobody out. During the v38→v39 rollout, `supportsMetadataOptOut` gates
+    /// both admission and placement so an older agent cannot silently ignore a
+    /// security control while the API reports it as applied.
     public static let currentVersion = 39
 
     /// The lowest protocol version this build will talk to at all.
     ///
-    /// Strato deploys the control plane and its agents in lockstep: there is
-    /// no supported skew window, so there are no per-feature version gates.
-    /// Both sides enforce the floor at registration — the control plane
-    /// refuses an older agent (`unsupported_protocol_version`, which stops the
-    /// agent's reconnect loop with an upgrade instruction), and the agent
-    /// refuses an older control plane the same way — so by the time any other
-    /// message crosses the wire, every field this build defines is known to
-    /// both ends and absence always means what the doc comment says it means.
+    /// v38 closed the historical skew window and removed every legacy dual
+    /// path. v39 deliberately keeps v38 as the floor for one rolling-upgrade
+    /// window. The new snapshot measurement is optional, agent→control-plane
+    /// only, and safely ignored by a v38 decoder. The metadata kill switch does
+    /// affect behavior, so `supportsMetadataOptOut` guards every place where an
+    /// older peer could silently ignore it. All other messages retain v38's
+    /// lockstep shape.
     ///
-    /// Two things to know before touching this number. First, moving it is a
-    /// *deployment decision*, not a code decision: an agent below the floor
-    /// cannot connect, and the declarative self-update rides the sync it can
-    /// no longer receive, so raising the floor past deployed agents means
-    /// updating those agents by hand. Second, if a supported skew window is
-    /// ever reintroduced, resurrect the old `supports*` gates from history
-    /// (deleted at v38) rather than reasoning them out fresh — each one's doc
-    /// comment recorded exactly which silent cross-skew failure it prevented:
-    /// an ignored field reported as converged, or an absent list misread as an
-    /// authoritative teardown.
-    public static let minimumSupportedVersion = 39
+    /// Moving this floor is a deployment decision. An agent below it cannot
+    /// connect, and the declarative self-update rides the sync it can no longer
+    /// receive. Once no v38 agents remain, the floor can move to 39 and this
+    /// one feature gate can be retired. If a broader skew window is ever
+    /// reintroduced, resurrect the pre-v38 gates from history rather than
+    /// re-deriving their silent-failure cases.
+    public static let minimumSupportedVersion = 38
+
+    /// The lowest protocol version that honours the per-instance metadata kill
+    /// switch (see `currentVersion` version 39 notes).
+    public static let metadataOptOutMinimumVersion = 39
+
+    /// Whether an agent registered with `version` enforces
+    /// `InstanceMetadata.serviceEnabled`.
+    public static func supportsMetadataOptOut(_ version: Int) -> Bool {
+        version >= metadataOptOutMinimumVersion
+    }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and
     /// from this single definition — to Foundation's `deferredToDate` numeric

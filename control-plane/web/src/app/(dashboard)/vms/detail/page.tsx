@@ -330,6 +330,15 @@ export default function VMDetailPage() {
                   </p>
                 </div>
                 <div>
+                  <p className="text-muted-foreground">Instance metadata</p>
+                  {/* `!== false` rather than a truthy test: a control plane
+                      predating STR-185 omits the field, and "unknown" reads as
+                      on there because nothing could have switched it off. */}
+                  <p className="text-foreground">
+                    {vm.metadataEnabled !== false ? "Enabled" : "Disabled"}
+                  </p>
+                </div>
+                <div>
                   <p className="text-muted-foreground">Last Updated</p>
                   <p className="text-foreground">
                     {new Date(vm.updatedAt).toLocaleString()}

@@ -29,6 +29,11 @@ import Foundation
 /// can reach the link-local address, so this is a publication boundary, not an
 /// internal DTO: adding a field here hands it to unprivileged guest code.
 ///
+/// `serviceEnabled` is the one deliberate exception, and it earns the exception
+/// by being the field that decides whether any of the rest is disclosed at all
+/// — see its own doc for why it rides here rather than beside `metadata` on
+/// `DesiredVMState`.
+///
 /// ## Size on the wire
 ///
 /// `userData`/`vendorData` are carried inline, which is the one place this
@@ -121,6 +126,49 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
     /// every VM gets until identity ships.
     public let identity: IdentityPolicy?
 
+    /// Whether the metadata service answers this instance at all — Strato's
+    /// per-instance kill switch, `VM.metadataEnabled`, and the equivalent of
+    /// EC2's `MetadataOptions.HttpEndpoint` (STR-185).
+    ///
+    /// **Nil is enabled**, not disabled, unlike every other conservative-by-
+    /// absence field here: a control plane that predates the switch has opted
+    /// nobody out, and reading its silence as a denial would take IMDS away
+    /// from every VM in the fleet on upgrade. Refusing to *apply* a kill switch
+    /// an agent is too old to hear is the control plane's job instead, which is
+    /// what `WireProtocol.supportsMetadataOptOut` is for.
+    ///
+    /// Distinct from `NetworkSpec.metadataEnabled` / `DesiredNetworkState`'s,
+    /// which is per **network** and decides whether the link-local endpoint is
+    /// published on that switch at all. The two compose as an AND from the
+    /// guest's side, and neither is derived from the other: the network switch
+    /// is realized by the localport, this one by the listener refusing the
+    /// caller and by an ACL that denies its port the address.
+    ///
+    /// ## Why it lives on the document rather than beside it
+    ///
+    /// It could as easily have been a sibling of `metadata` on `DesiredVMState`.
+    /// Carrying it *inside* buys two things that separate fields cannot:
+    ///
+    /// - **It cannot drift from the payload it governs.** The agent's store,
+    ///   its durable copy and the snapshot pushed to a listener all move one
+    ///   value, so there is no second field to arrive late, be dropped by an
+    ///   older persisted record, or survive a restore without its policy.
+    /// - **It survives the fail-static path.** `MetadataStore` restores what the
+    ///   last sync said when the control plane is unreachable. A policy stored
+    ///   anywhere but next to the document would be the one thing that restore
+    ///   did not bring back — and an agent that comes up serving a VM its
+    ///   operator switched off is the exact failure this field exists to
+    ///   prevent.
+    ///
+    /// It is never rendered into a document: a disabled service publishes
+    /// nothing, so there is nothing for a guest to read this out of.
+    public let serviceEnabled: Bool?
+
+    /// Whether the service should answer this instance, reading an absent
+    /// `serviceEnabled` as enabled. The only form callers should use — nothing
+    /// should be comparing against `true` or `false` directly.
+    public var isServiceEnabled: Bool { serviceEnabled ?? true }
+
     public init(
         instanceId: UUID,
         hostname: String? = nil,
@@ -133,7 +181,8 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         userData: String? = nil,
         vendorData: String? = nil,
         tags: [String: String] = [:],
-        identity: IdentityPolicy? = nil
+        identity: IdentityPolicy? = nil,
+        serviceEnabled: Bool? = nil
     ) {
         self.instanceId = instanceId
         self.hostname = hostname
@@ -147,6 +196,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         self.vendorData = vendorData
         self.tags = tags
         self.identity = identity
+        self.serviceEnabled = serviceEnabled
     }
 
     // Custom decode so the collections tolerate absence, matching `VMSpec`:
@@ -175,6 +225,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         vendorData = try c.decodeIfPresent(String.self, forKey: .vendorData)
         tags = try c.decodeIfPresent([String: String].self, forKey: .tags) ?? [:]
         identity = try c.decodeIfPresent(IdentityPolicy.self, forKey: .identity)
+        serviceEnabled = try c.decodeIfPresent(Bool.self, forKey: .serviceEnabled)
     }
 }
 
