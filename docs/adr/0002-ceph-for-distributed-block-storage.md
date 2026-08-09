@@ -181,7 +181,9 @@ Specifically:
 - **Quota and actual consumption stop tracking each other in both
   directions.** `QuotaUsageAggregator` sums *provisioned* volume, snapshot,
   and checkpoint bytes, and `QuotaEnforcementService` admits creates
-  against that total. RBD clones consume only their own writes, so a
+  against that total. (True since STR-181; when this ADR was written volumes
+  and their snapshots were charged nothing at all, so the over-counting
+  described here could not yet occur.) RBD clones consume only their own writes, so a
   project can be at quota while using almost nothing; conversely Ceph's
   near-full is a cluster-wide property cutting across every project in the
   site, so a site can be unable to accept writes while every project is

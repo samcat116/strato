@@ -184,13 +184,19 @@ actor Agent {
 
     // Snapshot artifacts this host holds (STR-150), across all three families.
     //
-    // Durable, unlike `volumeSizes`, because none of what it holds can be
+    // Durable, unlike `volumeSizes`, because almost none of what it holds can be
     // re-derived: a Firecracker checkpoint's fork-layout version and CPU
     // template are not recoverable from its files at all, and a qcow2 internal
     // snapshot's footprint costs a subprocess per artifact per report. The
     // control plane learns every one of these facts from the observed report,
     // so they are recorded once, when the only party that can measure them
     // does.
+    //
+    // The one exception is a volume snapshot's footprint, which is a `stat` of a
+    // plain file the agent named — cheap enough to redo per report, and it has
+    // to be, since an overlay grows after capture (STR-181). That measurement
+    // lives on the report path (`SnapshotFootprint.reported`) and never comes back
+    // here: this stays the memory of the capture.
     //
     // `snapshotInventoryUnreadable` is the artifact counterpart of
     // `manifestReadFailure` and does the same job: an empty inventory is
@@ -4205,9 +4211,15 @@ extension Agent: ReconcileActuator {
         }
     }
 
-    /// The allocated size of a file, or nil when it cannot be read. Nil is
-    /// "unknown", never "empty" — a footprint the agent could not measure must
-    /// not silently become a free one in the control plane's quota accounting.
+    /// The apparent size of a file (`st_size`), or nil when it cannot be read.
+    /// Nil is "unknown", never "empty" — a footprint the agent could not measure
+    /// must not silently become a free one in the control plane's quota
+    /// accounting.
+    ///
+    /// Apparent, not allocated: for the archives this measures — a sandbox
+    /// snapshot's files, an overlay at the instant it was created — the two are
+    /// the same. `SnapshotFootprint.allocatedBytes` is what to reach for when the
+    /// question is how much of the filesystem an artifact is occupying *now*.
     private static func fileSizeBytes(at path: String) -> Int64? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
             let size = attributes[.size] as? NSNumber
@@ -5208,7 +5220,11 @@ extension Agent: ReconcileActuator {
                     parentId: artifact.parentId,
                     present: true,
                     exported: artifact.exported,
-                    facts: artifact.facts,
+                    // Re-measured here rather than in `observedSnapshotPresence()`,
+                    // which builds the `Equatable` value the planner diffs: a
+                    // number that changes every report has no business reaching
+                    // a convergence decision (STR-181).
+                    facts: SnapshotFootprint.reported(artifact.facts, kind: artifact.kind),
                     observedGeneration: await reconciler.observedGeneration(for: snapshotId, kind: kind),
                     convergencePhase: await reconciler.convergencePhase(for: snapshotId, kind: kind),
                     lastError: await reconciler.lastError(for: snapshotId, kind: kind),

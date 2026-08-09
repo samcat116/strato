@@ -44,9 +44,34 @@ final class VolumeSnapshot: Model, @unchecked Sendable {
     @Parent(key: "project_id")
     var project: Project
 
+    /// The parent volume's environment at capture time, denormalized so quota
+    /// resync can measure the snapshot after the volume is gone — the same
+    /// reason `VMSnapshot` and `SandboxSnapshot` carry one (STR-181).
+    @Field(key: "environment")
+    var environment: String
+
     // Snapshot specifications
+    /// The volume's size when the snapshot was taken. Not a footprint: it is
+    /// what a restore needs to size its target, and it is also the storage
+    /// quota's durable reservation bound — an overlay cannot outgrow the volume
+    /// behind it, and it can grow without another admission point.
     @Field(key: "size")
-    var size: Int64  // Size of the volume at the time of the snapshot
+    var size: Int64
+
+    /// What the overlay actually occupies right now, as the owning agent
+    /// re-measures it on every report (STR-181, wire v39).
+    ///
+    /// This figure is exposed for observability and billing. It does not replace
+    /// the quota reservation in `size`: releasing that worst-case bound after a
+    /// small first report would let several overlays be admitted before any of
+    /// them grew. Nil is "no agent has said" — the bytes are not on a host yet,
+    /// or the agent predates v39 — never zero.
+    ///
+    /// Separate from `size` because the two answer different questions and the
+    /// overlay's answer keeps changing: `size` is frozen at capture and a restore
+    /// depends on it, while this grows as the volume diverges.
+    @OptionalField(key: "observed_size_bytes")
+    var observedSizeBytes: Int64?
 
     // Status tracking
     @Enum(key: "status")
@@ -112,6 +137,7 @@ final class VolumeSnapshot: Model, @unchecked Sendable {
         description: String,
         volumeID: UUID,
         projectID: UUID,
+        environment: String,
         size: Int64,
         agentId: String? = nil,
         expiresAt: Date? = nil,
@@ -122,6 +148,7 @@ final class VolumeSnapshot: Model, @unchecked Sendable {
         self.description = description
         self.$volume.id = volumeID
         self.$project.id = projectID
+        self.environment = environment
         self.size = size
         self.status = .creating
         self.agentId = agentId
@@ -208,6 +235,22 @@ extension VolumeSnapshot: SnapshotArtifactResource {
     /// there is nothing coherent to upload off-node.
     var wantsExport: Bool { false }
 
+    /// Nil deliberately, even though a volume snapshot *does* draw on the
+    /// storage pool now (STR-181).
+    ///
+    /// What this scope arms is `enforceStorageQuota`, which **deletes** an
+    /// artifact whose real footprint put an enabled quota over its limit. That
+    /// contract exists for the one-shot estimate→truth jump at capture, where a
+    /// sandbox snapshot can land several times the size admission reserved: it
+    /// fires once, on a number that then stops moving. An overlay's number never
+    /// stops moving, so arming it here would re-run the check on every report and
+    /// start destroying snapshots because their volume diverged.
+    ///
+    /// Enforcement stays at admission, which is why `reserveVolumeSnapshot`
+    /// checks the parent volume's *whole* size rather than the overlay's: a
+    /// snapshot cannot be admitted unless the pool could absorb it fully grown.
+    var storageQuotaScope: (projectID: UUID, environment: String)? { nil }
+
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VolumeSnapshot] {
         try await VolumeSnapshot.query(on: db).filter(\.$convergenceDeadline <= now).all()
     }
@@ -240,19 +283,45 @@ extension VolumeSnapshot: SnapshotArtifactResource {
         convergenceDeadline = committed.convergenceDeadline
         agentId = committed.agentId
         storagePath = committed.storagePath
+        observedSizeBytes = committed.observedSizeBytes
         finalizers = committed.finalizers
         expiresAt = committed.expiresAt
     }
 
+    /// How much the reported footprint has to move before it is worth a row
+    /// write (STR-181).
+    ///
+    /// A report goes out every 20 seconds, and event-driven ones coalesce at
+    /// 500 ms, so an overlay under active write would otherwise cost an `UPDATE`
+    /// per snapshot per report for a figure that feeds a byte quota displayed in
+    /// GiB. A megabyte of hysteresis buys back all of that and costs nothing any
+    /// reader can see.
+    static let footprintReportGranularity: Int64 = 1 << 20
+
     @discardableResult
     func applyCapturedFacts(_ facts: ObservedSnapshotFacts) -> Bool {
-        // Deliberately not `size`: this column means "how big the volume was
-        // when the snapshot was taken", which is what a restore needs to size
-        // its target, and the agent reports the *overlay's* current footprint —
-        // a different number that grows as the volume diverges.
-        guard let path = facts.storagePath, storagePath != path else { return false }
-        storagePath = path
-        return true
+        var changed = false
+        if let path = facts.storagePath, storagePath != path {
+            storagePath = path
+            changed = true
+        }
+        // `currentSizeBytes`, never `sizeBytes` — and never into `size`.
+        //
+        // `size` means "how big the volume was when the snapshot was taken",
+        // which is what a restore needs to size its target and what the quota
+        // charges until a real figure arrives. What the agent measures is the
+        // *overlay's* footprint, a different number that grows as the volume
+        // diverges, so it lands in its own column. `sizeBytes` is that same
+        // measurement taken at capture, when the overlay is an empty file, and
+        // is still ignored: a pre-v39 agent reports only that one, and reading
+        // it would make every snapshot it holds cost ~200 KB.
+        if let footprint = facts.currentSizeBytes,
+            observedSizeBytes.map({ abs(footprint - $0) >= Self.footprintReportGranularity }) ?? true
+        {
+            observedSizeBytes = footprint
+            changed = true
+        }
+        return changed
     }
 
     @discardableResult
@@ -290,8 +359,17 @@ struct SnapshotResponse: Content {
     let description: String
     let volumeId: UUID?
     let projectId: UUID?
+    /// The project environment this snapshot's bytes are charged to (STR-181).
+    let environment: String
+    /// The parent volume's size when the snapshot was taken — what a restore
+    /// sizes its target to, and what the storage quota admits against.
     let size: Int64
     let sizeFormatted: String
+    /// What the overlay actually occupies, as last reported by the owning agent
+    /// (STR-181). Null means no agent has said — the bytes are not on a host yet,
+    /// or the agent predates wire v39. The quota keeps `size` reserved either way.
+    let observedSize: Int64?
+    let observedSizeFormatted: String?
     let status: SnapshotStatus
     let errorMessage: String?
     let agentId: String?
@@ -309,8 +387,11 @@ struct SnapshotResponse: Content {
         self.description = snapshot.description
         self.volumeId = snapshot.$volume.id
         self.projectId = snapshot.$project.id
+        self.environment = snapshot.environment
         self.size = snapshot.size
         self.sizeFormatted = snapshot.size.formattedByteSize
+        self.observedSize = snapshot.observedSizeBytes
+        self.observedSizeFormatted = snapshot.observedSizeBytes?.formattedByteSize
         self.status = snapshot.status
         self.errorMessage = snapshot.errorMessage
         self.agentId = snapshot.agentId

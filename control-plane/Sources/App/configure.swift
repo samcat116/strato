@@ -879,6 +879,11 @@ public func configure(_ app: Application) async throws {
     // deployment — see `BoundDNSTextColumns`.
     app.migrations.add(BoundDNSTextColumns())
 
+    // STR-181: volumes and volume snapshots become countable — an environment
+    // to scope them by, the overlay footprint reported for visibility, and an
+    // optional volume count limit.
+    app.migrations.add(AddVolumeQuotaAccounting())
+
     // STR-185: the per-instance metadata kill switch, so hardening one workload
     // against SSRF no longer means moving it to a network of its own.
     app.migrations.add(AddMetadataEnabledToVM())

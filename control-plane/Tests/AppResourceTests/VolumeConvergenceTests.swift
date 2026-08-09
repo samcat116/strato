@@ -85,7 +85,7 @@ final class VolumeConvergenceTests {
         let volume = Volume(
             name: name,
             description: "",
-            projectID: project.id!,
+            projectID: project.id!, environment: "development",
             size: size,
             status: status,
             createdByID: user.id!
@@ -510,7 +510,7 @@ final class VolumeConvergenceTests {
 
             let snapshot = VolumeSnapshot(
                 name: "snap", description: "", volumeID: volumeID,
-                projectID: try project.requireID(), size: 1 << 30,
+                projectID: try project.requireID(), environment: "development", size: 1 << 30,
                 createdByID: try user.requireID())
             try await snapshot.save(on: app.db)
             let snapshotID = try #require(snapshot.id)

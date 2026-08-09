@@ -67,7 +67,7 @@ final class VolumeSizeValidationTests {
         CreateVolumeRequest(
             name: "size-test-vol",
             description: "volume for size validation",
-            projectId: project.id!,
+            projectId: project.id!, environment: nil,
             sizeGB: sizeGB,
             format: "qcow2",
             volumeType: "data",
@@ -87,7 +87,7 @@ final class VolumeSizeValidationTests {
         let volume = Volume(
             name: "resize-target",
             description: "resizable volume",
-            projectID: project.id!,
+            projectID: project.id!, environment: "development",
             size: sizeGB.gbToBytes!,
             format: .qcow2,
             volumeType: .data,

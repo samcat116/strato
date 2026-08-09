@@ -279,6 +279,20 @@ optional and every consumer treats nil as *unknown*, never zero — a footprint
 the agent could not measure must not silently become a free one in quota
 accounting.
 
+`ObservedSnapshotFacts` carries **two** sizes (STR-181, wire v39), and which one
+answers depends on whether the artifact is finished when it is captured.
+`sizeBytes` is measured once, at capture — the final answer for a VM checkpoint's
+machine state and a sandbox snapshot's archive. `currentSizeBytes` is re-measured
+on every report, for the one family whose bytes keep growing afterwards: a volume
+snapshot is an overlay that starts as an empty qcow2 and fills toward its
+parent's size as the volume is written, so its capture-time figure is a header
+and nothing else. The control plane exposes the live figure for observability
+and billing, while the storage quota keeps the parent-sized admission bound
+reserved because the overlay can grow without another admission point.
+Splitting the fields rather than redefining `sizeBytes` also makes a pre-v39
+agent safe: it sends only the frozen header size under a name whose meaning did
+not change, and the nil in the new field means "does not re-measure".
+
 A nil `snapshots` on the report has v31's two causes and the same response:
 an agent below v33 does not speak the field, and a v33 agent that cannot read
 its snapshot record file says so this way rather than claiming an empty

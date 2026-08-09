@@ -20,6 +20,8 @@ export function QuotaCard({
   onDelete,
 }: QuotaCardProps) {
   const { limits, usage, utilization } = quota;
+  // The API can omit an unlimited optional limit or encode it as null.
+  const maxVolumes = limits.maxVolumes ?? null;
 
   return (
     <div className="rounded-lg border border-border bg-muted/50 p-4 space-y-3">
@@ -100,10 +102,21 @@ export function QuotaCard({
           limit={limits.maxVMs}
           percent={utilization.vmPercent}
         />
+        {maxVolumes !== null && (
+          <UsageBar
+            label="Volumes"
+            used={usage.volumeCount}
+            limit={maxVolumes}
+            percent={utilization.volumePercent ?? 0}
+          />
+        )}
       </div>
 
       <div className="text-xs text-muted-foreground">
         Networks: {usage.networkCount} / {limits.maxNetworks}
+        {maxVolumes === null && (
+          <> &middot; Volumes: {usage.volumeCount} (no limit)</>
+        )}
       </div>
     </div>
   );
