@@ -1,0 +1,83 @@
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 116-120,232-237,361-369,419
+  s_20a800b1a6731c::t_75d920a594bc6f 420
+agent/Sources/StratoAgentCore/SandboxJail.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 241
+agent/Sources/StratoAgent/Agent.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 345-352,424,460,690-691,2187-2208,2226-2227,2237-2267,2270-2272,2274-2276,2283-2284,2287-2288,2296-2297,2306-2320,2354-2357,2366-2372,2726,3904-3919,3922-3943,3974-3995,3999-4012,4024-4053,4646-4658,4717-4720,4743-4761,4966,5065-5079,5111-5136
+  s_20a800b1a6731c::t_216415bdd32d9e 3920-3921
+  s_20a800b1a6731c::t_82c872d38393d8 5137
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 218-220,336-342,373,419,545-549,864
+agent/Sources/StratoAgentCore/HostMemoryController.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 1-31
+docs/architecture/multi-replica.md
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 31-36,133-138,162-165
+agent/Sources/StratoAgent/StratoAgent.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 221-222,283
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 61-64,72,146-150,154,160-175
+  s_20a800b1a6731c::t_11736bf288f172 176-177
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 454
+shared/Tests/StratoSharedTests/QEMUMemoryReservationTests.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 1-41
+agent/Tests/StratoAgentTests/DomainXMLBuilderTests.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 101-102,107-108,798-805
+  s_20a800b1a6731c::t_ed396bd4932e40 806-807
+agent/Sources/StratoAgentCore/MemoryHotplugPlan.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 28,38-41
+agent/Sources/StratoAgent/MockHypervisorService.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 44,70-73,168-174,191-198,209-246
+control-plane/Sources/App/configure.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 135-137
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_20a800b1a6731c::t_8e92d7a150316e 547
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 542-546,548-568
+agent/Sources/StratoAgentCore/HostCapacityAdmission.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 1-260
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 23-31,66,73,86,112-144,153
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 279-315
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 68-70,82-83,95,294-305
+  s_20a800b1a6731c::t_d662ddd17d4f64 306
+config.toml.example
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 77-82
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 23,26-27,67-68,71,157-313
+  s_20a800b1a6731c::t_e88e27e745242e 314
+shared/Sources/StratoShared/QEMUMemoryReservation.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 1-31
+docs/deployment/agents.md
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 492-499
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 45,123-124,159,186-187,197-198,202-205,643-647,741-772,1012-1019,1096,1100,1111-1113,1116-1123,1126-1129,1131-1134,1136-1138,1140-1141,1143,1147-1151,1537-1551,1556-1559,1566-1577
+  s_20a800b1a6731c::t_1471b44d88614e 1578-1579
+control-plane/Sources/App/Controllers/VMController.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 1190-1191,1243-1244,1297-1364
+  s_20a800b1a6731c::t_bc00ed2d2ed48e 1365-1366
+agent/Sources/StratoAgentCore/DomainMemoryTuning.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 1-48
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 42-45,447-449,474-475,479-480,706-709,858-860
+agent/Tests/StratoAgentTests/HostCapacityAdmissionTests.swift
+  s_20a800b1a6731c::t_a29e3fba3a0fd9 1-283
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "e0ebf5cc85ce5e21478f163fc3e41de7f4240fee",
+  "prompts": {},
+  "sessions": {
+    "s_20a800b1a6731c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4ae-973d-7190-8574-beee3fbb2d7d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
