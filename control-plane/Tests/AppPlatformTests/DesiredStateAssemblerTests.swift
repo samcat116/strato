@@ -288,10 +288,6 @@ final class DesiredStateAssemblerTests {
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
 
-            // Sent as the column's literal value both ways rather than omitted
-            // when on, so the agent never has to distinguish "left on" from
-            // "this control plane has no opinion" for a VM it is being told
-            // about right now.
             let servedMetadata = try #require(sync.vms.first { $0.vmId == served.id }?.metadata)
             #expect(servedMetadata.serviceEnabled == true)
             #expect(servedMetadata.isServiceEnabled)
@@ -299,32 +295,8 @@ final class DesiredStateAssemblerTests {
             let hardenedMetadata = try #require(sync.vms.first { $0.vmId == hardened.id }?.metadata)
             #expect(hardenedMetadata.serviceEnabled == false)
             #expect(!hardenedMetadata.isServiceEnabled)
-            // The rest of the document still travels: the switch is enforced by
-            // the listener refusing the caller, not by withholding the payload,
-            // because withholding it would take the VM's addresses out of the
-            // listener's caller index — see `MetadataCallerIndex`.
             #expect(hardenedMetadata.instanceId == hardened.id)
             #expect(hardenedMetadata.projectId == project.id)
-        }
-    }
-
-    @Test("Metadata is omitted entirely for pre-v26 agents")
-    func metadataOmittedForOldAgents() async throws {
-        try await withAssemblerApp { app, _, project in
-            // An agent from before the instance-metadata protocol: it decodes
-            // and discards the field, so sending it would only misstate what
-            // the sync achieved. It still boots its guests from the seed ISO —
-            // the gate costs mutable metadata, not placement.
-            let agentId = try await self.registerAgent(
-                app: app, named: "old-agent", protocolVersion: 25)
-            let vm = try await self.placeVM(
-                app: app, project: project, named: "old-vm", onAgent: agentId)
-
-            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(sync.vms.first { $0.vmId == vm.id })
-            #expect(entry.metadata == nil)
-            // The VM itself still syncs — only the metadata is withheld.
-            #expect(entry.spec.cpus == vm.cpu)
         }
     }
 
@@ -358,29 +330,6 @@ final class DesiredStateAssemblerTests {
             // A VM checkpoint lives inside the VM's own disks, so it never moves
             // between hosts and there is nothing to stage.
             #expect(entry.restore?.artifacts == nil)
-        }
-    }
-
-    @Test("Edge nonces are omitted entirely for pre-v34 agents")
-    func edgeNoncesOmittedForOldAgents() async throws {
-        try await withAssemblerApp { app, _, project in
-            // Such an agent decodes and discards them, so sending them would
-            // only misstate what the sync achieved — the same posture as the
-            // v26 metadata gate. The admission gate has already refused the
-            // mutation that could set one, so this is belt to those braces.
-            let agentId = try await self.registerAgent(
-                app: app, named: "pre-v34-agent",
-                protocolVersion: WireProtocol.edgeNonceMinimumVersion - 1)
-            let vm = try await self.placeVM(
-                app: app, project: project, named: "pre-v34-vm", onAgent: agentId)
-            vm.requestReboot()
-            try await vm.save(on: app.db)
-
-            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(sync.vms.first { $0.vmId == vm.id })
-            #expect(entry.rebootGeneration == nil)
-            // The VM itself still syncs — only the nonce is withheld.
-            #expect(entry.spec.cpus == vm.cpu)
         }
     }
 

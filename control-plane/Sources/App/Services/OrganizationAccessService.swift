@@ -25,6 +25,29 @@ struct OrganizationAccessService {
         }
     }
 
+    /// `requireMember`, for a *narrowing parameter* rather than a gate (STR-203).
+    ///
+    /// The difference is what stands behind it. `requireMember` is often the
+    /// only thing between a caller and an organization's contents; this one is
+    /// followed, at every call site, by a per-row evaluator decision on the rows
+    /// themselves — so `?organization_id=` can only ever remove rows the caller
+    /// was already going to be shown. Enforcing a credential's ceiling against
+    /// `org:read` here therefore protects nothing and costs a project-scoped
+    /// token the ability to say which organization it means; the ceiling is
+    /// applied per row, where there is an act to apply it to. Membership itself
+    /// is still decided, so a non-member is refused exactly as before.
+    ///
+    /// Deliberately *not* what the other `requireMember` call sites use: most of
+    /// them are the authorization, with nothing behind them to filter.
+    static func requireMembershipForNarrowing(organizationID: UUID, on req: Request) async throws {
+        guard
+            try await req.canAsMembershipProbe(
+                "view_organization", on: "organization", id: organizationID.uuidString)
+        else {
+            throw Abort(.forbidden, reason: "Not a member of this organization")
+        }
+    }
+
     /// Throws `.forbidden` unless the current user can manage the organization's members.
     static func requireAdmin(organizationID: UUID, on req: Request) async throws {
         guard try await req.can("manage_members", on: "organization", id: organizationID.uuidString) else {
@@ -72,7 +95,9 @@ struct OrganizationAccessService {
     /// per-row permission check allows. This exists so a client that has picked an
     /// organization — the frontend's sidebar switcher — can ask for that org's rows
     /// instead of the whole fleet, and so system admins (who bypass the per-row check
-    /// entirely) can scope a list at all.
+    /// entirely) can scope a list at all — and, since STR-203, so a credential
+    /// restricted to a subtree can name the organization it is confined to
+    /// instead of being refused for a permission the narrowing never used.
     static func organizationListFilter(on req: Request) async throws -> OrganizationListFilter? {
         guard let raw = req.query[String.self, at: "organization_id"] else { return nil }
         guard let organizationID = UUID(uuidString: raw) else {
@@ -81,7 +106,7 @@ struct OrganizationAccessService {
             // this filter exists to prevent.
             throw Abort(.badRequest, reason: "Invalid organization_id")
         }
-        try await requireMember(organizationID: organizationID, on: req)
+        try await requireMembershipForNarrowing(organizationID: organizationID, on: req)
         return OrganizationListFilter(
             organizationID: organizationID,
             organizationalUnitIDs: try await OrganizationalUnit.query(on: req.db)

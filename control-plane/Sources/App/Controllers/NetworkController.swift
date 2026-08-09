@@ -84,10 +84,24 @@ struct NetworkController: RouteCollection {
             groupedBy: \.$logicalNetwork, in: visibleIDs, on: req.db)
         let sandboxCounts = try await SandboxNetworkInterface.counts(
             groupedBy: \.$logicalNetwork, in: visibleIDs, on: req.db)
+        // One more grouped read for the zone-resolution warning (STR-201), and a
+        // second only when a network on this page could have one — a deployment
+        // using no DNS zones pays a single count for the whole page.
+        let zoneCounts = try await DNSZoneNetwork.counts(
+            groupedBy: \.$logicalNetwork, in: visibleIDs, on: req.db)
+        let capability =
+            zoneCounts.isEmpty
+            ? ResolverCapability.Index(incapable: [])
+            : try await ResolverCapability.index(on: req.db)
         return visible.map { network in
             let id = network.id
             let attached = (id.map { vmCounts[$0] ?? 0 } ?? 0) + (id.map { sandboxCounts[$0] ?? 0 } ?? 0)
-            return NetworkResponse(from: network, attachedInterfaceCount: attached)
+            return NetworkResponse(
+                from: network, attachedInterfaceCount: attached,
+                zoneResolutionWarning: ResolverCapability.zoneResolutionWarning(
+                    network: network,
+                    attachedZoneCount: id.map { zoneCounts[$0] ?? 0 } ?? 0,
+                    incapableAgentNames: capability.incapableAgentNames(forSite: network.$site.id)))
         }
     }
 
@@ -118,7 +132,7 @@ struct NetworkController: RouteCollection {
         let request = try req.content.decodeValidated(CreateNetworkRequest.self)
 
         let project = try await req.authorizedProjectForCreate(
-            requested: request.projectId, user: user,
+            requested: request.projectId,
             action: "create_network", resourceKind: "networks")
         let projectId = try project.requireID()
 
@@ -195,13 +209,6 @@ struct NetworkController: RouteCollection {
             // same transaction as the row (issue #477).
             let creatorID = user.id!
             try await req.db.transaction { db in
-                // Inside the transaction, under a name lock: two concurrent
-                // cross-project creates of the same name would otherwise both
-                // observe "no collision" and both commit, since the unique
-                // index is per project.
-                try await LogicalNetworkService.lockName(name, on: db)
-                try await Self.assertNameSafeForFleet(
-                    name: name, projectId: projectId, siteId: request.siteId, on: db)
                 // Inside the same transaction as the row: the allocator's
                 // advisory lock is transaction-scoped, so allocating outside it
                 // would release the lock before the index it chose was durable.
@@ -232,7 +239,9 @@ struct NetworkController: RouteCollection {
                 "projectId": .string(projectId.uuidString),
             ])
 
-        return NetworkResponse(from: network, attachedInterfaceCount: 0)
+        // Nil rather than computed: a network created a moment ago has no zone
+        // attached to it, so there is nothing it can be failing to resolve.
+        return NetworkResponse(from: network, attachedInterfaceCount: 0, zoneResolutionWarning: nil)
     }
 
     // MARK: - Get Network
@@ -244,7 +253,9 @@ struct NetworkController: RouteCollection {
         let user = try req.auth.require(User.self)
         let network = try await fetchNetworkWithPermission(req: req, user: user, permission: "read")
         let count = try await attachedInterfaceCount(for: network, on: req.db)
-        return NetworkResponse(from: network, attachedInterfaceCount: count)
+        return NetworkResponse(
+            from: network, attachedInterfaceCount: count,
+            zoneResolutionWarning: try await zoneResolutionWarning(for: network, on: req.db))
     }
 
     // MARK: - Update Network
@@ -433,6 +444,11 @@ struct NetworkController: RouteCollection {
         if let dnsServers = request.dnsServers {
             network.dnsServers = try Self.validatedDNS(dnsServers)
         }
+        // Captured, not just applied: an explicit `domainName` in this request
+        // outranks the one the primary-zone block below would derive, and the
+        // two are only distinguishable here — once applied, an operator's value
+        // and a derived one are the same column (STR-201).
+        let domainNameExplicit = request.domainName != nil
         if let domainName = request.domainName {
             network.domainName = try Self.validatedDomainName(domainName)
         }
@@ -464,11 +480,20 @@ struct NetworkController: RouteCollection {
         // zone already attached to the network — attachment is what grants
         // resolution, and registering into a zone the network cannot resolve
         // would publish names its own VMs can't look up.
+        //
+        // Both branches also move the search domain, which follows the primary
+        // zone while the operator has not claimed it (STR-201) — see
+        // `DNSZoneService.searchDomainFollowingPrimaryZone`.
         if request.clearPrimaryDnsZone == true {
             guard request.primaryDnsZoneId == nil else {
                 throw Abort(
                     .badRequest,
                     reason: "primaryDnsZoneId cannot be combined with clearPrimaryDnsZone=true")
+            }
+            if !domainNameExplicit {
+                let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
+                network.domainName = DNSZoneService.searchDomainFollowingPrimaryZone(
+                    current: network.domainName, previousZoneName: outgoing, nextZoneName: nil)
             }
             network.$primaryDNSZone.id = nil
         } else if let zoneID = request.primaryDnsZoneId, zoneID != network.$primaryDNSZone.id {
@@ -490,6 +515,13 @@ struct NetworkController: RouteCollection {
             }
             try await DNSZoneService.assertPrimaryZoneAssignable(
                 zone: zone, networkID: networkID, on: req.db)
+            if !domainNameExplicit {
+                let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
+                network.domainName = try Self.validatedDomainName(
+                    DNSZoneService.searchDomainFollowingPrimaryZone(
+                        current: network.domainName, previousZoneName: outgoing,
+                        nextZoneName: zone.name))
+            }
             network.$primaryDNSZone.id = zoneID
         }
 
@@ -497,13 +529,6 @@ struct NetworkController: RouteCollection {
             let pendingRename = renamedTo
             let pendingResolverIndex = allocatesResolverIndex
             try await req.db.transaction { db in
-                // A rename into a cross-project collision needs the same
-                // in-transaction check under the same name lock as create.
-                if let renamedTo = pendingRename {
-                    try await LogicalNetworkService.lockName(renamedTo, on: db)
-                    try await Self.assertNameSafeForFleet(
-                        name: renamedTo, projectId: network.$project.id, siteId: network.$site.id, on: db)
-                }
                 if pendingResolverIndex {
                     _ = try await ResolverAddressAllocator.ensureIndex(for: network, on: db)
                 }
@@ -527,7 +552,9 @@ struct NetworkController: RouteCollection {
                 "name": .string(network.name),
             ])
 
-        return NetworkResponse(from: network, attachedInterfaceCount: interfaceCount)
+        return NetworkResponse(
+            from: network, attachedInterfaceCount: interfaceCount,
+            zoneResolutionWarning: try await zoneResolutionWarning(for: network, on: req.db))
     }
 
     // MARK: - Delete Network
@@ -579,50 +606,6 @@ struct NetworkController: RouteCollection {
             .join(parent: \.$interface)
             .filter(VMNetworkInterface.self, \.$logicalNetwork.$id == networkID)
             .count()
-    }
-
-    /// Refuses a network name that another project already uses, when any agent
-    /// that would realize it is too old to tell the two apart.
-    ///
-    /// A pre-v21 agent keys its managed `DHCP_Options` rows on
-    /// `(network-name, cidr)` rather than on the network's id, so two
-    /// same-named networks would share one row: DNS or lease edits on one would
-    /// land on the other, and disabling DHCP on one would delete the other's.
-    /// The check lives at *create* rather than at VM placement because topology
-    /// convergence programs DHCP for every network the authority realizes,
-    /// whether or not a VM ever lands on it.
-    ///
-    /// Scoped to the fleet that could realize the network: its site's agents
-    /// when pinned, otherwise every agent (an unpinned network can be realized
-    /// on any host a VM lands on).
-    ///
-    /// This is one half of the guard. It cannot see an agent that joins *later*
-    /// — a rollback to an older binary, or a newly-enrolled one — so
-    /// `AgentService.registerAgent` runs the mirror check and refuses such a
-    /// registration.
-    static func assertNameSafeForFleet(
-        name: String, projectId: UUID, siteId: UUID?, on db: Database
-    ) async throws {
-        let collides = try await LogicalNetwork.query(on: db)
-            .filter(\.$name == name)
-            .filter(\.$project.$id != projectId)
-            .count()
-        guard collides > 0 else { return }
-
-        var query = Agent.query(on: db)
-        if let siteId { query = query.filter(\.$site.$id == siteId) }
-        let stale = try await query.all()
-            .filter { !WireProtocol.supportsProjectNetworkIsolation($0.wireProtocolVersion ?? 0) }
-        guard let oldest = stale.min(by: { ($0.wireProtocolVersion ?? 0) < ($1.wireProtocolVersion ?? 0) })
-        else { return }
-
-        throw Abort(
-            .conflict,
-            reason: "Another project already has a network named '\(name)', and agent "
-                + "'\(oldest.name)' speaks protocol v\(oldest.wireProtocolVersion ?? 0) — too old to keep "
-                + "two same-named networks' DHCP configuration apart (needs "
-                + "v\(WireProtocol.projectNetworkIsolationMinimumVersion)). Upgrade the agent or choose "
-                + "a different name.")
     }
 
     /// Whether two CIDRs overlap. For CIDRs, ranges are either disjoint or one
@@ -765,6 +748,23 @@ struct NetworkController: RouteCollection {
                 reason: "Invalid IPv6 subnet '\(subnet6)': multicast, link-local, loopback, and "
                     + "unspecified prefixes are not routable tenant networks")
         }
+        // The v4 metadata address is link-local and can never collide with a
+        // tenant subnet; its v6 counterpart is a ULA drawn from the same space
+        // tenant subnets are (STR-186). A network overlapping it would publish
+        // the service localport inside its own address space and — worse —
+        // inherit the metadata and resolver security-group carve-outs, which
+        // sit above every rule-derived ACL, as non-overridable allows to a
+        // *tenant* address. Reject the whole documented `/32` rather than the
+        // containing /64: it is how the space is described everywhere else,
+        // and it covers the per-network resolvers as well.
+        if NetworkResolverEndpoint.v6SpaceCIDR.overlaps(cidr) {
+            throw Abort(
+                .badRequest,
+                reason: "IPv6 subnet '\(trimmed)' overlaps \(NetworkResolverEndpoint.v6Space), which is "
+                    + "reserved for Strato's own link-local services (instance metadata at "
+                    + "\(InstanceMetadataEndpoint.addressV6) and the per-network DNS resolvers); "
+                    + "choose a different ULA prefix, or omit subnet6 to have one generated")
+        }
 
         let resolvedGateway: IPv6Address
         if let gateway6, let trimmedGateway = gateway6.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty {
@@ -844,6 +844,27 @@ struct NetworkController: RouteCollection {
             .filter(\.$logicalNetwork.$id == networkID)
             .count()
         return vmInterfaces + sandboxInterfaces
+    }
+
+    /// The zone-resolution warning for one network (STR-201), for the handlers
+    /// that answer with a single row.
+    ///
+    /// The zone count is asked first and short-circuits everything else: a
+    /// network with no attached zone cannot be failing to deliver one, and that
+    /// is the overwhelming majority of networks, so the capability read is only
+    /// paid for by the ones the answer could be about.
+    private func zoneResolutionWarning(for network: LogicalNetwork, on db: any Database) async throws
+        -> String?
+    {
+        let networkID = try network.requireID()
+        let zoneCount = try await DNSZoneNetwork.query(on: db)
+            .filter(\.$logicalNetwork.$id == networkID)
+            .count()
+        guard zoneCount > 0 else { return nil }
+        let capability = try await ResolverCapability.index(on: db)
+        return ResolverCapability.zoneResolutionWarning(
+            network: network, attachedZoneCount: zoneCount,
+            incapableAgentNames: capability.incapableAgentNames(forSite: network.$site.id))
     }
 
     /// Fetch a network and check permission. Access derives entirely from the

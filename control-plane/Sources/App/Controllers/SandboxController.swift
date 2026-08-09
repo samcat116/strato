@@ -171,7 +171,6 @@ struct SandboxController: RouteCollection {
     }
 
     func listOperations(req: Request) async throws -> [OperationResponse] {
-        _ = try req.requireActingPrincipal()
         let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
         let sandboxID = try sandbox.requireID()
 
@@ -193,6 +192,9 @@ struct SandboxController: RouteCollection {
             /// Ready sandbox snapshot to restore into a new identity (issue
             /// #427). Mutually exclusive with image/machine/process fields.
             let restoreFrom: UUID?
+            /// Required: there is no default project (issue #1059). Optional here so
+            /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
+            /// rather than a `Codable` decode failure that names neither.
             let projectId: UUID?
             let environment: String?
             let cpus: Int?
@@ -326,16 +328,7 @@ struct SandboxController: RouteCollection {
             } else {
                 pinnedAgent = nil
             }
-            let pinnedAgentForkCapable =
-                pinnedAgent.map { WireProtocol.supportsSandboxFork($0.wireProtocolVersion ?? 0) } ?? false
-            guard pinnedAgentForkCapable || snapshot.isExported else {
-                if let pinnedAgent {
-                    throw Abort(
-                        .conflict,
-                        reason:
-                            "Agent '\(pinnedAgent.name)' is too old for sandbox forks (wire protocol \(pinnedAgent.wireProtocolVersion ?? 0), need >= \(WireProtocol.sandboxForkMinimumVersion)) and the snapshot is not exported"
-                    )
-                }
+            guard pinnedAgent != nil || snapshot.isExported else {
                 throw Abort(
                     .conflict,
                     reason:
@@ -902,15 +895,6 @@ struct SandboxController: RouteCollection {
 
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.internalServerError, reason: "Agent not found for sandbox")
-        }
-
-        let agentWireVersion = agent.wireProtocolVersion ?? 0
-        guard WireProtocol.supportsSandboxExec(agentWireVersion) else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Agent '\(agent.name)' is too old for sandbox exec (wire protocol \(agentWireVersion), need >= \(WireProtocol.sandboxExecMinimumVersion)). Upgrade the agent."
-            )
         }
 
         // Exec frames flow over the agent's WebSocket, which only this

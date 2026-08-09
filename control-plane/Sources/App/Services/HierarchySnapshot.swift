@@ -193,8 +193,7 @@ struct HierarchySnapshot {
         Self.resourceUsage(of: vms)
     }
 
-    /// Totals over a set of VMs. Shared with `Organization.getResourceUsage` so
-    /// both routes to the same figures agree.
+    /// Totals over a set of VMs.
     static func resourceUsage(of vms: [VM]) -> ResourceUsageResponse {
         ResourceUsageResponse(
             totalVCPUs: vms.reduce(0) { $0 + $1.cpu },

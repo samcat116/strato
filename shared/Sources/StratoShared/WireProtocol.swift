@@ -797,449 +797,48 @@ public enum WireProtocol {
     /// it rather than clearing it. Skew the other way is inert — a pre-v38
     /// control plane's decoder drops the unknown key.
     ///
+    /// v38 also closes the skew window (deferred-cleanup sweep). Both sides
+    /// refuse any peer below `minimumSupportedVersion`, so every per-feature
+    /// `supports*` gate this file carried since v2 is gone, along with the
+    /// dual paths they guarded — most notably the push transport for desired
+    /// state (`AgentRegisterMessage.pullsDesiredState` and the control plane's
+    /// push assembly), which pre-v29 agents were the last consumers of. The
+    /// same version deletes the wire fields nothing read
+    /// (`AgentHeartbeatMessage.runningVMs`, `AgentRegisterMessage.hypervisorType`,
+    /// `AgentUnregisterMessage.reason`, the `VMLogMessage` detail fields,
+    /// `ObservedVolumeState.format`/`.deviceName`, the `ObservedSnapshotFacts`
+    /// size breakdown, `ObservedManifestStatus.preservedCopyPath`,
+    /// `VMMemoryStats.freeBytes`,
+    /// `SandboxExecStartedMessage.sandboxId`, `SandboxExecOutputMessage.stream`,
+    /// `ConsoleSpec.console`/`.serial`) and the enum cases nothing produced.
     /// Version 39: a per-instance metadata kill switch (STR-185).
     /// `InstanceMetadata` gains `serviceEnabled`, EC2's
-    /// `MetadataOptions.HttpEndpoint` — the per-*workload* lever STR-54's
-    /// non-overridable IMDS allow deliberately shipped without, and the one an
-    /// operator hardening a single VM against SSRF needs now that STR-56 has a
-    /// listener answering.
+    /// `MetadataOptions.HttpEndpoint` — the per-workload lever an operator
+    /// hardening a single VM against SSRF needs.
     ///
-    /// A v39 agent enforces it twice, and the two cover different failures. The
-    /// **listener** refuses the caller after identifying it, which is what makes
-    /// the switch unconditional: it needs no port group, so it holds for a NIC
-    /// whose `securityGroupIds` is nil (unmanaged, and therefore in no ACL's
-    /// reach) and it holds while the site's topology authority is still on an
-    /// older build. The **ACL** — a drop on the new `pg_strato_no_metadata`
-    /// group at priority 1004, one step above `metadataAllowPriority`, exactly
-    /// the reserved space v34's carve-out set aside — is what makes it a kill
-    /// switch rather than a refusal: the packet never reaches the chassis, so
-    /// the guest cannot probe the endpoint at all, and it is as non-overridable
-    /// as the allow it cancels.
-    ///
-    /// Absence is read as **enabled**, which is the opposite of this protocol's
-    /// usual conservative default and is the only safe reading here: a pre-v39
-    /// control plane has opted nobody out, and taking silence for a denial would
-    /// blackhole IMDS fleet-wide on upgrade. The hazard therefore runs the other
-    /// way — a pre-v39 *agent* decodes the sync, ignores the field, and serves a
-    /// guest its operator switched off while the API reports the switch as
-    /// thrown. That is v20's security-group hazard and v23's graphics-console
-    /// one, and it is gated the same way: `supportsMetadataOptOut` refuses to
-    /// *set* the switch on a VM whose placed agent is too old, and placement
-    /// refuses to put a switched-off VM on one in the first place. Unlike v20,
-    /// create is gated too — a VM can be created without the switch, so gating
-    /// it strands nobody.
+    /// A v39 agent enforces it twice: the listener refuses the identified
+    /// caller, and a drop ACL on `pg_strato_no_metadata` keeps the packet off
+    /// the chassis. Absence means enabled, because a v38 control plane opted
+    /// nobody out. During the v38→v39 rollout, `supportsMetadataOptOut` gates
+    /// both admission and placement so an older agent cannot silently ignore a
+    /// security control while the API reports it as applied.
     public static let currentVersion = 39
 
-    /// The lowest protocol version that speaks reconciliation state sync
-    /// (see `currentVersion` version 2 notes).
-    public static let stateSyncMinimumVersion = 2
-
-    /// Whether a peer registering with `version` should be driven with
-    /// desired-state syncs rather than imperative VM lifecycle messages.
-    public static func supportsStateSync(_ version: Int) -> Bool {
-        version >= stateSyncMinimumVersion
-    }
-
-    /// The lowest protocol version whose `DesiredStateMessage` carries an
-    /// authoritative `networks` list (see `currentVersion` version 3 notes).
-    public static let networkSyncMinimumVersion = 3
-
-    /// Whether a control plane at `version` sends a first-class network desired
-    /// state. When false the `networks` field is merely absent (decoded to []),
-    /// which must NOT be treated as "tear down all L3" — the agent skips network
-    /// reconciliation and falls back to VM-only convergence.
-    public static func supportsNetworkSync(_ version: Int) -> Bool {
-        version >= networkSyncMinimumVersion
-    }
-
-    /// The lowest protocol version that understands `networksAuthoritative`
-    /// (see `currentVersion` version 4 notes).
-    public static let siteAuthorityMinimumVersion = 4
-
-    /// Whether an agent registered with `version` can be sent a
-    /// non-authoritative sync (`networks: []` + `networksAuthoritative: false`).
-    /// An older agent ignores the flag and would misread that sync as an
-    /// authoritative teardown of its whole L3 topology, so pre-v4 agents must
-    /// stay on the legacy per-node scoping even when assigned to a site.
-    public static func supportsSiteAuthority(_ version: Int) -> Bool {
-        version >= siteAuthorityMinimumVersion
-    }
-
-    /// The lowest protocol version that speaks sandbox workloads
-    /// (see `currentVersion` version 5 notes).
-    public static let sandboxSyncMinimumVersion = 5
-
-    /// Whether a peer at `version` understands sandbox desired-state sync.
-    /// Agent-side: a pre-v5 control plane merely omits `sandboxes` (decoded to
-    /// []), which must NOT be treated as "tear down all sandboxes" — the agent
-    /// skips sandbox reconciliation entirely. Control-plane-side this is a
-    /// necessary-but-insufficient placement precondition: eligibility
-    /// additionally requires the agent to have advertised
-    /// `AgentRegisterMessage.sandboxCapable`, because a v5 agent may
-    /// understand the fields without running the sandbox runtime (see the
-    /// version 5 notes on `currentVersion`).
-    public static func supportsSandboxSync(_ version: Int) -> Bool {
-        version >= sandboxSyncMinimumVersion
-    }
-
-    /// The lowest protocol version that restores a sandbox checkpoint into a
-    /// new identity rather than treating the desired entry as a cold create.
-    public static let sandboxForkMinimumVersion = 12
-
-    public static func supportsSandboxFork(_ version: Int) -> Bool {
-        version >= sandboxForkMinimumVersion
-    }
-
-    /// The lowest protocol version that acts on
-    /// `DesiredStateMessage.desiredAgentUpdate` (see `currentVersion` version 7
-    /// notes).
-    public static let desiredAgentUpdateMinimumVersion = 7
-
-    /// Whether an agent registered with `version` converges on a
-    /// `desiredAgentUpdate` carried by the sync. An older agent decodes the
-    /// sync fine but never acts on the field, so neither assigner may select
-    /// such an agent — the fleet rollout's health budget would expire against
-    /// silence and halt, and an operator's "update now" would report an
-    /// assignment that never converges. Since v28 this is the *only* way an
-    /// agent is updated, so it is also the update endpoint's floor.
-    public static func supportsDesiredAgentUpdate(_ version: Int) -> Bool {
-        version >= desiredAgentUpdateMinimumVersion
-    }
-
-    /// The lowest protocol version that speaks sandbox exec/attach and
-    /// workload logs (see `currentVersion` version 8 notes).
-    public static let sandboxExecMinimumVersion = 8
-
-    /// Whether an agent registered with `version` can be sent
-    /// `sandboxExec*` messages. A pre-v8 agent cannot decode the envelope
-    /// (unknown `MessageType` case) and never replies, so the control plane
-    /// must refuse the exec request up front rather than let the session hang
-    /// against silence.
-    public static func supportsSandboxExec(_ version: Int) -> Bool {
-        version >= sandboxExecMinimumVersion
-    }
-
-    // The v9 `supportsSandboxSnapshots` and v22 `supportsVMCheckpoint` gates
-    // went with the frames they guarded. Both existed to keep a request from
-    // being sent into an envelope an older agent could not decode; capture and
-    // delete stopped being frames at v33 and restore stopped at v34, so every
-    // question either one answered is now answered — at a higher floor — by
-    // `supportsSnapshotSync` and `supportsEdgeNonces`. A version gate whose
-    // frame no longer exists can only mislead the next person to read it.
-
-    /// The lowest protocol version that speaks sandbox snapshot mobility —
-    /// export to object storage, artifact transfer descriptors on restore and
-    /// fork, and CPU templates on sandbox specs (see `currentVersion` version
-    /// 14 notes).
-    public static let sandboxSnapshotMobilityMinimumVersion = 14
-
-    /// Whether an agent registered with `version` can be sent an export
-    /// instruction, an `artifacts`-carrying restore/fork, or a templated
-    /// `SandboxSpec`. A pre-v14 agent silently ignores the field and
-    /// mis-converges, so the control plane must refuse all three up front. (The
-    /// export half now travels on the desired entry, where the stricter
-    /// `supportsSnapshotSync` floor applies anyway; this gate survives for
-    /// restore artifacts and CPU templates.)
-    public static func supportsSandboxSnapshotMobility(_ version: Int) -> Bool {
-        version >= sandboxSnapshotMobilityMinimumVersion
-    }
-
-    /// The lowest protocol version whose reconciler converges a running VM's
-    /// vCPU/memory sizing (see `currentVersion` version 17 notes).
-    public static let vmResizeMinimumVersion = 17
-
-    /// Whether a VM on an agent registered with `version` can be resized
-    /// while it runs. A pre-v17 agent reports the new generation as converged
-    /// without touching the guest, so the control plane refuses the online
-    /// resize rather than completing an operation that did nothing.
-    public static func supportsVMResize(_ version: Int) -> Bool {
-        version >= vmResizeMinimumVersion
-    }
-
-    /// The lowest protocol version whose network reconciler realizes
-    /// `DesiredNetworkState.floatingIPs` (see `currentVersion` version 12
-    /// notes).
-    public static let floatingIPMinimumVersion = 12
-
-    /// Whether an agent registered with `version` realizes floating IP NAT
-    /// rules. A pre-v12 agent decodes the sync and silently ignores the field,
-    /// so the control plane must refuse attaches whose realizing agent is too
-    /// old — otherwise the API reports an attached address that no NAT rule
-    /// ever backs.
-    public static func supportsFloatingIPs(_ version: Int) -> Bool {
-        version >= floatingIPMinimumVersion
-    }
-
-    /// The lowest protocol version that realizes `VMSpec.machine` — pflash
-    /// firmware with a persistent variable store, Secure Boot, and a vTPM
-    /// (see `currentVersion` version 18 notes).
-    public static let machineProfileMinimumVersion = 18
-
-    /// Whether an agent registered with `version` realizes a non-default
-    /// `MachineProfile`. A pre-v18 agent decodes the sync and boots the guest
-    /// without Secure Boot or a TPM, so a Windows VM placed there would fail
-    /// setup with no signal in the API. Placement of such VMs is refused
-    /// instead. Necessary but not sufficient for `tpm`: eligibility
-    /// additionally requires the agent to have advertised
-    /// `AgentRegisterMessage.tpmCapable`, since a v18 build on a host without
-    /// swtpm understands the field but cannot realize it.
-    public static func supportsMachineProfile(_ version: Int) -> Bool {
-        version >= machineProfileMinimumVersion
-    }
-
-    /// The lowest protocol version that realizes `VMSpec.balloonTargetBytes`
-    /// (see `currentVersion` version 19 notes).
-    public static let balloonTargetMinimumVersion = 19
-
-    /// Whether an agent registered with `version` inflates a VM's balloon to
-    /// an operator's target. A pre-v19 agent ignores the spec field and
-    /// reports the bumped generation as converged, so the control plane
-    /// refuses to set a target there rather than completing an operation that
-    /// reclaimed nothing.
-    public static func supportsBalloonTarget(_ version: Int) -> Bool {
-        version >= balloonTargetMinimumVersion
-    }
-
-    /// The lowest protocol version whose network reconciler realizes security
-    /// groups — OVN port groups + ACLs from `DesiredStateMessage.securityGroups`
-    /// and port membership from `NetworkSpec.securityGroupIds` (see
-    /// `currentVersion` version 20 notes).
-    public static let securityGroupsMinimumVersion = 20
-
-    /// Whether an agent registered with `version` enforces security groups. A
-    /// pre-v20 agent decodes the sync and silently ignores both fields, so
-    /// the control plane must refuse attach/detach on VMs whose realizing
-    /// agent is too old — otherwise the API reports filtering that no ACL
-    /// ever enforces — and sync assembly omits the fields for such agents.
-    /// VM create is deliberately ungated; see the version 20 notes on
-    /// `currentVersion`.
-    public static func supportsSecurityGroups(_ version: Int) -> Bool {
-        version >= securityGroupsMinimumVersion
-    }
-
-    /// The lowest protocol version that identifies a logical network by id
-    /// everywhere it matters — the OVN switch *and* the `DHCP_Options` rows
-    /// (see `currentVersion` version 21 notes).
-    public static let projectNetworkIsolationMinimumVersion = 21
-
-    /// Whether an agent registered with `version` can safely realize two
-    /// networks that share a name. A pre-v21 agent keys its managed
-    /// `DHCP_Options` rows on `(network-name, cidr)`, so two same-named
-    /// networks with the same subnet — exactly what per-project isolation
-    /// makes legal — would share one row: DNS/lease edits on one would land on
-    /// the other, and disabling DHCP on one would delete the other's row. The
-    /// control plane must therefore refuse to *create* a colliding name at a
-    /// site any of whose agents is pre-v21.
-    public static func supportsProjectNetworkIsolation(_ version: Int) -> Bool {
-        version >= projectNetworkIsolationMinimumVersion
-    }
-
-    /// The lowest protocol version that realizes a graphics console
-    /// (see `currentVersion` version 23 notes).
-    public static let graphicsConsoleMinimumVersion = 23
-
-    /// Whether an agent registered with `version` understands the graphics
-    /// console — both halves of it, since they always ship together:
-    /// `ConsoleSpec.graphics` (so the VM spawns with a display device and a VNC
-    /// socket) and `ConsoleConnectMessage.stream` (so a console session can ask
-    /// for that socket instead of the serial one).
+    /// The lowest protocol version this build will talk to at all.
     ///
-    /// Load-bearing in two places, because both failures are silent. At
-    /// placement: a pre-v23 agent decodes the spec, ignores `graphics`, and
-    /// boots the guest headless while the API reports a display. At session
-    /// mint: it ignores `stream` and hands back the *serial* socket, so noVNC
-    /// would sit forever reading kernel log text where it expects an RFB
-    /// version string.
-    public static func supportsGraphicsConsole(_ version: Int) -> Bool {
-        version >= graphicsConsoleMinimumVersion
-    }
-
-    /// The lowest protocol version that holds unlisted workloads instead of
-    /// destroying them (see `currentVersion` version 25 notes).
-    public static let workloadTombstoneMinimumVersion = 25
-
-    /// Whether an agent registered with `version` treats omission from a sync
-    /// as "hold and report" rather than "destroy".
+    /// v38 closed the historical skew window and removed every legacy dual
+    /// path. v39 deliberately keeps v38 as the floor for one rolling-upgrade
+    /// window: the only new behavior is the optional metadata kill switch, and
+    /// `supportsMetadataOptOut` guards every place where an older peer could
+    /// silently ignore it. All other messages retain v38's lockstep shape.
     ///
-    /// Not a send-side gate — tombstones are additive and a pre-v25 agent
-    /// ignoring them changes nothing it would otherwise do. It exists to make
-    /// the *remaining* exposure legible: below this version, any sync that
-    /// under-lists a host still force-stops every workload it omitted, and no
-    /// control-plane behavior can prevent that. Registration says so out loud
-    /// so an operator upgrading a fleet knows which hosts are still armed.
-    public static func supportsWorkloadTombstones(_ version: Int) -> Bool {
-        version >= workloadTombstoneMinimumVersion
-    }
-
-    /// The lowest protocol version that speaks `DesiredVMState.metadata`
-    /// (see `currentVersion` version 26 notes).
-    public static let instanceMetadataMinimumVersion = 26
-
-    /// Whether a peer at `version` understands instance metadata on the sync.
-    ///
-    /// Agent-side this decides whether an absent `metadata` field *means*
-    /// anything: from a v26+ control plane nil is authoritative (serve
-    /// nothing), from an older one it is silence and the agent must leave the
-    /// VM's metadata alone — the `supportsNetworkSync` reading of an absent
-    /// list, for the same reason. Control-plane-side it lets sync assembly
-    /// omit the field for agents that would discard it.
-    public static func supportsInstanceMetadata(_ version: Int) -> Bool {
-        version >= instanceMetadataMinimumVersion
-    }
-
-    /// The lowest protocol version that speaks `metadataEnabled` on
-    /// `DesiredNetworkState` and `NetworkSpec` (see `currentVersion` version 27
-    /// notes).
-    public static let metadataPortMinimumVersion = 27
-
-    /// Whether a peer at `version` understands the metadata port.
-    ///
-    /// Agent-side this decides whether a nil `metadataEnabled` *means* anything:
-    /// from a v27+ control plane it is authoritative silence about a network the
-    /// sender knows the field for, from an older one the sender has never heard
-    /// of the feature and the agent must leave existing ports alone. Since
-    /// network teardown is a set difference, that reading is enforced by
-    /// `NetworkReconciler.serviceLocalPortProtection(for:)` rather than left to each
-    /// call site. Control-plane-side it lets sync assembly omit the field for
-    /// agents that would discard it.
-    public static func supportsMetadataPort(_ version: Int) -> Bool {
-        version >= metadataPortMinimumVersion
-    }
-
-    /// The lowest protocol version that serves desired state over the
-    /// long-poll `GET /agent/desired-state` endpoint (see `currentVersion`
-    /// version 29 notes).
-    public static let desiredStatePullMinimumVersion = 29
-
-    /// Whether a peer at `version` speaks the desired-state pull transport.
-    ///
-    /// Read in both directions, and neither reading is sufficient on its own.
-    /// Agent-side it answers "does this control plane serve the endpoint?" —
-    /// the agent additionally needs its own `desired_state_pull` config to be
-    /// on. Control-plane-side it answers "could this agent be polling?" — the
-    /// control plane additionally needs the agent's explicit
-    /// `pullsDesiredState` flag before it stops pushing, because an agent that
-    /// merely *understands* the endpoint may have been pinned to push mode.
-    public static func supportsDesiredStatePull(_ version: Int) -> Bool {
-        version >= desiredStatePullMinimumVersion
-    }
-
-    /// The lowest protocol version that carries volumes on the reconciliation
-    /// loop rather than through imperative RPCs (see `currentVersion` version
-    /// 31 notes).
-    public static let volumeSyncMinimumVersion = 31
-
-    /// Whether a peer at `version` speaks declarative volumes.
-    ///
-    /// Read in three places, for three different reasons. Agent-side it is the
-    /// belt to the `volumes`-is-nil braces: a sync from a pre-v31 control plane
-    /// says nothing about volumes and must not be planned against. Sync
-    /// assembly reads it to omit the field — and skip the query — for an agent
-    /// that would discard it. And unlike most gates in this file, *placement*
-    /// reads it: with the imperative frames gone there is no fallback path, so
-    /// a volume must never be scheduled onto an agent that cannot converge it.
-    public static func supportsVolumeSync(_ version: Int) -> Bool {
-        version >= volumeSyncMinimumVersion
-    }
-
-    /// The lowest protocol version that carries snapshot artifacts on the
-    /// reconciliation loop rather than through imperative RPCs (see
-    /// `currentVersion` version 33 notes).
-    public static let snapshotSyncMinimumVersion = 33
-
-    /// Whether a peer at `version` speaks declarative snapshot artifacts.
-    ///
-    /// Read in three places, like `supportsVolumeSync` and for the same three
-    /// reasons — agent-side as the belt to the `snapshots`-is-nil braces, at
-    /// sync assembly to omit the field (and skip the query) for an agent that
-    /// would discard it, and as a refusal.
-    ///
-    /// The refusal is where snapshots differ. A volume's gate is at
-    /// *placement*, because the control plane chooses a volume's host; an
-    /// artifact inherits its parent's host, so there is no placement decision
-    /// to gate. This one sits at **capture admission** instead: with the
-    /// imperative frames gone there is no fallback, so a checkpoint requested
-    /// against a pre-v33 agent is refused with `409` rather than accepted into
-    /// a state nothing can converge.
-    public static func supportsSnapshotSync(_ version: Int) -> Bool {
-        version >= snapshotSyncMinimumVersion
-    }
-
-    /// The lowest protocol version that applies reboot and restore as monotonic
-    /// nonces on the desired entry rather than as imperative RPCs (see
-    /// `currentVersion` version 34 notes).
-    public static let edgeNonceMinimumVersion = 34
-
-    /// Whether a peer at `version` speaks edge nonces.
-    ///
-    /// Read in two places rather than `supportsVolumeSync`'s three, because
-    /// there is no destructive reading of absence for an agent to defend
-    /// against: the fields are counts of requests, and a missing count can only
-    /// ever mean "nothing was asked for". Sync assembly reads it to omit fields
-    /// a pre-v34 agent would discard, and **admission** reads it as a refusal.
-    ///
-    /// The refusal is where the whole gate earns its keep. With `vm_reboot`,
-    /// `vm_restore` and `sandbox_restore` gone there is no fallback, and the
-    /// failure mode of sending anyway is the silent one this changelog keeps
-    /// returning to: a pre-v34 agent decodes the sync, ignores the field, plans
-    /// no work, and reports the bumped generation as converged — so the API
-    /// would tell a user their VM restarted when it never did. `POST
-    /// .../restart` and both `.../restore` endpoints answer `409` instead, the
-    /// `supportsSnapshotSync` posture applied to a verb rather than an artifact.
-    public static func supportsEdgeNonces(_ version: Int) -> Bool {
-        version >= edgeNonceMinimumVersion
-    }
-
-    /// The lowest protocol version that realizes DNS zones into the OVN `DNS`
-    /// table (see `currentVersion` version 36 notes).
-    public static let dnsZoneMinimumVersion = 36
-
-    /// Whether a peer at `version` speaks DNS zones on the sync.
-    ///
-    /// Read in two places, both send-side-ish and neither a refusal. Sync
-    /// assembly omits the field — and skips assembling the zones at all — for
-    /// an agent that would discard it, which matters more here than for most
-    /// gates: a zone's records are assembled from every VM in the site, so
-    /// building them for a receiver that cannot use them is real query load on
-    /// every poll. Agent-side it is the belt to the `dnsZones`-is-nil braces,
-    /// so silence from an older control plane is never planned against.
-    ///
-    /// There is deliberately no admission gate. Attaching a zone to a network
-    /// whose site controller is pre-v36 leaves names unresolved until the
-    /// agent is upgraded — a visible, non-destructive failure that heals on
-    /// its own, unlike the silent false "converged" that makes
-    /// `supportsEdgeNonces` and `supportsSnapshotSync` refuse at the API.
-    public static func supportsDNSZones(_ version: Int) -> Bool {
-        version >= dnsZoneMinimumVersion
-    }
-
-    /// The lowest protocol version that speaks the per-network resolver
-    /// (see `currentVersion` version 37 notes).
-    public static let networkResolverMinimumVersion = 37
-
-    /// Whether a peer at `version` speaks `resolverEnabled` and record TTLs.
-    ///
-    /// A **field gate**, like `supportsDNSZones` and for the same reason: sync
-    /// assembly omits `resolverEnabled` for an agent that would discard it, and
-    /// the agent reads the version before planning against the field, so
-    /// silence from an older control plane is never mistaken for "off".
-    ///
-    /// It is deliberately not an admission gate, and the asymmetry with
-    /// `supportsEdgeNonces` is the point. A pre-v37 agent that ignores
-    /// `resolverEnabled` keeps handing guests the configured `dnsServers`
-    /// verbatim — which is precisely what it did before the field existed — so
-    /// the failure mode is "this network did not get the new resolver yet",
-    /// not a mutation reported as converged when nothing happened. Nothing
-    /// about a resolver is ever reported converged, so there is no false
-    /// success to refuse at the API.
-    ///
-    /// It is also not, on its own, sufficient. Whether the *host* can run the
-    /// resolver is a separate question answered by
-    /// `AgentRegisterMessage.resolverCapable`, and the two are combined
-    /// site-wide before the field is sent — see the version 37 notes.
-    public static func supportsNetworkResolver(_ version: Int) -> Bool {
-        version >= networkResolverMinimumVersion
-    }
+    /// Moving this floor is a deployment decision. An agent below it cannot
+    /// connect, and the declarative self-update rides the sync it can no longer
+    /// receive. Once no v38 agents remain, the floor can move to 39 and this
+    /// one feature gate can be retired. If a broader skew window is ever
+    /// reintroduced, resurrect the pre-v38 gates from history rather than
+    /// re-deriving their silent-failure cases.
+    public static let minimumSupportedVersion = 38
 
     /// The lowest protocol version that honours the per-instance metadata kill
     /// switch (see `currentVersion` version 39 notes).
@@ -1247,23 +846,6 @@ public enum WireProtocol {
 
     /// Whether an agent registered with `version` enforces
     /// `InstanceMetadata.serviceEnabled`.
-    ///
-    /// This one *is* an admission gate, in `supportsEdgeNonces`' sense rather
-    /// than `supportsNetworkResolver`'s, and for a reason neither of those has:
-    /// what a pre-v39 agent silently does with a field it cannot read is keep
-    /// serving instance identity to a workload an operator switched off. There
-    /// is no partial credit and no "it just arrives later" — the API would
-    /// report a kill switch that killed nothing, which is the worst answer a
-    /// security control can give. So the control plane refuses to set it on a VM
-    /// whose placed agent is older, and refuses to place a switched-off VM on
-    /// one.
-    ///
-    /// Note which agent's version is the question: the VM's **own host**, the
-    /// one running the listener that would refuse the caller. The site's
-    /// topology authority authors the deny ACL, and an older authority means the
-    /// carve-out is merely not withdrawn at the network layer — the listener
-    /// still refuses, so the switch holds. That is why the gate is per placement
-    /// rather than site-wide.
     public static func supportsMetadataOptOut(_ version: Int) -> Bool {
         version >= metadataOptOutMinimumVersion
     }

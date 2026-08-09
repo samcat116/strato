@@ -50,440 +50,67 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (currently 39), stamped on
-every envelope and exchanged at registration
+`WireProtocol.swift` holds the protocol version (`currentVersion`, currently
+39), stamped on every envelope and exchanged at registration
 (`AgentRegisterMessage.protocolVersion` ↔
 `AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
 is treated as version 0.
 
-Feature availability is expressed as pure per-version gates rather than
-ad-hoc checks scattered through the code:
+**Strato normally deploys the control plane and its agents in lockstep.** Both
+sides refuse any peer below `WireProtocol.minimumSupportedVersion` at
+registration. Wire v39 deliberately keeps v38 as that floor for one rolling
+window: `InstanceMetadata.serviceEnabled` is optional and
+`supportsMetadataOptOut` gates the only behavior an older agent could silently
+ignore. Every legacy dual path removed at v38 stays removed.
 
-| Gate | Minimum version | Feature |
-|---|---|---|
-| `supportsStateSync` | 2 | Desired/observed state sync |
-| `supportsNetworkSync` | 3 | Networks in the desired-state sync |
-| `supportsSiteAuthority` | 4 | `networksAuthoritative` site-topology flag |
-| `supportsSandboxSync` | 5 | Sandboxes in the desired-state sync |
-| `supportsDesiredAgentUpdate` | 7 | Agent self-update carried by the sync (the only update path since v28) |
-| `supportsSandboxExec` | 8 | Interactive sandbox exec streams |
-| `supportsSandboxFork` | 12 | Restore-into-new-identity sandbox forks |
-| `supportsFloatingIPs` | 12 | Floating IPs in the network desired state |
-| `supportsSandboxSnapshotMobility` | 14 | Off-node snapshot export + cross-agent restore/fork |
-| `supportsVMResize` | 17 | Online vCPU/memory resize of a running VM |
-| `supportsMachineProfile` | 18 | `VMSpec.machine` — Secure Boot and vTPM |
-| `supportsBalloonTarget` | 19 | `VMSpec.balloonTargetBytes` — operator balloon targets on a running guest |
-| `supportsSecurityGroups` | 20 | Security groups: OVN port groups/ACLs from the sync, membership per NIC |
-| `supportsProjectNetworkIsolation` | 21 | Id-keyed OVN naming, so two same-named networks can coexist |
-| `supportsGraphicsConsole` | 23 | `ConsoleSpec.graphics` + `ConsoleConnectMessage.stream` — the VNC console |
-| `supportsWorkloadTombstones` | 25 | Omission is hold-and-report, not teardown (a legibility gate, not a send gate — see STR-98 below) |
-| `supportsInstanceMetadata` | 26 | `DesiredVMState.metadata` — the instance metadata the agent serves at the link-local address |
-| `supportsMetadataPort` | 27 | `metadataEnabled` on `DesiredNetworkState` **and** `NetworkSpec` — the OVN localport publishing the metadata addresses |
-| `supportsDesiredStatePull` | 29 | The control plane serves `GET /agent/desired-state`, so the agent may fetch its sync instead of waiting for a push |
-| `supportsVolumeSync` | 31 | Volumes in the desired-state sync — and a **placement** gate, not just a field gate: with the imperative volume frames gone there is no fallback path |
-| `supportsSnapshotSync` | 33 | Snapshot artifacts in the desired-state sync — and a **capture-admission** gate: an artifact has no placement decision to gate, so a capture requested against a pre-v33 agent is refused instead |
-| `supportsEdgeNonces` | 34 | Reboot and restore as monotonic nonces on the desired entry — and an **admission** gate: with the imperative frames gone, a pre-v34 agent would ignore the field and report the bumped generation as converged, so the API would claim a restart that never happened |
-| `supportsDNSZones` | 36 | `DesiredStateMessage.dnsZones` — the zones an agent realizes, into the OVN `DNS` table (topology authority) and into its networks' resolvers (any agent with a local NIC). A *field* gate only: a pre-v36 agent leaves names unresolved, which is visible and self-healing, so there is nothing to refuse at the API |
-| `supportsNetworkResolver` | 37 | `DesiredNetworkState.resolverEnabled`/`.resolverAddresses`, the same pair on `NetworkSpec`, and `DesiredDNSRecord.ttl` — the per-network link-local resolver. A *field* gate; whether the host can actually serve one is the separate `AgentRegisterMessage.resolverCapable`, folded site-wide before the field is sent |
-| `supportsMetadataOptOut` | 39 | `InstanceMetadata.serviceEnabled` — the per-instance metadata kill switch. An **admission** gate, and a *placement* one: a pre-v39 agent ignores the field and keeps serving a guest whose API record says the switch is thrown, so switching it off on such a VM is refused and a switched-off VM is never placed there. Turning it back on is never refused |
+Two consequences worth knowing:
 
-The v9 `supportsSandboxSnapshots` and v22 `supportsVMCheckpoint` gates were
-removed with the last frames they guarded (v33 and v34): every question either
-answered is now answered, at a higher floor, by `supportsSnapshotSync` and
-`supportsEdgeNonces`.
+- **Moving the floor is a deployment decision.** An agent below it cannot
+  connect, and the declarative self-update rides the sync it can no longer
+  receive — so raising the floor past deployed agents means updating those
+  agents by hand (re-run `install.sh`, or pull a new image).
+- **Capabilities still exist, and they are not versions.** A capability
+  (`sandboxCapable`, `sandboxNetworkingCapable`, `tpmCapable`,
+  `resolverCapable`) is evidence that a *host* can realize a feature — a
+  runtime, a binary, a guest image — all installed independently of the agent
+  binary. Version says "the peer understands the payload"; capability says
+  "the host can act on it". The floor answers the first question for the whole
+  fleet; capabilities keep answering the second per host, re-probed at every
+  registration.
 
-Version 13 has no gate: it switched image downloads from signed URLs to
-relative paths fetched over SVID mTLS (issue #493), which older agents cannot
-degrade around — they must upgrade.
-
-Versions 15 and 16 have no gates either: both add optional, nil-tolerant
-fields — `ObservedVMState.guestInfo` and the volume snapshot's attached-VM hint
-at v15 (the QEMU guest agent, issue #563; the hint lives on
-`DesiredSnapshotCapture` since v33), `ObservedVMState.memoryStats` at
-v16 (virtio-balloon statistics, issue #567). A nil from an older peer reads
-identically to "not known" and can never mean a destructive action, so no
-send-side gate is needed. One meaning did tighten without its shape changing:
-`attachedVMId` originally told the agent which guest to fs-freeze around a
-snapshot; since issue #747 the agent uses it to *refuse* the snapshot.
-
-Version 17 adds CPU/memory hot-add (issue #568). The new spec field —
-`VMSpec.maxMemoryBytes`, defaulting to `memoryBytes` — is additive and
-nil-tolerant, but the *behavior* is not: a pre-v17 agent plans no work for a
-generation that changed only sizing and reports it converged, so the resize
-would silently succeed having changed nothing. Hence `supportsVMResize`: the
-control plane refuses an online resize below it and tells the caller to
-restart the VM. Resizing a stopped VM needs no gate, since the next boot
-uses the whole spec.
-
-Version 18 adds `VMSpec.machine` (a `MachineProfile` of `secureBoot` and
-`tpm`, issue #565) plus `AgentRegisterMessage.tpmCapable`. The field itself is
-additive and tolerant — a pre-v18 agent decodes the sync fine — but that is
-precisely the problem: it would then boot the guest *without* Secure Boot or a
-TPM and report success, and Windows setup would refuse to install with nothing
-in the API explaining why. So this feature is gated on two signals rather than
-one, exactly as `sandboxCapable` is at v5: `supportsMachineProfile` proves the
-agent understands the field, and `tpmCapable` proves the host can actually
-realize a TPM (swtpm installed). A v18 build on a host without swtpm answers
-yes to the first and no to the second, which is why the version number alone
-cannot stand in for the capability flag. The scheduler treats both as hard
-constraints.
-
-Version 19 adds operator balloon targets (issue #567 phase 2):
-`VMSpec.balloonTargetBytes` outbound and `VMMemoryStats.balloonActualBytes`
-back. The observed field follows v16's contract and needs no gate; the spec
-field repeats v17's hazard, since a pre-v19 agent reports the bumped
-generation converged without touching the balloon. Hence
-`supportsBalloonTarget`, which the control plane refuses below — and unlike
-v17 there is no "restart to apply" remedy to offer, because a balloon target
-only exists on a running guest in the first place.
-
-Version 23 adds the graphics console (issue #566): `ConsoleSpec.graphics`
-outbound, which makes the QEMU driver give the guest a display device and a
-`vnc.sock` in its VM directory, and `ConsoleConnectMessage.stream`, which picks
-that socket over the serial one for a console session. Both are optional and
-encode to nothing when unset, so a pre-v23 agent receives byte-identical JSON —
-which is exactly the hazard, in v18's *silent* form rather than v22's
-undecodable-envelope form. Ignoring `graphics`, the agent boots the guest
-headless while the API reports a display; ignoring `stream`, it answers a
-graphics connect with the serial socket, and noVNC hangs reading kernel log
-text where it expects `RFB 003.008`. Hence `supportsGraphicsConsole`, enforced
-both at placement and again when a console session is minted (an agent can be
-downgraded after its VMs were placed). Unlike v18 it needs no registration
-capability beside the version: placement already restricts to QEMU-capable
-agents, and a QEMU built `--disable-vnc` fails the create loudly.
-
-The byte-identity above is a property of the *production* path, not just the
-type: `VMSpecBuilder` sends `nil` rather than an explicit `"None"` for a
-headless VM, so the key is genuinely absent from every spec a headless VM
-produces. `GraphicsMode` itself decodes strictly, following `DesiredVMStatus` —
-but note the blast radius, since a `DesiredStateMessage` is decoded in one
-shot: a future unknown mode fails the *whole* sync for that agent and stops it
-converging on everything, not just the VM that carried it. The version gate is
-what keeps that unreachable.
-
-Version 26 adds instance metadata (STR-48): an optional
-`DesiredVMState.metadata` carrying `InstanceMetadata` — hostname, placement,
-NICs, SSH keys, user and vendor data, tags, and an `IdentityPolicy` naming the
-VM's SPIFFE instance identity —
-which the agent serves to the guest from the link-local metadata address
-(169.254.169.254) instead of baking it into a boot-time seed ISO. Putting it on
-the sync is the whole point of the design: the metadata store inherits
-level-triggering, generation guards, and replay safety from the machinery that
-already exists, so an operator's edit propagates on the next sync with no
-second control loop, no second transport, and nothing in the payload that can
-expire. Carrying the metadata on the sync is shipped, and so is holding it: the
-agent's `MetadataStore` records each VM's copy as syncs arrive (STR-52). Serving
-it is not — no agent yet answers HTTP on `169.254.169.254`, so the guest-facing
-IMDS listener is future work (the v27 chassis/localport half and the store are
-what exist agent-side, see [agent](./agent.md)).
-
-Absence is asymmetric in the v3/v5 sense rather than the harmless v7 sense,
-which is why `supportsInstanceMetadata` gates both directions. Agent-side it
-decides whether a missing key *means* anything: from a v26+ control plane nil
-is authoritative ("nothing to serve" — drop stale metadata), from an older one
-it is silence, and reading silence as authoritative would empty every VM's
-store the moment a control plane is rolled back. Control-plane-side the same
-gate lets sync assembly omit the field for pre-v26 agents, the v20
-`securityGroups` pattern. What it deliberately does *not* do is refuse
-placement, unlike v18/v23: a pre-v26 agent still provisions guests from the
-seed ISO exactly as before, so a VM landing there loses mutable metadata, not
-its ability to boot. Retiring the seed ISO is what will make a placement gate
-load-bearing.
-
-Version 27 adds the metadata dataplane (STR-49): `metadataEnabled` on
-`DesiredNetworkState`, and the same flag per NIC on `NetworkSpec`. The two are
-not redundant — they feed the two halves of a feature with two different
-owners. The OVN `localport` that publishes `InstanceMetadataEndpoint`'s
-addresses (`169.254.169.254` and `fd00:ec2::254`) on a logical switch is one
-row in the shared northbound database, authored only by the site's network
-controller from `networks`. The chassis-local namespace that terminates those
-addresses must exist on *every* host running a NIC on that network, and a
-sited non-controller agent receives an empty `networks` list by design — it may
-not author topology — so its only input is its own workloads' specs. Hence the
-flag on both, and hence the network reconcile converging the chassis half
-*before* its authority guard.
-
-It rides `DesiredNetworkState` rather than only the NIC spec for `dhcpEnabled`'s
-reason: metadata edits don't bump VM generations, so a converged VM never
-re-realizes its NICs, and the level-triggered network reconcile is the only path
-that reaches a live network whose setting changed — including deleting the port
-when it is turned off.
-
-Absence is asymmetric in the v3/v5 sense on both fields, and on
-`DesiredNetworkState` the asymmetry is enforced in code rather than by
-convention. Network teardown is `observed − desired`, so a nil that merely
-planned no port would read as "remove it":
-`NetworkReconciler.serviceLocalPortProtection(for:)` explicitly protects the ports of
-networks whose `metadataEnabled` is nil, which is what keeps a rollback to v26
-from deleting every live metadata port on the next sync. `false` remains an
-opinion and is honored — that is what makes turning the feature off work.
-Control-plane-side the gate lets sync assembly omit both fields for pre-v27
-agents. Like v26 and unlike v18/v23 it does not refuse placement: a pre-v27
-agent simply doesn't publish the address, and its guests fall back to the seed
-ISO exactly as today.
-
-Version 28 removes the imperative `agent_update` message (ADR 0001 stage 6). An
-agent's build is a durable fact about the host rather than an action, so it
-belongs in the sync — where `desiredAgentUpdate` has carried it since v7 — and
-the operator's "update now" endpoint now assigns that field instead of
-dispatching a command, leaving the message with no sender. Removing a
-`MessageType` case breaks in exactly one direction, and only across a skew that
-upgrades backwards: a pre-v28 *control plane* driving a v28 agent would send
-`agent_update` into an envelope the agent can no longer decode and burn its
-timeout against silence. Upgrade the control plane first, as everywhere else
-here.
-
-Version 29 makes the sync *pullable*: the control plane serves it over a
-long-poll `GET /agent/desired-state`, and the agent may fetch it there instead
-of waiting for a push (ADR 0001 stage 10). Nothing about the payload changes,
-so this gates the transport rather than the schema, and both directions of skew
-simply keep pushing.
-
-Version 30 lets an agent say "I don't know what is on this host" (STR-138),
-via `ObservedStateReport.manifestStatus`. It carries no gate and refuses no
-placement, for the same reason v25 doesn't: the field only ever *withholds*
-action.
-
-Version 31 makes volumes desired state (ADR 0001 stage 5, STR-148).
-`DesiredStateMessage` gains `volumes` and `ObservedStateReport` gains its
-counterpart; the six imperative frames `volume_create`, `volume_delete`,
-`volume_attach`, `volume_detach`, `volume_resize` and `volume_clone` are
-removed. This bump carries two hazard shapes at once.
-
-The *removal* half is the v28 shape and breaks only across a skew that upgrades
-backwards. The *addition* half is the v3/v5/v26/v27 asymmetric-absence shape in
-its most expensive form: read wrong, silence deletes the only copy of a user's
-data. Both new fields are therefore `Optional` rather than `[]`-defaulted, so
-the payload describes itself and the reading does not depend on a version
-lookup being right. A sync whose `volumes` is nil makes the agent skip its
-volume half entirely — it does *not* plan against an empty desired list, which
-would put every volume on the host into the unrecognized set. A report whose
-`volumes` is nil makes the control plane skip its own volume half, rather than
-reading the absence as "every volume on this agent is gone" and reaping the
-rows.
-
-Unlike v26/v27 and like v18/v23, this gate **does** refuse placement: with no
-imperative fallback left, a volume placed on a pre-v31 agent could never be
-created. Volumes already sitting on such an agent when the control plane
-upgrades simply freeze — their rows are never reaped, because that agent's
-reports say nothing about volumes — until the agent is upgraded. Deleting one
-still works: the delete path force-clears the agent-absence finalizer for an
-agent that cannot confirm.
-
-Version 32 removes `volume_info` (ADR 0001 stage 7, STR-149) — the v28 shape
-without even v28's skew hazard, because the message had no sender on either
-side of any version. Nothing was added to the observed report to replace it: a
-read is not desired state, and for every field the message carried, one side
-already knew the answer. Format, storage path and attachment have been on
-`ObservedVolumeState` since v31; the requested size is a control-plane column
-whose realization `observedGeneration` confirms. (The *virtual* size did come
-back in v38, on the narrower ground below: a refused grow made the desired size
-a misleading answer, and the planner's cache had made the subprocess free.) The
-remainder — allocated
-bytes, the qcow2 dirty flag, the encryption flag — has no reader, and
-allocation moves with every guest write, so it cannot be cached the way virtual
-size is and would cost a `qemu-img info` per volume on a report assembled on
-every convergence action. `StorageBackend.volumeInfo` survives as the agent's
-own probe behind the resize planner's size cache.
-
-Version 33 makes snapshots and checkpoints desired artifacts (ADR 0001 stage
-8, STR-150). `DesiredStateMessage` gains `snapshots` and `ObservedStateReport`
-gains its counterpart; seven imperative frames go — `volume_snapshot`,
-`volume_snapshot_delete`, `vm_checkpoint`, `vm_snapshot_delete`,
-`sandbox_snapshot_create`, `sandbox_snapshot_delete` and
-`sandbox_snapshot_export`. `vm_restore` and `sandbox_restore` survive; they are
-edges rather than states, and convert to nonces at v34.
-
-Both hazard shapes are v31's, and the `Optional`-not-`[]` treatment is the
-same, one step more expensive to get wrong: an empty `snapshots` the control
-plane believed would reap every checkpoint row it holds for the agent, and a
-checkpoint is a point in time nothing can recreate.
-
-Where the gate sits is what differs from v31. A volume is *placed* by the
-control plane, so v31 could simply refuse to schedule one onto an agent that
-could not converge it; an artifact inherits its parent's host, so there is no
-placement decision to gate. `supportsSnapshotSync` gates **capture admission**
-instead — `POST .../snapshots` against a pre-v33 agent is refused with `409`,
-which is exactly what the pre-v22/v9 capability preflights already did, one
-floor higher. Artifacts already on such an agent freeze until it is upgraded;
-deleting one still works, by force-clearing the agent-absence finalizer.
-
-Version 34 makes reboot and restore edge-nonces (ADR 0001 stage 9, STR-151),
-and takes the last three durable-resource RPCs with them: `vm_reboot`,
-`vm_restore`, `sandbox_restore`. `DesiredVMState` gains `rebootGeneration` and
-`restore`; `DesiredSandboxState` gains `restore`. Nothing imperative is left on
-the wire but live byte streams.
-
-These three resisted every earlier stage because they really are edges: a
-reboot starts and ends `running`, and "be at checkpoint C" stops being true the
-moment the guest resumes. Counting them is what makes them states — the
-`kubectl rollout restart` shape, where the edge becomes a state once *how many
-times it was asked* is part of the state. The agent applies one only when the
-desired count outranks the one it recorded, so a dropped, replayed or re-driven
-sync converges instead of restarting a guest twice.
-
-Two things are worth knowing about this bump specifically. First, it is
-**strictly better than what it replaces**: a fire-and-forget RPC whose socket
-dropped mid-flight lost the reboot silently, where a nonce survives and
-converges. Second, the correctness invariant moved to the agent and became a
-*durability* question rather than a delivery one — the applied nonces live in
-`VMManifestStore`, and an entry with **no record** (written by an older build,
-or never converged here) is *adopted* rather than read as zero. Reading it as
-zero would have a re-registered agent replay a VM's whole restore history.
-
-The gate is unusual too. Both fields are `Optional` like v31's and v33's, but
-absence here is inert in every direction — a count of requests can only mean
-"nothing was asked for" — so `supportsEdgeNonces` is not defending the payload.
-It defends the *request*: with no fallback frame left, a reboot aimed at a
-pre-v34 agent would be accepted into a field that agent ignores and then
-reported as converged, so it is refused with `409` at admission.
-
-Version 35 adds online volume grow and per-volume I/O ceilings (STR-19):
-`ioLimits` on `DesiredVolumeState`, `VolumeSpec` and `ObservedVolumeState`. No
-frame changes and no gate — the first bump since v23 without one. The observed
-echo is what carries the skew instead: nil means "this agent does not report
-applied limits", while a present-but-empty `VolumeIOLimits` means "applied, and
-the answer is uncapped", so a fleet mid-upgrade shows caps requested rather
-than done.
-
-Version 36 realizes internal names in the datapath (STR-39, roadmap #769).
-`DesiredStateMessage` gains `dnsZones`: for each zone attached to a network the
-receiving agent authors, its id, name, attached network ids, effective record
-set and a `recordsHash`. The agent writes them to the OVN Northbound `DNS`
-table and references them from `Logical_Switch.dns_records`, so `ovn-controller`
-answers `dns_lookup()` in the datapath — no daemon, no HA story, no failure
-domain.
-
-Two structural decisions are worth reading before extending it. The field rides
-the **network carrier, not `NetworkSpec`**, for `dhcpEnabled`'s reason: DNS
-edits don't bump VM generations, so a converged VM never re-realizes its NICs
-and a per-NIC field would reach nobody. And records travel **typed**
-(`name`/`type`/`values`) rather than pre-flattened into OVN's `name → addresses`
-map, so realization stays a swappable driver and the *receiver* decides what its
-backend can express — the OVN driver joins a name's A and AAAA values and skips
-CNAME/TXT/SRV with a diagnostic.
-
-Absence is v31's asymmetric shape, and the reading matters more than usual
-because these rows are switch-scoped topology written by *one* agent while
-their contents come from every agent in the site: nil is "no opinion" and a
-**non-authoritative agent is sent nil, not `[]`**, so a controller handover can
-never have two writers reading each other's rows as garbage. `[]` is an opinion
-and does remove managed rows, which is what makes detaching the last zone from
-a network take effect. `supportsDNSZones` gates only the field (and lets
-assembly skip the fleet-wide record queries for an agent that would discard
-them); unlike v33 and v34 there is no admission gate, because nothing reports a
-zone as converged, so there is no false success to refuse.
-
-Version 37 gives every network a resolver (STR-40, roadmap #769 phase 4).
-`DesiredNetworkState` and `NetworkSpec` gain `resolverEnabled`, and
-`DesiredDNSRecord` gains `ttl`.
-
-The two `resolverEnabled` fields are the v27 metadata-port pair repeated
-exactly, and for the same reason: the network carrier authors the OVN
-`localport` and the DHCP row, while the per-NIC copy reaches the *chassis* half
-on agents that receive an empty `networks` list because they may not author
-topology.
-
-Each carrier also gains `resolverAddresses`, non-nil exactly when the flag is
-true: **one distinct v4/v6 pair per network**, allocated from `169.254.0.0/16`
-and `fd00:ec2:1::/48`. That distinctness is the whole feature. A resolver in the
-network's own chassis namespace has only link-local addresses and no egress the
-OVN router will SNAT, so it answers for its zones and forwards nothing — the bug
-the phase was filed to fix. A pair per network puts every resolver in the *host*
-namespace, where forwarding is the hypervisor's own, while the destination
-address still identifies the network and a per-address routing rule returns the
-reply to the right switch. See ADR 0008.
-
-`ttl` is the field v36 deliberately left off — an OVN `DNS` row has nowhere to
-put one, so it would have been dead weight on every sync. A zone file writes one
-TTL per RRset, so the CoreDNS driver cannot render without it. It is folded into
-`recordsHash`, which moves every stamp once on upgrade and heals with one
-rewrite per zone.
-
-Two consequences reach past the new fields. **`dnsZones` widens past the
-topology authority**: OVN `DNS` rows are switch-scoped and still written only by
-the site's controller, but a resolver runs wherever the guests are, so a zone
-now goes to any agent that authors an attached network *or* runs a local NIC on
-one — and the agent picks which half to realize from `networksAuthoritative`,
-which it already has. And **`dnsServers` is redefined rather than replaced**: on
-a resolver-enabled network the DHCP `dns_server` option becomes the resolver's
-link-local address and the configured list becomes its upstream forwarders. The
-field, its validation and its wire shape are unchanged; only the consumer moves.
-
-`supportsNetworkResolver` gates only the fields, and deliberately not admission
-— the asymmetry with v34 is the point. A pre-v37 agent that ignores
-`resolverEnabled` keeps handing guests the configured `dnsServers` verbatim,
-which is exactly what it did before the field existed, so the failure mode is
-"this network has not got its resolver yet" rather than a mutation reported as
-converged when nothing happened. What *is* refused is enabling the feature at
-all where it cannot work: `AgentRegisterMessage.resolverCapable` reports whether
-a host has a usable CoreDNS, and the control plane withholds `resolverEnabled`
-unless **every** agent in the site says yes — because the DHCP option is
-authored once per network by the topology authority while the listener is per
-chassis, so one incapable host would give that network DNS that works until a VM
-lands somewhere else.
-
-Version 38 lets a volume report the size it actually has (STR-199):
-`ObservedVolumeState` gains `sizeBytes`. Agent→control-plane only, no frame
-changes, and no gate — like v35 there is nothing to gate, since the control
-plane does not change what it *sends* based on the answer and a desired size has
-always converged without it. It closes a gap v32 argued was not worth a
-subprocess: with only the desired `size` to report, a volume whose grow the
-agent had refused answered with the size it had *failed* to reach. The
-subprocess objection expired on its own — the resize planner needs the same
-number and already caches one per volume. Absence is v35's echo shape: nil is
-"this agent said nothing", never zero, so a pre-v38 agent's silence leaves
-`observed_size_bytes` as the last report that spoke left it.
+History: through wire v37 this protocol carried a per-feature gate
+(`supports*`) for every version since v2, each defending a specific silent
+failure across a skew window — an ignored field reported as converged, an
+absent list misread as an authoritative teardown. The v38 floor replaced all
+of them (see the `minimumSupportedVersion` doc comment in
+`WireProtocol.swift`); if a supported skew window is ever reintroduced,
+resurrect the gates from git history rather than re-deriving them.
 
 Version 39 adds the per-instance metadata kill switch (STR-185):
-`InstanceMetadata` gains `serviceEnabled`, EC2's
-`MetadataOptions.HttpEndpoint`, and the per-*workload* lever STR-54's
-non-overridable IMDS allow deliberately shipped without. A v39 agent enforces it
-twice — the listener refuses the caller after identifying it, and a drop ACL on
-a new `pg_strato_no_metadata` port group at priority 1004 keeps the packet off
-the chassis — because the two cover different failures: the refusal needs no
-port group, so it holds for an unmanaged NIC and while the site's authority is
-still on an older build, while the ACL is what makes the switch a kill switch
-rather than a 404.
+`InstanceMetadata.serviceEnabled` is EC2's `MetadataOptions.HttpEndpoint`,
+the per-workload lever for denying one VM the link-local service. The listener
+refuses an identified caller and a drop ACL on `pg_strato_no_metadata` keeps
+the packet off the chassis; the two layers cover unmanaged NICs, authority
+skew, and probe resistance.
 
-It rides `InstanceMetadata` rather than sitting beside it on `DesiredVMState`,
-which is worth stating because the two look interchangeable. Inside the
-document, the policy cannot drift from the payload it governs and — the reason
-that settles it — it comes back with `MetadataStore`'s durable restore. A policy
-stored anywhere else would be the one thing a fail-static restart did not bring
-back, and an agent that comes up serving a VM its operator switched off is the
-exact failure the field exists to prevent.
+Absence means enabled because a v38 control plane opted nobody out. During the
+v38→v39 rollout, `supportsMetadataOptOut` refuses to throw the switch on a VM
+placed on an older agent and keeps an already-hardened VM off one. Turning the
+service back on is never refused. Once v38 agents have left the fleet, the
+minimum version can move to 39 and this sole feature gate can be retired.
 
-**Absence means enabled**, inverting this protocol's usual conservative default,
-because a pre-v39 control plane opted nobody out and reading its silence as a
-denial would blackhole IMDS fleet-wide on upgrade. The hazard therefore runs
-toward the *agent*, and it is v20's and v23's: a pre-v39 agent decodes the sync,
-ignores the field, and serves a guest whose API record says the switch is
-thrown. `supportsMetadataOptOut` refuses to set it on a VM placed on such an
-agent, and placement refuses to put a switched-off VM there — unlike v20, create
-is gated too, since a VM can simply be created with the switch left on. Turning
-the service back *on* is never refused: that is the behavior every agent already
-has.
-
-**A capability is sometimes the whole answer, with no bump at all.** STR-103
-put sandbox NICs on the wire without touching the version, because
-`SandboxSpec.network` has been in the shape since v5 — what was missing was
-never a field an old agent could not decode, but evidence that a given host can
-realize one. That evidence cannot come from a version: the three things a
-sandbox NIC needs (OVN, the jailer barrier, and a guest image whose init
-configures the interface) are all installed independently of the agent binary,
-so an agent at `currentVersion` paired with a two-releases-old guest image
-would refuse the config drive. Hence
-`AgentRegisterMessage.sandboxNetworkingCapable`, re-probed at every
-registration, gating both placement and whether assembly puts the NIC on the
-wire — the `sandboxCapable` shape, applied to a sharper question. Reach for a
-version bump when a peer would *misread* a payload; reach for a capability when
-it would understand the payload perfectly and still be unable to act on it.
+Nil-tolerance conventions survive the gates, because they defend against
+*absence within one version*, not skew: a nil `volumes` or `snapshots` list
+still means "the sender said nothing about that family" and is never planned
+against (STR-148/150), `dnsZones: nil` still means "not the topology
+authority", and a nil per-NIC `resolverEnabled` is still the control plane
+withholding an opinion about a host it cannot describe.
 
 The doc comment on `currentVersion` is a narrative changelog of every bump —
 read it before adding a version. Adding an enum case to a strictly-decoded
-wire type (see `DesiredVMStatus` below) also requires a version bump and a
-dual-mode rollout.
+wire type (see `DesiredVMStatus` below) requires a version bump and an
+explicit rollout decision: move the floor with both sides, or add one narrowly
+scoped compatibility gate like v39's.
 
 ## Message catalog
 
@@ -669,25 +296,19 @@ the control plane marks a resource degraded only when `failedGeneration` matches
 the current generation, which prevents attributing a stale error to a newer
 change.
 
-### Two transports, one payload (wire v29)
+### One transport: the long-poll (STR-146)
 
-Since v29 the agent normally **fetches** its desired state rather than waiting
-for a pushed frame: a long-poll `GET /agent/desired-state` on the same Envoy
-SVID-mTLS listener that carries image downloads, scoped by the forwarded SVID
-identity exactly as the image-download route is (ADR 0001 stage 10, STR-146).
+The agent **fetches** its desired state: a long-poll
+`GET /agent/desired-state` on the same Envoy SVID-mTLS listener that carries
+image downloads, scoped by the forwarded SVID identity exactly as the
+image-download route is (ADR 0001 stage 10). It has been the only desired-state
+transport since wire v38 — the pushed `desired_state` WebSocket frame and the
+per-agent transport negotiation (`pullsDesiredState`, the
+`AGENT_DESIRED_STATE_PULL_ENABLED` kill switch) went with the skew window.
 
-Nothing about the payload changes. The response body is the same
-`MessageEnvelope` wrapping the same `DesiredStateMessage`, so the agent's decode
-and dispatch path — including reading `senderVersion` off the envelope to tell
-authoritative silence from an old control plane — is identical either way. This
-version gates the *transport*, not the schema.
-
-Which transport an agent gets is per agent, not per fleet:
-`AgentRegisterMessage.pullsDesiredState` says whether it is polling, and the
-control plane stops pushing only when that, the version gate, and its own
-`AGENT_DESIRED_STATE_PULL_ENABLED` kill switch all agree. Speaking v29 is
-deliberately not sufficient on its own, for the same reason `sandboxCapable`
-exists: a v29 build understands the endpoint but may be pinned to push mode.
+The response body is a full `MessageEnvelope` wrapping a `DesiredStateMessage`,
+so a fetched payload takes the agent's ordinary inbound dispatch path and lands
+on the `.desiredState` serialization lane.
 
 **Conditional requests are an optimization and never a gate.** The response
 carries an `ETag` (a SHA-256 digest of the assembled payload, with per-assembly
@@ -709,11 +330,10 @@ ETag anywhere can then cost only latency, never convergence.
   is not the *instruction* to remove it. See "Omission is not teardown" below.
 - Identical syncs diff to nothing; the message is safe to drop, replay, or
   reorder (generations guard the reorder case).
-- Backward compatibility is asymmetric by design: when decoding from an older
-  peer, missing `sandboxes`/`networks` decode to empty lists, but the agent
-  must **not** interpret that as "tear everything down" — reconciliation of
-  each list is gated on the corresponding version gate
-  (`supportsSandboxSync`, `supportsNetworkSync`).
+- Absence still has grammar even without version skew: a nil `volumes` or
+  `snapshots` field means "the sender said nothing about that family" and is
+  never planned against, and `dnsZones: nil` means "not the topology
+  authority" — silence is never an instruction to tear down.
 
 `ObservedStateReport` is the mirror image: the full observed VM/sandbox sets
 plus current resources, sent level-triggered from the agent.
@@ -763,13 +383,9 @@ Teardown now needs to be said out loud, in a round trip:
    staleness guard — the generation is minted above whatever the agent
    reported applying.
 
-Nothing here is gated on a version, in either direction, and for once that is
-the safe choice: the thing an older peer fails to do is *destroy something*. A
-pre-v25 control plane never authorizes a teardown, so a v25 agent leaks a
-stray rather than killing a live workload. A pre-v25 **agent** still destroys
-on omission whatever the control plane does, which is what
-`supportsWorkloadTombstones(_:)` exists to surface — registration logs such
-agents at `notice` so a half-upgraded fleet's remaining exposure is legible.
+The three-step handshake is what makes teardown deliberate: nothing is
+destroyed on omission alone, only on an explicit tombstone minted above the
+generation the agent reported applying.
 
 `ObservedStateReport.teardownRefusal` carries the agent-side blast-radius
 guard's refusal (see `docs/architecture/agent.md`); the control plane records
@@ -809,12 +425,10 @@ The rest of the package is vocabulary used on both sides:
   synthesized, so a missing required key inside `metadata` throws out of the
   whole `DesiredStateMessage` and stops that agent converging on everything.
 
-  `serviceEnabled` (v39) is the one field here that is *not* published — it is
-  the switch deciding whether any of the rest is. It lives on the document
-  rather than beside it so that policy and payload cannot drift, and so that
-  `MetadataStore`'s durable restore brings both back together after a restart
-  with the control plane unreachable. Nil means enabled, inverting the usual
-  conservative default for the reason the v39 notes give.
+  `serviceEnabled` (v39) is the one field that is not published — it decides
+  whether the rest is served. It lives on the document so policy and payload
+  cannot drift and so `MetadataStore`'s durable restore brings both back after
+  a restart. Nil means enabled for the rolling-upgrade reason above.
 
   `userData`/`vendorData` are carried **inline**, unlike `imageInfo`'s fetched
   paths. That is deliberate — the agent must serve exactly what the last sync

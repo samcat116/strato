@@ -732,6 +732,44 @@ decision row naming the route and the credential, so they remain attributable
 (STR-116); they are the only credential denials without a Cedar verdict behind
 them.
 
+**A substituted question does not carry the ceiling (STR-203).** Two
+enforcement points ask something other than the act they are gating, because at
+that moment there is nothing yet to gate. `AuthorizationMiddleware` answers a
+collection route — `GET /api/vms`, `POST /api/sandboxes` — with
+`view_organization` on the caller's acting organization, "are you anyone here at
+all", and leaves the real work to the handler: `canFilter("vm:read")` per row for
+a list, `create_resources` on the resolved project for a create. The
+`?organization_id=` narrowing filter does the same, in front of five lists that
+then decide every row themselves. A restriction, though, is stated in the
+vocabulary of the *act* — `vm:read`, in project P — and neither half of that can
+be true of `org:read` on an organization: a project never appears in an
+organization's ancestor chain, and `vm:read` does not cover `org:read`.
+Intersecting a restriction with the substituted question therefore denied it
+twice over, and a project-scoped token got a 403 on `GET /api/vms` while
+succeeding on `GET /api/vms/{id}` and `POST /api/vms/{id}/start` underneath it —
+the two resource families answering the same question in different shapes, since
+`/api/volumes` and `/api/networks` are handler-checked and filtered the same
+caller to a 200 all along.
+
+So the ceiling is suspended for those two checks and applied in full downstream,
+where there is an act to apply it to. **This is not a bypass**: the bindings half
+is decided exactly as before, so a *non-member is still refused* — what changes
+is only that a member holding a narrowed token reaches the handler and gets a
+filtered, possibly empty page. The suspension is spelled
+`IAMRequestAuthState.membershipProbe()`, and the derived state shares the
+request's audit-flag boxes (an admin-policy allow through a probe is still
+recorded) and keeps the credential reference (the probe's decision row is still
+attributed). The other ~24 `requireMember` call sites are untouched, deliberately:
+most of them *are* the authorization, and the narrowing filter is safe here only
+because a narrowing can subtract rows and never add them.
+
+Two consequences to know. A probe writes an `org:read` **allow** attributed to a
+credential whose restriction does not permit `org:read`; its `path` names the
+collection route it came from, which is how to read it in the log. And
+`IAMRequestCache.DecisionKey` carries the restriction as part of a decision's
+identity, so a suspended allow can never be reused later in the request by a
+check that was asked under the ceiling.
+
 A restriction belongs to the credential, not the principal, so it survives an
 impersonation: a user acting as a service account through a restricted key
 stays restricted.
@@ -839,6 +877,9 @@ record. A machine principal's organization scope, for the collection-level
 "are you anyone in this org" checks, comes from where it was registered — a
 service account's project's organization, or a workload registration's
 organization — never from membership, which machine principals do not have.
+Those collection-level checks are *membership probes*: see "A substituted
+question does not carry the ceiling" above for why they do not carry a
+credential's restriction.
 
 **Reads today, mutations still user-only.** Listing and reading VMs and
 sandboxes (and every handler that authorizes purely through the evaluator)
@@ -1365,17 +1406,41 @@ Two enforcement details worth naming:
     bullet above to `attachSecurityGroup` should expect the VM half only until
     sandbox parity lands.
 - **A project named in a create body is checked for existence *after* the
-  permission check** (issue #1049). The five project-scoped creates — volume,
-  network, security group, floating IP, DNS zone — resolve their target project
-  through `Request.authorizedProjectForCreate`, which authorizes first and
-  confirms the row second, so `400 "Project {id} does not exist"` cannot be told
-  apart from `403` by a caller sweeping ids. In practice that `400` is
-  unreachable from the API: a missing project's chain never reaches an
-  organization, so the truncated-chain rule above denies the check outright and
-  every one of the five answers `403` — for a system admin, and for a principal
-  holding a binding pinned directly at the missing id. The assertion stays as
-  the backstop against inserting against a dangling foreign key. Pinned by
-  `ProjectResolutionTests`.
+  permission check** (issue #1049). All seven project-scoped creates — VM,
+  sandbox, volume, network, security group, floating IP, DNS zone — resolve
+  their target project through `Request.authorizedProjectForCreate`, which
+  authorizes first and confirms the row second, so `400 "Project {id} does not
+  exist"` cannot be told apart from `403` by a caller sweeping ids. In practice
+  that `400` is unreachable from the API: a missing project's chain never
+  reaches an organization, so the truncated-chain rule above denies the check
+  outright and every one of the seven answers `403` — for a system admin, and
+  for a principal holding a binding pinned directly at the missing id. The
+  assertion stays as the backstop against inserting against a dangling foreign
+  key. Pinned by `ProjectResolutionTests`.
+  - **VM and sandbox only joined this list with issue #1059**, and that is the
+    security-relevant half of the change. `resolveProjectForCreate` used to look
+    the project up *first* — `400 "Project not found"` — then check the caller's
+    current organization (`403 "Access denied to project"`), and ask the
+    evaluator last. The two answers were distinguishable, so `POST /api/vms` and
+    `POST /api/sandboxes` were an existence oracle over other tenants' projects,
+    at exactly the endpoints this bullet was written to exclude. They are built
+    on `authorizedProjectForCreate` now rather than sitting beside it, so the
+    ordering cannot diverge again. The current-organization check survives,
+    moved *behind* the permission check: it still narrows VM and sandbox creates
+    to the caller's current organization — the five infrastructure creates leave
+    that entirely to the evaluator — but its `403` now only reaches a caller the
+    evaluator already allowed, so it discloses nothing. Expect an *allow* in the
+    decision log immediately followed by a `403` in that case.
+- **No create infers a project** (issue #1059). Naming none is `400
+  "projectId is required — name the project to <verb> <kind> in."`, at all
+  seven. Two of them used to guess — VM and sandbox took the project *named*
+  "Default Project", the other five took the organization's oldest — so the same
+  empty body landed in different projects depending on the endpoint. Neither
+  guess was a decision anyone made, and both were blind to projects living under
+  a folder. Nothing named "Default Project" is privileged any more; an
+  organization is still provisioned with a first project by that name, but it is
+  a label no query reads. Same shape as networks losing their implicit fallback
+  in issue #765.
 
 #### The request-scoped cache (shipped with #686, extended by #735)
 

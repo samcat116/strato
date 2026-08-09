@@ -15,14 +15,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { vmsApi } from "@/lib/api/vms";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useImages } from "@/lib/hooks/use-images";
 import { useNetworks } from "@/lib/hooks/use-networks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
-import {
-  acceptedMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
-import { useProjectContext } from "@/providers";
+import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
 import { MAX_SECURITY_GROUPS_PER_NIC } from "@/types/api";
 import { toast } from "sonner";
 
@@ -37,8 +34,7 @@ export function CreateVMDialog({
   onOpenChange,
   onCreated,
 }: CreateVMDialogProps) {
-  const watch = useMutationsStore((state) => state.watch);
-  const [isLoading, setIsLoading] = useState(false);
+  const { isLoading, run } = useAcceptedMutation();
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     name: "",
@@ -123,6 +119,14 @@ export function CreateVMDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Required: there is no default project to fall back to (issue #1059).
+    // Without this the body would go out with the key dropped by
+    // JSON.stringify and come back a 400 the user cannot act on.
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
+
     if (!formData.name.trim()) {
       toast.error("Please enter a VM name");
       return;
@@ -133,83 +137,82 @@ export function CreateVMDialog({
       return;
     }
 
-    setIsLoading(true);
     setQuotaError(null);
-    try {
-      const GB = 1024 * 1024 * 1024; // 1 GiB in bytes; the API fields are named `memory`/`disk`
-      // Creation is asynchronous: the server accepts the request and returns the
-      // VM with the generation it is converging on, which the MutationWatcher
-      // follows and reports on completion.
-      const accepted = await vmsApi.create({
-        name: formData.name,
-        description: formData.description || undefined,
-        projectId,
-        imageId: formData.imageId,
-        cpu: parseInt(formData.cpu) || 2,
-        memory: (parseInt(formData.memory) || 4) * GB,
-        disk: (parseInt(formData.disk) || 50) * GB,
-        // Required: there is no default network to fall back to (issue #765).
-        networkId: formData.networkId,
-        sshPublicKey: formData.sshPublicKey.trim() || undefined,
-        // Sent verbatim (no trim): the first bytes are the format header
-        // cloud-init dispatches on.
-        userData: formData.userData.trim() ? formData.userData : undefined,
-        // Omitted unless on, so pre-#565 control planes ignore them harmlessly.
-        // Never sent for Firecracker, which the API rejects outright.
-        secureBoot: !isFirecracker && secureBoot ? true : undefined,
-        tpm: !isFirecracker && tpm ? true : undefined,
-        // Same omit-unless-on rule (issue #566); Firecracker emulates no
-        // display device and the API rejects the combination.
-        graphicsConsole: !isFirecracker && graphicsConsole ? true : undefined,
-        // Omitted unless *off*, the inverse of the three above, because this
-        // one defaults on: sending `true` would only say what the server
-        // already assumes, while pinning a pre-STR-185 control plane to a key
-        // it does not know.
-        metadataEnabled: metadataEnabled ? undefined : false,
-        // Omitted when empty → the server uses the project's default group.
-        securityGroupIds:
-          securityGroupIds.length > 0 ? securityGroupIds : undefined,
-      });
-      watch(
-        acceptedMutation(accepted, {
-          kind: "create",
-          resourceKind: "virtual_machine",
-          resourceName: formData.name,
-        })
-      );
-      toast.success(`Creating VM "${formData.name}"`);
-      onOpenChange(false);
-      onCreated?.();
-      // Reset form
-      setFormData({
-        name: "",
-        description: "",
-        imageId: "",
-        cpu: "2",
-        memory: "4",
-        disk: "50",
-        networkId: "",
-        sshPublicKey: "",
-        userData: "",
-      });
-      setSecureBoot(false);
-      setTpm(false);
-      setGraphicsConsole(false);
-      setSecurityGroupIds([]);
-      setQuotaError(null);
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to create VM";
+    const GB = 1024 * 1024 * 1024; // 1 GiB in bytes; the API fields are named `memory`/`disk`
+    // Creation is asynchronous: the server accepts the request and returns the
+    // VM with the generation it is converging on, which the MutationWatcher
+    // follows and reports on completion.
+    await run({
+      request: () =>
+        vmsApi.create({
+          name: formData.name,
+          description: formData.description || undefined,
+          projectId,
+          imageId: formData.imageId,
+          cpu: parseInt(formData.cpu) || 2,
+          memory: (parseInt(formData.memory) || 4) * GB,
+          disk: (parseInt(formData.disk) || 50) * GB,
+          // Required: there is no default network to fall back to (issue #765).
+          networkId: formData.networkId,
+          sshPublicKey: formData.sshPublicKey.trim() || undefined,
+          // Sent verbatim (no trim): the first bytes are the format header
+          // cloud-init dispatches on.
+          userData: formData.userData.trim() ? formData.userData : undefined,
+          // Omitted unless on, so pre-#565 control planes ignore them harmlessly.
+          // Never sent for Firecracker, which the API rejects outright.
+          secureBoot: !isFirecracker && secureBoot ? true : undefined,
+          tpm: !isFirecracker && tpm ? true : undefined,
+          // Same omit-unless-on rule (issue #566); Firecracker emulates no
+          // display device and the API rejects the combination.
+          graphicsConsole: !isFirecracker && graphicsConsole ? true : undefined,
+          // Omitted unless *off*, the inverse of the three above, because this
+          // one defaults on: sending `true` would only say what the server
+          // already assumes, while pinning a pre-STR-185 control plane to a key
+          // it does not know.
+          metadataEnabled: metadataEnabled ? undefined : false,
+          // Omitted when empty → the server uses the project's default group.
+          securityGroupIds:
+            securityGroupIds.length > 0 ? securityGroupIds : undefined,
+        }),
+      watch: {
+        kind: "create",
+        resourceKind: "virtual_machine",
+        resourceName: formData.name,
+      },
+      errorMessage: "Failed to create VM",
+      successMessage: `Creating VM "${formData.name}"`,
+      onSuccess: () => {
+        onOpenChange(false);
+        onCreated?.();
+        // Reset form
+        setFormData({
+          name: "",
+          description: "",
+          imageId: "",
+          cpu: "2",
+          memory: "4",
+          disk: "50",
+          networkId: "",
+          sshPublicKey: "",
+          userData: "",
+        });
+        setSecureBoot(false);
+        setTpm(false);
+        setGraphicsConsole(false);
+        setMetadataEnabled(true);
+        setSecurityGroupIds([]);
+        setQuotaError(null);
+      },
       // Quota rejections surface inline with a pointer to the quotas page,
       // since resolving them means editing a quota rather than the VM form.
-      if (/quota/i.test(message)) {
-        setQuotaError(message);
-      } else {
-        toast.error(message);
-      }
-    } finally {
-      setIsLoading(false);
-    }
+      onError: (message) => {
+        if (/quota/i.test(message)) {
+          setQuotaError(message);
+          return true;
+        }
+        return false;
+      },
+    });
   };
 
   const renderImageSelector = () => (
@@ -260,7 +263,9 @@ export function CreateVMDialog({
         <DialogHeader>
           <DialogTitle>Create Virtual Machine</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Configure your new virtual machine
+            {currentProject
+              ? `Configure your new virtual machine in ${currentProject.name}`
+              : NO_PROJECT_DESCRIPTION}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -618,7 +623,7 @@ export function CreateVMDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={isLoading}
+              disabled={isLoading || !projectId}
             >
               {isLoading ? (
                 <>

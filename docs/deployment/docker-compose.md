@@ -90,6 +90,11 @@ Vapor app — migrations, lifecycle handlers and all — inside the container th
 is serving traffic. (If you do use `exec`, the binary is `./App`: the image's
 `ENTRYPOINT` is what normally supplies it, and `exec` bypasses that.)
 
+Either way you get a second process running the migration phase against the
+same database as the running control plane. That is safe: the phase is
+serialized fleet-wide by a Postgres advisory lock, so the one-shot container
+waits if a migration is in flight and then finds nothing to do (STR-183).
+
 `--claim` is refused for an account that already has a passkey — an unclaimed
 invite blocks passkey enrollment, so minting one would take away the sign-in it
 was meant to restore — and likewise for a disabled account or one provisioned
@@ -192,8 +197,8 @@ add those to `.env` (or an override file) to change them:
 
 The single `valkey` service backs two stores with opposite failure contracts:
 
-- **Coordination** (agent presence, socket routing, sweep locks, scheduler
-  reservations, rate-limit counters) is *fail-open*. Losing it degrades
+- **Coordination** (agent presence, sweep locks, scheduler reservations,
+  rate-limit counters) is *fail-open*. Losing it degrades
   convergence, never correctness — agents keep converging via the periodic sync,
   and `/health/ready` grades it `degraded` while still serving traffic.
 - **Session storage** cannot fail open at all. Losing it logs every signed-in

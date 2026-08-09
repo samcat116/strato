@@ -70,24 +70,18 @@ struct ResponseMessageTests {
                 timestamp: Fixtures.timestamp,
                 vmId: "vm-8",
                 level: .warning,
-                source: .qemu,
+                source: .agent,
                 eventType: .statusChange,
                 message: "guest reset",
-                operation: "reboot",
-                details: "triple fault",
-                previousStatus: .running,
-                newStatus: .starting
+                operation: "reboot"
             )
         )
         #expect(decoded.type == .vmLog)
         #expect(decoded.vmId == "vm-8")
         #expect(decoded.level == .warning)
-        #expect(decoded.source == .qemu)
+        #expect(decoded.source == .agent)
         #expect(decoded.eventType == .statusChange)
         #expect(decoded.message == "guest reset")
         #expect(decoded.operation == "reboot")
-        #expect(decoded.details == "triple fault")
-        #expect(decoded.previousStatus == .running)
-        #expect(decoded.newStatus == .starting)
     }
 }

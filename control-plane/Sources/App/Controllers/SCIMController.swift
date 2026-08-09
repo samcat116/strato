@@ -309,14 +309,14 @@ struct SCIMController: RouteCollection {
                 name: "User",
                 endpoint: "/Users",
                 description: "User resource type",
-                schema: "urn:ietf:params:scim:schemas:core:2.0:User"
+                schema: UserSCIMHandler.schemaURI
             ),
             SCIMResourceType(
                 id: "Group",
                 name: "Group",
                 endpoint: "/Groups",
                 description: "Group resource type",
-                schema: "urn:ietf:params:scim:schemas:core:2.0:Group"
+                schema: GroupSCIMHandler.schemaURI
             ),
         ]
     }

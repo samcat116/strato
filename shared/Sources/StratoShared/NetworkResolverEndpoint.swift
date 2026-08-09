@@ -92,7 +92,13 @@ public enum NetworkResolverEndpoint {
 
     /// The whole v6 space, covering the metadata address as well as every
     /// resolver — which is why one carve-out per protocol suffices.
-    public static let v6Space = "fd00:ec2::/32"
+    ///
+    /// Built from typed components so a spelling error cannot make every
+    /// reservation check silently disappear. Keep the string form derived
+    /// from this value for configuration and wire consumers.
+    public static let v6SpaceCIDR = IPv6CIDR(
+        base: IPv6Address(hi: 0xfd00_0ec2_0000_0000, lo: 0), prefix: 32)
+    public static let v6Space = v6SpaceCIDR.description
 
     /// The port the service listens on, both families and both transports. DNS
     /// falls back to TCP when a reply is truncated, so anything gating this

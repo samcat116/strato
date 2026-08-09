@@ -1066,7 +1066,8 @@ export interface CreateVMRequest {
   name: string;
   description?: string;
   imageId: string;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   environment?: string;
   cpu?: number;
   memory?: number;
@@ -1113,24 +1114,6 @@ export interface CreateVMRequest {
    * only agents new enough to honour that are schedulable — but note the
    * metadata service is also how a guest reads its cloud-init configuration,
    * so a VM created this way may not finish provisioning.
-   */
-  metadataEnabled?: boolean;
-}
-
-export interface UpdateVMRequest {
-  name?: string;
-  description?: string;
-  /**
-   * Operator balloon target in bytes (issue #567 phase 2). Omit to leave the
-   * current target alone; send `null` to clear it and give the guest its whole
-   * memory grant back. On a running VM this responds 202 with an Operation,
-   * not the VM.
-   */
-  balloonTarget?: number | null;
-  /**
-   * The per-instance metadata kill switch (backend STR-185). Omit to leave it
-   * alone. Applied to a running VM without a restart; turning it *off* is
-   * refused with 409 when the VM's agent is too old to honour it.
    */
   metadataEnabled?: boolean;
 }
@@ -1359,7 +1342,8 @@ export interface CreateSandboxRequest {
   image?: string;
   /** Ready sandbox snapshot to restore as a new sandbox identity. */
   restoreFrom?: string;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   environment?: string;
   cpus?: number;
   /** Guest memory in bytes. */
@@ -1461,11 +1445,6 @@ export interface CreateSandboxSnapshotRequest {
   // When true, checkpoint and stop; defaults to false.
   stop?: boolean;
   // Omitted uses the fleet default; 0 keeps the snapshot until deleted.
-  ttlSeconds?: number;
-}
-
-export interface UpdateSandboxRequest {
-  name?: string;
   ttlSeconds?: number;
 }
 
@@ -1645,15 +1624,6 @@ export interface UpdateImageRequest {
   defaultCmdline?: string;
 }
 
-export interface ImageStatusResponse {
-  id: string;
-  status: ImageStatus;
-  downloadProgress?: number;
-  errorMessage?: string;
-  size?: number;
-  checksum?: string;
-}
-
 // Volume types
 export type VolumeStatus =
   | "creating"
@@ -1766,16 +1736,12 @@ export interface VolumeSnapshot {
 export interface CreateVolumeRequest {
   name: string;
   description?: string;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   sizeGB: number;
   format?: VolumeFormat;
   volumeType?: VolumeType;
   sourceImageId?: string;
-}
-
-export interface UpdateVolumeRequest {
-  name?: string;
-  description?: string;
 }
 
 export interface AttachVolumeRequest {
@@ -1802,14 +1768,17 @@ export interface CreateVolumeSnapshotRequest {
 }
 
 // VM Log types
-export type VMLogLevel = "debug" | "info" | "warning" | "error";
-export type VMLogSource = "agent" | "qemu" | "control_plane";
+// Each union carries "unknown": the backend decodes unrecognized values
+// tolerantly into that case (a newer agent may emit vocabulary this build
+// doesn't know) and forwards it, so the UI must render it, not crash on it.
+export type VMLogLevel = "debug" | "info" | "warning" | "error" | "unknown";
+export type VMLogSource = "agent" | "control_plane" | "unknown";
 export type VMEventType =
   | "status_change"
   | "operation"
-  | "qemu_output"
   | "error"
-  | "info";
+  | "info"
+  | "unknown";
 
 export interface VMLogEntry {
   timestamp: string;
@@ -1995,6 +1964,12 @@ export interface Network {
   metadataEnabled: boolean;
   resolverEnabled: boolean;
   resolverAddresses?: string[];
+  /**
+   * Why this network's guests will not resolve the DNS zones attached to it,
+   * with the remedy — absent when they will, and absent for a network with no
+   * attached zone, which has nothing to fail to deliver.
+   */
+  zoneResolutionWarning?: string;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -2008,7 +1983,8 @@ export interface CreateNetworkRequest {
   gateway6?: string;
   /** false → v4-only network. */
   ipv6Enabled?: boolean;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   dhcpEnabled?: boolean;
   dnsServers?: string[];
   domainName?: string;
@@ -2080,8 +2056,8 @@ export interface SecurityGroup {
 export interface CreateSecurityGroupRequest {
   name: string;
   description?: string;
-  /** Defaults to the caller's default project when omitted. */
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
 }
 
 export interface UpdateSecurityGroupRequest {

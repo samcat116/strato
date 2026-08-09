@@ -63,16 +63,6 @@ struct SchedulableAgent: Sendable {
     /// it advertised swtpm AND speaks a wire protocol that carries the machine
     /// profile. Same two-signal rule as `supportsSandboxWorkloads`.
     let supportsVTPM: Bool
-    /// Whether this agent realizes `VMSpec.machine` at all. Secure Boot needs
-    /// only this — no host binary, just a firmware set the agent resolves — so
-    /// it is tracked separately from `supportsVTPM`.
-    let supportsMachineProfile: Bool
-    /// Whether this agent realizes `ConsoleSpec.graphics` (issue #566): it
-    /// speaks a wire protocol that carries the field. Unlike `supportsVTPM`
-    /// this needs no second signal — every candidate here is already
-    /// QEMU-capable, and a QEMU built without VNC fails the create loudly
-    /// rather than booting a guest whose display silently does not exist.
-    let supportsGraphicsConsole: Bool
 
     init(
         id: String,
@@ -92,9 +82,7 @@ struct SchedulableAgent: Sendable {
         wireProtocolVersion: Int? = nil,
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
-        supportsVTPM: Bool = false,
-        supportsMachineProfile: Bool = false,
-        supportsGraphicsConsole: Bool = false
+        supportsVTPM: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -114,8 +102,6 @@ struct SchedulableAgent: Sendable {
         self.supportsSandboxWorkloads = supportsSandboxWorkloads
         self.supportsSandboxNetworking = supportsSandboxNetworking
         self.supportsVTPM = supportsVTPM
-        self.supportsMachineProfile = supportsMachineProfile
-        self.supportsGraphicsConsole = supportsGraphicsConsole
     }
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
@@ -171,9 +157,7 @@ struct SchedulableAgent: Sendable {
             wireProtocolVersion: wireProtocolVersion,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
-            supportsVTPM: supportsVTPM,
-            supportsMachineProfile: supportsMachineProfile,
-            supportsGraphicsConsole: supportsGraphicsConsole
+            supportsVTPM: supportsVTPM
         )
     }
 }
@@ -216,24 +200,19 @@ struct VMPlacementRequirements: Sendable {
     /// silently loses its TPM fails Windows setup with nothing in the API
     /// explaining why.
     let requiresVTPM: Bool
+    /// Whether the VM's per-instance metadata switch is off (STR-185). Hard
+    /// constraint during the v38→v39 rollout: an older agent ignores
+    /// `InstanceMetadata.serviceEnabled` and serves the guest its identity
+    /// while the API reports the switch as thrown.
+    let requiresMetadataOptOut: Bool
     /// Whether the VM asks for UEFI Secure Boot. Hard constraint on the wire
     /// protocol only — any agent that understands the machine profile can
     /// resolve a signed firmware set (or fail the create loudly if its host
     /// has none).
-    let requiresSecureBoot: Bool
     /// Whether the VM asks for a graphics console (issue #566). Hard
     /// constraint on the wire protocol: a pre-v23 agent decodes the spec,
     /// ignores the field, and boots the guest headless while the API reports a
     /// display — the same silent degradation the machine profile is gated on.
-    let requiresGraphicsConsole: Bool
-    /// Whether the VM's per-instance metadata switch is off (STR-185). Hard
-    /// constraint on the wire protocol, `requiresGraphicsConsole`'s shape and
-    /// the sharpest instance of its argument: a pre-v39 agent ignores
-    /// `InstanceMetadata.serviceEnabled` and serves the guest its identity
-    /// anyway, so placing a switched-off VM there does not degrade a feature —
-    /// it silently unthrows a kill switch, while the API keeps reporting it
-    /// thrown.
-    let requiresMetadataOptOut: Bool
 
     init(
         cpu: Int,
@@ -246,8 +225,6 @@ struct VMPlacementRequirements: Sendable {
         requiresSandboxRuntime: Bool = false,
         requiresSandboxNetworking: Bool = false,
         requiresVTPM: Bool = false,
-        requiresSecureBoot: Bool = false,
-        requiresGraphicsConsole: Bool = false,
         requiresMetadataOptOut: Bool = false
     ) {
         self.cpu = cpu
@@ -260,8 +237,6 @@ struct VMPlacementRequirements: Sendable {
         self.requiresSandboxRuntime = requiresSandboxRuntime
         self.requiresSandboxNetworking = requiresSandboxNetworking
         self.requiresVTPM = requiresVTPM
-        self.requiresSecureBoot = requiresSecureBoot
-        self.requiresGraphicsConsole = requiresGraphicsConsole
         self.requiresMetadataOptOut = requiresMetadataOptOut
     }
 }
@@ -276,8 +251,6 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case sandboxRuntimeUnsatisfied(eligibleAgents: Int)
     case sandboxNetworkingUnsatisfied(eligibleAgents: Int)
     case vtpmUnsatisfied(eligibleAgents: Int)
-    case machineProfileUnsatisfied(eligibleAgents: Int)
-    case graphicsConsoleUnsatisfied(eligibleAgents: Int)
     case metadataOptOutUnsatisfied(eligibleAgents: Int)
     case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
@@ -319,14 +292,6 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
                 + "hypervisor node (Debian/Ubuntu: `apt install swtpm swtpm-tools`), restart libvirtd there "
                 + "(it caches host capabilities, so installing the package alone changes nothing), and let its "
                 + "agent re-register"
-        case .machineProfileUnsatisfied(let eligibleAgents):
-            return
-                "No eligible agent is new enough to realize Secure Boot or a TPM (\(eligibleAgents) agent(s) "
-                + "checked) — upgrade the agents on your hypervisor nodes"
-        case .graphicsConsoleUnsatisfied(let eligibleAgents):
-            return
-                "No eligible agent is new enough to realize a graphics console (\(eligibleAgents) agent(s) "
-                + "checked) — upgrade the agents on your hypervisor nodes"
         case .metadataOptOutUnsatisfied(let eligibleAgents):
             return
                 "No eligible agent is new enough to switch the metadata service off for one VM "
@@ -400,8 +365,6 @@ final class SchedulerService: @unchecked Sendable {
             architecture: architecture,
             siteID: siteID,
             requiresVTPM: vm.tpmEnabled,
-            requiresSecureBoot: vm.secureBoot,
-            requiresGraphicsConsole: vm.graphicsConsole,
             requiresMetadataOptOut: !vm.metadataEnabled
         )
     }
@@ -576,9 +539,7 @@ final class SchedulerService: @unchecked Sendable {
         let siteMatched: [SchedulableAgent]
         if let requiredSiteID = requirements.siteID {
             siteMatched = online.filter {
-                $0.siteID == requiredSiteID
-                    && WireProtocol.supportsSiteAuthority($0.wireProtocolVersion ?? 0)
-                    && $0.supportsInterVMNetworking
+                $0.siteID == requiredSiteID && $0.supportsInterVMNetworking
             }
             guard !siteMatched.isEmpty else {
                 throw SchedulerError.siteUnsatisfied(requiredSiteID: requiredSiteID)
@@ -634,19 +595,13 @@ final class SchedulerService: @unchecked Sendable {
             sandboxNetworkCapable = runtimeCapable
         }
 
-        // Secure Boot and vTPM both ride `VMSpec.machine`, which only a v17+
-        // agent acts on; a vTPM additionally needs swtpm on the host. Both are
-        // categorical, and both fail *silently* on an agent that can't serve
-        // them — the guest simply boots without the feature — so placement is
-        // refused rather than degraded (issue #565).
+        // A vTPM needs swtpm on the host; the failure is categorical and
+        // *silent* on a host that can't serve it — the guest simply boots
+        // without the device — so placement is refused rather than degraded
+        // (issue #565). Secure Boot and the graphics console need no host
+        // capability: firmware is resolved on the agent, and a QEMU built
+        // without VNC fails the create loudly.
         var machineCapable = sandboxNetworkCapable
-        if requirements.requiresVTPM || requirements.requiresSecureBoot {
-            let profileCapable = machineCapable.filter { $0.supportsMachineProfile }
-            guard !profileCapable.isEmpty else {
-                throw SchedulerError.machineProfileUnsatisfied(eligibleAgents: machineCapable.count)
-            }
-            machineCapable = profileCapable
-        }
         if requirements.requiresVTPM {
             let tpmCapable = machineCapable.filter { $0.supportsVTPM }
             guard !tpmCapable.isEmpty else {
@@ -655,23 +610,10 @@ final class SchedulerService: @unchecked Sendable {
             machineCapable = tpmCapable
         }
 
-        // The graphics console rides `ConsoleSpec.graphics`, which only a v23+
-        // agent acts on. Same categorical, silent-failure shape as the machine
-        // profile above — the guest just boots headless — so placement is
-        // refused rather than degraded (issue #566).
-        if requirements.requiresGraphicsConsole {
-            let graphicsCapable = machineCapable.filter { $0.supportsGraphicsConsole }
-            guard !graphicsCapable.isEmpty else {
-                throw SchedulerError.graphicsConsoleUnsatisfied(eligibleAgents: machineCapable.count)
-            }
-            machineCapable = graphicsCapable
-        }
-
         // The metadata kill switch rides `InstanceMetadata.serviceEnabled`,
-        // which only a v39+ agent reads. Same categorical, silent-failure shape
-        // as the two above, and the failure is worse than a missing feature:
-        // the guest keeps being served its instance identity while the API says
-        // the switch is thrown (STR-185).
+        // which only a v39+ agent reads. During the one-version rollout window,
+        // refuse an older agent rather than report a security control that it
+        // silently ignores (STR-185).
         if requirements.requiresMetadataOptOut {
             let optOutCapable = machineCapable.filter {
                 WireProtocol.supportsMetadataOptOut($0.wireProtocolVersion ?? 0)

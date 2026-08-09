@@ -143,7 +143,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, token in
             // An online agent owns the VM, so the desired state persists (an
             // unreachable agent would fail the operation and realign it).
-            _ = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            _ = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -160,7 +160,7 @@ final class DesiredStateReconciliationTests {
     @Test("POST start against an offline agent degrades the VM fast")
     func startAgainstOfflineAgentFailsFast() async throws {
         try await withVMTestApp { app, _, vm, token in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             // The agent went dark: its row is offline cluster-wide.
             let agent = try #require(await app.agentService.getAgentInfo(agentId))
@@ -197,7 +197,7 @@ final class DesiredStateReconciliationTests {
     @Test("Start stores no transitional status; in-flight state is derived")
     func noTransitionalStatusOnStart() async throws {
         try await withVMTestApp { app, _, vm, token in
-            _ = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            _ = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/start") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -220,14 +220,16 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("Registration requires a state-sync protocol version")
+    @Test("Registration requires the minimum supported protocol version")
     func protocolVersionGate() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            // The imperative path is gone (issue #261): agents that predate
-            // desired-state sync are refused at registration.
+            // Control plane and agents deploy in lockstep: anything below the
+            // floor — including an agent too old to report a version at all —
+            // is refused at registration.
             await #expect(throws: AgentServiceError.self) {
                 _ = try await self.registerAgent(
-                    app: app, vm: vm, named: "old-agent", protocolVersion: 1)
+                    app: app, vm: vm, named: "old-agent",
+                    protocolVersion: WireProtocol.minimumSupportedVersion - 1)
             }
             await #expect(throws: AgentServiceError.self) {
                 _ = try await self.registerAgent(
@@ -238,10 +240,11 @@ final class DesiredStateReconciliationTests {
             let rows = try await Agent.query(on: app.db).all()
             #expect(rows.isEmpty)
 
-            // A state-sync agent registers fine.
-            let v2Agent = try await self.registerAgent(
-                app: app, vm: vm, named: "new-agent", protocolVersion: 2)
-            let registered = await app.agentService.getAgentInfo(v2Agent)
+            // An agent at the floor registers fine.
+            let current = try await self.registerAgent(
+                app: app, vm: vm, named: "new-agent",
+                protocolVersion: WireProtocol.minimumSupportedVersion)
+            let registered = await app.agentService.getAgentInfo(current)
             #expect(registered?.name == "new-agent")
             #expect(registered?.status == .online)
         }
@@ -252,7 +255,7 @@ final class DesiredStateReconciliationTests {
     @Test("Sync assembly lists the agent's VMs with desired status and generation")
     func syncAssemblyFromDatabase() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setDesiredStatus(.running)
             try await vm.save(on: app.db)
@@ -275,7 +278,7 @@ final class DesiredStateReconciliationTests {
     @Test("Sync assembly emits first-class network desired state for referenced networks")
     func syncAssemblyIncludesNetworks() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             // A project-scoped network the VM references via a NIC.
             let network = LogicalNetwork(
@@ -357,45 +360,12 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("Sync assembly omits floating IPs for pre-v12 agents")
-    func syncAssemblyOmitsFloatingIPsForOldAgents() async throws {
-        try await withVMTestApp { app, user, vm, _ in
-            // An agent from before the floating IP protocol: it would decode
-            // and silently ignore the field, so assembly must not claim the
-            // sync carries NAT intent it cannot realize.
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 11)
-
-            let network = LogicalNetwork(
-                name: "fip-old-net", subnet: "10.31.0.0/24", gateway: "10.31.0.1",
-                projectID: vm.$project.id, externalAccess: true)
-            try await network.save(on: app.db)
-            let nic = VMNetworkInterface(
-                vmID: vm.id!, logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
-            try await nic.save(on: app.db)
-            try await VMInterfaceAddress(
-                interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
-                address: "10.31.0.5", prefixLength: 24, gateway: "10.31.0.1"
-            ).save(on: app.db)
-            let pool = FloatingIPPool(name: "edge-old", cidr: "198.51.100.0/24")
-            try await pool.save(on: app.db)
-            try await FloatingIP(
-                poolID: pool.id!, address: "198.51.100.10", projectID: vm.$project.id,
-                interfaceID: nic.id!, createdByID: user.id!
-            ).save(on: app.db)
-
-            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let net = try #require(message.networks.first { $0.name == "fip-old-net" })
-            #expect(net.floatingIPs == nil)
-        }
-    }
-
     // MARK: - Observed-state report application
 
     @Test("A converged report updates status and generation, and clears the deadline")
     func reportRecordsConvergence() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setDesiredStatus(.running)
             vm.extendConvergenceDeadline(by: 600)
@@ -419,7 +389,7 @@ final class DesiredStateReconciliationTests {
     @Test("A reported pending create releases its placement reservation")
     func reportReleasesCreateReservation() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             let reservation = ReservationAmounts(cpu: vm.cpu, memory: vm.memory, disk: vm.disk)
             let reserved = await app.coordination.reserveCapacity(
                 agentId: agentId,
@@ -443,14 +413,14 @@ final class DesiredStateReconciliationTests {
                 fromAgentKey: agentKey("recon-agent")
             )
 
-            #expect(await app.coordination.activeReservations(agentId: agentId) == .zero)
+            #expect(await app.coordination.activeReservations(agentIds: [agentId])[agentId] == .zero)
         }
     }
 
     @Test("A convergence failure fails the pending operation with the agent's error")
     func reportFailsOperationWithError() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setDesiredStatus(.running)
             vm.extendConvergenceDeadline(by: 600)
@@ -488,7 +458,7 @@ final class DesiredStateReconciliationTests {
     @Test("A stale error from a previous generation does not degrade the current one")
     func staleErrorFromPreviousGenerationIgnored() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             // Boot at generation 1 failed and capped out; the user retried,
             // minting generation 2.
@@ -524,7 +494,7 @@ final class DesiredStateReconciliationTests {
     @Test("Progress-only entries neither settle status nor converge")
     func convergingEntriesAreProgressOnly() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setDesiredStatus(.running)
             try await vm.save(on: app.db)
@@ -552,7 +522,7 @@ final class DesiredStateReconciliationTests {
     @Test("Absence with desired absent confirms deletion: row removed, terminal event appended")
     func absenceConfirmsDeletion() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             ResourceFinalizerService.stampForDeletion(vm)
             vm.setDesiredStatus(.absent)
@@ -606,7 +576,7 @@ final class DesiredStateReconciliationTests {
     @Test("A timed-out delete keeps converging on absent instead of resurrecting the VM")
     func stuckDeleteKeepsConvergingOnAbsent() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             // A delete leaves `status` non-transitional: the user deleted a
             // running VM and the agent has not reported the absence yet.
@@ -642,7 +612,7 @@ final class DesiredStateReconciliationTests {
     @Test("Absence of an established VM that should exist marks it as error")
     func absenceOfEstablishedVMIsDrift() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setDesiredStatus(.running)
             vm.setStatus(.running)
@@ -659,7 +629,7 @@ final class DesiredStateReconciliationTests {
     @Test("A never-established VM absent from the report is left alone")
     func absenceOfFreshVMIsIgnored() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             // `.created` may be mid-create on an agent that hasn't received
             // the sync yet — absence must not escalate it.
@@ -677,7 +647,7 @@ final class DesiredStateReconciliationTests {
     @Test("Out-of-band drift is applied and detected without a pending operation")
     func driftDetectedWithoutOperation() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setDesiredStatus(.running)
             vm.setStatus(.running)
@@ -699,7 +669,7 @@ final class DesiredStateReconciliationTests {
     @Test("A report claiming another agent's identity is ignored")
     func reportOwnershipValidated() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             vm.setDesiredStatus(.running)
             try await vm.save(on: app.db)
@@ -720,7 +690,7 @@ final class DesiredStateReconciliationTests {
     @Test("An identical report does not rewrite the agent row")
     func identicalReportSkipsAgentSave() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             vm.setDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
@@ -760,7 +730,7 @@ final class DesiredStateReconciliationTests {
     @Test("Heartbeat absence no longer duplicates observed-report reconciliation")
     func heartbeatDoesNotReconcileVMAbsence() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 2)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             vm.setDesiredStatus(.running)
             vm.setStatus(.running)
             try await vm.save(on: app.db)
@@ -772,8 +742,7 @@ final class DesiredStateReconciliationTests {
                         totalCPU: 16, availableCPU: 12,
                         totalMemory: 1 << 34, availableMemory: 1 << 33,
                         totalDisk: 1 << 40, availableDisk: 1 << 39
-                    ),
-                    runningVMs: []
+                    )
                 ),
                 fromAgentKey: agentKey("recon-agent")
             )
@@ -788,7 +757,7 @@ final class DesiredStateReconciliationTests {
     @Test("A report's guestInfo persists hostname, availability, and per-MAC observed addresses")
     func guestInfoPersisted() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 15)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             // A NIC to attribute the guest's addresses to, by MAC.
             let nic = VMNetworkInterface(
@@ -839,7 +808,7 @@ final class DesiredStateReconciliationTests {
     @Test("A later report reconciles observed addresses; a nil guestInfo leaves them intact")
     func guestInfoReconciledAndPreservedOnNil() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 15)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
                 macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
@@ -888,7 +857,7 @@ final class DesiredStateReconciliationTests {
     @Test("A nil guestInfo on a stopped VM clears the stale qga view")
     func guestInfoClearedWhenNotRunning() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 15)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
             let nic = VMNetworkInterface(
                 vmID: vm.id!, logicalNetworkID: try await self.network(app: app, vm: vm).requireID(),
                 macAddress: "52:54:00:ab:cd:ef", deviceName: "net0")
@@ -931,7 +900,7 @@ final class DesiredStateReconciliationTests {
     @Test("A report's memoryStats persist and stamp their report time")
     func memoryStatsPersisted() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 16)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             let envelope = try self.report(
                 agentId: agentId,
@@ -956,7 +925,7 @@ final class DesiredStateReconciliationTests {
     @Test("A nil memoryStats preserves the last-known values while running, and clears them once stopped")
     func memoryStatsPreservedOnNilAndClearedWhenNotRunning() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: 16)
+            let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             func send(status: VMStatus, memoryStats: VMMemoryStats?) async throws {
                 let envelope = try self.report(

@@ -152,24 +152,6 @@ final class SnapshotConvergenceTests {
         }
     }
 
-    /// The asymmetric-absence hazard, assembly side. A pre-v33 agent gets nil
-    /// rather than `[]`, because `[]` from a control plane that speaks the field
-    /// would be an authoritative "you should hold no artifacts".
-    @Test("A pre-v33 agent's sync carries no snapshots field at all")
-    func preV32AgentGetsNilSnapshots() async throws {
-        try await withSnapshotApp { app, builder, user, project in
-            let agentId = try await registerAgent(
-                app: app, named: "old-agent",
-                protocolVersion: WireProtocol.snapshotSyncMinimumVersion - 1)
-            let vm = try await placedVM(builder, project: project, agentId: agentId)
-            try await makeCheckpoint(
-                on: app, user: user, project: project, vm: vm, agentId: agentId)
-
-            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(message.snapshots == nil)
-        }
-    }
-
     /// A capture is a create strategy, and a sandbox's carries its mode. It has
     /// to be durable rather than derived from the request, because the entry is
     /// re-assembled on every sync — including ones long after the request that

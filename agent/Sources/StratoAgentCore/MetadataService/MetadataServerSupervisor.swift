@@ -15,8 +15,7 @@ public enum MetadataServerReconciler {
     /// `desired` nil ≙ a control plane that predates `metadataEnabled`: no
     /// actions at all, so silence is never read as "stop every listener". An
     /// empty (non-nil) list *is* an opinion and stops all of them.
-    public static func actions(desired: [UUID]?, running: Set<UUID>) -> [MetadataServerAction] {
-        guard let desired else { return [] }
+    public static func actions(desired: [UUID], running: Set<UUID>) -> [MetadataServerAction] {
         let wanted = Set(desired)
         var actions: [MetadataServerAction] = []
         for networkId in wanted.subtracting(running).sorted(by: { $0.uuidString < $1.uuidString }) {
@@ -95,7 +94,7 @@ public actor MetadataServerSupervisor {
     /// `snapshot` is asked for per network rather than handed a map, so the
     /// caller does not have to build payloads for networks that turn out not to
     /// be running.
-    public func reconcile(desired: [UUID]?, snapshot: (UUID) -> MetadataSnapshot) async {
+    public func reconcile(desired: [UUID], snapshot: (UUID) -> MetadataSnapshot) async {
         // A child that died on its own is not running, whatever the map says.
         // Dropping it here is what makes the next start action a restart.
         for (networkId, handle) in listeners where !handle.isRunning {

@@ -90,8 +90,7 @@ final class AgentManifestQuarantineTests {
             manifestStatus: ObservedManifestStatus(
                 inventoryComplete: false,
                 quarantinedEntries: 0,
-                reason: "Workload manifest at /var/lib/strato/vm-manifest.json is not a readable manifest object.",
-                preservedCopyPath: "/var/lib/strato/vm-manifest.json.corrupt-20260806T120000Z"
+                reason: "Workload manifest at /var/lib/strato/vm-manifest.json is not a readable manifest object."
             )
         )
     }

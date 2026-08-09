@@ -57,6 +57,9 @@ final class VMMetadataOptOutTests {
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40),
+            hypervisors: [
+                HypervisorSupport(type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+            ],
             protocolVersion: protocolVersion
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id

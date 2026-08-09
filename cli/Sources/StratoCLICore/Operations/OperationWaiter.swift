@@ -24,10 +24,6 @@ public struct AcceptedMutation: Sendable {
     public init(id: String) {
         self.id = id
     }
-
-    public init(_ operation: ResourceOperation) {
-        self.id = operation.id ?? ""
-    }
 }
 
 /// Polls `getOperation` until the mutation leaves `pending`.
@@ -82,12 +78,5 @@ public struct OperationWaiter: Sendable {
                 kind: final.kind.rawValue, message: final.error ?? "unknown error")
         }
         return final
-    }
-
-    @discardableResult
-    public func wait(
-        for operation: ResourceOperation, client: any APIProtocol
-    ) async throws -> ResourceOperation {
-        try await wait(for: AcceptedMutation(operation), client: client)
     }
 }

@@ -44,8 +44,6 @@ struct SchedulerServiceTests {
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
         supportsVTPM: Bool = false,
-        supportsMachineProfile: Bool = false,
-        supportsGraphicsConsole: Bool = false,
         wireProtocolVersion: Int? = nil
     ) -> SchedulableAgent {
         return SchedulableAgent(
@@ -65,9 +63,7 @@ struct SchedulerServiceTests {
             wireProtocolVersion: wireProtocolVersion,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
-            supportsVTPM: supportsVTPM,
-            supportsMachineProfile: supportsMachineProfile,
-            supportsGraphicsConsole: supportsGraphicsConsole
+            supportsVTPM: supportsVTPM
         )
     }
 
@@ -760,8 +756,7 @@ struct SchedulerServiceTests {
             memory: memory,
             disk: 0,
             hypervisorType: .qemu,
-            requiresVTPM: true,
-            requiresSecureBoot: true
+            requiresVTPM: true
         )
     }
 
@@ -773,11 +768,10 @@ struct SchedulerServiceTests {
             // New enough to understand the machine profile and far more
             // attractive by utilization — but it never advertised swtpm, so it
             // would boot the guest with no TPM and Windows setup would refuse.
-            createTestAgent(
-                id: "no-swtpm", name: "no-swtpm", availableCPU: 8, supportsMachineProfile: true),
+            createTestAgent(id: "no-swtpm", name: "no-swtpm", availableCPU: 8),
             createTestAgent(
                 id: "tpm-ready", name: "tpm-ready", availableCPU: 2,
-                supportsVTPM: true, supportsMachineProfile: true),
+                supportsVTPM: true),
         ]
 
         let selectedId = try scheduler.selectAgent(requirements: windowsRequirements(), from: agents)
@@ -790,8 +784,8 @@ struct SchedulerServiceTests {
         let scheduler = SchedulerService(logger: Logger(label: "test"))
 
         let agents = [
-            createTestAgent(id: "a1", name: "a1", supportsMachineProfile: true),
-            createTestAgent(id: "a2", name: "a2", supportsMachineProfile: true),
+            createTestAgent(id: "a1", name: "a1"),
+            createTestAgent(id: "a2", name: "a2"),
         ]
 
         do {
@@ -812,165 +806,26 @@ struct SchedulerServiceTests {
         }
     }
 
-    /// An agent that predates wire v17 decodes the sync fine and simply
-    /// ignores `VMSpec.machine` — the guest boots without Secure Boot or a TPM
-    /// while the API says it has both. That silent divergence is exactly what
-    /// the gate exists to prevent, so such agents are excluded even when they
-    /// have swtpm installed.
-    @Test("An agent too old to realize the machine profile is not eligible")
-    func testMachineProfileRequiresNewEnoughAgent() throws {
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-
-        let agents = [
-            createTestAgent(id: "old", name: "old", supportsVTPM: false, supportsMachineProfile: false)
-        ]
-
-        do {
-            _ = try scheduler.selectAgent(requirements: windowsRequirements(), from: agents)
-            Issue.record("Expected machineProfileUnsatisfied error")
-        } catch let error as SchedulerError {
-            guard case .machineProfileUnsatisfied(let eligibleAgents) = error else {
-                Issue.record("Expected machineProfileUnsatisfied, got \(error)")
-                return
-            }
-            #expect(eligibleAgents == 1)
-        }
-    }
-
-    /// Secure Boot needs no host binary — any agent that acts on the machine
-    /// profile can resolve a signed firmware set — so it must not inherit the
-    /// vTPM constraint.
-    @Test("Secure Boot alone does not require swtpm")
-    func testSecureBootDoesNotRequireVTPM() throws {
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-
-        let requirements = VMPlacementRequirements(
-            cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu,
-            requiresVTPM: false, requiresSecureBoot: true)
-
-        let agents = [
-            createTestAgent(id: "sb-only", name: "sb-only", supportsVTPM: false, supportsMachineProfile: true)
-        ]
-
-        #expect(try scheduler.selectAgent(requirements: requirements, from: agents) == "sb-only")
-    }
-
-    /// The default profile must not narrow placement at all: an agent that
-    /// predates #565 entirely still takes ordinary VMs.
-    @Test("A VM with no machine profile places on a pre-v17 agent")
-    func testPlainVMIgnoresMachineProfileGates() throws {
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-
-        let agents = [
-            createTestAgent(id: "old", name: "old", supportsVTPM: false, supportsMachineProfile: false)
-        ]
-        let vm = createTestVM(cpu: 2)
-
-        #expect(try scheduler.selectAgent(for: vm, from: agents) == "old")
-    }
-
-    /// The requirements a VM implies must carry its machine profile, or the
-    /// gates above would never engage on the real create path.
-    @Test("Placement requirements carry the VM's Secure Boot and TPM intent")
+    /// The requirements a VM implies must carry its vTPM intent, or the gate
+    /// above would never engage on the real create path.
+    @Test("Placement requirements carry the VM's TPM intent")
     func testPlacementRequirementsCarryMachineProfile() throws {
         let plain = createTestVM(cpu: 2)
-        let plainRequirements = SchedulerService.placementRequirements(for: plain)
-        #expect(!plainRequirements.requiresVTPM)
-        #expect(!plainRequirements.requiresSecureBoot)
+        #expect(!SchedulerService.placementRequirements(for: plain).requiresVTPM)
 
         let windows = createTestVM(cpu: 2)
         windows.secureBoot = true
         windows.tpmEnabled = true
-        let windowsRequirements = SchedulerService.placementRequirements(for: windows)
-        #expect(windowsRequirements.requiresVTPM)
-        #expect(windowsRequirements.requiresSecureBoot)
-    }
-
-    // MARK: - Graphics console (issue #566)
-
-    /// Requirements for a VM that asks for a display.
-    private func graphicsRequirements(cpu: Int = 2, memory: Int64 = 1000) -> VMPlacementRequirements {
-        VMPlacementRequirements(
-            cpu: cpu, memory: memory, disk: 0, hypervisorType: .qemu, requiresGraphicsConsole: true)
-    }
-
-    /// A pre-v23 agent decodes the sync fine and ignores `ConsoleSpec.graphics`,
-    /// so the guest boots headless while the API reports a display and the
-    /// Display tab shows nothing. Same silent divergence the machine profile is
-    /// gated on, so placement is refused rather than degraded.
-    @Test("An agent too old to realize a graphics console is not eligible")
-    func testGraphicsConsoleRequiresNewEnoughAgent() throws {
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-
-        let agents = [
-            createTestAgent(id: "old", name: "old", supportsGraphicsConsole: false)
-        ]
-
-        do {
-            _ = try scheduler.selectAgent(requirements: graphicsRequirements(), from: agents)
-            Issue.record("Expected graphicsConsoleUnsatisfied error")
-        } catch let error as SchedulerError {
-            guard case .graphicsConsoleUnsatisfied(let eligibleAgents) = error else {
-                Issue.record("Expected graphicsConsoleUnsatisfied, got \(error)")
-                return
-            }
-            #expect(eligibleAgents == 1)
-        }
-    }
-
-    /// The gate narrows to the capable agents rather than failing outright when
-    /// some of the fleet can serve the VM.
-    @Test("A graphics VM places on the one agent new enough to serve it")
-    func testGraphicsConsolePlacesOnCapableAgent() throws {
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-
-        let agents = [
-            createTestAgent(id: "old", name: "old", availableCPU: 8, supportsGraphicsConsole: false),
-            createTestAgent(id: "new", name: "new", availableCPU: 2, supportsGraphicsConsole: true),
-        ]
-
-        // "old" has more free CPU, so a strategy-only choice would pick it.
-        #expect(try scheduler.selectAgent(requirements: graphicsRequirements(), from: agents) == "new")
-    }
-
-    /// The default must not narrow placement: a headless VM still takes any
-    /// agent, including one that predates the feature entirely.
-    @Test("A headless VM places on a pre-v23 agent")
-    func testHeadlessVMIgnoresGraphicsGate() throws {
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-
-        let agents = [
-            createTestAgent(id: "old", name: "old", supportsGraphicsConsole: false)
-        ]
-
-        #expect(try scheduler.selectAgent(for: createTestVM(cpu: 2), from: agents) == "old")
-    }
-
-    /// The gate only engages if the VM's intent reaches the requirements, so
-    /// the real create path has to carry it.
-    @Test("Placement requirements carry the VM's graphics console intent")
-    func testPlacementRequirementsCarryGraphicsConsole() throws {
-        let headless = createTestVM(cpu: 2)
-        #expect(!SchedulerService.placementRequirements(for: headless).requiresGraphicsConsole)
-
-        let graphical = createTestVM(cpu: 2)
-        graphical.graphicsConsole = true
-        #expect(SchedulerService.placementRequirements(for: graphical).requiresGraphicsConsole)
+        #expect(SchedulerService.placementRequirements(for: windows).requiresVTPM)
     }
 
     // MARK: - The per-instance metadata kill switch (STR-185)
 
-    /// Requirements for a VM whose metadata service has been switched off.
     private func metadataOptOutRequirements() -> VMPlacementRequirements {
         VMPlacementRequirements(
             cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu, requiresMetadataOptOut: true)
     }
 
-    /// A pre-v39 agent decodes the sync fine and ignores
-    /// `InstanceMetadata.serviceEnabled`, so it keeps serving the guest its
-    /// identity while the API reports the switch as thrown. That is worse than
-    /// a degraded feature — it is a security control reported as applied — so
-    /// placement is refused.
     @Test("An agent too old to honour the metadata kill switch is not eligible")
     func testMetadataOptOutRequiresNewEnoughAgent() throws {
         let scheduler = SchedulerService(logger: Logger(label: "test"))
@@ -1004,14 +859,9 @@ struct SchedulerServiceTests {
                 wireProtocolVersion: WireProtocol.metadataOptOutMinimumVersion),
         ]
 
-        // "old" has more free CPU, so a strategy-only choice would pick it.
         #expect(try scheduler.selectAgent(requirements: metadataOptOutRequirements(), from: agents) == "new")
     }
 
-    /// The default must not narrow placement. This is the load-bearing half of
-    /// "absence means enabled": every VM in an existing fleet leaves the switch
-    /// on, so a gate that engaged by default would make the whole fleet
-    /// unplaceable the moment this shipped.
     @Test("A VM with metadata left on places on an agent that predates the switch")
     func testMetadataServedVMIgnoresTheGate() throws {
         let scheduler = SchedulerService(logger: Logger(label: "test"))
@@ -1031,4 +881,5 @@ struct SchedulerServiceTests {
         hardened.metadataEnabled = false
         #expect(SchedulerService.placementRequirements(for: hardened).requiresMetadataOptOut)
     }
+
 }

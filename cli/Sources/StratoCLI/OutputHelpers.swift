@@ -26,10 +26,9 @@ func formatDate(_ date: Date?) -> String {
 /// or prints its id and returns (`--no-wait`). A failed mutation throws
 /// `CLIError.operationFailed`, which exits nonzero.
 ///
-/// Both `202` shapes funnel through here (STR-147): the operation record the
-/// imperative verbs still return, and the `mutationId` a lifecycle mutation
-/// answers with alongside the resource. Waiting goes through the operations
-/// endpoint either way — which is also what makes `strato vm delete --wait`
+/// Every mutation answers one `202` shape (STR-147, one shape since STR-151):
+/// the `mutationId` alongside the resource. Waiting goes through the
+/// operations endpoint — which is also what makes `strato vm delete --wait`
 /// keep working, since a deleted VM has nothing left to poll.
 func handleMutation(
     _ accepted: AcceptedMutation,

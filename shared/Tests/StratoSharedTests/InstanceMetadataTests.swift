@@ -295,9 +295,6 @@ struct InstanceMetadataTests {
         // Below the gate an absent `metadata` is silence, not an instruction:
         // the agent leaves what it serves alone instead of emptying every
         // VM's store the moment a control plane is rolled back.
-        #expect(!WireProtocol.supportsInstanceMetadata(25))
-        #expect(WireProtocol.supportsInstanceMetadata(26))
-        #expect(WireProtocol.supportsInstanceMetadata(WireProtocol.currentVersion))
     }
 
     @Test("Metadata-port support is keyed on protocol version 27")
@@ -305,9 +302,6 @@ struct InstanceMetadataTests {
         // Below the gate a nil `metadataEnabled` is silence too — and here it
         // matters more, because network teardown is `observed - desired`, so
         // reading silence as "off" would delete a live localport.
-        #expect(!WireProtocol.supportsMetadataPort(26))
-        #expect(WireProtocol.supportsMetadataPort(27))
-        #expect(WireProtocol.supportsMetadataPort(WireProtocol.currentVersion))
     }
 
     @Test("The metadata endpoints are the ones guest tooling already probes")

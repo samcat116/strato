@@ -126,9 +126,6 @@ actor AgentService {
     /// bump before routing; a successful send only clears the exact
     /// generation it assembled, so a mutation racing an in-flight sync cannot
     /// be accidentally marked clean.
-    private var desiredStateRevisions: [String: UInt64] = [:]
-    private var cleanDesiredStateRevisions: [String: UInt64] = [:]
-    private var periodicDesiredStateSyncTask: Task<Void, Never>?
 
     /// Agent row ids (as strings) whose desired state travels by long-poll
     /// rather than by push (STR-146). Pushes are skipped for these — both the
@@ -141,7 +138,6 @@ actor AgentService {
     /// registration and dropped on unregister. A replica that never saw the
     /// registration defaults to push mode, which is the safe direction — an
     /// unnecessary push is wasted work, a suppressed one is a stranded agent.
-    private var pullModeAgents: Set<String> = []
 
     /// The last refused sync this replica has logged per agent (STR-98).
     /// A refusal rides on every observed report until the agent's guard
@@ -229,7 +225,6 @@ actor AgentService {
         await app.replicaBridgeIfCreated?.shutdown()
         startupTask?.cancel()
         heartbeatTask?.cancel()
-        periodicDesiredStateSyncTask?.cancel()
         if let startupTask {
             await startupTask.value
         }
@@ -240,10 +235,6 @@ actor AgentService {
             await heartbeatTask.value
         }
         heartbeatTask = nil
-        if let periodicDesiredStateSyncTask {
-            await periodicDesiredStateSyncTask.value
-        }
-        periodicDesiredStateSyncTask = nil
     }
 
     // MARK: - Agent Registration
@@ -293,28 +284,14 @@ actor AgentService {
         let agentKey = identity.key
         let trustDomain = identity.trustDomain
 
-        // The imperative message path is gone (issue #261): an agent that
-        // cannot be driven by desired-state syncs would register successfully
-        // and then never converge anything — every operation would time out
-        // against its budget. Refuse it up front with the real reason.
+        // Strato deploys the control plane and its agents in lockstep: an
+        // agent below the floor would decode syncs into silently wrong
+        // behavior, so it is refused up front with the real reason (the agent
+        // stops its reconnect loop and tells the operator to upgrade).
         let protocolVersion = message.protocolVersion ?? 0
-        guard WireProtocol.supportsStateSync(protocolVersion) else {
+        guard protocolVersion >= WireProtocol.minimumSupportedVersion else {
             Telemetry.agentRegistrationFailed(reason: "unsupported_protocol")
             throw AgentServiceError.unsupportedProtocolVersion(agentName: agentName, version: protocolVersion)
-        }
-
-        // An agent below the tombstone protocol still reads omission from a
-        // sync as "destroy" (STR-98), and no control-plane behavior can change
-        // that. Say so at registration so a half-upgraded fleet's remaining
-        // exposure is visible rather than implicit in a version number.
-        if !WireProtocol.supportsWorkloadTombstones(protocolVersion) {
-            app.logger.notice(
-                "Agent predates tombstone-confirmed teardown; a sync that under-lists this host would still destroy its workloads",
-                metadata: [
-                    "agentName": .string(agentName),
-                    "protocolVersion": .stringConvertible(protocolVersion),
-                    "requiredVersion": .stringConvertible(WireProtocol.workloadTombstoneMinimumVersion),
-                ])
         }
 
         let db = app.db
@@ -504,23 +481,6 @@ actor AgentService {
             }
         }
 
-        // The mirror of `NetworkController.assertNameSafeForFleet`, which can
-        // only see the fleet as it stood when a network was created. An older
-        // agent joining afterwards — a rolled-back binary, or a node enrolled
-        // from an old image — would key its OVN DHCP rows on the network name
-        // and merge two tenants' configuration (issue #765). Refused for the
-        // same reason a pre-state-sync agent is: it would register and then
-        // quietly do the wrong thing.
-        if !WireProtocol.supportsProjectNetworkIsolation(protocolVersion) {
-            let shared = try await LogicalNetworkService.namesSharedAcrossProjects(
-                siteID: agent.$site.id, on: db)
-            if !shared.isEmpty {
-                Telemetry.agentRegistrationFailed(reason: "same_named_networks_unsupported")
-                throw AgentServiceError.cannotIsolateSameNamedNetworks(
-                    agentName: agentName, version: protocolVersion, names: Array(shared))
-            }
-        }
-
         try await agent.save(on: db)
 
         // A site with no designated network controller reconciles no topology
@@ -562,16 +522,10 @@ actor AgentService {
             throw AgentServiceError.invalidResponse("Failed to get agent ID after save")
         }
 
-        // Attach the UUID to the live socket so local routing (sync pushes,
-        // RPC forwarding, the periodic sync's work list) can resolve it
-        // without a database read. No-op when no socket exists (tests).
+        // Attach the UUID to the live socket so local routing (console and
+        // exec streams) can resolve it without a database read. No-op when no
+        // socket exists (tests).
         app.websocketManager.associate(agentKey: agentKey, agentId: agentUUID.uuidString)
-
-        recordDesiredStateTransport(
-            agentId: agentUUID.uuidString,
-            agentName: agentName,
-            protocolVersion: protocolVersion,
-            claimsPull: message.pullsDesiredState ?? false)
 
         // Publish presence to the coordination store so every control-plane
         // process — not just the one holding this socket — can see the agent.
@@ -682,8 +636,6 @@ actor AgentService {
         try await agent.save(on: db)
         let agentKey = agent.identity.key
 
-        pullModeAgents.remove(agentId)
-
         app.websocketManager.removeConnection(agentKey: agentKey)
         // The eventual socket close skips its cleanup once the connection is
         // gone (`removeConnection(ifCurrent:)` no longer matches), so console
@@ -716,8 +668,6 @@ actor AgentService {
                 "Cannot force unregister: agent not found by identity key", metadata: ["agentKey": .string(agentKey)])
             return
         }
-
-        pullModeAgents.remove(agentId)
 
         app.websocketManager.removeConnection(agentKey: agentKey)
         // Same reasoning as `unregisterAgent`: the socket-close handler will
@@ -770,12 +720,6 @@ actor AgentService {
     /// this change deleted.
     func removeAgent(_ agentKey: String) async {
         presenceRefreshedAt.removeValue(forKey: agentKey)
-
-        // The pull-mode claim came with the socket and goes with it. If the
-        // agent reconnects here it re-declares its transport at registration.
-        if let agentId = await agentId(forKey: agentKey) {
-            pullModeAgents.remove(agentId)
-        }
 
         Telemetry.agentDisconnected(reason: "connection_closed")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
@@ -922,16 +866,6 @@ actor AgentService {
                     // failed sync is repaired here, so pushes on mutation are
                     // purely a latency optimization (issue #260). Not a
                     // cluster singleton: syncs go over this process's sockets.
-                    if tick.isMultiple(of: 2) {
-                        // Dirty agents are the minute-level fast path. Every
-                        // tenth such pass (10 minutes at the production
-                        // interval) is the level-triggered backstop for a lost
-                        // doorbell. Pull-mode agents are skipped by the pass
-                        // itself — their backstop is their own unconditional
-                        // re-fetch, which runs on a much tighter interval.
-                        scheduleDesiredStateSyncToAllAgents(force: tick.isMultiple(of: 20))
-                    }
-
                     try self.checkTickPreconditions()
 
                     // Degrade workloads that missed their convergence deadline
@@ -1725,7 +1659,6 @@ actor AgentService {
                     && agent.updateDesiredVersion == nil
                     && AgentVersionTarget.updateAvailable(agentVersion: agent.version, target: target)
                     && agent.isOnline
-                    && WireProtocol.supportsDesiredAgentUpdate(agent.wireProtocolVersion ?? 0)
                     && agent.hostOperatingSystem != nil
                     && agent.cpuArchitecture != nil
             }
@@ -1770,79 +1703,16 @@ actor AgentService {
 
     // MARK: - Desired-state sync (issues #260, #261)
 
-    /// Push the authoritative desired state to every registered agent whose
-    /// socket this process holds. Called on the periodic timer; failures are
-    /// logged and repaired by the next tick. Each replica syncs exactly its
-    /// own sockets, so no cluster coordination is needed here.
-    func syncDesiredStateToAllAgents(force: Bool = false) async {
-        guard !isShutDown, !app.didShutdown else { return }
-        let targets = app.websocketManager.registeredAgents().compactMap {
-            registered
-                -> DesiredStateSyncTarget? in
-            // A pull-mode agent's backstop is its own unconditional re-fetch,
-            // not ours. Pushing to it anyway would assemble the full sync a
-            // second time and write it to a socket nothing is reading for
-            // desired state.
-            guard !pullModeAgents.contains(registered.agentId) else { return nil }
-            let revision = desiredStateRevisions[registered.agentId, default: 0]
-            guard force || cleanDesiredStateRevisions[registered.agentId] != revision else {
-                return nil
-            }
-            return DesiredStateSyncTarget(
-                agentKey: registered.key,
-                agentId: registered.agentId,
-                revision: revision)
-        }
-        guard !targets.isEmpty else { return }
-
-        let app = self.app
-        await withTaskGroup(of: DesiredStateSyncResult.self) { group in
-            var iterator = targets.makeIterator()
-            for _ in 0..<min(Self.desiredStateSyncConcurrency, targets.count) {
-                guard let target = iterator.next() else { break }
-                group.addTask {
-                    await Self.performDesiredStateSync(app: app, target: target)
-                }
-            }
-
-            while let result = await group.next() {
-                recordDesiredStateSyncResult(result)
-                if let target = iterator.next() {
-                    group.addTask {
-                        await Self.performDesiredStateSync(app: app, target: target)
-                    }
-                }
-            }
-        }
-    }
-
-    /// Start the periodic fan-out as tracked background work and return to the
-    /// heartbeat immediately. Registry and database latency therefore cannot
-    /// hold up the tick's operation/expiry/update sweeps. Only one periodic
-    /// pass runs at a time; explicit mutation pushes remain independent.
-    func scheduleDesiredStateSyncToAllAgents(force: Bool) {
-        guard periodicDesiredStateSyncTask == nil else { return }
-        periodicDesiredStateSyncTask = Task {
-            await self.syncDesiredStateToAllAgents(force: force)
-            self.periodicDesiredStateSyncDidFinish()
-        }
-    }
-
-    private func periodicDesiredStateSyncDidFinish() {
-        periodicDesiredStateSyncTask = nil
-    }
-
     /// Trigger a desired-state sync for an agent from any replica.
     ///
     /// This rings the contentless broadcast doorbell (STR-146): the local half
     /// runs inline, and the same signal goes out on `agent:doorbell` so
-    /// whichever *other* replica happens to hold the agent's parked poll or
-    /// socket can act on it. Nothing here consults a routing directory — that
-    /// question is what the doorbell exists to not have to answer.
+    /// whichever *other* replica happens to hold the agent's parked poll can
+    /// act on it. Nothing here consults a routing directory — that question is
+    /// what the doorbell exists to not have to answer.
     ///
-    /// Purely a latency optimization, in both modes: a pull-mode agent
-    /// converges on its own unconditional re-fetch and a push-mode agent on the
-    /// holder's periodic sync timer, doorbell or no doorbell.
+    /// Purely a latency optimization: the agent converges on its own
+    /// unconditional re-fetch, doorbell or no doorbell.
     ///
     /// A mutation on one agent can change what its site's network controller
     /// must realize (a VM landing on any site node may reference a network
@@ -1908,29 +1778,14 @@ actor AgentService {
         }
 
         // Wake a parked long-poll, if this is where it happens to be parked.
+        // An agent whose poll is parked elsewhere needs nothing from us: it
+        // will fetch wherever it actually lives.
         await app.desiredStatePollRegistry.ring(agentKey: agentKey)
-
-        // Push over a locally held socket, if the agent is still push-mode.
-        // An agent with neither a poll nor a socket here needs nothing from
-        // us: it will fetch (or be pushed to) wherever it actually lives.
-        guard let agentId = app.websocketManager.agentId(agentKey: agentKey),
-            !pullModeAgents.contains(agentId)
-        else { return }
-        markDesiredStateDirty(agentId)
-        await syncDesiredStateLocally(agentId: agentId, agentKey: agentKey)
     }
 
-    /// The local half of a fleet-wide doorbell: wake every poll parked here
-    /// and force a push pass over every push-mode socket here.
-    ///
-    /// Forced rather than dirty-filtered because a fleet-wide change (a
-    /// security-group rule, a network edit, a site's controller moving) is
-    /// exactly the kind that never went through `markDesiredStateDirty` per
-    /// affected agent — its blast radius is computed inside sync assembly, not
-    /// known at the mutation site.
+    /// The local half of a fleet-wide doorbell: wake every poll parked here.
     private func applyFleetDoorbell() async {
         await app.desiredStatePollRegistry.ringAll()
-        await syncDesiredStateToAllAgents(force: true)
     }
 
     /// Ring the fleet-wide doorbell: every agent's desired state may have
@@ -1946,141 +1801,12 @@ actor AgentService {
         await app.replicaBridge.ringDoorbell(agentKey: CoordinationService.doorbellAllAgents)
     }
 
-    /// Assemble and send the full desired-state sync over a locally held
-    /// socket. Safe to call redundantly: identical syncs diff to nothing on
-    /// the agent.
-    private func syncDesiredStateLocally(agentId: String, agentKey: String) async {
-        let target = DesiredStateSyncTarget(
-            agentKey: agentKey,
-            agentId: agentId,
-            revision: desiredStateRevisions[agentId, default: 0])
-        let result = await Self.performDesiredStateSync(app: app, target: target)
-        recordDesiredStateSyncResult(result)
-    }
-
-    private struct DesiredStateSyncTarget: Sendable {
-        let agentKey: String
-        let agentId: String
-        let revision: UInt64
-    }
-
-    private struct DesiredStateSyncResult: Sendable {
-        let target: DesiredStateSyncTarget
-        let sent: Bool
-    }
-
-    private func markDesiredStateDirty(_ agentId: String) {
-        desiredStateRevisions[agentId, default: 0] &+= 1
-    }
-
-    private func recordDesiredStateSyncResult(_ result: DesiredStateSyncResult) {
-        guard result.sent else { return }
-        // Only the revision actually assembled is clean. If another mutation
-        // arrived during the DB/network suspension, its higher generation
-        // remains dirty for the next push/backstop pass.
-        guard desiredStateRevisions[result.target.agentId, default: 0] == result.target.revision else {
-            return
-        }
-        cleanDesiredStateRevisions[result.target.agentId] = result.target.revision
-    }
-
-    /// The expensive DB assembly and socket write deliberately run outside
-    /// `AgentService` isolation. Structured task-group callers can therefore
-    /// fan out safely, and a slow agent does not serialize unrelated agents
-    /// through the service actor.
-    @concurrent
-    private static func performDesiredStateSync(
-        app: Application,
-        target: DesiredStateSyncTarget
-    ) async -> DesiredStateSyncResult {
-        let clock = ContinuousClock()
-        let start = clock.now
-        return await withSpan("agent.desired_state_sync", ofKind: .producer) { span in
-            span.attributes["agent.id"] = target.agentId
-            do {
-                let message = try await app.desiredStateAssembler.assemble(agentId: target.agentId)
-                guard let websocket = app.websocketManager.getConnection(agentKey: target.agentKey) else {
-                    throw AgentServiceError.agentNotFound(target.agentKey)
-                }
-                let envelope = try MessageEnvelope(message: message)
-                let data = try WireProtocol.makeEncoder().encode(envelope)
-                websocket.send(data)
-                span.attributes["sync.id"] = message.syncId
-                span.attributes["sync.vm_count"] = message.vms.count
-                Telemetry.recordDesiredStateSync(
-                    outcome: "sent", durationSeconds: (clock.now - start).asSeconds)
-                app.logger.debug(
-                    "Desired-state sync sent",
-                    metadata: [
-                        "agentId": .string(target.agentId),
-                        "syncId": .string(message.syncId),
-                        "vmCount": .stringConvertible(message.vms.count),
-                    ])
-                return DesiredStateSyncResult(target: target, sent: true)
-            } catch {
-                // Dropped syncs are safe: the periodic timer re-sends the full
-                // state, so this is logged rather than retried inline.
-                span.recordError(error)
-                Telemetry.recordDesiredStateSync(
-                    outcome: "failed", durationSeconds: (clock.now - start).asSeconds)
-                app.logger.warning(
-                    "Failed to send desired-state sync (periodic timer will retry)",
-                    metadata: [
-                        "agentId": .string(target.agentId),
-                        "error": .string(error.localizedDescription),
-                    ])
-                return DesiredStateSyncResult(target: target, sent: false)
-            }
-        }
-    }
-
     /// Deliver a broadcast doorbell from another replica (the
     /// `ReplicaBridgeDelegate` hook). Identical to the local ring — the whole
     /// point of a contentless broadcast is that the recipient does not need to
     /// know where it came from.
     func deliverDoorbell(agentKey: String) async {
         await applyDoorbell(agentKey: agentKey)
-    }
-
-    /// Whether this control plane will let agents drive themselves by
-    /// long-poll. The kill switch for the transport rollout: with it off,
-    /// every agent is pushed to regardless of what it claims at registration,
-    /// which is the pre-STR-146 behavior exactly.
-    static let desiredStatePullEnabled: Bool = {
-        guard let raw = Environment.get("AGENT_DESIRED_STATE_PULL_ENABLED") else { return true }
-        return !["0", "false", "no", "off"].contains(raw.lowercased())
-    }()
-
-    /// Record which transport an agent's desired state travels over, from what
-    /// it declared at registration.
-    ///
-    /// Three things must all agree before pushes stop, and each rules out a
-    /// different way of stranding an agent: the wire version (it knows the
-    /// endpoint exists), the agent's own `pullsDesiredState` flag (it is
-    /// actually polling, rather than merely capable and pinned to push mode by
-    /// config), and this control plane's kill switch. Any disagreement leaves
-    /// the agent in push mode, which is the only safe direction — a redundant
-    /// push wastes an assembly, a wrongly suppressed one strands a host.
-    private func recordDesiredStateTransport(
-        agentId: String,
-        agentName: String,
-        protocolVersion: Int,
-        claimsPull: Bool
-    ) {
-        let pulls =
-            claimsPull && Self.desiredStatePullEnabled
-            && WireProtocol.supportsDesiredStatePull(protocolVersion)
-        if pulls {
-            guard pullModeAgents.insert(agentId).inserted else { return }
-            app.logger.info(
-                "Agent drives itself by desired-state long-poll; suppressing pushes",
-                metadata: ["agentName": .string(agentName), "agentId": .string(agentId)])
-        } else {
-            guard pullModeAgents.remove(agentId) != nil else { return }
-            app.logger.info(
-                "Agent reverted to pushed desired state",
-                metadata: ["agentName": .string(agentName), "agentId": .string(agentId)])
-        }
     }
 
     // MARK: - Observed-state reports (issue #260)
@@ -2540,8 +2266,7 @@ actor AgentService {
             var candidates: [SchedulableAgent] = []
             var networkRemapBlocker: String?
             if let pinnedAgentID = snapshot.agentId,
-                let pinned = schedulableAgents.first(where: { $0.id == pinnedAgentID }),
-                WireProtocol.supportsSandboxFork(pinned.wireProtocolVersion ?? 0)
+                let pinned = schedulableAgents.first(where: { $0.id == pinnedAgentID })
             {
                 var pinnedBlocker: String?
                 if forkNeedsNetworkRemap, let pinnedUUID = UUID(uuidString: pinnedAgentID),
@@ -2594,20 +2319,6 @@ actor AgentService {
                         "restore snapshot records unsupported architecture '\(rawArchitecture)'")
                 }
                 requiredArchitecture = architecture
-            }
-        }
-
-        // A templated create needs an agent that actually applies
-        // `SandboxSpec.cpuTemplate`; a pre-v13 agent would silently boot the
-        // guest un-templated while the API reports a template (issue #428).
-        if sandbox.cpuTemplate != nil {
-            schedulableAgents = schedulableAgents.filter {
-                WireProtocol.supportsSandboxSnapshotMobility($0.wireProtocolVersion ?? 0)
-            }
-            guard !schedulableAgents.isEmpty else {
-                throw AgentServiceError.schedulingFailed(
-                    "no schedulable agent supports CPU templates (need wire protocol >= \(WireProtocol.sandboxSnapshotMobilityMinimumVersion))"
-                )
             }
         }
 
@@ -2818,44 +2529,19 @@ actor AgentService {
                 supportsInterVMNetworking: agent.supportsInterVMNetworking,
                 siteID: agent.$site.id,
                 wireProtocolVersion: agent.wireProtocolVersion,
-                // Both signals are required (issue #415): the advertised
-                // runtime proves the agent can boot sandboxes, and a v5+
-                // protocol proves desired sandbox entries actually reach it.
-                supportsSandboxWorkloads: agent.sandboxCapable
-                    && WireProtocol.supportsSandboxSync(agent.wireProtocolVersion ?? 0),
-                // The NIC half (STR-103). Same two-signal rule, with the
-                // version arm set at v20 rather than v5: a sandbox NIC that
-                // reaches a pre-v20 agent joins no port group, so it would come
-                // up unfiltered while the API reports its security groups —
-                // exactly the divergence a sandbox is never allowed to have.
-                // (v20 implies v5, so the runtime arm above is not weakened.)
-                supportsSandboxNetworking: agent.sandboxNetworkingCapable
-                    && WireProtocol.supportsSecurityGroups(agent.wireProtocolVersion ?? 0),
-                // Same two-signal rule for vTPM (issue #565): swtpm on the host
-                // proves it can be realized, and a v17+ protocol proves the
-                // machine profile reaches the agent at all.
+                // The advertised runtime proves the agent can boot sandboxes
+                // (issue #415).
+                supportsSandboxWorkloads: agent.sandboxCapable,
+                // The NIC half (STR-103): OVN, the jailer barrier, and a guest
+                // image that configures the interface.
+                supportsSandboxNetworking: agent.sandboxNetworkingCapable,
+                // swtpm on the host proves a vTPM can be realized (issue #565).
                 supportsVTPM: agent.tpmCapable
-                    && WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0),
-                supportsMachineProfile: WireProtocol.supportsMachineProfile(agent.wireProtocolVersion ?? 0),
-                // One signal only for the graphics console (issue #566): every
-                // candidate is already QEMU-capable, and a QEMU built without
-                // VNC fails the create loudly instead of degrading — so there
-                // is no host capability to advertise beyond the protocol.
-                supportsGraphicsConsole: WireProtocol.supportsGraphicsConsole(agent.wireProtocolVersion ?? 0)
             )
         }
     }
 
     // MARK: - Message Sending
-
-    /// Encode and push an envelope over a locally held socket.
-    private func sendEnvelope(_ envelope: MessageEnvelope, toLocalAgent agentKey: String) throws {
-        guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else {
-            throw AgentServiceError.agentNotFound(agentKey)
-        }
-        let data = try WireProtocol.makeEncoder().encode(envelope)
-        websocket.send(data)
-    }
 
     // There is no request/response path here any more (ADR 0001 stage 11,
     // STR-152). `sendMessageToAgentWithResponse` and the continuation

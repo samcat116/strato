@@ -148,7 +148,7 @@ struct AgentLogIngestorTests {
 
         func makeVMMessage(vmId: String, line: String) -> VMLogMessage {
             VMLogMessage(
-                vmId: vmId, level: .info, source: .qemu, eventType: .qemuOutput, message: line)
+                vmId: vmId, level: .info, source: .agent, eventType: .operation, message: line)
         }
 
         for index in 0..<50 {

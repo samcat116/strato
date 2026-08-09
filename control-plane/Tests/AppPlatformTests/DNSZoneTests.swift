@@ -316,6 +316,269 @@ final class DNSZoneTests {
         }
     }
 
+    // MARK: - Search domain and delivery (STR-201)
+
+    @Test("The search domain follows the primary zone only while nobody has claimed it")
+    func searchDomainFollowsPrimaryZone() {
+        // Unset: the zone fills it.
+        #expect(
+            DNSZoneService.searchDomainFollowingPrimaryZone(
+                current: nil, previousZoneName: nil, nextZoneName: "acme.internal")
+                == "acme.internal")
+        // Still spelling the outgoing zone: it moves with the pointer.
+        #expect(
+            DNSZoneService.searchDomainFollowingPrimaryZone(
+                current: "acme.internal", previousZoneName: "acme.internal",
+                nextZoneName: "corp.internal") == "corp.internal")
+        // Demotion clears what followed.
+        #expect(
+            DNSZoneService.searchDomainFollowingPrimaryZone(
+                current: "acme.internal", previousZoneName: "acme.internal", nextZoneName: nil)
+                == nil)
+        // An operator's value outranks every one of those.
+        #expect(
+            DNSZoneService.searchDomainFollowingPrimaryZone(
+                current: "chosen.example", previousZoneName: "acme.internal",
+                nextZoneName: "corp.internal") == "chosen.example")
+        #expect(
+            DNSZoneService.searchDomainFollowingPrimaryZone(
+                current: "chosen.example", previousZoneName: nil, nextZoneName: nil)
+                == "chosen.example")
+        // Nothing to follow and nothing set: still nothing.
+        #expect(
+            DNSZoneService.searchDomainFollowingPrimaryZone(
+                current: nil, previousZoneName: nil, nextZoneName: nil) == nil)
+    }
+
+    @Test("Attaching a zone as primary gives the network its search domain")
+    func attachAsPrimarySetsSearchDomain() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let network = try await builder.createNetwork(name: "net-search", project: project)
+            let networkID = try network.requireID()
+            let zone = try await createZone(app: app, token: token, project: project)
+
+            // Attaching without promoting is not a statement about resolution
+            // through the zone, so it leaves the search domain alone.
+            try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachDNSZoneRequest(networkId: networkID))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            var reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
+            #expect(reloaded.domainName == nil)
+
+            try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachDNSZoneRequest(networkId: networkID, primary: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
+            #expect(reloaded.domainName == "acme.internal")
+        }
+    }
+
+    @Test("A search domain the operator chose survives promotion, re-pointing and demotion")
+    func chosenSearchDomainIsNeverOverwritten() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let network = try await builder.createNetwork(name: "net-chosen", project: project)
+            let networkID = try network.requireID()
+            let first = try await createZone(app: app, token: token, project: project)
+            let second = try await createZone(
+                app: app, token: token, project: project, name: "corp.internal")
+
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(domainName: "chosen.example"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+
+            try await app.test(.POST, "/api/dns-zones/\(first.id)/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachDNSZoneRequest(networkId: networkID, primary: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            var reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
+            #expect(reloaded.domainName == "chosen.example")
+
+            try await app.test(.POST, "/api/dns-zones/\(second.id)/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachDNSZoneRequest(networkId: networkID, primary: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
+            #expect(reloaded.domainName == "chosen.example")
+
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(clearPrimaryDnsZone: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            reloaded = try #require(try await LogicalNetwork.find(networkID, on: app.db))
+            #expect(reloaded.domainName == "chosen.example")
+        }
+    }
+
+    @Test("Re-pointing and clearing the primary zone move a search domain that followed it")
+    func followingSearchDomainMovesWithThePointer() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let network = try await builder.createNetwork(name: "net-follow", project: project)
+            let networkID = try network.requireID()
+            let first = try await createZone(app: app, token: token, project: project)
+            let second = try await createZone(
+                app: app, token: token, project: project, name: "corp.internal")
+
+            try await app.test(.POST, "/api/dns-zones/\(first.id)/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachDNSZoneRequest(networkId: networkID, primary: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+            }
+            // Re-point through the network's own endpoint, the other of the two
+            // writers of `primary_dns_zone_id`.
+            try await DNSZoneNetwork(zoneID: second.id, logicalNetworkID: networkID)
+                .save(on: app.db)
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(primaryDnsZoneId: second.id))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let moved = try res.content.decode(NetworkResponse.self)
+                #expect(moved.domainName == "corp.internal")
+            }
+
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(clearPrimaryDnsZone: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let cleared = try res.content.decode(NetworkResponse.self)
+                #expect(cleared.domainName == nil)
+            }
+        }
+    }
+
+    @Test("Renaming a primary zone moves only search domains that still follow it")
+    func renamingPrimaryZoneMovesFollowingSearchDomains() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let following = try await builder.createNetwork(name: "net-rename-follow", project: project)
+            let chosen = try await builder.createNetwork(name: "net-rename-chosen", project: project)
+            chosen.domainName = "chosen.example"
+            try await chosen.save(on: app.db)
+            let zone = try await createZone(app: app, token: token, project: project)
+
+            for networkID in [try following.requireID(), try chosen.requireID()] {
+                try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        AttachDNSZoneRequest(networkId: networkID, primary: true))
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }
+
+            try await app.test(.PUT, "/api/dns-zones/\(zone.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateDNSZoneRequest(name: "renamed.internal"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let renamed = try res.content.decode(DNSZoneResponse.self)
+                #expect(renamed.name == "renamed.internal")
+            }
+
+            let moved = try #require(try await LogicalNetwork.find(following.id, on: app.db))
+            let untouched = try #require(try await LogicalNetwork.find(chosen.id, on: app.db))
+            #expect(moved.domainName == "renamed.internal")
+            #expect(untouched.domainName == "chosen.example")
+
+            // The new spelling still follows: demotion recognizes and clears
+            // it instead of treating a stale old name as operator-authored.
+            try await app.test(.PUT, "/api/networks/\(try moved.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(clearPrimaryDnsZone: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let cleared = try res.content.decode(NetworkResponse.self)
+                #expect(cleared.domainName == nil)
+            }
+        }
+    }
+
+    @Test("A domain name sent alongside the primary zone wins over the derived one")
+    func explicitDomainNameInTheSameRequestWins() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let network = try await builder.createNetwork(name: "net-both", project: project)
+            let networkID = try network.requireID()
+            let zone = try await createZone(app: app, token: token, project: project)
+            try await DNSZoneNetwork(zoneID: zone.id, logicalNetworkID: networkID).save(on: app.db)
+
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    UpdateNetworkRequest(domainName: "explicit.example", primaryDnsZoneId: zone.id))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let updated = try res.content.decode(NetworkResponse.self)
+                #expect(updated.primaryDnsZoneId == zone.id)
+                #expect(updated.domainName == "explicit.example")
+            }
+        }
+    }
+
+    @Test("The attach response says when guests will not reach the zone")
+    func attachResponseCarriesTheDeliveryWarning() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let network = try await builder.createNetwork(name: "net-warn", project: project)
+            let networkID = try network.requireID()
+            // A network created through the API always has an address; this one
+            // is built directly, so give it the one the resolver would have.
+            network.resolverIndex = 300
+            try await network.save(on: app.db)
+            let zone = try await createZone(app: app, token: token, project: project)
+
+            try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachDNSZoneRequest(networkId: networkID, primary: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let attached = try res.content.decode(DNSZoneResponse.self)
+                #expect(attached.networks[0].zoneResolutionWarning == nil)
+            }
+
+            // Turning the resolver off is what makes the realized zone inert:
+            // guests go back to being handed `dnsServers`, which knows nothing
+            // about it.
+            try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(resolverEnabled: false))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let updated = try res.content.decode(NetworkResponse.self)
+                let warning = try #require(updated.zoneResolutionWarning)
+                #expect(warning.contains("resolver is off"))
+            }
+
+            try await app.test(.GET, "/api/dns-zones/\(zone.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let fetched = try res.content.decode(DNSZoneResponse.self)
+                #expect(fetched.networks[0].zoneResolutionWarning != nil)
+            }
+        }
+    }
+
     // MARK: - Records
 
     @Test("Record values are validated and canonicalized per type")

@@ -478,11 +478,6 @@ public actor FileSystemStorageBackend: StorageBackend {
         )
     }
 
-    /// Checks if a volume exists
-    public func volumeExists(volumeId: String) -> Bool {
-        FileManager.default.fileExists(atPath: volumeDirectory(volumeId: volumeId))
-    }
-
     /// Every complete volume in the store, keyed by the canonical uppercase
     /// form of its id (STR-148).
     ///
