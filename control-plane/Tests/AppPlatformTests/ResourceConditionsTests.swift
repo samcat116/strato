@@ -372,6 +372,7 @@ final class ResourceConditionsTests {
             sandbox.setDesiredStatus(.running)
             sandbox.lastError = "pull failed"
             sandbox.failedGeneration = sandbox.generation
+            sandbox.lastErrorAt = Date(timeIntervalSince1970: 1_700_000_000)
             try await sandbox.save(on: app.db)
 
             let sandboxJSON =
@@ -381,6 +382,7 @@ final class ResourceConditionsTests {
             let degraded = try #require(sandboxConditions["degraded"] as? [String: Any])
             #expect(degraded["reason"] as? String == "pull failed")
             #expect(degraded["sinceGeneration"] as? Int == Int(sandbox.generation))
+            #expect(degraded.keys.contains("lastErrorAt"))
         }
     }
 
@@ -424,6 +426,7 @@ final class ResourceConditionsTests {
                 app: app, named: "cond-agent", capabilities: ["qemu"])
             vm.hypervisorId = agentId
             vm.setDesiredStatus(.running)  // generation 1
+            vm.extendConvergenceDeadline(by: 120)
             try await vm.save(on: app.db)
 
             let envelope = try self.report(
@@ -460,6 +463,7 @@ final class ResourceConditionsTests {
             vm.setDesiredStatus(.running)  // generation 1
             vm.lastError = "boot failed: no bootable device"
             vm.failedGeneration = 1
+            vm.lastErrorAt = Date(timeIntervalSince1970: 1_700_000_000)
             vm.convergencePhase = "starting"
             try await vm.save(on: app.db)
 
@@ -476,6 +480,7 @@ final class ResourceConditionsTests {
             #expect(refreshed.conditions.converged)
             #expect(refreshed.conditions.phase == nil)
             #expect(refreshed.conditions.degraded == nil)
+            #expect(refreshed.lastErrorAt == nil)
         }
     }
 
@@ -545,6 +550,9 @@ final class ResourceConditionsTests {
             #expect(refreshed.conditions.phase == nil)
             #expect(refreshed.conditions.degraded?.reason == "manifest unknown")
             #expect(refreshed.conditions.degraded?.sinceGeneration == 1)
+            #expect(refreshed.conditions.degraded?.lastErrorAt != nil)
+            #expect(refreshed.desiredStatus == .running)
+            #expect(refreshed.generation == 1)
         }
     }
 
@@ -608,6 +616,7 @@ final class ResourceConditionsTests {
             vm.setStatus(.running)
             vm.generation = 5
             vm.observedGeneration = 5  // the boot already converged and was reported
+            vm.extendConvergenceDeadline(by: 120)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(
                 .resize, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
@@ -637,6 +646,73 @@ final class ResourceConditionsTests {
             refreshed = try #require(await VM.find(vm.id, on: app.db))
             #expect(!refreshed.conditions.converged)
             #expect(try await self.mutationOutcomes(app: app) == ["operation.failed"])
+        }
+    }
+
+    @Test("A steady-state repair failure preserves intent, timestamps once, and recovers")
+    func steadyStateFailurePreservesIntentAndRecovers() async throws {
+        try await withTestApp { app, user, project in
+            try await self.subscribeToEverything(app: app)
+            let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
+            let agentId = try await self.registerAgent(
+                app: app, named: "cond-agent", capabilities: ["qemu"])
+            vm.hypervisorId = agentId
+            vm.desiredStatus = .running
+            vm.setStatus(.shutdown)
+            vm.generation = 5
+            vm.observedGeneration = 5
+            vm.convergenceDeadline = nil
+            try await vm.save(on: app.db)
+            _ = try await ResourceEvent.record(
+                .resize, resourceKind: .virtualMachine, resourceID: try vm.requireID(),
+                actor: .user(try user.requireID()), on: app.db)
+
+            let failing = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .shutdown, observedGeneration: 5,
+                        lastError: "image registry temporarily unavailable",
+                        failedGeneration: 5)
+                ])
+            await app.agentService.applyObservedStateReport(
+                failing, fromAgentKey: agentKey("cond-agent"))
+
+            var refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.desiredStatus == .running)
+            #expect(refreshed.generation == 5)
+            #expect(refreshed.status == .shutdown)
+            #expect(refreshed.conditions.degraded?.reason == "image registry temporarily unavailable")
+            let firstErrorAt = try #require(refreshed.lastErrorAt)
+            #expect(try await self.mutationOutcomes(app: app) == [])
+
+            // Model an already-claimed sustained-divergence episode. Repeated
+            // failures retain it; successful convergence clears it.
+            refreshed.divergenceDetectedAt = Date()
+            try await refreshed.save(on: app.db)
+
+            // Repeated heartbeats carry the same pair but do not move its age.
+            await app.agentService.applyObservedStateReport(
+                failing, fromAgentKey: agentKey("cond-agent"))
+            refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.lastErrorAt == firstErrorAt)
+            #expect(refreshed.divergenceDetectedAt != nil)
+            #expect(try await self.mutationOutcomes(app: app) == [])
+
+            // The agent's transient retry succeeds at the same generation.
+            let recovered = try self.report(
+                agentId: agentId,
+                vms: [ObservedVMState(vmId: vm.id!, status: .running, observedGeneration: 5)])
+            await app.agentService.applyObservedStateReport(
+                recovered, fromAgentKey: agentKey("cond-agent"))
+            refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.desiredStatus == .running)
+            #expect(refreshed.generation == 5)
+            #expect(refreshed.conditions.converged)
+            #expect(refreshed.conditions.degraded == nil)
+            #expect(refreshed.lastErrorAt == nil)
+            #expect(refreshed.divergenceDetectedAt == nil)
+            #expect(try await self.mutationOutcomes(app: app) == [])
         }
     }
 

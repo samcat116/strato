@@ -888,6 +888,10 @@ public func configure(_ app: Application) async throws {
     // against SSRF no longer means moving it to a network of its own.
     app.migrations.add(AddMetadataEnabledToVM())
 
+    // STR-123: timestamp steady-state convergence errors and claim sustained
+    // divergence episodes exactly once across control-plane replicas.
+    app.migrations.add(AddWorkloadConvergenceObservability())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.

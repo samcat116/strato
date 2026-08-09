@@ -162,6 +162,36 @@ struct MigrationRoundTripTests {
         }
     }
 
+    @Test("Workload convergence observability columns are nullable")
+    func workloadConvergenceObservabilityColumnsAreNullable() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+            struct Column: Decodable {
+                let table_name: String
+                let column_name: String
+                let is_nullable: String
+            }
+            let rows = try await sql.raw(
+                """
+                SELECT table_name, column_name, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name IN ('vms', 'sandboxes')
+                  AND column_name IN ('last_error_at', 'divergence_detected_at')
+                """
+            ).all(decoding: Column.self)
+
+            #expect(rows.count == 4)
+            #expect(rows.allSatisfy { $0.is_nullable == "YES" })
+            #expect(
+                Set(rows.map { "\($0.table_name).\($0.column_name)" })
+                    == Set([
+                        "vms.last_error_at", "vms.divergence_detected_at",
+                        "sandboxes.last_error_at", "sandboxes.divergence_detected_at",
+                    ]))
+        }
+    }
+
     /// The fully-migrated schema is the *fresh database* half of STR-152: the
     /// migrations that built `resource_operations` are deleted rather than
     /// reverted, so the table is simply never created.

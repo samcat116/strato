@@ -1191,7 +1191,12 @@ export interface ResourceConditions {
    * that names the generation you are waiting on is that mutation's verdict,
    * and `converged` is false alongside it.
    */
-  degraded?: { reason: string; sinceGeneration: number } | null;
+  degraded?: {
+    reason: string;
+    sinceGeneration: number;
+    /** ISO-8601 time when this error/generation pair was first observed. */
+    lastErrorAt?: string | null;
+  } | null;
 }
 
 /**

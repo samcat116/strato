@@ -5451,6 +5451,11 @@ export interface components {
              * @description The generation whose convergence produced `reason`. Compare with `targetGeneration` to tell a failure of the state currently being pursued from one a newer mutation has already superseded. Equal to `targetGeneration` means this is the current state's verdict, and `converged` is false alongside it.
              */
             sinceGeneration: number;
+            /**
+             * Format: date-time
+             * @description When this error and generation pair was first observed. Repeated agent heartbeats leave it unchanged; successful convergence clears the degraded condition. Absent for resource kinds that do not persist convergence-failure timestamps.
+             */
+            lastErrorAt?: string;
         };
         /**
          * @description The observed VM state (tolerant decoding; unknown values map to Unknown).

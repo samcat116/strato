@@ -137,7 +137,11 @@ Responses carry a **`conditions`** block, which is how a mutation is followed:
   "targetGeneration": 14,
   "observedGeneration": 12,
   "phase": "downloading image",
-  "degraded": { "reason": "image download failed", "sinceGeneration": 13 }
+  "degraded": {
+    "reason": "image download failed",
+    "sinceGeneration": 13,
+    "lastErrorAt": "2026-08-09T04:12:30Z"
+  }
 }
 ```
 
@@ -150,8 +154,10 @@ mutually exclusive** — a `degraded` naming `targetGeneration` always comes wit
 `converged: false` — so you never see both and never have to break a tie. The
 block also reports *what* the agent is doing (`phase`), and `degraded` can name
 an older generation than `targetGeneration` while a retry is in flight, which is
-the case where a converged resource does carry one. Nothing stores it: it is
-derived on read from the resource's generation counters and the convergence
+the case where a converged resource does carry one. VM and sandbox failures
+also report optional `lastErrorAt`, the first time that error/generation pair
+was observed; repeated heartbeats leave it stable and successful convergence
+clears it. The block itself is derived on read from the resource's generation counters and the convergence
 progress its agent reports
 ([ADR 0001](/adr/0001-declarative-agent-protocol)).
 
