@@ -36,11 +36,11 @@ struct MigrationRoundTripTests {
     }
 
     /// STR-181: `AddVolumeQuotaAccounting` adds an environment column to two
-    /// tables that never had one, so the interesting case is a row that predates
+    /// tables that never had one, so the interesting cases are rows that predate
     /// it. Written through raw SQL with the column nulled out, because the live
-    /// model cannot express a volume without an environment.
-    @Test("Pre-existing volumes are backfilled with their project's default environment")
-    func volumeEnvironmentBackfillUsesProjectDefault() async throws {
+    /// models cannot express storage without an environment.
+    @Test("Pre-existing storage follows its attached VM, then falls back to the project default")
+    func volumeEnvironmentBackfillUsesAttachmentThenProjectDefault() async throws {
         try await withTestApp { app in
             let sql = try #require(app.db as? SQLDatabase)
             let builder = TestDataBuilder(db: app.db)
@@ -52,13 +52,28 @@ struct MigrationRoundTripTests {
             project.defaultEnvironment = "production"
             try await project.save(on: app.db)
 
-            let volume = try await builder.createVolume(
-                name: "legacy", project: project, createdBy: user)
-            let snapshot = VolumeSnapshot(
-                name: "legacy-snap", description: "", volumeID: try volume.requireID(),
+            let vm = try await builder.createVM(
+                name: "legacy-vm", project: project, environment: "staging")
+            let attachedVolume = try await builder.createVolume(
+                name: "legacy-attached", project: project, createdBy: user)
+            attachedVolume.$vm.id = try vm.requireID()
+            attachedVolume.deviceName = "disk1"
+            try await attachedVolume.save(on: app.db)
+            let attachedSnapshot = VolumeSnapshot(
+                name: "legacy-attached-snap", description: "",
+                volumeID: try attachedVolume.requireID(),
                 projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
-            try await snapshot.save(on: app.db)
+            try await attachedSnapshot.save(on: app.db)
+
+            let unattachedVolume = try await builder.createVolume(
+                name: "legacy-unattached", project: project, createdBy: user)
+            let unattachedSnapshot = VolumeSnapshot(
+                name: "legacy-unattached-snap", description: "",
+                volumeID: try unattachedVolume.requireID(),
+                projectID: try project.requireID(), environment: "development",
+                size: 1 << 30, createdByID: try user.requireID())
+            try await unattachedSnapshot.save(on: app.db)
 
             // Rewind both rows to the pre-migration shape.
             for table in ["volumes", "volume_snapshots"] {
@@ -70,11 +85,19 @@ struct MigrationRoundTripTests {
 
             try await AddVolumeQuotaAccounting().backfillEnvironments(on: app.db)
 
-            let backfilledVolume = try #require(try await Volume.find(volume.id, on: app.db))
-            let backfilledSnapshot = try #require(
-                try await VolumeSnapshot.find(snapshot.id, on: app.db))
-            #expect(backfilledVolume.environment == "production")
-            #expect(backfilledSnapshot.environment == "production")
+            let backfilledAttached = try #require(
+                try await Volume.find(attachedVolume.id, on: app.db))
+            let backfilledAttachedSnapshot = try #require(
+                try await VolumeSnapshot.find(attachedSnapshot.id, on: app.db))
+            #expect(backfilledAttached.environment == "staging")
+            #expect(backfilledAttachedSnapshot.environment == "staging")
+
+            let backfilledUnattached = try #require(
+                try await Volume.find(unattachedVolume.id, on: app.db))
+            let backfilledUnattachedSnapshot = try #require(
+                try await VolumeSnapshot.find(unattachedSnapshot.id, on: app.db))
+            #expect(backfilledUnattached.environment == "production")
+            #expect(backfilledUnattachedSnapshot.environment == "production")
         }
     }
 

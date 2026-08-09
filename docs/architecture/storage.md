@@ -655,6 +655,9 @@ all of them measure the same rows, and neither table had an environment. Both
 carry one now, resolved from the creating request against its project exactly as
 a VM's is (omitted takes the project's default) and denormalized onto the
 snapshot the way `VMSnapshot` and `SandboxSnapshot` already denormalize theirs.
+On upgrade, an attached volume is backfilled from its consuming VM, its existing
+snapshots follow that resolved volume environment, and only unattached storage
+falls back to the project's default.
 
 What each object is charged:
 

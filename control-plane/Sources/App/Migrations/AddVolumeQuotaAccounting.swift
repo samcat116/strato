@@ -9,8 +9,9 @@ import SQLKit
 /// aggregate so all of them measure exactly the same rows, and neither `volumes`
 /// nor `volume_snapshots` had an environment to filter on. `vm_snapshots` and
 /// `sandbox_snapshots` denormalize theirs for precisely this reason; these two
-/// now do the same, backfilled from each row's project so an existing volume
-/// lands in the environment its project would have given it.
+/// now do the same. Existing attached volumes inherit the consuming VM's
+/// environment, their snapshots follow the volume, and only unattached storage
+/// falls back to the project's default.
 ///
 /// Also here, because they are the same upgrade:
 ///
@@ -48,21 +49,38 @@ struct AddVolumeQuotaAccounting: AsyncMigration {
     /// The two tables that gain an `environment`.
     static let environmentTables = ["volumes", "volume_snapshots"]
 
-    /// Fills the new column from each row's project. Its own step so a test can
-    /// drive it against rows written in the pre-migration shape; a project always
-    /// has a `default_environment`, so it leaves no NULL for the `SET NOT NULL`
-    /// that follows to trip over.
+    /// Fills the new column from the resource that determines where the bytes
+    /// are consumed. An attached volume follows its VM, a volume snapshot
+    /// follows its parent volume, and storage without either relationship falls
+    /// back to the project's default. Its own step lets a test drive it against
+    /// rows written in the pre-migration shape; the project fallback leaves no
+    /// NULL for the `SET NOT NULL` that follows to trip over.
     func backfillEnvironments(on database: Database) async throws {
         guard let sql = database as? SQLDatabase else { throw UnsupportedDatabase() }
-        for table in Self.environmentTables {
-            try await sql.raw(
-                """
-                UPDATE \(ident: table) SET environment = p.default_environment
-                FROM projects p
-                WHERE p.id = \(ident: table).project_id AND \(ident: table).environment IS NULL
-                """
-            ).run()
-        }
+        try await sql.raw(
+            """
+            UPDATE volumes SET environment = COALESCE(
+                (SELECT v.environment FROM vms v WHERE v.id = volumes.vm_id),
+                p.default_environment
+            )
+            FROM projects p
+            WHERE p.id = volumes.project_id AND volumes.environment IS NULL
+            """
+        ).run()
+        try await sql.raw(
+            """
+            UPDATE volume_snapshots SET environment = COALESCE(
+                (
+                    SELECT volume.environment FROM volumes volume
+                    WHERE volume.id = volume_snapshots.volume_id
+                ),
+                p.default_environment
+            )
+            FROM projects p
+            WHERE p.id = volume_snapshots.project_id
+              AND volume_snapshots.environment IS NULL
+            """
+        ).run()
     }
 
     /// Initializes the two reservation counters this migration changes from the
@@ -80,13 +98,13 @@ struct AddVolumeQuotaAccounting: AsyncMigration {
     func prepare(on database: Database) async throws {
         guard let sql = database as? SQLDatabase else { throw UnsupportedDatabase() }
 
-        // Add nullable, backfill from the owning project, then tighten — the
+        // Add nullable, backfill from the consuming workload, then tighten — the
         // `AddTrustDomainToAgentIdentities` sequence.
         //
         // The default goes on *last*, and the order is load-bearing in both
         // directions. Adding the column with one would fill every existing row
         // before the backfill could read `IS NULL`, so no volume would land in
-        // its project's environment. Leaving it off entirely makes a `NOT NULL`
+        // its VM's environment. Leaving it off entirely makes a `NOT NULL`
         // column with no default, which breaks any insert that predates the
         // column — `MigrateVMDisksToVolumes` writes `volumes` through a frozen
         // schema snapshot that cannot know about it. In the real migration order
