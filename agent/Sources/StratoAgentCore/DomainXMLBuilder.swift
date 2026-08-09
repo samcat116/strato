@@ -65,6 +65,9 @@ public struct DomainXMLInput: Sendable {
     /// `<emulator>` override. Omitted when nil, letting libvirt choose from its
     /// own capabilities.
     public var emulatorPath: String?
+    /// QEMU process memory ceiling. Nil deliberately emits no `<memtune>` for
+    /// hosts without a usable cgroup-v2 memory controller.
+    public var memoryHardLimitBytes: Int64?
 
     public init(
         vmId: String,
@@ -76,7 +79,8 @@ public struct DomainXMLInput: Sendable {
         architecture: CPUArchitecture,
         accelerator: DomainAccelerator,
         firmware: FirmwareSet? = nil,
-        emulatorPath: String? = nil
+        emulatorPath: String? = nil,
+        memoryHardLimitBytes: Int64? = nil
     ) {
         self.vmId = vmId
         self.vmDirectory = vmDirectory
@@ -88,6 +92,7 @@ public struct DomainXMLInput: Sendable {
         self.accelerator = accelerator
         self.firmware = firmware
         self.emulatorPath = emulatorPath
+        self.memoryHardLimitBytes = memoryHardLimitBytes
     }
 }
 
@@ -285,6 +290,19 @@ public enum DomainXMLBuilder {
         domain.append(DomainXMLNode("memory", [("unit", "KiB")], text: kib(totalMemoryBytes)))
         domain.append(
             DomainXMLNode("currentMemory", [("unit", "KiB")], text: kib(spec.memoryBytes)))
+
+        if let hardLimit = input.memoryHardLimitBytes {
+            domain.append(
+                DomainXMLNode(
+                    "memtune",
+                    children: [
+                        DomainXMLNode(
+                            "hard_limit", [("unit", "KiB")],
+                            text: String(
+                                QEMUMemoryCeiling.kibibytes(
+                                    guestMemoryBytes: hardLimit, overheadBytes: 0)))
+                    ]))
+        }
 
         domain.append(
             DomainXMLNode(

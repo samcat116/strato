@@ -455,6 +455,33 @@ final class DesiredStateReconciliationTests {
         }
     }
 
+    @Test("An agent capacity create refusal degrades immediately and clears its deadline")
+    func capacityCreateRefusalDegradesImmediately() async throws {
+        try await withVMTestApp { app, _, vm, _ in
+            let agentId = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            vm.setDesiredStatus(.running)
+            vm.extendConvergenceDeadline(by: 600)
+            try await vm.save(on: app.db)
+            let reason = "agent `hv-03` has 12 GiB available; this operation requires 64 GiB additional memory"
+
+            let envelope = try self.report(
+                agentId: agentId,
+                vms: [
+                    ObservedVMState(
+                        vmId: vm.id!, status: .shutdown, observedGeneration: 0,
+                        lastError: reason, failedGeneration: 1)
+                ])
+            await app.agentService.applyObservedStateReport(
+                envelope, fromAgentKey: agentKey("recon-agent"))
+
+            let refreshed = try #require(await VM.find(vm.id, on: app.db))
+            #expect(refreshed.conditions.degraded?.reason == reason)
+            #expect(refreshed.conditions.degraded?.sinceGeneration == 1)
+            #expect(refreshed.convergenceDeadline == nil)
+        }
+    }
+
     @Test("A stale error from a previous generation does not degrade the current one")
     func staleErrorFromPreviousGenerationIgnored() async throws {
         try await withVMTestApp { app, _, vm, _ in

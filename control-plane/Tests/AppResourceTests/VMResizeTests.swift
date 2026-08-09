@@ -22,6 +22,8 @@ final class VMResizeTests {
         agentWireVersion: Int = WireProtocol.currentVersion,
         quotaVCPUs: Int = 32,
         quotaMemoryGB: Double = 64,
+        agentAvailableCPU: Int = 32,
+        agentAvailableMemory: Int64 = 64_000_000_000,
         _ test: (Application, User, VM, Project, String) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
@@ -61,8 +63,8 @@ final class VMResizeTests {
                 capabilities: ["qemu"],
                 status: .online,
                 resources: AgentResources(
-                    totalCPU: 32, availableCPU: 32,
-                    totalMemory: 64_000_000_000, availableMemory: 64_000_000_000,
+                    totalCPU: 32, availableCPU: agentAvailableCPU,
+                    totalMemory: 64_000_000_000, availableMemory: agentAvailableMemory,
                     totalDisk: 500_000_000_000, availableDisk: 500_000_000_000
                 ),
                 architecture: .x86_64,
@@ -150,6 +152,113 @@ final class VMResizeTests {
     }
 
     // MARK: - Running VM
+
+    @Test("Placed resize accepts an exact fit")
+    func placedExactFit() async throws {
+        try await withResizeTestApp(agentAvailableCPU: 4) { app, _, vm, _, token in
+            try await running(vm, on: app.db)
+            try await put(app, vm, token: token, body: ["cpu": 6]) { res in
+                #expect(res.status == .accepted)
+            }
+        }
+    }
+
+    @Test("Placed resize rejects CPU shortage without changing sizing, generation, or quota")
+    func placedCPUShortage() async throws {
+        try await withResizeTestApp(agentAvailableCPU: 3) { app, _, vm, project, token in
+            try await running(vm, on: app.db)
+            let generation = vm.generation
+            let quotasBefore = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            let reservedBefore = try #require(quotasBefore.first).reservedVCPUs
+
+            try await put(app, vm, token: token, body: ["cpu": 6]) { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("Agent `hv-resize-"))
+                #expect(res.body.string.contains("4 additional vCPUs"))
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.cpu == 2)
+            #expect(refreshed.generation == generation)
+            let quotasAfter = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            #expect(try #require(quotasAfter.first).reservedVCPUs == reservedBefore)
+        }
+    }
+
+    @Test("Placed resize subtracts active placement reservations")
+    func activePlacementReservation() async throws {
+        try await withResizeTestApp(agentAvailableCPU: 4) { app, _, vm, _, token in
+            try await running(vm, on: app.db)
+            let agentID = try #require(vm.hypervisorId)
+            #expect(
+                await app.coordination.reserveCapacity(
+                    agentId: agentID, vmId: UUID().uuidString,
+                    amounts: ReservationAmounts(cpu: 2, memory: 0, disk: 0),
+                    capacity: ReservationAmounts(cpu: 4, memory: 64_000_000_000, disk: 0)))
+
+            try await put(app, vm, token: token, body: ["cpu": 6]) { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("after active placements"))
+            }
+        }
+    }
+
+    @Test("Stopped QEMU growth beyond reserved headroom needs new host capacity")
+    func stoppedQEMUBeyondHeadroom() async throws {
+        try await withResizeTestApp(agentAvailableMemory: 1024 * 1024 * 1024) {
+            app, _, vm, _, token in
+            try await put(
+                app, vm, token: token,
+                body: ["memory": Int64(10 * 1024 * 1024 * 1024)]
+            ) { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("2 GiB additional memory"))
+            }
+        }
+    }
+
+    @Test("Non-QEMU memory growth compares current and requested grants")
+    func nonQEMUMemoryShortage() async throws {
+        try await withResizeTestApp(agentAvailableMemory: 1024 * 1024 * 1024) {
+            app, _, vm, _, token in
+            vm.hypervisorType = .firecracker
+            try await vm.save(on: app.db)
+            try await put(
+                app, vm, token: token,
+                body: ["memory": Int64(4 * 1024 * 1024 * 1024)]
+            ) { res in
+                #expect(res.status == .conflict)
+            }
+        }
+    }
+
+    @Test("Shrink passes on a full host")
+    func shrinkOnFullHost() async throws {
+        try await withResizeTestApp(agentAvailableCPU: 0, agentAvailableMemory: 0) {
+            app, _, vm, _, token in
+            try await running(vm, on: app.db)
+            try await put(
+                app, vm, token: token,
+                body: ["cpu": 1, "memory": Int64(1024 * 1024 * 1024)]
+            ) { res in
+                #expect(res.status == .accepted)
+            }
+        }
+    }
+
+    @Test("Unplaced stopped VM relies on placement instead of one host snapshot")
+    func unplacedStoppedVM() async throws {
+        try await withResizeTestApp(agentAvailableCPU: 0, agentAvailableMemory: 0) {
+            app, _, vm, _, token in
+            vm.hypervisorId = nil
+            try await vm.save(on: app.db)
+            try await put(app, vm, token: token, body: ["cpu": 12]) { res in
+                #expect(res.status == .ok)
+            }
+        }
+    }
 
     @Test("Resizing a running VM returns 202 with the VM and bumps the generation")
     func runningResizeAccepted() async throws {

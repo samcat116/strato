@@ -336,6 +336,13 @@ actor Agent {
     private let sandboxWarmCacheMaxSizeBytes: Int64?
     private let hypervisorType: HypervisorType
     private let hardwareAccelerationEnabled: Bool
+    private let qemuMemoryOverheadBytes: Int64
+
+    // Cross-VM reconciliation lanes are concurrent. This ledger closes the
+    // stale-snapshot race between reading host inventory and committing the
+    // manifest entry that makes a successful growth visible to later reads.
+    private var capacityAdmissionLedger = HostCapacityAdmissionLedger()
+    private var bootCapacityClaims: [String: HostCapacityClaim] = [:]
 
     // Simulation ("dummy agent") mode: the agent speaks the full control-plane
     // protocol but drives a no-op mock hypervisor with no real
@@ -407,6 +414,7 @@ actor Agent {
         sandboxWarmCacheMaxSizeBytes: Int64? = nil,
         hypervisorType: HypervisorType = .qemu,
         hardwareAccelerationEnabled: Bool = true,
+        qemuMemoryOverheadBytes: Int64 = Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
         simulation: SimulationConfig? = nil,
         spiffeConfig: SPIFFEConfig? = nil,
         teardownGuard: TeardownGuard = TeardownGuard(),
@@ -442,6 +450,7 @@ actor Agent {
         self.sandboxWarmCacheMaxSizeBytes = sandboxWarmCacheMaxSizeBytes
         self.hypervisorType = hypervisorType
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
+        self.qemuMemoryOverheadBytes = qemuMemoryOverheadBytes
         self.simulation = simulation
         self.spiffeConfig = spiffeConfig
         self.teardownGuard = teardownGuard
@@ -671,7 +680,8 @@ actor Agent {
             let libvirt = LibvirtService(
                 logger: logger, storage: storageBackend,
                 vmStoragePath: vmStoragePath, firmware: firmware,
-                hardwareAccelerationEnabled: hardwareAccelerationEnabled)
+                hardwareAccelerationEnabled: hardwareAccelerationEnabled,
+                memoryOverheadBytes: qemuMemoryOverheadBytes)
             libvirtService = libvirt
             hypervisorServices[.qemu] = libvirt
             #else
@@ -2167,7 +2177,9 @@ actor Agent {
         }
     }
 
-    private func getAgentResources() async -> AgentResources {
+    /// Raw CPU/memory accounting, before availability is clamped. Admission
+    /// needs to distinguish exact fit from a host that is already overcommitted.
+    private func rawHostCapacitySnapshot() async -> HostCapacitySnapshot {
         // Host capacity. In simulation mode this is the configured fake capacity
         // — many dummies share one physical machine, so a spawner varies these
         // to give the scheduler a realistic spread of host sizes. Otherwise it
@@ -2185,8 +2197,8 @@ actor Agent {
         // Resources committed to VMs currently managed on this host. We report
         // available = total - reserved (1:1, no overcommit) so the scheduler treats
         // CPU/memory as hard constraints; overcommit ratios can be layered on later.
-        var reservedCPU = 0
-        var reservedMemory: Int64 = 0
+        var reserved = HostReservation()
+        var backendsIncludingOrphans: Set<HypervisorType> = []
 
         for (type, service) in hypervisorServices {
             // Falls back to the manifest, never to nothing: under-reporting
@@ -2196,32 +2208,40 @@ actor Agent {
             // without knowing, not merely one that runs out of time. A driver
             // returning a synthesized zero was indistinguishable from an idle
             // host, which is how STR-190 stayed invisible in the field.
-            let reserved =
-                await observe(type, "reserved-resources") {
-                    await service.reservedResources()
-                } ?? manifestReservations(for: type)
-            reservedCPU += reserved.vcpus
-            reservedMemory += reserved.memoryBytes
+            let observed = await observe(type, "reserved-resources") {
+                await service.reservedResources()
+            }
+            // Libvirt's inventory is daemon-wide and includes domains this
+            // process has not re-adopted yet. Other services hold only their
+            // in-process sessions, so their orphan manifests still need adding.
+            if type == .qemu, libvirtService != nil, observed != nil {
+                backendsIncludingOrphans.insert(type)
+            }
+            let backendReserved = observed ?? manifestReservations(for: type)
+            reserved = reserved.addingSaturating(
+                HostReservation(cpus: backendReserved.vcpus, memoryBytes: backendReserved.memoryBytes))
         }
 
         // VMs orphaned by a restart are not managed by any service, but their
         // hypervisor processes may still be running — the scheduler must not hand
         // their capacity to new placements until they are deleted or re-created.
         for entry in orphanedVMs.values {
-            reservedCPU += entry.spec.cpus
-            reservedMemory += entry.spec.memoryBytes
+            guard !backendsIncludingOrphans.contains(entry.hypervisorType) else { continue }
+            reserved = reserved.addingSaturating(
+                VMHostReservation.forSpec(
+                    entry.spec, hypervisorType: entry.hypervisorType, architecture: .current))
         }
 
         // Sandbox reservations always come from the manifest (managed and
         // orphaned alike): the sandbox runtime seam has no reservation query,
         // and the manifest entry is authoritative for the workload's sizing.
         for entry in managedSandboxes.values {
-            reservedCPU += entry.spec.cpus
-            reservedMemory += entry.spec.memoryBytes
+            reserved = reserved.addingSaturating(
+                HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes))
         }
         for entry in orphanedSandboxes.values {
-            reservedCPU += entry.spec.cpus
-            reservedMemory += entry.spec.memoryBytes
+            reserved = reserved.addingSaturating(
+                HostReservation(cpus: entry.spec.cpus, memoryBytes: entry.spec.memoryBytes))
         }
 
         // Workloads whose manifest entry this build cannot route (STR-138) are
@@ -2229,8 +2249,8 @@ actor Agent {
         // reserve exactly like an orphan — an entry we can't act on is the
         // last thing whose capacity should be handed to a new placement.
         for entry in quarantinedWorkloads.values {
-            reservedCPU += entry.cpus
-            reservedMemory += entry.memoryBytes
+            reserved = reserved.addingSaturating(
+                HostReservation(cpus: entry.cpus, memoryBytes: entry.memoryBytes))
         }
 
         // An unreadable manifest means this host's contents are unknown, and
@@ -2239,9 +2259,21 @@ actor Agent {
         // manifest failed to decode reported its whole machine as free, and
         // `least_loaded` preferentially filled it — over-committing memory on a
         // host whose guests are all live.
-        let inventoryUnknown = manifestReadFailure != nil
-        let availableCPU = inventoryUnknown ? 0 : max(0, totalCPU - reservedCPU)
-        let availableMemory = inventoryUnknown ? 0 : max(0, totalMemory - reservedMemory)
+        return HostCapacitySnapshot(
+            total: HostReservation(cpus: totalCPU, memoryBytes: totalMemory),
+            reserved: reserved, inventoryKnown: manifestReadFailure == nil)
+    }
+
+    private func getAgentResources() async -> AgentResources {
+        let raw = await rawHostCapacitySnapshot()
+        // Provisional claims are not durable reservations yet, but advertising
+        // them as free would invite placement into an in-flight create/resize.
+        let accounted = HostCapacitySnapshot(
+            total: raw.total,
+            reserved: raw.reserved.addingSaturating(capacityAdmissionLedger.provisionalReservation),
+            inventoryKnown: raw.inventoryKnown)
+        let available = accounted.available
+        let inventoryUnknown = !raw.inventoryKnown
 
         // Disk. In simulation mode the total is the configured fake capacity
         // (the real filesystem is shared by every dummy and has nothing to do
@@ -2275,10 +2307,10 @@ actor Agent {
         }
 
         return AgentResources(
-            totalCPU: totalCPU,
-            availableCPU: availableCPU,
-            totalMemory: totalMemory,
-            availableMemory: availableMemory,
+            totalCPU: raw.total.cpus,
+            availableCPU: available.cpus,
+            totalMemory: raw.total.memoryBytes,
+            availableMemory: available.memoryBytes,
             totalDisk: totalDisk,
             availableDisk: availableDisk
         )
@@ -2287,7 +2319,14 @@ actor Agent {
     /// Reservations for `type` from the durable manifest, which carries every
     /// managed VM's sizing — authoritative, not a guess.
     private func manifestReservations(for type: HypervisorType) -> (vcpus: Int, memoryBytes: Int64) {
-        managedVMs.values.lazy.filter { $0.hypervisorType == type }.map(\.spec).reservedResources
+        let reserved = managedVMs.values.lazy.filter { $0.hypervisorType == type }.reduce(
+            HostReservation()
+        ) { partial, entry in
+            partial.addingSaturating(
+                VMHostReservation.forSpec(
+                    entry.spec, hypervisorType: entry.hypervisorType, architecture: .current))
+        }
+        return (reserved.cpus, reserved.memoryBytes)
     }
 
     /// Query a hypervisor for reporting purposes under a short budget,
@@ -3831,37 +3870,44 @@ extension Agent: ReconcileActuator {
             try await performSandbox(step, item: item)
             return
         }
-        switch step {
-        case .adopt:
-            // Adoption flows through adoptVM (the reconciler needs the
-            // observed status back to plan the remaining steps).
-            _ = try await adoptVM(item)
-        case .create:
-            try await reconcileCreate(item)
-        case .boot:
-            try await reconcileBoot(item)
-        case .pause:
-            try await reconcileService(for: item.vmId).pauseVM(vmId: item.vmId)
-        case .resume:
-            try await reconcileService(for: item.vmId).resumeVM(vmId: item.vmId)
-        case .resize:
-            try await reconcileResize(item)
-        case .shutdown:
-            try await reconcileService(for: item.vmId).shutdownVM(vmId: item.vmId)
-        case .delete:
-            try await reconcileDelete(item)
-        case .reboot:
-            try await reconcileService(for: item.vmId).rebootVM(vmId: item.vmId)
-            await sendVMLog(
-                vmId: item.vmId, level: .info, eventType: .operation,
-                message: "VM restarted by reconciliation", operation: "reboot")
-        case .restore:
-            try await reconcileRestore(item)
-        case .attach, .detach, .export:
-            // Volume- and snapshot-only steps; both kinds were handled above
-            // and the planner never emits these for a VM or sandbox.
-            throw HypervisorServiceError.invalidConfiguration(
-                "step \(step) is not applicable to a \(item.kind.rawValue) workload")
+        do {
+            switch step {
+            case .adopt:
+                // Adoption flows through adoptVM (the reconciler needs the
+                // observed status back to plan the remaining steps).
+                _ = try await adoptVM(item)
+            case .create:
+                try await reconcileCreate(item)
+            case .boot:
+                try await reconcileBoot(item)
+            case .pause:
+                try await reconcileService(for: item.vmId).pauseVM(vmId: item.vmId)
+            case .resume:
+                try await reconcileService(for: item.vmId).resumeVM(vmId: item.vmId)
+            case .resize:
+                try await reconcileResize(item)
+            case .shutdown:
+                try await reconcileService(for: item.vmId).shutdownVM(vmId: item.vmId)
+            case .delete:
+                try await reconcileDelete(item)
+            case .reboot:
+                try await reconcileService(for: item.vmId).rebootVM(vmId: item.vmId)
+                await sendVMLog(
+                    vmId: item.vmId, level: .info, eventType: .operation,
+                    message: "VM restarted by reconciliation", operation: "reboot")
+            case .restore:
+                try await reconcileRestore(item)
+            case .attach, .detach, .export:
+                // Volume- and snapshot-only steps; both kinds were handled above
+                // and the planner never emits these for a VM or sandbox.
+                throw HypervisorServiceError.invalidConfiguration(
+                    "step \(step) is not applicable to a \(item.kind.rawValue) workload")
+            }
+        } catch {
+            if let claim = bootCapacityClaims.removeValue(forKey: item.vmId) {
+                capacityAdmissionLedger.release(claim)
+            }
+            throw error
         }
     }
 
@@ -3892,6 +3938,28 @@ extension Agent: ReconcileActuator {
     /// regression.
     private func reconcileBoot(_ item: ReconcileWorkItem) async throws {
         let service = try reconcileService(for: item.vmId)
+        guard let desired = item.desired,
+            let current = managedVMs[item.vmId] ?? orphanedVMs[item.vmId]
+        else {
+            throw HypervisorServiceError.invalidConfiguration("boot work item without a managed VM spec")
+        }
+
+        let raw = await rawHostCapacitySnapshot()
+        let currentReservation = VMHostReservation.forSpec(
+            current.spec, hypervisorType: current.hypervisorType, architecture: .current)
+        let desiredReservation = VMHostReservation.forSpec(
+            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
+        let growth = HostReservation.positiveDelta(from: currentReservation, to: desiredReservation)
+        let claim: HostCapacityClaim?
+        do {
+            try capacityAdmissionLedger.validateExistingReservation(
+                snapshot: raw, agentName: initialAgentID)
+            claim = try capacityAdmissionLedger.claim(
+                growth, snapshot: raw, agentName: initialAgentID)
+        } catch let refusal as HostCapacityAdmissionError {
+            throw DependencyPendingError(refusal.localizedDescription)
+        }
+
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {
                 try await service.redefineVM(vmId: item.vmId, spec: spec)
@@ -3906,7 +3974,19 @@ extension Agent: ReconcileActuator {
                     ])
             }
         }
-        try await service.bootVM(vmId: item.vmId)
+        do {
+            try await service.ensureMemoryCeiling(vmId: item.vmId, spec: desired.spec)
+            try await service.bootVM(vmId: item.vmId)
+        } catch {
+            capacityAdmissionLedger.release(claim)
+            throw error
+        }
+
+        if let claim, item.steps.contains(.resize) {
+            bootCapacityClaims[item.vmId] = claim
+        } else {
+            capacityAdmissionLedger.release(claim)
+        }
     }
 
     /// Load a checkpoint back into an existing VM (STR-151).
@@ -4491,6 +4571,20 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
         }
 
+        let currentEntry = managedVMs[item.vmId] ?? orphanedVMs[item.vmId]
+        let currentReservation =
+            currentEntry.map {
+                VMHostReservation.forSpec(
+                    $0.spec, hypervisorType: $0.hypervisorType, architecture: .current)
+            } ?? HostReservation()
+        let desiredReservation = VMHostReservation.forSpec(
+            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
+        let raw = await rawHostCapacitySnapshot()
+        let claim = try capacityAdmissionLedger.claim(
+            .positiveDelta(from: currentReservation, to: desiredReservation),
+            snapshot: raw, agentName: initialAgentID)
+        defer { capacityAdmissionLedger.release(claim) }
+
         // The VM's host-global vsock context ID (STR-72), taken before the
         // driver runs and — like the NICs below — given back if the driver
         // never created the VM. Exhaustion fails the create rather than reusing
@@ -4571,6 +4665,25 @@ extension Agent: ReconcileActuator {
         guard let entry = managedVMs[item.vmId] else {
             throw HypervisorServiceError.vmNotFound(item.vmId)
         }
+        let currentReservation = VMHostReservation.forSpec(
+            entry.spec, hypervisorType: entry.hypervisorType, architecture: .current)
+        let desiredReservation = VMHostReservation.forSpec(
+            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
+        let bootClaim = bootCapacityClaims.removeValue(forKey: item.vmId)
+        let claim: HostCapacityClaim?
+        if let bootClaim {
+            claim = bootClaim
+        } else {
+            let raw = await rawHostCapacitySnapshot()
+            do {
+                claim = try capacityAdmissionLedger.claim(
+                    .positiveDelta(from: currentReservation, to: desiredReservation),
+                    snapshot: raw, agentName: initialAgentID)
+            } catch let refusal as HostCapacityAdmissionError {
+                throw DependencyPendingError(refusal.localizedDescription)
+            }
+        }
+        defer { capacityAdmissionLedger.release(claim) }
         let service = try reconcileService(for: item.vmId)
         try await service.resizeVM(vmId: item.vmId, spec: desired.spec)
 

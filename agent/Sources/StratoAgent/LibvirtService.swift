@@ -120,6 +120,8 @@ actor LibvirtService: HypervisorService {
     private var tpmSupported: Bool?
     /// KVM on Linux, HVF on macOS; when false, domains run under TCG.
     private let hardwareAccelerationEnabled: Bool
+    private let memoryOverheadBytes: Int64
+    private let memoryControllerAvailable: Bool
 
     let hypervisorType: HypervisorType = .qemu
 
@@ -181,6 +183,8 @@ actor LibvirtService: HypervisorService {
         uri: String = LibvirtProbe.systemURI,
         firmware: FirmwareOverrides = FirmwareOverrides(),
         hardwareAccelerationEnabled: Bool = true,
+        memoryOverheadBytes: Int64 = Int64(AgentConfig.defaultQEMUMemoryOverheadMB) * 1024 * 1024,
+        memoryControllerAvailable: Bool = HostMemoryController.isAvailable(),
         varstore: UEFIVarstore? = nil
     ) {
         self.logger = logger
@@ -190,9 +194,15 @@ actor LibvirtService: HypervisorService {
         self.firmware = firmware
         self.varstore = varstore ?? UEFIVarstore(logger: logger)
         self.hardwareAccelerationEnabled = hardwareAccelerationEnabled
+        self.memoryOverheadBytes = max(0, memoryOverheadBytes)
+        self.memoryControllerAvailable = memoryControllerAvailable
         (self.lifecycleStream, self.lifecycleContinuation) = AsyncStream.makeStream(
             of: VMLifecycleChange.self, bufferingPolicy: .bufferingNewest(64))
         logger.info("libvirt hypervisor service initialized", metadata: ["uri": .string(uri)])
+        if !memoryControllerAvailable {
+            logger.warning(
+                "cgroup v2 memory controller is unavailable; QEMU process memory ceilings are disabled on this host")
+        }
     }
 
     /// Records what libvirt said about backing a guest vTPM. Called from the
@@ -630,7 +640,11 @@ actor LibvirtService: HypervisorService {
                 networks: networkAttachments,
                 architecture: .current,
                 accelerator: accelerator,
-                firmware: firmwareSet)
+                firmware: firmwareSet,
+                memoryHardLimitBytes: memoryControllerAvailable
+                    ? QEMUMemoryCeiling.bytes(
+                        guestMemoryBytes: spec.memoryBytes, overheadBytes: memoryOverheadBytes)
+                    : nil)
             let xml = try DomainXMLBuilder.build(input)
 
             // A VM with enough devices of its own to reach the root-port ceiling
@@ -721,6 +735,38 @@ actor LibvirtService: HypervisorService {
                 client, deadline in
                 try await client.domainDefineXML(xml: xml, deadline: deadline)
             }
+        }
+    }
+
+    /// Required boot-time convergence, separate from best-effort widening.
+    /// The inactive definition is the source the next QEMU process reads.
+    func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {
+        do {
+            try await perform("memory-ceiling", vmId: vmId) {
+                let dom = try await domain(vmId)
+                let desired =
+                    memoryControllerAvailable
+                    ? QEMUMemoryCeiling.bytes(
+                        guestMemoryBytes: spec.memoryBytes, overheadBytes: memoryOverheadBytes)
+                    : nil
+                guard
+                    let xml = try DomainMemoryTuning.updatingHardLimit(
+                        in: try await inactiveDomainXML(dom, vmId: vmId), bytes: desired)
+                else { return }
+                _ = try await call(
+                    "libvirt-memory-ceiling-define", vmId: vmId,
+                    seconds: StageBudget.hypervisorSpawnSeconds
+                ) { client, deadline in
+                    try await client.domainDefineXML(xml: xml, deadline: deadline)
+                }
+            }
+        } catch  where !memoryControllerAvailable {
+            // Graceful degradation is deliberate on unsupported hosts. A stale
+            // hard limit may remain in the definition, but this host cannot
+            // enforce one and the boot must not be held behind its removal.
+            logger.warning(
+                "Could not remove a stale QEMU memory ceiling on a host without cgroup memory support",
+                metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
         }
     }
 
@@ -963,6 +1009,14 @@ actor LibvirtService: HypervisorService {
         do {
             let dom = try await domain(vmId)
             let status = LibvirtDomain.vmStatus(forRawState: try await state(of: dom, vmId: vmId))
+            if memoryControllerAvailable, (status == .running || status == .paused) {
+                let layout = try DomainMemoryInventory.memoryLayout(
+                    inDomainXML: try await domainXML(dom, vmId: vmId))
+                let granted = layout.bootBytes + (layout.virtioMem?.requestedBytes ?? 0)
+                try await setMemoryCeiling(
+                    dom, vmId: vmId, guestMemoryBytes: granted,
+                    flags: LibvirtDomain.affectLiveAndConfig)
+            }
             logger.info(
                 "Adopted libvirt domain",
                 metadata: ["vmId": .string(vmId), "status": .string(status.rawValue)])
@@ -1403,13 +1457,46 @@ actor LibvirtService: HypervisorService {
             // in the protocol says so, and `AFFECT_LIVE` against an inactive
             // domain is `VIR_ERR_OPERATION_INVALID` — so the state decides.
             let live = LibvirtDomain.holdsResources(rawState: try await state(of: dom, vmId: vmId))
+            let currentGuestMemory = layout.bootBytes + (layout.virtioMem?.requestedBytes ?? 0)
+            let targetGuestMemory =
+                layout.virtioMem.flatMap { _ in
+                    layout.requestedBytes(forTotal: spec.memoryBytes)
+                }.map { layout.bootBytes + $0 } ?? spec.memoryBytes
+            // Without virtio-mem, a live memory resize is persistent-only. Its
+            // live QEMU process keeps its old limit until that definition boots.
+            let ceilingFlags =
+                live && layout.virtioMem != nil
+                ? LibvirtDomain.affectLiveAndConfig : LibvirtDomain.affectConfig
+
+            if memoryControllerAvailable, spec.memoryBytes > currentGuestMemory {
+                try await setMemoryCeiling(
+                    dom, vmId: vmId, guestMemoryBytes: targetGuestMemory, flags: ceilingFlags)
+            }
 
             try await resizeCPUs(
                 dom, vmId: vmId, spec: spec, currentCPUs: Int(info.nrVirtCpu), live: live)
             try await resizeMemory(dom, vmId: vmId, spec: spec, layout: layout, live: live)
+            if memoryControllerAvailable, spec.memoryBytes < currentGuestMemory {
+                try await setMemoryCeiling(
+                    dom, vmId: vmId, guestMemoryBytes: targetGuestMemory, flags: ceilingFlags)
+            }
             if live {
                 await applyBalloonTarget(dom, vmId: vmId, spec: spec, layout: layout)
             }
+        }
+    }
+
+    private func setMemoryCeiling(
+        _ dom: Domain, vmId: String, guestMemoryBytes: Int64, flags: UInt32
+    ) async throws {
+        let hardLimit = QEMUMemoryCeiling.kibibytes(
+            guestMemoryBytes: guestMemoryBytes, overheadBytes: memoryOverheadBytes)
+        try await call("libvirt-memory-ceiling", vmId: vmId) { client, deadline in
+            try await client.domainSetMemoryParameters(
+                dom: dom,
+                params: [TypedParam(field: "hard_limit", value: .ullong(hardLimit))],
+                flags: flags,
+                deadline: deadline)
         }
     }
 

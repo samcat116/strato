@@ -113,6 +113,11 @@ public protocol HypervisorService: Actor, Sendable {
     ///   - spec: The desired spec this boot is converging on
     func redefineVM(vmId: String, spec: VMSpec) async throws
 
+    /// Converges the backend's process-memory ceiling before a boot. Backends
+    /// without a persistent VMM process definition use the default no-op;
+    /// libvirt treats this as required whenever cgroup memory support exists.
+    func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws
+
     /// Boots (starts) a VM
     /// - Parameter vmId: The VM identifier
     func bootVM(vmId: String) async throws
@@ -373,6 +378,8 @@ public extension HypervisorService {
     /// from a stored configuration) need nothing before a boot: a spawn that
     /// reads the spec has no stored ceiling to widen.
     func redefineVM(vmId: String, spec: VMSpec) async throws {}
+
+    func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {}
 
     /// Backends must opt in to full-VM checkpoints (issue #564). Without an
     /// explicit implementation the control plane's capability gate keeps the

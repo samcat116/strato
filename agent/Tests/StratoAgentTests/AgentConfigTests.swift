@@ -308,6 +308,43 @@ struct AgentConfigTests {
 
     // MARK: - Sandbox jailer settings (issue #425)
 
+    @Test("QEMU memory overhead defaults to 512 MiB and loads valid bounds")
+    func qemuMemoryOverhead() throws {
+        try withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
+                toFile: configPath, atomically: true, encoding: .utf8)
+            var config = try AgentConfig.load(from: configPath)
+            #expect(config.qemuMemoryOverheadMB == nil)
+            #expect(config.qemuMemoryOverheadBytes == 512 * 1024 * 1024)
+
+            for value in [128, 4096] {
+                try """
+                control_plane_url = "ws://x:8080/agent/ws"
+                qemu_memory_overhead_mb = \(value)
+                """.write(toFile: configPath, atomically: true, encoding: .utf8)
+                config = try AgentConfig.load(from: configPath)
+                #expect(config.qemuMemoryOverheadMB == value)
+            }
+        }
+    }
+
+    @Test("QEMU memory overhead rejects values outside 128 through 4096 MiB")
+    func invalidQEMUMemoryOverhead() throws {
+        try withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            for value in [127, 4097] {
+                try """
+                control_plane_url = "ws://x:8080/agent/ws"
+                qemu_memory_overhead_mb = \(value)
+                """.write(toFile: configPath, atomically: true, encoding: .utf8)
+                #expect(throws: AgentConfigError.self) {
+                    try AgentConfig.load(from: configPath)
+                }
+            }
+        }
+    }
+
     @Test("Load sandbox jailer settings")
     func loadSandboxJailerSettings() throws {
         try withTempDirectory { tempDirectory in
