@@ -10,6 +10,7 @@ import Vapor
 enum GuestIdentityRefusal: String, Sendable {
     case noClientCertificate = "no_client_certificate"
     case unauthenticated
+    case rateLimited = "rate_limited"
     case unknownAgent = "unknown_agent"
     case invalidRequest = "invalid_request"
     case ttlInvalid = "ttl_invalid"
@@ -50,6 +51,20 @@ struct AgentGuestIdentityController: RouteCollection {
         }
 
         let rawVMID = req.parameters.get("vmID") ?? ""
+        let rateLimit = await req.application.agentGuestIdentityRateLimiter?.hit(
+            authenticatedAgent: authenticatedAgent,
+            request: req)
+        if let rateLimit, rateLimit.exceeded {
+            Telemetry.recordGuestIdentityMint(outcome: GuestIdentityRefusal.rateLimited.rawValue)
+            req.logger.warning(
+                "guest_identity_rate_limit_exceeded",
+                metadata: [
+                    "agentIdentity": .string(authenticatedAgent.identity.key),
+                    "path": .string(req.url.path),
+                ])
+            return rateLimit.limitedResponse()
+        }
+
         guard
             let agentRow = try await Agent.query(on: req.db)
                 .filter(\.$trustDomain == authenticatedAgent.identity.trustDomain)
@@ -325,6 +340,7 @@ struct AgentGuestIdentityController: RouteCollection {
         let response = Response(status: .ok, body: .init(data: body))
         response.headers.contentType = HTTPMediaType.json
         response.headers.cacheControl = HTTPHeaders.CacheControl(noStore: true)
+        rateLimit?.applyHeaders(to: response)
         return response
     }
 

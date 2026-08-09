@@ -114,6 +114,22 @@ struct GuestJWTSVIDMintTests {
         response.body.map { Data($0.readableBytesView) } ?? Data()
     }
 
+    private func rateLimitConfig(apiLimit: Int) -> RateLimitConfig {
+        RateLimitConfig(
+            enabled: true,
+            authLimit: 100,
+            authWindow: 60,
+            apiLimit: apiLimit,
+            apiWindow: 60,
+            failureThreshold: 5,
+            failureBaseDelay: 2,
+            failureMaxDelay: 300,
+            failureWindow: 900,
+            proxyTrust: ProxyTrustConfig(
+                trustForwardedFor: false,
+                trustedProxyHops: 1))
+    }
+
     @Test("A hosting agent mints the registered VM identity")
     func placedVM() async throws {
         try await withRunningMintApp { app, port in
@@ -138,6 +154,55 @@ struct GuestJWTSVIDMintTests {
             #expect(calls.first?.spiffeID == fixture.registration.spiffeID)
             #expect(calls.first?.audience == [Self.audience])
             #expect(calls.first?.ttlSeconds == 450)
+        }
+    }
+
+    @Test("Mint limits are isolated by the verified agent SPIFFE identity")
+    func rateLimitIsolation() async throws {
+        try await withRunningMintApp { app, port in
+            let first = try await fixture(on: app)
+            let secondAgent = try await registerAgent(on: app, name: "mint-agent-2")
+            let builder = TestDataBuilder(db: app.db)
+            let secondOrg = try await builder.createOrganization(name: "Second Mint Org")
+            let secondProject = try await builder.createProject(
+                name: "Second Mint Project",
+                description: "guest identity rate-limit tests",
+                organization: secondOrg)
+            let secondVM = try await builder.createVM(name: "second-mint-vm", project: secondProject)
+            secondVM.hypervisorId = try secondAgent.requireID().uuidString
+            try await secondVM.save(on: app.db)
+            _ = try await GuestIdentity.register(
+                vmID: try secondVM.requireID(),
+                organizationID: try secondOrg.requireID(),
+                createdBy: nil,
+                on: app.db)
+
+            app.agentGuestIdentityRateLimiter = AgentGuestIdentityRateLimiter(
+                config: rateLimitConfig(apiLimit: 1),
+                fallbackStore: InMemoryRateLimitStore())
+
+            let firstAllowed = try await mint(
+                app: app,
+                port: port,
+                vmID: try first.vm.requireID().uuidString)
+            #expect(firstAllowed.status == .ok)
+            #expect(firstAllowed.headers.first(name: "X-RateLimit-Limit") == "1")
+
+            let firstThrottled = try await mint(
+                app: app,
+                port: port,
+                vmID: try first.vm.requireID().uuidString)
+            #expect(firstThrottled.status == .tooManyRequests)
+            #expect(firstThrottled.headers.first(name: "Retry-After") != nil)
+
+            let secondAllowed = try await mint(
+                app: app,
+                port: port,
+                vmID: try secondVM.requireID().uuidString,
+                identity: "spiffe://strato.local/agent/mint-agent-2")
+            #expect(secondAllowed.status == .ok)
+            #expect(secondAllowed.headers.first(name: "X-RateLimit-Remaining") == "0")
+            #expect(await first.fake.mintedJWTSVIDs.count == 2)
         }
     }
 

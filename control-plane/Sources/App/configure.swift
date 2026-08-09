@@ -242,15 +242,26 @@ public func configure(_ app: Application) async throws {
     // requests are rejected before doing real work. Uses Valkey when configured
     // (shared across replicas), else a process-local counter. See issue #60.
     let rateLimitConfig = RateLimitConfig.fromEnvironment(for: app.environment)
+    let rateLimitFallbackStore = InMemoryRateLimitStore()
+    let valkeyRateLimitStore =
+        app.valkeyEnabled ? ValkeyRateLimitStore(client: app.coordinationValkey) : nil
+    // Agent minting authenticates inside its controller, after this global
+    // middleware runs. Give it the same policy and stores but a dedicated,
+    // verified-agent key space so every Envoy sidecar request does not share
+    // the loopback-IP API bucket.
+    app.agentGuestIdentityRateLimiter = AgentGuestIdentityRateLimiter(
+        config: rateLimitConfig,
+        fallbackStore: rateLimitFallbackStore,
+        valkeyStore: valkeyRateLimitStore)
     if rateLimitConfig.enabled {
         app.middleware.use(
             RateLimitMiddleware(
                 config: rateLimitConfig,
-                fallbackStore: InMemoryRateLimitStore(),
+                fallbackStore: rateLimitFallbackStore,
                 // Coordination, not sessions: these are cross-replica counters
                 // that fail open to the in-memory store, which is exactly the
                 // coordination contract.
-                valkeyStore: app.valkeyEnabled ? ValkeyRateLimitStore(client: app.coordinationValkey) : nil
+                valkeyStore: valkeyRateLimitStore
             ))
         app.logger.info(
             "Rate limiting enabled",
