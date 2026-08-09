@@ -144,13 +144,11 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     @Parent(key: "project_id")
     var project: Project
 
-    /// Site (availability zone) this network is pinned to. A pinned network's
+    /// Site (availability zone) this network is pinned to. The network's
     /// VMs may only place on that site's agents, where the shared OVN
-    /// deployment lets one logical switch span nodes over geneve. Nil means
-    /// unpinned: the legacy model, where the same name on different agents is
-    /// disconnected segments sharing an IP pool — only safe single-node.
-    @OptionalParent(key: "site_id")
-    var site: Site?
+    /// deployment lets one logical switch span nodes over geneve.
+    @Parent(key: "site_id")
+    var site: Site
 
     /// The zone VMs on this network **auto-register into** (issue #770) — the
     /// zone their derived `<hostname>.<zone>` and PTR records land in. Must be
@@ -191,7 +189,7 @@ final class LogicalNetwork: Model, @unchecked Sendable {
         resolverEnabled: Bool = true,
         resolverIndex: Int? = nil,
         generation: Int = 1,
-        siteID: UUID? = nil
+        siteID: UUID
     ) {
         self.id = id
         self.name = name
@@ -317,7 +315,7 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
     let resolverEnabled: Bool?
     /// Site to pin the network to; its VMs then only place on that site's
     /// agents, where the shared OVN deployment spans it across nodes.
-    let siteId: UUID?
+    let siteId: UUID
 
     // Explicit init so the DHCP fields default when omitted (e.g. in tests) while
     // JSON decoding still populates them via the synthesized Codable conformance.
@@ -326,7 +324,7 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
         gateway6: String? = nil, ipv6Enabled: Bool? = nil, projectId: UUID? = nil,
         dhcpEnabled: Bool? = nil, dnsServers: [String]? = nil, domainName: String? = nil,
         leaseTime: Int? = nil, externalAccess: Bool? = nil, metadataEnabled: Bool? = nil,
-        resolverEnabled: Bool? = nil, siteId: UUID? = nil
+        resolverEnabled: Bool? = nil, siteId: UUID
     ) {
         self.name = name
         self.subnet = subnet
@@ -444,7 +442,7 @@ struct NetworkResponse: Content {
     /// them because these are what an operator compares against a guest's
     /// `resolv.conf`.
     let resolverAddresses: [String]?
-    let siteId: UUID?
+    let siteId: UUID
     /// The zone this network's VMs auto-register into, if any (issue #770).
     let primaryDnsZoneId: UUID?
     /// Why this network's guests will not resolve the DNS zones attached to it,

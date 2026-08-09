@@ -158,7 +158,8 @@ struct NetworkController: RouteCollection {
         // OU's subtree. A bare root-org match would let a sibling OU's
         // project force its VMs onto (and realize its switch across) capacity
         // delegated to a different OU.
-        if let siteId = request.siteId {
+        let siteId = request.siteId
+        do {
             guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
             }
@@ -201,7 +202,7 @@ struct NetworkController: RouteCollection {
             externalAccess: request.externalAccess ?? true,
             metadataEnabled: request.metadataEnabled ?? true,
             resolverEnabled: request.resolverEnabled ?? true,
-            siteID: request.siteId
+            siteID: siteId
         )
 
         do {

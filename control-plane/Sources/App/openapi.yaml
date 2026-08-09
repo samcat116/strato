@@ -5205,36 +5205,6 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
-  /api/agents/{agentId}/organization:
-    parameters:
-      - $ref: "#/components/parameters/AgentID"
-    patch:
-      operationId: reassignAgentOrganization
-      summary: Reassign an agent's organization scope
-      description: >-
-        Moves the agent's dedicated capacity to another organization or folder
-        (organizational unit). System-admin only. The agent must be drained
-        first: no site membership, no hosted VMs or sandboxes, and no stored
-        volumes.
-      tags: [Agents]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ReassignAgentOrganizationRequest"
-      responses:
-        "200":
-          description: The reassigned agent.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AgentDetail"
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
   /api/sites:
     get:
       operationId: listSites
@@ -5359,26 +5329,6 @@ paths:
       responses:
         "200":
           description: The agent, now a member of the site.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AgentDetail"
-        "400": { $ref: "#/components/responses/BadRequest" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-    delete:
-      operationId: removeAgentFromSite
-      summary: Remove an agent from a site
-      description: >-
-        Refused with `409` while the agent is this site's network controller or
-        still hosts VMs or sandboxes. Requires `manage` on both the site and
-        the agent.
-      tags: [Sites]
-      responses:
-        "200":
-          description: The agent, no longer a member of any site.
           content:
             application/json:
               schema:
@@ -10422,7 +10372,7 @@ components:
 
     CreateNetworkRequest:
       type: object
-      required: [name, projectId, subnet]
+      required: [name, projectId, subnet, siteId]
       properties:
         name:
           type: string
@@ -10561,6 +10511,7 @@ components:
         - externalAccess
         - metadataEnabled
         - resolverEnabled
+        - siteId
       properties:
         id:
           type: string
@@ -10639,7 +10590,7 @@ components:
     CreateFloatingIPPoolRequest:
       type: object
       description: Exactly one of organizationId / organizationalUnitId must be present.
-      required: [name, cidr]
+      required: [name, cidr, siteId]
       properties:
         name:
           type: string
@@ -10658,6 +10609,7 @@ components:
           format: uuid
     UpdateFloatingIPPoolRequest:
       type: object
+      required: [siteId]
       properties:
         gateway:
           type: string
@@ -10666,7 +10618,7 @@ components:
           format: uuid
     FloatingIPPool:
       type: object
-      required: [id, name, cidr, allocatedCount]
+      required: [id, name, cidr, siteId, allocatedCount]
       properties:
         id:
           type: string
@@ -13453,6 +13405,7 @@ components:
         - sandboxCapable
         - sandboxNetworkingCapable
         - tpmCapable
+        - siteId
         - isOnline
         - updateAvailable
         - autoUpdate
@@ -13507,8 +13460,7 @@ components:
         siteId:
           type: string
           format: uuid
-          nullable: true
-          description: The site (OVN deployment) this agent belongs to, if any.
+          description: The site (OVN deployment) this agent belongs to.
         organizationId:
           type: string
           format: uuid
@@ -13832,21 +13784,6 @@ components:
         autoUpdate:
           type: boolean
           description: Enroll in (or withdraw from) declarative auto-update.
-
-    ReassignAgentOrganizationRequest:
-      type: object
-      description: >-
-        The agent's new owning scope. Exactly one of `organizationId` or
-        `organizationalUnitId` is required.
-      properties:
-        organizationId:
-          type: string
-          format: uuid
-          nullable: true
-        organizationalUnitId:
-          type: string
-          format: uuid
-          nullable: true
 
     AgentUpdateRequest:
       type: object
