@@ -177,6 +177,10 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+            # Bound every statement on every pooled connection at session
+            # startup (STR-207).
+            - name: DATABASE_STATEMENT_TIMEOUT_MS
+              value: "{{ .Values.strato.database.statementTimeoutMs }}"
             # Encrypt the Postgres connection (issue #56). Defaults by topology
             # (disable for the bundled in-cluster DB, require for external); set
             # strato.database.tls to override. When a CA bundle is supplied it's

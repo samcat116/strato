@@ -118,6 +118,14 @@ externalDatabase:
   password: external-db-password
 ```
 
+Every pooled control-plane connection sends PostgreSQL a
+`statement_timeout` during session startup. The default serving budget is five
+minutes (`strato.database.statementTimeoutMs: 300000`). The migration Job uses
+the narrowly scoped 15-minute `migration.statementTimeoutMs` budget because
+schema changes can legitimately take longer. Both values are milliseconds and
+must be positive integers no greater than 2147483647; an invalid value makes the
+control plane fail during startup rather than run with an unbounded query.
+
 ## Values Reference
 
 | Key | Type | Default | Description |
@@ -135,6 +143,8 @@ externalDatabase:
 | `resources.requests.cpu` | string | `"500m"` | CPU request |
 | `resources.requests.memory` | string | `"512Mi"` | Memory request |
 | `strato.logLevel` | string | `"info"` | Log level (debug, info, warn, error) |
+| `strato.database.statementTimeoutMs` | int | `300000` | Maximum duration in milliseconds for statements on normal pooled control-plane connections |
+| `migration.statementTimeoutMs` | int | `900000` | Longer, still-bounded statement timeout in milliseconds used only by the migration Job |
 | `strato.webauthn.relyingPartyId` | string | `""` | WebAuthn relying party identifier; empty derives it from the gateway/ingress hostname (falling back to `localhost`) |
 | `strato.webauthn.relyingPartyName` | string | `"Strato"` | WebAuthn relying party name |
 | `strato.webauthn.relyingPartyOrigin` | string | `""` | WebAuthn relying party origin; empty derives it from the gateway/ingress settings (falling back to `http://localhost:8080`) |

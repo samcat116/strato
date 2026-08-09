@@ -56,6 +56,10 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+            # Migrations get their own longer, still-bounded budget rather than
+            # disabling the connection-level timeout globally (STR-207).
+            - name: DATABASE_STATEMENT_TIMEOUT_MS
+              value: "{{ .Values.migration.statementTimeoutMs }}"
             # Encrypt the Postgres connection for the migration too (issue #56),
             # matching the control-plane deployment.
             - name: DATABASE_TLS

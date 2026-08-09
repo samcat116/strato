@@ -329,16 +329,24 @@ public func configure(_ app: Application) async throws {
         // defaults to `require` outside development, so credentials and data are
         // encrypted whenever Postgres is remote. See issue #56.
         let databaseTLS = try makeDatabaseTLS(for: app.environment, logger: app.logger)
+        let statementTimeout = try DatabaseStatementTimeout.fromEnvironment()
+        var databaseConfiguration = SQLPostgresConfiguration(
+            hostname: Environment.get("DATABASE_HOST") ?? "localhost",
+            port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
+                ?? SQLPostgresConfiguration.ianaPortNumber,
+            username: Environment.get("DATABASE_USERNAME") ?? "vapor_username",
+            password: Environment.get("DATABASE_PASSWORD") ?? "vapor_password",
+            database: Environment.get("DATABASE_NAME") ?? "vapor_database",
+            tls: databaseTLS
+        )
+        statementTimeout.apply(to: &databaseConfiguration)
+        app.logger.info(
+            "Database statement timeout configured",
+            metadata: ["milliseconds": .stringConvertible(statementTimeout.milliseconds)]
+        )
         app.databases.use(
             DatabaseConfigurationFactory.postgres(
-                configuration: .init(
-                    hostname: Environment.get("DATABASE_HOST") ?? "localhost",
-                    port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
-                        ?? SQLPostgresConfiguration.ianaPortNumber,
-                    username: Environment.get("DATABASE_USERNAME") ?? "vapor_username",
-                    password: Environment.get("DATABASE_PASSWORD") ?? "vapor_password",
-                    database: Environment.get("DATABASE_NAME") ?? "vapor_database",
-                    tls: databaseTLS)
+                configuration: databaseConfiguration
             ), as: .psql)
     }
 

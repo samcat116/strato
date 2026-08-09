@@ -192,6 +192,7 @@ add those to `.env` (or an override file) to change them:
 | `STRATO_GRAVATAR_ENABLED` | `true` | Frontend Gravatar profile pictures; `false` avoids third-party requests (not written by `setup.sh`). |
 | `IMAGE_STORAGE_BACKEND` / `IMAGE_S3_*` | `filesystem` | Keep image bytes in an S3-compatible bucket instead of the `image_storage` volume (not written by `setup.sh`); see [Storage](/architecture/storage). |
 | `DATABASE_TLS` | `disable` | Postgres TLS mode — set `require` if you point the stack at an external database (not written by `setup.sh`). |
+| `DATABASE_STATEMENT_TIMEOUT_MS` | `300000` | Maximum duration of any control-plane Postgres statement, in milliseconds. Must be an integer from 1 through 2147483647; invalid values stop startup instead of leaving queries unbounded. |
 
 ## Splitting session storage
 
