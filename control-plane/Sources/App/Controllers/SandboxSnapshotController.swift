@@ -126,7 +126,19 @@ extension SandboxController {
                 // the reconciler does not resume it on the next sync. Writing
                 // only the first would make "and stop" last exactly until the
                 // next level-triggered pass.
+                guard try await sandbox.lockAndRefresh(on: db) else {
+                    throw Abort(.notFound, reason: "Sandbox no longer exists")
+                }
+                let expectedGeneration = sandbox.generation
                 sandbox.setDesiredStatus(.stopped)
+                guard
+                    case .applied = try await sandbox.advanceDesiredStateGeneration(
+                        expectedGeneration: expectedGeneration, on: db)
+                else {
+                    throw Abort(
+                        .internalServerError,
+                        reason: "Failed to advance the locked sandbox generation")
+                }
                 try await sandbox.save(on: db)
             }
             return try await SnapshotArtifactMutation.recordCapture(

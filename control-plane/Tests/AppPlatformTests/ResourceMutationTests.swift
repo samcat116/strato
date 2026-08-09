@@ -26,6 +26,25 @@ actor FakeAgentDispatch: AgentDispatch {
     func syncDesiredState(agentId: String) async { syncedAgentIds.append(agentId) }
 }
 
+actor DispatchFailureGate {
+    private var entered = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func wait() async {
+        entered = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+
+    func waitUntilEntered() async {
+        while !entered { await Task.yield() }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 /// `ResourceMutation` — the accept path that replaced the operation row for
 /// generation-backed lifecycle mutations (ADR 0001 stage 4, STR-147).
 ///
@@ -48,6 +67,27 @@ final class ResourceMutationTests {
             let vm = try await builder.createVM(name: "mutation-vm", project: project)
 
             try await test(app, vm)
+        } catch {
+            try await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
+    private func withSandbox(_ test: (Application, Sandbox) async throws -> Void) async throws {
+        let app = try await Application.makeForTesting()
+        do {
+            try await configure(app)
+            try await app.autoMigrate()
+
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Mutation Org")
+            let project = try await builder.createProject(
+                name: "Mutation Project", description: "mutation tests", organization: org)
+            let sandbox = try await builder.createSandbox(
+                name: "mutation-sandbox", project: project)
+
+            try await test(app, sandbox)
         } catch {
             try await app.shutdownForTesting()
             throw error
@@ -142,7 +182,8 @@ final class ResourceMutationTests {
             let vmID = try vm.requireID()
 
             self.mutation(app, fake).dispatch(
-                .create, resourceType: VM.self, resourceID: vmID, hypervisorId: nil,
+                .create, resourceType: VM.self, resourceID: vmID,
+                targetGeneration: vm.generation, hypervisorId: nil,
                 strategy: .placement { _ in
                     throw ResourceMutation.WorkError("no agent has capacity")
                 }, app: app)
@@ -151,6 +192,45 @@ final class ResourceMutationTests {
 
             let reloaded = try #require(try await VM.find(vmID, on: app.db))
             #expect(reloaded.conditions.degraded?.reason.contains("no agent has capacity") == true)
+        }
+    }
+
+    @Test("a dispatch failure cannot degrade a newer desired state")
+    func supersededDispatchFailureIsDropped() async throws {
+        try await withVM { app, vm in
+            let fake = FakeAgentDispatch(online: true)
+            let gate = DispatchFailureGate()
+            let vmID = try vm.requireID()
+
+            // Hold the create-generation placement until a newer lifecycle
+            // mutation commits. Its eventual failure belongs only to the old
+            // target and must not clear the new target's deadline or emit an
+            // obsolete failure outcome.
+            self.mutation(app, fake).dispatch(
+                .create, resourceType: VM.self, resourceID: vmID,
+                targetGeneration: vm.generation, hypervisorId: nil,
+                strategy: .placement { _ in
+                    await gate.wait()
+                    throw ResourceMutation.WorkError("obsolete placement failed")
+                }, app: app)
+            await gate.waitUntilEntered()
+
+            let accepted = try await self.mutation(app, fake).accept(
+                .boot, on: vm, actor: .user(UUID()),
+                dispatch: .directResolution { _ in false },
+                on: app.db, app: app
+            ) { _ in
+                vm.setDesiredStatus(.running)
+            }
+            await gate.release()
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+
+            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            #expect(reloaded.generation == accepted.targetGeneration)
+            #expect(reloaded.desiredStatus == .running)
+            #expect(reloaded.convergenceDeadline != nil)
+            #expect(reloaded.lastError == nil)
+            #expect(reloaded.failedGeneration == nil)
         }
     }
 
@@ -292,12 +372,139 @@ final class ResourceMutationTests {
         }
     }
 
+    @Test("concurrent lifecycle mutations receive distinct consecutive generations")
+    func concurrentMutationsReceiveDistinctGenerations() async throws {
+        try await withVM { app, vm in
+            let fake = FakeAgentDispatch(online: true)
+            vm.hypervisorId = "agent-1"
+            try await vm.save(on: app.db)
+            let vmID = try vm.requireID()
+            let firstSnapshot = try #require(try await VM.find(vmID, on: app.db))
+            let secondSnapshot = try #require(try await VM.find(vmID, on: app.db))
+            let runningMutation = self.mutation(app, fake)
+            let shutdownMutation = self.mutation(app, fake)
+
+            async let running = runningMutation.accept(
+                .boot, on: firstSnapshot, actor: .user(UUID()), dispatch: .stateSync,
+                on: app.db, app: app
+            ) { _ in
+                firstSnapshot.setDesiredStatus(.running)
+            }
+            async let shutdown = shutdownMutation.accept(
+                .shutdown, on: secondSnapshot, actor: .user(UUID()), dispatch: .stateSync,
+                on: app.db, app: app
+            ) { _ in
+                secondSnapshot.setDesiredStatus(.shutdown)
+            }
+
+            let (runningAccepted, shutdownAccepted) = try await (running, shutdown)
+            #expect(
+                Set([runningAccepted.targetGeneration, shutdownAccepted.targetGeneration])
+                    == [1, 2])
+
+            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            let expectedDesired: DesiredVMStatus =
+                runningAccepted.targetGeneration > shutdownAccepted.targetGeneration
+                ? .running : .shutdown
+            #expect(reloaded.generation == 2)
+            #expect(reloaded.desiredStatus == expectedDesired)
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+        }
+    }
+
+    @Test("a stale failure cannot overwrite a newer deletion intent")
+    func staleFailureCannotOverwriteDelete() async throws {
+        try await withVM { app, vm in
+            let fake = FakeAgentDispatch(online: true)
+            let vmID = try vm.requireID()
+            vm.generation = 10
+            vm.desiredStatus = .running
+            vm.setStatus(.starting)
+            vm.convergenceDeadline = Date().addingTimeInterval(120)
+            try await vm.save(on: app.db)
+
+            // This is the applier's bulk-loaded copy. A delete commits after
+            // it was read but before its failed-generation resolution saves.
+            let staleReportCopy = try #require(try await VM.find(vmID, on: app.db))
+            let deleteCopy = try #require(try await VM.find(vmID, on: app.db))
+            let acceptedDelete = try await self.mutation(app, fake).accept(
+                .delete, on: deleteCopy, actor: .user(UUID()),
+                dispatch: .directResolution { _ in false },
+                on: app.db, app: app
+            ) { _ in
+                ResourceFinalizerService.stampForDeletion(deleteCopy)
+                deleteCopy.setDesiredStatus(.absent)
+            }
+            #expect(acceptedDelete.targetGeneration == 11)
+
+            staleReportCopy.setStatus(.shutdown)
+            let outcome = try await ResourceConvergence.recordFailure(
+                staleReportCopy,
+                mutation: .boot,
+                reason: "boot failed before the delete",
+                telemetryReason: "convergence_failed",
+                on: app.db)
+            #expect(outcome == .superseded(actualGeneration: 11))
+
+            let reloaded = try #require(try await VM.find(vmID, on: app.db))
+            #expect(reloaded.generation == 11)
+            #expect(reloaded.desiredStatus == .absent)
+            #expect(reloaded.lastError == nil)
+            #expect(reloaded.failedGeneration == nil)
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+        }
+    }
+
+    @Test("a stale sandbox failure cannot overwrite a newer deletion intent")
+    func staleSandboxFailureCannotOverwriteDelete() async throws {
+        try await withSandbox { app, sandbox in
+            let fake = FakeAgentDispatch(online: true)
+            let sandboxID = try sandbox.requireID()
+            sandbox.generation = 10
+            sandbox.desiredStatus = .running
+            sandbox.setStatus(.starting)
+            sandbox.convergenceDeadline = Date().addingTimeInterval(120)
+            try await sandbox.save(on: app.db)
+
+            let staleReportCopy = try #require(try await Sandbox.find(sandboxID, on: app.db))
+            let deleteCopy = try #require(try await Sandbox.find(sandboxID, on: app.db))
+            let acceptedDelete = try await self.mutation(app, fake).accept(
+                .delete, on: deleteCopy, actor: .user(UUID()),
+                dispatch: .directResolution { _ in false },
+                on: app.db, app: app
+            ) { _ in
+                ResourceFinalizerService.stampForDeletion(deleteCopy)
+                deleteCopy.setDesiredStatus(.absent)
+            }
+            #expect(acceptedDelete.targetGeneration == 11)
+
+            staleReportCopy.setStatus(.stopped)
+            let outcome = try await ResourceConvergence.recordFailure(
+                staleReportCopy,
+                mutation: .boot,
+                reason: "start failed before the delete",
+                telemetryReason: "convergence_failed",
+                on: app.db)
+            #expect(outcome == .superseded(actualGeneration: 11))
+
+            let reloaded = try #require(try await Sandbox.find(sandboxID, on: app.db))
+            #expect(reloaded.generation == 11)
+            #expect(reloaded.desiredStatus == .absent)
+            #expect(reloaded.lastError == nil)
+            #expect(reloaded.failedGeneration == nil)
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+        }
+    }
+
     // MARK: - Failures that leave nothing to abandon (STR-191)
 
     /// The state the ambiguity lived in, and which nothing else constructs.
     ///
     /// Every other `recordFailure` path goes through a `resolveForStuckOperation`
-    /// that bumps the generation, so `failedGeneration` ends one *behind*
+    /// that advances the generation, so `failedGeneration` ends one *behind*
     /// `generation` and the two conditions cannot collide. A VM already sitting
     /// at its desired status has nothing to abandon — `revertDesiredToObserved`
     /// returns false — so the failure stays pinned to the current generation
@@ -305,7 +512,7 @@ final class ResourceMutationTests {
     @Test("a failure with nothing to revert stays pinned to the current generation")
     func failureWithNothingToRevertPins() async throws {
         try await withVM { app, vm in
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
             try await vm.save(on: app.db)
@@ -314,7 +521,7 @@ final class ResourceMutationTests {
             let recorded = try await ResourceConvergence.recordFailure(
                 vm, mutation: .resize, reason: "resize failed: no space left on device",
                 telemetryReason: "convergence_failed", on: app.db)
-            #expect(recorded)
+            #expect(recorded == .recorded)
             #expect(vm.generation == generation)  // nothing was abandoned
             #expect(vm.failedGeneration == generation)
             #expect(!vm.conditions.converged)
@@ -324,7 +531,7 @@ final class ResourceMutationTests {
             let again = try await ResourceConvergence.recordFailure(
                 vm, mutation: .resize, reason: "resize failed: no space left on device",
                 telemetryReason: "convergence_failed", on: app.db)
-            #expect(!again)
+            #expect(again == .alreadyRecorded)
 
             await app.backgroundTasks.drain(timeout: .seconds(10))
         }
@@ -338,7 +545,7 @@ final class ResourceMutationTests {
         try await withVM { app, vm in
             let fake = FakeAgentDispatch(online: true)
             vm.hypervisorId = "agent-1"
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
             vm.lastError = "resize failed: no space left on device"

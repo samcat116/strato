@@ -73,9 +73,23 @@ enum OrgTrustDomainProvisioning {
         else { return }
 
         row.phase = .deleting
-        row.generation += 1
         row.deletedAt = Date()
         row.lastError = nil
+        switch try await DesiredStateGenerationWriter.advance(
+            schema: OrgTrustDomain.schema, id: try row.requireID(), on: db)
+        {
+        case .applied(let generation):
+            guard let generation = Int(exactly: generation) else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "Trust-domain generation exceeds the model's integer range")
+            }
+            row.generation = generation
+        case .missing:
+            return
+        case .superseded:
+            throw Abort(.internalServerError, reason: "Trust-domain generation did not advance")
+        }
         try await row.save(on: db)
     }
 }

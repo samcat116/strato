@@ -332,19 +332,10 @@ extension Volume {
         return Double(size) / 1024.0 / 1024.0 / 1024.0
     }
 
-    /// Records a new desired state and bumps the generation so the owning agent
-    /// treats it as newer than whatever it last applied.
+    /// Records a new desired state in memory. The owning mutation service
+    /// advances the generation in SQL before saving it.
     func setDesiredStatus(_ newDesired: DesiredVolumeStatus) {
         desiredStatus = newDesired
-        generation += 1
-    }
-
-    /// Bumps the generation without changing the desired status, for a change
-    /// to the volume's *shape* — its size, or where it is attached. The agent
-    /// drops any entry not newer than the one it last applied, so a mutation
-    /// that skipped this would be silently ignored.
-    func bumpGeneration() {
-        generation += 1
     }
 
     /// The agent has confirmed the current generation and the volume is sitting

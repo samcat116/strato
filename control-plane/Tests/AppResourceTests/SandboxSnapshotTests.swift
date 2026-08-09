@@ -242,7 +242,7 @@ final class SandboxSnapshotTests {
 
             // An unconverged boot on the sandbox: desired state moved, the
             // agent has not caught up.
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             sandbox.extendConvergenceDeadline(by: 600)
             try await sandbox.save(on: app.db)
 

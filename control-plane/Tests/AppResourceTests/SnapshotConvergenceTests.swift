@@ -284,6 +284,45 @@ final class SnapshotConvergenceTests {
         }
     }
 
+    @Test("A stale snapshot failure cannot overwrite a newer deletion")
+    func staleFailureCannotOverwriteDelete() async throws {
+        try await withSnapshotApp { app, builder, user, project in
+            let agentId = try await registerAgent(app: app, named: "stale-snapshot-agent")
+            let vm = try await placedVM(builder, project: project, agentId: agentId)
+            let snapshot = try await makeCheckpoint(
+                on: app, user: user, project: project, vm: vm, agentId: agentId,
+                status: .creating, generation: 10, observedGeneration: 9)
+            snapshot.convergenceDeadline = Date().addingTimeInterval(120)
+            try await snapshot.save(on: app.db)
+            let snapshotID = try #require(snapshot.id)
+            let stale = try #require(try await VMSnapshot.find(snapshotID, on: app.db))
+            let deleteCopy = try #require(try await VMSnapshot.find(snapshotID, on: app.db))
+
+            let accepted = try await app.resourceMutation.accept(
+                .delete, on: deleteCopy, actor: .user(try user.requireID()),
+                dispatch: .directResolution { _ in false }, on: app.db, app: app
+            ) { _ in
+                ResourceFinalizerService.stampForDeletion(deleteCopy)
+                deleteCopy.setDesiredStatus(.absent)
+            }
+            #expect(accepted.targetGeneration == 11)
+
+            let outcome = try await ResourceConvergence.recordFailure(
+                stale, mutation: .create, reason: "obsolete capture failure",
+                telemetryReason: "convergence_failed", on: app.db)
+            #expect(outcome == .superseded(actualGeneration: 11))
+
+            let stored = try #require(try await VMSnapshot.find(snapshotID, on: app.db))
+            #expect(stored.generation == 11)
+            #expect(stored.desiredStatus == .absent)
+            #expect(stored.convergenceDeadline != nil)
+            #expect(stored.errorMessage == nil)
+            #expect(stored.failedGeneration == nil)
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+        }
+    }
+
     /// The delete contract: the row goes when — and only when — the agent's
     /// full list stops mentioning the artifact.
     @Test("Omission from a full report confirms a deletion and reaps the row")
@@ -537,7 +576,7 @@ final class SnapshotConvergenceTests {
                 agentId: agentId,
                 createdByID: try user.requireID())
             snapshot.status = .ready
-            snapshot.setDesiredStatus(.absent)
+            snapshot.setFixtureDesiredStatus(.absent)
             snapshot.observedGeneration = snapshot.generation
             try await snapshot.save(on: app.db)
 

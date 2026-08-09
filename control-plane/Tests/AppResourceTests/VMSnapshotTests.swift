@@ -430,7 +430,7 @@ final class VMSnapshotTests {
         try await withCheckpointTestApp { app, user, _, vm, token in
             try await placeOnCapableAgent(app: app, vm: vm, status: .paused)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
-            vm.setDesiredStatus(.paused)
+            vm.setFixtureDesiredStatus(.paused)
             vm.generation = 1
             try await vm.save(on: app.db)
 

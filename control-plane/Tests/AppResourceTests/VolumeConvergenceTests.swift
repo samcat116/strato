@@ -272,6 +272,44 @@ final class VolumeConvergenceTests {
         }
     }
 
+    @Test("A stale volume failure cannot overwrite a newer deletion")
+    func staleFailureCannotOverwriteDelete() async throws {
+        try await withVolumeApp { app, _, user, project in
+            let agentId = try await registerAgent(app: app, named: "stale-volume-agent")
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId,
+                status: .creating, generation: 10, observedGeneration: 9, storagePath: nil)
+            volume.convergenceDeadline = Date().addingTimeInterval(120)
+            try await volume.save(on: app.db)
+            let volumeID = try #require(volume.id)
+            let stale = try #require(try await Volume.find(volumeID, on: app.db))
+            let deleteCopy = try #require(try await Volume.find(volumeID, on: app.db))
+
+            let accepted = try await app.resourceMutation.accept(
+                .delete, on: deleteCopy, actor: .user(try user.requireID()),
+                dispatch: .directResolution { _ in false }, on: app.db, app: app
+            ) { _ in
+                ResourceFinalizerService.stampForDeletion(deleteCopy)
+                deleteCopy.setDesiredStatus(.absent)
+            }
+            #expect(accepted.targetGeneration == 11)
+
+            let outcome = try await ResourceConvergence.recordFailure(
+                stale, mutation: .resize, reason: "obsolete resize failure",
+                telemetryReason: "convergence_failed", on: app.db)
+            #expect(outcome == .superseded(actualGeneration: 11))
+
+            let stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.generation == 11)
+            #expect(stored.desiredStatus == .absent)
+            #expect(stored.convergenceDeadline != nil)
+            #expect(stored.errorMessage == nil)
+            #expect(stored.failedGeneration == nil)
+
+            await app.backgroundTasks.drain(timeout: .seconds(10))
+        }
+    }
+
     /// The STR-191 shape, which the test above does not reach: there the agent
     /// had never applied generation 3, so `converged` was false on the
     /// generation clause alone. Here it *has* — a resize planned at a generation
@@ -448,7 +486,6 @@ final class VolumeConvergenceTests {
             ) { @Sendable _ in
                 volume.$vm.id = vmID
                 volume.deviceName = "disk1"
-                volume.bumpGeneration()
             }
 
             #expect(accepted.targetGeneration == 5)

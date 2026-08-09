@@ -89,7 +89,7 @@ final class VMResizeTests {
 
     private func running(_ vm: VM, on db: any Database) async throws {
         vm.setStatus(.running)
-        vm.setDesiredStatus(.running)
+        vm.setFixtureDesiredStatus(.running)
         try await vm.save(on: db)
     }
 

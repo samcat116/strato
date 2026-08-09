@@ -134,14 +134,12 @@ struct VolumeStatusTests {
         #expect(failed.canClone)
     }
 
-    @Test("setDesiredStatus and bumpGeneration both advance the generation")
-    func mutatorsBumpTheGeneration() {
+    @Test("Desired-state helpers leave generation assignment to the SQL writer")
+    func mutatorsAreStateOnly() {
         let volume = volume(generation: 4)
         volume.setDesiredStatus(.absent)
-        #expect(volume.generation == 5)
+        #expect(volume.generation == 4)
         #expect(volume.desiredStatus == .absent)
-        volume.bumpGeneration()
-        #expect(volume.generation == 6)
     }
 
     /// The failure resolution asymmetry, which is deliberate and easy to
@@ -158,7 +156,7 @@ struct VolumeStatusTests {
         #expect(attaching.$vm.id == nil)
         #expect(attaching.deviceName == nil)
         #expect(attaching.readonly == false)
-        #expect(attaching.generation == 5)
+        #expect(attaching.generation == 4)
 
         let resizing = volume(generation: 4)
         resizing.size = 20 << 30

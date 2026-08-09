@@ -271,12 +271,11 @@ extension Sandbox {
         divergenceDetectedAt = nil
     }
 
-    /// Records a new desired state and bumps the generation so agents treat
-    /// it as newer than anything they have applied. Does not persist — call
-    /// `save(on:)` afterwards.
+    /// Records a new desired state in memory. The caller advances the
+    /// generation through `DesiredStateGenerationWriter` in the same
+    /// transaction that persists it.
     func setDesiredStatus(_ newDesired: DesiredSandboxStatus) {
         desiredStatus = newDesired
-        generation += 1
     }
 
     /// Asks the owning agent to load `snapshotID` back into this sandbox once
@@ -289,8 +288,9 @@ extension Sandbox {
         setDesiredStatus(.running)
     }
 
-    /// Realigns desired state with observed reality after a failed operation,
-    /// bumping the generation — same rationale as `VM.revertDesiredToObserved`:
+    /// Realigns desired state with observed reality after a failed operation.
+    /// The convergence writer advances the generation when this returns true —
+    /// same rationale as `VM.revertDesiredToObserved`:
     /// a failed operation's unachieved intent must not linger and replay on a
     /// later sync, except for a deletion's `.absent`, which is never abandoned
     /// (issue #734) because reverting it resurrects a sandbox the user deleted
@@ -326,23 +326,19 @@ extension Sandbox {
     /// cannot resurrect the sandbox). Shared by
     /// `ResourceOperationCoordinator.recordVerdict` and the stuck-convergence
     /// sweep. Takes the mutation kind rather than an operation row, for the
-    /// reason the VM's does (STR-147). Returns whether anything changed; does
-    /// not persist — call `save(on:)` afterwards.
+    /// reason the VM's does (STR-147). Returns whether desired state changed
+    /// and needs a new generation; a status-only escalation does not. Does not
+    /// persist.
     ///
     /// `telemetryReason` is accepted and ignored: there is no sandbox
     /// counterpart to `Telemetry.vmEnteredError` yet, and the parameter is here
     /// so both workload kinds present one signature to `ConvergingResource`.
     @discardableResult
     func resolveForStuckOperation(mutation: VMOperationKind, telemetryReason: String) -> Bool {
-        var changed = false
         if status.isTransitional || (mutation == .create && observedGeneration == 0) {
             setStatus(.error)
-            changed = true
         }
-        if revertDesiredToObserved() {
-            changed = true
-        }
-        return changed
+        return revertDesiredToObserved()
     }
 
     /// The wire spec for this sandbox, assembled fresh at every sync. `network`

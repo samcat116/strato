@@ -377,7 +377,7 @@ struct WebhookOutboxTests {
 
             // A lifecycle mutation as `ResourceMutation.accept` leaves it: the
             // desired-state change, the deadline, and the attribution event.
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.extendConvergenceDeadline(by: 180)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(
@@ -386,7 +386,7 @@ struct WebhookOutboxTests {
 
             vm.observedGeneration = vm.generation
             vm.setStatus(.running)
-            try await ResourceConvergence.recordSuccess(vm, on: app.db)
+            _ = try await ResourceConvergence.recordSuccess(vm, on: app.db)
 
             let deliveries = try await WebhookDelivery.query(on: app.db).all()
             #expect(deliveries.count == 1)
@@ -397,7 +397,7 @@ struct WebhookOutboxTests {
 
             // The transition is what fires, not the state: the deadline is
             // cleared, so a repeat is a no-op rather than a second delivery.
-            try await ResourceConvergence.recordSuccess(vm, on: app.db)
+            _ = try await ResourceConvergence.recordSuccess(vm, on: app.db)
             #expect(try await WebhookDelivery.query(on: app.db).count() == 1)
         }
     }
@@ -410,7 +410,7 @@ struct WebhookOutboxTests {
             let builder = TestDataBuilder(db: app.db)
             let vm = try await builder.createVM(name: "failing-vm", project: fixture.project)
 
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(
                 .boot, resourceKind: .virtualMachine, resourceID: vm.requireID(),
@@ -419,7 +419,7 @@ struct WebhookOutboxTests {
             let recorded = try await ResourceConvergence.recordFailure(
                 vm, mutation: .boot, reason: "no bootable device",
                 telemetryReason: "convergence_failed", on: app.db)
-            #expect(recorded)
+            #expect(recorded == .recorded)
 
             let delivery = try #require(try await WebhookDelivery.query(on: app.db).first())
             #expect(delivery.eventType == "operation.failed")
@@ -438,7 +438,7 @@ struct WebhookOutboxTests {
             let vmID = try vm.requireID()
 
             ResourceFinalizerService.stampForDeletion(vm)
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             // The request event is where the reap reads its delivery context —
             // by the time it runs there is no resource left to resolve one.
@@ -481,7 +481,7 @@ struct WebhookOutboxTests {
                 app, fixture: fixture, projectID: fixture.project.id)
 
             let vm = try await builder.createVM(name: "hook-vm", project: fixture.project)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.extendConvergenceDeadline(by: 180)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(
@@ -489,7 +489,7 @@ struct WebhookOutboxTests {
                 actor: .user(fixture.user.requireID()), on: app.db)
             vm.observedGeneration = vm.generation
             vm.setStatus(.running)
-            try await ResourceConvergence.recordSuccess(vm, on: app.db)
+            _ = try await ResourceConvergence.recordSuccess(vm, on: app.db)
 
             let deliveries = try await WebhookDelivery.query(on: app.db).all()
             let recipients = Set(deliveries.map { $0.$subscription.id })
