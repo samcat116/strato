@@ -99,6 +99,7 @@ export default defineConfig({
           { text: 'Docker Compose', link: '/deployment/docker-compose' },
           { text: 'Kubernetes (Helm)', link: '/deployment/kubernetes' },
           { text: 'Agents', link: '/deployment/agents' },
+          { text: 'OVN Stable ID Cutover', link: '/deployment/ovn-stable-id-cutover' },
           { text: 'IAM & Permissions', link: '/deployment/iam' },
           { text: 'Health Checks & Zero-Downtime Deploys', link: '/deployment/health-checks' },
           { text: 'Rate Limiting', link: '/deployment/rate-limiting' },

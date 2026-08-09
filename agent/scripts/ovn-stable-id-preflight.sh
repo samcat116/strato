@@ -3,10 +3,12 @@
 set -euo pipefail
 
 OVN_NBCTL=${OVN_NBCTL:-ovn-nbctl}
+command -v "$OVN_NBCTL" >/dev/null || { echo "$OVN_NBCTL is required" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 2; }
+ovn_nbctl=("$OVN_NBCTL" "$@")
 
 switches=$(
-  "$OVN_NBCTL" --format=json --data=json \
+  "${ovn_nbctl[@]}" --format=json --data=json \
     --columns=_uuid,name,external_ids list Logical_Switch |
     jq -c '
       .headings as $h
@@ -18,7 +20,7 @@ switches=$(
 )
 
 dhcp=$(
-  "$OVN_NBCTL" --format=json --data=json \
+  "${ovn_nbctl[@]}" --format=json --data=json \
     --columns=_uuid,cidr,external_ids list DHCP_Options |
     jq -c '
       .headings as $h

@@ -11,9 +11,16 @@ Run the read-only inventory against each site's northbound database:
 agent/scripts/ovn-stable-id-preflight.sh
 ```
 
-The default is the local `ovn-nbctl`. For a remote database, set `OVN_NBCTL`
-to the path of a small executable wrapper containing the database and TLS
-flags. The script only issues OVSDB `list` queries. It reports:
+The default is the local `ovn-nbctl`. Pass connection options directly for a
+remote database:
+
+```sh
+agent/scripts/ovn-stable-id-preflight.sh \
+  --db=ssl:ovn.example:6641 -C ca.pem -c cert.pem -p key.pem
+```
+
+`OVN_NBCTL` can select a different `ovn-nbctl` executable. The script only
+issues OVSDB `list` queries. It reports:
 
 - Strato-created tenant switches whose names are not `net-<network UUID>`.
 - `strato-managed` DHCP rows with no `network-id` external ID.
