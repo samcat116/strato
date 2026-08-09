@@ -98,12 +98,14 @@ struct DomainXMLBuilderTests {
         architecture: CPUArchitecture = .x86_64,
         accelerator: DomainAccelerator = .kvm,
         firmware: FirmwareSet? = nil,
-        emulatorPath: String? = nil
+        emulatorPath: String? = nil,
+        memoryHardLimitBytes: Int64? = nil
     ) -> DomainXMLInput {
         DomainXMLInput(
             vmId: vmId, vmDirectory: vmDirectory, spec: spec, disks: disks,
             cloudInitISOPath: cloudInitISOPath, networks: networks, architecture: architecture,
-            accelerator: accelerator, firmware: firmware, emulatorPath: emulatorPath)
+            accelerator: accelerator, firmware: firmware, emulatorPath: emulatorPath,
+            memoryHardLimitBytes: memoryHardLimitBytes)
     }
 
     // MARK: - Scenarios
@@ -791,6 +793,16 @@ struct DomainXMLBuilderTests {
         #expect(xml.contains("<memory unit='KiB'>8388608</memory>"))
         #expect(xml.contains("<currentMemory unit='KiB'>2097152</currentMemory>"))
         #expect(xml.contains("<size unit='KiB'>6291456</size>"))
+    }
+
+    @Test("a configured QEMU ceiling is emitted as libvirt memtune")
+    func memoryHardLimit() throws {
+        let xml = try DomainXMLBuilder.build(
+            Self.input(
+                spec: Self.spec(),
+                memoryHardLimitBytes: 2 * 1024 * 1024 * 1024 + 512 * 1024 * 1024))
+        #expect(xml.contains("<memtune>"))
+        #expect(xml.contains("<hard_limit unit='KiB'>2621440</hard_limit>"))
     }
 
     /// Headroom smaller than one virtio-mem block cannot be realized, so the VM

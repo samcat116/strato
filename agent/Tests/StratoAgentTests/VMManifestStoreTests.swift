@@ -58,7 +58,10 @@ struct VMManifestStoreTests {
         let store = makeStore(dir: dir)
 
         store.save([
-            "vm-a": VMManifestEntry(hypervisorType: .qemu, spec: makeSpec(cpus: 2)),
+            "vm-a": VMManifestEntry(
+                hypervisorType: .qemu,
+                spec: makeSpec(cpus: 2),
+                realizedMemoryReservationBytes: 8_589_934_592),
             "vm-b": VMManifestEntry(hypervisorType: .firecracker, spec: makeSpec(cpus: 4, memoryBytes: 1_073_741_824)),
         ])
 
@@ -66,6 +69,7 @@ struct VMManifestStoreTests {
         #expect(loaded.count == 2)
         #expect(loaded["vm-a"]?.hypervisorType == .qemu)
         #expect(loaded["vm-a"]?.spec.cpus == 2)
+        #expect(loaded["vm-a"]?.realizedMemoryReservationBytes == 8_589_934_592)
         #expect(loaded["vm-b"]?.hypervisorType == .firecracker)
         #expect(loaded["vm-b"]?.spec.cpus == 4)
         #expect(loaded["vm-b"]?.spec.memoryBytes == 1_073_741_824)
@@ -139,13 +143,36 @@ struct VMManifestStoreTests {
     /// rebuilt from `(hypervisorType, spec)`.
     @Test("Re-specing an entry keeps its vsock CID")
     func withSpecKeepsVsockCID() {
-        let entry = VMManifestEntry(hypervisorType: .qemu, spec: makeSpec(cpus: 2), vsockCID: 11)
+        let entry = VMManifestEntry(
+            hypervisorType: .qemu,
+            spec: makeSpec(cpus: 2),
+            realizedMemoryReservationBytes: 8_589_934_592,
+            vsockCID: 11)
         let resized = entry.with(spec: makeSpec(cpus: 8))
 
         #expect(resized.vsockCID == 11)
+        #expect(resized.realizedMemoryReservationBytes == 8_589_934_592)
         #expect(resized.spec.cpus == 8)
         #expect(resized.hypervisorType == .qemu)
         #expect(resized.kind == .vm)
+    }
+
+    @Test("Boot reservation records growth without crediting a mixed shrink")
+    func bootReservationKeepsShrink() {
+        let current = makeSpec(cpus: 4, memoryBytes: 2_147_483_648)
+        let desired = VMSpec(
+            cpus: 2,
+            maxCpus: 8,
+            memoryBytes: 4_294_967_296,
+            maxMemoryBytes: 8_589_934_592,
+            boot: .disk(firmware: nil))
+        let reserved = VMManifestEntry(hypervisorType: .qemu, spec: current)
+            .reservingPositiveSizingGrowth(toward: desired)
+
+        #expect(reserved.spec.cpus == 4)
+        #expect(reserved.spec.maxCpus == 8)
+        #expect(reserved.spec.memoryBytes == 4_294_967_296)
+        #expect(reserved.spec.maxMemoryBytes == 8_589_934_592)
     }
 
     /// The other field that made copying necessary (STR-151): the record of

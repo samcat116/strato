@@ -1187,6 +1187,8 @@ struct VMController: RouteCollection {
                     reason: "A VM can only be resized while it is running or stopped (this one is "
                         + "\(existingVM.status.rawValue))")
             }
+            try await Self.requirePlacedResizeCapacity(
+                vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
             let metadataEnabledChanged = try await req.db.transaction { db in
                 guard try await existingVM.lockAndRefresh(on: db) else {
                     throw Abort(.notFound, reason: "VM no longer exists")
@@ -1238,6 +1240,8 @@ struct VMController: RouteCollection {
                 reason: "This VM was started with a maximum of \(existingVM.maxMemory) bytes of memory; "
                     + "restart it to grow beyond that")
         }
+        try await Self.requirePlacedResizeCapacity(
+            vm: existingVM, newCPU: newCPU, newMemory: newMemory, on: req)
         let existingVMID = try existingVM.requireID()
         let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(
@@ -1288,6 +1292,76 @@ struct VMController: RouteCollection {
             placedAgentId: existingVM.hypervisorId,
             app: req.application)
         return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
+    }
+
+    /// Rejects a placed resize before quota, sizing, or generation mutate.
+    /// The node repeats this decision authoritatively; this last-reported check
+    /// keeps requests that are already impossible out of reconciliation.
+    private static func requirePlacedResizeCapacity(
+        vm: VM, newCPU: Int, newMemory: Int64, on req: Request
+    ) async throws {
+        guard let agentIDString = vm.hypervisorId else {
+            // A stopped, unplaced VM is sized before placement and relies on
+            // the scheduler. A running VM without a placement is inconsistent
+            // and cannot safely accept host-bound growth.
+            guard vm.status != .running else {
+                throw Abort(.conflict, reason: "This running VM has no placed agent to validate resize capacity")
+            }
+            return
+        }
+        guard let agentID = UUID(uuidString: agentIDString),
+            let agent = try await Agent.find(agentID, on: req.db)
+        else {
+            throw Abort(.conflict, reason: "The VM's placed agent is no longer available")
+        }
+
+        let cpuGrowth = max(0, newCPU - vm.cpu)
+        let memoryGrowth: Int64
+        if vm.hypervisorType == .qemu, newMemory > vm.memory {
+            guard let architecture = agent.cpuArchitecture else {
+                throw Abort(
+                    .conflict,
+                    reason: "Agent `\(agent.name)` has not reported its CPU architecture; "
+                        + "QEMU resize capacity cannot be validated")
+            }
+            // QEMU reserves only the block-aligned hot-add region the agent can
+            // realize, not the raw maxMemory request. Recompute both sides with
+            // the placed host's architecture so sub-block headroom is charged
+            // when a stopped resize turns it into guest memory.
+            let currentReservation = QEMUMemoryReservation.reservedBytes(
+                memoryBytes: vm.memory,
+                maxMemoryBytes: vm.maxMemory,
+                architecture: architecture)
+            let requestedReservation = QEMUMemoryReservation.reservedBytes(
+                memoryBytes: newMemory,
+                maxMemoryBytes: max(vm.maxMemory, newMemory),
+                architecture: architecture)
+            memoryGrowth = max(0, requestedReservation - currentReservation)
+        } else if vm.hypervisorType == .qemu {
+            // Alignment can make the recomputed reservation move upward while
+            // the guest grant moves downward. A true shrink never needs new
+            // capacity, regardless of that representational artifact.
+            memoryGrowth = 0
+        } else {
+            memoryGrowth = max(0, newMemory - vm.memory)
+        }
+        guard cpuGrowth > 0 || memoryGrowth > 0 else { return }
+
+        let active =
+            await req.application.coordination.activeReservations(agentIds: [agentIDString])[
+                agentIDString] ?? .zero
+        let reservedCPU = max(0, active.cpu)
+        let reservedMemory = max(Int64(0), active.memory)
+        let effectiveCPU = reservedCPU >= agent.availableCPU ? 0 : agent.availableCPU - reservedCPU
+        let effectiveMemory = reservedMemory >= agent.availableMemory ? 0 : agent.availableMemory - reservedMemory
+        guard cpuGrowth <= effectiveCPU, memoryGrowth <= effectiveMemory else {
+            throw Abort(
+                .conflict,
+                reason: "Agent `\(agent.name)` has \(effectiveCPU) vCPUs and "
+                    + "\(effectiveMemory.formattedByteSize) effectively available after active placements; "
+                    + "this resize requests \(cpuGrowth) additional vCPUs and "
+                    + "\(memoryGrowth.formattedByteSize) additional memory")
+        }
     }
 
     /// Applies the metadata switch from a row-locking transaction. Placement

@@ -25,10 +25,7 @@ public enum MemoryHotplugPlan {
     /// on smaller-block hosts too, since block sizes are powers of two and a
     /// multiple of the larger is a multiple of the smaller.
     public static func blockBytes(architecture: CPUArchitecture) -> Int64 {
-        switch architecture {
-        case .arm64: return 512 * 1024 * 1024
-        case .x86_64: return 2 * 1024 * 1024
-        }
+        QEMUMemoryReservation.blockBytes(architecture: architecture)
     }
 
     /// The block-aligned hot-pluggable region a spec asks for.
@@ -38,9 +35,9 @@ public enum MemoryHotplugPlan {
     /// the VM gets no memory device at all rather than one it can never grow
     /// into.
     public static func alignedHotplugBytes(spec: VMSpec, architecture: CPUArchitecture) -> Int64 {
-        let requested = spec.maxMemoryBytes - spec.memoryBytes
-        guard requested > 0 else { return 0 }
-        let block = blockBytes(architecture: architecture)
-        return requested - (requested % block)
+        QEMUMemoryReservation.alignedHotplugBytes(
+            memoryBytes: spec.memoryBytes,
+            maxMemoryBytes: spec.maxMemoryBytes,
+            architecture: architecture)
     }
 }

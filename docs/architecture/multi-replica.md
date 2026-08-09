@@ -28,10 +28,12 @@ operations table in STR-152.
 | Browser sessions | Valkey `vrs-{sessionID}` (idle TTL, `SESSION_TTL_SECONDS`) | **Not** coordination state — a separate store with the opposite failure contract (below) |
 
 Everything above the session row is coordination state, and every key in it
-satisfies one invariant: flushing the store degrades to slower convergence, never
-to incorrect state. Presence keys are rewritten by the next heartbeat, sweep
-locks gate work that is idempotent, and losing a reservation reopens a race
-rather than corrupting anything.
+satisfies one invariant: flushing the store cannot make durable state or a
+hypervisor's physical capacity incorrect. Presence keys are rewritten by the
+next heartbeat, sweep locks gate idempotent work, and losing a placement
+reservation can at worst send a create to a node that filled after selection.
+That node refuses the create; its admission ledger, not Valkey, prevents host
+overcommit.
 
 Sessions satisfy nothing of the sort — losing them logs every signed-in user out
 at once, and passkeys are the only interactive authentication. So the two stores
@@ -128,10 +130,12 @@ frames survive, but only as uncorrelated control-plane → agent
 acknowledgements: nothing awaits a `requestId` on either side.
 
 What that buys is the point of the whole ADR. Every remaining Valkey key and
-channel is a latency optimization or a duplicate-work guard, so a coordination
-outage now costs convergence latency and nothing else — there is no directory
-whose staleness can make a request fail, and no in-memory request state that a
-process boundary can lose.
+channel is a latency optimization or a duplicate-work guard. A coordination
+outage costs convergence latency and may cause an individual create to be
+refused when its selected node has filled since the last heartbeat; it cannot
+overcommit that node because agent admission is authoritative. There is no
+directory whose staleness loses in-memory request state across a process
+boundary.
 
 ## Failure and deploy behavior
 
@@ -155,8 +159,10 @@ process boundary can lose.
   coordination command has a two-second deadline, so the fail-open path does not
   inherit the client's 30-second command timeout. Desired-state doorbells are
   unavailable until Valkey returns, so convergence falls back to the agent's own
-  poll interval. `/health/ready` reports `coordination: degraded` and keeps serving
-  traffic.
+  poll interval. Missing placement reservations can let two replicas select the
+  same last-reported capacity; the node admits one and refuses the other rather
+  than overcommitting, so that create becomes degraded and can be retried.
+  `/health/ready` reports `coordination: degraded` and keeps serving traffic.
 - **Session-store outage**: no fail-open path exists for browser auth. Every
   signed-in user is logged out and must re-authenticate with a passkey. Agents
   (SPIFFE mTLS) and API-key/CLI clients are unaffected, and the reconciler needs

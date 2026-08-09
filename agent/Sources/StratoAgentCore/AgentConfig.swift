@@ -215,6 +215,9 @@ public struct AgentConfig {
     public let ovnNorthboundTLS: OVNNorthboundTLSConfig?
     public let enableHVF: Bool?
     public let enableKVM: Bool?
+    /// Fixed QEMU process allowance above current guest RAM. This only sizes
+    /// libvirt's cgroup ceiling; it is not a placement reservation.
+    public let qemuMemoryOverheadMB: Int?
     public let vmStoragePath: String?
     /// Where managed volume disks and their snapshots live. Nil means the
     /// platform default (`/var/lib/strato/volumes` on Linux) — see
@@ -330,6 +333,13 @@ public struct AgentConfig {
     /// The hop limit to apply to metadata responses.
     public var metadataHopLimit: Int { metadataResponseHopLimit ?? 1 }
 
+    public static let defaultQEMUMemoryOverheadMB = 512
+    public static let qemuMemoryOverheadRange = 128...4096
+
+    public var qemuMemoryOverheadBytes: Int64 {
+        Int64(qemuMemoryOverheadMB ?? Self.defaultQEMUMemoryOverheadMB) * 1024 * 1024
+    }
+
     /// The forced-unconditional-fetch interval, floored at one second so a
     /// zero or negative value in a config file cannot turn the loop into a
     /// spin.
@@ -360,6 +370,7 @@ public struct AgentConfig {
         ovnNorthboundTLS: OVNNorthboundTLSConfig? = nil,
         enableHVF: Bool? = nil,
         enableKVM: Bool? = nil,
+        qemuMemoryOverheadMB: Int? = nil,
         vmStoragePath: String? = nil,
         volumeStoragePath: String? = nil,
         imageCacheDir: String? = nil,
@@ -405,6 +416,7 @@ public struct AgentConfig {
         self.ovnNorthboundTLS = ovnNorthboundTLS
         self.enableHVF = enableHVF
         self.enableKVM = enableKVM
+        self.qemuMemoryOverheadMB = qemuMemoryOverheadMB
         self.vmStoragePath = vmStoragePath
         self.volumeStoragePath = volumeStoragePath
         self.imageCacheDir = imageCacheDir
@@ -530,6 +542,11 @@ public struct AgentConfig {
         }
         let enableHVF = tomlData.bool("enable_hvf")
         let enableKVM = tomlData.bool("enable_kvm")
+        let qemuMemoryOverheadMB = tomlData.int("qemu_memory_overhead_mb")
+        if let qemuMemoryOverheadMB, !Self.qemuMemoryOverheadRange.contains(qemuMemoryOverheadMB) {
+            throw AgentConfigError.invalidConfiguration(
+                "qemu_memory_overhead_mb must be between 128 and 4096, got \(qemuMemoryOverheadMB)")
+        }
         let vmStoragePath = tomlData.string("vm_storage_dir")
         let volumeStoragePath = tomlData.string("volume_storage_dir")
         let imageCacheDir = tomlData.string("image_cache_dir")
@@ -844,6 +861,7 @@ public struct AgentConfig {
             ovnNorthboundTLS: ovnNorthboundTLS,
             enableHVF: enableHVF,
             enableKVM: enableKVM,
+            qemuMemoryOverheadMB: qemuMemoryOverheadMB,
             vmStoragePath: vmStoragePath,
             volumeStoragePath: volumeStoragePath,
             imageCacheDir: imageCacheDir,

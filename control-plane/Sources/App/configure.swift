@@ -132,8 +132,9 @@ public func configure(_ app: Application) async throws {
     // configured separately (issue #855):
     //
     //  - **Coordination** (agent presence, singleton sweep locks, scheduler
-    //    placement reservations — issue #258) is fail-open by design: losing it
-    //    degrades convergence, never correctness.
+    //    placement reservations — issue #258) is fail-open by design. Losing a
+    //    reservation may make one create reach a now-full node and be refused;
+    //    the agent's admission gate, not Valkey, prevents host overcommit.
     //  - **Session storage** cannot fail open at all. Losing it logs every
     //    signed-in user out at once, and passkeys are the only interactive auth,
     //    so everyone re-authenticates with a security key.

@@ -39,10 +39,10 @@ struct ReservationAmounts: Sendable, Equatable {
 /// actor used by tests (which run without external services).
 ///
 /// Every key written through this protocol must pass the test: flushing the
-/// store degrades to slower convergence, never to incorrect state. Presence
-/// keys are rewritten by the next heartbeat, sweep locks only gate work that is
-/// idempotent, and reservations exist to narrow a race — losing one reopens the
-/// race window, it does not corrupt state.
+/// store keeps durable state correct. Presence keys are rewritten by the next
+/// heartbeat, sweep locks only gate idempotent work, and reservations reduce
+/// placement races. Losing one can send a create to a node that filled since
+/// selection; the node admission gate refuses it instead of overcommitting.
 protocol CoordinationStore: Sendable {
     /// Write `key` with a TTL, unconditionally refreshing both (SETEX semantics).
     func setKey(_ key: String, ttlSeconds: Int) async throws
@@ -444,8 +444,9 @@ actor InMemoryCoordinationStore: CoordinationStore {
 /// routing and cross-replica signalling added in phase 3, issue #261; the
 /// desired-state doorbell made broadcast in STR-146).
 ///
-/// Since STR-152 nothing here is load-bearing for correctness: every key and
-/// channel below is a latency optimization or a duplicate-work guard, and the
+/// Since STR-152 nothing here is the final authority for durable state or host
+/// capacity: every key and channel below is a latency optimization or a
+/// duplicate-work/race guard, and the
 /// paths that genuinely needed a distributed directory — the socket-route key
 /// `agent:{name}:replica` and the `replica:{id}:rpc` forwarding channels — went
 /// with the imperative exchanges that read them.
@@ -470,13 +471,13 @@ actor InMemoryCoordinationStore: CoordinationStore {
 ///   free, and under-ringing costs only latency because the agent re-fetches
 ///   unconditionally on its own timer.
 ///
-/// Degradation policy: coordination improves correctness but must never make
-/// the control plane less available than it was without it. Store errors are
+/// Degradation policy: coordination narrows races but must never make the
+/// control plane less available than it was without it. Store errors are
 /// logged and fail *open* — presence reads return nil (caller falls back to
 /// its in-memory view), sweep locks grant (sweeps are idempotent, duplicate
 /// passes are harmless), and reservations grant (reopening the placement race
-/// is the pre-coordination status quo, while refusing would take VM creation
-/// down with Valkey).
+/// may make one selected node refuse a create, while refusing here would take
+/// all VM creation down with Valkey; agent admission prevents overcommit).
 actor CoordinationService {
     /// Presence TTL. Agents heartbeat far more often than this, so an expired
     /// presence key means several consecutive heartbeats were missed.
@@ -702,9 +703,10 @@ actor CoordinationService {
     /// agent's last-reported *available* resources; the store checks that all
     /// active reservations plus this one fit inside it. Returns false when the
     /// agent is (now) full — the caller re-runs selection with fresh data.
-    /// Fails open on store errors: an unreserved placement is the
-    /// pre-coordination behavior, while refusing would couple VM creation
-    /// availability to Valkey.
+    /// Fails open on store errors: an unreserved placement may be refused by
+    /// the selected node if capacity raced away, while refusing here would
+    /// couple all VM creation availability to Valkey. Agent admission is the
+    /// physical-capacity authority.
     func reserveCapacity(
         agentId: String,
         vmId: String,
@@ -853,9 +855,9 @@ actor CoordinationService {
     }
 
     /// Reservation totals keyed by agent ID, fetched as a single pipeline.
-    /// Store failures preserve the existing fail-open behavior by returning
-    /// zero for every requested agent; the atomic reserve remains the final
-    /// capacity gate while the store is healthy.
+    /// Store failures preserve fail-open behavior by returning zero for every
+    /// requested agent. The node remains the final capacity gate; while the
+    /// store is healthy these totals avoid predictable API and placement races.
     func activeReservations(agentIds: [String]) async -> [String: ReservationAmounts] {
         guard !agentIds.isEmpty else { return [:] }
         do {

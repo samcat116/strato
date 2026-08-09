@@ -451,7 +451,7 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("An unsupported agent cannot register into a fleet with colliding network names")
+    @Test("An agent below the wire floor cannot register into a fleet that already has colliding names")
     func registrationRefusedWhenNamesAlreadyCollide() async throws {
         try await withNetworkTestApp { app, user, project, _ in
             let builder = TestDataBuilder(db: app.db)
