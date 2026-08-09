@@ -1,0 +1,25 @@
+control-plane/Sources/App/Migrations/AddVolumeQuotaAccounting.swift
+  s_e64eb3da2ecde9::t_e799e7f269d1cb 12-14,52-57,60-83,101,107
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_e64eb3da2ecde9::t_d85a71310fc136 60,67
+  s_e64eb3da2ecde9::t_e799e7f269d1cb 39,41-43,55-59,61-64,69-76,88-100
+  s_e64eb3da2ecde9::t_df8b3724ebaf1b 68
+docs/architecture/storage.md
+  s_e64eb3da2ecde9::t_e799e7f269d1cb 658-660
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "5f056e0fbdd72467510bd05c71534be660ee91cb",
+  "prompts": {},
+  "sessions": {
+    "s_e64eb3da2ecde9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3ea-91f4-7053-818a-8085597f43aa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
