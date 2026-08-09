@@ -249,15 +249,26 @@ public func configure(_ app: Application) async throws {
     // requests are rejected before doing real work. Uses Valkey when configured
     // (shared across replicas), else a process-local counter. See issue #60.
     let rateLimitConfig = RateLimitConfig.fromEnvironment(for: app.environment)
+    let rateLimitFallbackStore = InMemoryRateLimitStore()
+    let valkeyRateLimitStore =
+        app.valkeyEnabled ? ValkeyRateLimitStore(client: app.coordinationValkey) : nil
+    // Agent minting authenticates inside its controller, after this global
+    // middleware runs. Give it the same policy and stores but a dedicated,
+    // verified-agent key space so every Envoy sidecar request does not share
+    // the loopback-IP API bucket.
+    app.agentGuestIdentityRateLimiter = AgentGuestIdentityRateLimiter(
+        config: rateLimitConfig,
+        fallbackStore: rateLimitFallbackStore,
+        valkeyStore: valkeyRateLimitStore)
     if rateLimitConfig.enabled {
         app.middleware.use(
             RateLimitMiddleware(
                 config: rateLimitConfig,
-                fallbackStore: InMemoryRateLimitStore(),
+                fallbackStore: rateLimitFallbackStore,
                 // Coordination, not sessions: these are cross-replica counters
                 // whose backend errors fail open without rejecting the request,
                 // which is exactly the coordination contract.
-                valkeyStore: app.valkeyEnabled ? ValkeyRateLimitStore(client: app.coordinationValkey) : nil
+                valkeyStore: valkeyRateLimitStore
             ))
         app.logger.info(
             "Rate limiting enabled",
@@ -962,6 +973,10 @@ public func configure(_ app: Application) async throws {
     // Configure SPIRE join-token provisioning for the agent registration flow
     // (requires SPIRE_ENABLED plus SPIRE_SERVER_API_ADDRESS)
     try app.configureSPIRERegistration()
+
+    // Guest JWT-SVID issuance is default-off until an operator supplies an
+    // explicit audience allowlist.
+    app.configureGuestIdentityIssuance()
 
     // Configure SVID issuance telemetry for the Workload Identity view
     // (requires SPIRE_METRICS_PROMETHEUS_URL; otherwise the panel stays empty)

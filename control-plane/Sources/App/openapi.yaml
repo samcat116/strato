@@ -98,6 +98,8 @@ info:
       Returns `200` with a `MessageEnvelope` wrapping a `DesiredStateMessage`
       and an `ETag`, or `304` when the agent's `If-None-Match` still matches
       after the server's hold window. See `docs/architecture/wire-protocol.md`.
+    - `POST /agent/vms/{vmID}/jwt-svid` — placement-checked guest JWT-SVID
+      issuance for the hosting agent (SPIFFE mTLS).
     - `GET /api/vms/{vmID}/console` — VM serial console (WebSocket).
     - `POST /api/vms/{vmID}/console/vnc` + `GET
       /api/vms/{vmID}/console/vnc/{sessionID}/attach` — VM graphics console

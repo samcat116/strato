@@ -411,10 +411,11 @@ The rest of the package is vocabulary used on both sides:
   `MetadataNIC` entries (device name, MAC, network, address + prefix per
   family, gateway, MTU, DNS), SSH keys, `userData`/`vendorData`, tags, and an
   optional `IdentityPolicy`. Since STR-55 that policy carries the VM's SPIFFE
-  instance identity — `spiffe://<trust-domain>/vm/<vm-id>` and nothing else:
-  no key, no token, no audiences, no TTL. It clears the publication boundary
-  below precisely because it is a *name*; the audiences and lifetime an issuer
-  would need arrive with the minting endpoint (STR-57). It rides
+  instance identity — `spiffe://<trust-domain>/vm/<vm-id>` — and nothing else:
+  no key, token, audiences, or TTL crosses the sync. STR-57 adds the
+  placement-checked `POST /agent/vms/{vmID}/jwt-svid` control-plane endpoint,
+  but the optional policy fields remain empty until the agent implements the
+  guest-facing request path and token cache. It rides
   `DesiredVMState` rather than a boot-time seed ISO so metadata is mutable and
   converges like everything else. Treat it as a **publication boundary**: any
   process in the guest that can reach the link-local address reads every field,
