@@ -78,10 +78,10 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
     event.preventDefault();
     if (!selected || !name.trim()) return;
 
-    // Required: there is no default project to fall back to (issue #1059).
-    // The fork lands in the current project, or — when there is none — in the
-    // one the source sandbox is already in, which is always known here.
-    const projectId = currentProject?.id ?? sandbox.projectId;
+    // A fork stays with its source sandbox by default. In particular, a
+    // networked snapshot cannot silently follow the header switcher into a
+    // different project without also naming a new network.
+    const projectId = sandbox.projectId ?? currentProject?.id;
     if (!projectId) {
       toast.error("Select a project first");
       return;
@@ -214,7 +214,7 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
             <DialogTitle>Fork from snapshot</DialogTitle>
             <DialogDescription>
               Create a running sandbox from “{selected?.name}” with a new
-              identity and network reservation.
+              identity in the source sandbox&apos;s project.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={submitFork}>

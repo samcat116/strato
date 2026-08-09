@@ -35,9 +35,8 @@ final class ProjectResolutionTests {
         let project: Project
         /// A `.ready` image, because `VMController.create` validates the image
         /// and checks `read` on it *before* it resolves the project. Without a
-        /// real one, a VM-create test refuses for the wrong reason and passes
-        /// vacuously. The controller order is deliberate and left alone — those
-        /// are `400`s the caller has to fix regardless.
+        /// real image — and permission to read it for non-admin callers — a
+        /// VM-create test refuses for the wrong reason and passes vacuously.
         let image: Image
         let token: String
     }
@@ -393,6 +392,19 @@ final class ProjectResolutionTests {
             member.currentOrganizationId = fixture.org.id
             try await member.save(on: fixture.app.db)
 
+            // VM create checks image readability before project resolution.
+            // Let this caller pass that gate so the VM row exercises the ghost
+            // project just like the other six rows do.
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: try member.requireID(),
+                role: .viewer,
+                nodeType: .project,
+                nodeID: try fixture.project.requireID(),
+                createdBy: try member.requireID(),
+                on: fixture.app.db
+            )
+
             let ghostProject = UUID()
             try await RoleBindingService.grant(
                 principalType: .user,
@@ -409,6 +421,9 @@ final class ProjectResolutionTests {
                 fixture, projectId: ghostProject, suffix: "ghost", as: memberToken
             ) { route, res in
                 #expect(res.status == .forbidden, "\(route) answered \(res.status): \(res.body.string)")
+                #expect(
+                    res.body.string.contains("this project"),
+                    "\(route) refused before ghost-project authorization: \(res.body.string)")
             }
         }
     }

@@ -102,7 +102,7 @@ extension Request {
         verb: String = "create"
     ) async throws -> Project {
         guard let projectId = requestedProjectId else {
-            throw Request.projectIsRequired(verb: verb, resourceKind)
+            throw Self.projectIsRequired(verb: verb, resourceKind)
         }
 
         let allowed = try await can(action, on: "project", id: projectId.uuidString)
