@@ -223,13 +223,6 @@ public struct DesiredSwitch: Equatable, Sendable {
     /// The UUID-derived OVN switch name (`OVNNaming.switchName`).
     public let name: String
     public let subnet: String
-    /// The network's user-facing name, i.e. the switch name older agents used
-    /// before UUID naming. The actuator renames such a legacy switch in place to
-    /// `name` on upgrade, so existing VM ports migrate without re-creation.
-    /// Empty when no rename may be attempted — including when another network
-    /// in the same sync shares the name, which makes the hint ambiguous
-    /// (issue #765).
-    public let legacyName: String
     /// The service localport this network wants, if any — metadata addresses,
     /// resolver addresses, or both. It hangs off the *switch* rather than the
     /// router deliberately: a gateway-less (switch-only) network yields no
@@ -244,13 +237,12 @@ public struct DesiredSwitch: Equatable, Sendable {
     public let resolverPort: DesiredServiceLocalPort?
 
     public init(
-        name: String, subnet: String, legacyName: String,
+        name: String, subnet: String,
         serviceLocalPort: DesiredServiceLocalPort? = nil,
         resolverPort: DesiredServiceLocalPort? = nil
     ) {
         self.name = name
         self.subnet = subnet
-        self.legacyName = legacyName
         self.serviceLocalPort = serviceLocalPort
         self.resolverPort = resolverPort
     }
@@ -553,15 +545,6 @@ public enum NetworkReconciler {
         // stable — two same-named networks would order arbitrarily.
         let sorted = networks.sorted { ($0.name, $0.networkId.uuidString) < ($1.name, $1.networkId.uuidString) }
 
-        // A pre-#342 switch was named after the network, so `legacyName` is how
-        // `ensureSwitch` finds and renames one in place. That only works while
-        // the name identifies a single network: when two share one, which of
-        // them inherits the existing switch — and its live port bindings —
-        // would come down to plan order. Withhold the hint from both; they get
-        // fresh id-named switches instead.
-        var nameCounts: [String: Int] = [:]
-        for network in sorted { nameCounts[network.name, default: 0] += 1 }
-
         let switches = sorted.map { network -> DesiredSwitch in
             let switchName = OVNNaming.switchName(networkId: network.networkId)
             // `== true`, not `?? false`: nil and false plan the same thing here
@@ -593,7 +576,6 @@ public enum NetworkReconciler {
             }
             return DesiredSwitch(
                 name: switchName, subnet: network.subnet,
-                legacyName: nameCounts[network.name] == 1 ? network.name : "",
                 serviceLocalPort: serviceLocalPort,
                 resolverPort: resolverPort)
         }

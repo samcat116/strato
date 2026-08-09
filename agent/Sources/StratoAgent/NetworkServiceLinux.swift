@@ -1206,7 +1206,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     }
 
     /// Deletes every strato-managed `DHCP_Options` row stamped with this
-    /// network's name (both families, and any stale-subnet leftovers).
+    /// network's stable id (both families, and any stale-subnet leftovers).
     /// Matching by the external-id rather than CIDR means renumbered networks
     /// are cleaned up too, and rows other networks own are never touched.
     private func removeDHCPOptions(networkId: UUID, networkName: String) async throws {
@@ -1214,15 +1214,11 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         let ownedID = DHCPRowIdentity.externalIDs(networkId: networkId, networkName: networkName)[
             DHCPRowIdentity.networkIDKey]
         for row in try await ovnManager.getDHCPOptions() {
-            // Rows this network owns at any CIDR, plus any pre-upgrade row of
-            // its own that was never stamped with an id — otherwise a network
-            // whose DHCP was disabled before its first post-upgrade converge
-            // would keep answering leases from a row nothing tracks.
+            // Rows this network owns at any CIDR.
             let owned =
                 row.external_ids?[DHCPRowIdentity.managedKey] == DHCPRowIdentity.managedValue
                 && row.external_ids?[DHCPRowIdentity.networkIDKey] == ownedID
-            let legacy = DHCPRowIdentity.isLegacyOwned(row.external_ids, networkName: networkName)
-            guard owned || legacy, let uuid = row.uuid else { continue }
+            guard owned, let uuid = row.uuid else { continue }
             try await ovnManager.deleteDHCPOptions(uuid: uuid)
             logger.info(
                 "Removed DHCP options for network with DHCP disabled",
@@ -1234,27 +1230,13 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         }
     }
 
-    /// This network's `DHCP_Options` row for `cidr`, adopting a pre-upgrade row
-    /// that carries only the network's name. See `DHCPRowIdentity` for why the
-    /// match is on the id and why adoption beats orphaning.
+    /// This network's `DHCP_Options` row for `cidr`.
     private static func ownDHCPRow(
-        in rows: [OVNDHCPOptions], networkId: UUID, networkName: String, cidr: String
+        in rows: [OVNDHCPOptions], networkId: UUID, cidr: String
     ) -> OVNDHCPOptions? {
-        if let own = rows.first(where: {
+        rows.first(where: {
             DHCPRowIdentity.isOwn($0.external_ids, rowCIDR: $0.cidr, cidr: cidr, networkId: networkId)
-        }) {
-            return own
-        }
-        // Deterministic if a malformed NB somehow holds two candidates: taking
-        // the lowest row UUID beats skipping, which would strand a row live
-        // ports still reference.
-        return
-            rows
-            .filter {
-                DHCPRowIdentity.isAdoptableLegacy(
-                    $0.external_ids, rowCIDR: $0.cidr, cidr: cidr, networkName: networkName)
-            }
-            .min { ($0.uuid ?? "") < ($1.uuid ?? "") }
+        })
     }
 
     /// Find-or-update this network's `DHCP_Options` row for `subnet` and
@@ -1282,13 +1264,11 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         let dhcp = OVNDHCPOptions(cidr: subnet, options: options, external_ids: externalIDs)
 
         if let existing = Self.ownDHCPRow(
-            in: try await ovnManager.getDHCPOptions(), networkId: networkId, networkName: networkName,
-            cidr: subnet),
+            in: try await ovnManager.getDHCPOptions(), networkId: networkId, cidr: subnet),
             let uuid = existing.uuid
         {
             // The external-ids are part of what converges, not just the
-            // options: an adopted legacy row needs stamping with its
-            // `network-id`, and a renamed network needs its label refreshed.
+            // external ids: a renamed network needs its label refreshed.
             if existing.options != options || existing.external_ids != externalIDs {
                 try await ovnManager.updateDHCPOptions(uuid: uuid, dhcp)
             }
@@ -1315,8 +1295,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         let dhcp = OVNDHCPOptions(cidr: subnet6, options: options, external_ids: externalIDs)
 
         if let existing = Self.ownDHCPRow(
-            in: try await ovnManager.getDHCPOptions(), networkId: networkId, networkName: networkName,
-            cidr: subnet6),
+            in: try await ovnManager.getDHCPOptions(), networkId: networkId, cidr: subnet6),
             let uuid = existing.uuid
         {
             if existing.options != options || existing.external_ids != externalIDs {
@@ -2135,23 +2114,6 @@ extension NetworkServiceLinux: NetworkActuator {
         }
         // Already on the UUID scheme.
         if try await ovnManager.getLogicalSwitch(named: desired.name) != nil { return }
-
-        // Upgrade migration: an older agent named this switch after the network's
-        // user-facing name. Rename it in place to the UUID name — a rename keeps
-        // the same OVSDB row (and UUID), so existing VM ports and their dataplane
-        // bindings move to the new scheme without re-creation, and new VMs + the
-        // router port land on the same switch. issue #342.
-        if !desired.legacyName.isEmpty, desired.legacyName != desired.name,
-            let legacy = try await ovnManager.getLogicalSwitch(named: desired.legacyName),
-            let legacyUUID = legacy.uuid
-        {
-            // Only `name` is set, so the row encoder leaves ports/external_ids intact.
-            try await ovnManager.updateLogicalSwitch(uuid: legacyUUID, OVNLogicalSwitch(name: desired.name))
-            logger.info(
-                "Migrated legacy network switch to UUID name",
-                metadata: ["from": .string(desired.legacyName), "to": .string(desired.name)])
-            return
-        }
 
         _ = try await findOrCreateLogicalSwitch(name: desired.name, subnet: desired.subnet)
         #endif
