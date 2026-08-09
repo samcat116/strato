@@ -177,10 +177,13 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
-            # Bound every statement on every pooled connection at session
-            # startup (STR-207).
+            # Bound normal serving statements on every pooled connection
+            # (STR-207). The migrator temporarily raises this on its pinned
+            # connection, including when a serving pod performs migrations.
             - name: DATABASE_STATEMENT_TIMEOUT_MS
               value: "{{ .Values.strato.database.statementTimeoutMs }}"
+            - name: DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS
+              value: "{{ .Values.migration.statementTimeoutMs }}"
             # Encrypt the Postgres connection (issue #56). Defaults by topology
             # (disable for the bundled in-cluster DB, require for external); set
             # strato.database.tls to override. When a CA bundle is supplied it's

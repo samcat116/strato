@@ -321,6 +321,7 @@ public func configure(_ app: Application) async throws {
     app.middleware.use(AuthorizationMiddleware())
 
     // Configure database based on environment
+    var databaseStatementTimeouts: SchemaMigrator.StatementTimeouts?
     if app.environment == .testing {
         // Testing environment already configured with a per-test Postgres
         // database clone in test setup — skip database configuration here
@@ -330,7 +331,14 @@ public func configure(_ app: Application) async throws {
         // encrypted whenever Postgres is remote. See issue #56.
         let databaseTLS = try makeDatabaseTLS(for: app.environment, logger: app.logger)
         let statementTimeout = try DatabaseStatementTimeout.fromEnvironment()
-        var databaseConfiguration = SQLPostgresConfiguration(
+        let migrationStatementTimeout = try DatabaseStatementTimeout.migrationFromEnvironment(
+            defaultingTo: statementTimeout
+        )
+        databaseStatementTimeouts = .init(
+            normal: statementTimeout,
+            migration: migrationStatementTimeout
+        )
+        let databaseConfiguration = SQLPostgresConfiguration(
             hostname: Environment.get("DATABASE_HOST") ?? "localhost",
             port: Environment.get("DATABASE_PORT").flatMap(Int.init(_:))
                 ?? SQLPostgresConfiguration.ianaPortNumber,
@@ -339,14 +347,18 @@ public func configure(_ app: Application) async throws {
             database: Environment.get("DATABASE_NAME") ?? "vapor_database",
             tls: databaseTLS
         )
-        statementTimeout.apply(to: &databaseConfiguration)
         app.logger.info(
-            "Database statement timeout configured",
-            metadata: ["milliseconds": .stringConvertible(statementTimeout.milliseconds)]
+            "Database statement timeouts configured",
+            metadata: [
+                "servingMilliseconds": .stringConvertible(statementTimeout.milliseconds),
+                "migrationMilliseconds": .stringConvertible(migrationStatementTimeout.milliseconds),
+            ]
         )
         app.databases.use(
-            DatabaseConfigurationFactory.postgres(
-                configuration: databaseConfiguration
+            statementTimeout.applying(
+                to: DatabaseConfigurationFactory.postgres(
+                    configuration: databaseConfiguration
+                )
             ), as: .psql)
     }
 
@@ -891,7 +903,9 @@ public func configure(_ app: Application) async throws {
     // crash mid-migration leaves a half-state no later boot can get past.
     // `SchemaMigrator` serializes the phase on a Postgres advisory lock and
     // commits each migration with its log row.
-    try await SchemaMigrator.run(on: app)
+    var schemaMigrationOptions = SchemaMigrator.Options.fromEnvironment()
+    schemaMigrationOptions.statementTimeouts = databaseStatementTimeouts
+    try await SchemaMigrator.run(on: app, options: schemaMigrationOptions)
 
     // STR-186 prevents new tenant IPv6 subnets from overlapping the ULA space
     // used by metadata and per-network resolvers. Existing rows cannot be

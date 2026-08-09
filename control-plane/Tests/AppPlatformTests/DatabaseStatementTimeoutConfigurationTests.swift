@@ -35,20 +35,41 @@ struct DatabaseStatementTimeoutConfigurationTests {
         }
     }
 
-    @Test("Applies one statement_timeout startup parameter without disturbing others")
-    func appliesStartupParameter() throws {
+    @Test("Migration timeout defaults to serving timeout and validates its own setting")
+    func migrationValue() throws {
+        let normal = try DatabaseStatementTimeout(milliseconds: 42_000)
+        #expect(
+            try DatabaseStatementTimeout.resolveMigration(nil, defaultingTo: normal)
+                == normal
+        )
+        #expect(
+            try DatabaseStatementTimeout.resolveMigration("900000", defaultingTo: normal)
+                .milliseconds == 900_000
+        )
+
+        var description: String?
+        do {
+            _ = try DatabaseStatementTimeout.resolveMigration("0", defaultingTo: normal)
+        } catch {
+            description = String(describing: error)
+        }
+        #expect(description?.contains(DatabaseStatementTimeout.migrationEnvironmentKey) == true)
+    }
+
+    @Test("Does not add statement_timeout to the PostgreSQL startup packet")
+    func avoidsStartupParameter() throws {
         var configuration = PostgresTestDatabases.configuration(database: "strato_test")
         configuration.coreConfiguration.options.additionalStartupParameters = [
-            ("application_name", "strato-test"),
-            ("statement_timeout", "1"),
+            ("application_name", "strato-test")
         ]
 
-        try DatabaseStatementTimeout(milliseconds: 42_000).apply(to: &configuration)
+        _ = try DatabaseStatementTimeout(milliseconds: 42_000).applying(
+            to: .postgres(configuration: configuration)
+        )
 
         let parameters = configuration.coreConfiguration.options.additionalStartupParameters
         #expect(parameters.first(where: { $0.0 == "application_name" })?.1 == "strato-test")
-        #expect(parameters.filter { $0.0 == "statement_timeout" }.count == 1)
-        #expect(parameters.first(where: { $0.0 == "statement_timeout" })?.1 == "42000")
+        #expect(parameters.allSatisfy { $0.0 != "statement_timeout" })
     }
 }
 
@@ -67,9 +88,12 @@ struct DatabaseStatementTimeoutIntegrationTests {
             owningDatabase: true
         )
 
-        var configuration = PostgresTestDatabases.configuration(database: databaseName)
-        try DatabaseStatementTimeout(milliseconds: 100).apply(to: &configuration)
-        timed.databases.use(.postgres(configuration: configuration), as: .psql)
+        let configuration = PostgresTestDatabases.configuration(database: databaseName)
+        let timeout = try DatabaseStatementTimeout(milliseconds: 100)
+        timed.databases.use(
+            timeout.applying(to: .postgres(configuration: configuration)),
+            as: .psql
+        )
 
         let attempt: StatementTimeoutAttempt
         do {
@@ -83,6 +107,9 @@ struct DatabaseStatementTimeoutIntegrationTests {
                 do {
                     let result = try await timed.db.withConnection { timedConnection in
                         let timedSQL = try #require(timedConnection as? any SQLDatabase)
+                        let configuredValue = try await timedSQL.raw(
+                            "SELECT current_setting('statement_timeout') AS value"
+                        ).first(decodingColumn: "value", as: String.self)
                         let clock = ContinuousClock()
                         let started = clock.now
                         var errorDescription: String?
@@ -103,7 +130,8 @@ struct DatabaseStatementTimeoutIntegrationTests {
                         return StatementTimeoutAttempt(
                             errorDescription: errorDescription,
                             elapsed: elapsed,
-                            connectionProbe: probe
+                            connectionProbe: probe,
+                            configuredValue: configuredValue
                         )
                     }
                     try await heldSQL.raw(
@@ -128,9 +156,69 @@ struct DatabaseStatementTimeoutIntegrationTests {
         #expect(description.contains("statement timeout"))
         #expect(attempt.elapsed < .seconds(3))
         #expect(attempt.connectionProbe == 1)
+        #expect(attempt.configuredValue == "100ms")
 
         try await holder.asyncShutdown()
         try await timed.shutdownForTesting()
+    }
+
+    @Test("Migration work gets its longer budget and always restores the serving timeout")
+    func migrationBudgetIsScoped() async throws {
+        let databaseName = try await PostgresTestDatabases.shared.createDatabaseForTest()
+        let app = try await Application.makeForTesting(
+            database: databaseName,
+            owningDatabase: true
+        )
+        let normal = try DatabaseStatementTimeout(milliseconds: 50)
+        let migration = try DatabaseStatementTimeout(milliseconds: 1_000)
+        let configuration = PostgresTestDatabases.configuration(database: databaseName)
+        app.databases.use(
+            normal.applying(to: .postgres(configuration: configuration)),
+            as: .psql
+        )
+
+        do {
+            try await app.db.withConnection { connection in
+                let sql = try #require(connection as? any SQLDatabase)
+                let before = try await currentStatementTimeout(on: sql)
+                #expect(before == "50ms")
+
+                try await SchemaMigrator.withMigrationStatementTimeout(
+                    .init(normal: normal, migration: migration),
+                    on: connection,
+                    logger: app.logger
+                ) {
+                    #expect(try await currentStatementTimeout(on: sql) == "1s")
+                    try await sql.raw("SELECT pg_sleep(0.2)").run()
+                }
+
+                #expect(try await currentStatementTimeout(on: sql) == "50ms")
+
+                do {
+                    try await SchemaMigrator.withMigrationStatementTimeout(
+                        .init(normal: normal, migration: migration),
+                        on: connection,
+                        logger: app.logger
+                    ) {
+                        throw ExpectedMigrationFailure()
+                    }
+                } catch is ExpectedMigrationFailure {
+                    // Expected: cleanup must still restore the serving value.
+                }
+                #expect(try await currentStatementTimeout(on: sql) == "50ms")
+            }
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+
+        try await app.shutdownForTesting()
+    }
+
+    private func currentStatementTimeout(on sql: any SQLDatabase) async throws -> String? {
+        try await sql.raw(
+            "SELECT current_setting('statement_timeout') AS value"
+        ).first(decodingColumn: "value", as: String.self)
     }
 }
 
@@ -138,4 +226,7 @@ private struct StatementTimeoutAttempt: Sendable {
     let errorDescription: String?
     let elapsed: Duration
     let connectionProbe: Int?
+    let configuredValue: String?
 }
+
+private struct ExpectedMigrationFailure: Error {}
