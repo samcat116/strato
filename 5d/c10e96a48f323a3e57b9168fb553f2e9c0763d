@@ -1,0 +1,162 @@
+control-plane/Sources/App/Services/SPIFFE/OrgTrustDomainProvisioning.swift
+  s_5d7717eeeb4bf1::t_25d71d4ca3226d 78-92
+control-plane/Tests/AppPlatformTests/FloatingIPControllerTests.swift
+  s_5d7717eeeb4bf1::t_9da2c9e6ca60ff 428-478,481,484-486
+  s_5d7717eeeb4bf1::t_e23caf95139151 479-480,482-483
+control-plane/Sources/App/Services/DesiredStateGenerationWriter.swift
+  s_5d7717eeeb4bf1::t_52519ecdbbe980 2
+  s_5d7717eeeb4bf1::t_7246728c11c336 1,3-71,73-81,83-102
+  s_5d7717eeeb4bf1::t_f19f653fd0a9bf 72,82
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_5d7717eeeb4bf1::t_c84245bbefeb10 596-605,622-630
+  s_5d7717eeeb4bf1::t_9f573f8d618f78 606-621
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_5d7717eeeb4bf1::t_5cdee1bf2777a2 338-340
+  s_5d7717eeeb4bf1::t_a0996017b1f26c 221-224,276-290
+  s_5d7717eeeb4bf1::t_41e218d7617734 268-274,328-330,344-357,367-369
+  s_5d7717eeeb4bf1::t_4e4501f6c55dec 234-235
+  s_5d7717eeeb4bf1::t_e272ca2fa05fa5 370
+control-plane/Sources/App/Models/SnapshotArtifact.swift
+  s_5d7717eeeb4bf1::t_f8b76c9e30ca36 108-109
+  s_5d7717eeeb4bf1::t_3d705acd9c63b1 39-40
+control-plane/Sources/App/Models/LogicalNetwork.swift
+  s_5d7717eeeb4bf1::t_73c08430ec064e 356
+control-plane/Tests/AppPlatformTests/AgentManifestQuarantineTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 127
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_5d7717eeeb4bf1::t_25d71d4ca3226d 312-322
+control-plane/Tests/AppPlatformTests/DesiredStateFixtureHelpers.swift
+  s_5d7717eeeb4bf1::t_02437e79c85f9d 2-54
+  s_5d7717eeeb4bf1::t_1f9ce30267db38 1
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_5d7717eeeb4bf1::t_5b0817ebc19e2b 41-52,54-58,60-68
+  s_5d7717eeeb4bf1::t_7b0408fd99cc76 73,78
+  s_5d7717eeeb4bf1::t_d63e985d14271f 704,738,741,748,1048,1061,1064,1273,1279,1282,1410,1416,1419
+  s_5d7717eeeb4bf1::t_e08d0d1e09d46f 193-197,199-202,209-213,215-219,241-245,247-251
+  s_5d7717eeeb4bf1::t_8a8fd9c289d4bd 1326-1329,1331-1334
+  s_5d7717eeeb4bf1::t_ae14269c684b0a 53,59
+  s_5d7717eeeb4bf1::t_796cd68a79f58d 69-72,74-77,79-83,587,979,1143,1347
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_5d7717eeeb4bf1::t_c81bb8900e4cd3 200-204,206,209,212-213,216-220,230-233,252,848-851,853,856,859-860,863-867,876-879,885
+  s_5d7717eeeb4bf1::t_f12feb649dd081 198,846
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_5d7717eeeb4bf1::t_92d8d03a651f10 129-132,134-141
+control-plane/Tests/AppResourceTests/VMInstanceIdentityTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 395
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 245
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 433
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_5d7717eeeb4bf1::t_25d71d4ca3226d 640-641,644-650,652-659
+  s_5d7717eeeb4bf1::t_acb1126c8d216f 554-555,634-635
+  s_5d7717eeeb4bf1::t_73c08430ec064e 270,273
+  s_5d7717eeeb4bf1::t_3e189e27208d60 508-525,527-529,535-553,556-633,636-639,642-643,651,660-664,666-667
+  s_5d7717eeeb4bf1::t_594c198f681001 530-534
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 380,413,441,484
+  s_5d7717eeeb4bf1::t_2051da1381bd21 389,400,422,492
+control-plane/Sources/App/Services/AgentService.swift
+  s_5d7717eeeb4bf1::t_41e218d7617734 1080-1097
+  s_5d7717eeeb4bf1::t_72e8fda42b17e2 2394-2398,2400-2415
+  s_5d7717eeeb4bf1::t_d63e985d14271f 1124,1129-1138
+  s_5d7717eeeb4bf1::t_de19a067510b49 2199
+  s_5d7717eeeb4bf1::t_9792572f7df14a 2399
+  s_5d7717eeeb4bf1::t_92d8d03a651f10 1206-1221
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_5d7717eeeb4bf1::t_7246728c11c336 15-26
+control-plane/Tests/AppPlatformTests/ResourceMutationTests.swift
+  s_5d7717eeeb4bf1::t_0f935f0f3d1cff 77-97,451-492
+  s_5d7717eeeb4bf1::t_0af38ee1038774 384-385,387,393
+  s_5d7717eeeb4bf1::t_c55712ea020cf3 29-47,198-233
+  s_5d7717eeeb4bf1::t_221c4d72ee43f7 234-235,375-383,386,388-392,394-450,493-501
+  s_5d7717eeeb4bf1::t_81c356a469c4e2 507,515,548
+  s_5d7717eeeb4bf1::t_291f6e297ab5bb 185-186
+  s_5d7717eeeb4bf1::t_d63e985d14271f 524,534
+  s_3805ddcc2bf4a3::t_d0a68a76997fa1 236
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 92
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_5d7717eeeb4bf1::t_92d8d03a651f10 140-142,184-191,193-198
+  s_5d7717eeeb4bf1::t_3d705acd9c63b1 46-47
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_5d7717eeeb4bf1::t_25d71d4ca3226d 519-521,524-528,570-573,576-581
+  s_5d7717eeeb4bf1::t_2f62fa7c065025 522-523,574-575
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 260,370,425,465-466,499,528,584,617,636,652,674,694,734
+  s_5d7717eeeb4bf1::t_b68745e5f7d266 124,126,135
+control-plane/Tests/AppPlatformTests/ResourceFinalizerTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 165,185,208,231,248,268,307,334,349,382,384
+control-plane/Sources/App/Controllers/VMController.swift
+  s_5d7717eeeb4bf1::t_3d705acd9c63b1 490-492
+  s_5d7717eeeb4bf1::t_f12feb649dd081 558-565,939-947
+  s_5d7717eeeb4bf1::t_291f6e297ab5bb 736-737
+control-plane/Sources/App/Models/Volume.swift
+  s_5d7717eeeb4bf1::t_f8b76c9e30ca36 320-321
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_5d7717eeeb4bf1::t_2d273363a93cfa 275-312
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_5d7717eeeb4bf1::t_291f6e297ab5bb 659-660
+  s_5d7717eeeb4bf1::t_f12feb649dd081 586-593
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_5d7717eeeb4bf1::t_a0996017b1f26c 128,137-153
+  s_5d7717eeeb4bf1::t_3d705acd9c63b1 346-350
+  s_5d7717eeeb4bf1::t_52a1559ec1478f 382-403
+  s_5d7717eeeb4bf1::t_f29eee968be4a1 171,183,194,202,221,234,252,259-271
+  s_5d7717eeeb4bf1::t_d63e985d14271f 272,275-285
+  s_5d7717eeeb4bf1::t_6badc7c95a9c90 326-331,379-380,407,409-410,412-438,442-446,448,464-465,468-481,486-490,492
+  s_5d7717eeeb4bf1::t_0619041ccca1a4 483
+control-plane/Tests/AppResourceTests/RegistryPullSecretTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 532
+control-plane/Sources/App/Models/Sandbox.swift
+  s_5d7717eeeb4bf1::t_f8b76c9e30ca36 262-264,279-281
+  s_5d7717eeeb4bf1::t_4e4501f6c55dec 317-319,329
+control-plane/Tests/AppResourceTests/DesiredStateFixtureHelpers.swift
+  s_5d7717eeeb4bf1::t_1f9ce30267db38 1
+  s_5d7717eeeb4bf1::t_02437e79c85f9d 2-54
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_5d7717eeeb4bf1::t_2d273363a93cfa 287-325
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 579
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 292,425,456,483,514,522,539,582,658,681,710,732,749
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 113,147
+  s_5d7717eeeb4bf1::t_996a96349a8e1a 242-245
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_5d7717eeeb4bf1::t_f29eee968be4a1 46
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 180,190,200,926,976,984,1030,1147,1364,1771,1799,1823,1857,1912,1928,1955
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 321-322
+control-plane/Tests/AppPlatformTests/ResourceConditionsTests.swift
+  s_5d7717eeeb4bf1::t_37bb22bc11e1e7 134,151,165,212,234,254,273,301,317,336,342,356,372,396,426,460,489,516,561,607,651
+control-plane/Sources/App/Models/vm.swift
+  s_5d7717eeeb4bf1::t_f8b76c9e30ca36 382-384,390-391,409,416-418
+  s_5d7717eeeb4bf1::t_4e4501f6c55dec 459-460,473
+control-plane/Tests/AppResourceTests/VolumeStatusTests.swift
+  s_5d7717eeeb4bf1::t_4e4501f6c55dec 137-138,141,159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "5dc10e96a48f323a3e57b9168fb553f2e9c0763d",
+  "prompts": {},
+  "sessions": {
+    "s_3805ddcc2bf4a3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4ae-e6d0-7543-9224-3e5f392b4ed8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_5d7717eeeb4bf1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4af-40ef-7863-978f-c926590eb759",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
