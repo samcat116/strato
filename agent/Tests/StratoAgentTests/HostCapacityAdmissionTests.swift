@@ -172,6 +172,23 @@ struct HostCapacityAdmissionTests {
                 == HostReservation(cpus: 6, memoryBytes: 6 * gib))
     }
 
+    @Test("per-workload inventory raises stale sizing to the durable manifest")
+    func staleInventorySizing() {
+        let inventory = HypervisorReservationInventory(
+            reservation: HostReservation(cpus: 3, memoryBytes: 3 * gib),
+            workloadReservations: [
+                "vm-a": HostReservation(cpus: 1, memoryBytes: gib),
+                "vm-untracked": HostReservation(cpus: 2, memoryBytes: 2 * gib),
+            ])
+        let durable = [
+            "vm-a": HostReservation(cpus: 4, memoryBytes: 4 * gib)
+        ]
+
+        #expect(
+            inventory.includingMissingWorkloads(durable)
+                == HostReservation(cpus: 6, memoryBytes: 6 * gib))
+    }
+
     @Test("sandbox sizing uses the shared host reservation pools")
     func sandboxReservationSemantics() {
         let spec = SandboxSpec(

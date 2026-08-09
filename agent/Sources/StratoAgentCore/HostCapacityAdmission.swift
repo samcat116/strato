@@ -36,17 +36,41 @@ public struct HostReservation: Sendable, Equatable, Hashable {
 public struct HypervisorReservationInventory: Sendable, Equatable {
     public let reservation: HostReservation
     public let workloadIDs: Set<String>?
+    /// Exact per-workload reservations when the backend can collect sizing and
+    /// membership in the same sweep. This lets admission raise a cached entry
+    /// to a newer durable manifest size without discarding other domains from
+    /// that cached inventory.
+    public let workloadReservations: [String: HostReservation]?
 
-    public init(reservation: HostReservation, workloadIDs: Set<String>? = nil) {
+    public init(
+        reservation: HostReservation,
+        workloadIDs: Set<String>? = nil,
+        workloadReservations: [String: HostReservation]? = nil
+    ) {
         self.reservation = reservation
-        self.workloadIDs = workloadIDs
+        self.workloadReservations = workloadReservations
+        self.workloadIDs = workloadReservations.map { Set($0.keys) } ?? workloadIDs
     }
 
-    /// Adds durable manifest reservations that are absent from the backend's
-    /// inventory. A backend that cannot identify the members of its aggregate
-    /// is handled conservatively: every orphan remains reserved.
+    /// Reconciles durable manifest reservations with the backend inventory.
+    /// Exact per-workload sizing takes the larger value in each dimension, so
+    /// a cached pre-resize aggregate cannot hide a newer manifest grant. With
+    /// membership only, missing workloads are added as before. A backend that
+    /// cannot identify its aggregate's members conservatively retains every
+    /// durable workload.
     public func includingMissingWorkloads(_ workloads: [String: HostReservation]) -> HostReservation {
-        workloads.reduce(reservation) { total, workload in
+        if var reconciled = workloadReservations {
+            for (id, durable) in workloads {
+                let observed = reconciled[id] ?? HostReservation()
+                reconciled[id] = HostReservation(
+                    cpus: max(observed.cpus, durable.cpus),
+                    memoryBytes: max(observed.memoryBytes, durable.memoryBytes))
+            }
+            return reconciled.values.reduce(HostReservation()) { total, workload in
+                total.addingSaturating(workload)
+            }
+        }
+        return workloads.reduce(reservation) { total, workload in
             guard workloadIDs?.contains(workload.key) != true else { return total }
             return total.addingSaturating(workload.value)
         }

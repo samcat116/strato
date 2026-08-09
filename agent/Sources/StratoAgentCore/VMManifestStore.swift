@@ -117,6 +117,31 @@ public struct VMManifestEntry: Codable, Sendable {
         return copy
     }
 
+    /// Moves only growing reservation dimensions toward a desired spec. A boot
+    /// can realize those larger grants before the planner emits its separate
+    /// drift-correction resize item, while a requested shrink must not be
+    /// credited until that resize succeeds.
+    public func reservingPositiveSizingGrowth(toward desired: VMSpec) -> VMManifestEntry {
+        var copy = self
+        copy.spec = VMSpec(
+            cpus: max(spec.cpus, desired.cpus),
+            maxCpus: max(spec.maxCpus, desired.maxCpus),
+            memoryBytes: max(spec.memoryBytes, desired.memoryBytes),
+            maxMemoryBytes: max(spec.maxMemoryBytes, desired.maxMemoryBytes),
+            balloonTargetBytes: spec.balloonTargetBytes,
+            diskBytes: spec.diskBytes,
+            sharedMemory: spec.sharedMemory,
+            hugepages: spec.hugepages,
+            boot: spec.boot,
+            machine: spec.machine,
+            volumes: spec.volumes,
+            networks: spec.networks,
+            console: spec.console,
+            sshAuthorizedKeys: spec.sshAuthorizedKeys,
+            userData: spec.userData)
+        return copy
+    }
+
     // Custom decode so `kind` tolerates absence: entries persisted by a
     // pre-sandbox agent decode as VMs rather than throwing. `encode(to:)`
     // stays synthesized.

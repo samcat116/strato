@@ -1108,26 +1108,34 @@ actor LibvirtService: HypervisorService {
                 // already share one absolute deadline, so serializing them turns
                 // a host's domain count into `N x RTT` inside a budget sized for
                 // a single query — on a busy host, reliably unfinishable.
-                let reservation = try await withThrowingTaskGroup(of: DomainGetInfoRet.self) { group in
+                let workloads = try await withThrowingTaskGroup(
+                    of: (String, HostReservation).self
+                ) { group in
                     for dom in domains {
                         group.addTask {
-                            try await client.domainGetInfo(dom: dom, deadline: deadline)
+                            let info = try await client.domainGetInfo(dom: dom, deadline: deadline)
+                            let reservation = LibvirtDomain.reservation(from: info)
+                            return (
+                                dom.name,
+                                HostReservation(
+                                    cpus: reservation.vcpus,
+                                    memoryBytes: reservation.memoryBytes)
+                            )
                         }
                     }
-                    var infos: [DomainGetInfoRet] = []
-                    infos.reserveCapacity(domains.count)
-                    for try await info in group {
-                        infos.append(info)
+                    var reservations: [String: HostReservation] = [:]
+                    reservations.reserveCapacity(domains.count)
+                    for try await (name, reservation) in group {
+                        reservations[name] = reservation
                     }
-                    // Both the arithmetic and the fold are `LibvirtDomain`'s, so
-                    // "a host with domains never reports zero" is asserted in a
-                    // package with no daemon in it — this target has no tests.
-                    return LibvirtDomain.reservation(from: infos)
+                    return reservations
+                }
+                let reservation = workloads.values.reduce(HostReservation()) { total, workload in
+                    total.addingSaturating(workload)
                 }
                 return HypervisorReservationInventory(
-                    reservation: HostReservation(
-                        cpus: reservation.vcpus, memoryBytes: reservation.memoryBytes),
-                    workloadIDs: Set(domains.map(\.name)))
+                    reservation: reservation,
+                    workloadReservations: workloads)
             }
             lastKnownReservationInventory.record(inventory)
             return inventory

@@ -4040,6 +4040,23 @@ extension Agent: ReconcileActuator {
             throw error
         }
 
+        if let entry = managedVMs[item.vmId] ?? orphanedVMs[item.vmId] {
+            var booted = entry.reservingPositiveSizingGrowth(toward: desired.spec)
+            if entry.hypervisorType == .qemu {
+                booted = booted.reservingMemory(
+                    atLeast: max(currentReservation.memoryBytes, desiredReservation.memoryBytes))
+            }
+            if managedVMs[item.vmId] != nil {
+                managedVMs[item.vmId] = booted
+            } else {
+                orphanedVMs[item.vmId] = booted
+            }
+            // The larger domain is running now. Make its reservation durable
+            // before retiring the provisional claim; the separate drift
+            // resize item may not arrive until the next desired-state sync.
+            persistManifest()
+        }
+
         if let claim, item.steps.contains(.resize) {
             bootCapacityClaims[item.vmId] = claim
         } else {

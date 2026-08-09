@@ -214,20 +214,28 @@ actor MockHypervisorService: HypervisorService {
     /// real domain. Returning exact membership also lets agent accounting add
     /// only manifest workloads that are actually missing from this mock.
     func reservationInventory() async -> HypervisorReservationInventory? {
-        HypervisorReservationInventory(
-            reservation: reservation,
-            workloadIDs: Set(vms.keys))
+        let workloads = workloadReservations
+        return HypervisorReservationInventory(
+            reservation: workloads.values.reduce(HostReservation()) { total, workload in
+                total.addingSaturating(workload)
+            },
+            workloadReservations: workloads)
     }
 
     private var reservation: HostReservation {
-        vms.values.reduce(HostReservation()) { total, vm in
+        workloadReservations.values.reduce(HostReservation()) { total, workload in
+            total.addingSaturating(workload)
+        }
+    }
+
+    private var workloadReservations: [String: HostReservation] {
+        vms.mapValues { vm in
             let current = VMHostReservation.forSpec(
                 vm.spec, hypervisorType: hypervisorType, architecture: .current)
             let fixed = vm.realizedMemoryReservationBytes ?? current.memoryBytes
-            return total.addingSaturating(
-                HostReservation(
-                    cpus: current.cpus,
-                    memoryBytes: max(vm.spec.memoryBytes, fixed)))
+            return HostReservation(
+                cpus: current.cpus,
+                memoryBytes: max(vm.spec.memoryBytes, fixed))
         }
     }
 

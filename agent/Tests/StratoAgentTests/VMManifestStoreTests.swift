@@ -157,6 +157,24 @@ struct VMManifestStoreTests {
         #expect(resized.kind == .vm)
     }
 
+    @Test("Boot reservation records growth without crediting a mixed shrink")
+    func bootReservationKeepsShrink() {
+        let current = makeSpec(cpus: 4, memoryBytes: 2_147_483_648)
+        let desired = VMSpec(
+            cpus: 2,
+            maxCpus: 8,
+            memoryBytes: 4_294_967_296,
+            maxMemoryBytes: 8_589_934_592,
+            boot: .disk(firmware: nil))
+        let reserved = VMManifestEntry(hypervisorType: .qemu, spec: current)
+            .reservingPositiveSizingGrowth(toward: desired)
+
+        #expect(reserved.spec.cpus == 4)
+        #expect(reserved.spec.maxCpus == 8)
+        #expect(reserved.spec.memoryBytes == 4_294_967_296)
+        #expect(reserved.spec.maxMemoryBytes == 8_589_934_592)
+    }
+
     /// The other field that made copying necessary (STR-151): the record of
     /// what this host has already *done* to the workload. Losing it to a resize
     /// or a volume attach would make the next sync read "no record" and quietly
