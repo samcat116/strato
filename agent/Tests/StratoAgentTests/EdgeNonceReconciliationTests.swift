@@ -399,8 +399,13 @@ private actor MockEdgeActuator: ReconcileActuator {
     func setNonces(_ nonces: [String: AppliedEdgeNonces]) { self.nonces = nonces }
     func setFailure(_ error: (any Error)?) { failWith = error }
 
+    func presenceIsComplete() -> Bool { true }
     func observedPresence() -> [String: VMPresence] { presence }
+    func observedSizing() -> [String: VMSizing] { [:] }
+    func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
     func observedSandboxPresence() -> [String: SandboxPresence] { sandboxes }
+    func observedVolumePresence() -> [String: VolumePresence]? { [:] }
+    func observedSnapshotPresence() -> [String: SnapshotPresence]? { [:] }
     func observedEdgeNonces() -> [String: AppliedEdgeNonces] { nonces }
 
     func recordAppliedEdges(_ item: ReconcileWorkItem, _ applied: AppliedEdgeNonces) {
@@ -412,6 +417,10 @@ private actor MockEdgeActuator: ReconcileActuator {
         performed.append((.adopt, item.id))
         presence[item.id] = .managed(.running)
         return .running
+    }
+
+    func adoptSandbox(_ item: ReconcileWorkItem) throws -> SandboxStatus {
+        throw UnsupportedTestActuation.sandbox
     }
 
     /// Mirrors the hypervisor closely enough that a multi-sync test sees the

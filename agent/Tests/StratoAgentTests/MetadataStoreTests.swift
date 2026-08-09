@@ -45,22 +45,34 @@ struct MetadataStoreTests {
             failWith = error
         }
 
+        func presenceIsComplete() -> Bool { true }
         func observedPresence() -> [String: VMPresence] { presence }
+        func observedSizing() -> [String: VMSizing] { [:] }
+        func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
+        func observedSandboxPresence() -> [String: SandboxPresence] { [:] }
+        func observedVolumePresence() -> [String: VolumePresence]? { [:] }
+        func observedSnapshotPresence() -> [String: SnapshotPresence]? { [:] }
+        func observedEdgeNonces() -> [String: AppliedEdgeNonces] { [:] }
+        func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) {}
 
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus {
-            presence[item.vmId] = .managed(.running)
+            presence[item.id] = .managed(.running)
             return .running
+        }
+
+        func adoptSandbox(_ item: ReconcileWorkItem) throws -> SandboxStatus {
+            throw UnsupportedTestActuation.sandbox
         }
 
         func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
             if let failWith { throw failWith }
             switch step {
-            case .create: presence[item.vmId] = .managed(.created)
-            case .boot, .resume: presence[item.vmId] = .managed(.running)
-            case .pause: presence[item.vmId] = .managed(.paused)
-            case .shutdown: presence[item.vmId] = .managed(.shutdown)
-            case .delete: presence.removeValue(forKey: item.vmId)
-            case .reboot, .restore: presence[item.vmId] = .managed(.running)
+            case .create: presence[item.id] = .managed(.created)
+            case .boot, .resume: presence[item.id] = .managed(.running)
+            case .pause: presence[item.id] = .managed(.paused)
+            case .shutdown: presence[item.id] = .managed(.shutdown)
+            case .delete: presence.removeValue(forKey: item.id)
+            case .reboot, .restore: presence[item.id] = .managed(.running)
             // Steps this suite never plans: it drives VM items only, and the
             // rest belong to volumes (attach/detach) or snapshots (export).
             case .adopt, .resize, .attach, .detach, .export, .reconfigureNetworks: break
@@ -444,7 +456,17 @@ struct MetadataStoreTests {
     private actor BlindActuator: ReconcileActuator {
         func presenceIsComplete() -> Bool { false }
         func observedPresence() -> [String: VMPresence] { [:] }
+        func observedSizing() -> [String: VMSizing] { [:] }
+        func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
+        func observedSandboxPresence() -> [String: SandboxPresence] { [:] }
+        func adoptSandbox(_ item: ReconcileWorkItem) throws -> SandboxStatus {
+            throw UnsupportedTestActuation.sandbox
+        }
+        func observedVolumePresence() -> [String: VolumePresence]? { [:] }
+        func observedSnapshotPresence() -> [String: SnapshotPresence]? { [:] }
+        func observedEdgeNonces() -> [String: AppliedEdgeNonces] { [:] }
+        func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) {}
         func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {}
         func convergenceDidChange() {}
     }
