@@ -791,6 +791,7 @@ jobs:
              "strato-cli-linux-arm64.tar.gz",
              "strato-cli-macos-arm64.tar.gz",
              "strato-1.2.3-source.tar.gz",
+             "strato-1.2.3-compose.tar.gz",
              "agent-manifest.json",
              "install.sh"]
             | map(select(test($ENV.BUNDLE_ASSET_PATTERN))) | join(" ")')"
@@ -823,16 +824,17 @@ jobs:
           # unexpected name, a partial upload. Assert the complement too — a
           # strato-*.tar.gz asset the pattern did not select is a pattern that
           # fell behind the build matrix, not an asset to skip silently. The
-          # two deliberate non-bundles are subtracted by name: the CLI-only
-          # assets (STR-45) and the source archive. Checked against the live
-          # release rather than a fixture, so it needs no maintenance when a
-          # leg is added — it just fails until the pattern catches up.
+          # deliberate non-bundles are subtracted by name: the CLI-only assets
+          # (STR-45), source archive, and canonical Compose deployment archive.
+          # Checked against the live release rather than a fixture, so it needs
+          # no maintenance when a leg is added — it just fails until the
+          # pattern catches up.
           gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
             --jq '.assets[].name
                   | select(startswith("strato-") and endswith(".tar.gz"))
                   | select(test($ENV.BUNDLE_ASSET_PATTERN) | not)
                   | select((startswith("strato-cli-")
-                            or test("-source\\.tar\\.gz$")) | not)' \
+                            or test("-(source|compose)\\.tar\\.gz$")) | not)' \
             > unmatched.txt
           if [ -s unmatched.txt ]; then
             echo "bundle-shaped assets missing from the manifest: $(tr '\n' ' ' < unmatched.txt)" >&2
