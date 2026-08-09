@@ -90,8 +90,10 @@ struct AddHotPathIndexes: AsyncMigration {
         // migrations in a transaction — it does not, and that false belief is
         // what STR-183 was filed about. `SchemaMigrator` now does, so
         // `CREATE INDEX CONCURRENTLY` genuinely cannot join it and would need
-        // the `UntransactedMigration` opt-out. At current table sizes the brief
-        // write lock is acceptable, so these stay plain creates.
+        // the `UntransactedMigration` opt-out. Because this entire migration is
+        // now one transaction, every index's write-blocking lock is held until
+        // all indexes commit. At current table sizes that combined lock window
+        // is acceptable, so these stay plain creates.
         for index in Self.indexes {
             try await sql.raw(
                 "CREATE INDEX IF NOT EXISTS \(unsafeRaw: index.name) ON \(unsafeRaw: index.definition)"

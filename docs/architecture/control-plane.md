@@ -660,8 +660,10 @@ what makes the test harness safe.
   the whole phase on one **pinned** connection (`db.withConnection`):
   - A session-scoped `pg_advisory_lock` on `strato:schema-migrations`, taken by
     polling `pg_try_advisory_lock` against a deadline
-    (`STRATO_MIGRATION_LOCK_TIMEOUT_SECONDS`, default 600) so a wedged migration
-    on another replica is named rather than waited on forever. It cannot be the
+    (`STRATO_MIGRATION_LOCK_TIMEOUT_SECONDS`, default 240) so a wedged migration
+    on another replica is named rather than waited on forever. The four-minute
+    default stays inside the Helm chart's five-minute startup-probe budget; keep
+    those settings coupled when overriding either one. It cannot be the
     `pg_advisory_xact_lock` idiom `IPAMService`/`QuotaEnforcementService` use —
     the phase is many transactions, so an xact lock would release at the first
     statement boundary. A losing replica waits, then finds nothing unapplied.
@@ -674,10 +676,10 @@ what makes the test harness safe.
     connections while the lock sat on a pinned one would need a pool of ≥2 *per
     event loop*, and Vapor's Postgres pool defaults to exactly 1.
 - `UntransactedMigration` is the documented opt-out, for the one case Postgres
-  forbids in a transaction block: `CREATE INDEX CONCURRENTLY`. Nothing conforms
-  today. Opting out gives back the crash window above, so such a migration must
-  be written to be re-runnable (`IF NOT EXISTS`, no read-then-write over live
-  rows).
+  forbids in a transaction block: `CREATE INDEX CONCURRENTLY`. No production
+  migration conforms today. Opting out gives back the crash window above, so
+  such a migration must be written to be re-runnable (`IF NOT EXISTS`, no
+  read-then-write over live rows).
 
 ## Testing
 

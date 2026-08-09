@@ -71,7 +71,10 @@ enum SchemaMigrator {
     static let lockTimeoutKey = "STRATO_MIGRATION_LOCK_TIMEOUT_SECONDS"
     static let lockPollKey = "STRATO_MIGRATION_LOCK_POLL_SECONDS"
 
-    private static let defaultLockTimeout: Double = 600
+    /// Kept one minute inside the Helm chart's five-minute startup-probe
+    /// budget, so the named timeout reaches the logs before kubelet restarts the
+    /// process. Keep this coupled to `startupProbe` in the chart values.
+    private static let defaultLockTimeout: Double = 240
     private static let defaultLockPoll: Double = 2
 
     /// Resolved once at the call site rather than read from the environment
@@ -99,6 +102,15 @@ enum SchemaMigrator {
         let logger = app.logger
         let migrations = app.migrations
 
+        logger.info(
+            "[SchemaMigrator] Resolved migration options",
+            metadata: [
+                "runMigrations": .stringConvertible(options.runMigrations),
+                "lockTimeoutSeconds": .stringConvertible(options.lockTimeout),
+                "lockPollSeconds": .stringConvertible(options.lockPoll),
+            ]
+        )
+
         try await app.db.withConnection { connection in
             let migrator = Migrator(
                 databaseFactory: { _ in connection },
@@ -118,29 +130,23 @@ enum SchemaMigrator {
                 logger: logger
             )
 
-            do {
+            try await whileHolding(lock, logger: logger) {
                 // Under the lock: create `_fluent_migrations` if it is missing,
                 // then read the unapplied list. Both have to happen here rather
                 // than before the lock — a list read outside it is exactly the
                 // stale read every replica acts on today.
                 try await migrator.setupIfNeeded().get()
                 let pending = try await migrator.previewPrepareBatch().get().map(\.0)
-                guard !pending.isEmpty else {
+                if pending.isEmpty {
                     logger.info("[SchemaMigrator] Schema is up to date")
-                    try await lock.release()
-                    return
+                } else {
+                    let batch = try await nextBatchNumber(on: connection)
+                    logger.info(
+                        "[SchemaMigrator] Applying \(pending.count) migration(s)",
+                        metadata: ["batch": .stringConvertible(batch)]
+                    )
+                    try await applyBatch(pending, batch: batch, on: connection, logger: logger)
                 }
-
-                let batch = try await nextBatchNumber(on: connection)
-                logger.info(
-                    "[SchemaMigrator] Applying \(pending.count) migration(s)",
-                    metadata: ["batch": .stringConvertible(batch)]
-                )
-                try await applyBatch(pending, batch: batch, on: connection, logger: logger)
-                try await lock.release()
-            } catch {
-                try? await lock.release()
-                throw error
             }
         }
     }
@@ -185,21 +191,19 @@ enum SchemaMigrator {
         // connection" — and `transaction(_:)` short-circuits on it without ever
         // issuing a `BEGIN`. `TransactionControlDatabase` is the public API for
         // exactly this case, and it is what actually opens the transaction.
-        let control = connection as? any TransactionControlDatabase
-        if control == nil {
-            logger.warning(
-                "[SchemaMigrator] Database does not support explicit transaction control; migrations will not be atomic with their log rows"
-            )
+        guard let control = connection as? any TransactionControlDatabase else {
+            let error = SchemaMigrationError.transactionControlUnavailable
+            logger.critical("\(error.description)")
+            throw error
         }
 
         for migration in migrations {
             logger.info("[SchemaMigrator] Starting prepare", metadata: ["migration": .string(migration.name)])
+            let transactional = !(migration is any UntransactedMigration)
             do {
-                // The opt-out (and any database without transaction control):
-                // DDL first, row second, with the crash window back between
-                // them. See `UntransactedMigration`.
-                let transactional = !(migration is any UntransactedMigration)
-                if transactional, let control {
+                // The opt-out: DDL first, row second, with the crash window
+                // back between them. See `UntransactedMigration`.
+                if transactional {
                     try await control.beginTransaction().get()
                     do {
                         try await migration.prepare(on: connection).get()
@@ -217,6 +221,7 @@ enum SchemaMigrator {
                 let wrapped = SchemaMigrationError.migrationFailed(
                     name: migration.name,
                     batch: batch,
+                    transactional: transactional,
                     underlying: error
                 )
                 logger.error(
@@ -241,31 +246,64 @@ enum SchemaMigrator {
 
     // MARK: - The advisory lock
 
-    /// A held advisory lock, or the no-op stand-in for a non-Postgres database.
+    /// A held advisory lock.
     struct LockHandle {
         let release: @Sendable () async throws -> Void
+    }
+
+    /// Runs `body`, then releases `lock` exactly once on either outcome. When
+    /// both fail, the migration error stays primary and the cleanup failure is
+    /// logged alongside it.
+    private static func whileHolding(
+        _ lock: LockHandle,
+        logger: Logger,
+        body: () async throws -> Void
+    ) async throws {
+        var bodyError: (any Error)?
+        do {
+            try await body()
+        } catch {
+            bodyError = error
+        }
+
+        do {
+            try await lock.release()
+        } catch {
+            guard let bodyError else { throw error }
+            logger.error(
+                "[SchemaMigrator] Failed to release the migration lock after the migration phase failed",
+                metadata: [
+                    "migrationError": .string(String(reflecting: bodyError)),
+                    "releaseError": .string(String(reflecting: error)),
+                ]
+            )
+        }
+
+        if let bodyError { throw bodyError }
     }
 
     /// Takes the migration lock, polling `pg_try_advisory_lock` rather than
     /// blocking in `pg_advisory_lock`, so a wedged migration on another replica
     /// surfaces as a named error instead of a readiness gate that never opens.
     ///
-    /// **Non-Postgres databases are an explicit, deliberate no-op**, not a
-    /// pattern inherited from `lockAllocations`/`lockQuotas`. Postgres has been
-    /// the only supported backend since the SQLite removal, so there is no
-    /// second engine this could silently run unlocked against; the guard exists
-    /// only because `Database` does not promise a dialect. The per-migration
-    /// transaction is not gated on the dialect at all — it asks for transaction
-    /// control instead, which any SQL backend can answer.
+    /// Postgres has been the only supported backend since the SQLite removal.
+    /// Fail hard if that contract changes under us: silently skipping the lock
+    /// would restore the cross-replica migration race this type exists to stop.
     static func acquireLock(
         on connection: any Database,
         timeout: Double,
         poll: Double,
         logger: Logger
     ) async throws -> LockHandle {
-        guard let sql = connection as? any SQLDatabase, sql.dialect.name == "postgresql" else {
-            logger.debug("[SchemaMigrator] Non-Postgres database; skipping the migration advisory lock")
-            return LockHandle(release: {})
+        guard let sql = connection as? any SQLDatabase else {
+            let error = SchemaMigrationError.postgresRequired(actualDialect: nil)
+            logger.critical("\(error.description)")
+            throw error
+        }
+        guard sql.dialect.name == "postgresql" else {
+            let error = SchemaMigrationError.postgresRequired(actualDialect: sql.dialect.name)
+            logger.critical("\(error.description)")
+            throw error
         }
 
         let name = lockName
@@ -318,10 +356,10 @@ enum SchemaMigrator {
 /// A migration that must run *outside* a transaction.
 ///
 /// The one real case is `CREATE INDEX CONCURRENTLY`, which Postgres forbids
-/// inside a transaction block. Nothing conforms today — `AddHotPathIndexes`
-/// deliberately uses plain creates — but the escape hatch exists before a table
-/// gets large enough to need one, because discovering it is missing while
-/// writing that migration is the wrong time.
+/// inside a transaction block. No production migration conforms today —
+/// `AddHotPathIndexes` deliberately uses plain creates — but the escape hatch
+/// exists before a table gets large enough to need one, because discovering it
+/// is missing while writing that migration is the wrong time.
 ///
 /// **Opting out gives up the atomicity this migrator exists for.** A crash
 /// between the DDL and the `_fluent_migrations` row is the unrecoverable
@@ -336,9 +374,16 @@ enum SchemaMigrationError: Error, CustomStringConvertible {
     /// The lock is held by another process past the deadline.
     case lockTimeout(lockName: String, seconds: Double)
 
-    /// A migration's `prepare` (or its log row) failed. The transaction rolled
-    /// back, so nothing it did is on the database.
-    case migrationFailed(name: String, batch: Int, underlying: any Error)
+    /// The configured database cannot provide Postgres advisory locks.
+    case postgresRequired(actualDialect: String?)
+
+    /// The driver cannot open explicit transactions on a pinned connection.
+    case transactionControlUnavailable
+
+    /// A migration's `prepare` (or its log row) failed. `transactional` records
+    /// whether the migrator attempted to roll the schema change and log row
+    /// back together; an opted-out migration may have left changes behind.
+    case migrationFailed(name: String, batch: Int, transactional: Bool, underlying: any Error)
 
     /// This process does not migrate, and the schema is behind the binary.
     case migrationsPendingButDisabled(names: [String])
@@ -353,14 +398,41 @@ enum SchemaMigrationError: Error, CustomStringConvertible {
                 \(SchemaMigrator.lockTimeoutKey).
                 """
 
-        case .migrationFailed(let name, let batch, let underlying):
+        case .postgresRequired(let actualDialect):
+            let actual = actualDialect.map { "'\($0)'" } ?? "a non-SQL database"
+            return """
+                Schema migrations require PostgreSQL, but the configured database reports \(actual). \
+                Refusing to run without the Postgres advisory lock that serializes replicas.
+                """
+
+        case .transactionControlUnavailable:
+            return """
+                The database driver does not expose TransactionControlDatabase on its pinned \
+                connection. Refusing to run migrations without atomic schema changes and migration \
+                log rows.
+                """
+
+        case .migrationFailed(let name, let batch, let transactional, let underlying):
             var message = "Migration '\(name)' failed: \(String(reflecting: underlying))"
+            if transactional {
+                message += """
+                    \n\nThe migration was run transactionally, and the migrator requested a rollback \
+                    before reporting this error.
+                    """
+            } else {
+                message += """
+                    \n\nThis migration opted out of transactions. Its schema changes may already be \
+                    present even though no migration log row was written; inspect the schema before retrying.
+                    """
+            }
             if isDuplicateObject(underlying) {
+                let provenance =
+                    transactional
+                    ? "The row was either lost by an older build crashing mid-migration or removed by hand"
+                    : "An earlier untransacted attempt may have changed the schema before it failed to write the row"
                 message += """
                     \n\nThe objects this migration creates already exist, but no '\(name)' row is in \
-                    _fluent_migrations — the schema and the migration log disagree. This build writes \
-                    both in one transaction and cannot produce that state, so the row was either lost \
-                    by an older build crashing mid-migration or removed by hand. To recover, confirm \
+                    _fluent_migrations — the schema and the migration log disagree. \(provenance). To recover, confirm \
                     the schema change is fully present, then record it: \
                     INSERT INTO _fluent_migrations (id, name, batch, created_at, updated_at) \
                     VALUES (gen_random_uuid(), '\(name)', \(batch), now(), now());
@@ -383,8 +455,8 @@ enum SchemaMigrationError: Error, CustomStringConvertible {
     /// errors the driver has wrapped past recognition.
     private func isDuplicateObject(_ error: any Error) -> Bool {
         // 42P07 duplicate_table, 42701 duplicate_column, 42710 duplicate_object,
-        // 42P06 duplicate_schema, 42P16 invalid_table_definition.
-        let duplicateStates: Set<String> = ["42P07", "42701", "42710", "42P06", "42P16"]
+        // 42P06 duplicate_schema.
+        let duplicateStates: Set<String> = ["42P07", "42701", "42710", "42P06"]
         if let psql = error as? PSQLError, let state = psql.serverInfo?[.sqlState] {
             return duplicateStates.contains(state)
         }

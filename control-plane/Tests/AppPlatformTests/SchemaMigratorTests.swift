@@ -129,6 +129,7 @@ struct SchemaMigratorTests {
 
             let error = try #require(thrown as? SchemaMigrationError)
             #expect(error.description.contains(migration.name))
+            #expect(error.description.contains("run transactionally"))
 
             // The transaction rolled back: the table it created is gone, and no
             // row claims the migration ran. The next boot re-runs it cleanly.
@@ -173,6 +174,69 @@ struct SchemaMigratorTests {
             #expect(logged.first?.batch == batch)
 
             try await sql.raw("DROP TABLE IF EXISTS schema_migrator_probe").run()
+        }
+    }
+
+    @Test("An untransacted migration can leave schema behind without a log row")
+    func untransactedFailureDescribesAndPreservesSchemaChange() async throws {
+        try await withTestApp { app in
+            let migration = UntransactedCreatesThenFails()
+
+            var thrown: (any Error)?
+            do {
+                try await app.db.withConnection { connection in
+                    try await SchemaMigrator.applyBatch(
+                        [migration],
+                        batch: 9999,
+                        on: connection,
+                        logger: app.logger
+                    )
+                }
+            } catch {
+                thrown = error
+            }
+
+            let error = try #require(thrown as? SchemaMigrationError)
+            #expect(error.description.contains("opted out of transactions"))
+            #expect(error.description.contains("may already be present"))
+
+            let sql = try #require(app.db as? any SQLDatabase)
+            let present = try await sql.raw(
+                "SELECT to_regclass('public.schema_migrator_probe') IS NOT NULL AS present"
+            ).first(decodingColumn: "present", as: Bool.self)
+            #expect(present == true)
+
+            let logged = try await MigrationLog.query(on: app.db)
+                .filter(\.$name == migration.name)
+                .count()
+            #expect(logged == 0)
+
+            try await sql.raw("DROP TABLE IF EXISTS schema_migrator_probe").run()
+        }
+    }
+
+    @Test("Invalid table definitions do not produce duplicate-object recovery advice")
+    func invalidTableDefinitionHasNoRecoveryInsert() async throws {
+        try await withTestApp { app in
+            let migration = CreatesInvalidTableDefinition()
+
+            var thrown: (any Error)?
+            do {
+                try await app.db.withConnection { connection in
+                    try await SchemaMigrator.applyBatch(
+                        [migration],
+                        batch: 9999,
+                        on: connection,
+                        logger: app.logger
+                    )
+                }
+            } catch {
+                thrown = error
+            }
+
+            let error = try #require(thrown as? SchemaMigrationError)
+            #expect(error.description.contains("42P16"))
+            #expect(!error.description.contains("INSERT INTO _fluent_migrations"))
         }
     }
 
@@ -288,6 +352,43 @@ private struct CreatesProbeTable: AsyncMigration {
     func prepare(on database: any Database) async throws {
         guard let sql = database as? any SQLDatabase else { return }
         try await sql.raw("CREATE TABLE schema_migrator_probe (id uuid PRIMARY KEY)").run()
+    }
+
+    func revert(on database: any Database) async throws {
+        guard let sql = database as? any SQLDatabase else { return }
+        try await sql.raw("DROP TABLE IF EXISTS schema_migrator_probe").run()
+    }
+}
+
+/// Makes a durable schema change and then fails. Conformance opts it out of the
+/// transaction so the test can pin down the escape hatch's promised semantics.
+private struct UntransactedCreatesThenFails: AsyncMigration, UntransactedMigration {
+    struct Boom: Error {}
+
+    var name: String { "SchemaMigratorTests.UntransactedCreatesThenFails" }
+
+    func prepare(on database: any Database) async throws {
+        guard let sql = database as? any SQLDatabase else { return }
+        try await sql.raw("CREATE TABLE schema_migrator_probe (id uuid PRIMARY KEY)").run()
+        throw Boom()
+    }
+
+    func revert(on database: any Database) async throws {
+        guard let sql = database as? any SQLDatabase else { return }
+        try await sql.raw("DROP TABLE IF EXISTS schema_migrator_probe").run()
+    }
+}
+
+/// PostgreSQL reports multiple primary keys as 42P16
+/// (`invalid_table_definition`), not as a duplicate object.
+private struct CreatesInvalidTableDefinition: AsyncMigration {
+    var name: String { "SchemaMigratorTests.CreatesInvalidTableDefinition" }
+
+    func prepare(on database: any Database) async throws {
+        guard let sql = database as? any SQLDatabase else { return }
+        try await sql.raw(
+            "CREATE TABLE schema_migrator_probe (first uuid PRIMARY KEY, second uuid PRIMARY KEY)"
+        ).run()
     }
 
     func revert(on database: any Database) async throws {
