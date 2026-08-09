@@ -142,6 +142,52 @@ public struct VMSpec: Codable, Sendable {
         )
     }
 
+    /// A copy of this spec with a different network-interface list.
+    ///
+    /// The VM manifest uses this as its durable record of which NICs the agent
+    /// has realized, just as `withVolumes(_:)` records realized disks.
+    public func withNetworks(_ networks: [NetworkSpec]) -> VMSpec {
+        VMSpec(
+            cpus: cpus,
+            maxCpus: maxCpus,
+            memoryBytes: memoryBytes,
+            maxMemoryBytes: maxMemoryBytes,
+            balloonTargetBytes: balloonTargetBytes,
+            diskBytes: diskBytes,
+            sharedMemory: sharedMemory,
+            hugepages: hugepages,
+            boot: boot,
+            machine: machine,
+            volumes: volumes,
+            networks: networks,
+            console: console,
+            sshAuthorizedKeys: sshAuthorizedKeys,
+            userData: userData
+        )
+    }
+
+    /// A copy with the desired resource-sizing fields while retaining the
+    /// attachment lists already realized by this agent.
+    public func withSizing(from desired: VMSpec) -> VMSpec {
+        VMSpec(
+            cpus: desired.cpus,
+            maxCpus: desired.maxCpus,
+            memoryBytes: desired.memoryBytes,
+            maxMemoryBytes: desired.maxMemoryBytes,
+            balloonTargetBytes: desired.balloonTargetBytes,
+            diskBytes: desired.diskBytes,
+            sharedMemory: sharedMemory,
+            hugepages: hugepages,
+            boot: boot,
+            machine: machine,
+            volumes: volumes,
+            networks: networks,
+            console: console,
+            sshAuthorizedKeys: sshAuthorizedKeys,
+            userData: userData
+        )
+    }
+
     // Custom decode so `sshAuthorizedKeys`, `diskBytes`, `maxMemoryBytes`,
     // `balloonTargetBytes`, `machine`, and `userData` tolerate absence: a spec produced by an older
     // control plane (before these fields existed) decodes to []/nil rather
@@ -272,7 +318,16 @@ public struct VolumeSpec: Codable, Sendable {
 
 /// A NIC attached to a logical network, referenced by id. The agent realizes
 /// the attachment (tap interface, user-mode SLIRP, ...) according to its platform.
-public struct NetworkSpec: Codable, Sendable {
+public struct NetworkSpec: Codable, Equatable, Sendable {
+    /// Stable control-plane identity of this interface (wire v40). Optional so
+    /// manifests and desired state from older peers remain decodable.
+    public let interfaceId: UUID?
+    /// Stable guest-facing device label assigned by the control plane.
+    public let deviceName: String?
+    /// Stable host-resource slot. New agents use this instead of the NIC's
+    /// compact array position, so removing a middle interface cannot rename the
+    /// TAP and OVN port belonging to every interface after it.
+    public let orderIndex: Int?
     /// Logical network name — a *human label only*, used for the OVN
     /// `network-name` external-id and logging. Never an identifier: names are
     /// unique per project, so two networks on one chassis may share one
@@ -369,6 +424,9 @@ public struct NetworkSpec: Codable, Sendable {
     public let resolverAddresses: [String]?
 
     public init(
+        interfaceId: UUID? = nil,
+        deviceName: String? = nil,
+        orderIndex: Int? = nil,
         network: String,
         networkId: UUID,
         macAddress: String? = nil,
@@ -388,6 +446,9 @@ public struct NetworkSpec: Codable, Sendable {
         resolverEnabled: Bool? = nil,
         resolverAddresses: [String]? = nil
     ) {
+        self.interfaceId = interfaceId
+        self.deviceName = deviceName
+        self.orderIndex = orderIndex
         self.network = network
         self.networkId = networkId
         self.macAddress = macAddress
@@ -409,6 +470,7 @@ public struct NetworkSpec: Codable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
+        case interfaceId, deviceName, orderIndex
         case network, networkId, macAddress, ipAddress, netmask, gateway, mtu
         case ipv6Address, ipv6PrefixLength, gateway6
         case dhcpEnabled, dnsServers, domainName, leaseTime
@@ -422,6 +484,9 @@ public struct NetworkSpec: Codable, Sendable {
     /// switch and the name is no longer a safe fallback.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.interfaceId = try container.decodeIfPresent(UUID.self, forKey: .interfaceId)
+        self.deviceName = try container.decodeIfPresent(String.self, forKey: .deviceName)
+        self.orderIndex = try container.decodeIfPresent(Int.self, forKey: .orderIndex)
         self.network = try container.decode(String.self, forKey: .network)
         self.networkId = try container.decode(UUID.self, forKey: .networkId)
         self.macAddress = try container.decodeIfPresent(String.self, forKey: .macAddress)

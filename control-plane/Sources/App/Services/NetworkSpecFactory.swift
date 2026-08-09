@@ -37,6 +37,9 @@ extension NetworkSpec {
         let ipv4 = interface.ipv4Address
         let ipv6 = interface.ipv6Address
         return NetworkSpec(
+            interfaceId: interface.networkInterfaceID,
+            deviceName: interface.networkDeviceName,
+            orderIndex: interface.networkOrderIndex,
             // A human label only: names are unique per project, so they cannot
             // identify a network. Agents use it for logging and external-ids.
             network: network.name,

@@ -121,7 +121,8 @@ struct VolumeReconciliationTests {
                         path: current.path, format: current.format, sizeBytes: current.sizeBytes))
             case .delete:
                 volumes.removeValue(forKey: item.id)
-            case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore:
+            case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore,
+                .reconfigureNetworks:
                 break
             }
         }

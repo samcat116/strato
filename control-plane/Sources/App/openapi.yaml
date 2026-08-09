@@ -431,6 +431,77 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/interfaces:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      operationId: listVMNetworkInterfaces
+      summary: List a virtual machine's network interfaces
+      tags: [Virtual Machines]
+      responses:
+        "200":
+          description: Interfaces ordered by their stable slot.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/NetworkInterface"
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: attachVMNetworkInterface
+      summary: Attach a network interface to a virtual machine
+      description: >-
+        QEMU only. The VM retains at most eight interface rows, including
+        pending and failed operations. The returned operation settles after
+        the agent reports the interface in its durable manifest.
+      tags: [Virtual Machines]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVMNetworkInterfaceRequest"
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/interfaces/{interfaceID}:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+      - $ref: "#/components/parameters/InterfaceID"
+    delete:
+      operationId: detachVMNetworkInterface
+      summary: Detach a network interface from a virtual machine
+      description: >-
+        The interface, its addresses, security groups, and floating IP remain
+        visible until a settled agent report confirms that it is absent.
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /api/vms/{vmID}/interfaces/{interfaceID}/retry:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+      - $ref: "#/components/parameters/InterfaceID"
+    post:
+      operationId: retryVMNetworkInterfaceMutation
+      summary: Retry a failed network-interface mutation
+      tags: [Virtual Machines]
+      responses:
+        "202": { $ref: "#/components/responses/AcceptedVMMutation" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /api/vms/{vmID}/stop:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -7864,6 +7935,14 @@ components:
       schema:
         type: string
         format: uuid
+    InterfaceID:
+      name: interfaceID
+      in: path
+      required: true
+      description: The VM network interface's id.
+      schema:
+        type: string
+        format: uuid
     SandboxID:
       name: sandboxID
       in: path
@@ -8979,6 +9058,16 @@ components:
         networkName:
           type: string
           description: Name of that network within the project. Mutually exclusive with `networkId`.
+        networkInterfaces:
+          type: array
+          minItems: 1
+          maxItems: 8
+          description: >-
+            Interfaces to create in stable slot order. Do not combine this with
+            `networkId`, `networkName`, or scalar `securityGroupIds`. Creation
+            requires either this array or the legacy scalar network form.
+          items:
+            $ref: "#/components/schemas/CreateVMNetworkInterfaceRequest"
         sshPublicKey:
           type: string
         userData:
@@ -9033,6 +9122,29 @@ components:
             configuration, so a VM created with this off may not finish
             provisioning. Requires an agent new enough to honour it; placement
             is constrained to such agents.
+    CreateVMNetworkInterfaceRequest:
+      type: object
+      description: >-
+        One VM network interface. Exactly one of `networkId` or `networkName`
+        is required and is resolved inside the VM's project.
+      properties:
+        networkId:
+          type: string
+          format: uuid
+        networkName:
+          type: string
+        securityGroupIds:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            format: uuid
+          description: Omitted or empty uses the project's default security group.
+        mtu:
+          type: integer
+          minimum: 68
+          maximum: 65535
+          description: Must be at least 1280 when the selected network has IPv6 enabled.
     UpdateVMRequest:
       type: object
       properties:
@@ -9104,6 +9216,8 @@ components:
           format: uuid
         status:
           $ref: "#/components/schemas/VMStatus"
+        hypervisorType:
+          $ref: "#/components/schemas/HypervisorType"
         hypervisorId:
           type: string
         cpu:
@@ -9309,7 +9423,7 @@ components:
         - Unknown
     NetworkInterface:
       type: object
-      required: [networkId, macAddress, addresses, deviceName, orderIndex]
+      required: [networkId, macAddress, addresses, deviceName, orderIndex, attachmentState]
       properties:
         id:
           type: string
@@ -9345,6 +9459,12 @@ components:
           description: Stable device name (e.g. net0).
         orderIndex:
           type: integer
+        attachmentState:
+          type: string
+          enum: [attaching, attached, detaching, attach_failed, detach_failed]
+        attachmentError:
+          type: string
+          description: The current generation's convergence error for this interface, when failed.
         securityGroupIds:
           type: array
           description: >-

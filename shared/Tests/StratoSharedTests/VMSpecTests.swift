@@ -251,6 +251,24 @@ struct VMSpecTests {
         #expect(decoded.ipAddress == "10.0.0.5")
         #expect(!decoded.dhcpEnabled)
         #expect(decoded.metadataEnabled == nil)
+        #expect(decoded.interfaceId == nil)
+        #expect(decoded.deviceName == nil)
+        #expect(decoded.orderIndex == nil)
+    }
+
+    @Test func networkSpecCarriesStableInterfaceIdentity() throws {
+        let interfaceID = UUID()
+        let spec = NetworkSpec(
+            interfaceId: interfaceID,
+            deviceName: "net5",
+            orderIndex: 5,
+            network: "storage",
+            networkId: UUID(),
+            macAddress: "52:54:00:00:00:05")
+        let decoded = try roundTrip(spec)
+        #expect(decoded.interfaceId == interfaceID)
+        #expect(decoded.deviceName == "net5")
+        #expect(decoded.orderIndex == 5)
     }
 
     /// `NetworkSpec` hand-writes `init(from:)`, so a new field needs both a

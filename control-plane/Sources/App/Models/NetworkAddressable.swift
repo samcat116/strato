@@ -26,11 +26,18 @@ protocol NetworkAddressable {
     var logicalNetworkID: UUID { get }
     var macAddress: String { get }
     var mtu: Int? { get }
+    var networkInterfaceID: UUID? { get }
+    var networkDeviceName: String? { get }
+    var networkOrderIndex: Int? { get }
     /// The allocated address rows; requires `addresses` to be eager-loaded.
     var allocatedAddresses: [AddressRow] { get }
 }
 
 extension NetworkAddressable {
+    var networkInterfaceID: UUID? { nil }
+    var networkDeviceName: String? { nil }
+    var networkOrderIndex: Int? { nil }
+
     /// The interface's IPv4 address row, when one is allocated. At most one
     /// exists per family (enforced in code, not schema). Requires `addresses`
     /// to be eager-loaded.

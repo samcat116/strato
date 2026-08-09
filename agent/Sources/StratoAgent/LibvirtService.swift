@@ -1301,6 +1301,66 @@ actor LibvirtService: HypervisorService {
 
     // MARK: - Disk hot-plug
 
+    // MARK: - Network hot-plug
+
+    func attachNetworkInterface(
+        vmId: String, spec: NetworkSpec, attachment: ResolvedNetworkAttachment
+    ) async throws {
+        try await perform("attach-network", vmId: vmId) {
+            guard let mac = spec.macAddress?.lowercased() else {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "VM network hot-plug requires a stable MAC address")
+            }
+            let dom = try await domain(vmId)
+            let present = try DomainNetworkInventory.macAddresses(
+                inDomainXML: try await domainXML(dom, vmId: vmId))
+            guard !present.contains(mac) else {
+                logger.info(
+                    "Network interface is already present; treating the attach as a no-op",
+                    metadata: ["vmId": .string(vmId), "mac": .string(mac)])
+                return
+            }
+            let flags = try await deviceFlags(dom, vmId: vmId)
+            let xml = try DomainDeviceXML.hotplugNetwork(attachment)
+            do {
+                try await call("libvirt-attach-network", vmId: vmId) { client, deadline in
+                    try await client.domainAttachDeviceFlags(
+                        dom: dom, xml: xml, flags: flags, deadline: deadline)
+                }
+            } catch let error where LibvirtFailure.isPCISlotsExhausted(error) {
+                let label = spec.deviceName ?? "network interface"
+                throw HypervisorServiceError.invalidConfiguration(
+                    "VM \(vmId) has no free PCIe root port to attach \(label). A running domain's ports "
+                        + "cannot be added to, so this will not succeed on retry: stop and start the VM, "
+                        + "which redefines it with fresh spare ports, or attach the interface while it is stopped.")
+            }
+        }
+    }
+
+    func detachNetworkInterface(vmId: String, spec: NetworkSpec) async throws {
+        try await perform("detach-network", vmId: vmId) {
+            guard let mac = spec.macAddress?.lowercased() else {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "VM network hot-unplug requires a stable MAC address")
+            }
+            let dom = try await domain(vmId)
+            let present = try DomainNetworkInventory.macAddresses(
+                inDomainXML: try await domainXML(dom, vmId: vmId))
+            guard present.contains(mac) else {
+                logger.info(
+                    "Network interface is already absent; treating the detach as a no-op",
+                    metadata: ["vmId": .string(vmId), "mac": .string(mac)])
+                return
+            }
+            let flags = try await deviceFlags(dom, vmId: vmId)
+            let xml = DomainDeviceXML.detachNetwork(macAddress: mac)
+            try await call("libvirt-detach-network", vmId: vmId) { client, deadline in
+                try await client.domainDetachDeviceFlags(
+                    dom: dom, xml: xml, flags: flags, deadline: deadline)
+            }
+        }
+    }
+
     /// Plugs `volumeId` into the VM's domain, live and in its definition.
     ///
     /// The guest device name is chosen here rather than taken from

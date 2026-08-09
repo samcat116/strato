@@ -53,6 +53,16 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
     @Field(key: "order_index")
     var orderIndex: Int
 
+    /// VM generation that first asked the agent to realize this NIC. Nil marks
+    /// rows created before STR-202, which are treated as already attached.
+    @OptionalField(key: "attach_generation")
+    var attachGeneration: Int64?
+
+    /// VM generation that asks the agent to remove this NIC. The row and its IP
+    /// leases remain until an observed v40 manifest confirms absence.
+    @OptionalField(key: "detach_generation")
+    var detachGeneration: Int64?
+
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
 
@@ -77,6 +87,8 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
         self.mtu = mtu
         self.deviceName = deviceName
         self.orderIndex = orderIndex
+        self.attachGeneration = nil
+        self.detachGeneration = nil
     }
 
     /// Generates a random MAC address with VMware OUI (00:0c:29)
@@ -84,6 +96,10 @@ final class VMNetworkInterface: Model, @unchecked Sendable {
         let randomBytes = (0..<3).map { _ in String(format: "%02x", Int.random(in: 0...255)) }
         return "00:0c:29:\(randomBytes.joined(separator: ":"))"
     }
+}
+
+extension VMNetworkInterface {
+    static let maxInterfacesPerVM = 8
 }
 
 extension VMNetworkInterface: Content {}

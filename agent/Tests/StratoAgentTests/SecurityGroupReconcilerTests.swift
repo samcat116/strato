@@ -14,6 +14,31 @@ struct SecurityGroupReconcilerTests {
     private var pg: String { OVNNaming.portGroupName(securityGroupId: groupId) }
     private var peerPG: String { OVNNaming.portGroupName(securityGroupId: peerId) }
 
+    @Test("VM port policy uses stable NIC slots and a legacy position fallback")
+    func vmPortMembershipSlots() {
+        let vmID = UUID()
+        let legacy = NetworkSpec(
+            network: "legacy", networkId: UUID(), securityGroupIds: [groupId])
+        let stable = NetworkSpec(
+            interfaceId: UUID(), deviceName: "net2", orderIndex: 2,
+            network: "stable", networkId: UUID(), securityGroupIds: [peerId])
+        let vm = DesiredVMState(
+            vmId: vmID,
+            hypervisorType: .qemu,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                networks: [legacy, stable]),
+            desiredStatus: .running,
+            generation: 1,
+            metadata: InstanceMetadata(
+                instanceId: vmID, projectId: UUID(), serviceEnabled: false))
+
+        let memberships = VMPortMembershipPlanner.memberships(for: [vm])
+        #expect(memberships.map(\.portName) == ["vm-\(vmID.uuidString)", "vm-\(vmID.uuidString)-2"])
+        #expect(memberships.map(\.securityGroupIds) == [[groupId], [peerId]])
+        #expect(memberships.allSatisfy { $0.metadataDenied })
+    }
+
     private func rule(
         direction: String = "ingress",
         ethertype: String = "ipv4",

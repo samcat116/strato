@@ -196,6 +196,16 @@ public protocol HypervisorService: Actor, Sendable {
     ///   hot-unplug disks
     func detachDisk(vmId: String, volumeId: String, deviceName: String) async throws
 
+    /// Adds one prepared network device to a QEMU VM. Active domains receive
+    /// the device live and in their stored definition; inactive domains update
+    /// configuration only.
+    func attachNetworkInterface(
+        vmId: String, spec: NetworkSpec, attachment: ResolvedNetworkAttachment
+    ) async throws
+
+    /// Removes the network device identified by the interface's stable MAC.
+    func detachNetworkInterface(vmId: String, spec: NetworkSpec) async throws
+
     /// Converges a running VM's vCPU count and memory size on `spec`
     /// (issue #568), within the headroom the VM was created with. Growth
     /// applies online; anything the backend cannot do without a restart is
@@ -336,6 +346,18 @@ public protocol HypervisorService: Actor, Sendable {
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    func attachNetworkInterface(
+        vmId: String, spec: NetworkSpec, attachment: ResolvedNetworkAttachment
+    ) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not support VM network hot-plug")
+    }
+
+    func detachNetworkInterface(vmId: String, spec: NetworkSpec) async throws {
+        throw HypervisorServiceError.notSupported(
+            "\(hypervisorType.displayName) does not support VM network hot-unplug")
+    }
+
     /// In-memory backends expose only an aggregate. Their orphan entries are
     /// outside that aggregate, so unknown membership deliberately makes the
     /// agent retain every orphan's manifest reservation.

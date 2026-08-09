@@ -176,6 +176,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/vms/{vmID}/interfaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        /** List a virtual machine's network interfaces */
+        get: operations["listVMNetworkInterfaces"];
+        put?: never;
+        /**
+         * Attach a network interface to a virtual machine
+         * @description QEMU only. The VM retains at most eight interface rows, including pending and failed operations. The returned operation settles after the agent reports the interface in its durable manifest.
+         */
+        post: operations["attachVMNetworkInterface"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vms/{vmID}/interfaces/{interfaceID}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                /** @description The VM network interface's id. */
+                interfaceID: components["parameters"]["InterfaceID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Detach a network interface from a virtual machine
+         * @description The interface, its addresses, security groups, and floating IP remain visible until a settled agent report confirms that it is absent.
+         */
+        delete: operations["detachVMNetworkInterface"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/vms/{vmID}/interfaces/{interfaceID}/retry": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                /** @description The VM network interface's id. */
+                interfaceID: components["parameters"]["InterfaceID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retry a failed network-interface mutation */
+        post: operations["retryVMNetworkInterfaceMutation"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/vms/{vmID}/stop": {
         parameters: {
             query?: never;
@@ -5295,6 +5366,8 @@ export interface components {
             networkId?: string;
             /** @description Name of that network within the project. Mutually exclusive with `networkId`. */
             networkName?: string;
+            /** @description Interfaces to create in stable slot order. Do not combine this with `networkId`, `networkName`, or scalar `securityGroupIds`. Creation requires either this array or the legacy scalar network form. */
+            networkInterfaces?: components["schemas"]["CreateVMNetworkInterfaceRequest"][];
             sshPublicKey?: string;
             /** @description cloud-init user data. */
             userData?: string;
@@ -5321,6 +5394,16 @@ export interface components {
              * @default true
              */
             metadataEnabled: boolean;
+        };
+        /** @description One VM network interface. Exactly one of `networkId` or `networkName` is required and is resolved inside the VM's project. */
+        CreateVMNetworkInterfaceRequest: {
+            /** Format: uuid */
+            networkId?: string;
+            networkName?: string;
+            /** @description Omitted or empty uses the project's default security group. */
+            securityGroupIds?: string[];
+            /** @description Must be at least 1280 when the selected network has IPv6 enabled. */
+            mtu?: number;
         };
         UpdateVMRequest: {
             name?: string;
@@ -5350,6 +5433,7 @@ export interface components {
             /** Format: uuid */
             projectId?: string;
             status: components["schemas"]["VMStatus"];
+            hypervisorType?: components["schemas"]["HypervisorType"];
             hypervisorId?: string;
             cpu: number;
             maxCpu: number;
@@ -5480,6 +5564,10 @@ export interface components {
             /** @description Stable device name (e.g. net0). */
             deviceName: string;
             orderIndex: number;
+            /** @enum {string} */
+            attachmentState: "attaching" | "attached" | "detaching" | "attach_failed" | "detach_failed";
+            /** @description The current generation's convergence error for this interface, when failed. */
+            attachmentError?: string;
             /** @description The security groups filtering this NIC. Absent — as opposed to an empty array — means the server did not load membership for this response, never that the NIC is in no group. */
             securityGroupIds?: string[];
         };
@@ -9275,6 +9363,8 @@ export interface components {
     parameters: {
         /** @description The virtual machine's id. */
         VMID: string;
+        /** @description The VM network interface's id. */
+        InterfaceID: string;
         /** @description The sandbox's id. */
         SandboxID: string;
         /** @description The sandbox snapshot's id. */
@@ -9718,6 +9808,98 @@ export interface operations {
         responses: {
             202: components["responses"]["AcceptedVMMutation"];
             400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    listVMNetworkInterfaces: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Interfaces ordered by their stable slot. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NetworkInterface"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    attachVMNetworkInterface: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateVMNetworkInterfaceRequest"];
+            };
+        };
+        responses: {
+            202: components["responses"]["AcceptedVMMutation"];
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    detachVMNetworkInterface: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                /** @description The VM network interface's id. */
+                interfaceID: components["parameters"]["InterfaceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["AcceptedVMMutation"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    retryVMNetworkInterfaceMutation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The virtual machine's id. */
+                vmID: components["parameters"]["VMID"];
+                /** @description The VM network interface's id. */
+                interfaceID: components["parameters"]["InterfaceID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            202: components["responses"]["AcceptedVMMutation"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];

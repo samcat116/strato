@@ -98,6 +98,7 @@ struct VMSpecBuilder {
         logger: Logger? = nil
     ) -> [(interface: VMNetworkInterface, network: LogicalNetwork)] {
         interfaces.inDeviceOrder
+            .filter { $0.detachGeneration == nil }
             .compactMap { interface in
                 guard let network = networks[interface.logicalNetworkID] else {
                     logger?.error(

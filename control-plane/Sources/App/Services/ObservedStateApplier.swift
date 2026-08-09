@@ -164,8 +164,9 @@ struct ObservedStateApplier {
         // Guest NIC state is another report-level batch. Only VMs whose
         // observation can read or clear guest data participate, so agents
         // without QGA payloads pay no NIC query at all.
-        let guestInfoVMIDs = dbVMs.compactMap { vm -> UUID? in
+        let interfaceVMIDs = dbVMs.compactMap { vm -> UUID? in
             guard let vmID = vm.id, let observed = reported[vmID] else { return nil }
+            if observed.appliedNetworkInterfaceIds != nil { return vmID }
             if observed.guestInfo != nil {
                 return vmID
             }
@@ -177,11 +178,11 @@ struct ObservedStateApplier {
             return nil
         }
         let interfacesByVMID: [UUID: [VMNetworkInterface]]
-        if guestInfoVMIDs.isEmpty {
+        if interfaceVMIDs.isEmpty {
             interfacesByVMID = [:]
         } else {
             let interfaces = try await VMNetworkInterface.query(on: db)
-                .filter(\.$vm.$id ~~ guestInfoVMIDs)
+                .filter(\.$vm.$id ~~ interfaceVMIDs)
                 .with(\.$observedAddresses)
                 .all()
             interfacesByVMID = Dictionary(grouping: interfaces, by: \.$vm.id)
@@ -654,6 +655,22 @@ struct ObservedStateApplier {
         if observed.observedGeneration > vm.observedGeneration {
             vm.observedGeneration = observed.observedGeneration
             changed = true
+        }
+
+        // A detach releases its address only after the agent's durable manifest
+        // says the target generation no longer contains the interface. The
+        // generation check rejects a stale report; the explicit id set rejects
+        // the more dangerous interpretation of silence as absence.
+        if let appliedInterfaceIDs = observed.appliedNetworkInterfaceIds {
+            let applied = Set(appliedInterfaceIDs)
+            for interface in interfaces {
+                guard let detachGeneration = interface.detachGeneration,
+                    observed.observedGeneration >= detachGeneration,
+                    let interfaceID = interface.id,
+                    !applied.contains(interfaceID)
+                else { continue }
+                try await interface.delete(on: db)
+            }
         }
 
         var statusTransition: (previous: VMStatus, current: VMStatus)?

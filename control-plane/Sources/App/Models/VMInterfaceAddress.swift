@@ -80,4 +80,7 @@ extension VMInterfaceAddress: InterfaceAddressRow {}
 extension VMNetworkInterface: NetworkAddressable {
     var allocatedAddresses: [VMInterfaceAddress] { $addresses.value ?? [] }
     var logicalNetworkID: UUID { $logicalNetwork.id }
+    var networkInterfaceID: UUID? { id }
+    var networkDeviceName: String? { deviceName }
+    var networkOrderIndex: Int? { orderIndex }
 }

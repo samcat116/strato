@@ -1285,10 +1285,9 @@ struct DesiredStateAssembler {
             .all()
         guard !attached.isEmpty else { return [:] }
 
-        // Load the owning VMs (scoped to the covered agents) with their full
-        // NIC lists: the NAT rule's `nicIndex` is the NIC's position in the
-        // same (orderIndex, deviceName) order the spec builder uses, which
-        // takes the sibling interfaces to compute.
+        // Load the owning VMs (scoped to the covered agents) with their NIC
+        // address rows. The NAT target uses each row's stable `orderIndex`,
+        // which is also the slot encoded in its OVN logical-port name.
         let vmIDs = Set(attached.compactMap { $0.interface?.$vm.id })
         let vmsByID = try await Dictionary(
             VM.query(on: db)
@@ -1306,21 +1305,21 @@ struct DesiredStateAssembler {
                 let vm = vmsByID[interface.$vm.id],
                 let vmId = vm.id
             else { continue }
-            let ordered = vm.networkInterfaces.inDeviceOrder
-            guard let nicIndex = ordered.firstIndex(where: { $0.id == interface.id }),
-                let logicalIP = ordered[nicIndex].ipv4Address?.address
+            guard let desiredInterface = vm.networkInterfaces.first(where: { $0.id == interface.id }),
+                desiredInterface.detachGeneration == nil,
+                let logicalIP = desiredInterface.ipv4Address?.address
             else {
                 app.logger.warning(
                     "Floating IP attached to a NIC without an IPv4 address; skipping its NAT rule",
                     metadata: ["address": .string(floatingIP.address)])
                 continue
             }
-            byNetwork[interface.logicalNetworkID, default: []].append(
+            byNetwork[desiredInterface.logicalNetworkID, default: []].append(
                 DesiredFloatingIP(
                     externalIP: floatingIP.address,
                     logicalIP: logicalIP,
                     vmId: vmId,
-                    nicIndex: nicIndex))
+                    nicIndex: desiredInterface.orderIndex))
         }
         return byNetwork.mapValues { $0.sorted { $0.externalIP < $1.externalIP } }
     }

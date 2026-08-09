@@ -25,6 +25,14 @@ struct WireProtocolTests {
         #expect(try envelope.decode(as: ConsoleConnectMessage.self).vmId == "vm-1")
     }
 
+    @Test("VM network hot-plug starts at wire protocol v40")
+    func vmNetworkHotplugGate() {
+        #expect(!WireProtocol.supportsVMNetworkHotplug(38))
+        #expect(!WireProtocol.supportsVMNetworkHotplug(39))
+        #expect(WireProtocol.supportsVMNetworkHotplug(40))
+        #expect(WireProtocol.currentVersion == 40)
+        #expect(WireProtocol.minimumSupportedVersion == 38)
+    }
     @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")
     func sandboxForkGuestGate() {
         #expect(!SandboxGuestControlProtocol.supportsReidentify(nil))

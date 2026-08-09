@@ -14,6 +14,21 @@ import StratoShared
 /// driver that sends them links a hypervisor SDK and has no unit tests.
 public enum DomainDeviceXML {
 
+    /// The same interface fragment used at domain creation, for hot-plug.
+    public static func hotplugNetwork(_ attachment: ResolvedNetworkAttachment) throws -> String {
+        try DomainXMLBuilder.interfaceNode(attachment).render()
+    }
+
+    /// Libvirt identifies an interface by MAC for hot-unplug. Interface MACs
+    /// allocated by the control plane are stable across manifest upgrades and
+    /// are therefore safer than a host TAP name reconstructed after a restart.
+    public static func detachNetwork(macAddress: String) -> String {
+        DomainXMLNode(
+            "interface", [("type", "ethernet")],
+            children: [DomainXMLNode("mac", [("address", macAddress)])]
+        ).render()
+    }
+
     /// A `<disk>` to hot-plug, naming its volume in `<serial>` so a later
     /// detach can find exactly this disk.
     ///

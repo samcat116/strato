@@ -184,6 +184,9 @@ public enum ReconcileStep: Equatable, Sendable {
     /// (issue #568), or grow a volume to its desired size (STR-148). Sandboxes
     /// are not resizable in place.
     case resize
+    /// Reconcile a managed QEMU VM's durable NIC set with its desired spec
+    /// (STR-202). Creation already realizes the complete initial set.
+    case reconfigureNetworks
     case shutdown
     /// Gracefully stop (best effort) and remove the workload from this host.
     case delete
@@ -207,6 +210,61 @@ public enum ReconcileStep: Equatable, Sendable {
     /// its own nonce for `.reboot`'s reason and more sharply: re-driving a
     /// restore rewinds a guest that has been writing since the last one.
     case restore
+}
+
+/// Projects the v40 interface identity carried by a durable VM manifest.
+/// A partial identity set is not authoritative: legacy manifests are hydrated
+/// by MAC during reconciliation, and reporting their missing ids as an empty
+/// applied set before that pass would make the control plane reap live NICs.
+public enum AppliedNetworkInterfaceInventory {
+    public static func ids(in networks: [NetworkSpec]) -> [UUID]? {
+        var ids: [UUID] = []
+        ids.reserveCapacity(networks.count)
+        for network in networks {
+            guard let id = network.interfaceId else { return nil }
+            ids.append(id)
+        }
+        return ids
+    }
+}
+
+/// Matches desired NICs to the agent's durable manifest without relying on
+/// compact array positions. Stable ids win, legacy manifests hydrate by MAC,
+/// and position is only a fallback when one side has no usable identity.
+public struct VMNetworkInterfaceDiff: Equatable, Sendable {
+    public let added: [Int]
+    public let removed: [Int]
+
+    public static func between(
+        current: [NetworkSpec], desired: [NetworkSpec]
+    ) -> VMNetworkInterfaceDiff {
+        var unusedCurrent = Set(current.indices)
+        var added: [Int] = []
+
+        for desiredIndex in desired.indices {
+            let candidate = desired[desiredIndex]
+            let match = unusedCurrent.first { currentIndex in
+                let existing = current[currentIndex]
+                if let desiredID = candidate.interfaceId, let existingID = existing.interfaceId {
+                    return desiredID == existingID
+                }
+                if let desiredMAC = candidate.macAddress, let existingMAC = existing.macAddress {
+                    return desiredMAC.caseInsensitiveCompare(existingMAC) == .orderedSame
+                }
+                return desiredIndex == currentIndex
+                    && (existing.interfaceId == nil && existing.macAddress == nil
+                        || candidate.interfaceId == nil && candidate.macAddress == nil)
+            }
+            if let match {
+                unusedCurrent.remove(match)
+            } else {
+                added.append(desiredIndex)
+            }
+        }
+
+        return VMNetworkInterfaceDiff(
+            added: added.sorted(), removed: unusedCurrent.sorted())
+    }
 }
 
 // MARK: - Edge nonces (STR-151)
@@ -506,6 +564,8 @@ public protocol ReconcileActuator: Sendable {
     /// can spot a spec whose vCPU/memory changed under a running VM
     /// (issue #568).
     func observedSizing() async -> [String: VMSizing]
+    /// Network specs durably recorded in each managed VM manifest.
+    func observedNetworkSpecs() async -> [String: [NetworkSpec]]
     /// Re-adopt an orphaned VM and return its observed status, so the
     /// reconciler can plan the remaining convergence steps toward the desired
     /// status.
@@ -673,6 +733,8 @@ extension ReconcileActuator {
     /// Actuators that cannot report per-VM sizing simply never have a resize
     /// planned for them; the change still lands at the VM's next boot.
     public func observedSizing() async -> [String: VMSizing] { [:] }
+
+    public func observedNetworkSpecs() async -> [String: [NetworkSpec]] { [:] }
 
     /// Actuators with no durable manifest keep no nonce records, so every
     /// workload reads as "no record" and every edge is adopted rather than
@@ -1072,7 +1134,8 @@ public actor Reconciler {
         let vmPlan = Self.plan(
             desired: message.vms, present: presentVMs, lastApplied: appliedGenerations(kind: .vm),
             presentSizing: await actuator.observedSizing(), tombstones: tombstones,
-            appliedEdges: appliedEdges)
+            appliedEdges: appliedEdges,
+            presentNetworks: await actuator.observedNetworkSpecs())
         var plan = ReconcilePlan(items: [], unrecognized: vmPlan.unrecognized)
 
         var volumePlan = ReconcilePlan()
@@ -1688,6 +1751,7 @@ public actor Reconciler {
         case .pause: return "pausing"
         case .resume: return "resuming"
         case .resize: return "resizing"
+        case .reconfigureNetworks: return "reconfiguring network interfaces"
         case .shutdown: return "shutting down"
         case .delete: return "deleting"
         case .attach: return "attaching"
@@ -1708,7 +1772,8 @@ public actor Reconciler {
         lastApplied: [String: Int64],
         presentSizing: [String: VMSizing] = [:],
         tombstones: [DesiredWorkloadTombstone] = [],
-        appliedEdges: [String: AppliedEdgeNonces] = [:]
+        appliedEdges: [String: AppliedEdgeNonces] = [:],
+        presentNetworks: [String: [NetworkSpec]] = [:]
     ) -> ReconcilePlan {
         var plan = planCore(
             desired: desired, tombstones: tombstones, present: present, lastApplied: lastApplied,
@@ -1716,7 +1781,52 @@ public actor Reconciler {
         addResizes(
             to: &plan.items, desired: desired, present: present, lastApplied: lastApplied,
             sizing: presentSizing, appliedEdges: appliedEdges)
+        addNetworkChanges(
+            to: &plan.items, desired: desired, present: present,
+            presentNetworks: presentNetworks, appliedEdges: appliedEdges)
         return plan
+    }
+
+    private static func addNetworkChanges(
+        to items: inout [ReconcileWorkItem],
+        desired: [DesiredVMState],
+        present: [String: VMPresence],
+        presentNetworks: [String: [NetworkSpec]],
+        appliedEdges: [String: AppliedEdgeNonces]
+    ) {
+        for entry in desired where !entry.wantsAbsent && entry.hypervisorType == .qemu {
+            let id = entry.vmId.uuidString
+            guard case .managed? = present[id],
+                let observed = presentNetworks[id],
+                observed != entry.spec.networks
+            else { continue }
+
+            if let index = items.firstIndex(where: { $0.kind == .vm && $0.id == id }) {
+                guard !items[index].steps.contains(.create),
+                    !items[index].steps.contains(.delete),
+                    !items[index].steps.contains(.adopt)
+                else { continue }
+                var steps = items[index].steps
+                if let shutdown = steps.firstIndex(of: .shutdown) {
+                    steps.insert(.reconfigureNetworks, at: shutdown + 1)
+                } else if let boot = steps.firstIndex(of: .boot) {
+                    steps.insert(.reconfigureNetworks, at: boot)
+                } else {
+                    steps.insert(.reconfigureNetworks, at: 0)
+                }
+                items[index] = ReconcileWorkItem(
+                    kind: .vm, id: id, generation: entry.generation, steps: steps,
+                    target: entry.asTarget, appliedEdges: items[index].appliedEdges)
+            } else {
+                let steps: [ReconcileStep] = [.reconfigureNetworks]
+                items.append(
+                    ReconcileWorkItem(
+                        kind: .vm, id: id, generation: entry.generation, steps: steps,
+                        target: entry.asTarget,
+                        appliedEdges: Self.edgesAfter(
+                            entry.edges, applied: appliedEdges[id], planning: steps)))
+            }
+        }
     }
 
     /// Plans `.resize` for VMs that are already running the status the

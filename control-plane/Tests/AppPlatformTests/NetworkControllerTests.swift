@@ -459,9 +459,9 @@ final class NetworkControllerTests {
             let neighbour = try await builder.createProject(
                 name: "Late Rollback Neighbour", description: "p", organization: org)
 
-            // Two projects legitimately own "default" while the whole fleet is
-            // current. The create-time guard cannot see an agent that joins
-            // afterwards, so registration runs the mirror check (issue #765).
+            // Two projects legitimately own "default" because every supported
+            // agent understands project-scoped network identity. Registration
+            // must reject older agents before they can endanger that state.
             try await builder.createNetwork(
                 name: "default", project: project, subnet: "10.50.0.0/24", gateway: "10.50.0.1")
             try await builder.createNetwork(

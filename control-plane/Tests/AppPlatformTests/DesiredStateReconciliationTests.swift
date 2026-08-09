@@ -324,12 +324,25 @@ final class DesiredStateReconciliationTests {
                 name: "fip-net", subnet: "10.30.0.0/24", gateway: "10.30.0.1",
                 projectID: vm.$project.id, externalAccess: true)
             try await network.save(on: app.db)
+            let networkID = try network.requireID()
+            let net0 = VMNetworkInterface(
+                vmID: vm.id!, logicalNetworkID: networkID,
+                macAddress: VMNetworkInterface.generateMACAddress(),
+                deviceName: "net0", orderIndex: 0)
+            try await net0.save(on: app.db)
+            let net1 = VMNetworkInterface(
+                vmID: vm.id!, logicalNetworkID: networkID,
+                macAddress: VMNetworkInterface.generateMACAddress(),
+                deviceName: "net1", orderIndex: 1)
+            net1.detachGeneration = vm.generation
+            try await net1.save(on: app.db)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: networkID,
+                macAddress: VMNetworkInterface.generateMACAddress(),
+                deviceName: "net2", orderIndex: 2)
             try await nic.save(on: app.db)
             try await VMInterfaceAddress(
-                interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
+                interfaceID: nic.id!, logicalNetworkID: networkID, family: .ipv4,
                 address: "10.30.0.5", prefixLength: 24, gateway: "10.30.0.1"
             ).save(on: app.db)
 
@@ -352,7 +365,7 @@ final class DesiredStateReconciliationTests {
             #expect(fips[0].externalIP == "203.0.113.10")
             #expect(fips[0].logicalIP == "10.30.0.5")
             #expect(fips[0].vmId == vm.id)
-            #expect(fips[0].nicIndex == 0)
+            #expect(fips[0].nicIndex == 2)
 
             // Another agent's sync must not carry this VM's floating IP.
             let other = try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)
@@ -361,6 +374,77 @@ final class DesiredStateReconciliationTests {
     }
 
     // MARK: - Observed-state report application
+
+    @Test("A detaching NIC retains related rows until an authoritative applied-ID report omits it")
+    func detachedNICCleanupWaitsForAgentConfirmation() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            let agentId = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            let network = try await self.network(app: app, vm: vm, named: "detach-net")
+            let networkID = try network.requireID()
+
+            let initialGeneration = vm.generation
+            #expect(
+                try await vm.advanceDesiredStateGeneration(
+                    expectedGeneration: initialGeneration, on: app.db)
+                    == .applied(initialGeneration + 1))
+            let nic = VMNetworkInterface(
+                vmID: try vm.requireID(), logicalNetworkID: networkID,
+                macAddress: "52:54:00:de:7a:01", deviceName: "net0", orderIndex: 0)
+            nic.attachGeneration = 0
+            nic.detachGeneration = vm.generation
+            try await nic.save(on: app.db)
+            let nicID = try nic.requireID()
+            let address = VMInterfaceAddress(
+                interfaceID: nicID, logicalNetworkID: networkID, family: .ipv4,
+                address: "192.168.1.50", prefixLength: 24, gateway: "192.168.1.1")
+            try await address.save(on: app.db)
+            let group = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: vm.$project.id, on: app.db)
+            let membership = VMInterfaceSecurityGroup(
+                interfaceID: nicID, securityGroupID: try group.requireID())
+            try await membership.save(on: app.db)
+            let pool = FloatingIPPool(
+                name: "detach-pool", cidr: "203.0.113.0/24", gateway: "203.0.113.1")
+            try await pool.save(on: app.db)
+            let floatingIP = FloatingIP(
+                poolID: try pool.requireID(), address: "203.0.113.50",
+                projectID: vm.$project.id, interfaceID: nicID,
+                createdByID: try user.requireID())
+            try await floatingIP.save(on: app.db)
+
+            func apply(appliedIDs: [UUID]) async throws {
+                let envelope = try self.report(
+                    agentId: agentId,
+                    vms: [
+                        ObservedVMState(
+                            vmId: try vm.requireID(), status: .shutdown,
+                            observedGeneration: vm.generation,
+                            appliedNetworkInterfaceIds: appliedIDs)
+                    ])
+                await app.agentService.applyObservedStateReport(
+                    envelope, fromAgentKey: agentKey("recon-agent"))
+            }
+
+            // A settled generation alone is insufficient: the durable agent
+            // manifest still says this NIC is applied, so every related row is
+            // retained for a safe retry.
+            try await apply(appliedIDs: [nicID])
+            #expect(try await VMNetworkInterface.find(nicID, on: app.db) != nil)
+            #expect(try await VMInterfaceAddress.find(address.id, on: app.db) != nil)
+            #expect(try await VMInterfaceSecurityGroup.find(membership.id, on: app.db) != nil)
+            #expect(try await FloatingIP.find(floatingIP.id, on: app.db)?.$interface.id == nicID)
+
+            // Only an explicit, authoritative absence releases the retained
+            // NIC. Its FK cascades release leases and memberships; the
+            // floating IP allocation remains reserved but becomes unattached.
+            try await apply(appliedIDs: [])
+            #expect(try await VMNetworkInterface.find(nicID, on: app.db) == nil)
+            #expect(try await VMInterfaceAddress.find(address.id, on: app.db) == nil)
+            #expect(try await VMInterfaceSecurityGroup.find(membership.id, on: app.db) == nil)
+            #expect(try await FloatingIP.find(floatingIP.id, on: app.db)?.$interface.id == nil)
+        }
+    }
 
     @Test("A converged report updates status and generation, and clears the deadline")
     func reportRecordsConvergence() async throws {
@@ -460,7 +544,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(
                 app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.extendConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
             let reason = "agent `hv-03` has 12 GiB available; this operation requires 64 GiB additional memory"

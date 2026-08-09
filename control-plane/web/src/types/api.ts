@@ -129,12 +129,26 @@ export interface VMNetworkInterface {
   mtu?: number;
   deviceName: string;
   orderIndex: number;
+  attachmentState?:
+    | "attaching"
+    | "attached"
+    | "detaching"
+    | "attach_failed"
+    | "detach_failed";
+  attachmentError?: string;
   /**
    * The security groups filtering this NIC. `undefined` means the server did
    * not report membership (an older control plane), never that the NIC is in
    * no group — an empty array is what says that.
    */
   securityGroupIds?: string[];
+}
+
+export interface CreateVMNetworkInterfaceRequest {
+  networkId?: string;
+  networkName?: string;
+  securityGroupIds?: string[];
+  mtu?: number;
 }
 
 export interface VM {
@@ -145,6 +159,7 @@ export interface VM {
   imageId?: string;
   projectId?: string;
   status: VMStatus;
+  hypervisorType?: "qemu" | "firecracker";
   hypervisorId?: string;
   cpu: number;
   maxCpu: number;
@@ -1072,8 +1087,12 @@ export interface CreateVMRequest {
   cpu?: number;
   memory?: number;
   disk?: number;
-  /** Logical network the VM's NIC attaches to; defaults to the "default" network. */
+  /** Legacy scalar selector; required when `networkInterfaces` is absent. */
   networkId?: string;
+  /** Compatible scalar selector; mutually exclusive with `networkId`. */
+  networkName?: string;
+  /** Create-time multi-NIC form. Do not combine with scalar network fields. */
+  networkInterfaces?: CreateVMNetworkInterfaceRequest[];
   /** SSH public key authorized for the guest's default user (cloud-init). */
   sshPublicKey?: string;
   /**

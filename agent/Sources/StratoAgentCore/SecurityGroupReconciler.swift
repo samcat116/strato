@@ -581,6 +581,25 @@ public struct DesiredPortMembership: Equatable, Sendable {
     }
 }
 
+/// Builds the per-VM port policy targets carried by desired state. New VM
+/// manifests key host resources by the control plane's stable NIC slot;
+/// compact array position remains only as the legacy fallback.
+public enum VMPortMembershipPlanner {
+    public static func memberships(for vms: [DesiredVMState]) -> [DesiredPortMembership] {
+        vms.flatMap { vm in
+            let metadataDenied = vm.metadata.map { !$0.isServiceEnabled } ?? false
+            return vm.spec.networks.enumerated().map { fallbackIndex, spec in
+                DesiredPortMembership(
+                    portName: OVNNaming.vmPortName(
+                        vmId: vm.vmId.uuidString,
+                        nicIndex: spec.orderIndex ?? fallbackIndex),
+                    securityGroupIds: spec.securityGroupIds,
+                    metadataDenied: metadataDenied)
+            }
+        }
+    }
+}
+
 // MARK: - Reconciler
 
 /// Pure planning for security-group reconciliation. No side effects.

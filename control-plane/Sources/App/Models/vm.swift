@@ -528,6 +528,14 @@ struct ObservedInterfaceAddressResponse: Content {
     }
 }
 
+enum NetworkInterfaceAttachmentState: String, Content {
+    case attaching
+    case attached
+    case detaching
+    case attachFailed = "attach_failed"
+    case detachFailed = "detach_failed"
+}
+
 struct NetworkInterfaceResponse: Content {
     let id: UUID?
     /// The network this NIC attaches to. The id is the reference; the name is a
@@ -549,8 +557,10 @@ struct NetworkInterfaceResponse: Content {
     /// address lists: an empty array here reads as "this NIC is in no group",
     /// a security claim a forgotten `.with(...)` must not be able to make.
     let securityGroupIds: [UUID]?
+    let attachmentState: NetworkInterfaceAttachmentState
+    let attachmentError: String?
 
-    init(from nic: VMNetworkInterface) {
+    init(from nic: VMNetworkInterface, vm: VM) {
         self.id = nic.id
         self.networkId = nic.$logicalNetwork.id
         self.network = nic.$logicalNetwork.value?.name
@@ -569,6 +579,28 @@ struct NetworkInterfaceResponse: Content {
         self.securityGroupIds = nic.$securityGroupMemberships.value.map { memberships in
             memberships.map { $0.$securityGroup.id }.sorted { $0.uuidString < $1.uuidString }
         }
+        if let detachGeneration = nic.detachGeneration {
+            if vm.failedGeneration == detachGeneration {
+                self.attachmentState = .detachFailed
+                self.attachmentError = vm.lastError
+            } else {
+                self.attachmentState = .detaching
+                self.attachmentError = nil
+            }
+        } else if let attachGeneration = nic.attachGeneration,
+            vm.observedGeneration < attachGeneration
+        {
+            if vm.failedGeneration == attachGeneration {
+                self.attachmentState = .attachFailed
+                self.attachmentError = vm.lastError
+            } else {
+                self.attachmentState = .attaching
+                self.attachmentError = nil
+            }
+        } else {
+            self.attachmentState = .attached
+            self.attachmentError = nil
+        }
     }
 }
 
@@ -580,6 +612,7 @@ struct VMDetailResponse: Content {
     let imageId: UUID?
     let projectId: UUID?
     let status: VMStatus
+    let hypervisorType: HypervisorType
     let hypervisorId: String?
     let cpu: Int
     let maxCpu: Int
@@ -662,6 +695,7 @@ struct VMDetailResponse: Content {
         self.imageId = vm.$sourceImage.id
         self.projectId = vm.$project.id
         self.status = vm.status
+        self.hypervisorType = vm.hypervisorType
         self.hypervisorId = vm.hypervisorId
         self.cpu = vm.cpu
         self.maxCpu = vm.maxCpu
@@ -674,7 +708,7 @@ struct VMDetailResponse: Content {
         // sorted to match the deterministic ordering agents receive in the spec.
         self.networkInterfaces = (vm.$networkInterfaces.value ?? [])
             .inDeviceOrder
-            .map(NetworkInterfaceResponse.init)
+            .map { NetworkInterfaceResponse(from: $0, vm: vm) }
         self.securityGroupsEnforced = securityGroupsEnforced
         self.spiffeId = spiffeId
         self.hostname = vm.hostname

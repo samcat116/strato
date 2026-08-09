@@ -67,7 +67,7 @@ struct SnapshotReconciliationTests {
             case .delete:
                 artifacts.removeValue(forKey: item.id)
             case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach,
-                .reboot, .restore:
+                .reboot, .restore, .reconfigureNetworks:
                 break
             }
         }
