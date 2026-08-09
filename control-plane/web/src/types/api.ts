@@ -1191,7 +1191,12 @@ export interface ResourceConditions {
    * that names the generation you are waiting on is that mutation's verdict,
    * and `converged` is false alongside it.
    */
-  degraded?: { reason: string; sinceGeneration: number } | null;
+  degraded?: {
+    reason: string;
+    sinceGeneration: number;
+    /** ISO-8601 time when this error/generation pair was first observed. */
+    lastErrorAt?: string | null;
+  } | null;
 }
 
 /**
@@ -1803,6 +1808,8 @@ export interface QuotaLimits {
   maxMemoryGB: number;
   maxStorageGB: number;
   maxVMs: number;
+  /** Volume count limit. Omitted or null means no count limit. */
+  maxVolumes?: number | null;
   maxNetworks: number;
 }
 
@@ -1811,6 +1818,7 @@ export interface QuotaReservedUsage {
   reservedMemoryGB: number;
   reservedStorageGB: number;
   vmCount: number;
+  volumeCount: number;
   networkCount: number;
 }
 
@@ -1819,6 +1827,8 @@ export interface QuotaUtilization {
   memoryPercent: number;
   storagePercent: number;
   vmPercent: number;
+  /** Null when no volume count limit is set. */
+  volumePercent: number | null;
 }
 
 export interface ResourceQuota {
@@ -1840,6 +1850,8 @@ export interface CreateQuotaRequest {
   maxMemoryGB: number;
   maxStorageGB: number;
   maxVMs: number;
+  /** Omitted means no volume count limit, not one inferred from `maxVMs`. */
+  maxVolumes?: number;
   maxNetworks?: number;
   environment?: string;
   isEnabled?: boolean;
@@ -1851,6 +1863,8 @@ export interface UpdateQuotaRequest {
   maxMemoryGB?: number;
   maxStorageGB?: number;
   maxVMs?: number;
+  /** Omit to leave the volume limit alone; send `0` to remove it. */
+  maxVolumes?: number;
   maxNetworks?: number;
   isEnabled?: boolean;
 }

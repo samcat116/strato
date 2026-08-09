@@ -177,6 +177,13 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
+            # Bound normal serving statements on every pooled connection
+            # (STR-207). The migrator temporarily raises this on its pinned
+            # connection, including when a serving pod performs migrations.
+            - name: DATABASE_STATEMENT_TIMEOUT_MS
+              value: "{{ .Values.strato.database.statementTimeoutMs }}"
+            - name: DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS
+              value: "{{ .Values.migration.statementTimeoutMs }}"
             # Encrypt the Postgres connection (issue #56). Defaults by topology
             # (disable for the bundled in-cluster DB, require for external); set
             # strato.database.tls to override. When a CA bundle is supplied it's
@@ -285,6 +292,14 @@ spec:
             - name: SPIFFE_JWT_BUNDLE_REFRESH_INTERVAL
               value: "{{ .Values.spire.controlPlane.jwtSvidAuth.bundleRefreshInterval }}"
             {{- end }}
+            # Guest JWT-SVID issuance is independent from accepting JWT-SVIDs
+            # on the Strato API. An empty audience list keeps issuance off.
+            - name: GUEST_IDENTITY_AUDIENCES
+              value: {{ join "," .Values.spire.controlPlane.guestIdentity.audiences | quote }}
+            - name: GUEST_IDENTITY_JWT_TTL
+              value: "{{ .Values.spire.controlPlane.guestIdentity.defaultTTLSeconds }}"
+            - name: GUEST_IDENTITY_JWT_MAX_TTL
+              value: "{{ .Values.spire.controlPlane.guestIdentity.maximumTTLSeconds }}"
             {{- if .Values.spire.controlPlane.serverPublicAddress }}
             # Public address remote nodes dial for attestation (explicit override).
             - name: SPIRE_SERVER_PUBLIC_ADDRESS

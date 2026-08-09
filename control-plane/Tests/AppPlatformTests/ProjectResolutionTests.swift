@@ -127,7 +127,7 @@ final class ProjectResolutionTests {
             req.headers.bearerAuthorization = BearerAuthorization(token: token)
             try req.content.encode(
                 CreateVolumeRequest(
-                    name: "vol-\(suffix)", description: nil, projectId: projectId, sizeGB: 1,
+                    name: "vol-\(suffix)", description: nil, projectId: projectId, environment: nil, sizeGB: 1,
                     format: nil, volumeType: nil, sourceImageId: nil, iopsTotal: nil, bpsTotal: nil))
         } afterResponse: { res in
             try afterResponse("/api/volumes", res)
@@ -465,7 +465,8 @@ final class ProjectResolutionTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: outsiderToken)
                 try req.content.encode(
                     CreateVolumeRequest(
-                        name: "denied-vol", description: nil, projectId: projectID, sizeGB: 1,
+                        name: "denied-vol", description: nil, projectId: projectID, environment: nil,
+                        sizeGB: 1,
                         format: nil, volumeType: nil, sourceImageId: nil, iopsTotal: nil, bpsTotal: nil))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
@@ -496,7 +497,7 @@ final class ProjectResolutionTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
                 try req.content.encode(
                     CreateVolumeRequest(
-                        name: "verbless-vol", description: nil, projectId: nil, sizeGB: 1,
+                        name: "verbless-vol", description: nil, projectId: nil, environment: nil, sizeGB: 1,
                         format: nil, volumeType: nil, sourceImageId: nil, iopsTotal: nil, bpsTotal: nil))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)

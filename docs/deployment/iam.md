@@ -71,3 +71,10 @@ verified email); users deactivated via SCIM are denied OIDC login.
 
 Session lifetime (`SESSION_TTL_SECONDS`) and session storage are covered in
 the [deployment overview](/deployment/overview#session-lifetime).
+
+Guest VM JWT-SVID issuance is a separate, default-off surface. Configure its
+relying parties with `GUEST_IDENTITY_AUDIENCES` (Helm:
+`spire.controlPlane.guestIdentity.audiences`); `GUEST_IDENTITY_JWT_TTL` and
+`GUEST_IDENTITY_JWT_MAX_TTL` bound the bearer credential's revocation window.
+The hosting agent is authenticated by SVID mTLS and the control plane verifies
+the VM's current placement before minting.

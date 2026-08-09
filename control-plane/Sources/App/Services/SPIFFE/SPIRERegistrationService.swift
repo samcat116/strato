@@ -76,6 +76,21 @@ public struct SPIRERegistrationService: Sendable {
         try await api.getBundle()
     }
 
+    /// Mint a one-shot bearer credential for an already-registered identity.
+    ///
+    /// Unlike every provisioning operation below, this creates no registration
+    /// object that can later be deleted to revoke the result. Its expiry is the
+    /// revocation window, so callers must apply their issuance policy before
+    /// reaching this passthrough.
+    public func mintJWTSVID(
+        spiffeID: String,
+        audience: [String],
+        ttlSeconds: Int32
+    ) async throws -> SPIREJWTSVID {
+        try await api.mintJWTSVID(
+            spiffeID: spiffeID, audience: audience, ttlSeconds: ttlSeconds)
+    }
+
     /// Provision a node in SPIRE: mint a join token and create the workload
     /// entry. An entry identical to an existing one is reused (idempotent
     /// re-issue after a token expired unredeemed).

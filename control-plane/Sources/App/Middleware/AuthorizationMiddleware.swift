@@ -154,6 +154,12 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // over mTLS, not a session; the handler authenticates the forwarded
         // client certificate (or a user session) itself.
         let isAgentDownload = path.hasPrefix("/api/projects/") && path.hasSuffix("/download")
+        // Guest JWT-SVID minting authenticates the hosting agent's forwarded
+        // client certificate in-handler, then performs its own placement and
+        // audience-policy checks. A user session is neither accepted nor a
+        // substitute for that SVID-mTLS identity.
+        let isAgentGuestIdentityMint =
+            path.hasPrefix("/agent/vms/") && path.hasSuffix("/jwt-svid")
         // Snapshot artifact transfer (issue #428): agents stream exported
         // snapshot artifacts up and down with their SPIFFE SVID over mTLS;
         // the handler authenticates the forwarded client certificate before
@@ -175,7 +181,8 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             path.hasPrefix(pair.prefix) && path.contains(pair.infix)
         }
         if exactPublic.contains(path) || publicPrefixes.contains(where: { path.hasPrefix($0) })
-            || isAgentDownload || isAgentSnapshotArtifact || isPublicPrefixInfix
+            || isAgentDownload || isAgentGuestIdentityMint || isAgentSnapshotArtifact
+            || isPublicPrefixInfix
         {
             return .isPublic
         }

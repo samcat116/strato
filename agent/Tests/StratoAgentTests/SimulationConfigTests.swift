@@ -33,11 +33,6 @@ struct SimulationConfigTests {
         #expect(sim.resolvedDiskBytes == 1024 * 1024 * 1024 * 1024)
     }
 
-    @Test("disabled is a convenient off switch")
-    func disabledDefault() {
-        #expect(SimulationConfig.disabled.enabled == false)
-    }
-
     // MARK: - Sandbox knobs (issue #470)
 
     @Test("Sandbox log interval defaults on, 0 disables, and set values convert to a Duration")

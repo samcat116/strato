@@ -31,23 +31,6 @@ public struct CustomLogHandler: LogHandler {
         formatter.timeZone = TimeZone(abbreviation: "UTC")
         let timestamp = formatter.string(from: Date())
 
-        let output = formattedLine(
-            level: level, message: message, metadata: metadata, source: source, timestamp: timestamp)
-
-        // Use FileHandle.standardError directly for concurrency safety
-        FileHandle.standardError.write(Data((output + "\n").utf8))
-    }
-
-    /// Builds the single formatted log line (without trailing newline). Split out from `log(...)`
-    /// so the output contract can be unit-tested deterministically — `log(...)` itself only stamps
-    /// the current time and writes to stderr.
-    func formattedLine(
-        level: Logger.Level,
-        message: Logger.Message,
-        metadata: Logger.Metadata?,
-        source: String,
-        timestamp: String
-    ) -> String {
         let logLevel = level.rawValue.uppercased()
         let mergedMetadata = self.metadata.merging(metadata ?? [:]) { _, new in new }
 
@@ -60,6 +43,8 @@ public struct CustomLogHandler: LogHandler {
         }
 
         output += "[\(source)] \(message)"
-        return output
+
+        // Use FileHandle.standardError directly for concurrency safety
+        FileHandle.standardError.write(Data((output + "\n").utf8))
     }
 }

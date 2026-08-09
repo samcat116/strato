@@ -537,8 +537,10 @@ What changes, uniformly:
   rootfs copy). If that puts an enabled quota over its limit the artifact is
   deleted and its `errorMessage` names the quota, which is the pre-conversion
   contract kept deliberately: tolerating the overage instead would silently
-  turn a quota into a suggestion. Volume snapshots draw on no pool and skip
-  this.
+  turn a quota into a suggestion. Volume snapshots *do* draw on the pool
+  (STR-181) but skip this check, because their reported figure is re-measured on
+  every report rather than settled once at capture — see "Volumes and the storage
+  quota" below.
 
 The agent keeps a durable record of what it captured
 (`SnapshotRecordStore`, `<vmStoragePath>/snapshot-records.json`), for the
@@ -636,6 +638,86 @@ move a volume's data across the boundary silently, leaving the storage quota
 attributed to the volume's project while the workload consuming it lived in
 another. This is the same containment VM create applies to networks and
 security groups.
+
+### Volumes and the storage quota
+
+Volumes, their snapshots and their clones draw on `ResourceQuota.maxStorage`
+(STR-181). Until then they drew on nothing, which made the one storage object a
+caller could create directly, repeatedly, at up to 256 TiB a time
+(`Volume.maxSizeGB`) the only one nobody counted — and the failure was host-wide
+rather than tenant-wide, because `qemu-img create` is sparse: an over-provisioned
+volume succeeds instantly and the bytes arrive later, on a filesystem shared with
+every other guest's disk on that node.
+
+The blocker was scoping, not accounting. `QuotaScope.predicate` is one SQL
+fragment over `project_id` **and** `environment`, shared by every aggregate so
+all of them measure the same rows, and neither table had an environment. Both
+carry one now, resolved from the creating request against its project exactly as
+a VM's is (omitted takes the project's default) and denormalized onto the
+snapshot the way `VMSnapshot` and `SandboxSnapshot` already denormalize theirs.
+On upgrade, an attached volume is backfilled from its consuming VM, its existing
+snapshots follow that resolved volume environment, and only unattached storage
+falls back to the project's default.
+
+What each object is charged:
+
+| Object | Admitted against | Charged |
+| -- | -- | -- |
+| Volume, clone | requested `size`; any larger materialized source size before attachment | desired `size` |
+| Resize | the **delta** | the new `size` |
+| Volume snapshot | the parent volume's **whole** size | the parent volume's **whole** size |
+
+A volume is charged its desired `size`, not raw `observed_size_bytes`. Normally
+that is the size it asked for. Before an image-backed or cloned volume enters a
+VM, attachment requires the agent's materialized virtual size and atomically
+admits any delta above the request; on success, desired `size` rises to that
+floor. The other mismatch is an outstanding grow, and a grow the agent refused
+is blocked rather than withdrawn — it lands the moment the guest stops, with no
+API call in between to admit it. Charging that smaller observed size would make
+a pending grow free.
+
+For a snapshot, `size` is the parent volume's size at capture. An overlay cannot
+outgrow the volume behind it, so that is the bound, and both admitting and
+continuing to reserve against it mean the pool can absorb the snapshot fully
+grown. Replacing that reservation with a small first footprint would let a
+caller admit several snapshots sequentially before any of their overlays had
+diverged, even though all could then grow without another API call to refuse.
+`observed_size_bytes` still exposes the overlay's actual allocated footprint for
+observability and billing; it does not release quota capacity.
+
+Two things this deliberately does not do:
+
+- **No auto-delete.** The post-capture re-check that deletes an over-quota
+  artifact (above) stays off for volume snapshots. The parent-sized reservation
+  already protects admission, while an overlay's reported footprint never stops
+  moving; arming deletion on it would re-run the check every report and destroy
+  snapshots because their volume diverged.
+- **No charge for a VM's boot disk twice.** For a volume whose `storage_path`
+  equals a VM's `disk_path`, even after detachment clears the mutable `vm_id`,
+  the `volumes` term deducts the bytes already reserved by `SUM(vms.disk)`.
+  Growth above that legacy VM size remains charged, while the compatibility row
+  stays out of `volume_count`. Only the rows `MigrateVMDisksToVolumes` backfilled
+  can match; nothing since inserts a volume for a VM's boot disk. Without the
+  deduction, an upgraded deployment would double every legacy VM's disk. The
+  path identity follows the agent's own rule:
+  `LibvirtService.resolveDisks` dedupes the pair by path into a single disk.
+
+The enabling migration recomputes both `volume_count` and the complete
+`reserved_storage` cache for existing quotas. Without that recount, list/detail
+responses would keep showing the pre-upgrade storage reservation until an
+unrelated create, resize, delete or quota update happened to trigger a resync.
+
+`ResourceQuota` also gained an optional `max_volumes` count limit. Optional where
+`max_vms` and `max_sandboxes` are required, because the only plausible backfill
+was `max_vms` and it is the wrong one: a deployment that gives each VM a data
+disk or two has more volumes than VMs, and would come out of the upgrade refusing
+creates against a limit nobody chose. Unset means no count limit; `maxStorage`
+remains the ceiling that protects the host.
+
+Release is the reap, not the request. A `DELETE` leaves the row in place until
+the agent confirms the bytes are gone, so `Volume.reap` recounts after the row
+goes — one call covering the volume's snapshots too, since their rows cascade
+with it and release recomputes rather than decrements.
 
 ### The attachment itself
 

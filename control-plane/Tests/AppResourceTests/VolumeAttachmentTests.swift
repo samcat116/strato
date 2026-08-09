@@ -61,7 +61,7 @@ struct VolumeAttachmentTests {
         let volume = Volume(
             name: name,
             description: "",
-            projectID: try project.requireID(),
+            projectID: try project.requireID(), environment: "development",
             size: 10 * 1024 * 1024 * 1024,
             status: vm == nil ? .available : .attached,
             createdByID: try user.requireID())
@@ -307,7 +307,7 @@ struct VolumeAttachmentTests {
         try await withAttachmentApp { app, _, admin, project, vm, _ in
             let volume = Volume(
                 name: "nameless-attachment", description: "",
-                projectID: try project.requireID(), size: 1 << 30, status: .attached,
+                projectID: try project.requireID(), environment: "development", size: 1 << 30, status: .attached,
                 createdByID: try admin.requireID())
             volume.$vm.id = try vm.requireID()
 

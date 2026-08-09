@@ -26,6 +26,7 @@ import {
   VMSnapshotsCard,
 } from "@/components/vms";
 import { useVM, useInvalidateVMs } from "@/lib/hooks";
+import { ConvergenceFailureAlert } from "@/components/workloads/convergence-failure-alert";
 
 // Dynamically import VNCDisplay: noVNC touches `document` while its module is
 // evaluated, so it cannot be server-rendered (issue #566).
@@ -128,6 +129,8 @@ export default function VMDetailPage() {
         </div>
         <VMActions vm={vm} onActionComplete={invalidateVMs} />
       </div>
+
+      <ConvergenceFailureAlert conditions={vm.conditions} />
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">

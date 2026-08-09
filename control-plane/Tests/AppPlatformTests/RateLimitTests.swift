@@ -35,6 +35,9 @@ struct RateLimitTests {
             app.post("auth", "login", "ok") { _ in Response(status: .ok) }
             // Health probe (must never be throttled).
             app.get("health") { _ in "healthy" }
+            // Guest minting is limited only after mTLS authentication in its
+            // controller; the global middleware must not use the sidecar IP.
+            app.post("agent", "vms", ":vmID", "jwt-svid") { _ in "minted" }
 
             try await test(app)
         } catch {
@@ -118,6 +121,21 @@ struct RateLimitTests {
         try await withRateLimitedApp(config: baseConfig(apiLimit: 1)) { app in
             for _ in 0..<10 {
                 try await app.test(.GET, "/health") { res async throws in
+                    #expect(res.status == .ok)
+                    #expect(res.headers.first(name: "X-RateLimit-Limit") == nil)
+                }
+            }
+        }
+    }
+
+    @Test("Guest minting bypasses the shared pre-authentication IP bucket")
+    func testGuestMintNotLimitedBySidecarIP() async throws {
+        try await withRateLimitedApp(config: baseConfig(apiLimit: 1)) { app in
+            for _ in 0..<5 {
+                try await app.test(
+                    .POST,
+                    "/agent/vms/00000000-0000-0000-0000-000000000001/jwt-svid"
+                ) { res async throws in
                     #expect(res.status == .ok)
                     #expect(res.headers.first(name: "X-RateLimit-Limit") == nil)
                 }

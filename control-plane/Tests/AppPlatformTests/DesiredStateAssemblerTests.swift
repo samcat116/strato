@@ -175,11 +175,9 @@ final class DesiredStateAssemblerTests {
             #expect(metadata.userData == vm.userData)
             #expect(metadata.vendorData == nil)
             #expect(metadata.tags.isEmpty)
-            // The VM's own SPIFFE ID (STR-55): a name, published to the guest
-            // because it is not a credential. `audiences` and `ttlSeconds` stay
-            // empty — nothing mints tokens for a guest yet (STR-57), and an
-            // audience list published before an issuer exists promises what
-            // nothing keeps.
+            // The VM's own SPIFFE ID (STR-55) is publishable because it is only
+            // a name. STR-57's audience and TTL policy remain hidden until the
+            // production agent exposes the guest-facing mint bridge.
             #expect(metadata.identity?.spiffeId == identity.spiffeID)
             #expect(metadata.identity?.audiences == [])
             #expect(metadata.identity?.ttlSeconds == nil)

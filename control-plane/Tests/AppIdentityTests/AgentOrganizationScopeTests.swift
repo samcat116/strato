@@ -482,7 +482,7 @@ final class AgentOrganizationScopeTests {
             // A detached volume anchors the agent the same way.
             try await sandbox.delete(on: app.db)
             let volume = Volume(
-                name: "anchor-vol", description: "v", projectID: project.id!,
+                name: "anchor-vol", description: "v", projectID: project.id!, environment: "development",
                 size: 1 << 30, createdByID: admin.id!)
             volume.hypervisorId = agentUUID.uuidString
             try await volume.save(on: app.db)
@@ -539,7 +539,7 @@ final class AgentOrganizationScopeTests {
             // until phase 2 too).
             try await foreignVM.delete(on: app.db)
             let foreignVolume = Volume(
-                name: "tenant-vol", description: "v", projectID: foreignProject.id!,
+                name: "tenant-vol", description: "v", projectID: foreignProject.id!, environment: "development",
                 size: 1 << 30, createdByID: orgAdmin.id!)
             foreignVolume.hypervisorId = agentUUID.uuidString
             try await foreignVolume.save(on: app.db)

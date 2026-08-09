@@ -141,8 +141,7 @@ struct DesiredStateAssembler {
         // The VMs' instance identities (STR-55), resolved in one query for the
         // whole sync — mirroring `securityGroupsByInterface` above, and for the
         // same reason: this runs for every agent on every sync, so a per-VM
-        // lookup would be a fleet-wide load multiplier. Skipped entirely for an
-        // agent that will not be sent metadata at all.
+        // lookup would be a fleet-wide load multiplier.
         let spiffeIDsByVM = try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
 
         var entries: [DesiredVMState] = []

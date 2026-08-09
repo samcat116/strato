@@ -12,6 +12,23 @@ import Testing
 @Suite("Sandbox Reconciliation Tests")
 struct SandboxReconciliationTests {
 
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var instant = Date(timeIntervalSince1970: 1_000)
+
+        func now() -> Date {
+            lock.lock()
+            defer { lock.unlock() }
+            return instant
+        }
+
+        func advance(by interval: TimeInterval) {
+            lock.lock()
+            defer { lock.unlock() }
+            instant = instant.addingTimeInterval(interval)
+        }
+    }
+
     // MARK: - Fixtures
 
     private static func sandboxSpec(cpus: Int = 1) -> SandboxSpec {
@@ -144,10 +161,13 @@ struct SandboxReconciliationTests {
         }
     }
 
-    private func makeReconciler(_ actuator: MockActuator) -> Reconciler {
+    private func makeReconciler(
+        _ actuator: MockActuator,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) -> Reconciler {
         Reconciler(
             actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
-            metadataStore: MetadataStore())
+            metadataStore: MetadataStore(), now: now)
     }
 
     // MARK: - Pure diff engine
@@ -371,23 +391,26 @@ struct SandboxReconciliationTests {
         #expect(sandboxGeneration == 1)
     }
 
-    @Test("Failing sandbox convergence is tracked under the sandbox kind, with the attempt cap")
+    @Test("Failing sandbox convergence retries after backoff at the same generation")
     func sandboxFailureTracking() async {
         struct Boom: Error {}
         let sandboxId = UUID()
         let actuator = MockActuator()
         await actuator.setFailure(Boom())
-        let reconciler = makeReconciler(actuator)
+        let clock = TestClock()
+        let reconciler = makeReconciler(actuator, now: clock.now)
         let message = Self.sync(sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 1)])
 
-        for attempt in 1...(Reconciler.maxAttemptsPerGeneration + 2) {
-            await reconciler.apply(message)
-            _ = await actuator.waitForReports(min(attempt, Reconciler.maxAttemptsPerGeneration))
-        }
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(1)
+        await reconciler.apply(message)
+        #expect(await actuator.reportCount == 1)
+        clock.advance(by: 60)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(2)
 
         let reports = await actuator.reportCount
-        #expect(reports == Reconciler.maxAttemptsPerGeneration)
+        #expect(reports == 2)
         let lastError = await reconciler.lastError(for: sandboxId.uuidString, kind: .sandbox)
         #expect(lastError != nil)
         let failedGeneration = await reconciler.failedGeneration(for: sandboxId.uuidString, kind: .sandbox)
@@ -398,14 +421,16 @@ struct SandboxReconciliationTests {
         let failed = await reconciler.failedConvergences(kind: .sandbox)
         #expect(failed[sandboxId.uuidString]?.generation == 1)
 
-        // A new generation re-arms the loop.
+        // The same generation can recover after the next backoff.
         await actuator.setFailure(nil)
-        await reconciler.apply(
-            Self.sync(sandboxes: [Self.desiredSandbox(sandboxId, status: .running, generation: 2)]))
-        _ = await actuator.waitForReports(Reconciler.maxAttemptsPerGeneration + 1)
+        clock.advance(by: 5 * 60)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(3)
         let performed = await actuator.performed
         #expect(performed.map(\.step) == [.create, .boot])
         let clearedError = await reconciler.lastError(for: sandboxId.uuidString, kind: .sandbox)
         #expect(clearedError == nil)
+        let generation = await reconciler.observedGeneration(for: sandboxId.uuidString, kind: .sandbox)
+        #expect(generation == 1)
     }
 }

@@ -1,13 +1,16 @@
 # Guest Identity (Proposal)
 
-**Status: design proposal, with one piece shipped.** The node-side attestation
+**Status: design proposal, with the VM principal and JWT path shipped.** The node-side attestation
 mechanism has been proven against a real SPIRE 1.9.6 server and agent with a
 spike (`strato-agent spiffe-delegated-probe` — see
 [What the spike proved](#what-the-spike-proved)). The **principal half for VMs**
 is implemented: STR-55 gives every VM a `workload_registrations` row under
 `spiffe://<trust-domain>/vm/<vm-id>` and publishes that ID through the instance
-metadata service. Nothing else here is implemented — in particular no SVID is
-issued to any guest yet, and sandboxes have no registration (STR-166). Issue
+metadata service. STR-57 lets the hosting agent obtain a short-lived,
+allowlisted **JWT-SVID** for that principal after the control plane verifies the
+VM's current placement. That is not the X.509 SVID, key, bundle, or standard
+Workload API path this proposal designs, and sandboxes still have no registration
+(STR-166). Issue
 [#496](https://github.com/samcat116/strato/issues/496) (STR-16) is the umbrella.
 
 ## What this is
@@ -451,6 +454,12 @@ agent WebSocket, for every guest in the fleet, forever. Node scoping also has to
 be re-implemented as an explicit placement check rather than falling out of entry
 sync.
 
+STR-57 is that retained JWT use case. Its agent-facing HTTP route performs the
+cost named above explicitly: `vm.hypervisorId` must equal the authenticated
+agent row's id before the controller will contact SPIRE. A node therefore cannot
+mint an identity for a VM currently placed elsewhere. The result remains a
+TTL-bounded bearer token, not the rotating X.509/Workload API identity below.
+
 **7. Passing the SPIRE agent's Workload API socket into the guest** (virtiofs,
 9p, or any passthrough). Killed by semantics rather than plumbing: the SPIRE
 agent attests the *calling process*, so whatever the guest reached would be
@@ -661,7 +670,9 @@ Filed under [#496](https://github.com/samcat116/strato/issues/496):
 8. QEMU `vhost-vsock-pci` (host-global CID allocation landed in STR-72).
 9. `strato-guest-identity` daemon for VMs, installed by cloud-init.
 10. Fork/clone identity safety.
-11. Audit events and metrics for guest identity issuance and refusal.
+11. Audit events and metrics for guest identity issuance and refusal. **Done for
+    the STR-57 JWT path**; the future delegated X.509 path still needs its own
+    lifecycle signals.
 12. Operator documentation.
 
 **Blocking item 0**, which has no issue yet because it is a choice rather than a

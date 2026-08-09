@@ -629,7 +629,7 @@ struct ObservedStateApplier {
         // the API can project it as the VM's `conditions` block. Recorded on
         // both the converging and settled paths — the phase only exists on the
         // former, and the error pair has to be *cleared* on the latter.
-        var changed = vm.recordConvergence(
+        var changed = vm.recordTimestampedConvergence(
             phase: observed.convergencePhase,
             lastError: observed.lastError,
             failedGeneration: observed.failedGeneration
@@ -677,6 +677,25 @@ struct ObservedStateApplier {
                     ])
                 Telemetry.vmDriftDetected()
             }
+        }
+        if vm.desiredSatisfied, vm.divergenceDetectedAt != nil {
+            vm.divergenceDetectedAt = nil
+            changed = true
+        }
+
+        let failedCurrentGeneration =
+            observed.lastError != nil && observed.failedGeneration == vm.generation
+        // No deadline means no user mutation is outstanding. This is a
+        // steady-state repair failure: persist exactly what the agent observed,
+        // but retain the desired state and generation so the level-triggered
+        // loop can heal it later. In particular, do not synthesize a stale
+        // mutation outcome from whichever resource event happens to be latest.
+        if failedCurrentGeneration, vm.convergenceDeadline == nil {
+            if changed {
+                try await vm.save(on: db)
+            }
+            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
+            return
         }
         // Deletions are settled by absence from the report, never by a status.
         //
@@ -938,7 +957,7 @@ struct ObservedStateApplier {
         // often because the agent restarted and lost its in-memory view. Drop
         // whatever it last said, rather than leave `conditions` claiming a
         // download that nothing is doing (STR-142).
-        let convergenceCleared = vm.recordConvergence(
+        let convergenceCleared = vm.recordTimestampedConvergence(
             phase: nil, lastError: nil, failedGeneration: nil)
 
         // Same established-state rule as the heartbeat reconciliation: only
@@ -982,7 +1001,7 @@ struct ObservedStateApplier {
 
         // Convergence progress for the `conditions` block (STR-142) — same
         // contract as VMs, recorded on both paths for the same reasons.
-        var changed = sandbox.recordConvergence(
+        var changed = sandbox.recordTimestampedConvergence(
             phase: observed.convergencePhase,
             lastError: observed.lastError,
             failedGeneration: observed.failedGeneration
@@ -1029,6 +1048,22 @@ struct ObservedStateApplier {
         if sandbox.exitCode != observed.exitCode {
             sandbox.exitCode = observed.exitCode
             changed = true
+        }
+        if sandbox.desiredSatisfied, sandbox.divergenceDetectedAt != nil {
+            sandbox.divergenceDetectedAt = nil
+            changed = true
+        }
+
+        let failedCurrentGeneration =
+            observed.lastError != nil && observed.failedGeneration == sandbox.generation
+        // A failure with no deadline belongs to steady-state repair, not to a
+        // pending mutation. Keep intent and generation intact and emit no
+        // operation outcome; a later same-generation retry can still recover.
+        if failedCurrentGeneration, sandbox.convergenceDeadline == nil {
+            if changed {
+                try await sandbox.save(on: db)
+            }
+            return
         }
         // Deletions are settled by absence from the report, never by a status.
         // The save is deferred to the transition where there is one, for the
@@ -1101,7 +1136,7 @@ struct ObservedStateApplier {
 
         // Nothing to report means no progress to report — same rationale as
         // the VM path (STR-142).
-        let convergenceCleared = sandbox.recordConvergence(
+        let convergenceCleared = sandbox.recordTimestampedConvergence(
             phase: nil, lastError: nil, failedGeneration: nil)
 
         // Only escalate established sandboxes: a never-confirmed row

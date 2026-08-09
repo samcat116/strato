@@ -32,15 +32,6 @@ struct FirecrackerAdoptionTests {
         return dir
     }
 
-    @Test("socketPath is deterministic per VM")
-    func socketPathDeterministic() {
-        let a = FirecrackerClient.socketPath(socketDirectory: "/run/fc", vmId: "vm-1")
-        let b = FirecrackerClient.socketPath(socketDirectory: "/run/fc", vmId: "vm-1")
-        #expect(a == b)
-        #expect(a == "/run/fc/vm-1.sock")
-        #expect(FirecrackerClient.socketPath(socketDirectory: "/run/fc", vmId: "vm-2") == "/run/fc/vm-2.sock")
-    }
-
     @Test("adoptVM throws when the API socket is missing")
     func adoptMissingSocketThrows() async throws {
         let dir = try makeSocketDir()

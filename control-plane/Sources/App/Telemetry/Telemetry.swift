@@ -125,6 +125,13 @@ enum Telemetry {
         Counter(label: "strato_vm_drift_total").increment()
     }
 
+    /// Workloads whose observed state has remained different from desired
+    /// state past the steady-state grace window. Recorded for both bounded
+    /// kinds on every sweep, including zero, so recovered series do not stick.
+    static func recordDivergedWorkloads(kind: String, count: Int) {
+        Gauge(label: "strato_diverged_workloads", dimensions: [("kind", kind)]).record(count)
+    }
+
     // MARK: - Teardown safety (STR-98)
 
     /// A workload an agent holds was confirmed to have no control-plane row,
@@ -283,5 +290,12 @@ enum Telemetry {
     /// every agent is refetching its full state on every poll.
     static func recordDesiredStatePoll(outcome: String) {
         Counter(label: "strato_agent_poll_total", dimensions: [("outcome", outcome)]).increment()
+    }
+
+    static func recordGuestIdentityMint(outcome: String) {
+        Counter(
+            label: "strato_guest_identity_mints_total",
+            dimensions: [("outcome", outcome)]
+        ).increment()
     }
 }

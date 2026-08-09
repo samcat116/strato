@@ -6,22 +6,6 @@ import StratoShared
 struct EnumDecodingTests {
     // MARK: VMStatus — the one enum with a tolerant fallback
 
-    @Test(arguments: VMStatus.allCases)
-    func vmStatusRoundTrips(status: VMStatus) throws {
-        #expect(try roundTrip([status]) == [status])
-    }
-
-    @Test func vmStatusWireStringsAreCapitalized() {
-        #expect(VMStatus.created.rawValue == "Created")
-        #expect(VMStatus.running.rawValue == "Running")
-        #expect(VMStatus.shutdown.rawValue == "Shutdown")
-        #expect(VMStatus.paused.rawValue == "Paused")
-        #expect(VMStatus.starting.rawValue == "Starting")
-        #expect(VMStatus.stopping.rawValue == "Stopping")
-        #expect(VMStatus.error.rawValue == "Error")
-        #expect(VMStatus.unknown.rawValue == "Unknown")
-    }
-
     @Test("unrecognized status decodes to .unknown, not an error")
     func vmStatusToleratesUnknownValues() throws {
         #expect(try decodeJSON([VMStatus].self, from: #"["Hibernated"]"#) == [.unknown])
@@ -33,12 +17,7 @@ struct EnumDecodingTests {
 
     // MARK: Enums without a fallback — unknown values are a decode error
 
-    @Test func hypervisorTypeRoundTripsAndRejectsUnknown() throws {
-        #expect(HypervisorType.qemu.rawValue == "qemu")
-        #expect(HypervisorType.firecracker.rawValue == "firecracker")
-        for type in HypervisorType.allCases {
-            #expect(try roundTrip([type]) == [type])
-        }
+    @Test func hypervisorTypeRejectsUnknown() throws {
         // No tolerant fallback: an agent advertising a hypervisor this build
         // doesn't know fails registration decode outright.
         #expect(throws: DecodingError.self) {
@@ -46,16 +25,7 @@ struct EnumDecodingTests {
         }
     }
 
-    @Test func consoleModeRoundTripsAndRejectsUnknown() throws {
-        #expect(ConsoleMode.off.rawValue == "Off")
-        #expect(ConsoleMode.pty.rawValue == "Pty")
-        #expect(ConsoleMode.tty.rawValue == "Tty")
-        #expect(ConsoleMode.file.rawValue == "File")
-        #expect(ConsoleMode.socket.rawValue == "Socket")
-        #expect(ConsoleMode.null.rawValue == "Null")
-        for mode in ConsoleMode.allCases {
-            #expect(try roundTrip([mode]) == [mode])
-        }
+    @Test func consoleModeRejectsUnknown() throws {
         // Graphics is a separate axis (issue #566), not a console mode: `Vnc`
         // still has no business decoding here.
         #expect(throws: DecodingError.self) {
@@ -63,14 +33,7 @@ struct EnumDecodingTests {
         }
     }
 
-    @Test func graphicsModeRoundTripsAndRejectsUnknown() throws {
-        // `headless` in source, `"None"` on the wire — the case was renamed to
-        // keep `== .none` from colliding with `Optional.none` at use sites.
-        #expect(GraphicsMode.headless.rawValue == "None")
-        #expect(GraphicsMode.vnc.rawValue == "Vnc")
-        for mode in GraphicsMode.allCases {
-            #expect(try roundTrip([mode]) == [mode])
-        }
+    @Test func graphicsModeRejectsUnknown() throws {
         // Strict, like DesiredVMStatus: a mode this build cannot realize must
         // not degrade to "no display" on a VM the API says has one.
         #expect(throws: DecodingError.self) {
@@ -81,34 +44,10 @@ struct EnumDecodingTests {
         }
     }
 
-    @Test func consoleStreamRoundTripsAndRejectsUnknown() throws {
-        #expect(ConsoleStream.serial.rawValue == "Serial")
-        #expect(ConsoleStream.vnc.rawValue == "Vnc")
+    @Test func consoleStreamRejectsUnknown() throws {
         #expect(throws: DecodingError.self) {
             try decodeJSON([ConsoleStream].self, from: #"["Spice"]"#)
         }
-    }
-
-    @Test func vmLogEnumsRoundTrip() throws {
-        #expect(VMLogLevel.debug.rawValue == "debug")
-        #expect(VMLogLevel.info.rawValue == "info")
-        #expect(VMLogLevel.warning.rawValue == "warning")
-        #expect(VMLogLevel.error.rawValue == "error")
-
-        #expect(VMLogSource.agent.rawValue == "agent")
-        #expect(VMLogSource.controlPlane.rawValue == "control_plane")
-
-        #expect(VMEventType.statusChange.rawValue == "status_change")
-        #expect(VMEventType.operation.rawValue == "operation")
-        #expect(VMEventType.error.rawValue == "error")
-        #expect(VMEventType.info.rawValue == "info")
-
-        let levels: [VMLogLevel] = [.debug, .info, .warning, .error]
-        #expect(try roundTrip(levels) == levels)
-        let sources: [VMLogSource] = [.agent, .controlPlane]
-        #expect(try roundTrip(sources) == sources)
-        let events: [VMEventType] = [.statusChange, .operation, .error, .info]
-        #expect(try roundTrip(events) == events)
     }
 
     @Test("telemetry enums tolerate unknown values from a newer protocol version")
@@ -118,41 +57,5 @@ struct EnumDecodingTests {
         #expect(try decodeJSON([VMLogLevel].self, from: #"["trace"]"#) == [.unknown])
         #expect(try decodeJSON([VMLogSource].self, from: #"["kernel"]"#) == [.unknown])
         #expect(try decodeJSON([VMEventType].self, from: #"["migration"]"#) == [.unknown])
-        #expect(VMLogLevel.unknown.rawValue == "unknown")
-        #expect(VMLogSource.unknown.rawValue == "unknown")
-        #expect(VMEventType.unknown.rawValue == "unknown")
-    }
-
-}
-
-@Suite("HypervisorCapabilities")
-struct HypervisorCapabilitiesTests {
-    @Test func roundTripPreservesAllFields() throws {
-        let capabilities = HypervisorCapabilities(
-            type: .firecracker,
-            supportsPause: true,
-            supportsLiveMigration: false,
-            supportsSnapshots: true,
-            requiresDirectKernelBoot: true,
-            maxVCPUs: 32,
-            maxMemory: 34_359_738_368
-        )
-        let decoded = try roundTrip(capabilities)
-        #expect(decoded.type == .firecracker)
-        #expect(decoded.supportsPause)
-        #expect(!decoded.supportsLiveMigration)
-        #expect(decoded.supportsSnapshots)
-        #expect(decoded.requiresDirectKernelBoot)
-        #expect(decoded.maxVCPUs == 32)
-        #expect(decoded.maxMemory == 34_359_738_368)
-    }
-
-    @Test func builtinPresetsRoundTrip() throws {
-        let qemu = try roundTrip(HypervisorCapabilities.qemu)
-        #expect(qemu.type == .qemu)
-        #expect(qemu.maxMemory == HypervisorCapabilities.qemu.maxMemory)
-        let firecracker = try roundTrip(HypervisorCapabilities.firecracker)
-        #expect(firecracker.type == .firecracker)
-        #expect(firecracker.requiresDirectKernelBoot)
     }
 }

@@ -326,16 +326,6 @@ struct ReconciliationProtocolTests {
         }
     }
 
-    @Test("State-sync support rejects peers that can emit imperative VM messages")
-    func stateSyncVersionGate() {
-    }
-
-    @Test("Network-sync support is keyed on protocol version 3")
-    func networkSyncVersionGate() {
-        // A v2 control plane omits `networks`; the agent must not treat the
-        // decoded-empty list as an authoritative teardown of all L3.
-    }
-
     @Test("DesiredStateMessage carries DNS zones through the envelope")
     func desiredDNSZonesRoundTrip() throws {
         let zoneID = UUID()
@@ -392,19 +382,6 @@ struct ReconciliationProtocolTests {
         let decoded = try WireProtocol.makeDecoder().decode(
             DesiredDNSRecord.self, from: Data(payload.utf8))
         #expect(decoded.type == "CAA")
-    }
-
-    @Test("DNS zone support is keyed on protocol version 36")
-    func dnsZoneVersionGate() {
-        // A pre-v36 agent decodes and discards the field, so the control plane
-        // omits it — and skips assembling zones it would only throw away.
-    }
-
-    @Test("Site-authority support is keyed on protocol version 4")
-    func siteAuthorityVersionGate() {
-        // A v3 agent ignores `networksAuthoritative`, so a non-authoritative
-        // empty sync would read as an authoritative teardown of all its L3 —
-        // the control plane must never send that shape to pre-v4 agents.
     }
 
     // MARK: - Per-network resolver (wire v37, STR-40)
@@ -503,12 +480,6 @@ struct ReconciliationProtocolTests {
         let old = try WireProtocol.makeDecoder().decode(
             AgentRegisterMessage.self, from: Data(legacy.utf8))
         #expect(old.resolverCapable == nil)
-    }
-
-    @Test("supportsNetworkResolver gates at 37")
-    func resolverVersionGate() {
-        // The resolver's fields ride the same list as the zones they serve, so
-        // an agent that speaks one must speak the other.
     }
 
     @Test("Each network's resolver addresses are distinct and derive from one index")

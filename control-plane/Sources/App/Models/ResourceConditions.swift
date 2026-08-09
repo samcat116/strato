@@ -85,6 +85,9 @@ struct ResourceConditions: Content, Equatable {
         /// `targetGeneration` to tell a failure of the state currently being
         /// pursued from one a newer mutation has already superseded.
         let sinceGeneration: Int64
+        /// When this error/generation pair was first observed. Nil on resource
+        /// families that do not persist convergence-failure timestamps.
+        let lastErrorAt: Date?
     }
 
     /// - Parameter desiredSatisfied: whether the observed status satisfies the
@@ -96,7 +99,8 @@ struct ResourceConditions: Content, Equatable {
         desiredSatisfied: Bool,
         phase: String?,
         lastError: String?,
-        failedGeneration: Int64?
+        failedGeneration: Int64?,
+        lastErrorAt: Date? = nil
     ) {
         self.targetGeneration = targetGeneration
         self.observedGeneration = observedGeneration
@@ -104,7 +108,8 @@ struct ResourceConditions: Content, Equatable {
         // Both halves or neither: an error with no generation cannot be placed
         // against `targetGeneration`, which is the whole point of reporting it.
         if let lastError, let failedGeneration {
-            self.degraded = Degraded(reason: lastError, sinceGeneration: failedGeneration)
+            self.degraded = Degraded(
+                reason: lastError, sinceGeneration: failedGeneration, lastErrorAt: lastErrorAt)
         } else {
             self.degraded = nil
         }
@@ -156,8 +161,45 @@ extension ConvergenceObservable {
     }
 }
 
-extension VM: ConvergenceObservable {}
-extension Sandbox: ConvergenceObservable {}
+/// VM and Sandbox convergence state includes the failure timestamp and the
+/// internal sustained-divergence claim. Other resource families retain the
+/// common convergence fields without taking these workload-only columns.
+protocol TimestampedConvergenceObservable: ConvergenceObservable {
+    var lastErrorAt: Date? { get set }
+    var divergenceDetectedAt: Date? { get set }
+}
+
+extension TimestampedConvergenceObservable {
+    /// Mirrors convergence progress and timestamps a newly observed
+    /// error/generation pair. Repeated heartbeats keep the original timestamp.
+    func recordTimestampedConvergence(
+        phase: String?,
+        lastError: String?,
+        failedGeneration: Int64?,
+        at now: Date = Date()
+    ) -> Bool {
+        let errorPairChanged = self.lastError != lastError || self.failedGeneration != failedGeneration
+        var changed = recordConvergence(
+            phase: phase, lastError: lastError, failedGeneration: failedGeneration)
+
+        let nextErrorAt: Date?
+        if lastError == nil || failedGeneration == nil {
+            nextErrorAt = nil
+        } else if errorPairChanged || lastErrorAt == nil {
+            nextErrorAt = now
+        } else {
+            nextErrorAt = lastErrorAt
+        }
+        if lastErrorAt != nextErrorAt {
+            lastErrorAt = nextErrorAt
+            changed = true
+        }
+        return changed
+    }
+}
+
+extension VM: TimestampedConvergenceObservable {}
+extension Sandbox: TimestampedConvergenceObservable {}
 extension Volume: ConvergenceObservable {}
 
 /// A resource whose `conditions` block and `isConverged` predicate are one
@@ -193,7 +235,8 @@ extension ConvergenceDerived {
             desiredSatisfied: desiredSatisfied,
             phase: convergencePhase,
             lastError: lastError,
-            failedGeneration: failedGeneration
+            failedGeneration: failedGeneration,
+            lastErrorAt: (self as? any TimestampedConvergenceObservable)?.lastErrorAt
         )
     }
 
@@ -403,6 +446,8 @@ extension VM: ConvergingResource {
         convergencePhase = committed.convergencePhase
         lastError = committed.lastError
         failedGeneration = committed.failedGeneration
+        lastErrorAt = committed.lastErrorAt
+        divergenceDetectedAt = committed.divergenceDetectedAt
         convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
         finalizers = committed.finalizers
@@ -433,6 +478,8 @@ extension Sandbox: ConvergingResource {
         convergencePhase = committed.convergencePhase
         lastError = committed.lastError
         failedGeneration = committed.failedGeneration
+        lastErrorAt = committed.lastErrorAt
+        divergenceDetectedAt = committed.divergenceDetectedAt
         convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
         finalizers = committed.finalizers
@@ -468,7 +515,15 @@ extension Volume: ConvergingResource {
         convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
         storagePath = committed.storagePath
+        observedSizeBytes = committed.observedSizeBytes
         finalizers = committed.finalizers
+        // The desired size, for the same read-modify-write reason as the
+        // attachment below: `accept` saves the whole model, so an attach or a
+        // throttle accepted while a resize commits would write its pre-request
+        // snapshot back over the new size. Adopting it is also what lets
+        // `resizeVolume` compute its quota delta (STR-181) against the row as it
+        // is under the lock rather than as the request found it.
+        size = committed.size
         // The desired attachment, which is not reconciliation-owned but is
         // read-modify-written by every mutation all the same: `accept` saves
         // the whole model, so a resize accepted while an attach commits would
