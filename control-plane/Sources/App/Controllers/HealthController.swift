@@ -136,7 +136,7 @@ struct HealthController: RouteCollection {
         if let sessionStore = req.application.sessionStore {
             let sharesCoordinationEndpoint = req.application.valkeyConfiguration?.sharesOneInstance ?? false
             do {
-                try await withStoreProbeTimeout(CoordinationService.probeDeadline) {
+                try await withStoreTimeout(CoordinationService.storeDeadline) {
                     try await sessionStore.probeReachability()
                 }
                 checks.append(HealthCheck(name: "session-store", status: "up"))

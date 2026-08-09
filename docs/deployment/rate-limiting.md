@@ -55,15 +55,21 @@ A rejected request returns `429 Too Many Requests` with a JSON body
 
 Counters live in **Valkey/Redis** when it's configured (`VALKEY_HOST`), so the
 limit is enforced consistently across every control-plane replica. They use the
-*coordination* endpoint, not the session one — shared counters that fall back to
-a local store when the backend is gone are coordination-shaped, so
-`SESSION_VALKEY_*` does not affect them. Without Valkey
+*coordination* endpoint, not the session one — shared counters are
+coordination-shaped state, so `SESSION_VALKEY_*` does not affect them. Without Valkey
 the limiter falls back to a **process-local** counter — correct for a single
 instance, but with multiple replicas each enforces its own counters (roughly N×
 the effective limit). Prefer Valkey for multi-node deployments.
 
 If the backend errors, the limiter **fails open** (allows the request) rather than
-taking down the API.
+taking down the API. Backend operations have their own two-second deadline, so a
+stalled Valkey connection cannot consume the request's longer HTTP deadline before
+the fail-open path runs.
+
+Bearer credentials are authenticated before browser sessions. An API key, CLI
+token, or workload credential is therefore never promoted into a Valkey-backed
+browser session on the response path; cookie-authenticated browser requests retain
+the session store's deliberately fail-closed contract.
 
 ## Configuration
 

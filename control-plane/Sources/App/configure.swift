@@ -219,11 +219,18 @@ public func configure(_ app: Application) async throws {
         try ImageObjectStoreFactory.configure(app)
     }
 
-    // Configure user authentication with sessions
-    app.middleware.use(User.sessionAuthenticator())
-
-    // Configure API key authentication (for Bearer tokens)
+    // Authenticate bearer credentials before installing the session
+    // authenticator. Vapor's SessionAuthenticator persists any User that a
+    // downstream middleware authenticated into the session on the response
+    // path. With the opposite order, every API-key request silently created a
+    // browser session and therefore depended on the session Valkey even when
+    // it arrived without a cookie (STR-206). A bearer credential is already
+    // self-contained; it must never be promoted into a browser session.
     app.middleware.use(BearerAuthorizationHeaderAuthenticator())
+
+    // Configure browser-session authentication after bearer auth. Cookie-only
+    // requests still restore and refresh their session exactly as before.
+    app.middleware.use(User.sessionAuthenticator())
 
     // Put the task-local `ServiceContext` back after the last future-based
     // middleware in the stack. Vapor's `SessionsMiddleware` and
@@ -248,8 +255,8 @@ public func configure(_ app: Application) async throws {
                 config: rateLimitConfig,
                 fallbackStore: InMemoryRateLimitStore(),
                 // Coordination, not sessions: these are cross-replica counters
-                // that fail open to the in-memory store, which is exactly the
-                // coordination contract.
+                // whose backend errors fail open without rejecting the request,
+                // which is exactly the coordination contract.
                 valkeyStore: app.valkeyEnabled ? ValkeyRateLimitStore(client: app.coordinationValkey) : nil
             ))
         app.logger.info(

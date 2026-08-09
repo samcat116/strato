@@ -87,6 +87,7 @@ struct ValkeyRateLimitStore: RateLimitStore {
 
 enum RateLimitError: Error {
     case unexpectedResponse
+    case backendTimeout(Duration)
 }
 
 // MARK: - In-memory backend
