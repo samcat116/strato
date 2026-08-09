@@ -140,11 +140,6 @@ public actor SandboxImageService {
         return try await task.value
     }
 
-    /// Evicts idle cache entries; the runtime calls this periodically.
-    public func cleanupCache() async {
-        await cache.cleanup()
-    }
-
     // MARK: - Pipeline
 
     private func performMaterialization(

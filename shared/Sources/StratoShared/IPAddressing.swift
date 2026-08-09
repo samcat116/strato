@@ -249,10 +249,41 @@ public struct IPv6Address: CustomStringConvertible, Equatable, Hashable, Sendabl
     /// (subnet ID 0). Randomness is the point — it keeps prefixes
     /// collision-resistant if networks are ever peered — so a fixed prefix
     /// must never replace this. `randomGlobalID` is injectable for tests.
+    ///
+    /// Never lands inside `NetworkResolverEndpoint.v6Space`, the ULA space
+    /// Strato's own link-local services are drawn from (instance metadata and
+    /// the per-network resolvers). An operator who types such a subnet is
+    /// rejected at the API, so generating one — ~1 in 2^24 — would mint a
+    /// network that validation would refuse to touch again, publish a
+    /// localport inside tenant space, and turn the metadata security-group
+    /// carve-out into a non-overridable allow to a tenant address (STR-186).
+    /// A collision is *nudged* out of the way rather than redrawn: a redraw
+    /// loop would never terminate on an injected constant, and the
+    /// neighbouring prefix is just as good a ULA. Flipping the lowest global-ID
+    /// bit the reserved prefix covers is what moves it. A ULA reservation must
+    /// be at least a /9 for any global-ID bit to sit outside it; `v6Space` is a
+    /// /32.
     public static func makeULASubnet64(randomGlobalID: (() -> UInt64)? = nil) -> IPv6CIDR {
-        let globalID = (randomGlobalID?() ?? UInt64.random(in: 0...UInt64.max)) & 0xff_ffff_ffff
-        let hi: UInt64 = (0xfd << 56) | (globalID << 16)
-        return IPv6CIDR(base: IPv6Address(hi: hi, lo: 0), prefix: 64)
+        makeULASubnet64(
+            globalID: randomGlobalID?() ?? UInt64.random(in: 0...UInt64.max),
+            avoiding: NetworkResolverEndpoint.v6SpaceCIDR)
+    }
+
+    /// Deterministic seam for testing the nudge independently of the current
+    /// service-space prefix. Kept internal because callers should always avoid
+    /// `NetworkResolverEndpoint.v6SpaceCIDR`.
+    static func makeULASubnet64(globalID: UInt64, avoiding reserved: IPv6CIDR) -> IPv6CIDR {
+        func subnet(globalID: UInt64) -> IPv6CIDR {
+            IPv6CIDR(base: IPv6Address(hi: (0xfd << 56) | ((globalID & 0xff_ffff_ffff) << 16), lo: 0), prefix: 64)
+        }
+        let candidate = subnet(globalID: globalID)
+        guard reserved.overlaps(candidate) else { return candidate }
+
+        // /8 reserves every RFC 4193 locally assigned ULA this generator can
+        // produce, so no global-ID nudge could satisfy that contract.
+        precondition(reserved.prefix >= 9, "ULA reservation leaves no global-ID bit available for a nudge")
+        let lowestCoveredGlobalIDBit = max(0, 48 - reserved.prefix)
+        return subnet(globalID: globalID ^ (1 << UInt64(lowestCoveredGlobalIDBit)))
     }
 }
 

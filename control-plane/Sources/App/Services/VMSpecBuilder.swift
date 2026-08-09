@@ -198,12 +198,10 @@ struct VMSpecBuilder {
             machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
             volumes: legacyVolumeSpecs(from: vm),
             networks: networkSpecs(from: networkInterfaces, networks: networks),
-            console: ConsoleSpec(
-                console: vm.consoleMode, serial: vm.serialMode,
-                // nil, not an explicit `.headless`, so the key is omitted
-                // entirely: a headless VM's spec has to stay byte-identical to
-                // what a pre-v23 agent already receives (issue #566).
-                graphics: vm.graphicsConsole ? .vnc : nil),
+            // nil, not an explicit `.headless`, so the key is omitted
+            // entirely and stays out of the sync digest for headless VMs
+            // (issue #566).
+            console: ConsoleSpec(graphics: vm.graphicsConsole ? .vnc : nil),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
             userData: vm.userData
         )
@@ -271,12 +269,10 @@ struct VMSpecBuilder {
                 securityGroupsByInterface: securityGroupsByInterface,
                 sendsMetadataPort: sendsMetadataPort,
                 siteResolverCapable: siteResolverCapable),
-            console: ConsoleSpec(
-                console: vm.consoleMode, serial: vm.serialMode,
-                // nil, not an explicit `.headless`, so the key is omitted
-                // entirely: a headless VM's spec has to stay byte-identical to
-                // what a pre-v23 agent already receives (issue #566).
-                graphics: vm.graphicsConsole ? .vnc : nil),
+            // nil, not an explicit `.headless`, so the key is omitted
+            // entirely and stays out of the sync digest for headless VMs
+            // (issue #566).
+            console: ConsoleSpec(graphics: vm.graphicsConsole ? .vnc : nil),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
             userData: vm.userData
         )
@@ -362,7 +358,6 @@ struct VMSpecBuilder {
         let artifacts = (image.$artifacts.value ?? []).filter { $0.status == .ready }.map { artifact in
             ArtifactInfo(
                 kind: artifact.kind,
-                format: artifact.format?.rawValue,
                 filename: artifact.filename,
                 checksum: artifact.checksum,
                 size: artifact.size,

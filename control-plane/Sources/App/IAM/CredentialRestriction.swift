@@ -23,7 +23,7 @@ import Vapor
 /// restriction and a ceiling are both "which actions does this pattern set
 /// name", and two implementations of that question would be two chances to
 /// disagree.
-struct CredentialRestriction: Equatable, Sendable {
+struct CredentialRestriction: Hashable, Sendable {
     /// Action patterns, in the guardrail vocabulary: exact actions
     /// (`vm:read`), service wildcards (`vm:*`), or the universal `*` — plus one
     /// pattern of this vocabulary's own, `read`.

@@ -80,9 +80,6 @@ protocol CoordinationStore: Sendable {
     /// linger until the next prune) reservations under `agentKey`.
     func reservedVMIds(agentKey: String) async throws -> [String]
 
-    /// Sum of all unexpired reservations under `agentKey`.
-    func reservedTotal(agentKey: String) async throws -> ReservationAmounts
-
     /// Sum reservations for every agent key in one pipelined store round trip.
     func reservedTotals(agentKeys: [String]) async throws -> [ReservationAmounts]
 
@@ -259,17 +256,6 @@ struct ValkeyCoordinationStore: CoordinationStore {
     func reservedVMIds(agentKey: String) async throws -> [String] {
         let response = try await client.smembers(ValkeyKey(Self.indexKey(agentKey)))
         return response.compactMap { try? $0.decode(as: String.self) }
-    }
-
-    func reservedTotal(agentKey: String) async throws -> ReservationAmounts {
-        let response = try await scripts.execute(
-            name: "coordination.reserved-total",
-            script: Self.reservedTotalScript,
-            keys: [ValkeyKey(Self.indexKey(agentKey))],
-            args: [Self.vmKeyPrefix(agentKey)]
-        )
-
-        return try Self.decodeReservationTotal(response)
     }
 
     func reservedTotals(agentKeys: [String]) async throws -> [ReservationAmounts] {
@@ -840,21 +826,6 @@ actor CoordinationService {
         try await store.subscribe(channel: channel, handler: handler)
     }
 
-    /// Sum of the agent's active reservations, for subtracting from its
-    /// reported availability before selection. Returns zero on store errors —
-    /// selection then sees optimistic numbers, and the atomic reserve step is
-    /// still the gate when the store is healthy.
-    func activeReservations(agentId: String) async -> ReservationAmounts {
-        do {
-            return try await store.reservedTotal(agentKey: Self.reservationKey(agentId: agentId))
-        } catch {
-            logger.warning(
-                "Failed to read placement reservations; treating as none",
-                metadata: ["agentId": .string(agentId), "error": .string("\(error)")])
-            return .zero
-        }
-    }
-
     /// Reservation totals keyed by agent ID, fetched as a single pipeline.
     /// Store failures preserve the existing fail-open behavior by returning
     /// zero for every requested agent; the atomic reserve remains the final
@@ -884,9 +855,10 @@ extension Application {
         typealias Value = String
     }
 
-    /// This control-plane process's identity for socket routing (issue #261).
+    /// This control-plane process's identity, stamped on doorbell broadcasts
+    /// (so a replica can ignore its own probe echoes) and on telemetry.
     /// Generated fresh at every process start — a restarted replica is a new
-    /// replica, and any routes naming the old identity expire by TTL.
+    /// replica.
     var replicaID: String {
         lazyService(ReplicaIDKey.self) { UUID().uuidString }
     }

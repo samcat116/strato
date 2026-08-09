@@ -1051,18 +1051,6 @@ struct AgentController: RouteCollection {
             throw Abort(.conflict, reason: "Agent is offline; it must be connected to receive an update")
         }
 
-        // A pre-v7 agent decodes the sync but ignores `desiredAgentUpdate`, so
-        // the assignment would sit there converging on nothing until the health
-        // budget recorded a failure. Refuse with the real reason instead.
-        let wireVersion = agent.wireProtocolVersion ?? 0
-        guard WireProtocol.supportsDesiredAgentUpdate(wireVersion) else {
-            throw Abort(
-                .conflict,
-                reason:
-                    "Agent registered with wire protocol v\(wireVersion), which predates remote updates (v\(WireProtocol.desiredAgentUpdateMinimumVersion)). Update it manually once (re-run install.sh, or pull a new image); remote updates work from then on."
-            )
-        }
-
         // VMs survive an agent restart regardless of hypervisor: QEMU and
         // Firecracker VMs are both re-adopted via their deterministic control
         // sockets (issue #433), so they need no acknowledgement. Sandboxes do:

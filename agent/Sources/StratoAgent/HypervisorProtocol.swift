@@ -94,7 +94,7 @@ public protocol HypervisorService: Actor, Sendable {
     ///
     /// A backend that rebuilds a VM from its spec on every spawn needs nothing
     /// here — that is what its spawn already does, and the default is a no-op
-    /// for exactly the backends whose `updateRecordedVolumes` is one. It exists
+    /// for exactly those backends. It exists
     /// for `LibvirtService`, where the domain document is written at create and
     /// the next boot reads *that* rather than the spec: a VM's hot-plug slots,
     /// its memory headroom and its vCPU maximum would otherwise be fixed for its
@@ -161,9 +161,18 @@ public protocol HypervisorService: Actor, Sendable {
     /// - Returns: The current VM status
     func getVMStatus(vmId: String) async throws -> VMStatus
 
-    /// Lists all VM IDs managed by this service
-    /// - Returns: Array of VM identifiers
-    func listVMs() async -> [String]
+    /// Every VM id this service manages, or nil if it cannot say (STR-196).
+    ///
+    /// The empty list is an *answer*, not a shrug: it claims this backend
+    /// manages nothing, and absence from an inventory of what exists on a host
+    /// reads downstream as gone. A backend that could not reach its hypervisor
+    /// is in no position to make that claim and must return nil. Callers must
+    /// preserve that unknown or provide an authoritative fallback, never
+    /// silently coerce it to empty.
+    ///
+    /// Backends holding their VM set in memory always know, and always answer.
+    /// - Returns: VM identifiers, or nil if this backend cannot say
+    func listVMs() async -> [String]?
 
     /// Returns the console access points for a VM, or nil if none exist yet
     /// (e.g. the VM is not running).
@@ -190,9 +199,20 @@ public protocol HypervisorService: Actor, Sendable {
     ///   resize a running VM at all
     func resizeVM(vmId: String, spec: VMSpec) async throws
 
-    /// Sum of vCPUs and memory (in bytes) committed to VMs this service manages.
-    /// Used to compute accurate available-resource figures for the scheduler.
-    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)
+    /// Sum of vCPUs and memory (in bytes) committed to VMs this service
+    /// manages, or nil if it cannot say (STR-196).
+    ///
+    /// Used to compute available-resource figures for the scheduler, which is
+    /// why `(0, 0)` is reserved for a backend that really is idle rather than
+    /// spent on one that failed to find out: under-reporting reservations
+    /// advertises capacity this host does not have. STR-190 is what that costs
+    /// — a libvirt decoder that never once worked reported the same figure an
+    /// idle host does, and the node advertised its whole machine as free while
+    /// running VMs. Nil is how a backend says it cannot say, and the agent
+    /// answers it by substituting the sizing from its durable manifest.
+    ///
+    /// Backends holding their VM set in memory always know, and always answer.
+    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)?
 
     /// Re-adopts a VM whose hypervisor process survived an agent restart
     /// (reconciliation phase 2, issue #260): reconnects the control session
@@ -300,15 +320,6 @@ public protocol HypervisorService: Actor, Sendable {
     /// Guest memory usage from the VM's balloon device (issue #567), on the
     /// same terms as `guestInfo`: nil means "no stats", never "no memory used".
     func memoryStats(vmId: String) async -> VMMemoryStats?
-
-    /// Replaces the volume list this backend will rebuild the VM's disk set
-    /// from at its next spawn (STR-148).
-    ///
-    /// Hot-plug alone does not survive a power cycle: the backend respawns from
-    /// the configuration the VM was created with, which a later `attachDisk`
-    /// never touched. This is what keeps that configuration in step with the
-    /// agent's durable attachment record.
-    func updateRecordedVolumes(vmId: String, volumes: [VolumeSpec]) async
 }
 
 // MARK: - Default Implementations
@@ -359,13 +370,10 @@ public extension HypervisorService {
     func memoryStats(vmId: String) async -> VMMemoryStats? { nil }
 
     /// Backends that rebuild a VM from its spec on every spawn (rather than
-    /// from a stored configuration) need nothing here: the manifest they are
-    /// handed at create time already carries the recorded volumes.
-    func updateRecordedVolumes(vmId: String, volumes: [VolumeSpec]) async {}
-
-    /// And for the same reason they need nothing before a boot: a spawn that
+    /// from a stored configuration) need nothing before a boot: a spawn that
     /// reads the spec has no stored ceiling to widen.
     func redefineVM(vmId: String, spec: VMSpec) async throws {}
+
     /// Backends must opt in to full-VM checkpoints (issue #564). Without an
     /// explicit implementation the control plane's capability gate keeps the
     /// request away in the first place; this default is the belt-and-braces

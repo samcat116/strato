@@ -65,7 +65,7 @@ struct VMSpecBuilderImageInfoTests {
         // Top-level fields describe the primary (disk-image) artifact.
         #expect(info.checksum == "d")
         #expect(info.artifact(ofKind: .kernel)?.checksum == "k")
-        #expect(info.artifact(ofKind: .rootfs)?.format == "raw")
+        #expect(info.artifact(ofKind: .rootfs)?.checksum == "r")
     }
 
     @Test("Falls back to legacy fields when no artifacts are present")

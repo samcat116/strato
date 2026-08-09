@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { Camera, History, Loader2, Trash2 } from "lucide-react";
-import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,11 +18,7 @@ import { Label } from "@/components/ui/label";
 import { vmsApi } from "@/lib/api/vms";
 import { formatMemory } from "@/lib/format-bytes";
 import { useVMSnapshots } from "@/lib/hooks";
-import {
-  acceptedMutation,
-  acceptedSnapshotMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import type { VM, VMSnapshot } from "@/types/api";
 
 /**
@@ -34,13 +29,14 @@ import type { VM, VMSnapshot } from "@/types/api";
  */
 export function VMSnapshotsCard({ vm }: { vm: VM }) {
   const { data: snapshots, isLoading, error } = useVMSnapshots(vm.id);
-  const watch = useMutationsStore((state) => state.watch);
-  const [isCreating, setIsCreating] = useState(false);
+  const { isLoading: isCreating, run: runCreate } = useAcceptedMutation();
+  // Restore and delete share one hook instance: its busyKey carries the id of
+  // the row being acted on, and both confirmation dialogs lock while set.
+  const { busyKey: busyId, run: runRowAction } = useAcceptedMutation();
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
   const [restoring, setRestoring] = useState<VMSnapshot | null>(null);
   const [deleting, setDeleting] = useState<VMSnapshot | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
 
   // A checkpoint captures live machine state, so there has to be some: a
   // shut-down VM has no QEMU process to read memory from. The server enforces
@@ -49,84 +45,59 @@ export function VMSnapshotsCard({ vm }: { vm: VM }) {
 
   const submitCreate = async (event: React.FormEvent) => {
     event.preventDefault();
-    setIsCreating(true);
-    try {
-      const trimmed = name.trim();
-      const accepted = await vmsApi.createSnapshot(
-        vm.id,
-        trimmed ? { name: trimmed } : undefined
-      );
-      watch(
-        acceptedSnapshotMutation(accepted, {
-          kind: "create",
-          resourceKind: "vm_checkpoint",
-          resourceName: trimmed || `${vm.name} checkpoint`,
-        })
-      );
-      toast.success("Checkpointing VM");
-      setShowCreate(false);
-      setName("");
-    } catch (createError) {
-      toast.error(
-        createError instanceof Error
-          ? createError.message
-          : "Failed to checkpoint VM"
-      );
-    } finally {
-      setIsCreating(false);
-    }
+    const trimmed = name.trim();
+    await runCreate({
+      request: () =>
+        vmsApi.createSnapshot(vm.id, trimmed ? { name: trimmed } : undefined),
+      watch: {
+        snapshot: true,
+        kind: "create",
+        resourceKind: "vm_checkpoint",
+        resourceName: trimmed || `${vm.name} checkpoint`,
+      },
+      errorMessage: "Failed to checkpoint VM",
+      successMessage: "Checkpointing VM",
+      onSuccess: () => {
+        setShowCreate(false);
+        setName("");
+      },
+    });
   };
 
   const submitRestore = async () => {
     if (!restoring) return;
-    setBusyId(restoring.id);
-    try {
-      // A restore acts on the VM, so it is watched as a VM mutation — the
-      // checkpoint itself does not change (backend STR-151).
-      watch(
-        acceptedMutation(await vmsApi.restoreSnapshot(vm.id, restoring.id), {
-          kind: "restore",
-          resourceKind: "virtual_machine",
-          resourceName: vm.name,
-        })
-      );
-      toast.success(`Restoring “${restoring.name}”`);
-      setRestoring(null);
-    } catch (restoreError) {
-      toast.error(
-        restoreError instanceof Error
-          ? restoreError.message
-          : "Failed to restore checkpoint"
-      );
-    } finally {
-      setBusyId(null);
-    }
+    // A restore acts on the VM, so it is watched as a VM mutation — the
+    // checkpoint itself does not change (backend STR-151).
+    await runRowAction({
+      busyKey: restoring.id,
+      request: () => vmsApi.restoreSnapshot(vm.id, restoring.id),
+      watch: {
+        kind: "restore",
+        resourceKind: "virtual_machine",
+        resourceName: vm.name,
+      },
+      errorMessage: "Failed to restore checkpoint",
+      successMessage: `Restoring “${restoring.name}”`,
+      onSuccess: () => setRestoring(null),
+    });
   };
 
   const submitDelete = async () => {
     if (!deleting) return;
     const snapshot = deleting;
-    setBusyId(snapshot.id);
-    try {
-      const accepted = await vmsApi.deleteSnapshot(vm.id, snapshot.id);
-      watch(
-        acceptedSnapshotMutation(accepted, {
-          kind: "delete",
-          resourceKind: "vm_checkpoint",
-          resourceName: snapshot.name,
-        })
-      );
-      toast.success(`Deleting “${snapshot.name}”`);
-      setDeleting(null);
-    } catch (deleteError) {
-      toast.error(
-        deleteError instanceof Error
-          ? deleteError.message
-          : "Failed to delete checkpoint"
-      );
-    } finally {
-      setBusyId(null);
-    }
+    await runRowAction({
+      busyKey: snapshot.id,
+      request: () => vmsApi.deleteSnapshot(vm.id, snapshot.id),
+      watch: {
+        snapshot: true,
+        kind: "delete",
+        resourceKind: "vm_checkpoint",
+        resourceName: snapshot.name,
+      },
+      errorMessage: "Failed to delete checkpoint",
+      successMessage: `Deleting “${snapshot.name}”`,
+      onSuccess: () => setDeleting(null),
+    });
   };
 
   return (

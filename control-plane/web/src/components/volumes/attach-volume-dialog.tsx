@@ -14,12 +14,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { volumesApi } from "@/lib/api/volumes";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useVMs } from "@/lib/hooks/use-vms";
 import { toast } from "sonner";
-import {
-  acceptedMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
 
 import type { Volume } from "@/types/api";
 
@@ -44,8 +41,7 @@ export function AttachVolumeDialog({
   onOpenChange,
   onSuccess,
 }: AttachVolumeDialogProps) {
-  const [isLoading, setIsLoading] = useState(false);
-  const watch = useMutationsStore((state) => state.watch);
+  const { isLoading, run } = useAcceptedMutation();
   const [vmId, setVmId] = useState("");
   const [deviceName, setDeviceName] = useState("");
   const { data: vms, isLoading: vmsLoading } = useVMs();
@@ -67,35 +63,28 @@ export function AttachVolumeDialog({
       return;
     }
 
-    setIsLoading(true);
-    try {
-      // Accepted, not performed: MutationWatcher toasts once the agent has
-      // actually presented the disk (backend STR-148).
-      watch(
-        acceptedMutation(
-          await volumesApi.attach(volume.id!, {
-            vmId,
-            deviceName: deviceName.trim() || undefined,
-          }),
-          {
-            kind: "attach",
-            resourceKind: "volume",
-            resourceId: volume.id!,
-            resourceName: volume.name,
-          }
-        )
-      );
-      onOpenChange(false);
-      onSuccess?.();
-      setVmId("");
-      setDeviceName("");
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Failed to attach volume"
-      );
-    } finally {
-      setIsLoading(false);
-    }
+    // Accepted, not performed: MutationWatcher toasts once the agent has
+    // actually presented the disk (backend STR-148).
+    await run({
+      request: () =>
+        volumesApi.attach(volume.id!, {
+          vmId,
+          deviceName: deviceName.trim() || undefined,
+        }),
+      watch: {
+        kind: "attach",
+        resourceKind: "volume",
+        resourceId: volume.id!,
+        resourceName: volume.name,
+      },
+      errorMessage: "Failed to attach volume",
+      onSuccess: () => {
+        onOpenChange(false);
+        onSuccess?.();
+        setVmId("");
+        setDeviceName("");
+      },
+    });
   };
 
   return (

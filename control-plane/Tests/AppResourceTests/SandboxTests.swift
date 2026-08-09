@@ -494,25 +494,26 @@ final class SandboxTests {
         }
     }
 
-    @Test("Fork refuses machine overrides and an agent below wire v12")
+    @Test("Fork refuses machine overrides")
     func createFromSnapshotGuards() async throws {
         try await withSandboxTestApp { app, user, project, source, token in
-            let oldAgent = try await registerAgent(
+            let agent = try await registerAgent(
                 app: app,
                 sandbox: source,
-                named: "old-fork-agent",
-                sandboxCapable: true,
-                protocolVersion: WireProtocol.sandboxForkMinimumVersion - 1)
+                named: "fork-agent",
+                sandboxCapable: true)
             let snapshot = SandboxSnapshot(
-                name: "old-agent-checkpoint",
+                name: "fork-checkpoint",
                 sandboxID: source.id!,
                 projectID: project.id!,
                 environment: source.environment,
-                agentId: oldAgent,
+                agentId: agent,
                 createdByID: user.id!)
             snapshot.status = .ready
             try await snapshot.save(on: app.db)
 
+            // A fork resumes the checkpointed machine, so a spec override the
+            // restore cannot honor is refused outright.
             try await app.test(.POST, "/api/sandboxes") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode([
@@ -523,18 +524,6 @@ final class SandboxTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
-            }
-
-            try await app.test(.POST, "/api/sandboxes") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode([
-                    "name": "old-agent-fork",
-                    "restoreFrom": snapshot.id!.uuidString,
-                    "projectId": project.id!.uuidString,
-                ])
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-                #expect(res.body.string.contains("too old"))
             }
         }
     }
@@ -1577,37 +1566,6 @@ final class SandboxTests {
             #expect(entry.spec.network == nil)
             // The sandbox itself is still desired state; only its NIC is held back.
             #expect(entry.sandboxId == sandbox.id)
-        }
-    }
-
-    /// The assembler's gate must not be weaker than the scheduler's, which
-    /// folds the capability with a v20+ protocol. A capable-but-pre-v20 agent
-    /// is refused at placement; if assembly sent it the NIC anyway the spec
-    /// would arrive with `securityGroupIds: nil` — the membership map is empty
-    /// below v20 — and the port would come up *unfiltered* while the API
-    /// reports its groups. Unreachable with a stock agent, since anything
-    /// advertising the capability is built at `currentVersion`; the two gates
-    /// disagreeing is what this pins.
-    @Test("the assembly withholds the NIC from a capable agent that predates security groups")
-    func assemblyWithholdsNICFromPreV20CapableAgent() async throws {
-        try await withSandboxTestApp { app, _, project, sandbox, _ in
-            let network = try await self.projectNetwork(project: project, on: app.db)
-            let agentId = try await self.registerAgent(
-                app: app, sandbox: sandbox, sandboxCapable: true, sandboxNetworkingCapable: true,
-                protocolVersion: WireProtocol.securityGroupsMinimumVersion - 1)
-
-            let nic = SandboxNetworkInterface(
-                sandboxID: try sandbox.requireID(), logicalNetworkID: try network.requireID(),
-                macAddress: "00:0c:29:ab:cd:dd")
-            try await nic.save(on: app.db)
-            try await SandboxInterfaceAddress(
-                interfaceID: try nic.requireID(), logicalNetworkID: try network.requireID(), family: .ipv4,
-                address: "192.168.1.10", prefixLength: 24, gateway: network.gateway
-            ).save(on: app.db)
-
-            let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.sandboxes.first)
-            #expect(entry.spec.network == nil)
         }
     }
 

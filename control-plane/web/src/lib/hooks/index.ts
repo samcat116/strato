@@ -4,7 +4,7 @@ export {
   useVMSnapshots,
   useInvalidateVMs,
 } from "./use-vms";
-export { useSites, useInvalidateSites } from "./use-sites";
+export { useSites } from "./use-sites";
 export {
   useSandboxes,
   useSandbox,
@@ -13,16 +13,12 @@ export {
 } from "./use-sandboxes";
 export {
   useVolumes,
-  useVolume,
-  useVolumeSnapshots,
   useSnapshotsForVolumes,
   useInvalidateVolumes,
 } from "./use-volumes";
 export {
   useAgents,
   useAgent,
-  useAgentEnrollments,
-  useRevokeAgentEnrollment,
   useUpdateAgent,
   useCancelAgentUpdate,
   usePatchAgent,
@@ -33,7 +29,6 @@ export {
 export {
   useImages,
   useImage,
-  useImageStatus,
   useCreateImageFromURL,
   useUploadImage,
   useUpdateImage,
@@ -41,7 +36,6 @@ export {
   useInvalidateImages,
 } from "./use-images";
 export {
-  useProjects,
   useProjectsForOrganization,
   useProject,
   useCreateProject,
@@ -136,7 +130,6 @@ export {
   useUpdateRole,
   useDeleteRole,
   useValidateRole,
-  useBindableRoles,
   useActionCatalog,
   usePolicies,
   useCreatePolicy,
@@ -146,9 +139,6 @@ export {
   iamErrorMessage,
 } from "./use-iam";
 export {
-  useOrganizationQuotas,
-  useProjectQuotas,
-  useInvalidateQuotas,
   useCreateQuota,
   useUpdateQuota,
   useDeleteQuota,
@@ -167,16 +157,10 @@ export {
   useRevokeProjectGroup,
   projectMemberErrorMessage,
 } from "./use-project-members";
-export { useNetworks, useNetwork, useInvalidateNetworks } from "./use-networks";
+export { useNetworks, useInvalidateNetworks } from "./use-networks";
 export {
   useSecurityGroups,
-  useSecurityGroup,
   useInvalidateSecurityGroups,
-  useCreateSecurityGroup,
-  useUpdateSecurityGroup,
-  useDeleteSecurityGroup,
-  useCreateSecurityGroupRule,
-  useDeleteSecurityGroupRule,
   useAttachSecurityGroup,
   useDetachSecurityGroup,
 } from "./use-security-groups";

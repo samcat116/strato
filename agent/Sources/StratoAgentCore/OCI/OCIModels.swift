@@ -15,7 +15,6 @@ public enum OCIMediaType {
     public static let dockerManifest = "application/vnd.docker.distribution.manifest.v2+json"
     public static let dockerManifestList = "application/vnd.docker.distribution.manifest.list.v2+json"
     public static let ociConfig = "application/vnd.oci.image.config.v1+json"
-    public static let dockerConfig = "application/vnd.docker.container.image.v1+json"
 
     /// Every manifest flavor the client accepts, for the `Accept` header on
     /// manifest requests (same set the control plane's

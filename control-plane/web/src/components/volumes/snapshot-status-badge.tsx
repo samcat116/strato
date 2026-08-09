@@ -1,10 +1,10 @@
-import { Badge } from "@/components/ui/badge";
+import {
+  StatusBadge,
+  type StatusBadgeConfig,
+} from "@/components/ui/status-badge";
 import type { SnapshotStatus } from "@/types/api";
 
-const statusConfig: Record<
-  SnapshotStatus,
-  { label: string; className: string }
-> = {
+const statusConfig: Record<SnapshotStatus, StatusBadgeConfig> = {
   creating: {
     label: "Creating",
     className: "bg-blue-500/20 text-blue-600 border-blue-500/30 animate-pulse",
@@ -28,17 +28,8 @@ const statusConfig: Record<
   },
 };
 
-const unknownConfig = {
-  label: "Unknown",
-  className: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
-};
-
+// No resourceId is passed, so this badge has no pending-mutation override —
+// the snapshot table communicates in-flight deletes through `status` alone.
 export function SnapshotStatusBadge({ status }: { status: SnapshotStatus }) {
-  const config = statusConfig[status] || unknownConfig;
-
-  return (
-    <Badge variant="outline" className={config.className}>
-      {config.label}
-    </Badge>
-  );
+  return <StatusBadge status={status} config={statusConfig} />;
 }

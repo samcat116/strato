@@ -9,9 +9,6 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
     private let logger: Logger
     private let maxMACGenerationAttempts = 100
 
-    // Track VM network configurations for info queries, keyed by "<vmId>#<nicIndex>"
-    private var vmNetworks: [String: VMNetworkInfo] = [:]
-    private var logicalNetworks: [String: NetworkInfo] = [:]
     private var usedMACs: Set<String> = []
 
     init(logger: Logger) {
@@ -27,8 +24,6 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
 
     func disconnect() async {
         logger.info("User-mode network service disconnected")
-        vmNetworks.removeAll()
-        logicalNetworks.removeAll()
     }
 
     // MARK: - VM Network Lifecycle
@@ -65,8 +60,6 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
             ipAddress: nil
         )
 
-        vmNetworks[Self.nicKey(vmId: vmId, nicIndex: nicIndex)] = networkInfo
-
         logger.info(
             "VM network created with user-mode networking",
             metadata: [
@@ -81,13 +74,6 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         logger.info(
             "Detaching VM from user-mode network",
             metadata: ["vmId": .string(vmId), "nicIndex": .stringConvertible(nicIndex)])
-        vmNetworks.removeValue(forKey: Self.nicKey(vmId: vmId, nicIndex: nicIndex))
-    }
-
-    // MARK: - Helper Methods
-
-    private static func nicKey(vmId: String, nicIndex: Int) -> String {
-        "\(vmId)#\(nicIndex)"
     }
 
     private func generateMACAddress() -> String {

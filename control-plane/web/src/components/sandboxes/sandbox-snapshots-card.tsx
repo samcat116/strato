@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { CloudUpload, GitFork, Loader2 } from "lucide-react";
-import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,11 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sandboxesApi } from "@/lib/api/sandboxes";
 import { useSandboxSnapshots } from "@/lib/hooks";
-import {
-  acceptedMutation,
-  acceptedSnapshotMutation,
-  useMutationsStore,
-} from "@/lib/stores/mutations-store";
+import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useProjectContext } from "@/providers";
 import type { Sandbox, SandboxSnapshot } from "@/types/api";
 import { formatMemory } from "@/lib/format-bytes";
@@ -32,11 +27,10 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const router = useRouter();
   const { data: snapshots, isLoading, error } = useSandboxSnapshots(sandbox.id);
   const { currentProject } = useProjectContext();
-  const watch = useMutationsStore((state) => state.watch);
   const [selected, setSelected] = useState<SandboxSnapshot | null>(null);
   const [name, setName] = useState("");
-  const [isForking, setIsForking] = useState(false);
-  const [exportingId, setExportingId] = useState<string | null>(null);
+  const { isLoading: isForking, run: runFork } = useAcceptedMutation();
+  const { busyKey: exportingId, run: runExport } = useAcceptedMutation();
 
   const beginFork = (snapshot: SandboxSnapshot) => {
     setSelected(snapshot);
@@ -48,62 +42,45 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   // loss and becomes eligible for cross-agent restore and fork. A placement
   // fact rather than a command since STR-150 — the owning agent converges by
   // uploading, and the snapshot stays unconverged until every artifact lands.
-  const exportSnapshot = async (snapshot: SandboxSnapshot) => {
-    setExportingId(snapshot.id);
-    try {
-      const accepted = await sandboxesApi.exportSnapshot(
-        sandbox.id,
-        snapshot.id
-      );
-      watch(
-        acceptedSnapshotMutation(accepted, {
-          kind: "snapshot_export",
-          resourceKind: "sandbox_snapshot",
-          resourceName: `${snapshot.name} export`,
-        })
-      );
-      toast.success(`Exporting snapshot "${snapshot.name}"`);
-    } catch (exportError) {
-      toast.error(
-        exportError instanceof Error
-          ? exportError.message
-          : "Failed to export snapshot"
-      );
-    } finally {
-      setExportingId(null);
-    }
-  };
+  const exportSnapshot = (snapshot: SandboxSnapshot) =>
+    runExport({
+      busyKey: snapshot.id,
+      request: () => sandboxesApi.exportSnapshot(sandbox.id, snapshot.id),
+      watch: {
+        snapshot: true,
+        kind: "snapshot_export",
+        resourceKind: "sandbox_snapshot",
+        resourceName: `${snapshot.name} export`,
+      },
+      errorMessage: "Failed to export snapshot",
+      successMessage: `Exporting snapshot "${snapshot.name}"`,
+    });
 
   const submitFork = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!selected || !name.trim()) return;
 
-    setIsForking(true);
-    try {
-      // A fork is an ordinary sandbox create, so it answers with the new
-      // sandbox rather than an operation.
-      const accepted = await sandboxesApi.create({
-        name: name.trim(),
-        restoreFrom: selected.id,
-        projectId: currentProject?.id ?? sandbox.projectId,
-      });
-      watch(
-        acceptedMutation(accepted, {
-          kind: "create",
-          resourceKind: "sandbox",
-          resourceName: name.trim(),
-        })
-      );
-      toast.success(`Forking sandbox "${name.trim()}"`);
-      setSelected(null);
-      router.push(`/sandboxes/detail?id=${accepted.resource.id}`);
-    } catch (forkError) {
-      toast.error(
-        forkError instanceof Error ? forkError.message : "Failed to fork sandbox"
-      );
-    } finally {
-      setIsForking(false);
-    }
+    // A fork is an ordinary sandbox create, so it answers with the new
+    // sandbox rather than an operation.
+    await runFork({
+      request: () =>
+        sandboxesApi.create({
+          name: name.trim(),
+          restoreFrom: selected.id,
+          projectId: currentProject?.id ?? sandbox.projectId,
+        }),
+      watch: {
+        kind: "create",
+        resourceKind: "sandbox",
+        resourceName: name.trim(),
+      },
+      errorMessage: "Failed to fork sandbox",
+      successMessage: `Forking sandbox "${name.trim()}"`,
+      onSuccess: (accepted) => {
+        setSelected(null);
+        router.push(`/sandboxes/detail?id=${accepted.resource.id}`);
+      },
+    });
   };
 
   return (

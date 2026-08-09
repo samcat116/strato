@@ -52,57 +52,11 @@ enum VolumeService {
     /// restricts candidates to those members; an empty list (the default
     /// local pool) leaves all agents eligible.
     ///
-    /// The wire-version filter is new with STR-148 and is the one placement
-    /// gate in this file that refuses rather than degrades: with the imperative
-    /// volume frames gone, an agent below v31 has no way to hear about a volume
-    /// at all, so placing one there would produce a resource that could never
-    /// converge and could only be deleted by force-clearing its finalizer.
     static func selectVolumeAgent(from agents: [Agent], memberAgentIds: [String] = []) -> Agent? {
         agents.first {
             $0.status == .online && $0.supportedHypervisors.contains(.qemu)
-                && WireProtocol.supportsVolumeSync($0.wireProtocolVersion ?? 0)
                 && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
         }
     }
 
-}
-
-// MARK: - Errors
-
-enum VolumeServiceError: Error, LocalizedError {
-    case noAgentsAvailable
-    case agentNotFound(String)
-    case agentOffline(String)
-    case vmNotScheduled
-    case volumeNotOnAgent
-    case volumeNotAttached
-    case firecrackerNotSupported
-    case agentOperationFailed(String, String?)
-    case operationUnsupportedByAgent(String, String)
-
-    var errorDescription: String? {
-        switch self {
-        case .noAgentsAvailable:
-            return "No agents available to handle volume operation"
-        case .agentNotFound(let id):
-            return "Agent '\(id)' not found"
-        case .agentOffline(let id):
-            return "Agent '\(id)' is offline"
-        case .vmNotScheduled:
-            return "VM is not scheduled on any hypervisor"
-        case .volumeNotOnAgent:
-            return "Volume is not stored on any agent"
-        case .volumeNotAttached:
-            return "Volume is not attached to any VM"
-        case .firecrackerNotSupported:
-            return "Volume operations are not supported for Firecracker VMs"
-        case .agentOperationFailed(let error, let details):
-            if let details {
-                return "\(error) (\(details))"
-            }
-            return error
-        case .operationUnsupportedByAgent(let operation, let agentId):
-            return "Agent '\(agentId)' does not support '\(operation)'; upgrade the agent and retry"
-        }
-    }
 }

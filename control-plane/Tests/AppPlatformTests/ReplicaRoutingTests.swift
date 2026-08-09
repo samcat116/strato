@@ -141,7 +141,7 @@ final class ReplicaRoutingAgentServiceTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: 2
+            protocolVersion: WireProtocol.currentVersion
         )
         // New agents need an owning org; this harness creates no other data,
         // so mint one on first use.

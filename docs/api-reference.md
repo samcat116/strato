@@ -71,11 +71,20 @@ algorithm name as its prefix. List inputs are bounded by cardinality too —
 notably `securityGroupIds`, which is held to the same five-per-interface cap at
 create that the attach endpoint enforces.
 
+**DNS zones and records** are bounded on the same terms, at their own grammar's
+ceiling (STR-198). A zone's `name` and a record's `name` may be **253
+characters**, RFC 1035's limit for a domain name in text form, rather than the
+128 above — a deep subdomain zone is an ordinary thing to serve. A zone's
+`description` takes the 4096 free-text ceiling. A record's `value` is bounded by
+its type: an address for `A`/`AAAA`, a domain name for `CNAME`/`PTR`, 255 bytes
+for `TXT`, and `priority weight port target` for `SRV`. A zone also holds at
+most 1000 authored records.
+
 Characters are counted the way Postgres counts them, and the same ceilings are
 enforced by `CHECK` constraints on the columns, so the API and the database
 reject exactly the same values.
 
-Resources outside that set — DNS zones and records, security-group rules, sites,
+Resources outside that set — security-group rules, sites,
 floating-IP pools, webhook subscriptions, IAM policies and roles, guardrails,
 API keys, registry pull secrets, OIDC providers, and users — do not yet carry
 per-field ceilings. Independently of any field, though, a collected request body

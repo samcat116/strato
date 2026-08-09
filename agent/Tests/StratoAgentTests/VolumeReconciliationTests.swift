@@ -352,8 +352,7 @@ struct VolumeReconciliationTests {
         let reconciler = Self.reconciler(actuator)
 
         await reconciler.apply(
-            Self.sync(volumes: [Self.desired(id, generation: 7, source: .clone(from: sourceId))]),
-            includeVolumes: true)
+            Self.sync(volumes: [Self.desired(id, generation: 7, source: .clone(from: sourceId))]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
@@ -367,8 +366,7 @@ struct VolumeReconciliationTests {
         let reconciler = Self.reconciler(actuator)
 
         await reconciler.apply(
-            Self.sync(volumes: [Self.desired(id, source: .clone(from: UUID()))]),
-            includeVolumes: true)
+            Self.sync(volumes: [Self.desired(id, source: .clone(from: UUID()))]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.map(\.step) == [.create])
@@ -426,30 +424,12 @@ struct VolumeReconciliationTests {
         let actuator = MockVolumeActuator(volumes: [id.uuidString: .managed(Self.facts())])
         let reconciler = Self.reconciler(actuator)
 
-        await reconciler.apply(Self.sync(volumes: nil), includeVolumes: true)
+        await reconciler.apply(Self.sync(volumes: nil))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
         #expect(await actuator.volumes.count == 1)
         #expect(await reconciler.unrecognizedWorkloads().isEmpty)
-    }
-
-    /// The version gate is belt to the field's braces: even a payload that
-    /// *does* carry volumes is ignored when the sender is too old to have meant
-    /// it, matching how the sandbox half is gated.
-    @Test("A pre-v31 sender's volumes are ignored even when present")
-    func versionGateSuppressesTheVolumeHalf() async {
-        let id = UUID()
-        let actuator = MockVolumeActuator(volumes: [id.uuidString: .managed(Self.facts())])
-        let reconciler = Self.reconciler(actuator)
-
-        await reconciler.apply(
-            Self.sync(volumes: [Self.desired(id, status: .absent, generation: 9)]),
-            includeVolumes: false)
-        try? await Task.sleep(for: .milliseconds(50))
-
-        #expect(await actuator.performed.isEmpty)
-        #expect(await actuator.volumes.count == 1)
     }
 
     /// An agent that cannot read its own workload manifest converges no volumes
@@ -464,7 +444,7 @@ struct VolumeReconciliationTests {
         await actuator.setPresenceComplete(false)
         let reconciler = Self.reconciler(actuator)
 
-        await reconciler.apply(Self.sync(volumes: [Self.desired(id)]), includeVolumes: true)
+        await reconciler.apply(Self.sync(volumes: [Self.desired(id)]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
@@ -482,7 +462,7 @@ struct VolumeReconciliationTests {
         await actuator.setInventoryReadable(false)
         let reconciler = Self.reconciler(actuator)
 
-        await reconciler.apply(Self.sync(volumes: [Self.desired(id)]), includeVolumes: true)
+        await reconciler.apply(Self.sync(volumes: [Self.desired(id)]))
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
@@ -527,7 +507,7 @@ struct VolumeReconciliationTests {
             vms: [],
             tombstones: vmIds.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 1) },
             volumes: [])
-        await reconciler.apply(sync, includeVolumes: true)
+        await reconciler.apply(sync)
         try? await Task.sleep(for: .milliseconds(50))
 
         #expect(await actuator.performed.isEmpty)
@@ -559,7 +539,7 @@ struct VolumeReconciliationTests {
             tombstones: vmIds.map { DesiredWorkloadTombstone(kind: .vm, workloadId: $0, generation: 1) }
                 + [DesiredWorkloadTombstone(kind: .volume, workloadId: doomedVolume, generation: 1)],
             volumes: [])
-        await reconciler.apply(sync, includeVolumes: true)
+        await reconciler.apply(sync)
         try? await Task.sleep(for: .milliseconds(50))
 
         // One volume out of forty is well inside the guard; the four VMs are not.
@@ -596,7 +576,7 @@ struct VolumeReconciliationTests {
         let actuator = MockVolumeActuator()
         let reconciler = Self.reconciler(actuator)
 
-        await reconciler.apply(Self.sync(volumes: [Self.desired(id)]), includeVolumes: true)
+        await reconciler.apply(Self.sync(volumes: [Self.desired(id)]))
         try? await Task.sleep(for: .milliseconds(100))
 
         #expect(await actuator.performed.map(\.step) == [.create])
@@ -625,7 +605,7 @@ struct VolumeReconciliationTests {
         // Every sync re-drives the refused grow, well past the attempt cap.
         let rounds = Reconciler.maxAttemptsPerGeneration + 3
         for round in 1...rounds {
-            await reconciler.apply(message, includeVolumes: true)
+            await reconciler.apply(message)
             _ = await actuator.waitForReports(round)
         }
         #expect(await actuator.performed.map(\.step) == Array(repeating: .resize, count: rounds))
@@ -639,7 +619,7 @@ struct VolumeReconciliationTests {
         // The operator stops the guest. The *same* generation converges — the
         // point being that nobody had to re-ask for the size.
         await actuator.setResizeFailure(nil)
-        await reconciler.apply(message, includeVolumes: true)
+        await reconciler.apply(message)
         _ = await actuator.waitForReports(rounds + 1)
 
         #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volume) == 3)
@@ -658,7 +638,7 @@ struct VolumeReconciliationTests {
         let message = Self.sync(volumes: [Self.desired(id, generation: 3, sizeBytes: 3 << 30)])
 
         for _ in 1...(Reconciler.maxAttemptsPerGeneration + 2) {
-            await reconciler.apply(message, includeVolumes: true)
+            await reconciler.apply(message)
             _ = await actuator.waitForReports(1)
         }
         try? await Task.sleep(for: .milliseconds(100))
@@ -675,7 +655,7 @@ struct VolumeReconciliationTests {
         let reconciler = Self.reconciler(actuator)
 
         await reconciler.apply(
-            Self.sync(volumes: [Self.desired(id, generation: 3)]), includeVolumes: true)
+            Self.sync(volumes: [Self.desired(id, generation: 3)]))
         try? await Task.sleep(for: .milliseconds(100))
 
         #expect(await reconciler.observedGeneration(for: id.uuidString, kind: .volume) == 3)

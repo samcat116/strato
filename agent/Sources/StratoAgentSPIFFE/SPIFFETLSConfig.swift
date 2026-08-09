@@ -98,23 +98,6 @@ public enum SPIFFETLSConfig {
 
         return config
     }
-
-    /// Create TLS configuration from trust bundle only (for verifying peers)
-    /// - Parameter bundle: The trust bundle containing CA certificates
-    /// - Returns: TLSConfiguration with only trust roots set
-    public static func makeTrustOnlyConfiguration(
-        bundle: SPIFFETrustBundle
-    ) throws -> TLSConfiguration {
-        let trustedCerts = try bundle.x509Authorities.map { pemString in
-            try NIOSSLCertificate(bytes: [UInt8](pemString.utf8), format: .pem)
-        }
-
-        var config = TLSConfiguration.makeClientConfiguration()
-        config.trustRoots = .certificates(trustedCerts)
-        config.certificateVerification = .fullVerification
-
-        return config
-    }
 }
 
 // MARK: - SVID Manager
@@ -134,9 +117,6 @@ public actor SVIDManager {
     private var currentTLSConfig: TLSConfiguration?
     private var watchTask: Task<Void, Never>?
     private var rotationCallbacks: [(X509SVID) async -> Void] = []
-
-    /// Time before expiration to trigger rotation (default: 5 minutes)
-    public var rotationMargin: TimeInterval = 300
 
     public init(client: any SPIFFEClientProtocol, logger: Logger, peerTrustDomain: String? = nil) {
         self.client = client
@@ -198,14 +178,6 @@ public actor SVIDManager {
     /// Register a callback for SVID rotation events
     public func onRotation(_ callback: @escaping (X509SVID) async -> Void) {
         rotationCallbacks.append(callback)
-    }
-
-    /// Check if SVID needs rotation
-    public func needsRotation() -> Bool {
-        guard let svid = currentSVID else {
-            return true
-        }
-        return svid.willExpire(within: rotationMargin)
     }
 
     /// Force SVID refresh

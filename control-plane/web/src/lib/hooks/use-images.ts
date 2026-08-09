@@ -38,18 +38,6 @@ export function useImage(projectId: string | undefined, imageId: string | undefi
   });
 }
 
-export function useImageStatus(projectId: string | undefined, imageId: string | undefined) {
-  return useQuery({
-    queryKey: ["images", projectId, imageId, "status"],
-    queryFn: () =>
-      projectId && imageId
-        ? imagesApi.getStatus(projectId, imageId)
-        : Promise.reject("Missing projectId or imageId"),
-    enabled: !!projectId && !!imageId,
-    refetchInterval: 2000, // Poll frequently for status updates
-  });
-}
-
 export function useCreateImageFromURL(projectId: string) {
   const queryClient = useQueryClient();
 
@@ -77,64 +65,6 @@ export function useUploadImage(projectId: string) {
     }) => imagesApi.upload(projectId, file, metadata, onProgress),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["images", projectId] });
-    },
-  });
-}
-
-export function useCreateEmptyImage(projectId: string) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (data: Omit<CreateImageRequest, "sourceURL">) =>
-      imagesApi.createEmpty(projectId, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["images", projectId] });
-    },
-  });
-}
-
-export function useUploadArtifact(projectId: string) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({
-      imageId,
-      kind,
-      file,
-      onProgress,
-    }: {
-      imageId: string;
-      kind: ArtifactKind;
-      file: File;
-      onProgress?: (progress: number) => void;
-    }) => imagesApi.uploadArtifact(projectId, imageId, kind, file, onProgress),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["images", projectId] });
-      queryClient.invalidateQueries({
-        queryKey: ["images", projectId, variables.imageId],
-      });
-    },
-  });
-}
-
-export function useFetchArtifact(projectId: string) {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: ({
-      imageId,
-      kind,
-      sourceURL,
-    }: {
-      imageId: string;
-      kind: ArtifactKind;
-      sourceURL: string;
-    }) => imagesApi.fetchArtifact(projectId, imageId, kind, sourceURL),
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ["images", projectId] });
-      queryClient.invalidateQueries({
-        queryKey: ["images", projectId, variables.imageId],
-      });
     },
   });
 }

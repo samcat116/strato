@@ -44,16 +44,6 @@ enum OperationResourceKind: String, Codable, CaseIterable, Sendable, Hashable {
         }
     }
 
-    /// The artifact family this kind names, or nil for a live resource.
-    var snapshotArtifactKind: SnapshotArtifactKind? {
-        switch self {
-        case .volumeSnapshot: return .volumeSnapshot
-        case .vmCheckpoint: return .vmCheckpoint
-        case .sandboxSnapshot: return .sandboxSnapshot
-        case .virtualMachine, .sandbox, .volume: return nil
-        }
-    }
-
     /// How long a mutation of `kind` on this resource kind may run before the
     /// stuck-convergence sweep declares it timed out — the figure
     /// `extendConvergenceDeadline` stamps at accept time.

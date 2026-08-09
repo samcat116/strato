@@ -110,18 +110,12 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let version: String
     public let capabilities: [String]
     public let resources: AgentResources
-    /// Legacy single hypervisor type. Still sent so control planes that predate
-    /// `hypervisors` can register this agent; readers should prefer `hypervisors`.
-    public let hypervisorType: HypervisorType
     /// Host CPU architecture. Optional so messages from agents that predate
     /// this field decode fine; absent means unknown, and the scheduler treats
     /// unknown-architecture agents as ineligible for any VM that pins an
     /// architecture.
     public let architecture: CPUArchitecture?
     /// Every hypervisor on this host with probed availability and capabilities.
-    /// Optional so registrations from older agents still decode; readers fall
-    /// back to deriving entries from the legacy `capabilities` strings
-    /// (see `effectiveHypervisors`).
     public let hypervisors: [HypervisorSupport]?
     /// Networking capability of this host. Optional for the same reason.
     public let networkCapability: NetworkCapability?
@@ -180,19 +174,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// registrations from agents that predate host-info reporting decode fine,
     /// and any individual field the agent couldn't probe is absent.
     public let hostInfo: HostInfo?
-    /// Whether this agent fetches its desired state from
-    /// `GET /agent/desired-state` rather than waiting for pushed
-    /// `desired_state` frames (ADR 0001 stage 10). True means "stop pushing to
-    /// me" — the control plane skips this agent in its periodic push pass and
-    /// rings the broadcast doorbell instead of writing to its socket.
-    ///
-    /// Like `sandboxCapable`, speaking the wire version is deliberately not
-    /// sufficient: a v29 agent understands the endpoint but may be pinned to
-    /// push mode by config, and the control plane must not stop pushing to an
-    /// agent that isn't actually polling. Optional so registrations from older
-    /// agents decode fine; absent means push mode, which is the safe default
-    /// in both directions of skew.
-    public let pullsDesiredState: Bool?
     /// Whether this host can actually run the per-network DNS resolver
     /// (STR-40): it is in OVN network mode and has a usable CoreDNS binary.
     ///
@@ -219,7 +200,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
         version: String,
         capabilities: [String],
         resources: AgentResources,
-        hypervisorType: HypervisorType = .qemu,
         architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport]? = nil,
         networkCapability: NetworkCapability? = nil,
@@ -229,7 +209,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
         tpmCapable: Bool? = nil,
         operatingSystem: OperatingSystem? = nil,
         hostInfo: HostInfo? = nil,
-        pullsDesiredState: Bool? = nil,
         resolverCapable: Bool? = nil
     ) {
         self.requestId = requestId
@@ -239,7 +218,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.version = version
         self.capabilities = capabilities
         self.resources = resources
-        self.hypervisorType = hypervisorType
         self.architecture = architecture
         self.hypervisors = hypervisors
         self.networkCapability = networkCapability
@@ -249,34 +227,13 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.tpmCapable = tpmCapable
         self.operatingSystem = operatingSystem
         self.hostInfo = hostInfo
-        self.pullsDesiredState = pullsDesiredState
         self.resolverCapable = resolverCapable
     }
 
-    /// The hypervisor list to act on: the probed report when the agent sent
-    /// one, otherwise entries derived from the hypervisor types named in the
-    /// legacy `capabilities` strings. Agents have always advertised the
-    /// backends they can run there (older builds hardcoded them per platform,
-    /// newer ones gate each on a binary probe), so deriving from capabilities
-    /// both preserves multi-hypervisor legacy agents and respects failed
-    /// probes — an agent advertising no backend stays unschedulable rather
-    /// than being resurrected by the configured-default `hypervisorType`
-    /// scalar. Derived entries are assumed available but not accelerated,
-    /// since such agents never probed KVM/HVF.
+    /// The hypervisor list to act on. An agent advertising no backend stays
+    /// unschedulable — absence of a probed report is not capability.
     public var effectiveHypervisors: [HypervisorSupport] {
-        if let hypervisors, !hypervisors.isEmpty {
-            return hypervisors
-        }
-        return HypervisorType.allCases
-            .filter { capabilities.contains($0.rawValue) }
-            .map { type in
-                HypervisorSupport(
-                    type: type,
-                    available: true,
-                    accelerated: false,
-                    capabilities: .capabilities(for: type)
-                )
-            }
+        hypervisors ?? []
     }
 }
 
@@ -286,20 +243,17 @@ public struct AgentHeartbeatMessage: WebSocketMessage {
     public let timestamp: Date
     public let agentId: String
     public let resources: AgentResources
-    public let runningVMs: [String]  // VM IDs
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         agentId: String,
-        resources: AgentResources,
-        runningVMs: [String]
+        resources: AgentResources
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.agentId = agentId
         self.resources = resources
-        self.runningVMs = runningVMs
     }
 }
 
@@ -308,18 +262,15 @@ public struct AgentUnregisterMessage: WebSocketMessage {
     public let requestId: String
     public let timestamp: Date
     public let agentId: String
-    public let reason: String?
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
-        agentId: String,
-        reason: String? = nil
+        agentId: String
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.agentId = agentId
-        self.reason = reason
     }
 }
 
@@ -398,10 +349,6 @@ public struct AgentResources: Codable, Sendable {
 /// credential in the URL itself (issue #493).
 public struct ArtifactInfo: Codable, Sendable {
     public let kind: ArtifactKind
-    /// Disk format raw string ("qcow2"/"raw") for `diskImage`/`rootfs`; nil for
-    /// opaque blobs (`kernel`/`initramfs`). Kept as a string to avoid coupling
-    /// the wire contract to the control plane's `ImageFormat` enum.
-    public let format: String?
     public let filename: String
     public let checksum: String
     public let size: Int64
@@ -409,14 +356,12 @@ public struct ArtifactInfo: Codable, Sendable {
 
     public init(
         kind: ArtifactKind,
-        format: String? = nil,
         filename: String,
         checksum: String,
         size: Int64,
         downloadURL: String
     ) {
         self.kind = kind
-        self.format = format
         self.filename = filename
         self.checksum = checksum
         self.size = size
@@ -526,9 +471,12 @@ public struct ErrorMessage: WebSocketMessage {
 
     /// Well-known values for `code`.
     public enum ErrorCode {
-        /// The presented registration/reconnect token was rejected (invalid,
-        /// expired, or already used). Retrying with the same token can never
-        /// succeed.
+        /// The agent's credential/enrollment was rejected permanently (today:
+        /// an enrollment with no organization scope). Named for the bearer
+        /// tokens that predated SVID-only auth (wire v11) — the string
+        /// survives because deployed agents key their "stop reconnecting and
+        /// exit" behavior on it. Retrying can never succeed without operator
+        /// action.
         public static let invalidToken = "invalid_token"
 
         /// The agent's wire protocol version predates desired-state sync,
@@ -850,7 +798,6 @@ public enum VMLogLevel: String, Codable, CaseIterable, Sendable {
 /// Source of the log message
 public enum VMLogSource: String, Codable, CaseIterable, Sendable {
     case agent = "agent"
-    case qemu = "qemu"
     case controlPlane = "control_plane"
     /// Fallback for a source emitted by a peer on a newer protocol version.
     case unknown = "unknown"
@@ -866,7 +813,6 @@ public enum VMLogSource: String, Codable, CaseIterable, Sendable {
 public enum VMEventType: String, Codable, CaseIterable, Sendable {
     case statusChange = "status_change"
     case operation = "operation"
-    case qemuOutput = "qemu_output"
     case error = "error"
     case info = "info"
     /// Fallback for an event type emitted by a peer on a newer protocol version.
@@ -890,9 +836,6 @@ public struct VMLogMessage: WebSocketMessage {
     public let eventType: VMEventType
     public let message: String
     public let operation: String?
-    public let details: String?
-    public let previousStatus: VMStatus?
-    public let newStatus: VMStatus?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -902,10 +845,7 @@ public struct VMLogMessage: WebSocketMessage {
         source: VMLogSource,
         eventType: VMEventType,
         message: String,
-        operation: String? = nil,
-        details: String? = nil,
-        previousStatus: VMStatus? = nil,
-        newStatus: VMStatus? = nil
+        operation: String? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -915,8 +855,5 @@ public struct VMLogMessage: WebSocketMessage {
         self.eventType = eventType
         self.message = message
         self.operation = operation
-        self.details = details
-        self.previousStatus = previousStatus
-        self.newStatus = newStatus
     }
 }

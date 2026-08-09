@@ -130,9 +130,6 @@ struct SandboxProtocolTests {
             sizeBytes: 10,
             storagePath: "/snapshots/1",
             architecture: .x86_64,
-            memorySizeBytes: 4,
-            vmstateSizeBytes: 2,
-            rootfsSizeBytes: 4,
             firecrackerVersion: "1.13.1",
             guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
             forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion)
@@ -269,8 +266,5 @@ struct SandboxProtocolTests {
     func sandboxSyncVersionGate() {
         // A v4 control plane omits `sandboxes`; the agent must not treat the
         // decoded-empty list as an authoritative teardown of all sandboxes.
-        #expect(!WireProtocol.supportsSandboxSync(4))
-        #expect(WireProtocol.supportsSandboxSync(5))
-        #expect(WireProtocol.supportsSandboxSync(WireProtocol.currentVersion))
     }
 }

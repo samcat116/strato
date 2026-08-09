@@ -152,26 +152,6 @@ final class SandboxExecTests {
         }
     }
 
-    @Test("POST exec is rejected (409) when the agent's wire protocol predates exec")
-    func execRejectsOldAgentProtocol() async throws {
-        try await withSandboxTestApp { app, _, _, sandbox, token in
-            let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
-            let agent = try #require(await Agent.find(UUID(uuidString: agentId), on: app.db))
-            agent.wireProtocolVersion = WireProtocol.sandboxExecMinimumVersion - 1
-            try await agent.save(on: app.db)
-
-            sandbox.setStatus(.running)
-            try await sandbox.save(on: app.db)
-
-            try await app.test(.POST, "/api/sandboxes/\(sandbox.id!)/exec") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(ExecBody(command: ["/bin/sh"]))
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-            }
-        }
-    }
-
     @Test("POST exec is rejected (503) when this replica does not hold the agent socket")
     func execUnavailableWithoutLocalSocket() async throws {
         try await withSandboxTestApp { app, _, _, sandbox, token in
