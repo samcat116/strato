@@ -121,9 +121,9 @@ final class DesiredStateReconciliationTests {
         return try MessageEnvelope(message: report)
     }
 
-    // MARK: - Model defaults and generation bumps
+    // MARK: - Model defaults and state-only helpers
 
-    @Test("New VMs rest at desired shutdown with generation zero")
+    @Test("New VMs rest at generation zero and desired helpers do not advance it")
     func modelDefaults() async throws {
         try await withVMTestApp { _, _, vm, _ in
             #expect(vm.desiredStatus == .shutdown)
@@ -132,7 +132,7 @@ final class DesiredStateReconciliationTests {
 
             vm.setDesiredStatus(.running)
             #expect(vm.desiredStatus == .running)
-            #expect(vm.generation == 1)
+            #expect(vm.generation == 0)
         }
     }
 
@@ -257,7 +257,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -367,7 +367,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.extendConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
 
@@ -422,7 +422,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, user, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.extendConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(
@@ -462,8 +462,8 @@ final class DesiredStateReconciliationTests {
 
             // Boot at generation 1 failed and capped out; the user retried,
             // minting generation 2.
-            vm.setDesiredStatus(.running)  // gen 1
-            vm.setDesiredStatus(.running)  // gen 2 (retry)
+            vm.setFixtureDesiredStatus(.running)  // gen 1
+            vm.setFixtureDesiredStatus(.running)  // gen 2 (retry)
             try await vm.save(on: app.db)
 
             // A heartbeat report still carrying generation 1's error arrives
@@ -496,7 +496,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
 
             let envelope = try self.report(
@@ -525,7 +525,7 @@ final class DesiredStateReconciliationTests {
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
             ResourceFinalizerService.stampForDeletion(vm)
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(
                 .delete, resourceKind: .virtualMachine, resourceID: vm.id!,
@@ -581,7 +581,7 @@ final class DesiredStateReconciliationTests {
             // A delete leaves `status` non-transitional: the user deleted a
             // running VM and the agent has not reported the absence yet.
             vm.setStatus(.running)
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             // Already past its budget when the sweep runs.
             vm.convergenceDeadline = Date().addingTimeInterval(-100)
             try await vm.save(on: app.db)
@@ -614,7 +614,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             try await vm.save(on: app.db)
 
@@ -633,7 +633,7 @@ final class DesiredStateReconciliationTests {
 
             // `.created` may be mid-create on an agent that hasn't received
             // the sync yet — absence must not escalate it.
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
 
             let envelope = try self.report(agentId: agentId, vms: [])
@@ -649,7 +649,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = 1
             try await vm.save(on: app.db)
@@ -671,7 +671,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
 
             let envelope = try self.report(
@@ -691,7 +691,7 @@ final class DesiredStateReconciliationTests {
     func identicalReportSkipsAgentSave() async throws {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
             try await vm.save(on: app.db)
@@ -731,7 +731,7 @@ final class DesiredStateReconciliationTests {
     func heartbeatDoesNotReconcileVMAbsence() async throws {
         try await withVMTestApp { app, _, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             try await vm.save(on: app.db)
 

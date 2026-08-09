@@ -1077,7 +1077,24 @@ actor AgentService {
             // deadline is the claim, so of two replicas sweeping the same row
             // exactly one proceeds — which is what lets this run everywhere
             // without a lock while still emitting one completion webhook.
-            guard try await resource.claimConvergenceTimeout(on: db) else { continue }
+            switch try await resource.claimConvergenceTimeout(on: db) {
+            case .claimed:
+                break
+            case .superseded(let actualGeneration):
+                Telemetry.desiredStateWriteConflict(
+                    resourceKind: R.operationResourceKind.rawValue, writer: "stuck_convergence")
+                app.logger.warning(
+                    "Dropped a convergence timeout after newer desired state superseded it",
+                    metadata: [
+                        "resourceKind": .string(R.operationResourceKind.rawValue),
+                        "resourceId": .string(id.uuidString),
+                        "expectedGeneration": .stringConvertible(resource.generation),
+                        "actualGeneration": .stringConvertible(actualGeneration),
+                    ])
+                continue
+            case .alreadyClaimed, .missing:
+                continue
+            }
 
             // The deadline is a backstop, not the verdict: a resource that
             // converged between the query and here (or whose deadline the
@@ -1104,12 +1121,21 @@ actor AgentService {
                     .requested, resourceKind: R.operationResourceKind, resourceID: id, on: db
                 )?.mutation ?? .boot
 
-            let recorded = try await ResourceConvergence.recordFailure(
+            let outcome = try await ResourceConvergence.recordFailure(
                 resource, mutation: mutation,
                 reason: "Timed out: the agent did not converge to generation "
                     + "\(resource.generation) before the deadline",
                 telemetryReason: "stuck_convergence", on: db)
-            guard recorded else { continue }
+            if case .superseded(let actualGeneration) = outcome {
+                app.logger.warning(
+                    "Dropped a convergence timeout after newer desired state superseded it",
+                    metadata: [
+                        "resourceKind": .string(R.operationResourceKind.rawValue),
+                        "resourceId": .string(id.uuidString),
+                        "actualGeneration": .stringConvertible(actualGeneration),
+                    ])
+            }
+            guard outcome == .recorded else { continue }
 
             app.logger.warning(
                 "Resource did not converge before its deadline; marked degraded",
@@ -1177,8 +1203,22 @@ actor AgentService {
 
             for volume in strandedVolumes {
                 guard let volumeID = volume.id else { continue }
-                VolumeAttachmentService.clearAttachment(volume)
-                try await volume.save(on: db)
+                let repaired = try await db.transaction { tx -> Bool in
+                    guard try await volume.lockAndRefresh(on: tx) else { return false }
+                    guard volume.$vm.id == nil,
+                        volume.deviceName != nil || volume.bootOrder != nil
+                            || volume.attachedAgentId != nil || volume.readonly
+                    else { return false }
+                    let expectedGeneration = volume.generation
+                    VolumeAttachmentService.clearAttachment(volume)
+                    guard
+                        case .applied = try await volume.advanceDesiredStateGeneration(
+                            expectedGeneration: expectedGeneration, on: tx)
+                    else { return false }
+                    try await volume.save(on: tx)
+                    return true
+                }
+                guard repaired else { continue }
 
                 app.logger.warning(
                     "Volume left attachment fields set with no VM; released",
@@ -2156,7 +2196,7 @@ actor AgentService {
                 }
                 reservedAgentId.withLockedValue { $0 = selectedAgentId }
 
-                try await requireNetworkAuthority(
+                try await self.requireNetworkAuthority(
                     forAgentId: selectedAgentId, workloadId: vmId,
                     consequence: "the VM's network would never be realized and it would never boot", on: tx)
 
@@ -2350,17 +2390,29 @@ actor AgentService {
             throw AgentServiceError.schedulingFailed(error.description)
         }
 
-        try await requireNetworkAuthority(
-            forAgentId: agentId, workloadId: sandboxId,
-            consequence: "the sandbox's network would never be realized and it would never start",
-            on: db)
-
         do {
-            // Persist the placement, then sync: from here the sandbox is part
-            // of the agent's desired state and every path (nudge now, periodic
-            // timer later, reconnect sync) will carry it.
-            sandbox.hypervisorId = agentId
-            try await sandbox.save(on: db)
+            let placed = try await db.transaction { tx -> Bool in
+                guard try await sandbox.lockAndRefresh(on: tx) else { return false }
+                // A delete may commit while the create scheduler is choosing a
+                // host. Absence is the one intent placement must never revive.
+                guard sandbox.desiredStatus != .absent else { return false }
+                try await self.requireNetworkAuthority(
+                    forAgentId: agentId, workloadId: sandboxId,
+                    consequence:
+                        "the sandbox's network would never be realized and it would never start",
+                    on: tx)
+
+                // Persist only after refreshing under the row lock, so this
+                // background placement cannot save its pre-scheduling snapshot
+                // over a concurrent lifecycle mutation.
+                sandbox.hypervisorId = agentId
+                try await sandbox.save(on: tx)
+                return true
+            }
+            guard placed else {
+                await app.coordination.releaseReservation(agentId: agentId, vmId: sandboxId)
+                return
+            }
 
             app.logger.info(
                 "Sandbox creation dispatched via desired-state sync",

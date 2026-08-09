@@ -529,7 +529,7 @@ final class RegistryPullSecretTests {
                 token: RegistryPullToken(token: "jwt", expiresAt: Date().addingTimeInterval(300)))
             app.registryClient = scripted
 
-            sandbox.setDesiredStatus(.absent)
+            sandbox.setFixtureDesiredStatus(.absent)
             try await sandbox.save(on: app.db)
 
             let agentId = try await registerAgent(app: app, sandbox: sandbox)

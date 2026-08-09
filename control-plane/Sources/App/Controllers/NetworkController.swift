@@ -267,33 +267,26 @@ struct NetworkController: RouteCollection {
     @Sendable
     func updateNetwork(req: Request) async throws -> NetworkResponse {
         let user = try req.auth.require(User.self)
-        let network = try await fetchNetworkWithPermission(req: req, user: user, permission: "update")
+        var network = try await fetchNetworkWithPermission(req: req, user: user, permission: "update")
         let request = try req.content.decodeValidated(UpdateNetworkRequest.self)
 
-        let interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
+        var interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
 
         // Renaming an in-use network is safe since issue #765: NICs, addresses
         // and the agent's OVN objects all key on the row id, so the name is a
         // display label nothing resolves through.
         //
-        // Set only when the name actually changes, so an unrelated edit that
-        // echoes the current name back doesn't get held to the collision guard.
-        var renamedTo: String?
         if let newName = request.name, newName != network.name {
             // Renaming *into* a collision is the same hazard as creating one;
             // the guard runs with the save, under the name lock. Trimmed and
             // bounded already by `UpdateNetworkRequest.validate()`.
             network.name = newName
-            renamedTo = newName
         }
 
         // Track changes that alter how agents realize the network's L3, so the
         // generation is bumped (and agents accept the new desired network state).
         let originalSubnet = network.subnet
-        let originalGateway = network.gateway
         let originalSubnet6 = network.subnet6
-        let originalGateway6 = network.gateway6
-        let originalExternalAccess = network.externalAccess
 
         if let newSubnet = request.subnet, newSubnet != network.subnet {
             guard interfaceCount == 0 else {
@@ -425,18 +418,6 @@ struct NetworkController: RouteCollection {
             network.externalAccess = externalAccess
         }
 
-        // Bump the realization generation only when an L3-affecting field
-        // actually changed, so agents treat this as a newer network desired
-        // state; DHCP/DNS-only edits leave it untouched.
-        if network.subnet != originalSubnet
-            || network.gateway != originalGateway
-            || network.subnet6 != originalSubnet6
-            || network.gateway6 != originalGateway6
-            || network.externalAccess != originalExternalAccess
-        {
-            network.generation += 1
-        }
-
         // DHCP/DNS settings — validated then applied.
         if let dhcpEnabled = request.dhcpEnabled {
             network.dhcpEnabled = dhcpEnabled
@@ -474,8 +455,6 @@ struct NetworkController: RouteCollection {
         // lock is transaction-scoped, so allocating on `req.db` would release it
         // before the chosen index was durable and let two concurrent enables
         // pick the same one.
-        let allocatesResolverIndex = network.resolverEnabled && network.resolverIndex == nil
-
         // The zone this network's VMs register into (issue #770). Only ever a
         // zone already attached to the network — attachment is what grants
         // resolution, and registering into a zone the network cannot resolve
@@ -526,14 +505,166 @@ struct NetworkController: RouteCollection {
         }
 
         do {
-            let pendingRename = renamedTo
-            let pendingResolverIndex = allocatesResolverIndex
-            try await req.db.transaction { db in
-                if pendingResolverIndex {
-                    _ = try await ResolverAddressAllocator.ensureIndex(for: network, on: db)
+            // Everything above prepares and authorizes the requested values.
+            // The row is reloaded under lock here so two updates that began
+            // from the same HTTP snapshot merge onto committed state and mint
+            // successive generations instead of saving one stale model over
+            // the other.
+            let prepared = network
+            let committed = try await req.db.transaction { db -> (LogicalNetwork, Int) in
+                switch try await DesiredStateGenerationWriter.lockCurrent(
+                    schema: LogicalNetwork.schema, id: networkID, expectedGeneration: nil, on: db)
+                {
+                case .applied:
+                    break
+                case .missing:
+                    throw Abort(.notFound, reason: "Network no longer exists")
+                case .superseded:
+                    throw Abort(
+                        .internalServerError,
+                        reason: "Network generation could not be locked")
                 }
-                try await network.save(on: db)
+                guard let current = try await LogicalNetwork.find(networkID, on: db) else {
+                    throw Abort(.notFound, reason: "Network no longer exists")
+                }
+                let oldSubnet = current.subnet
+                let oldGateway = current.gateway
+                let oldSubnet6 = current.subnet6
+                let oldGateway6 = current.gateway6
+                let oldExternalAccess = current.externalAccess
+
+                let currentInterfaceCount = try await attachedInterfaceCount(for: current, on: db)
+                let changesSubnet = request.subnet != nil && prepared.subnet != current.subnet
+                let changesGateway = request.gateway != nil && prepared.gateway != current.gateway
+                if changesSubnet || changesGateway {
+                    guard currentInterfaceCount == 0 else {
+                        let field = changesSubnet ? "subnet" : "gateway"
+                        throw Abort(
+                            .conflict,
+                            reason:
+                                "Network is in use by \(currentInterfaceCount) interface(s); changing the \(field) would break their L3 configuration"
+                        )
+                    }
+                }
+
+                if request.name != nil { current.name = prepared.name }
+                if request.subnet != nil { current.subnet = prepared.subnet }
+                if request.gateway != nil { current.gateway = prepared.gateway }
+
+                let changesIPv6 =
+                    request.ipv6Enabled != nil
+                    || request.subnet6 != nil || request.gateway6 != nil
+                if changesIPv6 {
+                    let currentV6AddressCount =
+                        try await VMInterfaceAddress.query(on: db)
+                        .filter(\.$logicalNetwork.$id == networkID)
+                        .filter(\.$family == IPFamily.ipv6.rawValue)
+                        .count()
+                        + (try await SandboxInterfaceAddress.query(on: db)
+                            .filter(\.$logicalNetwork.$id == networkID)
+                            .filter(\.$family == IPFamily.ipv6.rawValue)
+                            .count())
+                    if prepared.subnet6 != current.subnet6 {
+                        guard current.subnet6 == nil || currentV6AddressCount == 0 else {
+                            throw Abort(
+                                .conflict,
+                                reason:
+                                    "Network has \(currentV6AddressCount) allocated IPv6 address(es); changing IPv6 would invalidate them"
+                            )
+                        }
+                    } else if prepared.gateway6 != current.gateway6 {
+                        guard currentV6AddressCount == 0 else {
+                            throw Abort(
+                                .conflict,
+                                reason:
+                                    "Network has \(currentV6AddressCount) allocated IPv6 address(es); changing the IPv6 gateway would break their L3 configuration"
+                            )
+                        }
+                    }
+                    current.subnet6 = prepared.subnet6
+                    current.gateway6 = prepared.gateway6
+                }
+
+                let validated = try Self.validateAddressing(
+                    subnet: current.subnet, gateway: current.gateway)
+                current.subnet = validated.subnet
+                current.gateway = validated.gateway
+                if let subnet6 = current.subnet6 {
+                    let validated6 = try Self.validateAddressing6(
+                        subnet6: subnet6, gateway6: current.gateway6)
+                    current.subnet6 = validated6.subnet6
+                    current.gateway6 = validated6.gateway6
+                }
+                if changesSubnet || (changesIPv6 && prepared.subnet6 != oldSubnet6) {
+                    try await Self.assertNoSubnetOverlap(
+                        subnet: current.subnet, subnet6: current.subnet6,
+                        projectId: current.$project.id, excluding: current.id, on: db)
+                }
+
+                if let externalAccess = request.externalAccess {
+                    if !externalAccess && current.externalAccess {
+                        let attachedFloatingIPs = try await Self.attachedFloatingIPCount(
+                            networkID: networkID, on: db)
+                        guard attachedFloatingIPs == 0 else {
+                            throw Abort(
+                                .conflict,
+                                reason:
+                                    "Network has \(attachedFloatingIPs) attached floating IP(s); detach them before disabling external access"
+                            )
+                        }
+                    }
+                    current.externalAccess = externalAccess
+                }
+
+                if request.dhcpEnabled != nil { current.dhcpEnabled = prepared.dhcpEnabled }
+                if request.dnsServers != nil { current.dnsServersRaw = prepared.dnsServersRaw }
+                if request.domainName != nil { current.domainName = prepared.domainName }
+                if request.leaseTime != nil { current.leaseTime = prepared.leaseTime }
+                if request.metadataEnabled != nil {
+                    current.metadataEnabled = prepared.metadataEnabled
+                }
+                if request.resolverEnabled != nil {
+                    current.resolverEnabled = prepared.resolverEnabled
+                }
+                if request.clearPrimaryDnsZone == true || request.primaryDnsZoneId != nil {
+                    current.$primaryDNSZone.id = prepared.$primaryDNSZone.id
+                    if !domainNameExplicit { current.domainName = prepared.domainName }
+                }
+
+                let l3Changed =
+                    current.subnet != oldSubnet
+                    || current.gateway != oldGateway
+                    || current.subnet6 != oldSubnet6
+                    || current.gateway6 != oldGateway6
+                    || current.externalAccess != oldExternalAccess
+                if l3Changed {
+                    switch try await DesiredStateGenerationWriter.advance(
+                        schema: LogicalNetwork.schema, id: networkID,
+                        expectedGeneration: Int64(current.generation), on: db)
+                    {
+                    case .applied(let generation):
+                        guard let generation = Int(exactly: generation) else {
+                            throw Abort(
+                                .internalServerError,
+                                reason: "Network generation exceeds the model's integer range")
+                        }
+                        current.generation = generation
+                    case .missing:
+                        throw Abort(.notFound, reason: "Network no longer exists")
+                    case .superseded:
+                        throw Abort(
+                            .internalServerError,
+                            reason: "Network generation did not advance")
+                    }
+                }
+                if current.resolverEnabled && current.resolverIndex == nil {
+                    _ = try await ResolverAddressAllocator.ensureIndex(for: current, on: db)
+                }
+                try await current.save(on: db)
+                return (current, currentInterfaceCount)
             }
+            network = committed.0
+            interfaceCount = committed.1
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A network named '\(network.name)' already exists")
         }

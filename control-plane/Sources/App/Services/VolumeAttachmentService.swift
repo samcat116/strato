@@ -43,8 +43,8 @@ enum VolumeAttachmentService {
     // MARK: - Claim
 
     /// Writes `volume`'s desired attachment to `vm` under `deviceName`,
-    /// generating one when the caller named none, and bumps the generation the
-    /// owning agent converges on.
+    /// generating one when the caller named none. This mutates attachment
+    /// intent only; the owning `ResourceMutation.accept` advances generation.
     ///
     /// Takes the lock itself, so no caller can forget it: both the generated
     /// name and the duplicate checks read the VM's current attachments, and
@@ -119,7 +119,6 @@ enum VolumeAttachmentService {
         // The volume's replica placement is set at provisioning and must not be
         // overwritten here; this records where the *attachment* runs.
         volume.attachedAgentId = vm.hypervisorId
-        volume.bumpGeneration()
         do {
             try await volume.save(on: db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -138,9 +137,9 @@ enum VolumeAttachmentService {
 
     // MARK: - Release
 
-    /// Clears `volume`'s desired attachment, in memory. Every attachment column
-    /// moves together, and the generation and convergence deadline move with
-    /// them — the whole point of routing every caller through one function.
+    /// Clears `volume`'s desired attachment in memory. Every attachment column
+    /// and the convergence deadline move together; the owning guarded mutation
+    /// advances the generation in SQL.
     ///
     /// The bump is not bookkeeping: the agent drops a desired entry no newer
     /// than the one it last applied, so clearing the columns without it would
@@ -164,7 +163,6 @@ enum VolumeAttachmentService {
         volume.bootOrder = nil
         volume.readonly = false
         volume.attachedAgentId = nil
-        volume.bumpGeneration()
         volume.extendConvergenceDeadline(
             by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
     }
@@ -183,8 +181,21 @@ enum VolumeAttachmentService {
             .filter(\.$vm.$id == vmID)
             .all()
 
-        for volume in attached {
+        for volume in attached.sorted(by: {
+            ($0.id?.uuidString ?? "") < ($1.id?.uuidString ?? "")
+        }) {
+            guard try await volume.lockAndRefresh(on: db) else { continue }
+            // It may have moved while this VM's reap was reaching it. Only
+            // release the attachment the query selected, never a newer one.
+            guard volume.$vm.id == vmID else { continue }
+            let expectedGeneration = volume.generation
             clearAttachment(volume)
+            guard
+                case .applied = try await volume.advanceDesiredStateGeneration(
+                    expectedGeneration: expectedGeneration, on: db)
+            else {
+                throw ConvergenceWriteError.unsupportedDatabase
+            }
             try await volume.save(on: db)
         }
         return attached.compactMap(\.id)

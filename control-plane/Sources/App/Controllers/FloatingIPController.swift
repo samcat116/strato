@@ -513,13 +513,19 @@ struct FloatingIPController: RouteCollection {
         }
 
         floatingIP.$interface.id = interfaceId
-        // Bump the network generation so a replayed pre-attach sync can't
-        // resurrect the old NAT state on the agent.
-        network.generation += 1
         do {
             try await req.db.transaction { db in
                 try await floatingIP.save(on: db)
-                try await network.save(on: db)
+                switch try await DesiredStateGenerationWriter.advance(
+                    schema: LogicalNetwork.schema, id: try network.requireID(), on: db)
+                {
+                case .applied:
+                    break
+                case .missing:
+                    throw Abort(.notFound, reason: "Network no longer exists")
+                case .superseded:
+                    throw Abort(.internalServerError, reason: "Network generation did not advance")
+                }
             }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "Interface already has a floating IP attached")
@@ -559,10 +565,20 @@ struct FloatingIPController: RouteCollection {
         } else {
             network = nil
         }
-        network?.generation += 1
         try await req.db.transaction { db in
             try await floatingIP.save(on: db)
-            try await network?.save(on: db)
+            if let network {
+                switch try await DesiredStateGenerationWriter.advance(
+                    schema: LogicalNetwork.schema, id: try network.requireID(), on: db)
+                {
+                case .applied:
+                    break
+                case .missing:
+                    throw Abort(.notFound, reason: "Network no longer exists")
+                case .superseded:
+                    throw Abort(.internalServerError, reason: "Network generation did not advance")
+                }
+            }
         }
 
         await req.application.agentService.syncDesiredStateToFleet()

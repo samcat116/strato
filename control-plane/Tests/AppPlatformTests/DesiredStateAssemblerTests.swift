@@ -318,8 +318,8 @@ final class DesiredStateAssemblerTests {
             #expect(entry.restore == nil)
 
             let snapshotID = UUID()
-            vm.requestReboot()
-            vm.requestRestore(snapshotID: snapshotID)
+            vm.requestFixtureReboot()
+            vm.requestFixtureRestore(snapshotID: snapshotID)
             try await vm.save(on: app.db)
 
             sync = try await app.desiredStateAssembler.assemble(agentId: agentId)

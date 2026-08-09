@@ -131,7 +131,7 @@ final class ResourceConditionsTests {
     func vmConverged() async throws {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
 
@@ -148,7 +148,7 @@ final class ResourceConditionsTests {
     func vmAcknowledgedButUnsatisfied() async throws {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.error)
             vm.observedGeneration = vm.generation
 
@@ -162,7 +162,7 @@ final class ResourceConditionsTests {
     func vmPendingDeleteIsNeverConverged() async throws {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             vm.setStatus(.shutdown)
             vm.observedGeneration = vm.generation
 
@@ -209,7 +209,7 @@ final class ResourceConditionsTests {
     func failureAtCurrentGenerationIsNotConverged() async throws {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
             vm.observedGeneration = 5
@@ -231,7 +231,7 @@ final class ResourceConditionsTests {
     func supersededFailureStillReadsConverged() async throws {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 6
             vm.observedGeneration = 6
@@ -251,7 +251,7 @@ final class ResourceConditionsTests {
     func errorWithoutGenerationDoesNotUnconverge() async throws {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
             vm.observedGeneration = 5
@@ -270,7 +270,7 @@ final class ResourceConditionsTests {
     func convergedAndDegradedAreMutuallyExclusive() async throws {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
 
@@ -298,7 +298,7 @@ final class ResourceConditionsTests {
         try await withTestApp { app, _, project in
             let builder = TestDataBuilder(db: app.db)
             let vm = try await builder.createVM(name: "cond-vm", project: project)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
             vm.observedGeneration = 5
@@ -314,7 +314,7 @@ final class ResourceConditionsTests {
             #expect(!vm.isConverged)
 
             let sandbox = try await builder.createSandbox(name: "cond-sandbox", project: project)
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             sandbox.setStatus(.running)
             sandbox.generation = 3
             sandbox.observedGeneration = 3
@@ -333,13 +333,13 @@ final class ResourceConditionsTests {
         try await withTestApp { app, _, project in
             let sandbox = try await TestDataBuilder(db: app.db)
                 .createSandbox(name: "cond-sandbox", project: project)
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             sandbox.setStatus(.running)
             sandbox.observedGeneration = sandbox.generation
             #expect(sandbox.conditions.converged)
 
             let acknowledged = sandbox.observedGeneration
-            sandbox.setDesiredStatus(.stopped)  // bumps past what the agent acknowledged
+            sandbox.setFixtureDesiredStatus(.stopped)  // bumps past what the agent acknowledged
             #expect(!sandbox.conditions.converged)
             #expect(sandbox.conditions.targetGeneration == acknowledged + 1)
             #expect(sandbox.conditions.observedGeneration == acknowledged)
@@ -353,7 +353,7 @@ final class ResourceConditionsTests {
         try await withTestApp { app, _, project in
             let builder = TestDataBuilder(db: app.db)
             let vm = try await builder.createVM(name: "cond-vm", project: project)
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.convergencePhase = "downloading image"
             try await vm.save(on: app.db)
 
@@ -369,7 +369,7 @@ final class ResourceConditionsTests {
             #expect(!vmConditions.keys.contains("degraded"))
 
             let sandbox = try await builder.createSandbox(name: "cond-sandbox", project: project)
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             sandbox.lastError = "pull failed"
             sandbox.failedGeneration = sandbox.generation
             try await sandbox.save(on: app.db)
@@ -393,7 +393,7 @@ final class ResourceConditionsTests {
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", capabilities: ["qemu"])
             vm.hypervisorId = agentId
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
 
             let envelope = try self.report(
@@ -423,7 +423,7 @@ final class ResourceConditionsTests {
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", capabilities: ["qemu"])
             vm.hypervisorId = agentId
-            vm.setDesiredStatus(.running)  // generation 1
+            vm.setFixtureDesiredStatus(.running)  // generation 1
             try await vm.save(on: app.db)
 
             let envelope = try self.report(
@@ -457,7 +457,7 @@ final class ResourceConditionsTests {
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", capabilities: ["qemu"])
             vm.hypervisorId = agentId
-            vm.setDesiredStatus(.running)  // generation 1
+            vm.setFixtureDesiredStatus(.running)  // generation 1
             vm.lastError = "boot failed: no bootable device"
             vm.failedGeneration = 1
             vm.convergencePhase = "starting"
@@ -486,7 +486,7 @@ final class ResourceConditionsTests {
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", capabilities: ["qemu"])
             vm.hypervisorId = agentId
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.convergencePhase = "downloading image"
             vm.lastError = "transient download error"
             vm.failedGeneration = 1
@@ -513,7 +513,7 @@ final class ResourceConditionsTests {
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-fc-agent", capabilities: ["firecracker"])
             sandbox.hypervisorId = agentId
-            sandbox.setDesiredStatus(.running)  // generation 1
+            sandbox.setFixtureDesiredStatus(.running)  // generation 1
             try await sandbox.save(on: app.db)
 
             let converging = try self.report(
@@ -558,7 +558,7 @@ final class ResourceConditionsTests {
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", capabilities: ["qemu"])
             vm.hypervisorId = agentId
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
             vm.observedGeneration = 4
@@ -604,7 +604,7 @@ final class ResourceConditionsTests {
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", capabilities: ["qemu"])
             vm.hypervisorId = agentId
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
             vm.observedGeneration = 5  // the boot already converged and was reported
@@ -648,7 +648,7 @@ final class ResourceConditionsTests {
             let agentId = try await self.registerAgent(
                 app: app, named: "cond-agent", capabilities: ["qemu"])
             vm.hypervisorId = agentId
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.generation = 5
             vm.observedGeneration = 5

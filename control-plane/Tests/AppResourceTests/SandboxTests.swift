@@ -177,7 +177,7 @@ final class SandboxTests {
             #expect(sandbox.generation == 0)
             #expect(sandbox.observedGeneration == 0)
 
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             #expect(sandbox.generation == 1)
         }
     }
@@ -187,7 +187,7 @@ final class SandboxTests {
         try await withSandboxTestApp { _, _, _, sandbox, _ in
             // `.exited` satisfies desired `.running`, so a failed unrelated
             // operation must not flip desired to `.stopped`.
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             sandbox.setStatus(.exited)
             #expect(sandbox.revertDesiredToObserved() == false)
             #expect(sandbox.desiredStatus == .running)
@@ -197,7 +197,7 @@ final class SandboxTests {
             // reconciler would recreate a blank one once the agent had torn it
             // down. The generation must not move either.
             sandbox.setStatus(.running)
-            sandbox.setDesiredStatus(.absent)
+            sandbox.setFixtureDesiredStatus(.absent)
             let generation = sandbox.generation
             #expect(sandbox.revertDesiredToObserved() == false)
             #expect(sandbox.desiredStatus == .absent)
@@ -923,7 +923,7 @@ final class SandboxTests {
             // restore nonce and the generation, and the agent has not confirmed
             // the latter. That window is what used to be a pending `restore`
             // operation row (STR-152).
-            source.requestRestore(snapshotID: snapshot.id!)
+            source.requestFixtureRestore(snapshotID: snapshot.id!)
             try await source.save(on: app.db)
             _ = try await ResourceEvent.record(
                 .restore, resourceKind: .sandbox, resourceID: source.requireID(),
@@ -973,7 +973,7 @@ final class SandboxTests {
             let userID = try user.requireID()
 
             // The restore is requested first...
-            source.requestRestore(snapshotID: snapshot.id!)
+            source.requestFixtureRestore(snapshotID: snapshot.id!)
             try await source.save(on: app.db)
             _ = try await ResourceEvent.record(
                 .restore, resourceKind: .sandbox, resourceID: sourceID,
@@ -981,7 +981,7 @@ final class SandboxTests {
 
             // ...then a stop lands on top of it, making `.shutdown` the newest
             // recorded mutation while the restore is still unapplied.
-            source.setDesiredStatus(.stopped)
+            source.setFixtureDesiredStatus(.stopped)
             try await source.save(on: app.db)
             _ = try await ResourceEvent.record(
                 .shutdown, resourceKind: .sandbox, resourceID: sourceID,
@@ -1027,7 +1027,7 @@ final class SandboxTests {
             try await snapshot.save(on: app.db)
 
             source.setStatus(.running)
-            source.requestRestore(snapshotID: snapshot.id!)
+            source.requestFixtureRestore(snapshotID: snapshot.id!)
             // The agent applied the nonce and reported the generation back.
             source.observedGeneration = source.generation
             try await source.save(on: app.db)
@@ -1144,7 +1144,7 @@ final class SandboxTests {
 
             // A mutation in flight: desired state moved and the agent has not
             // confirmed it, which is what the operation mutex used to key on.
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             sandbox.extendConvergenceDeadline(by: 600)
             try await sandbox.save(on: app.db)
 
@@ -1361,7 +1361,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             try await sandbox.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
@@ -1768,7 +1768,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             sandbox.extendConvergenceDeadline(by: 600)
             try await sandbox.save(on: app.db)
 
@@ -1796,7 +1796,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             try await sandbox.save(on: app.db)
 
             let envelope = try self.report(
@@ -1820,7 +1820,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             sandbox.extendConvergenceDeadline(by: 600)
             try await sandbox.save(on: app.db)
             let generation = sandbox.generation
@@ -1854,7 +1854,7 @@ final class SandboxTests {
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             ResourceFinalizerService.stampForDeletion(sandbox)
-            sandbox.setDesiredStatus(.absent)
+            sandbox.setFixtureDesiredStatus(.absent)
             try await sandbox.save(on: app.db)
             let request = try await ResourceEvent.record(
                 .delete, resourceKind: .sandbox, resourceID: sandbox.id!,
@@ -1909,7 +1909,7 @@ final class SandboxTests {
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
             // Mid-create: desired stopped at generation 1, never confirmed.
-            sandbox.setDesiredStatus(.stopped)
+            sandbox.setFixtureDesiredStatus(.stopped)
             try await sandbox.save(on: app.db)
 
             let envelope = try self.report(agentId: agentId, sandboxes: [])
@@ -1925,7 +1925,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, _, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
-            sandbox.setDesiredStatus(.running)
+            sandbox.setFixtureDesiredStatus(.running)
             sandbox.setStatus(.running)
             sandbox.observedGeneration = sandbox.generation
             try await sandbox.save(on: app.db)
@@ -1952,7 +1952,7 @@ final class SandboxTests {
             // A delete leaves `status` non-transitional: the user deleted a
             // running sandbox and the agent has not reported the absence yet.
             sandbox.setStatus(.running)
-            sandbox.setDesiredStatus(.absent)
+            sandbox.setFixtureDesiredStatus(.absent)
             sandbox.convergenceDeadline = Date(timeIntervalSinceNow: -100)
             try await sandbox.save(on: app.db)
             _ = try await ResourceEvent.record(

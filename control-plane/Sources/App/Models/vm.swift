@@ -379,26 +379,16 @@ extension VM {
         statusChangedAt = date
     }
 
-    /// Records a new desired state and bumps the generation so agents treat it
-    /// as newer than anything they have applied. Does not persist — call
-    /// `save(on:)` afterwards.
+    /// Records a new desired state in memory. The caller advances the
+    /// generation through `DesiredStateGenerationWriter` in the same
+    /// transaction that persists it.
     func setDesiredStatus(_ newDesired: DesiredVMStatus) {
         desiredStatus = newDesired
-        generation += 1
-    }
-
-    /// Bumps the generation without changing the desired status, for a change
-    /// to the *spec* rather than the power state (issue #568: a vCPU/memory
-    /// resize). Agents converge on spec and status from the same
-    /// generation-guarded entry, so a spec edit that skipped the bump would
-    /// be dropped as stale. Does not persist — call `save(on:)` afterwards.
-    func bumpGeneration() {
-        generation += 1
     }
 
     /// Asks the owning agent to restart this VM once (ADR 0001 stage 9,
-    /// STR-151): bumps the reboot nonce and the ordinary generation alongside
-    /// it. Does not persist — call `save(on:)` afterwards.
+    /// STR-151): bumps the reboot nonce. `ResourceMutation` advances the
+    /// ordinary generation alongside it before persisting.
     ///
     /// Both counters move because they answer different questions. The nonce is
     /// what the *agent* diffs against its durable record to decide whether to
@@ -411,21 +401,21 @@ extension VM {
     /// `.running`, which is exactly why it needed a nonce in the first place.
     func requestReboot() {
         rebootGeneration += 1
-        generation += 1
     }
 
     /// Asks the owning agent to load `snapshotID` back into this VM once
     /// (STR-151). Sets the desired status to `.running` alongside the nonce —
     /// the restored guest resumes, so desired state has to agree or the next
-    /// sync would stop it right back — which also bumps `generation`.
+    /// sync would stop it right back. `ResourceMutation` advances `generation`.
     func requestRestore(snapshotID: UUID) {
         restoreGeneration += 1
         restoreSnapshotID = snapshotID
         setDesiredStatus(.running)
     }
 
-    /// Realigns desired state with observed reality after a failed operation,
-    /// bumping the generation. Without this, the unachieved intent lingers —
+    /// Realigns desired state with observed reality after a failed operation.
+    /// The convergence writer advances the generation when this returns true.
+    /// Without this, the unachieved intent lingers —
     /// e.g. a failed boot leaves `desired_status = .running`, which a later
     /// sync would replay without any new user action.
     ///
@@ -466,8 +456,8 @@ extension VM {
     /// snapshot/reboot operations) and the stuck-convergence sweep;
     /// `telemetryReason` keeps a reported failure (`operation_failed`) distinct
     /// from a swept timeout (`stuck_convergence`) in the error metric. Returns
-    /// whether anything changed; does not persist — call `save(on:)`
-    /// afterwards.
+    /// whether desired state changed and needs a new generation; a status-only
+    /// escalation does not. Does not persist.
     ///
     /// Takes the mutation kind rather than an operation row: lifecycle
     /// mutations no longer write one (STR-147), and `.create` is the only thing
@@ -476,16 +466,11 @@ extension VM {
     func resolveForStuckOperation(
         mutation: VMOperationKind, telemetryReason: String
     ) -> Bool {
-        var changed = false
         if status.isTransitional || (mutation == .create && status == .created) {
             setStatus(.error)
-            changed = true
             Telemetry.vmEnteredError(reason: telemetryReason)
         }
-        if revertDesiredToObserved() {
-            changed = true
-        }
-        return changed
+        return revertDesiredToObserved()
     }
 
     var canPause: Bool {

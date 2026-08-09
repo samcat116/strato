@@ -124,7 +124,7 @@ final class AgentManifestQuarantineTests {
             let vmID = try vm.requireID()
             vm.hypervisorId = agentId
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
 
             _ = try await app.observedStateApplier.apply(self.blindReport(agentId: agentId))

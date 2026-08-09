@@ -43,6 +43,7 @@ enum SnapshotArtifactMutation {
             .create,
             resourceType: A.self,
             resourceID: try artifact.requireID(),
+            targetGeneration: artifact.generation,
             hypervisorId: artifact.agentId,
             strategy: .stateSync,
             app: app)
@@ -133,7 +134,6 @@ enum SnapshotArtifactMutation {
             .snapshotExport, on: snapshot, actor: actor, dispatch: .stateSync, on: db, app: app
         ) { @Sendable _ in
             snapshot.exportDesired = true
-            snapshot.bumpSnapshotGeneration()
         }
     }
 
@@ -190,16 +190,5 @@ enum SnapshotDeletionGuard {
             return "Snapshot cannot be deleted while sandboxes forked from it still exist"
         }
         return nil
-    }
-}
-
-extension SnapshotArtifactResource {
-    /// Bumps the generation without changing the desired status, for a change
-    /// to what the artifact's entry *asks for* rather than whether it exists —
-    /// today, only the export placement fact. The agent drops any entry not
-    /// newer than the one it last applied, so a mutation that skipped this
-    /// would be silently ignored.
-    func bumpSnapshotGeneration() {
-        generation += 1
     }
 }

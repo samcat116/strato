@@ -593,6 +593,41 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("Concurrent L3 updates merge and receive consecutive generations")
+    func concurrentL3UpdatesReceiveConsecutiveGenerations() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            let network = LogicalNetwork(
+                name: "concurrent-l3-net", subnet: "10.62.0.0/24", gateway: "10.62.0.1",
+                projectID: project.id!, createdByID: user.id!)
+            try await network.save(on: app.db)
+            let networkID = try network.requireID()
+            let startGeneration = network.generation
+
+            async let gatewayUpdate: Void = {
+                try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(UpdateNetworkRequest(gateway: "10.62.0.254"))
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }()
+            async let externalAccessUpdate: Void = {
+                try await app.test(.PUT, "/api/networks/\(networkID)") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(UpdateNetworkRequest(externalAccess: false))
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }()
+            _ = try await (gatewayUpdate, externalAccessUpdate)
+
+            let persisted = try #require(try await LogicalNetwork.find(networkID, on: app.db))
+            #expect(persisted.gateway == "10.62.0.254")
+            #expect(persisted.externalAccess == false)
+            #expect(persisted.generation == startGeneration + 2)
+        }
+    }
+
     @Test("The metadata service defaults on and toggles without bumping the generation")
     func metadataEnabledDefaultsOnAndDoesNotBumpGeneration() async throws {
         try await withNetworkTestApp { app, user, project, token in

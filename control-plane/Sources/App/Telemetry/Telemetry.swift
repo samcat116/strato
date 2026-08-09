@@ -12,6 +12,18 @@ import Metrics
 /// See `docs/deployment/observability.md` for the alert runbook built on these.
 enum Telemetry {
 
+    // MARK: - Desired-state ordering (STR-125)
+
+    /// A background writer reached a resource after another desired-state
+    /// mutation had already advanced it. The guarded writer drops or re-decides
+    /// that stale work instead of overwriting the newer intent.
+    static func desiredStateWriteConflict(resourceKind: String, writer: String) {
+        Counter(
+            label: "strato_desired_state_write_conflicts_total",
+            dimensions: [("resource_kind", resourceKind), ("writer", writer)]
+        ).increment()
+    }
+
     // MARK: - Agent lifecycle
 
     /// An agent successfully (re)registered with the control plane.

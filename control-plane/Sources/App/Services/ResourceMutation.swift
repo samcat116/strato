@@ -125,6 +125,7 @@ struct ResourceMutation {
                     .notFound,
                     reason: "This \(R.operationResourceKind.displayName) no longer exists")
             }
+            let expectedGeneration = resource.generation
 
             // Resolve the delivery/attribution scope before the mutation: the
             // organization lookup walks the hierarchy, and only the generation
@@ -133,6 +134,23 @@ struct ResourceMutation {
                 of: R.operationResourceKind, id: resourceID, on: db)
 
             try await mutation(db)
+            switch try await resource.advanceDesiredStateGeneration(
+                expectedGeneration: expectedGeneration, on: db)
+            {
+            case .applied:
+                break
+            case .missing:
+                throw Abort(
+                    .notFound,
+                    reason: "This \(R.operationResourceKind.displayName) no longer exists")
+            case .superseded(let actualGeneration):
+                // `lockAndRefresh` holds this row through the transaction, so
+                // this is an invariant violation rather than an ordinary race.
+                throw Abort(
+                    .internalServerError,
+                    reason: "Desired-state generation advanced unexpectedly from "
+                        + "\(expectedGeneration) to \(actualGeneration) while its row was locked")
+            }
             resource.extendConvergenceDeadline(
                 by: R.operationResourceKind.completionBudgetSeconds(for: kind))
             try await resource.save(on: db)
@@ -150,6 +168,7 @@ struct ResourceMutation {
 
         dispatch(
             kind, resourceType: R.self, resourceID: resourceID,
+            targetGeneration: accepted.targetGeneration,
             hypervisorId: resource.hypervisorId, strategy: strategy, app: app)
         return accepted
     }
@@ -161,6 +180,7 @@ struct ResourceMutation {
         _ kind: VMOperationKind,
         resourceType: R.Type,
         resourceID: UUID,
+        targetGeneration: Int64,
         hypervisorId: String?,
         strategy: Dispatch,
         app: Application
@@ -171,6 +191,7 @@ struct ResourceMutation {
                 guard let agentId = hypervisorId else {
                     await degrade(
                         R.self, id: resourceID, mutation: kind,
+                        expectedGeneration: targetGeneration,
                         reason: "This \(R.operationResourceKind.displayName) is not placed on any agent",
                         app: app)
                     return
@@ -178,6 +199,7 @@ struct ResourceMutation {
                 guard await agentDispatch.agentIsOnline(agentId: agentId) else {
                     await degrade(
                         R.self, id: resourceID, mutation: kind,
+                        expectedGeneration: targetGeneration,
                         reason: "Agent \(agentId) is offline; the "
                             + "\(R.operationResourceKind.displayName) cannot converge to the requested state",
                         app: app)
@@ -196,6 +218,7 @@ struct ResourceMutation {
                 } catch {
                     await degrade(
                         R.self, id: resourceID, mutation: kind,
+                        expectedGeneration: targetGeneration,
                         reason: error.localizedDescription, app: app)
                 }
             }
@@ -208,6 +231,7 @@ struct ResourceMutation {
                 } catch {
                     await degrade(
                         R.self, id: resourceID, mutation: kind,
+                        expectedGeneration: targetGeneration,
                         reason: error.localizedDescription, app: app)
                 }
             }
@@ -225,15 +249,40 @@ struct ResourceMutation {
         _ type: R.Type,
         id: UUID,
         mutation: VMOperationKind,
+        expectedGeneration: Int64,
         reason: String,
         app: Application
     ) async {
         guard let db = app.liveDB else { return }
         do {
             guard let resource = try await R.find(id, on: db) else { return }
-            try await ResourceConvergence.recordFailure(
+            guard resource.generation == expectedGeneration else {
+                Telemetry.desiredStateWriteConflict(
+                    resourceKind: R.operationResourceKind.rawValue, writer: "mutation_failed")
+                logger.warning(
+                    "Dropped a mutation failure after newer desired state superseded it",
+                    metadata: [
+                        "resourceKind": .string(R.operationResourceKind.rawValue),
+                        "resourceId": .string(id.uuidString),
+                        "expectedGeneration": .stringConvertible(expectedGeneration),
+                        "actualGeneration": .stringConvertible(resource.generation),
+                    ])
+                return
+            }
+            let outcome = try await ResourceConvergence.recordFailure(
                 resource, mutation: mutation, reason: reason,
                 telemetryReason: "mutation_failed", on: db)
+            if case .superseded(let actualGeneration) = outcome {
+                logger.warning(
+                    "Dropped a mutation failure after newer desired state superseded it",
+                    metadata: [
+                        "resourceKind": .string(R.operationResourceKind.rawValue),
+                        "resourceId": .string(id.uuidString),
+                        "actualGeneration": .stringConvertible(actualGeneration),
+                    ])
+                return
+            }
+            guard outcome == .recorded else { return }
             logger.warning(
                 "Resource mutation failed",
                 metadata: [
@@ -274,6 +323,12 @@ extension Request {
 /// stuck-convergence sweep (the deadline), and `ResourceMutation` (dispatch
 /// that never reached an agent).
 enum ResourceConvergence {
+    enum WriteOutcome: Equatable, Sendable {
+        case recorded
+        case alreadyRecorded
+        case superseded(actualGeneration: Int64)
+        case missing
+    }
 
     /// Marks a resource degraded for `reason` and resolves the in-flight state
     /// the failed mutation left, saving the row and enqueuing the
@@ -288,10 +343,11 @@ enum ResourceConvergence {
     /// sync while the user was told nothing. Rolling both back instead costs a
     /// retry.
     ///
-    /// It also means the caller must not hold a transaction of its own: this
-    /// opens the outermost one, exactly as `ResourceOperation.completeIfPending`
-    /// does. Callers pass the pending row changes in on `resource` and let this
-    /// persist them.
+    /// The transaction composes with a caller transaction. Observed-state
+    /// application already holds the resource row lock while re-evaluating a
+    /// bulk-loaded report; dispatch failures and sweeps open the outermost one.
+    /// In either case callers pass pending row changes on `resource` and let
+    /// this persist them.
     ///
     /// Idempotent by the `failedGeneration == generation` guard: a caller
     /// repeating an already-recorded failure — the agent restating the same
@@ -320,22 +376,76 @@ enum ResourceConvergence {
         telemetryReason: String,
         alreadyRecordedAt: Int64?? = nil,
         on db: any Database
-    ) async throws -> Bool {
+    ) async throws -> WriteOutcome {
+        let expectedGeneration = resource.generation
         let recorded = alreadyRecordedAt ?? resource.failedGeneration
-        guard recorded != resource.generation else { return false }
+        if recorded == expectedGeneration {
+            let outcome = try await db.transaction { tx -> WriteOutcome in
+                switch try await DesiredStateGenerationWriter.lockCurrent(
+                    schema: R.schema,
+                    id: try resource.requireID(),
+                    expectedGeneration: expectedGeneration,
+                    on: tx)
+                {
+                case .applied:
+                    return .alreadyRecorded
+                case .missing:
+                    return .missing
+                case .superseded(let actualGeneration):
+                    return .superseded(actualGeneration: actualGeneration)
+                }
+            }
+            if case .superseded = outcome {
+                Telemetry.desiredStateWriteConflict(
+                    resourceKind: R.operationResourceKind.rawValue, writer: telemetryReason)
+            }
+            return outcome
+        }
 
         resource.convergencePhase = nil
         resource.lastError = reason
-        resource.failedGeneration = resource.generation
+        resource.failedGeneration = expectedGeneration
         resource.convergenceDeadline = nil
-        resource.resolveForStuckOperation(mutation: mutation, telemetryReason: telemetryReason)
+        let desiredStateChanged = resource.resolveForStuckOperation(
+            mutation: mutation, telemetryReason: telemetryReason)
 
-        try await db.transaction { tx in
+        let outcome = try await db.transaction { tx -> WriteOutcome in
+            switch try await DesiredStateGenerationWriter.lockCurrent(
+                schema: R.schema,
+                id: try resource.requireID(),
+                expectedGeneration: expectedGeneration,
+                on: tx)
+            {
+            case .missing:
+                return .missing
+            case .superseded(let actualGeneration):
+                return .superseded(actualGeneration: actualGeneration)
+            case .applied:
+                break
+            }
+
+            if desiredStateChanged {
+                switch try await resource.advanceDesiredStateGeneration(
+                    expectedGeneration: expectedGeneration, on: tx)
+                {
+                case .applied:
+                    break
+                case .missing:
+                    return .missing
+                case .superseded(let actualGeneration):
+                    return .superseded(actualGeneration: actualGeneration)
+                }
+            }
             try await resource.save(on: tx)
             try await WebhookEvents.enqueueMutationOutcome(
                 for: resource, succeeded: false, error: reason, on: tx)
+            return .recorded
         }
-        return true
+        if case .superseded = outcome {
+            Telemetry.desiredStateWriteConflict(
+                resourceKind: R.operationResourceKind.rawValue, writer: telemetryReason)
+        }
+        return outcome
     }
 
     /// Persists a converged resource and enqueues `operation.completed`, in one
@@ -351,15 +461,35 @@ enum ResourceConvergence {
     /// mutation happened to be the most recent, which is not what converged.
     static func recordSuccess<R: ConvergingResource>(
         _ resource: R, on db: any Database
-    ) async throws {
+    ) async throws -> WriteOutcome {
+        let expectedGeneration = resource.generation
         let wasOutstanding = resource.convergenceDeadline != nil
         resource.convergenceDeadline = nil
-        try await db.transaction { tx in
+        let outcome = try await db.transaction { tx -> WriteOutcome in
+            switch try await DesiredStateGenerationWriter.lockCurrent(
+                schema: R.schema,
+                id: try resource.requireID(),
+                expectedGeneration: expectedGeneration,
+                on: tx)
+            {
+            case .missing:
+                return .missing
+            case .superseded(let actualGeneration):
+                return .superseded(actualGeneration: actualGeneration)
+            case .applied:
+                break
+            }
             try await resource.save(on: tx)
-            guard wasOutstanding else { return }
+            guard wasOutstanding else { return .alreadyRecorded }
             try await WebhookEvents.enqueueMutationOutcome(
                 for: resource, succeeded: true, error: nil, on: tx)
+            return .recorded
         }
+        if case .superseded = outcome {
+            Telemetry.desiredStateWriteConflict(
+                resourceKind: R.operationResourceKind.rawValue, writer: "observed_success")
+        }
+        return outcome
     }
 }
 
