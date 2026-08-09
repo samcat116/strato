@@ -9,8 +9,9 @@ import StratoShared
 /// finished when it is written. A volume snapshot is not: it is an external
 /// qcow2 overlay, stat'd the instant `qemu-img create` returns, so the recorded
 /// `sizeBytes` is an empty file's header and stays there however far the volume
-/// diverges. The control plane's storage quota charges these now, so the number
-/// it charges has to be re-read on every report.
+/// diverges. The control plane exposes the live allocation for observability and
+/// billing, so it has to be re-read on every report even though quota admission
+/// keeps the parent-sized bound reserved.
 ///
 /// This is deliberately not folded back into the record: that file is the
 /// durable memory of the capture, and rewriting it per heartbeat would put a
@@ -20,14 +21,14 @@ public enum SnapshotFootprint {
     /// How much of the filesystem a file actually occupies, or nil when it
     /// cannot be read.
     ///
-    /// Allocated blocks rather than `st_size`, because the number this feeds is
-    /// a storage quota and what fills a hypervisor's disk is allocation — a
+    /// Allocated blocks rather than `st_size`, because the number this reports
+    /// is actual storage use and what fills a hypervisor's disk is allocation — a
     /// qcow2 overlay is written sparsely, so its apparent size runs ahead of
     /// what it costs. Falls back to the apparent size on a filesystem that does
     /// not report allocation, which is still a better answer than nil.
     ///
     /// Nil is "unknown", never "empty": a footprint the agent could not measure
-    /// must not silently become a free one in the control plane's accounting.
+    /// must not silently be reported as a free one.
     public static func allocatedBytes(at path: String) -> Int64? {
         let url = URL(fileURLWithPath: path)
         if let values = try? url.resourceValues(forKeys: [.totalFileAllocatedSizeKey]),

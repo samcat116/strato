@@ -809,16 +809,15 @@ public enum WireProtocol {
     /// final size, but a volume snapshot's overlay is stat'd immediately after
     /// `qemu-img create`, so the recorded number is an empty qcow2's header and
     /// stays there however far the volume diverges. Reusing the field would have
-    /// made every pre-v39 agent's snapshots read as ~200 KB to the storage quota
-    /// that now charges them, and no version gate would have caught it, because
-    /// the observed-state applier deliberately reads the payload rather than the
-    /// `wire_protocol_version` column. A distinct optional field is that rule
-    /// applied: nil means "this agent does not re-measure", and the control plane
-    /// falls back to the admission estimate.
+    /// made every pre-v39 agent's snapshots report as ~200 KB, and no version
+    /// gate would have caught it, because the observed-state applier deliberately
+    /// reads the payload rather than the `wire_protocol_version` column. A
+    /// distinct optional field keeps that reporting honest: nil means "this
+    /// agent does not re-measure". Quota reservation remains the parent-sized
+    /// admission bound either way.
     ///
-    /// Skew in both directions is inert. A pre-v39 agent sends no key and the
-    /// control plane keeps charging the parent volume's size; a pre-v39 control
-    /// plane's decoder drops it.
+    /// Skew in both directions is inert. A pre-v39 agent sends no key, while a
+    /// pre-v39 control plane's decoder drops it.
     public static let currentVersion = 39
 
     /// The lowest protocol version that speaks reconciliation state sync

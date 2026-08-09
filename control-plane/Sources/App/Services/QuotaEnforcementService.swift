@@ -245,9 +245,9 @@ struct QuotaEnforcementService {
     /// overlay will get, and that is the enforcement point for the whole family:
     /// an overlay grows toward its parent as the volume diverges, with no API
     /// call to refuse along the way, so a snapshot is admitted only when the pool
-    /// could absorb it fully grown. What the quota then *measures* is the real
-    /// footprint the agent reports, which is why a project that keeps five
-    /// untouched snapshots is not billed as though it kept five copies.
+    /// could absorb it fully grown. That bound remains reserved for the lifetime
+    /// of the snapshot; the agent's live footprint is reported separately for
+    /// observability and billing rather than releasing admission capacity.
     static func reserveVolumeSnapshot(
         for project: Project,
         environment: String,

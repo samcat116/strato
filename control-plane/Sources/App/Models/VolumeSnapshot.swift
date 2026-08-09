@@ -52,19 +52,20 @@ final class VolumeSnapshot: Model, @unchecked Sendable {
 
     // Snapshot specifications
     /// The volume's size when the snapshot was taken. Not a footprint: it is
-    /// what a restore needs to size its target, and it is also the *admission*
-    /// estimate the storage quota charges until the agent reports a real one —
-    /// an overlay cannot outgrow the volume behind it.
+    /// what a restore needs to size its target, and it is also the storage
+    /// quota's durable reservation bound — an overlay cannot outgrow the volume
+    /// behind it, and it can grow without another admission point.
     @Field(key: "size")
     var size: Int64
 
     /// What the overlay actually occupies right now, as the owning agent
     /// re-measures it on every report (STR-181, wire v39).
     ///
-    /// This is the figure the storage quota charges, falling back to `size` when
-    /// it is nil. Nil is "no agent has said" — the bytes are not on a host yet,
-    /// or the agent predates v39 — never zero, so a silent agent leaves the
-    /// admission estimate standing rather than making the snapshot free.
+    /// This figure is exposed for observability and billing. It does not replace
+    /// the quota reservation in `size`: releasing that worst-case bound after a
+    /// small first report would let several overlays be admitted before any of
+    /// them grew. Nil is "no agent has said" — the bytes are not on a host yet,
+    /// or the agent predates v39 — never zero.
     ///
     /// Separate from `size` because the two answer different questions and the
     /// overlay's answer keeps changing: `size` is frozen at capture and a restore
@@ -243,8 +244,7 @@ extension VolumeSnapshot: SnapshotArtifactResource {
     /// sandbox snapshot can land several times the size admission reserved: it
     /// fires once, on a number that then stops moving. An overlay's number never
     /// stops moving, so arming it here would re-run the check on every report and
-    /// start destroying snapshots because their volume diverged — a far worse
-    /// outcome than the overage, and one the user did nothing to cause.
+    /// start destroying snapshots because their volume diverged.
     ///
     /// Enforcement stays at admission, which is why `reserveVolumeSnapshot`
     /// checks the parent volume's *whole* size rather than the overlay's: a
@@ -366,9 +366,8 @@ struct SnapshotResponse: Content {
     let size: Int64
     let sizeFormatted: String
     /// What the overlay actually occupies, as last reported by the owning agent
-    /// (STR-181). Null means no agent has said — the bytes are not on a host
-    /// yet, or the agent predates wire v39 — in which case the quota charges
-    /// `size` instead.
+    /// (STR-181). Null means no agent has said — the bytes are not on a host yet,
+    /// or the agent predates wire v39. The quota keeps `size` reserved either way.
     let observedSize: Int64?
     let observedSizeFormatted: String?
     let status: SnapshotStatus

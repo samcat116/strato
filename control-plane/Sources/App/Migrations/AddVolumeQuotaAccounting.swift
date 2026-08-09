@@ -15,9 +15,9 @@ import SQLKit
 /// Also here, because they are the same upgrade:
 ///
 /// * `volume_snapshots.observed_size_bytes` — the overlay footprint a v39 agent
-///   re-measures per report. No backfill: NULL already means the right thing,
-///   which is that no agent has reported one, and the charge falls back to the
-///   parent volume's size.
+///   re-measures per report and the API exposes for observability and billing.
+///   It does not replace the quota reservation: `size` remains the parent-sized
+///   bound because an overlay can grow without another admission point.
 /// * `resource_quotas.max_volumes` / `volume_count` — an optional count limit
 ///   beside `max_vms` and `max_sandboxes`.
 /// * `idx_volume_snapshots_project_id`. `vm_snapshots` and `sandbox_snapshots`
@@ -65,14 +65,17 @@ struct AddVolumeQuotaAccounting: AsyncMigration {
         }
     }
 
-    /// A volume that *is* its VM's boot disk, which `vms.disk` already charges.
-    /// Aliased `w` to match `recountSQL`'s workload alias.
-    static let bootDiskDuplicate = """
-        NOT EXISTS (
-            SELECT 1 FROM vms
-            WHERE vms.id = w.vm_id AND vms.disk_path = w.storage_path
-        )
-        """
+    /// Initializes the two reservation counters this migration changes from the
+    /// same canonical measurement used by every later admission and resync.
+    /// Recomputing the whole storage cache is intentional: adding only the new
+    /// volume terms to a possibly stale cache would preserve whatever drift the
+    /// previous build left behind.
+    func backfillQuotaCounters(on database: Database) async throws {
+        for quota in try await ResourceQuota.query(on: database).all() {
+            try await QuotaEnforcementService.resyncReservations(quota, on: database)
+            try await quota.save(on: database)
+        }
+    }
 
     func prepare(on database: Database) async throws {
         guard let sql = database as? SQLDatabase else { throw UnsupportedDatabase() }
@@ -112,19 +115,11 @@ struct AddVolumeQuotaAccounting: AsyncMigration {
             .field("volume_count", .int, .required, .sql(.default(0)))
             .update()
 
-        // Backfill the counter rather than leaving it at zero, for the reason
-        // `AddSandboxCountToResourceQuota` gives: the counters are a cache
-        // nothing maintains outside the enforcement service, so a zero would
-        // make quota displays and the controller's update/delete floor checks
-        // wrong until some unrelated create happened to resync the row. Runs
-        // after the environment backfill above, which it filters on.
-        try await sql.raw(
-            SQLQueryString(
-                AddSandboxCountToResourceQuota.recountSQL(
-                    workloadTable: "volumes",
-                    countColumn: "volume_count",
-                    excluding: Self.bootDiskDuplicate))
-        ).run()
+        // Backfill both caches rather than leaving existing volumes and
+        // snapshots invisible until an unrelated mutation happens to resync the
+        // row. Runs after the environment and quota columns above, which the
+        // canonical aggregate reads.
+        try await backfillQuotaCounters(on: database)
 
         for index in Self.indexes {
             try await sql.raw(

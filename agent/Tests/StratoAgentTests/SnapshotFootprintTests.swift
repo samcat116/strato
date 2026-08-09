@@ -4,9 +4,9 @@ import Testing
 
 @testable import StratoAgentCore
 
-/// STR-181: the storage quota charges volume snapshots, so the footprint the
-/// agent reports for one has to be the overlay's size *now* rather than the
-/// empty file it was at capture.
+/// STR-181: the control plane exposes a volume snapshot's live footprint, so the
+/// agent reports the overlay's size *now* rather than only the empty file it was
+/// at capture.
 @Suite("Snapshot footprint (STR-181)")
 struct SnapshotFootprintTests {
 

@@ -5937,7 +5937,7 @@ export interface components {
             sizeFormatted: string;
             /**
              * Format: int64
-             * @description What the overlay actually occupies, as last reported by the owning agent. Null means no agent has said — the bytes are not on a host yet, or the agent predates wire v39 — in which case the storage quota charges `size` instead.
+             * @description What the overlay actually occupies, as last reported by the owning agent. Null means no agent has said — the bytes are not on a host yet, or the agent predates wire v39. The storage quota keeps `size` reserved either way.
              */
             observedSize?: number | null;
             /** @description Display form of `observedSize` in binary units. */

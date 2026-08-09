@@ -851,8 +851,8 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddVolumeObservedSize())
 
     // STR-181: volumes and volume snapshots become countable — an environment
-    // to scope them by, the overlay footprint the quota charges, and an optional
-    // volume count limit.
+    // to scope them by, the overlay footprint reported for visibility, and an
+    // optional volume count limit.
     app.migrations.add(AddVolumeQuotaAccounting())
 
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).

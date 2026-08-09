@@ -233,12 +233,12 @@ public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
     /// qcow2 and grows toward its parent's size as the volume is written.
     /// `sizeBytes` is what the agent measured *at* capture and is frozen there —
     /// for an overlay it is the header, which is why the control plane ignored
-    /// it. This one is re-read on every report, so it is what the storage quota
-    /// charges.
+    /// it. This one is re-read on every report for actual-footprint visibility;
+    /// the storage quota separately keeps the parent-sized bound reserved.
     ///
     /// Nil for every other kind, and from any agent that does not re-measure —
     /// which is what makes the field readable without a version gate. Nil is
-    /// "unknown", never zero: the control plane keeps its admission estimate.
+    /// "unknown", never zero.
     public let currentSizeBytes: Int64?
     /// Where the agent put it, when the artifact is a file or directory the
     /// agent names. Nil for a VM checkpoint, which lives inside disks it does

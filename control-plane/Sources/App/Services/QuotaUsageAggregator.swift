@@ -256,21 +256,23 @@ struct QuotaUsageAggregator {
     ///   that grow is blocked, not withdrawn: it lands the moment the guest
     ///   stops, with no admission point in between. Charging the observed size
     ///   would make it free until then.
-    /// * **A volume that *is* its VM's boot disk is skipped**, because
+    /// * **A volume that *is* a VM's boot disk is skipped**, because
     ///   `SUM(vms.disk)` already charges that file. Only the rows
     ///   `MigrateVMDisksToVolumes` backfilled can match — nothing since inserts a
     ///   volume for a VM's boot disk — but for a deployment upgraded from before
     ///   volumes existed, counting both would double every legacy VM's disk and
     ///   the symptom would be creates refused against a quota nobody changed.
-    ///   The predicate is the agent's own rule: `LibvirtService.resolveDisks`
-    ///   dedupes the pair by path into a single disk.
-    /// * **A snapshot is charged what its overlay actually occupies** once the
-    ///   agent reports it (wire v39), and the parent volume's size until then.
-    ///   The estimate is the bound — an overlay cannot outgrow the volume behind
-    ///   it — so the pool can never be oversubscribed by snapshots that have not
-    ///   diverged yet, while a project that took five snapshots of a 1 TiB volume
-    ///   is not billed 5 TiB for 1 MiB of overlay. `error` rows are excluded,
-    ///   matching the other two artifact families.
+    ///   Matching by path rather than the mutable `vm_id` keeps the exclusion
+    ///   after that compatibility volume is detached. This is the agent's own
+    ///   rule: `LibvirtService.resolveDisks` dedupes the pair by path into a
+    ///   single disk.
+    /// * **A snapshot keeps the parent volume's whole size reserved.** Its live
+    ///   overlay footprint is exposed separately for observability and billing,
+    ///   but it cannot replace the reservation: the overlay can grow toward the
+    ///   parent's size with no later API call at which to admit that growth. If
+    ///   a small first report released the bound, callers could admit several
+    ///   snapshots sequentially and oversubscribe the pool as they diverged.
+    ///   `error` rows are excluded, matching the other two artifact families.
     ///
     /// No status filter on `volumes`, deliberately: a row existing means the
     /// bytes are either asked for or not yet reclaimed. A volume being deleted
@@ -292,7 +294,7 @@ struct QuotaUsageAggregator {
                  WHERE \(inScope) AND \(Self.volumeIsNotAVMBootDisk)) AS volume_bytes,
                 (SELECT COUNT(*)::bigint FROM volumes
                  WHERE \(inScope) AND \(Self.volumeIsNotAVMBootDisk)) AS volume_count,
-                (SELECT COALESCE(SUM(COALESCE(observed_size_bytes, size)), 0)::bigint
+                (SELECT COALESCE(SUM(size), 0)::bigint
                  FROM volume_snapshots
                  WHERE \(inScope) AND status::text <> \(bind: SnapshotStatus.error.rawValue)
                 ) AS snapshot_bytes
@@ -308,7 +310,8 @@ struct QuotaUsageAggregator {
     private static let volumeIsNotAVMBootDisk: SQLQueryString = """
         NOT EXISTS (
             SELECT 1 FROM vms
-            WHERE vms.id = volumes.vm_id AND vms.disk_path = volumes.storage_path
+            WHERE vms.project_id = volumes.project_id
+              AND vms.disk_path = volumes.storage_path
         )
         """
 

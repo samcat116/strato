@@ -652,7 +652,7 @@ What each object is charged:
 | -- | -- | -- |
 | Volume, clone | provisioned `size` | `size` |
 | Resize | the **delta** | the new `size` |
-| Volume snapshot | the parent volume's **whole** size | the overlay's real footprint, or the parent's size until one is reported |
+| Volume snapshot | the parent volume's **whole** size | the parent volume's **whole** size |
 
 A volume is charged the size it *asked for*, not `observed_size_bytes`. The two
 differ exactly when a grow is outstanding, and a grow the agent refused is
@@ -660,32 +660,35 @@ blocked rather than withdrawn — it lands the moment the guest stops, with no A
 call in between to admit it. Charging the observed size would make a pending grow
 free.
 
-A snapshot is the reverse, and the split between its two columns is what makes
-both halves right. `size` is the parent volume's size at capture: an overlay
-cannot outgrow the volume behind it, so that is the bound, and admitting against
-it means a snapshot is only accepted when the pool could absorb it fully grown —
-the enforcement point for a family that then grows with no further API calls.
-What the quota *measures* is `observed_size_bytes`, the overlay's actual
-footprint, so a project holding five untouched snapshots of a 1 TiB volume is not
-billed six terabytes. The residual is worth naming: each admission needs a full
-parent-size of headroom, so post-admission growth can carry a project to roughly
-1× its ceiling before the next create is refused.
+For a snapshot, `size` is the parent volume's size at capture. An overlay cannot
+outgrow the volume behind it, so that is the bound, and both admitting and
+continuing to reserve against it mean the pool can absorb the snapshot fully
+grown. Replacing that reservation with a small first footprint would let a
+caller admit several snapshots sequentially before any of their overlays had
+diverged, even though all could then grow without another API call to refuse.
+`observed_size_bytes` still exposes the overlay's actual allocated footprint for
+observability and billing; it does not release quota capacity.
 
 Two things this deliberately does not do:
 
 - **No auto-delete.** The post-capture re-check that deletes an over-quota
-  artifact (above) stays off for volume snapshots. It exists for the one-shot
-  estimate→truth jump at capture — it fires once, on a figure that then stops
-  moving. An overlay's figure never stops moving, so arming it would re-run the
-  check every report and destroy snapshots because their volume diverged.
+  artifact (above) stays off for volume snapshots. The parent-sized reservation
+  already protects admission, while an overlay's reported footprint never stops
+  moving; arming deletion on it would re-run the check every report and destroy
+  snapshots because their volume diverged.
 - **No charge for a VM's boot disk twice.** The `volumes` term skips a volume
-  that *is* its VM's boot disk — `vm_id` set and `storage_path` equal to that
-  VM's `disk_path` — because `SUM(vms.disk)` already charges that file. Only the
-  rows `MigrateVMDisksToVolumes` backfilled can match; nothing since inserts a
-  volume for a VM's boot disk. Without it, a deployment upgraded from before
-  volumes existed would double every legacy VM's disk on the day it upgraded. The
-  predicate is the agent's own rule: `LibvirtService.resolveDisks` dedupes the
-  pair by path into a single disk.
+  whose `storage_path` equals a VM's `disk_path`, even when detachment has
+  cleared the mutable `vm_id`, because `SUM(vms.disk)` already charges that
+  file. Only the rows `MigrateVMDisksToVolumes` backfilled can match; nothing
+  since inserts a volume for a VM's boot disk. Without it, a deployment upgraded
+  from before volumes existed would double every legacy VM's disk on the day it
+  upgraded. The predicate is the agent's own rule:
+  `LibvirtService.resolveDisks` dedupes the pair by path into a single disk.
+
+The enabling migration recomputes both `volume_count` and the complete
+`reserved_storage` cache for existing quotas. Without that recount, list/detail
+responses would keep showing the pre-upgrade storage reservation until an
+unrelated create, resize, delete or quota update happened to trigger a resync.
 
 `ResourceQuota` also gained an optional `max_volumes` count limit. Optional where
 `max_vms` and `max_sandboxes` are required, because the only plausible backfill

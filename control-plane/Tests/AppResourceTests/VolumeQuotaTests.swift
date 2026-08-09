@@ -136,8 +136,8 @@ final class VolumeQuotaTests {
         }
     }
 
-    @Test("A reported overlay footprint replaces the parent-size estimate")
-    func snapshotFootprintReplacesEstimate() async throws {
+    @Test("A reported overlay footprint does not release the parent-size reservation")
+    func snapshotFootprintDoesNotReleaseReservation() async throws {
         try await withVolumeQuotaApp { app, builder, user, project, _ in
             let quota = try await builder.createResourceQuota(name: "q", project: project)
             let volume = try await seedVolume(
@@ -150,11 +150,12 @@ final class VolumeQuotaTests {
             try await snapshot.save(on: app.db)
             #expect(try await measure(quota, on: app.db).storageBytes == gb(200))
 
-            // What a v39 agent reports for an overlay that has barely diverged.
+            // What a v39 agent reports for an overlay that has barely diverged
+            // remains visible on the row, but the no-later-admission bound must
+            // stay reserved.
             snapshot.observedSizeBytes = 4 * 1024 * 1024
             try await snapshot.save(on: app.db)
-            #expect(
-                try await measure(quota, on: app.db).storageBytes == gb(100) + 4 * 1024 * 1024)
+            #expect(try await measure(quota, on: app.db).storageBytes == gb(200))
         }
     }
 
@@ -220,7 +221,16 @@ final class VolumeQuotaTests {
             #expect(deduped.storageBytes == vmDisk, "the boot disk is charged once, via vms.disk")
             #expect(deduped.volumeCount == 0)
 
-            // A genuinely separate file attached to the same VM is charged.
+            // Detaching clears the mutable attachment but does not change
+            // either owner of the shared file. Path identity must continue to
+            // suppress the compatibility volume.
+            bootVolume.$vm.id = nil
+            try await bootVolume.save(on: app.db)
+            let detached = try await measure(quota, on: app.db)
+            #expect(detached.storageBytes == vmDisk)
+            #expect(detached.volumeCount == 0)
+
+            // A genuinely separate file is charged, attached or not.
             bootVolume.storagePath = "/var/lib/strato/volumes/other.qcow2"
             try await bootVolume.save(on: app.db)
             let counted = try await measure(quota, on: app.db)
@@ -355,27 +365,37 @@ final class VolumeQuotaTests {
         }
     }
 
-    @Test("A snapshot is admitted against the parent volume's whole size")
-    func snapshotAdmitsAgainstParentSize() async throws {
+    @Test("A live footprint report cannot release room for another snapshot")
+    func snapshotReservationSurvivesFootprintReport() async throws {
         try await withVolumeQuotaApp { app, builder, user, project, token in
             _ = try await builder.createResourceQuota(
-                name: "tight", maxStorageGB: 60, project: project)
+                name: "tight", maxStorageGB: 110, project: project)
             let agentId = try await registerAgent(app: app, named: "snapshot-host")
             let volume = try await seedVolume(
                 app: app, user: user, project: project, name: "big", sizeGB: 50, agentId: agentId)
             let volumeID = try volume.requireID()
 
-            // The overlay will start out empty, but it can grow to 50 GiB and
-            // there is only 10 GiB of headroom left after the volume itself.
+            // The first overlay has barely diverged, but can still grow to the
+            // parent volume's whole size with no later admission point.
+            let first = VolumeSnapshot(
+                name: "first", description: "", volumeID: volumeID,
+                projectID: try project.requireID(), environment: "development",
+                size: volume.size, createdByID: try user.requireID())
+            first.observedSizeBytes = 4 * 1024 * 1024
+            try await first.save(on: app.db)
+
+            // 50 GiB volume + 50 GiB first-snapshot bound leaves only 10 GiB,
+            // so another 50 GiB bound must fail. Replacing the first bound with
+            // its 4 MiB report would incorrectly admit this request.
             try await app.test(.POST, "/api/volumes/\(volumeID)/snapshot") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
-                    CreateSnapshotRequest(name: "snap", description: nil, ttlSeconds: nil))
+                    CreateSnapshotRequest(name: "second", description: nil, ttlSeconds: nil))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.range(of: "quota", options: .caseInsensitive) != nil)
             }
-            #expect(try await VolumeSnapshot.query(on: app.db).count() == 0)
+            #expect(try await VolumeSnapshot.query(on: app.db).count() == 1)
         }
     }
 

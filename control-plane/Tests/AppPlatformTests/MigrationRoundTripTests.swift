@@ -78,6 +78,44 @@ struct MigrationRoundTripTests {
         }
     }
 
+    @Test("Volume quota migration backfills storage and count reservations")
+    func volumeQuotaMigrationBackfillsReservations() async throws {
+        try await withTestApp { app in
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "quota-backfill", email: "quota-backfill@example.com")
+            let org = try await builder.createOrganization(name: "Quota Backfill Org")
+            let project = try await builder.createProject(
+                name: "Quota Backfill Project", description: "p", organization: org)
+            let vm = try await builder.createVM(name: "existing-vm", project: project)
+            let quota = try await builder.createResourceQuota(name: "existing", project: project)
+
+            let volume = try await builder.createVolume(
+                name: "existing-volume", project: project, sizeGB: 20, createdBy: user)
+            let snapshot = VolumeSnapshot(
+                name: "existing-snapshot", description: "",
+                volumeID: try volume.requireID(), projectID: try project.requireID(),
+                environment: "development", size: volume.size,
+                createdByID: try user.requireID())
+            // A live footprint is reporting data, not capacity that can safely
+            // be released from the reservation cache.
+            snapshot.observedSizeBytes = 4 * 1024 * 1024
+            try await snapshot.save(on: app.db)
+
+            // Pre-upgrade storage already covered the VM but knew nothing about
+            // the new volume families; volume_count was newly added as zero.
+            quota.reservedStorage = vm.disk
+            quota.volumeCount = 0
+            try await quota.save(on: app.db)
+
+            try await AddVolumeQuotaAccounting().backfillQuotaCounters(on: app.db)
+
+            let backfilled = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(backfilled.reservedStorage == vm.disk + 2 * volume.size)
+            #expect(backfilled.volumeCount == 1)
+        }
+    }
+
     @Test("Legacy NIC address columns are dropped from the migrated schema")
     func legacyNICAddressColumnsAreDropped() async throws {
         try await withTestApp { app in
