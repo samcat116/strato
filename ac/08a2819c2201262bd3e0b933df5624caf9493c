@@ -1,0 +1,30 @@
+control-plane/Sources/App/Services/AgentService.swift
+  s_52a8eee24c642a::t_9e7de0016dc5c0 2387-2396,2400-2404,2406-2408,2410-2435,2437-2442,2447-2449,2452-2464
+  s_52a8eee24c642a::t_da63953d79907f 2399
+control-plane/Sources/App/Controllers/VMController.swift
+  s_52a8eee24c642a::t_52470e3ec05c95 851-852,1071
+  s_52a8eee24c642a::t_0019a56b27c077 873,938,1005,1057,1072
+  s_52a8eee24c642a::t_9b0e13fe992af7 933-937,951,953-957,1000-1004,1039-1043,1047-1056,1058-1070,1073-1089
+  s_52a8eee24c642a::t_baef71696675b6 853-858
+  s_52a8eee24c642a::t_2bf18432250b47 868-872,874-881
+  s_52a8eee24c642a::t_afae9033275071 1500-1503,1505-1506
+  s_52a8eee24c642a::t_ee73b11f38bfa7 1090
+control-plane/Tests/AppPlatformTests/VMMetadataOptOutTests.swift
+  s_52a8eee24c642a::t_b65c4c834252eb 230-248,256-267
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "ac08a2819c2201262bd3e0b933df5624caf9493c",
+  "prompts": {},
+  "sessions": {
+    "s_52a8eee24c642a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3e0-4c6e-70b3-bb24-fa55b59b8e60",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
