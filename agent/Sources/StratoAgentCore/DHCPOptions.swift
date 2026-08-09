@@ -197,36 +197,6 @@ public enum DHCPRowIdentity {
             && externalIDs?[managedKey] == managedValue
     }
 
-    /// Whether a row predates `network-id` stamping and can be adopted as this
-    /// network's row for `cidr`.
-    ///
-    /// Adoption — rather than leaving the row orphaned and creating a fresh one
-    /// — matters because existing VM ports still reference the old row through
-    /// their `dhcpv4_options` column: guests would keep leasing from a row no
-    /// later edit ever reaches. Updating it in place keeps the OVSDB row UUID,
-    /// so live port bindings stay valid (the same argument `ensureSwitch` makes
-    /// for renaming a legacy switch).
-    ///
-    /// Unambiguous by construction: names were globally unique when any such
-    /// row was written, so at most one legacy row can match.
-    public static func isAdoptableLegacy(
-        _ externalIDs: [String: String]?, rowCIDR: String, cidr: String, networkName: String
-    ) -> Bool {
-        rowCIDR == cidr
-            && externalIDs?[managedKey] == managedValue
-            && externalIDs?[networkIDKey] == nil
-            && externalIDs?[networkNameKey] == networkName
-    }
-
-    /// Whether a row is a legacy managed row this network owns, at any CIDR —
-    /// what a DHCP-disable teardown must also remove, or a network disabled
-    /// before its first post-upgrade converge would keep answering leases.
-    public static func isLegacyOwned(_ externalIDs: [String: String]?, networkName: String) -> Bool {
-        externalIDs?[managedKey] == managedValue
-            && externalIDs?[networkIDKey] == nil
-            && externalIDs?[networkNameKey] == networkName
-    }
-
     /// Lowercased, matching `OVNNaming`'s treatment of ids in object names.
     private static func canonical(_ networkId: UUID) -> String {
         networkId.uuidString.lowercased()

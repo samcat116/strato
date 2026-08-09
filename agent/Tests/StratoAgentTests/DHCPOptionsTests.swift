@@ -195,35 +195,6 @@ struct DHCPRowIdentityTests {
         #expect(!DHCPRowIdentity.isOwn(nil, rowCIDR: "10.0.0.0/24", cidr: "10.0.0.0/24", networkId: networkId))
     }
 
-    @Test("A pre-upgrade row with only a name is adoptable once, by that name")
-    func legacyAdoption() {
-        let cidr = "192.168.1.0/24"
-        let legacy = [
-            DHCPRowIdentity.networkNameKey: "default",
-            DHCPRowIdentity.managedKey: DHCPRowIdentity.managedValue,
-        ]
-
-        #expect(DHCPRowIdentity.isAdoptableLegacy(legacy, rowCIDR: cidr, cidr: cidr, networkName: "default"))
-        // Not another network's row...
-        #expect(!DHCPRowIdentity.isAdoptableLegacy(legacy, rowCIDR: cidr, cidr: cidr, networkName: "other"))
-        // ...nor one already stamped, which belongs to whichever id it names.
-        let stamped = DHCPRowIdentity.externalIDs(networkId: UUID(), networkName: "default")
-        #expect(!DHCPRowIdentity.isAdoptableLegacy(stamped, rowCIDR: cidr, cidr: cidr, networkName: "default"))
-    }
-
-    @Test("A DHCP-disable teardown also claims the network's unstamped legacy rows")
-    func legacyTeardown() {
-        let legacy = [
-            DHCPRowIdentity.networkNameKey: "default",
-            DHCPRowIdentity.managedKey: DHCPRowIdentity.managedValue,
-        ]
-        // Otherwise a network whose DHCP was turned off before its first
-        // post-upgrade converge would keep answering leases from this row.
-        #expect(DHCPRowIdentity.isLegacyOwned(legacy, networkName: "default"))
-        #expect(!DHCPRowIdentity.isLegacyOwned(legacy, networkName: "other"))
-        let stamped = DHCPRowIdentity.externalIDs(networkId: UUID(), networkName: "default")
-        #expect(!DHCPRowIdentity.isLegacyOwned(stamped, networkName: "default"))
-    }
 }
 
 @Suite("DHCP Options — per-network resolver")

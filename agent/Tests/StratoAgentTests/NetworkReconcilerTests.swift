@@ -102,10 +102,7 @@ struct NetworkReconcilerTests {
         let plan = NetworkReconciler.plan(networks: [net])
         #expect(plan.switches.count == 1)
         #expect(plan.routers.isEmpty)
-        // The switch is named by UUID; the user name is carried as the legacy
-        // name so the agent can migrate an old name-based switch in place.
         #expect(plan.switches[0].name == OVNNaming.switchName(networkId: net.networkId))
-        #expect(plan.switches[0].legacyName == "isolated")
     }
 
     @Test("externalAccess=false gets an L3 gateway but no SNAT")
@@ -246,25 +243,6 @@ struct NetworkReconcilerTests {
         #expect(plan.routers.allSatisfy { $0.snatSubnets == [cidr] })
         let snatKeys = Set(plan.expectedTopology.snatRules)
         #expect(snatKeys.count == 2)
-    }
-
-    @Test("A name shared by two networks yields no legacy-rename hint for either")
-    func duplicateNamesWithholdLegacyRename() {
-        // `legacyName` is how the actuator finds a pre-#342 name-based switch
-        // and renames it in place. With two claimants, which one inherits the
-        // existing switch (and its live ports) would come down to plan order,
-        // so neither may claim it.
-        let a = network(name: "default", subnet: "10.0.1.0/24", gateway: "10.0.1.1", routerKey: "project-A")
-        let b = network(name: "default", subnet: "10.0.2.0/24", gateway: "10.0.2.1", routerKey: "project-B")
-        let unique = network(name: "solo", subnet: "10.0.3.0/24", gateway: "10.0.3.1", routerKey: "project-A")
-
-        let plan = NetworkReconciler.plan(networks: [a, b, unique])
-
-        let byName = Dictionary(uniqueKeysWithValues: plan.switches.map { ($0.name, $0) })
-        #expect(byName[OVNNaming.switchName(networkId: a.networkId)]?.legacyName == "")
-        #expect(byName[OVNNaming.switchName(networkId: b.networkId)]?.legacyName == "")
-        // An unambiguous name still migrates.
-        #expect(byName[OVNNaming.switchName(networkId: unique.networkId)]?.legacyName == "solo")
     }
 
     // MARK: - Teardown / idempotency
