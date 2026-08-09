@@ -1057,7 +1057,8 @@ export interface CreateVMRequest {
   name: string;
   description?: string;
   imageId: string;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   environment?: string;
   cpu?: number;
   memory?: number;
@@ -1324,7 +1325,8 @@ export interface CreateSandboxRequest {
   image?: string;
   /** Ready sandbox snapshot to restore as a new sandbox identity. */
   restoreFrom?: string;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   environment?: string;
   cpus?: number;
   /** Guest memory in bytes. */
@@ -1717,7 +1719,8 @@ export interface VolumeSnapshot {
 export interface CreateVolumeRequest {
   name: string;
   description?: string;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   sizeGB: number;
   format?: VolumeFormat;
   volumeType?: VolumeType;
@@ -1957,7 +1960,8 @@ export interface CreateNetworkRequest {
   gateway6?: string;
   /** false → v4-only network. */
   ipv6Enabled?: boolean;
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
   dhcpEnabled?: boolean;
   dnsServers?: string[];
   domainName?: string;
@@ -2029,8 +2033,8 @@ export interface SecurityGroup {
 export interface CreateSecurityGroupRequest {
   name: string;
   description?: string;
-  /** Defaults to the caller's default project when omitted. */
-  projectId?: string;
+  /** The project the resource is created in. Required; there is no default project. */
+  projectId: string;
 }
 
 export interface UpdateSecurityGroupRequest {

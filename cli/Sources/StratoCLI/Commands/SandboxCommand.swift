@@ -101,7 +101,8 @@ struct SandboxCommand: AsyncParsableCommand {
                 let accepted = try await client.createSandbox(
                     body: .json(
                         .init(
-                            name: name, image: image, projectId: project ?? env.context.project,
+                            name: name, image: image,
+                            projectId: try resolveProject(project, environment: env),
                             environment: environment, cpus: cpus, memory: memory, ttlSeconds: ttl))
                 ).accepted.body.json
                 try await handleMutation(

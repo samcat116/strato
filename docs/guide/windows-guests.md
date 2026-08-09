@@ -88,6 +88,7 @@ POST /api/vms
 {
   "name": "win-2025",
   "imageId": "…",
+  "projectId": "…",
   "cpu": 4,
   "memory": 8589934592,
   "disk": 68719476736,

@@ -92,6 +92,25 @@ is capped at **1 MiB**, which bounds them all; the image-upload, artifact-upload
 and snapshot-transfer routes stream instead of collecting and carry their own,
 much larger limits.
 
+### Project scoping
+
+Every project-scoped create names the project it lands in. `projectId` is
+**required** on `POST /api/vms`, `/api/sandboxes`, `/api/volumes`,
+`/api/networks`, `/api/security-groups`, `/api/floating-ips` and
+`/api/dns-zones`; omitting it is a `400` reading
+`projectId is required — name the project to <verb> <kind> in.`
+
+**There is no default project.** Two of those endpoints used to infer one when a
+request named none, and they inferred differently — VM and sandbox creation took
+the project literally *named* "Default Project" in the caller's current
+organization, the other five took that organization's oldest project — so the
+same empty body could land in two different places. Neither answer was one an
+operator had chosen, and both were blind to projects held inside a folder, so
+the inference was removed rather than reconciled.
+
+A new organization is still provisioned with a first project named "Default
+Project", but nothing resolves a project by that name: rename it freely.
+
 ### Asynchronous mutations
 
 VM, sandbox, volume and snapshot mutations (create/start/stop/restart/delete,

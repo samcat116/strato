@@ -107,7 +107,7 @@ struct DNSCommand: AsyncParsableCommand {
                         body: .json(
                             .init(
                                 name: name, description: description,
-                                projectId: project ?? env.context.project))
+                                projectId: try resolveProject(project, environment: env)))
                     ).ok.body.json
                     switch global.output {
                     case .table:

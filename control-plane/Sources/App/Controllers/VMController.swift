@@ -199,6 +199,9 @@ struct VMController: RouteCollection {
             let hostname: String?
             let description: String?
             let imageId: UUID?
+            /// Required: there is no default project (issue #1059). Optional here so
+            /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
+            /// rather than a `Codable` decode failure that names neither.
             let projectId: UUID?
             let environment: String?
             let cpu: Int?

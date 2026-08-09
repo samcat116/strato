@@ -22,6 +22,7 @@ import { useAcceptedMutation } from "@/lib/hooks/use-accepted-mutation";
 import { useProjectContext } from "@/providers";
 import type { Sandbox, SandboxSnapshot } from "@/types/api";
 import { formatMemory } from "@/lib/format-bytes";
+import { toast } from "sonner";
 
 export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
   const router = useRouter();
@@ -60,6 +61,15 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
     event.preventDefault();
     if (!selected || !name.trim()) return;
 
+    // A fork stays with its source sandbox by default. In particular, a
+    // networked snapshot cannot silently follow the header switcher into a
+    // different project without also naming a new network.
+    const projectId = sandbox.projectId ?? currentProject?.id;
+    if (!projectId) {
+      toast.error("Select a project first");
+      return;
+    }
+
     // A fork is an ordinary sandbox create, so it answers with the new
     // sandbox rather than an operation.
     await runFork({
@@ -67,7 +77,7 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
         sandboxesApi.create({
           name: name.trim(),
           restoreFrom: selected.id,
-          projectId: currentProject?.id ?? sandbox.projectId,
+          projectId,
         }),
       watch: {
         kind: "create",
@@ -182,7 +192,7 @@ export function SandboxSnapshotsCard({ sandbox }: { sandbox: Sandbox }) {
             <DialogTitle>Fork from snapshot</DialogTitle>
             <DialogDescription>
               Create a running sandbox from “{selected?.name}” with a new
-              identity and network reservation.
+              identity in the source sandbox&apos;s project.
             </DialogDescription>
           </DialogHeader>
           <form onSubmit={submitFork}>

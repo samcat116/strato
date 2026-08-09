@@ -4,6 +4,28 @@ Ubiquitous language for Strato's control plane. Terms here are the names we
 use in code, tests, docs, and review. Architecture-level maps live in
 `docs/architecture/`; this file pins the vocabulary those maps assume.
 
+## Tenancy
+
+- **Project** — the unit every resource belongs to, and the node authorization
+  hangs from. **Every create names its project**; there is no default and
+  nothing infers one. An organization is provisioned with a first project so it
+  is not empty, but that project is not privileged — it is the first row, and
+  organizations accumulate more.
+
+  Two create paths used to guess when told nothing, and they guessed
+  differently: VM and sandbox creation took the project literally *named*
+  "Default Project", the five infrastructure creates took the organization's
+  oldest. Neither answer was one anybody chose — the first is a string an
+  organization can rename out from under, the second only became *repeatable*
+  (never right) when a sort was added to it — and both were blind to projects
+  held inside a folder. So the question was withdrawn rather than settled
+  (STR-200), the same way networks lost their implicit fallback in #765.
+
+  The phrase "the default project" outlives the thing: new organizations still
+  get one called that, the UI still pre-selects a project in its switcher, and a
+  migration names the string forever. None of those resolve anything. If someone
+  says "the default project", they mean a label, a UI convenience, or a habit.
+
 ## Resource mutations
 
 - **Resource mutation** — one durable, asynchronous lifecycle change to a VM,

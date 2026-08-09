@@ -83,8 +83,9 @@ struct CreateDNSZoneRequest: Content, ValidatedRequestBody {
     /// resolver serves them. The ceiling is the *grammar's* — see `validate()`.
     var name: String
     let description: String?
-    /// Defaults to the caller's default project when omitted, matching
-    /// networks, volumes, and security groups.
+    /// Required: there is no default project (issue #1059). Optional here so
+    /// the refusal is `Request.projectIsRequired`'s, which names the remedy,
+    /// rather than a `Codable` decode failure that names neither.
     let projectId: UUID?
 
     init(name: String, description: String? = nil, projectId: UUID? = nil) {

@@ -95,7 +95,7 @@ struct DNSController: RouteCollection {
         let request = try req.content.decodeValidated(CreateDNSZoneRequest.self)
 
         let project = try await req.authorizedProjectForCreate(
-            requested: request.projectId, user: user,
+            requested: request.projectId,
             action: "create_dns_zone", resourceKind: "DNS zones")
         let projectID = try project.requireID()
 

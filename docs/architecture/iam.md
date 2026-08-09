@@ -1406,17 +1406,41 @@ Two enforcement details worth naming:
     bullet above to `attachSecurityGroup` should expect the VM half only until
     sandbox parity lands.
 - **A project named in a create body is checked for existence *after* the
-  permission check** (issue #1049). The five project-scoped creates — volume,
-  network, security group, floating IP, DNS zone — resolve their target project
-  through `Request.authorizedProjectForCreate`, which authorizes first and
-  confirms the row second, so `400 "Project {id} does not exist"` cannot be told
-  apart from `403` by a caller sweeping ids. In practice that `400` is
-  unreachable from the API: a missing project's chain never reaches an
-  organization, so the truncated-chain rule above denies the check outright and
-  every one of the five answers `403` — for a system admin, and for a principal
-  holding a binding pinned directly at the missing id. The assertion stays as
-  the backstop against inserting against a dangling foreign key. Pinned by
-  `ProjectResolutionTests`.
+  permission check** (issue #1049). All seven project-scoped creates — VM,
+  sandbox, volume, network, security group, floating IP, DNS zone — resolve
+  their target project through `Request.authorizedProjectForCreate`, which
+  authorizes first and confirms the row second, so `400 "Project {id} does not
+  exist"` cannot be told apart from `403` by a caller sweeping ids. In practice
+  that `400` is unreachable from the API: a missing project's chain never
+  reaches an organization, so the truncated-chain rule above denies the check
+  outright and every one of the seven answers `403` — for a system admin, and
+  for a principal holding a binding pinned directly at the missing id. The
+  assertion stays as the backstop against inserting against a dangling foreign
+  key. Pinned by `ProjectResolutionTests`.
+  - **VM and sandbox only joined this list with issue #1059**, and that is the
+    security-relevant half of the change. `resolveProjectForCreate` used to look
+    the project up *first* — `400 "Project not found"` — then check the caller's
+    current organization (`403 "Access denied to project"`), and ask the
+    evaluator last. The two answers were distinguishable, so `POST /api/vms` and
+    `POST /api/sandboxes` were an existence oracle over other tenants' projects,
+    at exactly the endpoints this bullet was written to exclude. They are built
+    on `authorizedProjectForCreate` now rather than sitting beside it, so the
+    ordering cannot diverge again. The current-organization check survives,
+    moved *behind* the permission check: it still narrows VM and sandbox creates
+    to the caller's current organization — the five infrastructure creates leave
+    that entirely to the evaluator — but its `403` now only reaches a caller the
+    evaluator already allowed, so it discloses nothing. Expect an *allow* in the
+    decision log immediately followed by a `403` in that case.
+- **No create infers a project** (issue #1059). Naming none is `400
+  "projectId is required — name the project to <verb> <kind> in."`, at all
+  seven. Two of them used to guess — VM and sandbox took the project *named*
+  "Default Project", the other five took the organization's oldest — so the same
+  empty body landed in different projects depending on the endpoint. Neither
+  guess was a decision anyone made, and both were blind to projects living under
+  a folder. Nothing named "Default Project" is privileged any more; an
+  organization is still provisioned with a first project by that name, but it is
+  a label no query reads. Same shape as networks losing their implicit fallback
+  in issue #765.
 
 #### The request-scoped cache (shipped with #686, extended by #735)
 

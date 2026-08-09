@@ -22,6 +22,7 @@ curl -X POST https://strato.example.com/api/vms \
   -d '{
         "name": "ubuntu-desktop",
         "imageId": "…",
+        "projectId": "…",
         "networkId": "…",
         "cpu": 2,
         "memory": 4294967296,
