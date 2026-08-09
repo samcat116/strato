@@ -540,8 +540,9 @@ public struct CloudInitProvisioner {
     /// Renders a NoCloud `network-config` (version 2), matched by MAC address:
     /// DHCP-managed NICs are set to `dhcp4: true` (OVN's responder delivers
     /// IP/gateway/DNS/domain), and NICs with a control-plane static allocation
-    /// get an explicit address/gateway/nameservers block, including the
-    /// network's search domain.
+    /// get an explicit address/nameservers block, including the network's
+    /// search domain. The first eligible static NIC per address family also
+    /// owns its default gateway; later NICs keep only their connected routes.
     ///
     /// A NIC on a network publishing a link-local service — instance metadata,
     /// the network's DNS resolver, or both — also carries on-link routes to its
@@ -568,6 +569,12 @@ public struct CloudInitProvisioner {
         var metadataV6RouteClaimed = false
         var resolverV4RouteClaimed = false
         var resolverV6RouteClaimed = false
+        // A netplan document may carry only one unqualified default route per
+        // address family. Multi-NIC creation keeps the request's stable device
+        // order, so the first eligible static NIC is the deterministic primary
+        // and later NICs retain their addresses without competing gateways.
+        var defaultV4RouteClaimed = false
+        var defaultV6RouteClaimed = false
 
         for (index, nic) in attachments.enumerated() {
             // User-mode NICs are addressed by SLIRP's built-in DHCP.
@@ -638,11 +645,13 @@ public struct CloudInitProvisioner {
             if let ip6Address = nic.ip6Address {
                 section += "\n      - \(ip6Address)/\(nic.prefixLength6 ?? 64)"
             }
-            if let gateway = nic.gateway {
+            if let gateway = nic.gateway, !defaultV4RouteClaimed {
                 section += "\n    gateway4: \(gateway)"
+                defaultV4RouteClaimed = true
             }
-            if hasIPv6, let gateway6 = nic.gateway6 {
+            if hasIPv6, let gateway6 = nic.gateway6, !defaultV6RouteClaimed {
                 section += "\n    gateway6: \(gateway6)"
+                defaultV6RouteClaimed = true
             }
             if hasIPv6 {
                 // Statically addressed, but RAs still refresh the on-link

@@ -196,6 +196,30 @@ final class VMOperationTests {
         }
     }
 
+    @Test("VM interface attach rejects networks that need static guest configuration")
+    func networkInterfaceAttachRejectsStaticNetwork() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            try await placeOnAgent(app: app, vm: vm)
+            let network = LogicalNetwork(
+                name: "static-hotplug-net", subnet: "10.243.0.0/24", gateway: "10.243.0.1",
+                projectID: vm.$project.id, createdByID: user.id!, dhcpEnabled: false)
+            try await network.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/interfaces") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachInterfaceBody(networkId: network.id!))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("requires static guest configuration"))
+            }
+
+            #expect(
+                try await VMNetworkInterface.query(on: app.db)
+                    .filter(\.$vm.$id == vm.id!).count() == 0)
+            #expect(try await VM.find(vm.id, on: app.db)?.generation == 1)
+        }
+    }
+
     @Test("Detaching the final NIC retains it for confirmation and a failed detach can be retried")
     func detachFinalNetworkInterfaceAndRetry() async throws {
         try await withVMTestApp { app, user, vm, token in

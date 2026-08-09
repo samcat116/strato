@@ -4596,6 +4596,18 @@ extension Agent: ReconcileActuator {
         let target = desired.spec.networks
         let pairs = VMNetworkInterfaceDiff.between(current: current, desired: target)
 
+        // A hot-added NIC is absent from the immutable cloud-init seed created
+        // with the VM. DHCP is therefore the only guest L3 configuration path
+        // available today. The API rejects this synchronously; keep the agent
+        // defensive against legacy control planes and directly authored state.
+        if let addedIndex = pairs.added.first(where: { !target[$0].dhcpEnabled }) {
+            let spec = target[addedIndex]
+            throw HypervisorServiceError.notSupported(
+                "hot-plugging interface '\(spec.deviceName ?? "net\(spec.orderIndex ?? addedIndex)")' "
+                    + "on DHCP-disabled network '\(spec.network)'; recreate the VM with this interface, "
+                    + "or use a DHCP-enabled network")
+        }
+
         let status = try await service.getVMStatus(vmId: item.vmId)
         if status != .running && status != .paused {
             // On an inactive domain, widen the stored PCIe root complex before

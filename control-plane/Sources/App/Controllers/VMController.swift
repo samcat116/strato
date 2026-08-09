@@ -156,6 +156,7 @@ struct VMController: RouteCollection {
                     requestedName: request.networkName,
                     projectID: projectID,
                     on: db)
+                try Self.requireDHCPNetworkForHotplug(network)
                 if let requiredSite = network.$site.id, agent.$site.id != requiredSite {
                     throw Abort(
                         .conflict,
@@ -277,13 +278,17 @@ struct VMController: RouteCollection {
             else {
                 throw Abort(.notFound, reason: "Network interface no longer exists")
             }
+            if kind == .attach {
+                guard interface.detachGeneration == nil else {
+                    throw Abort(.conflict, reason: "A detaching interface cannot be retried as an attach")
+                }
+                try await Self.requireDHCPNetworkForHotplug(
+                    interface.$logicalNetwork.get(on: db))
+            }
             vm.bumpGeneration()
             if kind == .detach {
                 interface.detachGeneration = vm.generation
             } else {
-                guard interface.detachGeneration == nil else {
-                    throw Abort(.conflict, reason: "A detaching interface cannot be retried as an attach")
-                }
                 interface.attachGeneration = vm.generation
             }
             try await interface.save(on: db)
@@ -1713,6 +1718,21 @@ struct VMController: RouteCollection {
                     + "v\(WireProtocol.vmNetworkHotplugMinimumVersion) required). Upgrade the agent first.")
         }
         return agent
+    }
+
+    /// A post-create NIC cannot receive the static guest configuration that
+    /// QEMU VMs get from their immutable cloud-init seed at creation. Refuse
+    /// the mutation before allocating an address or reporting it as accepted;
+    /// the agent repeats this check as a defense against legacy or directly
+    /// authored desired state.
+    static func requireDHCPNetworkForHotplug(_ network: LogicalNetwork) throws {
+        guard network.dhcpEnabled else {
+            throw Abort(
+                .conflict,
+                reason: "Network '\(network.name)' has DHCP disabled and requires static guest configuration, "
+                    + "which cannot be added after VM creation. Use a DHCP-enabled network or recreate the VM "
+                    + "with this interface.")
+        }
     }
 
     static func loadInterfaces(for vm: VM, on db: any Database) async throws {

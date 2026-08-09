@@ -735,6 +735,44 @@ struct CloudInitNetworkConfigTests {
         #expect(yaml?.contains("nic1:") == true)
         #expect(yaml?.contains("- 10.10.0.5/24") == true)
     }
+
+    @Test("only the first eligible static NIC owns each default route")
+    func multipleStaticGatewaysUseOnePrimaryNIC() {
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "frontend",
+                attachment: .tap(interface: "tapA"),
+                macAddress: "52:54:00:00:00:01",
+                ipAddress: "192.168.1.5",
+                netmask: "255.255.255.0",
+                gateway: "192.168.1.1",
+                ip6Address: "fd00:1::5",
+                prefixLength6: 64,
+                gateway6: "fd00:1::1"
+            ),
+            ResolvedNetworkAttachment(
+                network: "backend",
+                attachment: .tap(interface: "tapB"),
+                macAddress: "52:54:00:00:00:02",
+                ipAddress: "10.10.0.5",
+                netmask: "255.255.255.0",
+                gateway: "10.10.0.1",
+                ip6Address: "fd00:2::5",
+                prefixLength6: 64,
+                gateway6: "fd00:2::1"
+            ),
+        ]
+
+        let yaml = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        #expect(yaml?.contains("- 192.168.1.5/24") == true)
+        #expect(yaml?.contains("- 10.10.0.5/24") == true)
+        #expect(yaml?.components(separatedBy: "gateway4:").count == 2)
+        #expect(yaml?.components(separatedBy: "gateway6:").count == 2)
+        #expect(yaml?.contains("gateway4: 192.168.1.1") == true)
+        #expect(yaml?.contains("gateway6: fd00:1::1") == true)
+        #expect(yaml?.contains("gateway4: 10.10.0.1") == false)
+        #expect(yaml?.contains("gateway6: fd00:2::1") == false)
+    }
 }
 
 /// The seed's half of the per-network resolver (STR-40): the route to the
