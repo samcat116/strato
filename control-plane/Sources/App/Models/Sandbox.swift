@@ -148,6 +148,16 @@ final class Sandbox: Model, @unchecked Sendable {
     @OptionalField(key: "failed_generation")
     var failedGeneration: Int64?
 
+    /// When the current error/generation pair was first observed. Stable while
+    /// identical heartbeats repeat it, and cleared by successful convergence.
+    @OptionalField(key: "last_error_at")
+    var lastErrorAt: Date?
+
+    /// Internal claim for the sustained-divergence warning. Nil starts a new
+    /// episode; the sweep atomically stamps it before logging.
+    @OptionalField(key: "divergence_detected_at")
+    var divergenceDetectedAt: Date?
+
     /// When the stuck-convergence sweep marks this sandbox degraded — the VM
     /// contract exactly (STR-147). Written by the mutation path as
     /// `max(existing, now + budget)`; nil means nothing is outstanding.
@@ -252,11 +262,13 @@ extension Sandbox {
         return expiresAt <= date
     }
 
-    /// Updates the observed status and stamps the change time for the
-    /// reconciliation sweep. Does not persist — call `save(on:)` afterwards.
+    /// Updates the observed status, starts a fresh divergence episode, and
+    /// stamps the change time for reconciliation sweeps. Does not persist —
+    /// call `save(on:)` afterwards.
     func setStatus(_ newStatus: SandboxStatus, at date: Date = Date()) {
         status = newStatus
         statusChangedAt = date
+        divergenceDetectedAt = nil
     }
 
     /// Records a new desired state and bumps the generation so agents treat

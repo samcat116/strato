@@ -160,6 +160,7 @@ bounded; unmatched requests fall back to `unmatched`.
 | `strato_agent_heartbeat_staleness_seconds` | gauge | `agent` = agent name | Seconds since the agent's last heartbeat, recorded each ~30s cycle **while connected**. Secondary "heartbeats slowing" signal; stops updating once the agent is swept |
 | `strato_vm_errors_total` | counter | `reason` = `reconciliation` \| `convergence_failed` \| `stuck_convergence` \| `mutation_failed` | A VM transitioned into `.error` |
 | `strato_vm_drift_total` | counter | — | A VM's observed state changed out-of-band with no mutation in flight (issue #260) |
+| `strato_diverged_workloads` | gauge | `kind` = `vm` \| `sandbox` | Current workloads whose acknowledged observed status has remained different from desired state for at least 15 minutes with no mutation outstanding. Recorded every sweep, including zero. **Alert on `> 0`** |
 
 ### Teardown safety & site networking
 
@@ -386,6 +387,18 @@ Thresholds are starting points; tune to your fleet size and SLOs.
   cross-reference `strato_agent_disconnections_total`. `stuck_transition` ⇒ an
   operation's terminal confirmation never arrived (lost status update or an agent
   that died mid-op).
+
+### Workload remains divergent
+
+- **Condition:** `strato_diverged_workloads > 0`. The `kind` label separates
+  VMs and sandboxes; the gauge already includes the 15-minute grace window.
+- **Severity:** warning for one workload; page when the count rises across many
+  workloads or both kinds on one host.
+- **First checks:** inspect `conditions.degraded.reason` and
+  `conditions.degraded.lastErrorAt` on the workload detail response, then the
+  owning agent's warning/error logs. The agent retries transient failures at
+  most hourly after its first four attempts; a permanent failure instead logs
+  one retry-suppression warning and needs operator repair plus a new generation.
 
 ### Registration failures spiking
 

@@ -324,9 +324,19 @@ enum ResourceConvergence {
         let recorded = alreadyRecordedAt ?? resource.failedGeneration
         guard recorded != resource.generation else { return false }
 
+        let failurePairChanged =
+            resource.lastError != reason || resource.failedGeneration != resource.generation
         resource.convergencePhase = nil
         resource.lastError = reason
         resource.failedGeneration = resource.generation
+        if let timestamped = resource as? any TimestampedConvergenceObservable {
+            // The observed-state path timestamps before it enters this shared
+            // mutation verdict. Preserve that first-observed instant; direct
+            // dispatch and sweep failures still need a timestamp of their own.
+            if failurePairChanged || timestamped.lastErrorAt == nil {
+                timestamped.lastErrorAt = Date()
+            }
+        }
         resource.convergenceDeadline = nil
         resource.resolveForStuckOperation(mutation: mutation, telemetryReason: telemetryReason)
 

@@ -9285,6 +9285,14 @@ components:
             pursued from one a newer mutation has already superseded. Equal to
             `targetGeneration` means this is the current state's verdict, and
             `converged` is false alongside it.
+        lastErrorAt:
+          type: string
+          format: date-time
+          description: >-
+            When this error and generation pair was first observed. Repeated
+            agent heartbeats leave it unchanged; successful convergence clears
+            the degraded condition. Absent for resource kinds that do not
+            persist convergence-failure timestamps.
     VMStatus:
       type: string
       description: The observed VM state (tolerant decoding; unknown values map to Unknown).

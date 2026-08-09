@@ -733,19 +733,21 @@ failed resize is re-planned by the next sync rather than looking applied.
   concurrent across keys). A VM's lane key is its bare ID — the same lane
   the imperative message handlers use — so reconcile and imperative
   operations can never interleave on one VM. Failures are tracked per
-  generation with a 3-attempt budget (permanent failures exhaust it
-  immediately; a new generation re-arms it). Two classifications sit outside
-  the budget, for opposite reasons: `waitingOnDependency` records nothing and
-  retries silently, and `blocked` records the reason and retries anyway —
-  the precondition it names (a guest that has to stop before its volume can
-  grow) clears without anyone minting a new generation, so the cap must not be
-  what decides whether the remedy works (STR-199). `.adopt` executes first and
-  then re-plans from the adopted workload's actual status.
+  generation and classification. Transient failures retry indefinitely with
+  `1m → 5m → 15m → 1h`, then repeat hourly; an injected clock makes every
+  boundary deterministic in tests. Permanent failures suppress later retries
+  at that generation, logging one warning and incrementing the actor-local
+  `retryCapSuppressions` diagnostic once when suppression first happens. A new
+  generation re-arms either path. `waitingOnDependency` records nothing and
+  retries silently on every sync, while `blocked` records the reason and also
+  retries every sync — the precondition it names clears without anyone
+  minting a new generation (STR-199). `.adopt` executes first and then
+  re-plans from the adopted workload's actual status.
 
 ### Volume lanes and the enqueue order (STR-148)
 
 Volumes joined the engine as a third `WorkloadKind` rather than a forked
-planner: the staleness guard, the attempt cap, the failure classification and
+planner: the staleness guard, the retry policy, the failure classification and
 the hold-and-report logic are all shared. A volume's presence comes from the
 storage backend's own inventory, not the manifest — a volume is a file, so
 there is nothing to adopt and no session to lose.
@@ -795,8 +797,9 @@ keeps running it and reports it in `ObservedStateReport.unrecognized`; the
 control plane checks whether a record exists and, only if none does, answers
 with a `DesiredWorkloadTombstone` on a later sync, which the agent converges
 exactly like an `.absent` desired entry. Tombstoned deletes stay exempt from
-the 3-attempt cap — nothing can mint a new generation for a workload with no
-record, so a capped failure would leak the stray forever.
+permanent suppression and transient backoff — nothing can mint a new
+generation for a workload with no record, so a suppressed failure would leak
+the stray forever.
 
 This matters because the alternative was catastrophic and quiet: omission used
 to mean "destroy", so any control-plane condition that produced a short list —

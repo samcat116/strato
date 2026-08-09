@@ -4343,15 +4343,15 @@ extension Agent: ReconcileActuator {
                 // Blocked, not permanent (STR-199). The reason names a remedy —
                 // stop the guest, or detach — and the whole point of naming one
                 // is that applying it works: the block clears without anyone
-                // re-asking for the size, so the refusal must not consume the
-                // attempt budget that decides whether the next sync tries
-                // again. Classified permanent, this guard reported what to do
+                // re-asking for the size, so the refusal must not enter either
+                // permanent suppression or transient backoff. Classified
+                // permanent, this guard reported what to do
                 // and then ignored an operator who did it, leaving a volume
                 // permanently short of a size nothing had withdrawn.
                 //
                 // Still not transient: an operator has to see the reason, and a
-                // transient failure that outlives its three attempts is degraded
-                // with no more explanation than one that never had a remedy.
+                // transient failure would delay the next retry even after the
+                // operator applied the remedy.
                 guard isDefinitelyStopped else {
                     throw VolumeConvergenceError.blocked(
                         "refusing to grow volume \(item.id): it is attached to VM "
