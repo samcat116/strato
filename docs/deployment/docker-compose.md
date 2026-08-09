@@ -12,6 +12,13 @@ source, see [Local Development](/development/local-development).
 
 ## Install
 
+Tagged releases provide a version-pinned `strato-<version>-compose.tar.gz`
+archive containing this entire directory. It replaces the retired standalone
+`docker-compose.release.yml` and `nginx.conf` release assets, which did not
+form a complete current deployment. Download and extract the archive when
+installing a release without cloning the repository; then run the same setup
+commands below from the extracted directory.
+
 ```bash
 git clone https://github.com/samcat116/strato.git
 cd strato/deploy/compose
