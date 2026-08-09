@@ -31,10 +31,6 @@ struct AgentController: RouteCollection {
         // before.
         agents.post(":agentId", "actions", "adopt-workloads", use: adoptWorkloads)
         agents.patch(":agentId", use: patchAgent)
-        // Scope reassignment corrects the migration backfill's oldest-org
-        // guess on multi-org installs; deliberately system-admin only (it
-        // moves dedicated capacity between tenants).
-        agents.patch(":agentId", "organization", use: reassignOrganization)
     }
 
     // MARK: - Authorization
@@ -1335,11 +1331,9 @@ struct AgentController: RouteCollection {
             return try AgentResponse(from: agent)
         }
 
-        guard agent.$site.id == nil else {
-            throw Abort(
-                .conflict,
-                reason: "Agent belongs to a site; remove it from the site before changing its organization")
-        }
+        throw Abort(
+            .conflict,
+            reason: "An agent's organization cannot change independently of its required site")
         let hostedVMs = try await VM.query(on: req.db)
             .filter(\.$hypervisorId == agentId.uuidString)
             .count()

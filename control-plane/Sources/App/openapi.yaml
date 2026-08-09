@@ -10422,7 +10422,7 @@ components:
 
     CreateNetworkRequest:
       type: object
-      required: [name, projectId, subnet]
+      required: [name, projectId, subnet, siteId]
       properties:
         name:
           type: string
@@ -10561,6 +10561,7 @@ components:
         - externalAccess
         - metadataEnabled
         - resolverEnabled
+        - siteId
       properties:
         id:
           type: string
@@ -10639,7 +10640,7 @@ components:
     CreateFloatingIPPoolRequest:
       type: object
       description: Exactly one of organizationId / organizationalUnitId must be present.
-      required: [name, cidr]
+      required: [name, cidr, siteId]
       properties:
         name:
           type: string
@@ -10658,6 +10659,7 @@ components:
           format: uuid
     UpdateFloatingIPPoolRequest:
       type: object
+      required: [siteId]
       properties:
         gateway:
           type: string
@@ -10666,7 +10668,7 @@ components:
           format: uuid
     FloatingIPPool:
       type: object
-      required: [id, name, cidr, allocatedCount]
+      required: [id, name, cidr, siteId, allocatedCount]
       properties:
         id:
           type: string
@@ -13507,8 +13509,7 @@ components:
         siteId:
           type: string
           format: uuid
-          nullable: true
-          description: The site (OVN deployment) this agent belongs to, if any.
+          description: The site (OVN deployment) this agent belongs to.
         organizationId:
           type: string
           format: uuid

@@ -15,7 +15,6 @@ struct SiteController: RouteCollection {
         // Membership for agents that already exist; new nodes join via the
         // registration token's `siteId` instead.
         sites.post(":siteId", "agents", ":agentId", use: assignAgent)
-        sites.delete(":siteId", "agents", ":agentId", use: removeAgent)
     }
 
     // MARK: - Authorization
@@ -470,9 +469,8 @@ struct SiteController: RouteCollection {
             throw Abort(.conflict, reason: "Agent hosts \(hostedSandboxes) sandbox(es); delete them first")
         }
 
-        agent.$site.id = nil
-        try await agent.save(on: req.db)
-        await req.application.agentService.syncDesiredStateToFleet()
-        return try AgentResponse(from: agent)
+        throw Abort(
+            .conflict,
+            reason: "Agents require site placement; assign the agent to another site instead")
     }
 }

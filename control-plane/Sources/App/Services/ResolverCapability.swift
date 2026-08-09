@@ -50,13 +50,8 @@ enum ResolverCapability {
     /// A fleet-wide snapshot of which sites are holding the resolver back.
     struct Index: Sendable {
         private let bySite: [UUID: [String]]
-        private let siteLess: [String]
-
         init(incapable: [Agent]) {
-            self.siteLess = incapable.filter { $0.$site.id == nil }.map(\.name).sorted()
-            self.bySite = Dictionary(grouping: incapable.filter { $0.$site.id != nil }) {
-                $0.$site.id!
-            }
+            self.bySite = Dictionary(grouping: incapable) { $0.$site.id }
             .mapValues { $0.map(\.name).sorted() }
         }
 
@@ -67,8 +62,7 @@ enum ResolverCapability {
         /// never consults agents assigned to unrelated sites. Restricting this
         /// warning to the site-less complement keeps the API's explanation on
         /// the same scope as that delivery decision.
-        func incapableAgentNames(forSite siteID: UUID?) -> [String] {
-            guard let siteID else { return siteLess }
+        func incapableAgentNames(forSite siteID: UUID) -> [String] {
             return bySite[siteID] ?? []
         }
     }

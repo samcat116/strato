@@ -157,7 +157,7 @@ struct VMController: RouteCollection {
                     projectID: projectID,
                     on: db)
                 try Self.requireDHCPNetworkForHotplug(network)
-                if let requiredSite = network.$site.id, agent.$site.id != requiredSite {
+                if agent.$site.id != network.$site.id {
                     throw Abort(
                         .conflict,
                         reason: "This network is pinned to a different site than the VM's agent")

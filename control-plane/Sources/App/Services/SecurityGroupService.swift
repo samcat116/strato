@@ -507,7 +507,8 @@ enum SecurityGroupService {
                 continue
             }
             let authority: SiteNetworkAuthority.Authority
-            if let siteID = host.$site.id, let cached = authorityBySite[siteID] {
+            let siteID = host.$site.id
+            if let cached = authorityBySite[siteID] {
                 authority = cached
             } else {
                 authority = try await SiteNetworkAuthority.resolve(forAgent: host, on: db)
@@ -515,9 +516,7 @@ enum SecurityGroupService {
                 // property of the agent — a site-less host, or a pre-v4 one
                 // writing its own NB — and sharing it with a site's other
                 // hosts would claim they author their own topology too.
-                if let siteID = host.$site.id, !authority.isSelfAuthored {
-                    authorityBySite[siteID] = authority
-                }
+                authorityBySite[siteID] = authority
             }
             enforcedByHost[hostID] = enforcement(of: realization(host: host, authority: authority))
         }

@@ -549,7 +549,7 @@ struct DesiredStateAssembler {
         async throws -> Bool
     {
         guard let site, let siteID = site.id else {
-            return agent.resolverCapable
+            throw Abort(.internalServerError, reason: "Agent references a missing site")
         }
         // One query returning the offending names rather than a count plus a
         // second lookup on failure: the common answer materializes zero rows, so
@@ -1074,16 +1074,11 @@ struct DesiredStateAssembler {
         // the legacy per-node scope, which is what a missing row already does.
         guard let agent,
             let agentUUID = agent.id,
-            let siteID = agent.$site.id,
-            let site, site.id == siteID
+            let site, site.id == agent.$site.id
         else {
-            return NetworkAssemblyScope(
-                networkIDs: ownReferences,
-                authoritative: true,
-                floatingIPAgentIDs: [agentId],
-                coveredVMs: ownVMs,
-                coveredSandboxes: ownSandboxes)
+            throw Abort(.internalServerError, reason: "Cannot assemble topology without an agent site")
         }
+        let siteID = agent.$site.id
 
         guard let controllerID = site.$networkControllerAgent.id else {
             // No designated controller: nobody may author topology, so the
