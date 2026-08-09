@@ -70,8 +70,12 @@ against ~2.4s for the four targets in parallel. Keep them roughly balanced.
    slides, and the driver skips the write-back when a request left the session
    data unchanged.
 4. Secrets encryption, registry client, WebAuthn, Postgres (with TLS), then
-   ~154 ordered migrations and `autoMigrate()`. Migrations run at startup;
-   there is no separate migrate step.
+   ~154 ordered migrations, applied by `SchemaMigrator` (**not**
+   `autoMigrate()`). Migrations run at startup; there is no separate migrate
+   step, which means every replica of a rolling upgrade enters this phase at
+   once — see "Model and migration conventions" for how that is made safe
+   (STR-183). `STRATO_RUN_MIGRATIONS=false` turns a replica into a verifier: it
+   refuses to boot if anything is unapplied rather than migrating itself.
 5. Post-migration convergence: the Cedar policy set is compiled at its
    current version, stored secrets are re-encrypted, and `role_bindings` are
    backfilled from the relational mirrors (org members, project
@@ -642,6 +646,37 @@ what makes the test harness safe.
   and never query live models in a migration — snapshot the columns in a
   private model instead. Migration ordering in `configure.swift` matters when
   models select newly added columns.
+- **The migration phase is `SchemaMigrator`, not `app.autoMigrate()`**
+  (`SchemaMigrator.swift`, STR-183). Fluent's own migrator takes no lock and
+  wraps no transaction around a migration and the `_fluent_migrations` row that
+  records it, which is fine for one process and wrong for the supported
+  multi-replica deployment: concurrent boots race the same migration, and a
+  crash between the DDL and the log row leaves a half-state *no later boot can
+  get past* — every one recomputes the migration as unapplied, re-runs it, and
+  exits on `already exists`. Two properties fix that, and both follow from doing
+  the whole phase on one **pinned** connection (`db.withConnection`):
+  - A session-scoped `pg_advisory_lock` on `strato:schema-migrations`, taken by
+    polling `pg_try_advisory_lock` against a deadline
+    (`STRATO_MIGRATION_LOCK_TIMEOUT_SECONDS`, default 240) so a wedged migration
+    on another replica is named rather than waited on forever. The four-minute
+    default stays inside the Helm chart's five-minute startup-probe budget; keep
+    those settings coupled when overriding either one. It cannot be the
+    `pg_advisory_xact_lock` idiom `IPAMService`/`QuotaEnforcementService` use —
+    the phase is many transactions, so an xact lock would release at the first
+    statement boundary. A losing replica waits, then finds nothing unapplied.
+  - Each migration's `prepare` and its `MigrationLog` row commit **together**.
+    Two traps live here. `connection.transaction { … }` is a silent no-op on a
+    pinned connection — fluent-postgres-driver's `withConnection` hands back a
+    database flagged `inTransaction: true` without issuing a `BEGIN` — so the
+    transaction is opened through `TransactionControlDatabase`. And pinning is
+    what keeps the connection budget at one: a migrator drawing its own
+    connections while the lock sat on a pinned one would need a pool of ≥2 *per
+    event loop*, and Vapor's Postgres pool defaults to exactly 1.
+- `UntransactedMigration` is the documented opt-out, for the one case Postgres
+  forbids in a transaction block: `CREATE INDEX CONCURRENTLY`. No production
+  migration conforms today. Opting out gives back the crash window above, so
+  such a migration must be written to be re-runnable (`IF NOT EXISTS`, no
+  read-then-write over live rows).
 
 ## Testing
 
