@@ -60,6 +60,15 @@ struct WireProtocolTests {
         // happened, which is why the gate refuses the mutation at admission.
     }
 
+    @Test("VM network hot-plug starts at wire protocol v40")
+    func vmNetworkHotplugGate() {
+        #expect(!WireProtocol.supportsVMNetworkHotplug(38))
+        #expect(!WireProtocol.supportsVMNetworkHotplug(39))
+        #expect(WireProtocol.supportsVMNetworkHotplug(40))
+        #expect(WireProtocol.currentVersion == 40)
+        #expect(WireProtocol.minimumSupportedVersion == 38)
+    }
+
     @Test("graphics console gate starts at wire protocol v23")
     func graphicsConsoleGate() {
         // Both halves are optional fields, so a pre-v23 agent decodes the sync

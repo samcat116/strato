@@ -426,7 +426,7 @@ private actor MockEdgeActuator: ReconcileActuator {
         case .pause: presence[item.id] = .managed(.paused)
         case .shutdown: presence[item.id] = .managed(.shutdown)
         case .delete: presence.removeValue(forKey: item.id)
-        case .adopt, .resize, .attach, .detach, .export: break
+        case .adopt, .resize, .attach, .detach, .export, .reconfigureNetworks: break
         }
     }
 

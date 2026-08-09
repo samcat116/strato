@@ -1102,6 +1102,10 @@ public struct ObservedVMState: Codable, Sendable {
     /// `Optional` contract as `guestInfo`. Purely informational: it never
     /// participates in convergence.
     public let memoryStats: VMMemoryStats?
+    /// Interface ids present in the agent's durable VM manifest (wire v40).
+    /// Nil means the reporting agent predates per-NIC reconciliation; an empty
+    /// array is an authoritative networkless VM.
+    public let appliedNetworkInterfaceIds: [UUID]?
 
     public init(
         vmId: UUID,
@@ -1111,7 +1115,8 @@ public struct ObservedVMState: Codable, Sendable {
         lastError: String? = nil,
         failedGeneration: Int64? = nil,
         guestInfo: GuestInfo? = nil,
-        memoryStats: VMMemoryStats? = nil
+        memoryStats: VMMemoryStats? = nil,
+        appliedNetworkInterfaceIds: [UUID]? = nil
     ) {
         self.vmId = vmId
         self.status = status
@@ -1121,6 +1126,7 @@ public struct ObservedVMState: Codable, Sendable {
         self.failedGeneration = failedGeneration
         self.guestInfo = guestInfo
         self.memoryStats = memoryStats
+        self.appliedNetworkInterfaceIds = appliedNetworkInterfaceIds
     }
 }
 

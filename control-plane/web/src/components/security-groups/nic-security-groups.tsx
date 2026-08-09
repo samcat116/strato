@@ -97,10 +97,12 @@ export function NicSecurityGroupMenu({
   target,
   nic,
   groups,
+  disabled = false,
 }: {
   target: Pick<AttachSecurityGroupRequest, "vmId" | "sandboxId">;
   nic: SecurityGroupNIC;
   groups: SecurityGroup[];
+  disabled?: boolean;
 }) {
   const attach = useAttachSecurityGroup();
   const detach = useDetachSecurityGroup();
@@ -149,7 +151,7 @@ export function NicSecurityGroupMenu({
           size="sm"
           variant="ghost"
           className="text-foreground/80 hover:text-foreground hover:bg-accent"
-          disabled={busy}
+          disabled={busy || disabled}
           title="Security groups"
         >
           <Shield className="h-4 w-4" />

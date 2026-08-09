@@ -362,6 +362,74 @@ final class DesiredStateReconciliationTests {
 
     // MARK: - Observed-state report application
 
+    @Test("A detaching NIC retains related rows until an authoritative applied-ID report omits it")
+    func detachedNICCleanupWaitsForAgentConfirmation() async throws {
+        try await withVMTestApp { app, user, vm, _ in
+            let agentId = try await self.registerAgent(
+                app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
+            let network = try await self.network(app: app, vm: vm, named: "detach-net")
+            let networkID = try network.requireID()
+
+            vm.bumpGeneration()
+            try await vm.save(on: app.db)
+            let nic = VMNetworkInterface(
+                vmID: try vm.requireID(), logicalNetworkID: networkID,
+                macAddress: "52:54:00:de:7a:01", deviceName: "net0", orderIndex: 0)
+            nic.attachGeneration = 0
+            nic.detachGeneration = vm.generation
+            try await nic.save(on: app.db)
+            let nicID = try nic.requireID()
+            let address = VMInterfaceAddress(
+                interfaceID: nicID, logicalNetworkID: networkID, family: .ipv4,
+                address: "192.168.1.50", prefixLength: 24, gateway: "192.168.1.1")
+            try await address.save(on: app.db)
+            let group = try await SecurityGroupService.ensureDefaultGroup(
+                projectID: vm.$project.id, on: app.db)
+            let membership = VMInterfaceSecurityGroup(
+                interfaceID: nicID, securityGroupID: try group.requireID())
+            try await membership.save(on: app.db)
+            let pool = FloatingIPPool(
+                name: "detach-pool", cidr: "203.0.113.0/24", gateway: "203.0.113.1")
+            try await pool.save(on: app.db)
+            let floatingIP = FloatingIP(
+                poolID: try pool.requireID(), address: "203.0.113.50",
+                projectID: vm.$project.id, interfaceID: nicID,
+                createdByID: try user.requireID())
+            try await floatingIP.save(on: app.db)
+
+            func apply(appliedIDs: [UUID]) async throws {
+                let envelope = try self.report(
+                    agentId: agentId,
+                    vms: [
+                        ObservedVMState(
+                            vmId: try vm.requireID(), status: .shutdown,
+                            observedGeneration: vm.generation,
+                            appliedNetworkInterfaceIds: appliedIDs)
+                    ])
+                await app.agentService.applyObservedStateReport(
+                    envelope, fromAgentKey: agentKey("recon-agent"))
+            }
+
+            // A settled generation alone is insufficient: the durable agent
+            // manifest still says this NIC is applied, so every related row is
+            // retained for a safe retry.
+            try await apply(appliedIDs: [nicID])
+            #expect(try await VMNetworkInterface.find(nicID, on: app.db) != nil)
+            #expect(try await VMInterfaceAddress.find(address.id, on: app.db) != nil)
+            #expect(try await VMInterfaceSecurityGroup.find(membership.id, on: app.db) != nil)
+            #expect(try await FloatingIP.find(floatingIP.id, on: app.db)?.$interface.id == nicID)
+
+            // Only an explicit, authoritative absence releases the retained
+            // NIC. Its FK cascades release leases and memberships; the
+            // floating IP allocation remains reserved but becomes unattached.
+            try await apply(appliedIDs: [])
+            #expect(try await VMNetworkInterface.find(nicID, on: app.db) == nil)
+            #expect(try await VMInterfaceAddress.find(address.id, on: app.db) == nil)
+            #expect(try await VMInterfaceSecurityGroup.find(membership.id, on: app.db) == nil)
+            #expect(try await FloatingIP.find(floatingIP.id, on: app.db)?.$interface.id == nil)
+        }
+    }
+
     @Test("A converged report updates status and generation, and clears the deadline")
     func reportRecordsConvergence() async throws {
         try await withVMTestApp { app, _, vm, _ in

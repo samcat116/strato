@@ -299,6 +299,23 @@ struct ReconciliationProtocolTests {
             """
         let decoded = try decodeJSON(ObservedVMState.self, from: legacy)
         #expect(decoded.memoryStats == nil)
+        #expect(decoded.appliedNetworkInterfaceIds == nil)
+    }
+
+    @Test("ObservedVMState carries applied interface ids and preserves an authoritative empty list")
+    func observedStateAppliedInterfaceIDsRoundTrip() throws {
+        let first = UUID()
+        let withNIC = try roundTrip(
+            ObservedVMState(
+                vmId: UUID(), status: .running, observedGeneration: 8,
+                appliedNetworkInterfaceIds: [first]))
+        #expect(withNIC.appliedNetworkInterfaceIds == [first])
+
+        let networkless = try roundTrip(
+            ObservedVMState(
+                vmId: UUID(), status: .shutdown, observedGeneration: 9,
+                appliedNetworkInterfaceIds: []))
+        #expect(networkless.appliedNetworkInterfaceIds == [])
     }
 
     @Test("DesiredVMStatus decoding is strict: unknown values fail the sync")

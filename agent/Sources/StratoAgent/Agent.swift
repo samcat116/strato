@@ -3525,6 +3525,10 @@ extension Agent: ReconcileActuator {
         }
     }
 
+    func observedNetworkSpecs() async -> [String: [NetworkSpec]] {
+        managedVMs.mapValues { $0.spec.networks }
+    }
+
     /// What this host has already applied for each workload's edges (STR-151),
     /// read from the manifest entries — the same durable record that survives
     /// the restart the nonces exist to be safe across.
@@ -3846,6 +3850,8 @@ extension Agent: ReconcileActuator {
             try await reconcileService(for: item.vmId).resumeVM(vmId: item.vmId)
         case .resize:
             try await reconcileResize(item)
+        case .reconfigureNetworks:
+            try await reconcileNetworks(item)
         case .shutdown:
             try await reconcileService(for: item.vmId).shutdownVM(vmId: item.vmId)
         case .delete:
@@ -3946,7 +3952,8 @@ extension Agent: ReconcileActuator {
             try await volumeReconcileAttach(item)
         case .detach:
             try await volumeReconcileDetach(item)
-        case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore:
+        case .adopt, .boot, .pause, .resume, .shutdown, .export, .reboot, .restore,
+            .reconfigureNetworks:
             // A volume has no run state, nowhere to be exported to, and no
             // edges to apply; the planner never emits these.
             throw VolumeConvergenceError.unsupported("step \(step) is not applicable to a volume")
@@ -3963,7 +3970,8 @@ extension Agent: ReconcileActuator {
             try await snapshotReconcileDelete(item)
         case .export:
             try await snapshotReconcileExport(item)
-        case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach, .reboot, .restore:
+        case .adopt, .boot, .pause, .resume, .shutdown, .resize, .attach, .detach, .reboot, .restore,
+            .reconfigureNetworks:
             // An artifact is frozen bytes: it has no run state, no size that
             // can change, nothing to plug in, and no edges of its own — a
             // restore acts on the artifact's *parent*. The planner never emits
@@ -4528,7 +4536,8 @@ extension Agent: ReconcileActuator {
                 vmId: item.vmId, spec: desired.spec, imageInfo: desired.imageInfo,
                 networkAttachments: attachments, metadata: desired.metadata)
         } catch {
-            await networkOrchestrator.teardownAttachments(vmId: item.vmId, count: attachments.count)
+            await networkOrchestrator.teardownAttachments(
+                vmId: item.vmId, networks: desired.spec.networks)
             vsockCIDs.rollBack(lease)
             throw error
         }
@@ -4574,12 +4583,75 @@ extension Agent: ReconcileActuator {
         let service = try reconcileService(for: item.vmId)
         try await service.resizeVM(vmId: item.vmId, spec: desired.spec)
 
-        managedVMs[item.vmId] = entry.with(spec: desired.spec)
+        managedVMs[item.vmId] = entry.with(spec: entry.spec.withSizing(from: desired.spec))
         persistManifest()
         await sendVMLog(
             vmId: item.vmId, level: .info, eventType: .operation,
             message: "VM resized to \(desired.spec.cpus) vCPUs and \(desired.spec.memoryBytes) bytes of memory",
             operation: "resize")
+    }
+
+    /// Converges the durable NIC manifest against desired state. A legacy
+    /// manifest pairs by MAC and is hydrated with v40 identity fields without
+    /// changing a device; array position is used only when neither side has an
+    /// identity to match.
+    private func reconcileNetworks(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desired else {
+            throw HypervisorServiceError.invalidConfiguration(
+                "network work item without a desired entry")
+        }
+        guard let entry = managedVMs[item.vmId] else {
+            throw HypervisorServiceError.vmNotFound(item.vmId)
+        }
+        guard entry.hypervisorType == .qemu else {
+            throw HypervisorServiceError.notSupported(
+                "VM network hot-plug is supported only for QEMU VMs")
+        }
+
+        let service = try reconcileService(for: item.vmId)
+        let current = entry.spec.networks
+        let target = desired.spec.networks
+        let pairs = VMNetworkInterfaceDiff.between(current: current, desired: target)
+
+        let status = try await service.getVMStatus(vmId: item.vmId)
+        if status != .running && status != .paused {
+            // On an inactive domain, widen the stored PCIe root complex before
+            // config-only device changes consume another slot.
+            try await service.redefineVM(vmId: item.vmId, spec: desired.spec)
+        }
+
+        for oldIndex in pairs.removed {
+            let spec = current[oldIndex]
+            try await service.detachNetworkInterface(vmId: item.vmId, spec: spec)
+            try await networkOrchestrator.removeAttachment(
+                vmId: item.vmId, spec: spec, fallbackIndex: oldIndex)
+        }
+
+        for newIndex in pairs.added {
+            let spec = target[newIndex]
+            let attachment = try await networkOrchestrator.prepareAttachment(
+                vmId: item.vmId,
+                spec: spec,
+                fallbackIndex: newIndex,
+                metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
+            do {
+                try await service.attachNetworkInterface(
+                    vmId: item.vmId, spec: spec, attachment: attachment)
+            } catch {
+                await networkOrchestrator.teardownAttachments(
+                    vmId: item.vmId, networks: [spec])
+                throw error
+            }
+        }
+
+        // Identity hydration and every add/remove become durable only after
+        // the complete operation succeeds. A replay then observes libvirt's
+        // already-present/absent result and finishes any interrupted cleanup.
+        managedVMs[item.vmId] = entry.with(spec: entry.spec.withNetworks(target))
+        persistManifest()
+        await sendVMLog(
+            vmId: item.vmId, level: .info, eventType: .operation,
+            message: "VM network interfaces reconciled", operation: "network-hotplug")
     }
 
     /// Re-adopts an orphan that is being deleted, classifying a failure by
@@ -4644,7 +4716,7 @@ extension Agent: ReconcileActuator {
                 // Host-side network resources are derived from deterministic
                 // names, so they can be torn down even with no live session.
                 await networkOrchestrator.teardownAttachments(
-                    vmId: item.vmId, count: entry.spec.networks.count)
+                    vmId: item.vmId, networks: entry.spec.networks)
                 return
             }
         }
@@ -4671,7 +4743,7 @@ extension Agent: ReconcileActuator {
         // Tear down the VM's host-side network resources now that the
         // hypervisor session is gone (best-effort; never blocks deletion).
         await networkOrchestrator.teardownAttachments(
-            vmId: item.vmId, count: entry.spec.networks.count)
+            vmId: item.vmId, networks: entry.spec.networks)
 
         managedVMs.removeValue(forKey: item.vmId)
         orphanedVMs.removeValue(forKey: item.vmId)
@@ -4707,7 +4779,7 @@ extension Agent: ReconcileActuator {
             try await sandboxReconcileDelete(item)
         case .restore:
             try await sandboxReconcileRestore(item)
-        case .pause, .resume, .resize, .reboot, .attach, .detach, .export:
+        case .pause, .resume, .resize, .reboot, .attach, .detach, .export, .reconfigureNetworks:
             // Not in the sandbox step vocabulary (v1); the planner never
             // emits these for sandbox items. `.reboot` in particular is a VM
             // edge only: `POST /api/sandboxes/:id/restart` is expressed as a
@@ -4820,7 +4892,7 @@ extension Agent: ReconcileActuator {
                 registryCredential: desired.registryCredential, networkAttachments: attachments)
         } catch {
             await networkOrchestrator.teardownAttachments(
-                vmId: item.id, count: attachments.count, placement: placement)
+                vmId: item.id, networks: networks, placement: placement)
             throw error
         }
 
@@ -4851,7 +4923,7 @@ extension Agent: ReconcileActuator {
                 // Host-side network resources are derived from deterministic
                 // names, so they can be torn down even with no live session.
                 await networkOrchestrator.teardownAttachments(
-                    vmId: item.id, count: entry.sandboxSpec?.network != nil ? 1 : 0,
+                    vmId: item.id, networks: entry.sandboxSpec?.network.map { [$0] } ?? [],
                     placement: sandboxTeardownPlacement(sandboxId: item.id))
                 logger.warning(
                     "Deleted orphaned sandbox from manifest; any surviving process must be cleaned up manually",
@@ -4866,7 +4938,7 @@ extension Agent: ReconcileActuator {
         try await requireSandboxRuntime().deleteSandbox(sandboxId: item.id)
 
         await networkOrchestrator.teardownAttachments(
-            vmId: item.id, count: entry.sandboxSpec?.network != nil ? 1 : 0,
+            vmId: item.id, networks: entry.sandboxSpec?.network.map { [$0] } ?? [],
             placement: sandboxTeardownPlacement(sandboxId: item.id))
 
         managedSandboxes.removeValue(forKey: item.id)
@@ -4908,7 +4980,9 @@ extension Agent: ReconcileActuator {
                     // memory stats (issue #567); nil until the slow poll first
                     // sees a responsive qga / reporting balloon on this VM.
                     guestInfo: guestInfoCache[vmId],
-                    memoryStats: memoryStatsCache[vmId]
+                    memoryStats: memoryStatsCache[vmId],
+                    appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
+                        in: entry.spec.networks)
                 ))
             reported.insert(vmId)
         }
@@ -4918,7 +4992,7 @@ extension Agent: ReconcileActuator {
         // queued) would fail pending operations on the control plane seconds
         // before the registration sync's adopt converges them. Real adoption
         // failures surface through the reconciler's failure tracking.
-        for vmId in orphanedVMs.keys where !reported.contains(vmId) {
+        for (vmId, entry) in orphanedVMs where !reported.contains(vmId) {
             guard let uuid = UUID(uuidString: vmId) else { continue }
             observed.append(
                 ObservedVMState(
@@ -4927,7 +5001,9 @@ extension Agent: ReconcileActuator {
                     observedGeneration: await reconciler.observedGeneration(for: vmId),
                     convergencePhase: await reconciler.convergencePhase(for: vmId),
                     lastError: await reconciler.lastError(for: vmId),
-                    failedGeneration: await reconciler.failedGeneration(for: vmId)
+                    failedGeneration: await reconciler.failedGeneration(for: vmId),
+                    appliedNetworkInterfaceIds: AppliedNetworkInterfaceInventory.ids(
+                        in: entry.spec.networks)
                 ))
             reported.insert(vmId)
         }

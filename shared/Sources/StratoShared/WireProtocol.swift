@@ -822,20 +822,23 @@ public enum WireProtocol {
     /// nobody out. During the v38→v39 rollout, `supportsMetadataOptOut` gates
     /// both admission and placement so an older agent cannot silently ignore a
     /// security control while the API reports it as applied.
-    public static let currentVersion = 39
+    /// Version 40: stable VM NIC identity and applied-interface reporting for
+    /// declarative QEMU network hot-plug (STR-202).
+    public static let currentVersion = 40
 
     /// The lowest protocol version this build will talk to at all.
     ///
     /// v38 closed the historical skew window and removed every legacy dual
-    /// path. v39 deliberately keeps v38 as the floor for one rolling-upgrade
-    /// window: the only new behavior is the optional metadata kill switch, and
-    /// `supportsMetadataOptOut` guards every place where an older peer could
-    /// silently ignore it. All other messages retain v38's lockstep shape.
+    /// path. v39 and v40 deliberately keep v38 as the floor for rolling
+    /// upgrades: both revisions add optional fields, and their behavior changes
+    /// are protected by `supportsMetadataOptOut` and
+    /// `supportsVMNetworkHotplug`. Create-time NIC arrays remain compatible
+    /// because pre-v40 agents already realize every `NetworkSpec` they receive.
     ///
     /// Moving this floor is a deployment decision. An agent below it cannot
     /// connect, and the declarative self-update rides the sync it can no longer
     /// receive. Once no v38 agents remain, the floor can move to 39 and this
-    /// one feature gate can be retired. If a broader skew window is ever
+    /// these feature gates can be retired. If a broader skew window is ever
     /// reintroduced, resurrect the pre-v38 gates from history rather than
     /// re-deriving their silent-failure cases.
     public static let minimumSupportedVersion = 38
@@ -844,10 +847,18 @@ public enum WireProtocol {
     /// switch (see `currentVersion` version 39 notes).
     public static let metadataOptOutMinimumVersion = 39
 
+    /// The lowest protocol version that can reconcile a VM's NIC set after
+    /// creation and report the applied interface identities.
+    public static let vmNetworkHotplugMinimumVersion = 40
+
     /// Whether an agent registered with `version` enforces
     /// `InstanceMetadata.serviceEnabled`.
     public static func supportsMetadataOptOut(_ version: Int) -> Bool {
         version >= metadataOptOutMinimumVersion
+    }
+
+    public static func supportsVMNetworkHotplug(_ version: Int) -> Bool {
+        version >= vmNetworkHotplugMinimumVersion
     }
 
     /// The JSON encoder for all wire messages. Dates are pinned — explicitly and

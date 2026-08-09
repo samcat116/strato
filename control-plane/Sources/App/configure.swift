@@ -872,6 +872,10 @@ public func configure(_ app: Application) async throws {
     // against SSRF no longer means moving it to a network of its own.
     app.migrations.add(AddMetadataEnabledToVM())
 
+    // STR-202: stable per-NIC mutation generations and an unambiguous device
+    // order, used by deferred detach cleanup and QEMU network hot-plug.
+    app.migrations.add(AddVMNetworkInterfaceLifecycle())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.

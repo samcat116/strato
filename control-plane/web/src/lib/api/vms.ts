@@ -12,6 +12,8 @@ import type {
   VMSnapshot,
   CreateVMSnapshotRequest,
   VNCSession,
+  VMNetworkInterface,
+  CreateVMNetworkInterfaceRequest,
 } from "@/types/api";
 import { LIST_PAGE_LIMIT } from "@/types/api";
 
@@ -37,6 +39,29 @@ export const vmsApi = {
 
   create(data: CreateVMRequest): Promise<AcceptedMutation<VM>> {
     return api.post<AcceptedMutation<VM>>("/api/vms", data);
+  },
+
+  listInterfaces(id: string): Promise<VMNetworkInterface[]> {
+    return api.get<VMNetworkInterface[]>(`/api/vms/${id}/interfaces`);
+  },
+
+  attachInterface(
+    id: string,
+    data: CreateVMNetworkInterfaceRequest
+  ): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(`/api/vms/${id}/interfaces`, data);
+  },
+
+  detachInterface(id: string, interfaceId: string): Promise<AcceptedMutation<VM>> {
+    return api.delete<AcceptedMutation<VM>>(
+      `/api/vms/${id}/interfaces/${interfaceId}`
+    );
+  },
+
+  retryInterface(id: string, interfaceId: string): Promise<AcceptedMutation<VM>> {
+    return api.post<AcceptedMutation<VM>>(
+      `/api/vms/${id}/interfaces/${interfaceId}/retry`
+    );
   },
 
   // Mint a single-use graphics console session. Throws ApiError with the

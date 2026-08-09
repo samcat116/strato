@@ -27,6 +27,22 @@ final class VMNetworkSelectionTests {
         var hypervisorType: String? = nil
     }
 
+    struct CreateNICBody: Content {
+        let networkId: UUID?
+        let networkName: String?
+        var securityGroupIds: [UUID]? = nil
+        var mtu: Int? = nil
+    }
+
+    struct CreateMultiVMBody: Content {
+        let name: String
+        let imageId: UUID
+        let projectId: UUID
+        let networkInterfaces: [CreateNICBody]
+        var networkId: UUID? = nil
+        var securityGroupIds: [UUID]? = nil
+    }
+
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
 
     private func withApp(
@@ -94,6 +110,134 @@ final class VMNetworkSelectionTests {
             #expect(address?.address.hasPrefix("10.100.0.") == true)
             #expect(address?.prefixLength == 24)
             #expect(address?.gateway == "10.100.0.1")
+        }
+    }
+
+    @Test("POST /api/vms creates multiple stable NICs, including duplicate network selections")
+    func createWithMultipleInterfaces() async throws {
+        try await withApp { app, _, _, project, image, token in
+            let network = try #require(
+                try await LogicalNetwork.query(on: app.db)
+                    .filter(\.$project.$id == project.id!)
+                    .filter(\.$name == "default")
+                    .first())
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateMultiVMBody(
+                        name: "multi-nic-vm",
+                        imageId: image.id!,
+                        projectId: project.id!,
+                        networkInterfaces: [
+                            CreateNICBody(networkId: network.id, networkName: nil, mtu: 1400),
+                            CreateNICBody(networkId: network.id, networkName: nil, mtu: 9000),
+                        ]))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let vm = try #require(
+                try await VM.query(on: app.db).filter(\.$name == "multi-nic-vm").first())
+            let nics = try await VMNetworkInterface.query(on: app.db)
+                .filter(\.$vm.$id == vm.id!)
+                .with(\.$addresses)
+                .sort(\.$orderIndex)
+                .all()
+            #expect(nics.count == 2)
+            #expect(nics.map(\.orderIndex) == [0, 1])
+            #expect(nics.map(\.deviceName) == ["net0", "net1"])
+            #expect(nics.map(\.mtu) == [1400, 9000])
+            #expect(Set(nics.compactMap(\.ipv4Address?.address)).count == 2)
+            #expect(
+                try await VMInterfaceSecurityGroup.query(on: app.db)
+                    .filter(\.$interface.$id ~~ nics.compactMap(\.id)).count() == 2)
+
+            // Exercise the same create-derived rows through the wire spec the
+            // agent consumes. This is the API-reachable source shape for the
+            // existing two-interface domain XML golden.
+            let spec = VMSpecBuilder.buildVMSpec(
+                from: vm, image: image, networkInterfaces: nics,
+                networks: [try network.requireID(): network])
+            #expect(spec.networks.map(\.interfaceId) == nics.map(\.id))
+            #expect(spec.networks.map(\.deviceName) == ["net0", "net1"])
+            #expect(spec.networks.map(\.orderIndex) == [0, 1])
+            #expect(spec.networks.map(\.mtu) == [1400, 9000])
+        }
+    }
+
+    @Test("POST /api/vms rejects mixed scalar and multi-NIC forms")
+    func createRejectsMixedNetworkForms() async throws {
+        try await withApp { app, _, _, project, image, token in
+            let network = try #require(
+                try await LogicalNetwork.query(on: app.db)
+                    .filter(\.$project.$id == project.id!)
+                    .first())
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateMultiVMBody(
+                        name: "mixed-network-vm",
+                        imageId: image.id!,
+                        projectId: project.id!,
+                        networkInterfaces: [
+                            CreateNICBody(networkId: network.id, networkName: nil)
+                        ],
+                        networkId: network.id))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+            #expect(try await VM.query(on: app.db).filter(\.$name == "mixed-network-vm").count() == 0)
+        }
+    }
+
+    @Test("POST /api/vms enforces the eight-interface creation limit")
+    func createRejectsNineInterfaces() async throws {
+        try await withApp { app, _, _, project, image, token in
+            let network = try #require(
+                try await LogicalNetwork.query(on: app.db)
+                    .filter(\.$project.$id == project.id!)
+                    .first())
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateMultiVMBody(
+                        name: "nine-nic-vm",
+                        imageId: image.id!,
+                        projectId: project.id!,
+                        networkInterfaces: (0..<9).map { _ in
+                            CreateNICBody(networkId: network.id, networkName: nil)
+                        }))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
+    @Test("POST /api/vms enforces the IPv6 minimum MTU per interface")
+    func createRejectsIPv6InterfaceBelowMinimumMTU() async throws {
+        try await withApp { app, user, _, project, image, token in
+            let network = LogicalNetwork(
+                name: "ipv6-mtu-net", subnet: "10.102.0.0/24", gateway: "10.102.0.1",
+                subnet6: "fd00:102::/64", gateway6: "fd00:102::1",
+                projectID: try project.requireID(), createdByID: try user.requireID())
+            try await network.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateMultiVMBody(
+                        name: "low-ipv6-mtu-vm", imageId: try image.requireID(),
+                        projectId: try project.requireID(),
+                        networkInterfaces: [
+                            CreateNICBody(
+                                networkId: try network.requireID(), networkName: nil, mtu: 1_279)
+                        ]))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+            #expect(
+                try await VM.query(on: app.db)
+                    .filter(\.$name == "low-ipv6-mtu-vm").count() == 0)
         }
     }
 

@@ -4,6 +4,24 @@ import SQLKit
 import Vapor
 import StratoShared
 
+struct CreateVMNetworkInterfaceRequest: Content {
+    let networkId: UUID?
+    let networkName: String?
+    let securityGroupIds: [UUID]?
+    let mtu: Int?
+
+    func validate(path: String) throws {
+        guard (networkId == nil) != (networkName == nil) else {
+            throw Abort(.badRequest, reason: "\(path) must specify exactly one of 'networkId' or 'networkName'")
+        }
+        try Validate.list(
+            securityGroupIds, "\(path).securityGroupIds", max: SecurityGroup.maxGroupsPerNIC)
+        if let mtu, !(68...65_535).contains(mtu) {
+            throw Abort(.badRequest, reason: "\(path).mtu must be between 68 and 65535")
+        }
+    }
+}
+
 struct VMController: RouteCollection {
     /// Validates caller-supplied cloud-init user data: bounded in size and
     /// starting with a header cloud-init actually dispatches on — a payload
@@ -66,6 +84,12 @@ struct VMController: RouteCollection {
             vm.post("resume", use: resume)
             vm.get("status", use: status)
             vm.get("operations", use: listOperations)
+            vm.get("interfaces", use: listInterfaces)
+            vm.post("interfaces", use: attachInterface)
+            vm.group("interfaces", ":interfaceID") { interface in
+                interface.delete(use: detachInterface)
+                interface.post("retry", use: retryInterfaceMutation)
+            }
             // Full-VM checkpoints (issue #564); handlers live in
             // VMSnapshotController.swift.
             vm.post("snapshots", use: createSnapshot)
@@ -85,6 +109,186 @@ struct VMController: RouteCollection {
 
         return try await OperationFacade.history(
             resourceKind: .virtualMachine, resourceID: vmID, limit: limit, on: req.db)
+    }
+
+    func listInterfaces(req: Request) async throws -> [NetworkInterfaceResponse] {
+        let vm = try await fetchVMWithPermission(req: req, permission: "read")
+        try await Self.loadInterfaces(for: vm, on: req.db)
+        return vm.networkInterfaces.inDeviceOrder.map { NetworkInterfaceResponse(from: $0, vm: vm) }
+    }
+
+    func attachInterface(req: Request) async throws -> Response {
+        let user = try req.requireActingUser("Attaching a VM network interface")
+        let vm = try await fetchVMWithPermission(req: req, permission: "update")
+        guard vm.hypervisorType == .qemu else {
+            throw Abort(.conflict, reason: "Post-create network-interface changes are supported only for QEMU VMs")
+        }
+        let request = try req.content.decode(CreateVMNetworkInterfaceRequest.self)
+        try request.validate(path: "interface")
+        let projectID = vm.$project.id
+        let vmID = try vm.requireID()
+        let requestedGroups = try await SecurityGroupService.resolveRequestedGroupIDs(
+            request.securityGroupIds, projectID: projectID, on: req.db)
+        let userID = try user.requireID()
+
+        let accepted = try await Self.retryingOnConstraintFailure {
+            try await req.resourceMutation.accept(
+                .attach, on: vm, actor: .user(userID), dispatch: .stateSync,
+                on: req.db, app: req.application
+            ) { @Sendable db in
+                let agent = try await Self.requireNetworkHotplugCapableAgent(vm, on: db)
+                let existing = try await VMNetworkInterface.query(on: db)
+                    .filter(\.$vm.$id == vmID)
+                    .all()
+                guard existing.count < VMNetworkInterface.maxInterfacesPerVM else {
+                    throw Abort(
+                        .conflict,
+                        reason: "A VM may retain at most \(VMNetworkInterface.maxInterfacesPerVM) network interfaces")
+                }
+                let used = Set(existing.map(\.orderIndex))
+                guard let orderIndex = (0..<VMNetworkInterface.maxInterfacesPerVM).first(where: { !used.contains($0) })
+                else {
+                    throw Abort(.conflict, reason: "No free VM network-interface slot is available")
+                }
+
+                let network = try await LogicalNetworkService.resolveForWorkloadCreate(
+                    requestedID: request.networkId,
+                    requestedName: request.networkName,
+                    projectID: projectID,
+                    on: db)
+                if let requiredSite = network.$site.id, agent.$site.id != requiredSite {
+                    throw Abort(
+                        .conflict,
+                        reason: "This network is pinned to a different site than the VM's agent")
+                }
+                if let mtu = request.mtu, network.subnet6 != nil, mtu < 1_280 {
+                    throw Abort(.badRequest, reason: "interface.mtu must be at least 1280 on an IPv6 network")
+                }
+                let networkID = try network.requireID()
+                if let hostname = vm.hostname {
+                    let zones = try await DNSZoneService.registrationZones(networkIDs: [networkID], on: db)
+                    _ = try await DNSZoneService.validatedExplicitHostname(
+                        hostname, forVM: vmID, in: zones, on: db)
+                }
+
+                vm.bumpGeneration()
+                let interface = VMNetworkInterface(
+                    vmID: vmID,
+                    logicalNetworkID: networkID,
+                    macAddress: VMNetworkInterface.generateMACAddress(),
+                    mtu: request.mtu,
+                    deviceName: "net\(orderIndex)",
+                    orderIndex: orderIndex)
+                interface.attachGeneration = vm.generation
+                try await interface.save(on: db)
+                let interfaceID = try interface.requireID()
+
+                let groupIDs: [UUID]
+                if requestedGroups.isEmpty {
+                    let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
+                        projectID: projectID, on: db)
+                    groupIDs = [try defaultGroup.requireID()]
+                } else {
+                    groupIDs = requestedGroups
+                }
+                for groupID in groupIDs {
+                    try await VMInterfaceSecurityGroup(
+                        interfaceID: interfaceID, securityGroupID: groupID
+                    ).save(on: db)
+                }
+
+                let allocation = try await IPAMService.allocateIP(for: network, on: db)
+                try await VMInterfaceAddress(
+                    interfaceID: interfaceID,
+                    logicalNetworkID: networkID,
+                    family: .ipv4,
+                    address: allocation.ipAddress,
+                    prefixLength: allocation.prefixLength,
+                    gateway: network.gateway
+                ).save(on: db)
+                if let allocation6 = try await IPAMService.allocateIPv6(for: network, on: db) {
+                    try await VMInterfaceAddress(
+                        interfaceID: interfaceID,
+                        logicalNetworkID: networkID,
+                        family: .ipv6,
+                        address: allocation6.ipAddress,
+                        prefixLength: allocation6.prefixLength,
+                        gateway: network.gateway6
+                    ).save(on: db)
+                }
+            }
+        }
+        return try await Self.acceptedResponse(for: vm, accepted, on: req)
+    }
+
+    func detachInterface(req: Request) async throws -> Response {
+        try await mutateInterface(req: req, requestedKind: .detach)
+    }
+
+    func retryInterfaceMutation(req: Request) async throws -> Response {
+        try await mutateInterface(req: req, requestedKind: nil)
+    }
+
+    private func mutateInterface(req: Request, requestedKind: VMOperationKind?) async throws -> Response {
+        let user = try req.requireActingUser("Mutating a VM network interface")
+        let vm = try await fetchVMWithPermission(req: req, permission: "update")
+        guard vm.hypervisorType == .qemu else {
+            throw Abort(.conflict, reason: "Post-create network-interface changes are supported only for QEMU VMs")
+        }
+        guard let interfaceID = req.parameters.get("interfaceID", as: UUID.self) else {
+            throw Abort(.badRequest, reason: "Invalid interface ID")
+        }
+        let vmID = try vm.requireID()
+        guard
+            let initial = try await VMNetworkInterface.query(on: req.db)
+                .filter(\.$id == interfaceID)
+                .filter(\.$vm.$id == vmID)
+                .first()
+        else {
+            throw Abort(.notFound, reason: "Network interface not found")
+        }
+
+        let kind: VMOperationKind
+        if let requestedKind {
+            kind = requestedKind
+        } else if let failedGeneration = vm.failedGeneration,
+            initial.detachGeneration == failedGeneration
+        {
+            kind = .detach
+        } else if let failedGeneration = vm.failedGeneration,
+            initial.attachGeneration == failedGeneration
+        {
+            kind = .attach
+        } else {
+            throw Abort(.conflict, reason: "This network interface has no failed mutation to retry")
+        }
+
+        let userID = try user.requireID()
+        let accepted = try await req.resourceMutation.accept(
+            kind, on: vm, actor: .user(userID), dispatch: .stateSync,
+            on: req.db, app: req.application
+        ) { @Sendable db in
+            _ = try await Self.requireNetworkHotplugCapableAgent(vm, on: db)
+            guard
+                let interface = try await VMNetworkInterface.query(on: db)
+                    .filter(\.$id == interfaceID)
+                    .filter(\.$vm.$id == vmID)
+                    .first()
+            else {
+                throw Abort(.notFound, reason: "Network interface no longer exists")
+            }
+            vm.bumpGeneration()
+            if kind == .detach {
+                interface.detachGeneration = vm.generation
+            } else {
+                guard interface.detachGeneration == nil else {
+                    throw Abort(.conflict, reason: "A detaching interface cannot be retried as an attach")
+                }
+                interface.attachGeneration = vm.generation
+            }
+            try await interface.save(on: db)
+        }
+        return try await Self.acceptedResponse(for: vm, accepted, on: req)
     }
 
     /// GET /api/vms
@@ -215,6 +419,7 @@ struct VMController: RouteCollection {
             let cmdline: String?
             let networkId: UUID?
             let networkName: String?
+            let networkInterfaces: [CreateVMNetworkInterfaceRequest]?
             // SSH public key authorized for the guest's default user (cloud-init).
             var sshPublicKey: String?
             // Cloud-init user data, verbatim (#cloud-config, #! script, MIME
@@ -258,6 +463,22 @@ struct VMController: RouteCollection {
                 // through an O(n²) dedupe, so an unbounded list is work done
                 // before the guard rather than instead of it.
                 try Validate.list(securityGroupIds, "securityGroupIds", max: SecurityGroup.maxGroupsPerNIC)
+                try Validate.list(
+                    networkInterfaces, "networkInterfaces", max: VMNetworkInterface.maxInterfacesPerVM)
+                if let networkInterfaces {
+                    guard !networkInterfaces.isEmpty else {
+                        throw Abort(.badRequest, reason: "'networkInterfaces' must contain at least one interface")
+                    }
+                    guard networkId == nil, networkName == nil, securityGroupIds == nil else {
+                        throw Abort(
+                            .badRequest,
+                            reason:
+                                "'networkInterfaces' cannot be combined with legacy network or security-group fields")
+                    }
+                    for (index, interface) in networkInterfaces.enumerated() {
+                        try interface.validate(path: "networkInterfaces[\(index)]")
+                    }
+                }
             }
         }
 
@@ -300,19 +521,33 @@ struct VMController: RouteCollection {
         )
         let projectId = try project.requireID()
 
-        // The NIC's logical network is resolved inside the create transaction
+        // NIC logical networks are resolved inside the create transaction
         // (`LogicalNetworkService.resolveForWorkloadCreate`), scoped to this
         // VM's project. Validate the mutually-exclusive selectors up front so a
         // malformed request fails before any quota or placement work.
-        if createRequest.networkId != nil && createRequest.networkName != nil {
-            throw Abort(.badRequest, reason: "Specify either 'networkId' or 'networkName', not both")
+        let requestedInterfaces: [CreateVMNetworkInterfaceRequest]
+        if let networkInterfaces = createRequest.networkInterfaces {
+            requestedInterfaces = networkInterfaces
+        } else {
+            let legacy = CreateVMNetworkInterfaceRequest(
+                networkId: createRequest.networkId,
+                networkName: createRequest.networkName,
+                securityGroupIds: createRequest.securityGroupIds,
+                mtu: nil)
+            try legacy.validate(path: "network")
+            requestedInterfaces = [legacy]
         }
 
-        // Resolve the NIC's security groups. Explicit ids must exist, belong
-        // to this project, and fit the per-NIC cap; omitted (or empty) means
-        // the project's default group, ensured inside the create transaction.
-        let requestedSecurityGroupIds = try await SecurityGroupService.resolveRequestedGroupIDs(
-            createRequest.securityGroupIds, projectID: projectId, on: req.db)
+        // Resolve every NIC's explicit security groups before quota/placement
+        // work. Omitted or empty lists remain empty here and become the default
+        // group inside the create transaction.
+        var requestedGroupsByIndex: [[UUID]] = []
+        for interface in requestedInterfaces {
+            requestedGroupsByIndex.append(
+                try await SecurityGroupService.resolveRequestedGroupIDs(
+                    interface.securityGroupIds, projectID: projectId, on: req.db))
+        }
+        let resolvedRequestedGroupsByIndex = requestedGroupsByIndex
 
         // Create the VM instance from the image.
         // Pre-compute values to avoid complex expression
@@ -519,17 +754,30 @@ struct VMController: RouteCollection {
                     // Generate unique paths and configurations using the generated ID
                     let vmID = try vm.requireID()
 
-                    // Every VM starts with one NIC on the network the caller named,
-                    // resolved here — inside the transaction — so the row that IPAM
-                    // allocates from is the one the NIC's foreign key then pins
-                    // (issue #765).
-                    let logicalNetwork = try await LogicalNetworkService.resolveForWorkloadCreate(
-                        requestedID: createRequest.networkId,
-                        requestedName: createRequest.networkName,
-                        projectID: projectId,
-                        on: db
-                    )
-                    let logicalNetworkID = try logicalNetwork.requireID()
+                    // Resolve every requested network in the VM's project. They
+                    // stay as distinct NIC requests even when two select the
+                    // same logical network: each receives its own MAC and IPs.
+                    var resolvedInterfaces:
+                        [(
+                            request: CreateVMNetworkInterfaceRequest,
+                            network: LogicalNetwork,
+                            networkID: UUID,
+                            securityGroupIDs: [UUID]
+                        )] = []
+                    for (index, interface) in requestedInterfaces.enumerated() {
+                        let network = try await LogicalNetworkService.resolveForWorkloadCreate(
+                            requestedID: interface.networkId,
+                            requestedName: interface.networkName,
+                            projectID: projectId,
+                            on: db)
+                        if let mtu = interface.mtu, network.subnet6 != nil, mtu < 1_280 {
+                            throw Abort(
+                                .badRequest,
+                                reason: "networkInterfaces[\(index)].mtu must be at least 1280 on an IPv6 network")
+                        }
+                        resolvedInterfaces.append(
+                            (interface, network, try network.requireID(), resolvedRequestedGroupsByIndex[index]))
+                    }
 
                     // The VM's DNS label (issue #770), resolved against the
                     // zone the network registers into. An explicit hostname is
@@ -539,7 +787,7 @@ struct VMController: RouteCollection {
                     // "web server" is an ordinary thing to do and failing the
                     // create over an implicit label would be baffling.
                     let registrationZones = try await DNSZoneService.registrationZones(
-                        networkIDs: [logicalNetworkID], on: db)
+                        networkIDs: Array(Set(resolvedInterfaces.map(\.networkID))), on: db)
                     if let requestedHostname = createRequest.hostname {
                         vm.hostname = try await DNSZoneService.validatedExplicitHostname(
                             requestedHostname, forVM: vmID, in: registrationZones, on: db)
@@ -559,59 +807,66 @@ struct VMController: RouteCollection {
                     // Update VM with generated paths
                     try await vm.update(on: db)
 
-                    // The control plane owns IPAM (issue #212): the address is
-                    // allocated here so agents receive it in the spec instead
-                    // of inventing one.
-                    let allocation = try await IPAMService.allocateIP(for: logicalNetwork, on: db)
-                    let networkGateway = logicalNetwork.gateway
-                    // Dual-stack network: the NIC gets one address per family.
-                    let allocation6 = try await IPAMService.allocateIPv6(for: logicalNetwork, on: db)
-                    let networkGateway6 = logicalNetwork.gateway6
-
-                    let networkInterface = VMNetworkInterface(
-                        vmID: vmID,
-                        logicalNetworkID: logicalNetworkID,
-                        macAddress: VMNetworkInterface.generateMACAddress()
-                    )
-                    try await networkInterface.save(on: db)
-
-                    // The ≥1-group invariant: the NIC joins the requested
-                    // security groups, or the project's default group when the
-                    // caller picked none.
-                    let groupIds: [UUID]
-                    if requestedSecurityGroupIds.isEmpty {
+                    let defaultGroupID: UUID?
+                    if resolvedInterfaces.contains(where: { $0.securityGroupIDs.isEmpty }) {
                         let defaultGroup = try await SecurityGroupService.ensureDefaultGroup(
                             projectID: projectId, on: db)
-                        groupIds = [try defaultGroup.requireID()]
+                        defaultGroupID = try defaultGroup.requireID()
                     } else {
-                        groupIds = requestedSecurityGroupIds
-                    }
-                    for groupId in groupIds {
-                        try await VMInterfaceSecurityGroup(
-                            interfaceID: try networkInterface.requireID(),
-                            securityGroupID: groupId
-                        ).save(on: db)
+                        defaultGroupID = nil
                     }
 
-                    let address = VMInterfaceAddress(
-                        interfaceID: try networkInterface.requireID(),
-                        logicalNetworkID: logicalNetworkID,
-                        family: .ipv4,
-                        address: allocation.ipAddress,
-                        prefixLength: allocation.prefixLength,
-                        gateway: networkGateway
-                    )
-                    try await address.save(on: db)
-                    if let allocation6 {
-                        let address6 = VMInterfaceAddress(
-                            interfaceID: try networkInterface.requireID(),
-                            logicalNetworkID: logicalNetworkID,
-                            family: .ipv6,
-                            address: allocation6.ipAddress,
-                            prefixLength: allocation6.prefixLength,
-                            gateway: networkGateway6
-                        )
-                        try await address6.save(on: db)
+                    // Allocate and persist one complete NIC at a time. All rows
+                    // still share this outer retrying transaction, so any IPAM
+                    // race rolls back the whole VM rather than leaving a partial
+                    // interface set.
+                    for (orderIndex, resolved) in resolvedInterfaces.enumerated() {
+                        let allocation = try await IPAMService.allocateIP(for: resolved.network, on: db)
+                        let allocation6 = try await IPAMService.allocateIPv6(for: resolved.network, on: db)
+                        let networkInterface = VMNetworkInterface(
+                            vmID: vmID,
+                            logicalNetworkID: resolved.networkID,
+                            macAddress: VMNetworkInterface.generateMACAddress(),
+                            mtu: resolved.request.mtu,
+                            deviceName: "net\(orderIndex)",
+                            orderIndex: orderIndex)
+                        networkInterface.attachGeneration = vm.generation
+                        try await networkInterface.save(on: db)
+                        let interfaceID = try networkInterface.requireID()
+
+                        let groupIDs: [UUID]
+                        if resolved.securityGroupIDs.isEmpty {
+                            guard let defaultGroupID else {
+                                throw Abort(.internalServerError, reason: "Default security group was not resolved")
+                            }
+                            groupIDs = [defaultGroupID]
+                        } else {
+                            groupIDs = resolved.securityGroupIDs
+                        }
+                        for groupID in groupIDs {
+                            try await VMInterfaceSecurityGroup(
+                                interfaceID: interfaceID, securityGroupID: groupID
+                            ).save(on: db)
+                        }
+
+                        try await VMInterfaceAddress(
+                            interfaceID: interfaceID,
+                            logicalNetworkID: resolved.networkID,
+                            family: .ipv4,
+                            address: allocation.ipAddress,
+                            prefixLength: allocation.prefixLength,
+                            gateway: resolved.network.gateway
+                        ).save(on: db)
+                        if let allocation6 {
+                            try await VMInterfaceAddress(
+                                interfaceID: interfaceID,
+                                logicalNetworkID: resolved.networkID,
+                                family: .ipv6,
+                                address: allocation6.ipAddress,
+                                prefixLength: allocation6.prefixLength,
+                                gateway: resolved.network.gateway6
+                            ).save(on: db)
+                        }
                     }
 
                     // The create's attribution record, and the client's handle
@@ -1103,12 +1358,7 @@ struct VMController: RouteCollection {
     private static func detail(
         for vm: VM, on req: Request, resolvingEnforcement: Bool = true
     ) async throws -> VMDetailResponse {
-        try await vm.$networkInterfaces.load(on: req.db)
-        for interface in vm.networkInterfaces {
-            try await interface.$addresses.load(on: req.db)
-            try await interface.$observedAddresses.load(on: req.db)
-            try await interface.$securityGroupMemberships.load(on: req.db)
-        }
+        try await loadInterfaces(for: vm, on: req.db)
         return try await VMDetailResponse(
             from: vm,
             securityGroupsEnforced: resolvingEnforcement
@@ -1447,5 +1697,31 @@ struct VMController: RouteCollection {
                 "Agent '\(agentId)' is too old to switch the metadata service off for one VM (wire protocol "
                 + "v\(WireProtocol.metadataOptOutMinimumVersion) required), and would keep serving this guest "
                 + "its metadata. Upgrade the agent, or turn 'metadataEnabled' off on the whole network.")
+    }
+
+    static func requireNetworkHotplugCapableAgent(_ vm: VM, on db: any Database) async throws -> Agent {
+        guard let agentID = vm.hypervisorId,
+            let agentUUID = UUID(uuidString: agentID),
+            let agent = try await Agent.find(agentUUID, on: db)
+        else {
+            throw Abort(.conflict, reason: "The VM must be placed on an agent before its interfaces can change")
+        }
+        guard WireProtocol.supportsVMNetworkHotplug(agent.wireProtocolVersion ?? 0) else {
+            throw Abort(
+                .conflict,
+                reason: "Agent '\(agentID)' is too old for VM network hot-plug (wire protocol "
+                    + "v\(WireProtocol.vmNetworkHotplugMinimumVersion) required). Upgrade the agent first.")
+        }
+        return agent
+    }
+
+    static func loadInterfaces(for vm: VM, on db: any Database) async throws {
+        try await vm.$networkInterfaces.load(on: db)
+        for interface in vm.networkInterfaces {
+            try await interface.$addresses.load(on: db)
+            try await interface.$observedAddresses.load(on: db)
+            try await interface.$logicalNetwork.load(on: db)
+            try await interface.$securityGroupMemberships.load(on: db)
+        }
     }
 }

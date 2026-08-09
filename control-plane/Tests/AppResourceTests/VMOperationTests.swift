@@ -21,6 +21,12 @@ import AppTestSupport
 @Suite("VM Operation Tests", .serialized)
 final class VMOperationTests {
 
+    private struct AttachInterfaceBody: Content {
+        let networkId: UUID
+        var securityGroupIds: [UUID]? = nil
+        var mtu: Int? = nil
+    }
+
     /// Boots a configured test app with a non-admin user, org, project and one VM.
     /// Mirrors the harness in `VMAuthorizationTests` so requests traverse the full
     /// middleware stack (role-binding-backed authorization, API-key auth).
@@ -120,6 +126,139 @@ final class VMOperationTests {
         vm.observedGeneration = 1
         try await vm.save(on: app.db)
         return agentUUID.uuidString
+    }
+
+    @Test("VM interface attach uses the lowest free stable slot and returns a 202 mutation")
+    func attachNetworkInterfaceUsesLowestFreeSlot() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            try await placeOnAgent(app: app, vm: vm)
+            let projectID = vm.$project.id
+            let network = LogicalNetwork(
+                name: "hotplug-net", subnet: "10.240.0.0/24", gateway: "10.240.0.1",
+                projectID: projectID, createdByID: user.id!)
+            try await network.save(on: app.db)
+            for slot in [0, 2] {
+                try await VMNetworkInterface(
+                    vmID: vm.id!, logicalNetworkID: network.id!,
+                    macAddress: "52:54:00:00:00:0\(slot)",
+                    deviceName: "net\(slot)", orderIndex: slot
+                ).save(on: app.db)
+            }
+
+            var accepted: AcceptedMutation<VMDetailResponse>?
+            try await app.test(.POST, "/api/vms/\(vm.id!)/interfaces") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachInterfaceBody(networkId: network.id!, mtu: 1450))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                accepted = try res.content.decode(AcceptedMutation<VMDetailResponse>.self)
+            }
+
+            let created = try #require(
+                try await VMNetworkInterface.query(on: app.db)
+                    .filter(\.$vm.$id == vm.id!)
+                    .filter(\.$orderIndex == 1)
+                    .first())
+            #expect(created.deviceName == "net1")
+            #expect(created.mtu == 1450)
+            #expect(created.attachGeneration == accepted?.targetGeneration)
+
+            try await app.test(.GET, "/api/vms/\(vm.id!)/interfaces") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let interfaces = try res.content.decode([NetworkInterfaceResponse].self)
+                #expect(interfaces.map(\.orderIndex) == [0, 1, 2])
+            }
+        }
+    }
+
+    @Test("VM interface mutations reject pre-v40 agents")
+    func networkInterfaceMutationRejectsOldAgent() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            try await placeOnAgent(
+                app: app, vm: vm,
+                wireProtocolVersion: WireProtocol.vmNetworkHotplugMinimumVersion - 1)
+            let network = LogicalNetwork(
+                name: "old-agent-net", subnet: "10.241.0.0/24", gateway: "10.241.0.1",
+                projectID: vm.$project.id, createdByID: user.id!)
+            try await network.save(on: app.db)
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/interfaces") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(AttachInterfaceBody(networkId: network.id!))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+            #expect(
+                try await VMNetworkInterface.query(on: app.db)
+                    .filter(\.$vm.$id == vm.id!).count() == 0)
+        }
+    }
+
+    @Test("Detaching the final NIC retains it for confirmation and a failed detach can be retried")
+    func detachFinalNetworkInterfaceAndRetry() async throws {
+        try await withVMTestApp { app, user, vm, token in
+            try await placeOnAgent(app: app, vm: vm)
+            let network = LogicalNetwork(
+                name: "detach-net", subnet: "10.242.0.0/24", gateway: "10.242.0.1",
+                projectID: vm.$project.id, createdByID: try user.requireID())
+            try await network.save(on: app.db)
+            let nic = VMNetworkInterface(
+                vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
+                macAddress: "52:54:00:00:00:42", deviceName: "net0", orderIndex: 0)
+            nic.attachGeneration = vm.generation
+            try await nic.save(on: app.db)
+            let nicID = try nic.requireID()
+
+            try await app.test(.POST, "/api/vms/\(vm.id!)/interfaces/\(nicID)/retry") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            var detachGeneration: Int64?
+            try await app.test(.DELETE, "/api/vms/\(vm.id!)/interfaces/\(nicID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                detachGeneration = try res.content.decode(
+                    AcceptedMutation<VMDetailResponse>.self
+                ).targetGeneration
+            }
+            let retained = try #require(try await VMNetworkInterface.find(nicID, on: app.db))
+            #expect(retained.detachGeneration == detachGeneration)
+
+            // Model the agent's failed convergence report. The list surface
+            // derives the failure from the interface's mutation generation and
+            // keeps the row visible and reserved.
+            let failedVM = try #require(try await VM.find(vm.id, on: app.db))
+            failedVM.failedGeneration = detachGeneration
+            failedVM.lastError = "libvirt detach failed"
+            try await failedVM.save(on: app.db)
+            try await app.test(.GET, "/api/vms/\(vm.id!)/interfaces") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                let interfaces = try res.content.decode([NetworkInterfaceResponse].self)
+                #expect(interfaces.count == 1)
+                #expect(interfaces[0].attachmentState == .detachFailed)
+                #expect(interfaces[0].attachmentError == "libvirt detach failed")
+            }
+
+            var retryGeneration: Int64?
+            try await app.test(.POST, "/api/vms/\(vm.id!)/interfaces/\(nicID)/retry") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+                retryGeneration = try res.content.decode(
+                    AcceptedMutation<VMDetailResponse>.self
+                ).targetGeneration
+            }
+            #expect(retryGeneration == (detachGeneration ?? 0) + 1)
+            #expect(
+                try await VMNetworkInterface.find(nicID, on: app.db)?.detachGeneration
+                    == retryGeneration)
+        }
     }
 
     /// A reboot starts and ends `.running`, so `desiredStatus` cannot express

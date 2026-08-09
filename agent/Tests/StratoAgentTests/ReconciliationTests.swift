@@ -9,6 +9,67 @@ struct ReconciliationTests {
 
     // MARK: - Fixtures
 
+    @Test("Applied interface IDs are authoritative only after complete legacy hydration")
+    func appliedNetworkInterfaceInventory() {
+        let first = UUID()
+        let second = UUID()
+        #expect(AppliedNetworkInterfaceInventory.ids(in: []) == [])
+        #expect(
+            AppliedNetworkInterfaceInventory.ids(in: [
+                NetworkSpec(interfaceId: first, network: "a", networkId: UUID()),
+                NetworkSpec(interfaceId: second, network: "b", networkId: UUID()),
+            ]) == [first, second])
+        #expect(
+            AppliedNetworkInterfaceInventory.ids(in: [
+                NetworkSpec(interfaceId: first, network: "a", networkId: UUID()),
+                NetworkSpec(
+                    network: "legacy", networkId: UUID(),
+                    macAddress: "52:54:00:00:00:01"),
+            ]) == nil)
+    }
+
+    @Test("Stable NIC matching preserves later slots when the middle NIC is removed")
+    func stableNetworkInterfaceDiff() {
+        let first = UUID()
+        let middle = UUID()
+        let last = UUID()
+        let current = [
+            NetworkSpec(
+                interfaceId: first, deviceName: "net0", orderIndex: 0,
+                network: "a", networkId: UUID(), macAddress: "52:54:00:00:00:01"),
+            NetworkSpec(
+                interfaceId: middle, deviceName: "net1", orderIndex: 1,
+                network: "b", networkId: UUID(), macAddress: "52:54:00:00:00:02"),
+            NetworkSpec(
+                interfaceId: last, deviceName: "net2", orderIndex: 2,
+                network: "c", networkId: UUID(), macAddress: "52:54:00:00:00:03"),
+        ]
+
+        let diff = VMNetworkInterfaceDiff.between(
+            current: current, desired: [current[0], current[2]])
+        #expect(diff.added.isEmpty)
+        #expect(diff.removed == [1])
+    }
+
+    @Test("Legacy NICs hydrate by MAC without device changes")
+    func legacyNetworkInterfaceDiff() {
+        let legacy = [
+            NetworkSpec(
+                network: "a", networkId: UUID(), macAddress: "52:54:00:00:00:01"),
+            NetworkSpec(
+                network: "b", networkId: UUID(), macAddress: "52:54:00:00:00:02"),
+        ]
+        let desired = legacy.enumerated().map { index, network in
+            NetworkSpec(
+                interfaceId: UUID(), deviceName: "net\(index)", orderIndex: index,
+                network: network.network, networkId: network.networkId,
+                macAddress: network.macAddress?.uppercased())
+        }
+
+        #expect(VMNetworkInterfaceDiff.between(current: legacy, desired: desired).added.isEmpty)
+        #expect(VMNetworkInterfaceDiff.between(current: legacy, desired: desired).removed.isEmpty)
+    }
+
     private static func spec(cpus: Int = 1) -> VMSpec {
         VMSpec(cpus: cpus, memoryBytes: 1 << 30, boot: .disk(firmware: nil))
     }
@@ -147,7 +208,7 @@ struct ReconciliationTests {
                 }
             case .reboot: presence[item.vmId] = .managed(.running)
             case .restore: presence[item.vmId] = .managed(.running)
-            case .adopt, .export: break
+            case .adopt, .export, .reconfigureNetworks: break
             case .attach, .detach: break  // volume-only steps; never planned for a VM
             }
         }
@@ -359,6 +420,66 @@ struct ReconciliationTests {
         #expect(Reconciler.statusSteps(desired: .shutdown, observed: .running) == [.shutdown])
         #expect(Reconciler.statusSteps(desired: .shutdown, observed: .created) == [])
         #expect(Reconciler.statusSteps(desired: .shutdown, observed: .paused) == [.shutdown])
+    }
+
+    @Test("QEMU network changes are ordered around shutdown and boot")
+    func networkChangesAreOrderedAroundPowerTransitions() {
+        let vmId = UUID()
+        let oldNIC = NetworkSpec(
+            interfaceId: UUID(), deviceName: "net0", orderIndex: 0,
+            network: "management", networkId: UUID(),
+            macAddress: "52:54:00:00:00:01")
+        let newNIC = NetworkSpec(
+            interfaceId: UUID(), deviceName: "net1", orderIndex: 1,
+            network: "storage", networkId: UUID(),
+            macAddress: "52:54:00:00:00:02")
+        func desired(_ status: DesiredVMStatus) -> DesiredVMState {
+            DesiredVMState(
+                vmId: vmId,
+                hypervisorType: .qemu,
+                spec: VMSpec(
+                    cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                    networks: [oldNIC, newNIC]),
+                desiredStatus: status,
+                generation: 2)
+        }
+
+        let stopping = Reconciler.plan(
+            desired: [desired(.shutdown)],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [oldNIC]])
+        #expect(stopping.items.first?.steps == [.shutdown, .reconfigureNetworks])
+
+        let starting = Reconciler.plan(
+            desired: [desired(.running)],
+            present: [vmId.uuidString: .managed(.shutdown)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: [oldNIC]])
+        #expect(starting.items.first?.steps == [.reconfigureNetworks, .boot])
+    }
+
+    @Test("Firecracker does not plan post-create network reconciliation")
+    func firecrackerNetworkChangesAreNotPlanned() {
+        let vmId = UUID()
+        let desired = DesiredVMState(
+            vmId: vmId,
+            hypervisorType: .firecracker,
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1 << 30, boot: .disk(firmware: nil),
+                networks: [NetworkSpec(network: "new", networkId: UUID())]),
+            desiredStatus: .running,
+            generation: 2)
+        let plan = Reconciler.plan(
+            desired: [desired],
+            present: [vmId.uuidString: .managed(.running)],
+            lastApplied: [vmId.uuidString: 1],
+            appliedEdges: [vmId.uuidString: AppliedEdgeNonces()],
+            presentNetworks: [vmId.uuidString: []])
+        #expect(plan.items.count == 1)
+        #expect(plan.items.first?.steps.isEmpty == true)
     }
 
     // MARK: - Unknown host contents (STR-138)

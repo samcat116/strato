@@ -1307,7 +1307,7 @@ struct DesiredStateAssembler {
                 let vm = vmsByID[interface.$vm.id],
                 let vmId = vm.id
             else { continue }
-            let ordered = vm.networkInterfaces.inDeviceOrder
+            let ordered = vm.networkInterfaces.inDeviceOrder.filter { $0.detachGeneration == nil }
             guard let nicIndex = ordered.firstIndex(where: { $0.id == interface.id }),
                 let logicalIP = ordered[nicIndex].ipv4Address?.address
             else {

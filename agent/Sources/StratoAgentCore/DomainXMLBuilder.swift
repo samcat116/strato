@@ -813,7 +813,7 @@ public enum DomainXMLBuilder {
             readonly: readonly, bootOrder: bootOrder, volumeId: volumeId)
     }
 
-    private static func interfaceNode(_ nic: ResolvedNetworkAttachment) throws -> DomainXMLNode {
+    static func interfaceNode(_ nic: ResolvedNetworkAttachment) throws -> DomainXMLNode {
         guard case .tap(let interface) = nic.attachment else {
             throw DomainXMLBuilderError.unsupportedNetworkAttachment(network: nic.network)
         }
