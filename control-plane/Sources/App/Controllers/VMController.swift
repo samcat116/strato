@@ -1034,13 +1034,31 @@ struct VMController: RouteCollection {
 
         let cpuGrowth = max(0, newCPU - vm.cpu)
         let memoryGrowth: Int64
-        if vm.hypervisorType == .qemu {
-            // QEMU's maxMemory hot-add region is already in the agent's
-            // reservation. A live resize within it consumes no new host RAM;
-            // a stopped resize grows the reservation only past that headroom.
-            let currentReservation = max(vm.memory, vm.maxMemory)
-            let requestedReservation = max(currentReservation, newMemory)
+        if vm.hypervisorType == .qemu, newMemory > vm.memory {
+            guard let architecture = agent.cpuArchitecture else {
+                throw Abort(
+                    .conflict,
+                    reason: "Agent `\(agent.name)` has not reported its CPU architecture; "
+                        + "QEMU resize capacity cannot be validated")
+            }
+            // QEMU reserves only the block-aligned hot-add region the agent can
+            // realize, not the raw maxMemory request. Recompute both sides with
+            // the placed host's architecture so sub-block headroom is charged
+            // when a stopped resize turns it into guest memory.
+            let currentReservation = QEMUMemoryReservation.reservedBytes(
+                memoryBytes: vm.memory,
+                maxMemoryBytes: vm.maxMemory,
+                architecture: architecture)
+            let requestedReservation = QEMUMemoryReservation.reservedBytes(
+                memoryBytes: newMemory,
+                maxMemoryBytes: max(vm.maxMemory, newMemory),
+                architecture: architecture)
             memoryGrowth = max(0, requestedReservation - currentReservation)
+        } else if vm.hypervisorType == .qemu {
+            // Alignment can make the recomputed reservation move upward while
+            // the guest grant moves downward. A true shrink never needs new
+            // capacity, regardless of that representational artifact.
+            memoryGrowth = 0
         } else {
             memoryGrowth = max(0, newMemory - vm.memory)
         }

@@ -58,7 +58,10 @@ struct VMManifestStoreTests {
         let store = makeStore(dir: dir)
 
         store.save([
-            "vm-a": VMManifestEntry(hypervisorType: .qemu, spec: makeSpec(cpus: 2)),
+            "vm-a": VMManifestEntry(
+                hypervisorType: .qemu,
+                spec: makeSpec(cpus: 2),
+                realizedMemoryReservationBytes: 8_589_934_592),
             "vm-b": VMManifestEntry(hypervisorType: .firecracker, spec: makeSpec(cpus: 4, memoryBytes: 1_073_741_824)),
         ])
 
@@ -66,6 +69,7 @@ struct VMManifestStoreTests {
         #expect(loaded.count == 2)
         #expect(loaded["vm-a"]?.hypervisorType == .qemu)
         #expect(loaded["vm-a"]?.spec.cpus == 2)
+        #expect(loaded["vm-a"]?.realizedMemoryReservationBytes == 8_589_934_592)
         #expect(loaded["vm-b"]?.hypervisorType == .firecracker)
         #expect(loaded["vm-b"]?.spec.cpus == 4)
         #expect(loaded["vm-b"]?.spec.memoryBytes == 1_073_741_824)
@@ -139,10 +143,15 @@ struct VMManifestStoreTests {
     /// rebuilt from `(hypervisorType, spec)`.
     @Test("Re-specing an entry keeps its vsock CID")
     func withSpecKeepsVsockCID() {
-        let entry = VMManifestEntry(hypervisorType: .qemu, spec: makeSpec(cpus: 2), vsockCID: 11)
+        let entry = VMManifestEntry(
+            hypervisorType: .qemu,
+            spec: makeSpec(cpus: 2),
+            realizedMemoryReservationBytes: 8_589_934_592,
+            vsockCID: 11)
         let resized = entry.with(spec: makeSpec(cpus: 8))
 
         #expect(resized.vsockCID == 11)
+        #expect(resized.realizedMemoryReservationBytes == 8_589_934_592)
         #expect(resized.spec.cpus == 8)
         #expect(resized.hypervisorType == .qemu)
         #expect(resized.kind == .vm)

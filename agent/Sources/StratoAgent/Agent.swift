@@ -348,6 +348,7 @@ actor Agent {
     // stale-snapshot race between reading host inventory and committing the
     // manifest entry that makes a successful growth visible to later reads.
     private var capacityAdmissionLedger = HostCapacityAdmissionLedger()
+    private var capacityManifestRevision: UInt64 = 0
     private var bootCapacityClaims: [String: HostCapacityClaim] = [:]
 
     // Simulation ("dummy agent") mode: the agent speaks the full control-plane
@@ -2186,6 +2187,25 @@ actor Agent {
     /// Raw CPU/memory accounting, before availability is clamped. Admission
     /// needs to distinguish exact fit from a host that is already overcommitted.
     private func rawHostCapacitySnapshot() async -> HostCapacitySnapshot {
+        while true {
+            let ledgerRevision = capacityAdmissionLedger.revision
+            let manifestRevision = capacityManifestRevision
+            let snapshot = await assembleRawHostCapacitySnapshot()
+            guard ledgerRevision == capacityAdmissionLedger.revision,
+                manifestRevision == capacityManifestRevision
+            else {
+                // Agent actors are reentrant at the backend awaits below. A
+                // create can commit its manifest and retire its claim while a
+                // different backend is still being queried; retry so the
+                // finished workload appears in either durable inventory or an
+                // active provisional claim, never in neither.
+                continue
+            }
+            return snapshot
+        }
+    }
+
+    private func assembleRawHostCapacitySnapshot() async -> HostCapacitySnapshot {
         // Host capacity. In simulation mode this is the configured fake capacity
         // — many dummies share one physical machine, so a spawner varies these
         // to give the scheduler a realistic spread of host sizes. Otherwise it
@@ -2220,8 +2240,8 @@ actor Agent {
             var durableReservations = orphanedVMs.reduce(into: [String: HostReservation]()) {
                 reservations, orphan in
                 guard orphan.value.hypervisorType == type else { return }
-                reservations[orphan.key] = VMHostReservation.forSpec(
-                    orphan.value.spec, hypervisorType: type, architecture: .current)
+                reservations[orphan.key] = VMHostReservation.forManifestEntry(
+                    orphan.value, architecture: .current)
             }
             if let observed {
                 // A daemon inventory with membership can also prove that a
@@ -2230,8 +2250,8 @@ actor Agent {
                 // re-create diffs from its old spec and claims growth only.
                 if observed.workloadIDs != nil {
                     for (vmId, entry) in managedVMs where entry.hypervisorType == type {
-                        durableReservations[vmId] = VMHostReservation.forSpec(
-                            entry.spec, hypervisorType: type, architecture: .current)
+                        durableReservations[vmId] = VMHostReservation.forManifestEntry(
+                            entry, architecture: .current)
                     }
                 }
                 reserved = reserved.addingSaturating(
@@ -2253,8 +2273,7 @@ actor Agent {
         for entry in orphanedVMs.values {
             guard !backendsWithInventory.contains(entry.hypervisorType) else { continue }
             reserved = reserved.addingSaturating(
-                VMHostReservation.forSpec(
-                    entry.spec, hypervisorType: entry.hypervisorType, architecture: .current))
+                VMHostReservation.forManifestEntry(entry, architecture: .current))
         }
 
         // Sandbox reservations always come from the manifest (managed and
@@ -2348,8 +2367,7 @@ actor Agent {
             HostReservation()
         ) { partial, entry in
             partial.addingSaturating(
-                VMHostReservation.forSpec(
-                    entry.spec, hypervisorType: entry.hypervisorType, architecture: .current))
+                VMHostReservation.forManifestEntry(entry, architecture: .current))
         }
         return (reserved.cpus, reserved.memoryBytes)
     }
@@ -2722,6 +2740,7 @@ extension Agent {
         // Quarantined entries are re-emitted exactly as they were read: their
         // routing field is what a build that understands them needs, and this
         // one rewriting it in a shape it prefers would destroy that.
+        capacityManifestRevision &+= 1
         manifestPersistFailed = !manifestStore.save(manifest, preserving: quarantinedWorkloads)
     }
 
@@ -3970,8 +3989,8 @@ extension Agent: ReconcileActuator {
         }
 
         let raw = await rawHostCapacitySnapshot()
-        let currentReservation = VMHostReservation.forSpec(
-            current.spec, hypervisorType: current.hypervisorType, architecture: .current)
+        let currentReservation = VMHostReservation.forManifestEntry(
+            current, architecture: .current)
         let desiredReservation = VMHostReservation.forSpec(
             desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
         let growth = HostReservation.positiveDelta(from: currentReservation, to: desiredReservation)
@@ -3988,6 +4007,20 @@ extension Agent: ReconcileActuator {
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {
                 try await service.redefineVM(vmId: item.vmId, spec: spec)
+                if current.hypervisorType == .qemu,
+                    desiredReservation.memoryBytes > currentReservation.memoryBytes,
+                    let entry = managedVMs[item.vmId] ?? orphanedVMs[item.vmId]
+                {
+                    let widened = entry.reservingMemory(atLeast: desiredReservation.memoryBytes)
+                    if managedVMs[item.vmId] != nil {
+                        managedVMs[item.vmId] = widened
+                    } else {
+                        orphanedVMs[item.vmId] = widened
+                    }
+                    // The persistent domain may already be wider even if the
+                    // boot below fails, so record the reservation immediately.
+                    persistManifest()
+                }
             } catch {
                 logger.warning(
                     """
@@ -4605,8 +4638,7 @@ extension Agent: ReconcileActuator {
         let currentEntry = managedVMs[item.vmId] ?? orphanedVMs[item.vmId]
         let currentReservation =
             currentEntry.map {
-                VMHostReservation.forSpec(
-                    $0.spec, hypervisorType: $0.hypervisorType, architecture: .current)
+                VMHostReservation.forManifestEntry($0, architecture: .current)
             } ?? HostReservation()
         let desiredReservation = VMHostReservation.forSpec(
             desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
@@ -4673,7 +4705,10 @@ extension Agent: ReconcileActuator {
         // with a restore outstanding.
         let appliedEdges = (managedVMs[item.vmId] ?? orphanedVMs[item.vmId])?.appliedEdges
         managedVMs[item.vmId] = VMManifestEntry(
-            hypervisorType: desired.hypervisorType, spec: desired.spec, vsockCID: lease.cid,
+            hypervisorType: desired.hypervisorType, spec: desired.spec,
+            realizedMemoryReservationBytes: desired.hypervisorType == .qemu
+                ? desiredReservation.memoryBytes : nil,
+            vsockCID: lease.cid,
             appliedEdges: appliedEdges)
         orphanedVMs.removeValue(forKey: item.vmId)
         persistManifest()
@@ -4696,8 +4731,8 @@ extension Agent: ReconcileActuator {
         guard let entry = managedVMs[item.vmId] else {
             throw HypervisorServiceError.vmNotFound(item.vmId)
         }
-        let currentReservation = VMHostReservation.forSpec(
-            entry.spec, hypervisorType: entry.hypervisorType, architecture: .current)
+        let currentReservation = VMHostReservation.forManifestEntry(
+            entry, architecture: .current)
         let desiredReservation = VMHostReservation.forSpec(
             desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
         let bootClaim = bootCapacityClaims.removeValue(forKey: item.vmId)

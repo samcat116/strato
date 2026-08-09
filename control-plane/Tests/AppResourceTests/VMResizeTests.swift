@@ -20,6 +20,7 @@ final class VMResizeTests {
     /// agent that speaks the resize protocol version.
     private func withResizeTestApp(
         agentWireVersion: Int = WireProtocol.currentVersion,
+        agentArchitecture: CPUArchitecture = .x86_64,
         quotaVCPUs: Int = 32,
         quotaMemoryGB: Double = 64,
         agentAvailableCPU: Int = 32,
@@ -67,7 +68,7 @@ final class VMResizeTests {
                     totalMemory: 64_000_000_000, availableMemory: agentAvailableMemory,
                     totalDisk: 500_000_000_000, availableDisk: 500_000_000_000
                 ),
-                architecture: .x86_64,
+                architecture: agentArchitecture,
                 lastHeartbeat: Date()
             )
             agent.wireProtocolVersion = agentWireVersion
@@ -216,6 +217,57 @@ final class VMResizeTests {
                 #expect(res.status == .conflict)
                 #expect(res.body.string.contains("2 GiB additional memory"))
             }
+        }
+    }
+
+    @Test("Stopped QEMU resize charges arm64 headroom that was too small to realize")
+    func stoppedQEMUUnrealizedHeadroom() async throws {
+        try await withResizeTestApp(
+            agentArchitecture: .arm64,
+            agentAvailableMemory: 0
+        ) { app, _, vm, project, token in
+            let gib: Int64 = 1024 * 1024 * 1024
+            let requested = gib + 256 * 1024 * 1024
+            vm.memory = gib
+            vm.maxMemory = requested
+            try await vm.save(on: app.db)
+            let generation = vm.generation
+            let quotasBefore = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            let reservedBefore = try #require(quotasBefore.first).reservedMemory
+
+            try await put(app, vm, token: token, body: ["memory": requested]) { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("256 MiB additional memory"))
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.memory == gib)
+            #expect(refreshed.maxMemory == requested)
+            #expect(refreshed.generation == generation)
+            let quotasAfter = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            #expect(try #require(quotasAfter.first).reservedMemory == reservedBefore)
+        }
+    }
+
+    @Test("ARM QEMU memory shrink passes when alignment would make the reservation look larger")
+    func armQEMUShrinkOnFullHost() async throws {
+        try await withResizeTestApp(
+            agentArchitecture: .arm64,
+            agentAvailableMemory: 0
+        ) { app, _, vm, _, token in
+            let gib: Int64 = 1024 * 1024 * 1024
+            vm.memory = gib + 768 * 1024 * 1024
+            vm.maxMemory = 2 * gib
+            try await vm.save(on: app.db)
+
+            try await put(app, vm, token: token, body: ["memory": gib]) { res in
+                #expect(res.status == .ok)
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(refreshed.memory == gib)
         }
     }
 

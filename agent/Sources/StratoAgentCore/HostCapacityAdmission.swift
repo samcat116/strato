@@ -120,6 +120,7 @@ public struct HostCapacityAdmissionError: ClassifiableError, LocalizedError, Equ
 /// made from earlier snapshots are added here before a later lane is admitted.
 public struct HostCapacityAdmissionLedger: Sendable {
     private var claims: [UUID: HostReservation] = [:]
+    public private(set) var revision: UInt64 = 0
 
     public init() {}
 
@@ -153,6 +154,7 @@ public struct HostCapacityAdmissionLedger: Sendable {
 
         let claim = HostCapacityClaim(id: UUID(), reservation: requested)
         claims[claim.id] = requested
+        revision &+= 1
         return claim
     }
 
@@ -181,7 +183,8 @@ public struct HostCapacityAdmissionLedger: Sendable {
 
     public mutating func release(_ claim: HostCapacityClaim?) {
         guard let claim else { return }
-        claims.removeValue(forKey: claim.id)
+        guard claims.removeValue(forKey: claim.id) != nil else { return }
+        revision &+= 1
     }
 }
 
@@ -194,13 +197,32 @@ public enum VMHostReservation {
     ) -> HostReservation {
         let memory: Int64
         if hypervisorType == .qemu {
-            let hotplug = MemoryHotplugPlan.alignedHotplugBytes(spec: spec, architecture: architecture)
-            let (sum, overflow) = spec.memoryBytes.addingReportingOverflow(hotplug)
-            memory = overflow ? Int64.max : sum
+            memory = QEMUMemoryReservation.reservedBytes(
+                memoryBytes: spec.memoryBytes,
+                maxMemoryBytes: spec.maxMemoryBytes,
+                architecture: architecture)
         } else {
             memory = spec.memoryBytes
         }
         return HostReservation(cpus: spec.cpus, memoryBytes: memory)
+    }
+
+    /// Reservation carried by the durable manifest. A QEMU entry written by a
+    /// current agent records the domain's fixed realized ceiling explicitly.
+    /// A legacy entry cannot reconstruct that ceiling after a live resize, so
+    /// it keeps the full requested maximum reserved rather than risk releasing
+    /// memory the domain still owns.
+    public static func forManifestEntry(
+        _ entry: VMManifestEntry, architecture: CPUArchitecture
+    ) -> HostReservation {
+        guard entry.hypervisorType == .qemu else {
+            return forSpec(entry.spec, hypervisorType: entry.hypervisorType, architecture: architecture)
+        }
+        let legacyReservation = max(entry.spec.memoryBytes, entry.spec.maxMemoryBytes)
+        let fixedReservation = entry.realizedMemoryReservationBytes ?? legacyReservation
+        return HostReservation(
+            cpus: entry.spec.cpus,
+            memoryBytes: max(entry.spec.memoryBytes, fixedReservation))
     }
 }
 

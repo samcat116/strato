@@ -27,12 +27,14 @@ struct HostCapacityAdmissionTests {
     @Test("stale concurrent snapshots cannot both spend the same capacity")
     func staleSnapshotClaims() throws {
         var ledger = HostCapacityAdmissionLedger()
+        let initialRevision = ledger.revision
         let stale = HostCapacitySnapshot(
             total: HostReservation(cpus: 8, memoryBytes: 8 * gib),
             reserved: HostReservation(cpus: 4, memoryBytes: 4 * gib))
         let first = try #require(
             try ledger.claim(
                 HostReservation(cpus: 3, memoryBytes: 3 * gib), snapshot: stale, agentName: "hv"))
+        #expect(ledger.revision == initialRevision + 1)
 
         #expect(throws: HostCapacityAdmissionError.self) {
             try ledger.claim(
@@ -40,6 +42,7 @@ struct HostCapacityAdmissionTests {
         }
 
         ledger.release(first)
+        #expect(ledger.revision == initialRevision + 2)
         #expect(
             try ledger.claim(
                 HostReservation(cpus: 2, memoryBytes: 2 * gib), snapshot: stale, agentName: "hv") != nil)
@@ -106,6 +109,38 @@ struct HostCapacityAdmissionTests {
         #expect(
             VMHostReservation.forSpec(spec, hypervisorType: .firecracker, architecture: .x86_64)
                 == HostReservation(cpus: 2, memoryBytes: 2 * gib))
+    }
+
+    @Test("manifest keeps a QEMU domain's fixed reservation after live resize")
+    func fixedQEMUManifestReservation() {
+        let created = VMSpec(
+            cpus: 2, memoryBytes: gib, maxMemoryBytes: 2 * gib,
+            boot: .disk(firmware: nil))
+        let resized = VMSpec(
+            cpus: 2, memoryBytes: gib + 768 * 1024 * 1024, maxMemoryBytes: 2 * gib,
+            boot: .disk(firmware: nil))
+        let entry = VMManifestEntry(
+            hypervisorType: .qemu,
+            spec: created,
+            realizedMemoryReservationBytes: 2 * gib
+        )
+        .with(spec: resized)
+
+        #expect(
+            VMHostReservation.forManifestEntry(entry, architecture: .arm64)
+                == HostReservation(cpus: 2, memoryBytes: 2 * gib))
+    }
+
+    @Test("legacy QEMU manifests conservatively keep requested maximum memory")
+    func legacyQEMUManifestReservation() {
+        let spec = VMSpec(
+            cpus: 2, memoryBytes: gib, maxMemoryBytes: gib + 256 * 1024 * 1024,
+            boot: .disk(firmware: nil))
+        let entry = VMManifestEntry(hypervisorType: .qemu, spec: spec)
+
+        #expect(
+            VMHostReservation.forManifestEntry(entry, architecture: .arm64)
+                == HostReservation(cpus: 2, memoryBytes: gib + 256 * 1024 * 1024))
     }
 
     @Test("backend inventory keeps only missing orphan reservations")

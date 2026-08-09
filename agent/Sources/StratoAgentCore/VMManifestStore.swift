@@ -20,6 +20,15 @@ public struct VMManifestEntry: Codable, Sendable {
     /// `var` only so `with(spec:)` can rewrite it in place; every caller goes
     /// through that method rather than assigning here.
     public private(set) var spec: VMSpec
+    /// The QEMU domain's realized, fixed memory reservation. This is persisted
+    /// separately from `spec`: a live resize changes the guest grant but does
+    /// not resize the virtio-mem region the process was created with.
+    ///
+    /// Nil for non-QEMU workloads and entries written before this field
+    /// existed. Admission treats a legacy nil conservatively as the full
+    /// requested `maxMemoryBytes`, because the exact aligned region can no
+    /// longer be reconstructed after a live resize.
+    public private(set) var realizedMemoryReservationBytes: Int64?
     /// The sandbox's own spec (present iff `kind == .sandbox`), kept so the
     /// sandbox runtime can re-adopt the orphan after a restart.
     public let sandboxSpec: SandboxSpec?
@@ -54,12 +63,14 @@ public struct VMManifestEntry: Codable, Sendable {
     public init(
         hypervisorType: HypervisorType,
         spec: VMSpec,
+        realizedMemoryReservationBytes: Int64? = nil,
         vsockCID: UInt32? = nil,
         appliedEdges: AppliedEdgeNonces? = nil
     ) {
         self.kind = .vm
         self.hypervisorType = hypervisorType
         self.spec = spec
+        self.realizedMemoryReservationBytes = realizedMemoryReservationBytes.map { max(0, $0) }
         self.sandboxSpec = nil
         self.vsockCID = vsockCID
         self.appliedEdges = appliedEdges
@@ -72,6 +83,7 @@ public struct VMManifestEntry: Codable, Sendable {
         self.hypervisorType = .firecracker
         self.spec = VMSpec(
             cpus: sandboxSpec.cpus, memoryBytes: sandboxSpec.memoryBytes, boot: .disk(firmware: nil))
+        self.realizedMemoryReservationBytes = nil
         self.sandboxSpec = sandboxSpec
         self.vsockCID = nil
         self.appliedEdges = appliedEdges
@@ -97,6 +109,14 @@ public struct VMManifestEntry: Codable, Sendable {
         return copy
     }
 
+    /// Records a domain widening without changing the grant currently applied
+    /// to the guest. Domain redefinition is upward-only, so this value is too.
+    public func reservingMemory(atLeast bytes: Int64) -> VMManifestEntry {
+        var copy = self
+        copy.realizedMemoryReservationBytes = max(copy.realizedMemoryReservationBytes ?? 0, bytes)
+        return copy
+    }
+
     // Custom decode so `kind` tolerates absence: entries persisted by a
     // pre-sandbox agent decode as VMs rather than throwing. `encode(to:)`
     // stays synthesized.
@@ -105,6 +125,7 @@ public struct VMManifestEntry: Codable, Sendable {
         kind = try c.decodeIfPresent(WorkloadKind.self, forKey: .kind) ?? .vm
         hypervisorType = try c.decode(HypervisorType.self, forKey: .hypervisorType)
         spec = try c.decode(VMSpec.self, forKey: .spec)
+        realizedMemoryReservationBytes = try c.decodeIfPresent(Int64.self, forKey: .realizedMemoryReservationBytes)
         sandboxSpec = try c.decodeIfPresent(SandboxSpec.self, forKey: .sandboxSpec)
         vsockCID = try c.decodeIfPresent(UInt32.self, forKey: .vsockCID)
         appliedEdges = try c.decodeIfPresent(AppliedEdgeNonces.self, forKey: .appliedEdges)

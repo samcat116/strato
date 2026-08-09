@@ -41,6 +41,7 @@ actor MockHypervisorService: HypervisorService {
     private struct MockVM {
         var spec: VMSpec
         var status: VMStatus
+        var realizedMemoryReservationBytes: Int64?
     }
     private var vms: [String: MockVM] = [:]
 
@@ -66,7 +67,10 @@ actor MockHypervisorService: HypervisorService {
         metadata: InstanceMetadata?
     ) async throws {
         logger.info("Creating mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        vms[vmId] = MockVM(spec: spec, status: .created)
+        vms[vmId] = MockVM(
+            spec: spec,
+            status: .created,
+            realizedMemoryReservationBytes: initialMemoryReservation(for: spec))
     }
 
     func bootVM(vmId: String) async throws {
@@ -161,6 +165,13 @@ actor MockHypervisorService: HypervisorService {
             throw HypervisorServiceError.vmNotFound(vmId)
         }
         vm.spec = spec
+        if hypervisorType == .qemu {
+            let requested = VMHostReservation.forSpec(
+                spec, hypervisorType: hypervisorType, architecture: .current
+            ).memoryBytes
+            vm.realizedMemoryReservationBytes = max(
+                vm.realizedMemoryReservationBytes ?? 0, requested)
+        }
         vms[vmId] = vm
         logger.info(
             "Mock: resized VM (mock mode)",
@@ -177,7 +188,14 @@ actor MockHypervisorService: HypervisorService {
     /// a simulated agent restart converge exactly like a real one.
     func adoptVM(vmId: String, spec: VMSpec) async throws -> VMStatus {
         logger.info("Re-adopting mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
-        vms[vmId] = MockVM(spec: spec, status: .running)
+        vms[vmId] = MockVM(
+            spec: spec,
+            status: .running,
+            // The old mock process is not available to report the region it
+            // realized before restart. Keep the requested maximum rather than
+            // risk releasing part of an adopted domain's fixed reservation.
+            realizedMemoryReservationBytes: hypervisorType == .qemu
+                ? max(spec.memoryBytes, spec.maxMemoryBytes) : nil)
         return .running
     }
 
@@ -188,6 +206,35 @@ actor MockHypervisorService: HypervisorService {
     /// Never nil, for the same reason as `listVMs()`: the specs are held here,
     /// so a zero from this backend is always a real zero.
     func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)? {
-        vms.values.lazy.map(\.spec).reservedResources
+        let reserved = reservation
+        return (reserved.cpus, reserved.memoryBytes)
+    }
+
+    /// Simulation must model the same fixed QEMU hot-plug reservation as a
+    /// real domain. Returning exact membership also lets agent accounting add
+    /// only manifest workloads that are actually missing from this mock.
+    func reservationInventory() async -> HypervisorReservationInventory? {
+        HypervisorReservationInventory(
+            reservation: reservation,
+            workloadIDs: Set(vms.keys))
+    }
+
+    private var reservation: HostReservation {
+        vms.values.reduce(HostReservation()) { total, vm in
+            let current = VMHostReservation.forSpec(
+                vm.spec, hypervisorType: hypervisorType, architecture: .current)
+            let fixed = vm.realizedMemoryReservationBytes ?? current.memoryBytes
+            return total.addingSaturating(
+                HostReservation(
+                    cpus: current.cpus,
+                    memoryBytes: max(vm.spec.memoryBytes, fixed)))
+        }
+    }
+
+    private func initialMemoryReservation(for spec: VMSpec) -> Int64? {
+        guard hypervisorType == .qemu else { return nil }
+        return VMHostReservation.forSpec(
+            spec, hypervisorType: hypervisorType, architecture: .current
+        ).memoryBytes
     }
 }
