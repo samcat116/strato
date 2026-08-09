@@ -1,4 +1,5 @@
 import AppTestSupport
+import Fluent
 import FluentPostgresDriver
 import Foundation
 import SQLKit
@@ -215,6 +216,70 @@ struct DatabaseStatementTimeoutIntegrationTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("Explicit migration transaction stays active across nested Database.transaction")
+    func nestedMigrationTransactionDoesNotCommitOuterTransaction() async throws {
+        let databaseName = try await PostgresTestDatabases.shared.createDatabaseForTest()
+        let app = try await Application.makeForTesting(
+            database: databaseName,
+            owningDatabase: true
+        )
+        let timeout = try DatabaseStatementTimeout(milliseconds: 1_000)
+        let configuration = PostgresTestDatabases.configuration(database: databaseName)
+        app.databases.use(
+            timeout.applying(to: .postgres(configuration: configuration)),
+            as: .psql
+        )
+        let migration = NestedTransactionCreatesThenFails()
+
+        var thrown: (any Error)?
+        do {
+            try await app.db.withConnection { connection in
+                let control = try #require(connection as? any TransactionControlDatabase)
+                #expect(!connection.inTransaction)
+                try await control.beginTransaction().get()
+                #expect(connection.inTransaction)
+                try await control.rollbackTransaction().get()
+                #expect(!connection.inTransaction)
+
+                do {
+                    try await SchemaMigrator.applyBatch(
+                        [migration],
+                        batch: 9999,
+                        on: connection,
+                        logger: app.logger
+                    )
+                } catch {
+                    #expect(!connection.inTransaction)
+                    throw error
+                }
+            }
+        } catch {
+            thrown = error
+        }
+
+        do {
+            let error = try #require(thrown as? SchemaMigrationError)
+            #expect(error.description.contains(migration.name))
+
+            let sql = try #require(app.db as? any SQLDatabase)
+            let present = try await sql.raw(
+                "SELECT to_regclass('public.statement_timeout_nested_transaction_probe') "
+                    + "IS NOT NULL AS present"
+            ).first(decodingColumn: "present", as: Bool.self)
+            #expect(present == false)
+
+            let logged = try await MigrationLog.query(on: app.db)
+                .filter(\.$name == migration.name)
+                .count()
+            #expect(logged == 0)
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+
+        try await app.shutdownForTesting()
+    }
+
     private func currentStatementTimeout(on sql: any SQLDatabase) async throws -> String? {
         try await sql.raw(
             "SELECT current_setting('statement_timeout') AS value"
@@ -230,3 +295,30 @@ private struct StatementTimeoutAttempt: Sendable {
 }
 
 private struct ExpectedMigrationFailure: Error {}
+
+/// Opens a nested `Database.transaction`, lets it return successfully, and
+/// then fails. The schema change survives only if that nested call incorrectly
+/// commits SchemaMigrator's explicit outer transaction.
+private struct NestedTransactionCreatesThenFails: AsyncMigration {
+    struct Boom: Error {}
+
+    var name: String { "DatabaseStatementTimeoutTests.NestedTransactionCreatesThenFails" }
+
+    func prepare(on database: any Database) async throws {
+        try await database.transaction { nested in
+            guard let sql = nested as? any SQLDatabase else {
+                throw DatabaseStatementTimeoutConfigurationError.postgresRequired
+            }
+            try await sql.raw(
+                "CREATE TABLE statement_timeout_nested_transaction_probe "
+                    + "(id uuid PRIMARY KEY)"
+            ).run()
+        }
+        throw Boom()
+    }
+
+    func revert(on database: any Database) async throws {
+        guard let sql = database as? any SQLDatabase else { return }
+        try await sql.raw("DROP TABLE IF EXISTS statement_timeout_nested_transaction_probe").run()
+    }
+}

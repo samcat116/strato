@@ -126,6 +126,8 @@ enum DatabaseStatementTimeoutConfigurationError: Error, CustomStringConvertible 
     case invalidValue(environmentKey: String, raw: String)
     case postgresRequired
     case pinnedConnectionRequired
+    case transactionAlreadyActive
+    case transactionNotActive
 
     var description: String {
         switch self {
@@ -138,6 +140,10 @@ enum DatabaseStatementTimeoutConfigurationError: Error, CustomStringConvertible 
             return "Database statement timeouts require a PostgreSQL SQL connection"
         case .pinnedConnectionRequired:
             return "Transaction control requires a pinned PostgreSQL connection"
+        case .transactionAlreadyActive:
+            return "A transaction is already active on this PostgreSQL connection"
+        case .transactionNotActive:
+            return "No transaction is active on this PostgreSQL connection"
         }
     }
 }
@@ -176,7 +182,7 @@ private struct StatementTimeoutDatabaseDriver: DatabaseDriver {
             base: base.makeDatabase(with: context),
             initializer: initializer,
             isPinned: false,
-            isInTransaction: false
+            transactionState: nil
         )
     }
 
@@ -245,6 +251,71 @@ private struct StatementTimeoutUncheckedSendable<Value>: @unchecked Sendable {
     let value: Value
 }
 
+/// Transaction state belongs to the pinned connection, not to one immutable
+/// database-wrapper value. SchemaMigrator begins and ends transactions through
+/// `TransactionControlDatabase`, while individual migrations may call
+/// `Database.transaction`; sharing this reference makes both APIs observe the
+/// same active transaction.
+private final class StatementTimeoutTransactionState: @unchecked Sendable {
+    private enum Phase: Equatable {
+        case idle
+        case beginning
+        case active
+        case ending
+    }
+
+    private let lock = NSLock()
+    private var phase: Phase = .idle
+
+    var isActive: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return phase == .active || phase == .ending
+    }
+
+    func willBegin() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard phase == .idle else {
+            throw DatabaseStatementTimeoutConfigurationError.transactionAlreadyActive
+        }
+        phase = .beginning
+    }
+
+    func didBegin() {
+        lock.lock()
+        defer { lock.unlock() }
+        phase = .active
+    }
+
+    func beginFailed() {
+        lock.lock()
+        defer { lock.unlock() }
+        phase = .idle
+    }
+
+    func willEnd() throws {
+        lock.lock()
+        defer { lock.unlock() }
+        guard phase == .active else {
+            throw DatabaseStatementTimeoutConfigurationError.transactionNotActive
+        }
+        phase = .ending
+    }
+
+    func didEnd() {
+        lock.lock()
+        defer { lock.unlock() }
+        phase = .idle
+    }
+
+    func endFailed() {
+        lock.lock()
+        defer { lock.unlock() }
+        phase = .active
+    }
+}
+
 /// Preserves Fluent, SQLKit, and PostgresNIO refinements while ensuring that a
 /// checked-out physical connection has its statement budget before application
 /// work runs on it.
@@ -252,10 +323,10 @@ private struct StatementTimeoutDatabase: Database {
     let base: any Database
     let initializer: StatementTimeoutConnectionInitializer
     let isPinned: Bool
-    let isInTransaction: Bool
+    let transactionState: StatementTimeoutTransactionState?
 
     var context: DatabaseContext { base.context }
-    var inTransaction: Bool { isInTransaction }
+    var inTransaction: Bool { transactionState?.isActive ?? false }
 
     private func withConfiguredConnection<T>(
         _ closure: @escaping @Sendable (any Database) -> EventLoopFuture<T>
@@ -297,25 +368,20 @@ private struct StatementTimeoutDatabase: Database {
     func transaction<T: Sendable>(
         _ closure: @escaping @Sendable (any Database) -> EventLoopFuture<T>
     ) -> EventLoopFuture<T> {
-        guard !isInTransaction else { return closure(self) }
+        guard !inTransaction else { return closure(self) }
 
         return withConfiguredConnection { connection in
-            guard let control = connection as? any TransactionControlDatabase else {
-                return connection.eventLoop.makeFailedFuture(
-                    DatabaseStatementTimeoutConfigurationError.pinnedConnectionRequired
-                )
-            }
             let transactionDatabase = StatementTimeoutDatabase(
                 base: connection,
                 initializer: initializer,
                 isPinned: true,
-                isInTransaction: true
+                transactionState: StatementTimeoutTransactionState()
             )
-            return control.beginTransaction().flatMap {
+            return transactionDatabase.beginTransaction().flatMap {
                 closure(transactionDatabase).flatMap { result in
-                    control.commitTransaction().map { result }
+                    transactionDatabase.commitTransaction().map { result }
                 }.flatMapError { error in
-                    control.rollbackTransaction().flatMapThrowing { throw error }
+                    transactionDatabase.rollbackTransaction().flatMapThrowing { throw error }
                 }
             }
         }
@@ -330,7 +396,7 @@ private struct StatementTimeoutDatabase: Database {
                     base: connection,
                     initializer: initializer,
                     isPinned: true,
-                    isInTransaction: isInTransaction
+                    transactionState: transactionState ?? StatementTimeoutTransactionState()
                 )
             )
         }
@@ -339,26 +405,61 @@ private struct StatementTimeoutDatabase: Database {
 
 extension StatementTimeoutDatabase: TransactionControlDatabase {
     func beginTransaction() -> EventLoopFuture<Void> {
-        transactionControl { $0.beginTransaction() }
-    }
-
-    func commitTransaction() -> EventLoopFuture<Void> {
-        transactionControl { $0.commitTransaction() }
-    }
-
-    func rollbackTransaction() -> EventLoopFuture<Void> {
-        transactionControl { $0.rollbackTransaction() }
-    }
-
-    private func transactionControl(
-        _ operation: (any TransactionControlDatabase) -> EventLoopFuture<Void>
-    ) -> EventLoopFuture<Void> {
-        guard isPinned, let control = base as? any TransactionControlDatabase else {
+        guard
+            isPinned,
+            let control = base as? any TransactionControlDatabase,
+            let transactionState
+        else {
             return eventLoop.makeFailedFuture(
                 DatabaseStatementTimeoutConfigurationError.pinnedConnectionRequired
             )
         }
-        return operation(control)
+
+        do {
+            try transactionState.willBegin()
+        } catch {
+            return eventLoop.makeFailedFuture(error)
+        }
+        return control.beginTransaction().map {
+            transactionState.didBegin()
+        }.flatMapErrorThrowing { error in
+            transactionState.beginFailed()
+            throw error
+        }
+    }
+
+    func commitTransaction() -> EventLoopFuture<Void> {
+        endTransaction { $0.commitTransaction() }
+    }
+
+    func rollbackTransaction() -> EventLoopFuture<Void> {
+        endTransaction { $0.rollbackTransaction() }
+    }
+
+    private func endTransaction(
+        _ operation: (any TransactionControlDatabase) -> EventLoopFuture<Void>
+    ) -> EventLoopFuture<Void> {
+        guard
+            isPinned,
+            let control = base as? any TransactionControlDatabase,
+            let transactionState
+        else {
+            return eventLoop.makeFailedFuture(
+                DatabaseStatementTimeoutConfigurationError.pinnedConnectionRequired
+            )
+        }
+
+        do {
+            try transactionState.willEnd()
+        } catch {
+            return eventLoop.makeFailedFuture(error)
+        }
+        return operation(control).map {
+            transactionState.didEnd()
+        }.flatMapErrorThrowing { error in
+            transactionState.endFailed()
+            throw error
+        }
     }
 }
 
