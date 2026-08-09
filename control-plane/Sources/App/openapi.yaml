@@ -10432,6 +10432,14 @@ components:
           type: string
           format: uuid
           description: The DNS zone this network's VMs auto-register into, if any.
+        zoneResolutionWarning:
+          type: string
+          description: >-
+            Why this network's guests will not resolve the DNS zones attached to
+            it, with the remedy, or absent when they will — the network's
+            resolver is off, its site cannot run one, or it has no address yet.
+            Absent for a network with no attached zone, which has nothing to
+            fail to deliver.
         createdAt:
           type: string
           format: date-time
@@ -10727,6 +10735,13 @@ components:
           description: >-
             Whether this zone is the network's primary — i.e. whether the
             network's VMs auto-register their derived records here.
+        zoneResolutionWarning:
+          type: string
+          description: >-
+            Why this network's guests will not resolve the DNS zones attached to
+            it, with the remedy, or absent when they will. A property of the
+            network rather than of this zone, so every entry for one network
+            repeats it.
     DNSZone:
       type: object
       required: [id, name, projectId, networks, recordCount]

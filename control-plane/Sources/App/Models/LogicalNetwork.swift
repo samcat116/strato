@@ -447,10 +447,19 @@ struct NetworkResponse: Content {
     let siteId: UUID?
     /// The zone this network's VMs auto-register into, if any (issue #770).
     let primaryDnsZoneId: UUID?
+    /// Why this network's guests will not resolve the DNS zones attached to it,
+    /// or nil when they will (STR-201). Derived on read from the resolver's
+    /// state and the site's capability — see
+    /// `ResolverCapability.zoneResolutionWarning`.
+    ///
+    /// A required init parameter rather than a defaulted one, so none of the
+    /// handlers building this can silently omit the one field that reports a
+    /// misconfiguration.
+    let zoneResolutionWarning: String?
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from network: LogicalNetwork, attachedInterfaceCount: Int) {
+    init(from network: LogicalNetwork, attachedInterfaceCount: Int, zoneResolutionWarning: String?) {
         self.id = network.id
         self.name = network.name
         self.subnet = network.subnet
@@ -474,6 +483,7 @@ struct NetworkResponse: Content {
         }
         self.siteId = network.$site.id
         self.primaryDnsZoneId = network.$primaryDNSZone.id
+        self.zoneResolutionWarning = zoneResolutionWarning
         self.createdAt = network.createdAt
         self.updatedAt = network.updatedAt
     }

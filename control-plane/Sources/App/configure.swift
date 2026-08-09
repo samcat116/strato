@@ -850,6 +850,11 @@ public func configure(_ app: Application) async throws {
     // for, so a grow the agent has refused stops reading as one that landed.
     app.migrations.add(AddVolumeObservedSize())
 
+    // STR-201: hand an address to the networks `AddResolverEnabledToLogicalNetwork`
+    // switched the resolver on for, which never got one because an index is only
+    // allocated by a network create or update.
+    app.migrations.add(BackfillResolverIndexes())
+
     // STR-198: the same backstop for the DNS model's text columns, which the
     // STR-195 cut left out. A follow-on rather than four more entries in
     // `BoundResourceTextColumns`, which has already run on every existing

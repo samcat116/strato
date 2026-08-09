@@ -802,6 +802,150 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("The zone-resolution warning names whichever thing is withholding the resolver")
+    func zoneResolutionWarningBranches() {
+        let network = LogicalNetwork(
+            name: "warn", subnet: "10.90.0.0/24", projectID: UUID(), resolverIndex: 400)
+
+        // Nothing attached: nothing to fail to deliver, whatever the resolver
+        // is doing.
+        network.resolverEnabled = false
+        #expect(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 0, incapableAgentNames: ["old-host"]) == nil)
+
+        let off = try! #require(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 1, incapableAgentNames: []))
+        #expect(off.contains("resolver is off"))
+        #expect(off.contains("its attached DNS zone"))
+
+        network.resolverEnabled = true
+        #expect(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 2, incapableAgentNames: []) == nil)
+
+        let incapable = try! #require(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 2, incapableAgentNames: ["hv-1", "hv-2"]))
+        #expect(incapable.contains("hv-1, hv-2"))
+        // Plural, because the count is the operator's own attachment count.
+        #expect(incapable.contains("its 2 attached DNS zones"))
+
+        // The pre-STR-40 state the backfill exists to remove.
+        network.resolverIndex = nil
+        let unallocated = try! #require(
+            ResolverCapability.zoneResolutionWarning(
+                network: network, attachedZoneCount: 1, incapableAgentNames: []))
+        #expect(unallocated.contains("no address allocated"))
+    }
+
+    @Test("The capability index answers per site, and from site-less agents when unpinned")
+    func capabilityIndexScopesBySite() {
+        let siteA = UUID()
+        let siteB = UUID()
+        func incapableAgent(named name: String, site: UUID?) -> Agent {
+            let agent = Agent(
+                name: name, hostname: name, version: "1.0", capabilities: [],
+                resources: AgentResources(
+                    totalCPU: 1, availableCPU: 1, totalMemory: 1, availableMemory: 1,
+                    totalDisk: 1, availableDisk: 1))
+            agent.$site.id = site
+            return agent
+        }
+        let index = ResolverCapability.Index(incapable: [
+            incapableAgent(named: "old-b", site: siteB),
+            incapableAgent(named: "old-a2", site: siteA),
+            incapableAgent(named: "old-a1", site: siteA),
+            incapableAgent(named: "unsited", site: nil),
+        ])
+
+        #expect(index.incapableAgentNames(forSite: siteA) == ["old-a1", "old-a2"])
+        #expect(index.incapableAgentNames(forSite: siteB) == ["old-b"])
+        // A site with nothing holding it back is capable, not unknown.
+        #expect(index.incapableAgentNames(forSite: UUID()).isEmpty)
+        // The sync path asks a site-less receiving agent's own flag, so agents
+        // assigned to other sites cannot be named as the cause here.
+        #expect(index.incapableAgentNames(forSite: nil) == ["unsited"])
+    }
+
+    @Test("The backfill gives an address to a resolver-enabled network that has none")
+    func backfillAllocatesMissingResolverIndexes() async throws {
+        try await withNetworkTestApp { app, _, project, _ in
+            let builder = TestDataBuilder(db: app.db)
+            // The shape `AddResolverEnabledToLogicalNetwork` left behind: the
+            // flag on by default, no index, and nothing that would ever
+            // allocate one.
+            let stranded = try await builder.createNetwork(name: "pre-str40", project: project)
+            #expect(stranded.resolverEnabled)
+            #expect(stranded.resolverIndex == nil)
+
+            let held = try await builder.createNetwork(name: "already-has-one", project: project)
+            held.resolverIndex = 500
+            try await held.save(on: app.db)
+
+            let optedOut = try await builder.createNetwork(name: "no-resolver", project: project)
+            optedOut.resolverEnabled = false
+            try await optedOut.save(on: app.db)
+
+            try await BackfillResolverIndexes().prepare(on: app.db)
+
+            let filled = try await LogicalNetwork.find(stranded.id, on: app.db)
+            let allocated = try #require(filled?.resolverIndex)
+            #expect(NetworkResolverEndpoint.isValidIndex(allocated))
+            #expect(allocated != 500)
+            // A live address is never moved — that would strand every lease
+            // already carrying it.
+            #expect(try await LogicalNetwork.find(held.id, on: app.db)?.resolverIndex == 500)
+            // The flag is off, so there is nothing to point guests at.
+            #expect(try await LogicalNetwork.find(optedOut.id, on: app.db)?.resolverIndex == nil)
+
+            // Idempotent: a second run allocates nothing further.
+            try await BackfillResolverIndexes().prepare(on: app.db)
+            #expect(try await LogicalNetwork.find(stranded.id, on: app.db)?.resolverIndex == allocated)
+        }
+    }
+
+    @Test("The backfill serializes with a concurrent live resolver allocation")
+    func backfillSerializesWithLiveAllocation() async throws {
+        try await withNetworkTestApp { app, _, project, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let stranded = try await builder.createNetwork(name: "backfill-race", project: project)
+
+            // Keep this row out of the backfill's pending set until its live
+            // allocation commits. Its transaction chooses an index, pauses,
+            // and gives the migration a chance to collide if the migration is
+            // not participating in the allocator's advisory lock.
+            let live = try await builder.createNetwork(name: "live-race", project: project)
+            live.resolverEnabled = false
+            try await live.save(on: app.db)
+            let liveID = try live.requireID()
+            let (selection, selected) = AsyncStream.makeStream(of: Void.self)
+
+            async let liveAllocation: Void = app.db.transaction { db in
+                let allocating = try #require(try await LogicalNetwork.find(liveID, on: db))
+                allocating.resolverEnabled = true
+                _ = try await ResolverAddressAllocator.ensureIndex(for: allocating, on: db)
+                selected.yield()
+                try await Task.sleep(for: .milliseconds(250))
+                try await allocating.save(on: db)
+            }
+
+            for await _ in selection {
+                break
+            }
+            async let backfill: Void = BackfillResolverIndexes().prepare(on: app.db)
+            _ = try await (liveAllocation, backfill)
+            selected.finish()
+
+            let filled = try #require(try await LogicalNetwork.find(stranded.id, on: app.db))
+            let allocatedLive = try #require(try await LogicalNetwork.find(liveID, on: app.db))
+            #expect(filled.resolverIndex != nil)
+            #expect(allocatedLive.resolverIndex != nil)
+            #expect(filled.resolverIndex != allocatedLive.resolverIndex)
+        }
+    }
+
     @Test("subnetsOverlap detects containment, equality, and disjoint ranges")
     func subnetOverlapLogic() {
         #expect(NetworkController.subnetsOverlap("10.0.0.0/16", "10.0.1.0/24"))

@@ -5,12 +5,12 @@ model** with swappable realization. This document describes that model — what 
 zone is, where records come from, and how a zone's contents are assembled — and
 sketches the layers that will realize it.
 
-Status: **phases 1 and 3 are implemented; phase 4 is partial.** Zones,
-attachments, records, and hostnames are fully manageable through the API and
-CLI; the assembler produces a correct record set for a zone; and the A/AAAA/PTR
-subset of that set is realized into the OVN `DNS` table by each network's
-topology authority, so a guest resolves its peers by `<hostname>.<zone>` in the
-datapath.
+Status: **phases 1, 3 and 4 are implemented.** Zones, attachments, records, and
+hostnames are fully manageable through the API and CLI; the assembler produces a
+correct record set for a zone; the A/AAAA/PTR subset of that set is realized into
+the OVN `DNS` table by each network's topology authority, so a guest resolves its
+peers by `<hostname>.<zone>` in the datapath; and every network can have a
+resolver of its own on a link-local address, which its guests are pointed at.
 
 Phase 4's resolver serves the **full record vocabulary** — CNAME, TXT and SRV,
 which the datapath cannot express — and **forwards everything else through the
@@ -18,16 +18,22 @@ hypervisor's own egress**, which is what lets a guest on a network with no
 external access resolve a public name at all. Inbound resolution from outside the
 overlay (phase 5) and external publication (phase 6) are untouched.
 
-## What exists before this
+## How resolver settings reach a guest
 
-Resolver-setting delivery only. `LogicalNetwork.dnsServers` / `domainName` ship
-over the wire and reach the guest on whichever path addresses its NIC: DHCP NICs
-get them as OVN `DHCP_Options` (`dns_server` plus `domain_name`/`domain_search`,
+`LogicalNetwork.dnsServers` / `domainName` ship over the wire and reach the guest
+on whichever path addresses its NIC: DHCP NICs get them as OVN `DHCP_Options`
+(`dns_server` plus `domain_name`/`domain_search`,
 `agent/Sources/StratoAgentCore/DHCPOptions.swift`), and statically addressed NICs
 get them as the `nameservers` `addresses`/`search` block of the cloud-init
-network-config (`CloudInitProvisioner.networkConfigYAML`). They are seeded with
-public resolvers so guests can look up *public* names. Nothing resolves a
-Strato-owned name, and the OVN `DNS` table is never touched.
+network-config (`CloudInitProvisioner.networkConfigYAML`).
+
+Before phase 4 that was the whole story, and `dnsServers` was seeded with public
+resolvers so guests could look up *public* names — nothing resolved a
+Strato-owned name and the OVN `DNS` table was never touched. Phase 4 kept the two
+delivery paths and changed what travels on them: with the resolver on, both
+substitute the network's own link-local address for `dns_server` /
+`nameservers.addresses`, and `dnsServers` becomes that resolver's upstream
+forwarders. See "`LogicalNetwork.dnsServers` is redefined, not replaced" below.
 
 `domainName` is held to the same grammar as a zone name (`DNSName.normalizedZoneName`),
 so the two names in this model agree on one spelling. That is also a safety
@@ -35,6 +41,44 @@ property rather than tidiness: neither destination carries the value as text —
 one is a netplan document keyed by indentation, the other an option map with its
 own quoting — so an unvalidated domain edits the structure around it rather than
 appearing in it (issue #876).
+
+### The search domain follows the primary zone
+
+Pointing a guest at a resolver is not the whole of "this network resolves its
+zone". A search domain is *guest-side* config — no resolver can supply one — so a
+network with a primary zone and no `domainName` gives its guests
+`alpha.corp.internal` and not `alpha` (STR-201).
+
+So `domainName` **follows the primary zone while the operator has not claimed
+it**: promoting a zone sets the search domain to the zone's name, re-pointing the
+primary or renaming its zone moves it, and clearing the primary clears it. The
+moment an operator sets a `domainName` of their own — including in the same
+request that sets the primary zone — it stops following and is never touched
+again.
+
+The predicate is one function,
+`DNSZoneService.searchDomainFollowingPrimaryZone`, called from the two places
+that move `primary_dns_zone_id` — `DNSController.attachNetwork` (with
+`primary: true`) and `NetworkController.updateNetwork` — and from
+`DNSController.updateZone`, which moves every still-following domain in the same
+transaction as a rename. Detaching refuses while a zone is primary and deleting
+refuses while any attachment exists, so the FK's `ON DELETE SET NULL` is
+unreachable through the API.
+
+### When guests will not reach the resolver at all
+
+Three states leave a network's guests being handed `dnsServers` verbatim while a
+zone is attached and realized: the network's resolver is off, its site cannot run
+one, or it has no address allocated yet. All three are invisible from inside a
+guest — the zone realizes, the resolver would answer, the guest simply never
+asks, and the failure presents as an ordinary NXDOMAIN.
+
+`ResolverCapability.zoneResolutionWarning` names whichever one applies, with its
+remedy, and it rides both the network (`NetworkResponse.zoneResolutionWarning`)
+and every zone-attachment entry
+(`DNSZoneNetworkResponse.zoneResolutionWarning`) — so the **attach response
+itself** says so, at the moment the operator states the intent. It is nil for a
+network with no attached zone, which has nothing to fail to deliver.
 
 ## Why the control plane owns the record model
 
@@ -255,7 +299,9 @@ without a zone, so delegating a zone carries its records.
 
 Attaching a zone to a network additionally requires `update` on the network:
 attachment changes what that network's VMs resolve, so owning the zone alone is
-not enough (the volume/floating-IP rule).
+not enough (the volume/floating-IP rule). Attaching as **primary** also writes
+the network's search domain — see "The search domain follows the primary zone"
+above — which is the other half of that same permission.
 
 CLI: `strato dns zone` and `strato dns record`, plus `strato network create
 --dns-server/--domain-name` and `strato network update` for the DHCP-delivered

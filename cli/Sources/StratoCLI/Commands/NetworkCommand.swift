@@ -67,6 +67,12 @@ struct NetworkCommand: AsyncParsableCommand {
                         ])
                     table.addRow(["domain name", network.domainName ?? ""])
                     table.addRow(["primary dns zone", network.primaryDnsZoneId ?? ""])
+                    // Only rendered when there is one: an empty row here would
+                    // read as "checked, and fine", which is not what an absent
+                    // warning means for a network with no zones at all.
+                    if let warning = network.zoneResolutionWarning {
+                        table.addRow(["zone resolution", warning])
+                    }
                     table.addRow(["attached NICs", String(network.attachedInterfaceCount)])
                     table.addRow(["created", formatDate(network.createdAt)])
                     return table
