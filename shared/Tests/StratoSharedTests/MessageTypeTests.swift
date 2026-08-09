@@ -4,6 +4,57 @@ import StratoShared
 
 @Suite("MessageType wire strings")
 struct MessageTypeTests {
+    /// These strings are a compatibility contract with independently deployed
+    /// peers, not an implementation inventory. Keep this switch exhaustive so
+    /// every new live frame gets an explicit, reviewed wire spelling.
+    private func expectedWireString(for type: MessageType) -> String {
+        switch type {
+        case .agentRegister: return "agent_register"
+        case .agentRegisterResponse: return "agent_register_response"
+        case .agentHeartbeat: return "agent_heartbeat"
+        case .agentUnregister: return "agent_unregister"
+        case .consoleConnect: return "console_connect"
+        case .consoleDisconnect: return "console_disconnect"
+        case .consoleData: return "console_data"
+        case .consoleConnected: return "console_connected"
+        case .consoleDisconnected: return "console_disconnected"
+        case .desiredState: return "desired_state"
+        case .observedState: return "observed_state"
+        case .success: return "success"
+        case .error: return "error"
+        case .vmLog: return "vm_log"
+        case .sandboxExecStart: return "sandbox_exec_start"
+        case .sandboxExecStarted: return "sandbox_exec_started"
+        case .sandboxExecInput: return "sandbox_exec_input"
+        case .sandboxExecOutput: return "sandbox_exec_output"
+        case .sandboxExecResize: return "sandbox_exec_resize"
+        case .sandboxExecExit: return "sandbox_exec_exit"
+        case .sandboxExecClose: return "sandbox_exec_close"
+        case .sandboxExecClosed: return "sandbox_exec_closed"
+        case .sandboxLog: return "sandbox_log"
+        }
+    }
+
+    private static let liveTypes: [MessageType] = [
+        .agentRegister, .agentRegisterResponse, .agentHeartbeat, .agentUnregister,
+        .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
+        .desiredState, .observedState,
+        .success, .error, .vmLog,
+        .sandboxExecStart, .sandboxExecStarted, .sandboxExecInput, .sandboxExecOutput,
+        .sandboxExecResize, .sandboxExecExit, .sandboxExecClose, .sandboxExecClosed,
+        .sandboxLog,
+    ]
+
+    @Test("live wire strings stay compatible", arguments: liveTypes)
+    func liveWireStringIsStable(type: MessageType) throws {
+        let expected = expectedWireString(for: type)
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: encodeJSON(type), options: .fragmentsAllowed) as? String
+        )
+        #expect(encoded == expected)
+        #expect(try decodeJSON(MessageType.self, from: encodeJSON(expected)) == type)
+    }
+
     @Test("unknown wire string fails to decode")
     func unknownTypeThrows() {
         // MessageType has no tolerant fallback: a peer speaking a newer
@@ -66,4 +117,10 @@ struct MessageTypeTests {
         }
     }
 
+    @Test("retired wire strings are never reused")
+    func retiredAndLiveStringsAreDisjoint() {
+        let live = Set(Self.liveTypes.map(\.rawValue))
+        let collisions = Self.retiredWireStrings.filter(live.contains)
+        #expect(collisions.isEmpty, "retired wire strings revived as live cases: \(collisions)")
+    }
 }
