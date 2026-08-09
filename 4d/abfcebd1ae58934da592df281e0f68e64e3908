@@ -1,0 +1,33 @@
+control-plane/web/src/components/security-groups/create-security-group-dialog.tsx
+  s_839ff8d845c23a::t_e98b9bd2844012 142
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_839ff8d845c23a::t_e98b9bd2844012 589
+control-plane/Tests/AppPlatformTests/ProjectResolutionTests.swift
+  s_839ff8d845c23a::t_e98b9bd2844012 38-39,395-407,424-426
+control-plane/web/src/components/volumes/create-volume-dialog.tsx
+  s_839ff8d845c23a::t_e98b9bd2844012 277
+control-plane/web/src/components/sandboxes/create-sandbox-dialog.tsx
+  s_839ff8d845c23a::t_e98b9bd2844012 467
+control-plane/Sources/App/Extensions/Request+ProjectResolution.swift
+  s_839ff8d845c23a::t_e98b9bd2844012 105
+control-plane/web/src/components/sandboxes/sandbox-snapshots-card.tsx
+  s_839ff8d845c23a::t_e98b9bd2844012 81-84,217
+control-plane/web/src/components/networks/create-network-dialog.tsx
+  s_839ff8d845c23a::t_e98b9bd2844012 254
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "4dabfcebd1ae58934da592df281e0f68e64e3908",
+  "prompts": {},
+  "sessions": {
+    "s_839ff8d845c23a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3d1-2690-7d33-bd4a-e33d7cd8a517",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
