@@ -62,14 +62,17 @@ const emptyForm: QuotaForm = {
 
 function formFromQuota(quota: ResourceQuota | undefined): QuotaForm {
   if (!quota) return emptyForm;
+  // Swift omits nil optional fields when encoding, while older payloads may
+  // still carry an explicit null. Normalize both wire shapes to the form's
+  // blank "unlimited" value.
+  const maxVolumes = quota.limits.maxVolumes ?? null;
   return {
     name: quota.name,
     maxVCPUs: String(quota.limits.maxVCPUs),
     maxMemoryGB: String(quota.limits.maxMemoryGB),
     maxStorageGB: String(quota.limits.maxStorageGB),
     maxVMs: String(quota.limits.maxVMs),
-    maxVolumes:
-      quota.limits.maxVolumes === null ? "" : String(quota.limits.maxVolumes),
+    maxVolumes: maxVolumes === null ? "" : String(maxVolumes),
     maxNetworks: String(quota.limits.maxNetworks),
     environment: quota.environment ?? "",
     isEnabled: quota.isEnabled,

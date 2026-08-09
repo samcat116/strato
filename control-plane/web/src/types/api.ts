@@ -1803,8 +1803,8 @@ export interface QuotaLimits {
   maxMemoryGB: number;
   maxStorageGB: number;
   maxVMs: number;
-  /** Volume count limit. Null means no count limit. */
-  maxVolumes: number | null;
+  /** Volume count limit. Omitted or null means no count limit. */
+  maxVolumes?: number | null;
   maxNetworks: number;
 }
 
