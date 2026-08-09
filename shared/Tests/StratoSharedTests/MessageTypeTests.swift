@@ -4,9 +4,9 @@ import StratoShared
 
 @Suite("MessageType wire strings")
 struct MessageTypeTests {
-    /// The wire string each case must serialize to. The switch is exhaustive on
-    /// purpose: adding a MessageType case without extending this test is a
-    /// compile error, so every new case gets its wire string pinned here.
+    /// These strings are a compatibility contract with independently deployed
+    /// peers, not an implementation inventory. Keep this switch exhaustive so
+    /// every new live frame gets an explicit, reviewed wire spelling.
     private func expectedWireString(for type: MessageType) -> String {
         switch type {
         case .agentRegister: return "agent_register"
@@ -35,7 +35,7 @@ struct MessageTypeTests {
         }
     }
 
-    private static let allTypes: [MessageType] = [
+    private static let liveTypes: [MessageType] = [
         .agentRegister, .agentRegisterResponse, .agentHeartbeat, .agentUnregister,
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
         .desiredState, .observedState,
@@ -45,14 +45,14 @@ struct MessageTypeTests {
         .sandboxLog,
     ]
 
-    @Test("every case keeps its wire string", arguments: allTypes)
-    func wireStringIsStable(type: MessageType) {
-        #expect(type.rawValue == expectedWireString(for: type))
-    }
-
-    @Test("every case round-trips through JSON", arguments: allTypes)
-    func roundTrips(type: MessageType) throws {
-        #expect(try roundTrip([type]) == [type])
+    @Test("live wire strings stay compatible", arguments: liveTypes)
+    func liveWireStringIsStable(type: MessageType) throws {
+        let expected = expectedWireString(for: type)
+        let encoded = try #require(
+            JSONSerialization.jsonObject(with: encodeJSON(type), options: .fragmentsAllowed) as? String
+        )
+        #expect(encoded == expected)
+        #expect(try decodeJSON(MessageType.self, from: encodeJSON(expected)) == type)
     }
 
     @Test("unknown wire string fails to decode")
@@ -67,7 +67,7 @@ struct MessageTypeTests {
     /// Every wire string that was a `MessageType` case once and must never be
     /// one again.
     ///
-    /// Retiring a string is *safe* precisely because of the test above — a
+    /// Retiring a string is *safe* because an unknown type fails to decode — a
     /// stale peer's frame fails to route instead of decoding into something
     /// else — but only for as long as it stays retired. Agents deploy on their
     /// own schedule, so a fleet always contains peers old enough to still send
@@ -117,12 +117,9 @@ struct MessageTypeTests {
         }
     }
 
-    /// The two lists above must stay disjoint. Without this, reviving a retired
-    /// string as a live case would only fail the retired-string test — which
-    /// reads like a stale expectation to delete, exactly the wrong fix.
-    @Test("no live case reuses a retired wire string")
+    @Test("retired wire strings are never reused")
     func retiredAndLiveStringsAreDisjoint() {
-        let live = Set(Self.allTypes.map(\.rawValue))
+        let live = Set(Self.liveTypes.map(\.rawValue))
         let collisions = Self.retiredWireStrings.filter(live.contains)
         #expect(collisions.isEmpty, "retired wire strings revived as live cases: \(collisions)")
     }

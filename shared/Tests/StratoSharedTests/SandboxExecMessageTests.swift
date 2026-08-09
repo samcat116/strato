@@ -85,7 +85,4 @@ struct SandboxExecMessageTests {
         #expect(decoded.message == "listening on :8080")
     }
 
-    @Test("exec gate refuses pre-v8 agents and admits v8")
-    func execVersionGate() {
-    }
 }

@@ -338,7 +338,8 @@ actor AgentService {
             agent.sandboxNetworkingCapable = message.sandboxNetworkingCapable ?? false
             agent.tpmCapable = message.tpmCapable ?? false
             agent.resolverCapable = message.resolverCapable ?? false
-            agent.updateResources(message.resources)
+            _ = agent.updateAvailableResources(message.resources)
+            agent.lastHeartbeat = Date()
             agent.status = .online
         } else {
             // A brand-new agent takes its scope and site placement from the
@@ -2475,7 +2476,29 @@ actor AgentService {
                     }
                 } ?? agents
 
-            return Self.schedulableAgents(from: present, runningVMCounts: runningVMCounts)
+            return present.compactMap { agent in
+                guard let agentId = agent.id?.uuidString else { return nil }
+                return SchedulableAgent(
+                    id: agentId,
+                    name: agent.name,
+                    totalCPU: agent.totalCPU,
+                    availableCPU: agent.availableCPU,
+                    totalMemory: agent.totalMemory,
+                    availableMemory: agent.availableMemory,
+                    totalDisk: agent.totalDisk,
+                    availableDisk: agent.availableDisk,
+                    status: agent.status,
+                    runningVMCount: runningVMCounts[agentId] ?? 0,
+                    supportedHypervisors: agent.supportedHypervisors,
+                    architecture: agent.cpuArchitecture,
+                    supportsInterVMNetworking: agent.supportsInterVMNetworking,
+                    siteID: agent.$site.id,
+                    wireProtocolVersion: agent.wireProtocolVersion,
+                    supportsSandboxWorkloads: agent.sandboxCapable,
+                    supportsSandboxNetworking: agent.sandboxNetworkingCapable,
+                    supportsVTPM: agent.tpmCapable
+                )
+            }
         } catch {
             app.logger.error("Failed to load schedulable agents from database: \(error)")
             return []
@@ -2503,42 +2526,6 @@ actor AgentService {
         ).all(decoding: Row.self)
 
         return Dictionary(uniqueKeysWithValues: rows.map { ($0.hypervisor_id, $0.count) })
-    }
-
-    /// Pure transform from agent rows to the scheduler's view. Kept
-    /// `nonisolated static` so it can be unit-tested without the actor.
-    nonisolated static func schedulableAgents(
-        from agents: [Agent],
-        runningVMCounts: [String: Int]
-    ) -> [SchedulableAgent] {
-        return agents.compactMap { agent in
-            guard let agentId = agent.id?.uuidString else { return nil }
-            return SchedulableAgent(
-                id: agentId,  // Database UUID (as String)
-                name: agent.name,  // Human-readable name
-                totalCPU: agent.totalCPU,
-                availableCPU: agent.availableCPU,
-                totalMemory: agent.totalMemory,
-                availableMemory: agent.availableMemory,
-                totalDisk: agent.totalDisk,
-                availableDisk: agent.availableDisk,
-                status: agent.status,
-                runningVMCount: runningVMCounts[agentId] ?? 0,
-                supportedHypervisors: agent.supportedHypervisors,
-                architecture: agent.cpuArchitecture,
-                supportsInterVMNetworking: agent.supportsInterVMNetworking,
-                siteID: agent.$site.id,
-                wireProtocolVersion: agent.wireProtocolVersion,
-                // The advertised runtime proves the agent can boot sandboxes
-                // (issue #415).
-                supportsSandboxWorkloads: agent.sandboxCapable,
-                // The NIC half (STR-103): OVN, the jailer barrier, and a guest
-                // image that configures the interface.
-                supportsSandboxNetworking: agent.sandboxNetworkingCapable,
-                // swtpm on the host proves a vTPM can be realized (issue #565).
-                supportsVTPM: agent.tpmCapable
-            )
-        }
     }
 
     // MARK: - Message Sending

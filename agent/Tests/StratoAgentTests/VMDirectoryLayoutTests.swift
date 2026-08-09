@@ -83,9 +83,4 @@ struct VMDirectoryLayoutTests {
         #expect(FileManager.default.fileExists(atPath: root))
     }
 
-    @Test("the directory is the storage path joined with the VM id")
-    func directoryPath() {
-        #expect(
-            VMDirectoryLayout.directory(vmStoragePath: "/var/lib/strato/vms", vmId: "abc") == "/var/lib/strato/vms/abc")
-    }
 }

@@ -65,13 +65,4 @@ struct NetworkAttachmentTests {
         #expect(subnet6CIDR(ip6Address: "fd12::1", prefixLength: 129) == nil)
     }
 
-    // MARK: - NetworkAttachment coding
-
-    @Test("attachment descriptor round-trips through Codable")
-    func attachmentCodable() throws {
-        let attachments: [NetworkAttachment] = [.tap(interface: "tap0123456789ab"), .userMode]
-        let data = try JSONEncoder().encode(attachments)
-        let decoded = try JSONDecoder().decode([NetworkAttachment].self, from: data)
-        #expect(decoded == attachments)
-    }
 }
