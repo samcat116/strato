@@ -290,20 +290,6 @@ struct InstanceMetadataTests {
         }
     }
 
-    @Test("Instance-metadata support is keyed on protocol version 26")
-    func instanceMetadataVersionGate() {
-        // Below the gate an absent `metadata` is silence, not an instruction:
-        // the agent leaves what it serves alone instead of emptying every
-        // VM's store the moment a control plane is rolled back.
-    }
-
-    @Test("Metadata-port support is keyed on protocol version 27")
-    func metadataPortVersionGate() {
-        // Below the gate a nil `metadataEnabled` is silence too — and here it
-        // matters more, because network teardown is `observed - desired`, so
-        // reading silence as "off" would delete a live localport.
-    }
-
     @Test("The metadata endpoints are the ones guest tooling already probes")
     func metadataEndpointAddresses() {
         // cloud-init's Ec2 datasource tries both without configuration; that is

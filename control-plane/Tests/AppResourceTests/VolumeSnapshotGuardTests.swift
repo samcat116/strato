@@ -47,7 +47,7 @@ struct VolumeSnapshotGuardTests {
             let volume = Volume(
                 name: "guard-volume",
                 description: "volume under the snapshot guard",
-                projectID: project.id!,
+                projectID: project.id!, environment: "development",
                 size: 10 * 1024 * 1024 * 1024,
                 status: status,
                 createdByID: admin.id!)

@@ -372,6 +372,13 @@ services:
       # Audience a token must name. Defaults to the control plane's own SPIFFE
       # ID, which is what a workload naturally mints a token for.
       # SPIFFE_JWT_AUDIENCE: spiffe://strato.local/control-plane
+      # Guest JWT-SVID issuance (STR-57). The audience allowlist is intentionally
+      # unset by default, which keeps the endpoint disabled. Never use the
+      # control plane's own SPIFFE_JWT_AUDIENCE here unless guests are meant to
+      # authenticate to the Strato API.
+      # GUEST_IDENTITY_AUDIENCES: spiffe://strato.local/example-relying-party
+      # GUEST_IDENTITY_JWT_TTL: "300"
+      # GUEST_IDENTITY_JWT_MAX_TTL: "3600"
       # Workload Identity "Issuance" panel: read SPIRE's SVID-signing counters
       # from the compose Prometheus over a rolling 24h window. Unset this to
       # leave the panel unavailable. Metric names default to SPIRE's server CA

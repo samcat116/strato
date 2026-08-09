@@ -43,7 +43,7 @@ final class ProjectVisibilityTests {
         let volume = Volume(
             name: name,
             description: "test volume",
-            projectID: project.id!,
+            projectID: project.id!, environment: "development",
             size: 1_073_741_824,
             createdByID: createdBy.id!
         )

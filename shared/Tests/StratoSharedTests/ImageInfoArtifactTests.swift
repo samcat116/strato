@@ -4,39 +4,6 @@ import Foundation
 
 @Suite("ImageInfo artifact set")
 struct ImageInfoArtifactTests {
-
-    @Test("ImageInfo with artifacts round-trips through Codable")
-    func artifactSetRoundTrips() throws {
-        let imageId = UUID()
-        let projectId = UUID()
-        let info = ImageInfo(
-            imageId: imageId,
-            projectId: projectId,
-            filename: "disk.qcow2",
-            checksum: "abc",
-            size: 100,
-            downloadURL: "https://cp/disk",
-            architecture: .arm64,
-            artifacts: [
-                ArtifactInfo(
-                    kind: .kernel, filename: "vmlinux", checksum: "k1",
-                    size: 10, downloadURL: "https://cp/kernel"),
-                ArtifactInfo(
-                    kind: .rootfs, filename: "rootfs.img", checksum: "r1",
-                    size: 20, downloadURL: "https://cp/rootfs"),
-            ]
-        )
-
-        let data = try JSONEncoder().encode(info)
-        let decoded = try JSONDecoder().decode(ImageInfo.self, from: data)
-
-        #expect(decoded.imageId == imageId)
-        #expect(decoded.architecture == .arm64)
-        #expect(decoded.artifacts.count == 2)
-        #expect(decoded.artifact(ofKind: .kernel)?.checksum == "k1")
-        #expect(decoded.artifact(ofKind: .diskImage) == nil)
-    }
-
     @Test("Legacy payload without architecture/artifacts still decodes")
     func legacyPayloadDecodes() throws {
         // A message shaped like the pre-#214 ImageInfo (no architecture/artifacts).

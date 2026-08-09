@@ -34,6 +34,10 @@ enum AuditEventType: String, Sendable {
     /// A cross-org principal's role revoked — the other half of the trail, so
     /// external access has a visible end as well as a visible start.
     case crossOrgRevoke = "iam.cross_org_revoke"
+    /// A hosting agent successfully minted a JWT-SVID naming one of its VMs.
+    case guestIdentityMinted = "identity.guest_svid_minted"
+    /// A verified agent was refused a guest JWT-SVID after authentication.
+    case guestIdentityRefused = "identity.guest_svid_refused"
 }
 
 // MARK: - Record

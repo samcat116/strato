@@ -27,6 +27,7 @@ func routes(_ app: Application) throws {
     try app.register(collection: APIDocumentationController())
     try app.register(collection: AgentWebSocketController())
     try app.register(collection: AgentDesiredStateController())
+    try app.register(collection: AgentGuestIdentityController())
 
     // Hierarchical IAM controllers
     // Projects themselves are served by generated handlers — see

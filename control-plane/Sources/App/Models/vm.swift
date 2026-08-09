@@ -86,6 +86,16 @@ final class VM: Model, @unchecked Sendable {
     @OptionalField(key: "failed_generation")
     var failedGeneration: Int64?
 
+    /// When the current error/generation pair was first observed. Stable while
+    /// identical heartbeats repeat it, and cleared by successful convergence.
+    @OptionalField(key: "last_error_at")
+    var lastErrorAt: Date?
+
+    /// Internal claim for the sustained-divergence warning. Nil starts a new
+    /// episode; the sweep atomically stamps it before logging.
+    @OptionalField(key: "divergence_detected_at")
+    var divergenceDetectedAt: Date?
+
     /// When the stuck-convergence sweep gives up on the outstanding mutations
     /// and marks this VM degraded (STR-147). Unlike the three fields above this
     /// is written by the *mutation* path, not the report: every accepted
@@ -372,11 +382,13 @@ extension VM {
         return status == .running || status == .paused
     }
 
-    /// Updates the VM status and stamps the change time for the reconciliation sweep.
-    /// Does not persist — call `save(on:)` afterwards.
+    /// Updates the VM status, starts a fresh divergence episode, and stamps the
+    /// change time for reconciliation sweeps. Does not persist — call
+    /// `save(on:)` afterwards.
     func setStatus(_ newStatus: VMStatus, at date: Date = Date()) {
         status = newStatus
         statusChangedAt = date
+        divergenceDetectedAt = nil
     }
 
     /// Records a new desired state and bumps the generation so agents treat it

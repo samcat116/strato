@@ -184,13 +184,19 @@ actor Agent {
 
     // Snapshot artifacts this host holds (STR-150), across all three families.
     //
-    // Durable, unlike `volumeSizes`, because none of what it holds can be
+    // Durable, unlike `volumeSizes`, because almost none of what it holds can be
     // re-derived: a Firecracker checkpoint's fork-layout version and CPU
     // template are not recoverable from its files at all, and a qcow2 internal
     // snapshot's footprint costs a subprocess per artifact per report. The
     // control plane learns every one of these facts from the observed report,
     // so they are recorded once, when the only party that can measure them
     // does.
+    //
+    // The one exception is a volume snapshot's footprint, which is a `stat` of a
+    // plain file the agent named — cheap enough to redo per report, and it has
+    // to be, since an overlay grows after capture (STR-181). That measurement
+    // lives on the report path (`SnapshotFootprint.reported`) and never comes back
+    // here: this stays the memory of the capture.
     //
     // `snapshotInventoryUnreadable` is the artifact counterpart of
     // `manifestReadFailure` and does the same job: an empty inventory is
@@ -4304,9 +4310,15 @@ extension Agent: ReconcileActuator {
         }
     }
 
-    /// The allocated size of a file, or nil when it cannot be read. Nil is
-    /// "unknown", never "empty" — a footprint the agent could not measure must
-    /// not silently become a free one in the control plane's quota accounting.
+    /// The apparent size of a file (`st_size`), or nil when it cannot be read.
+    /// Nil is "unknown", never "empty" — a footprint the agent could not measure
+    /// must not silently become a free one in the control plane's quota
+    /// accounting.
+    ///
+    /// Apparent, not allocated: for the archives this measures — a sandbox
+    /// snapshot's files, an overlay at the instant it was created — the two are
+    /// the same. `SnapshotFootprint.allocatedBytes` is what to reach for when the
+    /// question is how much of the filesystem an artifact is occupying *now*.
     private static func fileSizeBytes(at path: String) -> Int64? {
         guard let attributes = try? FileManager.default.attributesOfItem(atPath: path),
             let size = attributes[.size] as? NSNumber
@@ -4442,15 +4454,15 @@ extension Agent: ReconcileActuator {
                 // Blocked, not permanent (STR-199). The reason names a remedy —
                 // stop the guest, or detach — and the whole point of naming one
                 // is that applying it works: the block clears without anyone
-                // re-asking for the size, so the refusal must not consume the
-                // attempt budget that decides whether the next sync tries
-                // again. Classified permanent, this guard reported what to do
+                // re-asking for the size, so the refusal must not enter either
+                // permanent suppression or transient backoff. Classified
+                // permanent, this guard reported what to do
                 // and then ignored an operator who did it, leaving a volume
                 // permanently short of a size nothing had withdrawn.
                 //
                 // Still not transient: an operator has to see the reason, and a
-                // transient failure that outlives its three attempts is degraded
-                // with no more explanation than one that never had a remedy.
+                // transient failure would delay the next retry even after the
+                // operator applied the remedy.
                 guard isDefinitelyStopped else {
                     throw VolumeConvergenceError.blocked(
                         "refusing to grow volume \(item.id): it is attached to VM "
@@ -5378,7 +5390,11 @@ extension Agent: ReconcileActuator {
                     parentId: artifact.parentId,
                     present: true,
                     exported: artifact.exported,
-                    facts: artifact.facts,
+                    // Re-measured here rather than in `observedSnapshotPresence()`,
+                    // which builds the `Equatable` value the planner diffs: a
+                    // number that changes every report has no business reaching
+                    // a convergence decision (STR-181).
+                    facts: SnapshotFootprint.reported(artifact.facts, kind: artifact.kind),
                     observedGeneration: await reconciler.observedGeneration(for: snapshotId, kind: kind),
                     convergencePhase: await reconciler.convergencePhase(for: snapshotId, kind: kind),
                     lastError: await reconciler.lastError(for: snapshotId, kind: kind),

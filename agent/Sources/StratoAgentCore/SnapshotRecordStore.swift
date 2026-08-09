@@ -14,6 +14,14 @@ import StratoShared
 /// per artifact per report is not affordable on a dense host, and re-deriving
 /// them is in several cases impossible — so they are recorded once, when the
 /// only party that can measure them does.
+///
+/// That argument is about *those* artifacts, and one fact escapes it: a volume
+/// snapshot's footprint is a `stat` of a plain file, and it has to be re-read,
+/// because an overlay grows after capture and the control plane exposes that
+/// live allocation (STR-181). The re-measurement happens on the report path as
+/// `ObservedSnapshotFacts.currentSizeBytes` (see ``SnapshotFootprint``). Nothing
+/// writes it back here, so this record stays what it says it is — the memory of
+/// the capture.
 public struct SnapshotRecord: Codable, Sendable, Equatable {
     public let snapshotId: UUID
     public let kind: SnapshotArtifactKind

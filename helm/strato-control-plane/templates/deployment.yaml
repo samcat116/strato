@@ -285,6 +285,14 @@ spec:
             - name: SPIFFE_JWT_BUNDLE_REFRESH_INTERVAL
               value: "{{ .Values.spire.controlPlane.jwtSvidAuth.bundleRefreshInterval }}"
             {{- end }}
+            # Guest JWT-SVID issuance is independent from accepting JWT-SVIDs
+            # on the Strato API. An empty audience list keeps issuance off.
+            - name: GUEST_IDENTITY_AUDIENCES
+              value: {{ join "," .Values.spire.controlPlane.guestIdentity.audiences | quote }}
+            - name: GUEST_IDENTITY_JWT_TTL
+              value: "{{ .Values.spire.controlPlane.guestIdentity.defaultTTLSeconds }}"
+            - name: GUEST_IDENTITY_JWT_MAX_TTL
+              value: "{{ .Values.spire.controlPlane.guestIdentity.maximumTTLSeconds }}"
             {{- if .Values.spire.controlPlane.serverPublicAddress }}
             # Public address remote nodes dial for attestation (explicit override).
             - name: SPIRE_SERVER_PUBLIC_ADDRESS

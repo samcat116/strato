@@ -330,11 +330,15 @@ extension Volume: FinalizableResource {
             try await ResourceBindingCleanup.revokeBindings(forDeletedVolume: volumeID, on: tx)
             try await ResourceFinalizerService.recordDeletionCompleted(volume, in: tx)
             try await volume.delete(on: tx)
+            // After the delete, so the volume drops out of the recount (STR-181).
+            // One call covers its snapshots too: their rows cascade with the one
+            // above, and release recomputes rather than decrements.
+            try await QuotaEnforcementService.release(for: volume, on: tx)
             return true
         }
-        // No quota release and no placement reservation to give back: volumes
-        // draw on neither. Their `volume_replicas` and `volume_snapshots` rows
-        // cascade with the row above.
+        // No placement reservation to give back — volumes draw on none. Their
+        // `volume_replicas` and `volume_snapshots` rows cascade with the row
+        // above.
     }
 }
 
@@ -381,9 +385,14 @@ enum SnapshotArtifactReap {
 
 extension VolumeSnapshot: FinalizableResource {
     static func reap(_ snapshot: VolumeSnapshot, on db: any Database, app: Application) async throws -> Bool {
-        // No quota release: volume snapshots draw on no pool today, exactly as
-        // the volumes they hang off do not.
-        try await SnapshotArtifactReap.reap(snapshot, on: db, app: app)
+        try await SnapshotArtifactReap.reap(
+            snapshot, on: db, app: app,
+            releaseQuota: { snapshot, tx in
+                // The overlay was charged to the project's storage pool at
+                // admission (STR-181); recount now that it is gone.
+                _ = try? await QuotaEnforcementService.storageOverCommit(
+                    projectID: snapshot.$project.id, environment: snapshot.environment, on: tx)
+            })
     }
 }
 

@@ -338,7 +338,8 @@ actor AgentService {
             agent.sandboxNetworkingCapable = message.sandboxNetworkingCapable ?? false
             agent.tpmCapable = message.tpmCapable ?? false
             agent.resolverCapable = message.resolverCapable ?? false
-            agent.updateResources(message.resources)
+            _ = agent.updateAvailableResources(message.resources)
+            agent.lastHeartbeat = Date()
             agent.status = .online
         } else {
             // A brand-new agent takes its scope and site placement from the
@@ -874,6 +875,13 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
+                    // Surface desired/observed divergence when no mutation is
+                    // outstanding (STR-123). Each row carries its own
+                    // compare-and-swap warning claim across replicas.
+                    await sweepSteadyStateDivergence()
+
+                    try self.checkTickPreconditions()
+
                     // Release volumes still naming a VM that no longer exists
                     // (STR-129).
                     await sweepStrandedVolumeAttachments()
@@ -1061,6 +1069,173 @@ actor AgentService {
         } catch {
             app.logger.error("Stuck-convergence sweep failed: \(error)")
         }
+    }
+
+    /// Fixed grace before a resting desired/observed mismatch becomes
+    /// operationally divergent. Kept longer than ordinary report jitter and
+    /// short agent outages, while remaining alertable within one quarter-hour.
+    static let steadyStateDivergenceGrace: TimeInterval = 15 * 60
+
+    struct SteadyStateDivergenceCounts: Equatable, Sendable {
+        var vms = 0
+        var sandboxes = 0
+        var newlyDetected = 0
+    }
+
+    /// Detect steady-state divergence for workloads with no convergence
+    /// deadline. The metric is level-triggered; warning logs are edge-triggered
+    /// by `divergence_detected_at`, claimed atomically so every replica may run
+    /// this sweep without duplicating one episode's warning.
+    @discardableResult
+    func sweepSteadyStateDivergence(now: Date = Date()) async -> SteadyStateDivergenceCounts {
+        guard !isShutDown, !app.didShutdown else { return SteadyStateDivergenceCounts() }
+        guard let sql = app.db as? any SQLDatabase else {
+            app.logger.error("Steady-state divergence sweep requires an SQL database")
+            return SteadyStateDivergenceCounts()
+        }
+
+        let cutoff = now.addingTimeInterval(-Self.steadyStateDivergenceGrace)
+        do {
+            let vms = try await divergentVMRows(before: cutoff, on: sql)
+            let sandboxes = try await divergentSandboxRows(before: cutoff, on: sql)
+            var counts = SteadyStateDivergenceCounts(vms: vms.count, sandboxes: sandboxes.count)
+
+            Telemetry.recordDivergedWorkloads(kind: "vm", count: counts.vms)
+            Telemetry.recordDivergedWorkloads(kind: "sandbox", count: counts.sandboxes)
+
+            for row in vms where try await claimVMDivergence(row.id, at: now, before: cutoff, on: sql) {
+                counts.newlyDetected += 1
+                logDivergence(row, kind: "vm")
+            }
+            for row in sandboxes
+            where try await claimSandboxDivergence(row.id, at: now, before: cutoff, on: sql) {
+                counts.newlyDetected += 1
+                logDivergence(row, kind: "sandbox")
+            }
+            return counts
+        } catch {
+            app.logger.error("Steady-state divergence sweep failed: \(error)")
+            return SteadyStateDivergenceCounts()
+        }
+    }
+
+    private struct DivergedWorkloadRow: Decodable {
+        let id: UUID
+        let name: String
+        let desiredStatus: String
+        let status: String
+        let generation: Int64
+        let observedGeneration: Int64
+        let lastError: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id, name, status, generation
+            case desiredStatus = "desired_status"
+            case observedGeneration = "observed_generation"
+            case lastError = "last_error"
+        }
+    }
+
+    private struct DivergenceClaim: Decodable { let id: UUID }
+
+    private func divergentVMRows(
+        before cutoff: Date, on sql: any SQLDatabase
+    ) async throws -> [DivergedWorkloadRow] {
+        try await sql.raw(
+            """
+            SELECT id, name, desired_status, status, generation, observed_generation, last_error
+            FROM vms
+            WHERE convergence_deadline IS NULL
+              AND desired_status <> 'Absent'
+              AND observed_generation >= generation
+              AND COALESCE(status_changed_at, created_at, updated_at) <= \(bind: cutoff)
+              AND NOT (
+                    (desired_status = 'Running' AND status = 'Running')
+                 OR (desired_status = 'Paused' AND status = 'Paused')
+                 OR (desired_status = 'Shutdown' AND status IN ('Shutdown', 'Created'))
+              )
+            """
+        ).all(decoding: DivergedWorkloadRow.self)
+    }
+
+    private func divergentSandboxRows(
+        before cutoff: Date, on sql: any SQLDatabase
+    ) async throws -> [DivergedWorkloadRow] {
+        try await sql.raw(
+            """
+            SELECT id, name, desired_status, status, generation, observed_generation, last_error
+            FROM sandboxes
+            WHERE convergence_deadline IS NULL
+              AND desired_status <> 'Absent'
+              AND observed_generation >= generation
+              AND COALESCE(status_changed_at, created_at, updated_at) <= \(bind: cutoff)
+              AND NOT (
+                    (desired_status = 'Running' AND status IN ('Running', 'Exited'))
+                 OR (desired_status = 'Stopped' AND status IN ('Stopped', 'Exited'))
+              )
+            """
+        ).all(decoding: DivergedWorkloadRow.self)
+    }
+
+    private func claimVMDivergence(
+        _ id: UUID, at now: Date, before cutoff: Date, on sql: any SQLDatabase
+    ) async throws -> Bool {
+        let rows = try await sql.raw(
+            """
+            UPDATE vms SET divergence_detected_at = \(bind: now)
+            WHERE id = \(bind: id)
+              AND divergence_detected_at IS NULL
+              AND convergence_deadline IS NULL
+              AND desired_status <> 'Absent'
+              AND observed_generation >= generation
+              AND COALESCE(status_changed_at, created_at, updated_at) <= \(bind: cutoff)
+              AND NOT (
+                    (desired_status = 'Running' AND status = 'Running')
+                 OR (desired_status = 'Paused' AND status = 'Paused')
+                 OR (desired_status = 'Shutdown' AND status IN ('Shutdown', 'Created'))
+              )
+            RETURNING id
+            """
+        ).all(decoding: DivergenceClaim.self)
+        return !rows.isEmpty
+    }
+
+    private func claimSandboxDivergence(
+        _ id: UUID, at now: Date, before cutoff: Date, on sql: any SQLDatabase
+    ) async throws -> Bool {
+        let rows = try await sql.raw(
+            """
+            UPDATE sandboxes SET divergence_detected_at = \(bind: now)
+            WHERE id = \(bind: id)
+              AND divergence_detected_at IS NULL
+              AND convergence_deadline IS NULL
+              AND desired_status <> 'Absent'
+              AND observed_generation >= generation
+              AND COALESCE(status_changed_at, created_at, updated_at) <= \(bind: cutoff)
+              AND NOT (
+                    (desired_status = 'Running' AND status IN ('Running', 'Exited'))
+                 OR (desired_status = 'Stopped' AND status IN ('Stopped', 'Exited'))
+              )
+            RETURNING id
+            """
+        ).all(decoding: DivergenceClaim.self)
+        return !rows.isEmpty
+    }
+
+    private func logDivergence(_ row: DivergedWorkloadRow, kind: String) {
+        var metadata: Logger.Metadata = [
+            "kind": .string(kind),
+            "workloadId": .string(row.id.uuidString),
+            "name": .string(row.name),
+            "desiredStatus": .string(row.desiredStatus),
+            "observedStatus": .string(row.status),
+            "generation": .stringConvertible(row.generation),
+            "observedGeneration": .stringConvertible(row.observedGeneration),
+        ]
+        if let lastError = row.lastError { metadata["lastError"] = .string(lastError) }
+        app.logger.warning(
+            "Workload remains divergent with no mutation outstanding",
+            metadata: metadata)
     }
 
     /// One workload kind's overdue rows. The deadline is the only column the
@@ -2475,7 +2650,29 @@ actor AgentService {
                     }
                 } ?? agents
 
-            return Self.schedulableAgents(from: present, runningVMCounts: runningVMCounts)
+            return present.compactMap { agent in
+                guard let agentId = agent.id?.uuidString else { return nil }
+                return SchedulableAgent(
+                    id: agentId,
+                    name: agent.name,
+                    totalCPU: agent.totalCPU,
+                    availableCPU: agent.availableCPU,
+                    totalMemory: agent.totalMemory,
+                    availableMemory: agent.availableMemory,
+                    totalDisk: agent.totalDisk,
+                    availableDisk: agent.availableDisk,
+                    status: agent.status,
+                    runningVMCount: runningVMCounts[agentId] ?? 0,
+                    supportedHypervisors: agent.supportedHypervisors,
+                    architecture: agent.cpuArchitecture,
+                    supportsInterVMNetworking: agent.supportsInterVMNetworking,
+                    siteID: agent.$site.id,
+                    wireProtocolVersion: agent.wireProtocolVersion,
+                    supportsSandboxWorkloads: agent.sandboxCapable,
+                    supportsSandboxNetworking: agent.sandboxNetworkingCapable,
+                    supportsVTPM: agent.tpmCapable
+                )
+            }
         } catch {
             app.logger.error("Failed to load schedulable agents from database: \(error)")
             return []
@@ -2503,42 +2700,6 @@ actor AgentService {
         ).all(decoding: Row.self)
 
         return Dictionary(uniqueKeysWithValues: rows.map { ($0.hypervisor_id, $0.count) })
-    }
-
-    /// Pure transform from agent rows to the scheduler's view. Kept
-    /// `nonisolated static` so it can be unit-tested without the actor.
-    nonisolated static func schedulableAgents(
-        from agents: [Agent],
-        runningVMCounts: [String: Int]
-    ) -> [SchedulableAgent] {
-        return agents.compactMap { agent in
-            guard let agentId = agent.id?.uuidString else { return nil }
-            return SchedulableAgent(
-                id: agentId,  // Database UUID (as String)
-                name: agent.name,  // Human-readable name
-                totalCPU: agent.totalCPU,
-                availableCPU: agent.availableCPU,
-                totalMemory: agent.totalMemory,
-                availableMemory: agent.availableMemory,
-                totalDisk: agent.totalDisk,
-                availableDisk: agent.availableDisk,
-                status: agent.status,
-                runningVMCount: runningVMCounts[agentId] ?? 0,
-                supportedHypervisors: agent.supportedHypervisors,
-                architecture: agent.cpuArchitecture,
-                supportsInterVMNetworking: agent.supportsInterVMNetworking,
-                siteID: agent.$site.id,
-                wireProtocolVersion: agent.wireProtocolVersion,
-                // The advertised runtime proves the agent can boot sandboxes
-                // (issue #415).
-                supportsSandboxWorkloads: agent.sandboxCapable,
-                // The NIC half (STR-103): OVN, the jailer barrier, and a guest
-                // image that configures the interface.
-                supportsSandboxNetworking: agent.sandboxNetworkingCapable,
-                // swtpm on the host proves a vTPM can be realized (issue #565).
-                supportsVTPM: agent.tpmCapable
-            )
-        }
     }
 
     // MARK: - Message Sending

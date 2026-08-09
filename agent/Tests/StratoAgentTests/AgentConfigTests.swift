@@ -19,38 +19,6 @@ struct AgentConfigTests {
         return try body(tempDirectory)
     }
 
-    // MARK: - Initialization Tests
-
-    @Test("AgentConfig initializes with all parameters")
-    func agentConfigInitialization() {
-        let config = AgentConfig(
-            controlPlaneURL: "ws://localhost:8080/agent/ws",
-            logLevel: "debug",
-            networkMode: .ovn,
-            enableHVF: false,
-            enableKVM: true
-        )
-
-        #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
-        #expect(config.logLevel == "debug")
-        #expect(config.networkMode == .ovn)
-        #expect(config.enableHVF == false)
-        #expect(config.enableKVM == true)
-    }
-
-    @Test("AgentConfig initializes with nil optional values")
-    func agentConfigInitializationWithNilValues() {
-        let config = AgentConfig(
-            controlPlaneURL: "ws://test:8080/ws"
-        )
-
-        #expect(config.controlPlaneURL == "ws://test:8080/ws")
-        #expect(config.logLevel == nil)
-        #expect(config.networkMode == nil)
-        #expect(config.enableHVF == nil)
-        #expect(config.enableKVM == nil)
-    }
-
     // MARK: - Storage paths
 
     @Test("Load volume_storage_dir alongside vm_storage_dir")
@@ -931,31 +899,6 @@ struct AgentConfigTests {
             let first = AgentConfig.loadDefaultConfig(searchPaths: [firstPath, secondPath])
             #expect(first.controlPlaneURL == "ws://first:8080/agent/ws")
         }
-    }
-
-    // MARK: - Codable Tests
-
-    @Test("AgentConfig can be encoded and decoded")
-    func agentConfigEncodingDecoding() throws {
-        let originalConfig = AgentConfig(
-            controlPlaneURL: "ws://test:9000/ws",
-            logLevel: "trace",
-            networkMode: .user,
-            enableHVF: true,
-            enableKVM: false
-        )
-
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(originalConfig)
-
-        let decoder = JSONDecoder()
-        let decodedConfig = try decoder.decode(AgentConfig.self, from: data)
-
-        #expect(decodedConfig.controlPlaneURL == originalConfig.controlPlaneURL)
-        #expect(decodedConfig.logLevel == originalConfig.logLevel)
-        #expect(decodedConfig.networkMode == originalConfig.networkMode)
-        #expect(decodedConfig.enableHVF == originalConfig.enableHVF)
-        #expect(decodedConfig.enableKVM == originalConfig.enableKVM)
     }
 
     // MARK: - Error Description Tests

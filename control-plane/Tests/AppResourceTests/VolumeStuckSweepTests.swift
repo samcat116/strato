@@ -65,7 +65,7 @@ final class VolumeStuckSweepTests {
         let volume = Volume(
             name: "vol-\(UUID().uuidString.prefix(8))",
             description: "",
-            projectID: project.id!,
+            projectID: project.id!, environment: "development",
             size: 10 * 1024 * 1024 * 1024,
             status: status,
             createdByID: user.id!

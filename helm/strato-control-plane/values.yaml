@@ -924,6 +924,16 @@ spire:
       # Rotation is also picked up on demand when a token names an unknown key.
       bundleRefreshInterval: 300
 
+    # Placement-checked JWT-SVID issuance for guest VMs (STR-57). Empty by
+    # default so upgrading cannot silently hand every guest a bearer credential.
+    guestIdentity:
+      # Relying-party audiences guests may request. Do not add the control
+      # plane's own audience unless guests should authenticate to the Strato API.
+      audiences: []
+      defaultTTLSeconds: 300
+      # Requests above this lifetime are clamped rather than refused.
+      maximumTTLSeconds: 3600
+
   # Envoy sidecar configuration for mTLS termination
   envoy:
     enabled: true

@@ -262,6 +262,22 @@ struct RateLimitMiddleware: AsyncMiddleware {
         // its own agents throttle each other out of their desired state.
         if path == "/agent/desired-state" { return nil }
 
+        // Guest JWT-SVID minting also arrives from the pod-local sidecar, but it
+        // is a short request that still needs abuse protection. The controller
+        // applies a dedicated fixed-window limit immediately after mTLS
+        // authentication, keyed by the verified agent SPIFFE identity. Leaving
+        // it in this pre-controller limiter would put the whole fleet in the
+        // same `ip:127.0.0.1` API bucket before that identity exists.
+        let components = path.split(separator: "/")
+        if request.method == .POST,
+            components.count == 4,
+            components[0] == "agent",
+            components[1] == "vms",
+            components[3] == "jwt-svid"
+        {
+            return nil
+        }
+
         if path.hasPrefix("/auth/") || path == "/api/users/register" {
             return .auth
         }

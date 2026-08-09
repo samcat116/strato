@@ -41,6 +41,8 @@ type QuotaForm = {
   maxMemoryGB: string;
   maxStorageGB: string;
   maxVMs: string;
+  /** Blank means no volume count limit. */
+  maxVolumes: string;
   maxNetworks: string;
   environment: string;
   isEnabled: boolean;
@@ -52,6 +54,7 @@ const emptyForm: QuotaForm = {
   maxMemoryGB: "16",
   maxStorageGB: "100",
   maxVMs: "10",
+  maxVolumes: "",
   maxNetworks: "5",
   environment: "",
   isEnabled: true,
@@ -59,12 +62,17 @@ const emptyForm: QuotaForm = {
 
 function formFromQuota(quota: ResourceQuota | undefined): QuotaForm {
   if (!quota) return emptyForm;
+  // Swift omits nil optional fields when encoding, while older payloads may
+  // still carry an explicit null. Normalize both wire shapes to the form's
+  // blank "unlimited" value.
+  const maxVolumes = quota.limits.maxVolumes ?? null;
   return {
     name: quota.name,
     maxVCPUs: String(quota.limits.maxVCPUs),
     maxMemoryGB: String(quota.limits.maxMemoryGB),
     maxStorageGB: String(quota.limits.maxStorageGB),
     maxVMs: String(quota.limits.maxVMs),
+    maxVolumes: maxVolumes === null ? "" : String(maxVolumes),
     maxNetworks: String(quota.limits.maxNetworks),
     environment: quota.environment ?? "",
     isEnabled: quota.isEnabled,
@@ -114,6 +122,18 @@ export function QuotaDialog({
       return;
     }
 
+    // Blank means "no volume count limit". On create that is simply omitting
+    // the field; on update the API needs to be told to *remove* one, and `0` is
+    // the sentinel for that — a limit of zero would admit nothing, so it is free
+    // to mean this.
+    const trimmedVolumes = form.maxVolumes.trim();
+    const maxVolumes =
+      trimmedVolumes === "" ? undefined : parseInt(trimmedVolumes, 10);
+    if (maxVolumes !== undefined && (Number.isNaN(maxVolumes) || maxVolumes < 1)) {
+      toast.error("The volume limit must be a positive number, or blank for no limit");
+      return;
+    }
+
     try {
       if (isEdit && quota) {
         await updateQuota.mutateAsync({
@@ -121,6 +141,7 @@ export function QuotaDialog({
           data: {
             name: form.name.trim(),
             ...numbers,
+            maxVolumes: maxVolumes ?? 0,
             isEnabled: form.isEnabled,
           },
         });
@@ -131,6 +152,7 @@ export function QuotaDialog({
           data: {
             name: form.name.trim(),
             ...numbers,
+            maxVolumes,
             environment:
               showEnvironment && form.environment
                 ? form.environment
@@ -230,6 +252,7 @@ export function QuotaDialog({
               {numberField("maxVMs", "Max VMs")}
               {numberField("maxMemoryGB", "Max Memory (GiB)", "0.5")}
               {numberField("maxStorageGB", "Max Storage (GiB)", "0.5")}
+              {numberField("maxVolumes", "Max Volumes (blank = no limit)")}
               {numberField("maxNetworks", "Max Networks")}
             </div>
 

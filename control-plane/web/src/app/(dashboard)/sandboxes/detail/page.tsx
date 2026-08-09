@@ -27,6 +27,7 @@ import {
 } from "@/components/sandboxes";
 import { formatMemory } from "@/lib/format-bytes";
 import { useSandbox, useInvalidateSandboxes } from "@/lib/hooks";
+import { ConvergenceFailureAlert } from "@/components/workloads/convergence-failure-alert";
 
 // Dynamically import SandboxTerminal to avoid SSR issues with xterm.js
 const SandboxTerminal = dynamic(
@@ -129,6 +130,8 @@ export default function SandboxDetailPage() {
           onActionComplete={invalidateSandboxes}
         />
       </div>
+
+      <ConvergenceFailureAlert conditions={sandbox.conditions} />
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="w-full">

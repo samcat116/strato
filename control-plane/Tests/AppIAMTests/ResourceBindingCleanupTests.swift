@@ -593,10 +593,12 @@ struct ResourceBindingCleanupTests {
         try await record.save(on: db)
 
         let volume = Volume(
-            name: "data", description: "", projectID: projectID, size: 1024, createdByID: ownerID)
+            name: "data", description: "", projectID: projectID, environment: "development", size: 1024,
+            createdByID: ownerID)
         try await volume.save(on: db)
         let volumeSnapshot = VolumeSnapshot(
             name: "snap", description: "", volumeID: try volume.requireID(), projectID: projectID,
+            environment: "development",
             size: 1024, createdByID: ownerID)
         try await volumeSnapshot.save(on: db)
 

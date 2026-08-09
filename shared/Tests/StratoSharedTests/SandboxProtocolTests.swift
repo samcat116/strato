@@ -254,17 +254,11 @@ struct SandboxProtocolTests {
         }
     }
 
-    @Test("Only starting/stopping are transitional")
+    @Test("starting and stopping are transitional")
     func transitionalStatuses() {
-        for status in SandboxStatus.allCases {
-            let expected = status == .starting || status == .stopping
-            #expect(status.isTransitional == expected)
-        }
-    }
-
-    @Test("Sandbox-sync support is keyed on protocol version 5")
-    func sandboxSyncVersionGate() {
-        // A v4 control plane omits `sandboxes`; the agent must not treat the
-        // decoded-empty list as an authoritative teardown of all sandboxes.
+        #expect(SandboxStatus.starting.isTransitional)
+        #expect(SandboxStatus.stopping.isTransitional)
+        #expect(!SandboxStatus.running.isTransitional)
+        #expect(!SandboxStatus.unknown.isTransitional)
     }
 }

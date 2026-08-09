@@ -92,10 +92,4 @@ struct AgentAutoUpdateProtocolTests {
         #expect(!bareReportKeys.contains("agentUpdateStatus"))
     }
 
-    @Test("Desired-agent-update support is keyed on protocol version 7")
-    func desiredAgentUpdateVersionGate() {
-        // A pre-v7 agent decodes the sync but never acts on the field, so the
-        // rollout must not assign an update to one — its health budget would
-        // expire against silence and halt the rollout.
-    }
 }

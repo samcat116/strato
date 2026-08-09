@@ -267,6 +267,23 @@ struct ResourceQuotaController: RouteCollection {
             quota.maxSandboxes = maxSandboxes
         }
 
+        // The one limit that can be *removed*, so `0` is the sentinel for that
+        // (STR-181) — omission still means "leave it alone", as everywhere else
+        // here. Setting one is floored at the measured count like the other two.
+        if let maxVolumes = updateRequest.maxVolumes {
+            if maxVolumes == 0 {
+                quota.maxVolumes = nil
+            } else {
+                if maxVolumes < quota.volumeCount {
+                    throw Abort(
+                        .badRequest,
+                        reason:
+                            "New volume limit (\(maxVolumes)) cannot be below current count (\(quota.volumeCount))")
+                }
+                quota.maxVolumes = maxVolumes
+            }
+        }
+
         if let maxNetworks = updateRequest.maxNetworks {
             quota.maxNetworks = maxNetworks
         }
@@ -313,7 +330,7 @@ struct ResourceQuotaController: RouteCollection {
         // so there is nothing here for a healed cache to be read by.
         let usage = try await QuotaUsageAggregator.measure(quota: quota, on: req.db)
         if usage.vcpus > 0 || usage.memoryBytes > 0 || usage.storageBytes > 0 || usage.vmCount > 0
-            || usage.sandboxCount > 0
+            || usage.sandboxCount > 0 || usage.volumeCount > 0
         {
             throw Abort(.conflict, reason: "Cannot delete quota with active resource reservations")
         }
@@ -660,6 +677,7 @@ struct ResourceQuotaController: RouteCollection {
             maxStorage: maxStorageBytes,
             maxVMs: createRequest.maxVMs,
             maxSandboxes: createRequest.maxSandboxes,
+            maxVolumes: createRequest.maxVolumes,
             maxNetworks: createRequest.maxNetworks ?? 10,
             environment: createRequest.environment,
             isEnabled: createRequest.isEnabled ?? true

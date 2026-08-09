@@ -3,7 +3,7 @@ import Toml
 import Logging
 import StratoShared
 
-public enum NetworkMode: String, Codable {
+public enum NetworkMode: String {
     case ovn
     case user
 }
@@ -13,7 +13,7 @@ public enum NetworkMode: String, Codable {
 /// no real networking/storage, reporting configurable fake host capacity. This
 /// lets a fleet of agents be scale-tested against a control plane far larger
 /// than the compute available to actually run VMs.
-public struct SimulationConfig: Codable, Sendable, Equatable {
+public struct SimulationConfig: Sendable, Equatable {
     /// Whether simulation mode is active. When false, every other field is ignored.
     public let enabled: Bool
     /// Fake logical CPU core count to advertise. Nil uses `defaultCPUCores`.
@@ -31,15 +31,6 @@ public struct SimulationConfig: Codable, Sendable, Equatable {
     /// Nil means workloads run until stopped.
     public let sandboxExitAfterSeconds: Int?
 
-    enum CodingKeys: String, CodingKey {
-        case enabled
-        case cpuCores = "cpu_cores"
-        case memoryMB = "memory_mb"
-        case diskGB = "disk_gb"
-        case sandboxLogIntervalMS = "sandbox_log_interval_ms"
-        case sandboxExitAfterSeconds = "sandbox_exit_after_seconds"
-    }
-
     public init(
         enabled: Bool = false,
         cpuCores: Int? = nil,
@@ -55,9 +46,6 @@ public struct SimulationConfig: Codable, Sendable, Equatable {
         self.sandboxLogIntervalMS = sandboxLogIntervalMS
         self.sandboxExitAfterSeconds = sandboxExitAfterSeconds
     }
-
-    /// Default simulation configuration (disabled).
-    public static let disabled = SimulationConfig(enabled: false)
 
     public static let defaultCPUCores = 8
     public static let defaultMemoryMB = 16 * 1024  // 16 GB
@@ -88,7 +76,7 @@ public struct SimulationConfig: Codable, Sendable, Equatable {
 }
 
 /// SPIFFE/SPIRE configuration
-public struct SPIFFEConfig: Codable, Sendable {
+public struct SPIFFEConfig: Sendable {
     /// Whether SPIFFE authentication is enabled
     public let enabled: Bool
 
@@ -118,17 +106,6 @@ public struct SPIFFEConfig: Codable, Sendable {
     /// `spiffe://<trust_domain>/control-plane`, which is what both supported
     /// deployment paths (deploy/compose Envoy and the Helm chart) provision.
     public let controlPlaneSPIFFEID: String?
-
-    enum CodingKeys: String, CodingKey {
-        case enabled
-        case trustDomain = "trust_domain"
-        case workloadAPISocketPath = "workload_api_socket_path"
-        case sourceType = "source_type"
-        case certificatePath = "certificate_path"
-        case privateKeyPath = "private_key_path"
-        case trustBundlePath = "trust_bundle_path"
-        case controlPlaneSPIFFEID = "control_plane_spiffe_id"
-    }
 
     public init(
         enabled: Bool = false,
@@ -171,9 +148,6 @@ public struct SPIFFEConfig: Codable, Sendable {
         return !trustDomain.isEmpty && !path.isEmpty
     }
 
-    /// Default SPIFFE configuration (disabled)
-    public static let disabled = SPIFFEConfig(enabled: false)
-
     /// Default Workload API socket path
     public static let defaultWorkloadAPISocketPath = "/var/run/spire/sockets/workload.sock"
 
@@ -186,7 +160,7 @@ public struct SPIFFEConfig: Codable, Sendable {
 /// (`ovn-pki`), so the CA must be supplied explicitly and the server usually
 /// requires a client certificate signed by the same CA — these are the agent
 /// counterparts of ovn-nbctl's `-C`/`-c`/`-p` flags. All paths are PEM files.
-public struct OVNNorthboundTLSConfig: Codable, Sendable, Equatable {
+public struct OVNNorthboundTLSConfig: Sendable, Equatable {
     /// CA certificate(s) used to verify the server. Nil = system trust roots.
     public let caCertPath: String?
     /// Client certificate chain presented to the server.
@@ -199,14 +173,6 @@ public struct OVNNorthboundTLSConfig: Codable, Sendable, Equatable {
     /// Hostname for SNI/certificate verification, when connecting by IP
     /// address to a certificate issued for a DNS name.
     public let serverHostname: String?
-
-    enum CodingKeys: String, CodingKey {
-        case caCertPath = "ca_cert"
-        case clientCertPath = "client_cert"
-        case clientKeyPath = "client_key"
-        case verifyServerCertificate = "verify_server_certificate"
-        case serverHostname = "server_hostname"
-    }
 
     public init(
         caCertPath: String? = nil,
@@ -228,7 +194,7 @@ public struct OVNNorthboundTLSConfig: Codable, Sendable, Equatable {
     }
 }
 
-public struct AgentConfig: Codable {
+public struct AgentConfig {
     public let controlPlaneURL: String
     public let logLevel: String?
     public let networkMode: NetworkMode?
@@ -392,55 +358,7 @@ public struct AgentConfig: Codable {
             allowBulkTeardown: allowBulkTeardown ?? false)
     }
 
-    enum CodingKeys: String, CodingKey {
-        case controlPlaneURL = "control_plane_url"
-        case logLevel = "log_level"
-        case networkMode = "network_mode"
-        case ovnEncapIP = "ovn_encap_ip"
-        case ovnEncapType = "ovn_encap_type"
-        case ovnRemote = "ovn_remote"
-        case ovnBootstrapChassis = "ovn_bootstrap_chassis"
-        case ovnNorthbound = "ovn_northbound"
-        case ovnNorthboundTLS = "ovn_northbound_tls"
-        case enableHVF = "enable_hvf"
-        case enableKVM = "enable_kvm"
-        case qemuMemoryOverheadMB = "qemu_memory_overhead_mb"
-        case vmStoragePath = "vm_storage_dir"
-        case volumeStoragePath = "volume_storage_dir"
-        case imageCacheDir = "image_cache_dir"
-        case imageCacheMaxSizeGB = "image_cache_max_size_gb"
-        case sandboxImageCacheDir = "sandbox_image_cache_dir"
-        case sandboxImageCacheMaxSizeGB = "sandbox_image_cache_max_size_gb"
-        case firmwarePathARM64 = "firmware_path_arm64"
-        case firmwarePathX86_64 = "firmware_path_x86_64"
-        case firmwareCodePath = "firmware_code_path"
-        case firmwareVarsTemplate = "firmware_vars_template"
-        case secureBootFirmwareCodePath = "secure_boot_firmware_code_path"
-        case secureBootFirmwareVarsTemplate = "secure_boot_firmware_vars_template"
-        case spiffe
-        case firecrackerBinaryPath = "firecracker_binary_path"
-        case firecrackerSocketDir = "firecracker_socket_dir"
-        case sandboxGuestImagePath = "sandbox_guest_image_path"
-        case sandboxJailerMode = "sandbox_jailer_mode"
-        case sandboxJailerBinaryPath = "sandbox_jailer_binary_path"
-        case sandboxJailerChrootDir = "sandbox_jailer_chroot_dir"
-        case sandboxJailerUidBase = "sandbox_jailer_uid_base"
-        case sandboxWarmStart = "sandbox_warm_start"
-        case sandboxWarmCacheMaxSizeGB = "sandbox_warm_cache_max_size_gb"
-        case hypervisorType = "hypervisor_type"
-        case ovnUplink = "ovn_uplink"
-        case ovnDynamicRouting = "ovn_dynamic_routing"
-        case resolver
-        case simulation
-        case reconcileTeardownMinimum = "reconcile_teardown_minimum"
-        case reconcileTeardownPercent = "reconcile_teardown_percent"
-        case allowBulkTeardown = "allow_bulk_teardown"
-        case desiredStateFullRefetchSeconds = "desired_state_full_refetch_seconds"
-        case metadataService = "metadata_service"
-        case metadataResponseHopLimit = "metadata_response_hop_limit"
-    }
-
-    public init(
+    private init(
         controlPlaneURL: String,
         logLevel: String? = nil,
         networkMode: NetworkMode? = nil,

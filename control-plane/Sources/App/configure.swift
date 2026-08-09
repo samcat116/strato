@@ -250,15 +250,26 @@ public func configure(_ app: Application) async throws {
     // requests are rejected before doing real work. Uses Valkey when configured
     // (shared across replicas), else a process-local counter. See issue #60.
     let rateLimitConfig = RateLimitConfig.fromEnvironment(for: app.environment)
+    let rateLimitFallbackStore = InMemoryRateLimitStore()
+    let valkeyRateLimitStore =
+        app.valkeyEnabled ? ValkeyRateLimitStore(client: app.coordinationValkey) : nil
+    // Agent minting authenticates inside its controller, after this global
+    // middleware runs. Give it the same policy and stores but a dedicated,
+    // verified-agent key space so every Envoy sidecar request does not share
+    // the loopback-IP API bucket.
+    app.agentGuestIdentityRateLimiter = AgentGuestIdentityRateLimiter(
+        config: rateLimitConfig,
+        fallbackStore: rateLimitFallbackStore,
+        valkeyStore: valkeyRateLimitStore)
     if rateLimitConfig.enabled {
         app.middleware.use(
             RateLimitMiddleware(
                 config: rateLimitConfig,
-                fallbackStore: InMemoryRateLimitStore(),
+                fallbackStore: rateLimitFallbackStore,
                 // Coordination, not sessions: these are cross-replica counters
                 // whose backend errors fail open without rejecting the request,
                 // which is exactly the coordination contract.
-                valkeyStore: app.valkeyEnabled ? ValkeyRateLimitStore(client: app.coordinationValkey) : nil
+                valkeyStore: valkeyRateLimitStore
             ))
         app.logger.info(
             "Rate limiting enabled",
@@ -869,9 +880,18 @@ public func configure(_ app: Application) async throws {
     // deployment — see `BoundDNSTextColumns`.
     app.migrations.add(BoundDNSTextColumns())
 
+    // STR-181: volumes and volume snapshots become countable — an environment
+    // to scope them by, the overlay footprint reported for visibility, and an
+    // optional volume count limit.
+    app.migrations.add(AddVolumeQuotaAccounting())
+
     // STR-185: the per-instance metadata kill switch, so hardening one workload
     // against SSRF no longer means moving it to a network of its own.
     app.migrations.add(AddMetadataEnabledToVM())
+
+    // STR-123: timestamp steady-state convergence errors and claim sustained
+    // divergence episodes exactly once across control-plane replicas.
+    app.migrations.add(AddWorkloadConvergenceObservability())
 
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
@@ -963,6 +983,10 @@ public func configure(_ app: Application) async throws {
     // Configure SPIRE join-token provisioning for the agent registration flow
     // (requires SPIRE_ENABLED plus SPIRE_SERVER_API_ADDRESS)
     try app.configureSPIRERegistration()
+
+    // Guest JWT-SVID issuance is default-off until an operator supplies an
+    // explicit audience allowlist.
+    app.configureGuestIdentityIssuance()
 
     // Configure SVID issuance telemetry for the Workload Identity view
     // (requires SPIRE_METRICS_PROMETHEUS_URL; otherwise the panel stays empty)

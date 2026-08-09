@@ -89,7 +89,7 @@ final class VolumeObservedSizeTests {
         let volume = Volume(
             name: "observed-size-target",
             description: "",
-            projectID: project.id!,
+            projectID: project.id!, environment: "development",
             size: size,
             format: .qcow2,
             volumeType: .data,
