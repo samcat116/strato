@@ -1,0 +1,21 @@
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_08df14af99520f::t_c847010558c476 7-48,56-57,120-125
+  s_08df14af99520f::t_318722742bf6df 51-53
+  s_08df14af99520f::t_f3c7a1ff5d8c79 49-50,54-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "41dde44b5465d61251c91acb792a8ff7b6996393",
+  "prompts": {},
+  "sessions": {
+    "s_08df14af99520f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4b1-20b8-74b1-aac6-1172a92f6889",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
