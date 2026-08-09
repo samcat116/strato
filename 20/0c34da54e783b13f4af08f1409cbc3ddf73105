@@ -1,0 +1,38 @@
+CLAUDE.md
+  s_e64eb3da2ecde9::t_c5376a9c96613a 128
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_e64eb3da2ecde9::t_6d56297df430f7 231,235,237
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_e64eb3da2ecde9::t_6d56297df430f7 425
+docs/architecture/storage.md
+  s_e64eb3da2ecde9::t_c5376a9c96613a 663,667-674,692-699
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_e64eb3da2ecde9::t_6d56297df430f7 419-430,488-490,496-525
+control-plane/Sources/App/Models/Volume.swift
+  s_e64eb3da2ecde9::t_c5376a9c96613a 76-80,112,569-573,579-585
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_e64eb3da2ecde9::t_6d56297df430f7 261-262,267-273,298-299,314-333
+  s_e64eb3da2ecde9::t_c5376a9c96613a 253-260
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_e64eb3da2ecde9::t_4b8b221f338aa6 233-242,247,378-455
+  s_e64eb3da2ecde9::t_e9470bab28da41 456
+control-plane/Tests/AppIAMTests/VolumeAttachProjectContainmentTests.swift
+  s_e64eb3da2ecde9::t_4b8b221f338aa6 29-30,61,69-70,136-156
+  s_e64eb3da2ecde9::t_99e63ab4a1df7a 157-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "200c34da54e783b13f4af08f1409cbc3ddf73105",
+  "prompts": {},
+  "sessions": {
+    "s_e64eb3da2ecde9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3ea-91f4-7053-818a-8085597f43aa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
