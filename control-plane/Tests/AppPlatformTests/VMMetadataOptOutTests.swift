@@ -227,6 +227,25 @@ final class VMMetadataOptOutTests {
                 app: app, project: project, named: "vm-unplaced", onAgent: nil)
             let vmID = try vm.requireID()
 
+            // If placement used the create task's captured object, best-fit
+            // would choose this deliberately smaller old agent. The current
+            // agent is the only valid destination after the switch is thrown.
+            let oldAgentId = try await self.registerAgent(
+                app: app, named: "old-placement-agent",
+                protocolVersion: WireProtocol.metadataOptOutMinimumVersion - 1)
+            let currentAgentId = try await self.registerAgent(
+                app: app, named: "current-placement-agent",
+                protocolVersion: WireProtocol.metadataOptOutMinimumVersion)
+            let oldAgent = try #require(
+                try await Agent.find(UUID(uuidString: oldAgentId), on: app.db))
+            oldAgent.totalCPU = 2
+            oldAgent.availableCPU = 2
+            oldAgent.totalMemory = vm.memory
+            oldAgent.availableMemory = vm.memory
+            oldAgent.totalDisk = vm.disk
+            oldAgent.availableDisk = vm.disk
+            try await oldAgent.save(on: app.db)
+
             try await app.test(.PUT, "/api/vms/\(vmID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(UpdateBody(metadataEnabled: false))
@@ -234,6 +253,18 @@ final class VMMetadataOptOutTests {
                 #expect(res.status == .ok)
             }
             #expect(try await VM.find(vmID, on: app.db)?.metadataEnabled == false)
+
+            // The endpoint loaded a different model, so this is the stale
+            // snapshot the background create task really holds. Placement
+            // must lock and reload rather than schedule or save from it.
+            #expect(vm.metadataEnabled)
+            try await app.agentService.createVM(
+                vm: vm, db: app.db, strategy: .bestFit)
+
+            let placed = try #require(try await VM.find(vmID, on: app.db))
+            #expect(placed.metadataEnabled == false)
+            #expect(placed.hypervisorId == currentAgentId)
+            #expect(vm.hypervisorId == currentAgentId)
         }
     }
 }

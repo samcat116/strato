@@ -848,41 +848,14 @@ struct VMController: RouteCollection {
         // is re-realized, only the network-carried zone it registers into.
         let hostnameChanged = existingVM.hostname != originalHostname
 
-        // The metadata kill switch (STR-185). Gated on the *placed* agent, and
-        // only when the switch is actually being thrown: an operator turning
-        // the service back on is asking for the pre-STR-185 behavior, which
-        // every agent already gives, so refusing that would strand a VM in the
-        // off state on a fleet mid-upgrade. Switching it off against an agent
-        // that cannot hear the field would instead report a kill switch that
-        // killed nothing.
-        let metadataEnabledChanged: Bool
-        if let requested = updateRequest.metadataEnabled, requested != existingVM.metadataEnabled {
-            if !requested {
-                try await Self.requireMetadataOptOutCapableAgent(existingVM, app: req.application)
-            }
-            existingVM.metadataEnabled = requested
-            metadataEnabledChanged = true
-        } else {
-            metadataEnabledChanged = false
-        }
-
-        // Neither of the two edits above bumps the VM's generation, so neither
-        // rides a mutation's own dispatch — each needs an explicit nudge at
-        // whichever of the three exits below it leaves by. A hostname edit is
-        // realized by a topology authority that may be neither this VM's agent
-        // nor even in its site (STR-39), so it rings the fleet; the kill switch
-        // is enforced entirely on the VM's own host, so it rings that one. The
-        // fleet ring is a superset, which is why this is `else if` rather than
-        // two independent sends.
-        let placedAgentId = existingVM.hypervisorId
-        let nudgeAgents: @Sendable () async -> Void = { [app = req.application] in
-            if hostnameChanged {
-                await app.agentService.syncDesiredStateToFleet()
-            } else if metadataEnabledChanged, let placedAgentId {
-                await app.agentService.syncDesiredState(agentId: placedAgentId)
-            }
-        }
-
+        // Neither a hostname edit nor the metadata switch bumps the VM's
+        // generation, so neither rides a mutation's own dispatch — each needs
+        // an explicit nudge at whichever of the three exits below it leaves by.
+        // A hostname edit is realized by a topology authority that may be
+        // neither this VM's agent nor even in its site (STR-39), so it rings the
+        // fleet; the kill switch is enforced entirely on the VM's own host, so
+        // it rings that one. The fleet ring is a superset, which is why this is
+        // `else if` rather than two independent sends.
         if let description = updateRequest.description {
             existingVM.description = description
         }
@@ -892,8 +865,20 @@ struct VMController: RouteCollection {
         let newBalloonTarget = updateRequest.balloonTarget ?? existingVM.balloonTarget
         let balloonChanged = newBalloonTarget != existingVM.balloonTarget
         guard newCPU != existingVM.cpu || newMemory != existingVM.memory || balloonChanged else {
-            try await existingVM.save(on: req.db)
-            await nudgeAgents()
+            let metadataEnabledChanged = try await req.db.transaction { db in
+                guard try await existingVM.lockAndRefresh(on: db) else {
+                    throw Abort(.notFound, reason: "VM no longer exists")
+                }
+                let changed = try await Self.applyMetadataUpdate(
+                    updateRequest.metadataEnabled, to: existingVM, on: db)
+                try await existingVM.save(on: db)
+                return changed
+            }
+            await Self.nudgeAfterMetadataOrHostnameUpdate(
+                hostnameChanged: hostnameChanged,
+                metadataEnabledChanged: metadataEnabledChanged,
+                placedAgentId: existingVM.hypervisorId,
+                app: req.application)
             return try await Self.detailResponse(for: existingVM, on: req)
         }
 
@@ -945,7 +930,12 @@ struct VMController: RouteCollection {
                     reason: "A VM can only be resized while it is running or stopped (this one is "
                         + "\(existingVM.status.rawValue))")
             }
-            try await req.db.transaction { db in
+            let metadataEnabledChanged = try await req.db.transaction { db in
+                guard try await existingVM.lockAndRefresh(on: db) else {
+                    throw Abort(.notFound, reason: "VM no longer exists")
+                }
+                let metadataEnabledChanged = try await Self.applyMetadataUpdate(
+                    updateRequest.metadataEnabled, to: existingVM, on: db)
                 try await QuotaEnforcementService.reserveVMResize(
                     for: project, environment: existingVM.environment,
                     vcpuDelta: cpuDelta, memoryDelta: memoryDelta, on: db)
@@ -958,8 +948,13 @@ struct VMController: RouteCollection {
                 // syncs on; bump so the new spec isn't dropped as stale.
                 existingVM.bumpGeneration()
                 try await existingVM.save(on: db)
+                return metadataEnabledChanged
             }
-            await nudgeAgents()
+            await Self.nudgeAfterMetadataOrHostnameUpdate(
+                hostnameChanged: hostnameChanged,
+                metadataEnabledChanged: metadataEnabledChanged,
+                placedAgentId: existingVM.hypervisorId,
+                app: req.application)
             return try await Self.detailResponse(for: existingVM, on: req)
         }
 
@@ -1002,6 +997,12 @@ struct VMController: RouteCollection {
             .resize, on: existingVM, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable db in
+            // `accept` took and refreshed the row lock before entering this
+            // closure, so a placement that won the race is visible to the
+            // capability gate and a placement still waiting must schedule
+            // from the value persisted here.
+            _ = try await Self.applyMetadataUpdate(
+                updateRequest.metadataEnabled, to: existingVM, on: db)
             // Lock the row and recompute the deltas against what it says right
             // now. This is the one guard the dropped "operation already
             // pending" mutex was actually load-bearing for (STR-147): the
@@ -1035,8 +1036,56 @@ struct VMController: RouteCollection {
         // edge needs the wider ring, and that is what this call is for; the
         // redundant placement ring in the other branch is harmless (identical
         // syncs diff to nothing on the agent) and keeps one exit rule.
-        await nudgeAgents()
+        await Self.nudgeAfterMetadataOrHostnameUpdate(
+            hostnameChanged: hostnameChanged,
+            metadataEnabledChanged: false,
+            placedAgentId: existingVM.hypervisorId,
+            app: req.application)
         return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
+    }
+
+    /// Applies the metadata switch from a row-locking transaction. Placement
+    /// takes the same lock, so `vm.hypervisorId` is current here: either the
+    /// update commits first and constrains placement, or placement commits
+    /// first and this gate checks the selected agent's actual wire version.
+    ///
+    /// When the request omits the field, adopt the committed value before the
+    /// whole-model save. Otherwise a request loaded before a competing switch
+    /// update could silently write that update back even though it said
+    /// nothing about metadata.
+    private static func applyMetadataUpdate(
+        _ requested: Bool?, to vm: VM, on db: any Database
+    ) async throws -> Bool {
+        let vmID = try vm.requireID()
+        guard let committed = try await VM.find(vmID, on: db) else {
+            throw Abort(.notFound, reason: "VM no longer exists")
+        }
+        guard let requested else {
+            vm.metadataEnabled = committed.metadataEnabled
+            return false
+        }
+
+        // Turning the service on asks for behavior every agent already has.
+        // Turning it off must never be reported against an agent that ignores
+        // the field.
+        if !requested, requested != committed.metadataEnabled {
+            try await requireMetadataOptOutCapableAgent(vm, on: db)
+        }
+        vm.metadataEnabled = requested
+        return requested != committed.metadataEnabled
+    }
+
+    private static func nudgeAfterMetadataOrHostnameUpdate(
+        hostnameChanged: Bool,
+        metadataEnabledChanged: Bool,
+        placedAgentId: String?,
+        app: Application
+    ) async {
+        if hostnameChanged {
+            await app.agentService.syncDesiredStateToFleet()
+        } else if metadataEnabledChanged, let placedAgentId {
+            await app.agentService.syncDesiredState(agentId: placedAgentId)
+        }
     }
 
     /// The VM's committed sizing, read inside the mutation transaction — where
@@ -1448,12 +1497,13 @@ struct VMController: RouteCollection {
     /// host has not been chosen, and this constrains that choice.
     ///
     /// An agent the service has never heard of is treated the same way, and for
-    /// the same reason: `getAgentInfo` returning nil is an unknown version, not
-    /// a known-old one, and the placement constraint reads the row rather than
-    /// the in-memory registry.
-    static func requireMetadataOptOutCapableAgent(_ vm: VM, app: Application) async throws {
+    /// the same reason: a missing row is an unknown version, not a known-old
+    /// one. Read it through the caller's transaction so the row lock does not
+    /// consume one pooled connection while this lookup waits for another.
+    static func requireMetadataOptOutCapableAgent(_ vm: VM, on db: any Database) async throws {
         guard let agentId = vm.hypervisorId,
-            let agent = await app.agentService.getAgentInfo(agentId)
+            let agentUUID = UUID(uuidString: agentId),
+            let agent = try await Agent.find(agentUUID, on: db)
         else { return }
         guard !WireProtocol.supportsMetadataOptOut(agent.wireProtocolVersion ?? 0) else { return }
         throw Abort(
