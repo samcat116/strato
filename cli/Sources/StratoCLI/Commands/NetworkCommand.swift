@@ -98,6 +98,9 @@ struct NetworkCommand: AsyncParsableCommand {
         @Option(name: .long, help: "Project id (defaults to the context's project).")
         var project: String?
 
+        @Option(name: .long, help: "Site id where the network is placed.")
+        var site: String
+
         @Flag(name: .long, inversion: .prefixedNo, help: "Program OVN's DHCP responder for guests.")
         var dhcp = true
 
@@ -139,7 +142,7 @@ struct NetworkCommand: AsyncParsableCommand {
                             name: name, subnet: subnet, gateway: gateway,
                             projectId: try resolveProject(project, environment: env), dhcpEnabled: dhcp,
                             dnsServers: dnsServers.isEmpty ? nil : dnsServers, domainName: domainName,
-                            metadataEnabled: metadata, resolverEnabled: resolver))
+                            metadataEnabled: metadata, resolverEnabled: resolver, siteId: site))
                 ).ok.body.json
                 switch global.output {
                 case .table:
