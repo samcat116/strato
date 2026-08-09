@@ -53,6 +53,10 @@ final class CredentialScopeCompatibilityTests {
         try await RoleBindingService.grant(
             principalType: .user, principalID: try user.requireID(), role: .admin,
             nodeType: .organization, nodeID: try org.requireID(), createdBy: nil, on: app.db)
+        // The collection routes read it (`actingOrganizationID`); membership
+        // alone does not set it, and the item routes below never look.
+        user.currentOrganizationId = try org.requireID()
+        try await user.save(on: app.db)
         return Fixture(
             user: user,
             org: org,
@@ -75,6 +79,25 @@ final class CredentialScopeCompatibilityTests {
             // `.loginOnly` — one of each, since the classes are what a
             // compatibility break would split on.
             for path in ["/api/vms/\(vmID)", "/api/projects", "/api/api-keys"] {
+                try await app.test(.GET, path) { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: f.readKey)
+                } afterResponse: { res async in
+                    #expect(res.status == .ok, "GET \(path) → \(res.status)")
+                }
+            }
+        }
+    }
+
+    /// The legacy `read` shim resolves to the `read` *pattern*, which covers
+    /// `org:read` — so the collection gate never refused it, and the STR-203
+    /// suspension must not be what makes it work now. Pinned separately from
+    /// the item routes above because the gate is a different check.
+    @Test("A read-scoped key still lists the collections it could before")
+    func readKeyStillListsCollections() async throws {
+        try await withApp { app in
+            let f = try await fixture(app)
+
+            for path in ["/api/vms", "/api/sandboxes"] {
                 try await app.test(.GET, path) { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: f.readKey)
                 } afterResponse: { res async in

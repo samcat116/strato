@@ -223,6 +223,15 @@ credentials for free. The legacy scopes survive as a read-time shim. See
 behaviour tightenings it carried;
 [#873](https://github.com/samcat116/strato/issues/873) tracked the work.
 
+STR-203 closed the one consequence that survived the cutover: the two guarded
+*collection* routes gate on a **substituted** question (`view_organization` on
+the acting organization, standing in for the per-row check the handler does), and
+intersecting a restriction with that question denied a project-scoped credential
+the very list it was minted for. Those checks are now membership probes — the
+ceiling is suspended for them and applied downstream, where there is an act to
+apply it to — and the same treatment covers the `?organization_id=` narrowing
+filter, which can only ever subtract rows a per-row check has already decided.
+
 The `scope_denied` row this audit added became `credential_restricted`, and now
 covers only the surfaces that authorize by row scoping rather than by deciding
 (the identity plane, and the three handler helpers that satisfy the

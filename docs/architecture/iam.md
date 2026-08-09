@@ -732,6 +732,44 @@ decision row naming the route and the credential, so they remain attributable
 (STR-116); they are the only credential denials without a Cedar verdict behind
 them.
 
+**A substituted question does not carry the ceiling (STR-203).** Two
+enforcement points ask something other than the act they are gating, because at
+that moment there is nothing yet to gate. `AuthorizationMiddleware` answers a
+collection route — `GET /api/vms`, `POST /api/sandboxes` — with
+`view_organization` on the caller's acting organization, "are you anyone here at
+all", and leaves the real work to the handler: `canFilter("vm:read")` per row for
+a list, `create_resources` on the resolved project for a create. The
+`?organization_id=` narrowing filter does the same, in front of five lists that
+then decide every row themselves. A restriction, though, is stated in the
+vocabulary of the *act* — `vm:read`, in project P — and neither half of that can
+be true of `org:read` on an organization: a project never appears in an
+organization's ancestor chain, and `vm:read` does not cover `org:read`.
+Intersecting a restriction with the substituted question therefore denied it
+twice over, and a project-scoped token got a 403 on `GET /api/vms` while
+succeeding on `GET /api/vms/{id}` and `POST /api/vms/{id}/start` underneath it —
+the two resource families answering the same question in different shapes, since
+`/api/volumes` and `/api/networks` are handler-checked and filtered the same
+caller to a 200 all along.
+
+So the ceiling is suspended for those two checks and applied in full downstream,
+where there is an act to apply it to. **This is not a bypass**: the bindings half
+is decided exactly as before, so a *non-member is still refused* — what changes
+is only that a member holding a narrowed token reaches the handler and gets a
+filtered, possibly empty page. The suspension is spelled
+`IAMRequestAuthState.membershipProbe()`, and the derived state shares the
+request's audit-flag boxes (an admin-policy allow through a probe is still
+recorded) and keeps the credential reference (the probe's decision row is still
+attributed). The other ~24 `requireMember` call sites are untouched, deliberately:
+most of them *are* the authorization, and the narrowing filter is safe here only
+because a narrowing can subtract rows and never add them.
+
+Two consequences to know. A probe writes an `org:read` **allow** attributed to a
+credential whose restriction does not permit `org:read`; its `path` names the
+collection route it came from, which is how to read it in the log. And
+`IAMRequestCache.DecisionKey` carries the restriction as part of a decision's
+identity, so a suspended allow can never be reused later in the request by a
+check that was asked under the ceiling.
+
 A restriction belongs to the credential, not the principal, so it survives an
 impersonation: a user acting as a service account through a restricted key
 stays restricted.
@@ -839,6 +877,9 @@ record. A machine principal's organization scope, for the collection-level
 "are you anyone in this org" checks, comes from where it was registered — a
 service account's project's organization, or a workload registration's
 organization — never from membership, which machine principals do not have.
+Those collection-level checks are *membership probes*: see "A substituted
+question does not carry the ceiling" above for why they do not carry a
+credential's restriction.
 
 **Reads today, mutations still user-only.** Listing and reading VMs and
 sandboxes (and every handler that authorizes purely through the evaluator)

@@ -179,6 +179,74 @@ final class CredentialRestrictionEnforcementTests {
         }
     }
 
+    // MARK: - The membership probe (STR-203)
+
+    /// What the probe does and does not set aside. The ceiling goes; the audit
+    /// flags and the credential attribution stay, and an unrestricted state is
+    /// handed straight back rather than copied.
+    @Test("A membership probe suspends the ceiling and keeps the audit trail")
+    func membershipProbeSuspendsCeilingAndSharesAudit() throws {
+        let credential = CredentialReference(kind: .apiKey, id: UUID())
+        let node = IAMNode(type: .project, id: UUID())
+        let state = IAMRequestAuthState(
+            restriction: try restriction(["vm:read"], node: node), credential: credential)
+        let probe = state.membershipProbe()
+
+        #expect(probe.restriction.isUnrestricted)
+        #expect(probe.credential == credential)
+
+        // The same boxes, not copies: a decision made through the probe is a
+        // decision this request made.
+        probe.decisionEvaluated.withLockedValue { $0 = true }
+        probe.adminPolicyUsed.withLockedValue { $0 = true }
+        #expect(state.decisionEvaluated.withLockedValue { $0 })
+        #expect(state.adminPolicyUsed.withLockedValue { $0 })
+
+        let unrestricted = IAMRequestAuthState()
+        #expect(unrestricted.membershipProbe() === unrestricted)
+    }
+
+    /// The memo discipline behind the suspension. A probe's allow answers a
+    /// *different* question than the same triple asked under the ceiling, so it
+    /// must not be reusable as the second one — which is why the credential
+    /// restriction is part of `IAMRequestCache.DecisionKey`.
+    @Test("A probe's allow does not answer the same check made under the ceiling")
+    func probeAllowDoesNotAnswerARestrictedCheck() async throws {
+        try await withApp { app in
+            let tree = try await buildTree(app, prefix: "probe")
+            let projectNode = IAMNode(type: .project, id: try tree.project.requireID())
+            let state = IAMRequestAuthState(
+                restriction: try restriction(["vm:read"], node: projectNode),
+                credential: CredentialReference(kind: .apiKey, id: UUID()))
+            let cache = IAMRequestCache()
+            let context = IAMCheckContext(path: "/api/vms", method: "GET", requestID: nil)
+
+            let probed = try await IAMAuthorizer.checkLegacyVocabulary(
+                principal: .user(try tree.user.requireID()),
+                permission: "view_organization",
+                resourceType: "organization",
+                resourceID: try tree.org.requireID().uuidString,
+                context: context,
+                state: state.membershipProbe(),
+                cache: cache,
+                app: app,
+                db: app.db)
+            #expect(probed, "the probe asks about the principal, and this one is a member")
+
+            let underTheCeiling = try await IAMAuthorizer.checkLegacyVocabulary(
+                principal: .user(try tree.user.requireID()),
+                permission: "view_organization",
+                resourceType: "organization",
+                resourceID: try tree.org.requireID().uuidString,
+                context: context,
+                state: state,
+                cache: cache,
+                app: app,
+                db: app.db)
+            #expect(!underTheCeiling, "the probe's answer must not be reused for the real question")
+        }
+    }
+
     // MARK: - Batch filtering
 
     @Test("A batched list filters to the credential's subtree")
