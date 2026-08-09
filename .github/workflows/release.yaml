@@ -71,10 +71,15 @@ jobs:
           ### Using Docker Compose
 
           \`\`\`bash
-          # Update your docker-compose.yml to use the new version
-          docker compose pull
+          gh release download "${GITHUB_REF#refs/tags/}" --pattern 'strato-*-compose.tar.gz'
+          tar -xzf strato-*-compose.tar.gz
+          cd "strato-${GITHUB_REF#refs/tags/v}-compose"
+          ./setup.sh
           docker compose up -d
           \`\`\`
+
+          The version-pinned Compose archive is the replacement for the deleted
+          standalone \`docker-compose.release.yml\` and \`nginx.conf\` assets.
 
           ### Manual Installation
 
@@ -965,7 +970,7 @@ jobs:
             "$TAP_REPO" strato.rb "${GITHUB_REF_NAME#v}" \
             "${GITHUB_REPOSITORY}@${GITHUB_SHA}"
 
-  # Lightweight (git archive + heredocs + uploads). Everything is staged
+  # Lightweight (git archives + uploads). Everything is staged
   # first and uploaded in a single `gh release upload` at the end.
   upload-source-assets:
     runs-on: ubuntu-latest
@@ -983,189 +988,27 @@ jobs:
           git archive --format=tar.gz --prefix="strato-${VERSION}/" HEAD > "strato-${VERSION}-source.tar.gz"
           git archive --format=zip --prefix="strato-${VERSION}/" HEAD > "strato-${VERSION}-source.zip"
 
-      - name: Create docker-compose release file
+      # Package the supported single-host deployment as one coherent unit. The
+      # release copy defaults every Strato image to this immutable tag while
+      # retaining STRATO_VERSION as an explicit operator override.
+      - name: Create and validate Compose deployment archive
         run: |
-          cat > docker-compose.release.yml << 'EOF'
-          version: '3.8'
+          VERSION="${GITHUB_REF_NAME#v}"
+          DIRECTORY="strato-${VERSION}-compose"
+          git archive --format=tar --prefix="${DIRECTORY}/" HEAD:deploy/compose | tar -xf -
 
-          volumes:
-            db_data:
+          # The Compose interpolation defaults and both ways of creating .env
+          # must select the images built by this tagged workflow.
+          sed -i "s/STRATO_VERSION:-main/STRATO_VERSION:-${GITHUB_REF_NAME}/g" \
+            "${DIRECTORY}/docker-compose.yml"
+          sed -i "s/^STRATO_VERSION=main$/STRATO_VERSION=${GITHUB_REF_NAME}/" \
+            "${DIRECTORY}/.env.example" "${DIRECTORY}/setup.sh"
 
-          networks:
-            strato-network:
-              driver: bridge
-
-          services:
-            # Nginx reverse proxy - main entry point
-            nginx:
-              image: nginx:alpine
-              ports:
-                - "80:80"
-              volumes:
-                - ./nginx.conf:/etc/nginx/nginx.conf:ro
-              depends_on:
-                - control-plane
-                - frontend
-              networks:
-                - strato-network
-
-            # Vapor Control Plane (API)
-            control-plane:
-              image: ghcr.io/${{ github.repository }}-control-plane:${{ github.ref_name }}
-              environment:
-                DATABASE_HOST: db
-                DATABASE_NAME: vapor_database
-                DATABASE_USERNAME: vapor_username
-                DATABASE_PASSWORD: vapor_password
-                WEBAUTHN_RELYING_PARTY_ID: localhost
-                WEBAUTHN_RELYING_PARTY_NAME: Strato
-                WEBAUTHN_RELYING_PARTY_ORIGIN: http://localhost
-                # Public browser origin used to build OIDC redirect URIs. The
-                # control plane runs --env production here, where OIDC login
-                # fails loudly if this is unset — keep it the browser origin.
-                BASE_URL: http://localhost
-              depends_on:
-                db:
-                  condition: service_healthy
-              networks:
-                - strato-network
-              command: ["serve", "--env", "production", "--hostname", "0.0.0.0", "--port", "8080"]
-
-            # Next.js Frontend
-            frontend:
-              image: ghcr.io/${{ github.repository }}-frontend:${{ github.ref_name }}
-              environment:
-                NODE_ENV: production
-                PORT: 3000
-              depends_on:
-                - control-plane
-              networks:
-                - strato-network
-
-            # Agents are NOT part of this stack. Each hypervisor host runs its
-            # own agent, enrolled with a per-host registration token via
-            # `strato-agent join` (or deploy/agent/install.sh). See
-            # docs/deployment/agents.md for the Docker/systemd invocation:
-            #   docker run -d --name strato-agent --restart unless-stopped \
-            #     --user root --device /dev/kvm \
-            #     -v /var/lib/strato:/var/lib/strato -v /etc/strato:/etc/strato \
-            #     ghcr.io/${{ github.repository }}-agent:${{ github.ref_name }} \
-            #     join 'ws://strato.example.com/agent/ws?token=...&name=hv-01'
-            # `--user root` is required: the root-owned /var/lib/strato and
-            # /etc/strato paths (and the join state-file write check) need root,
-            # matching the "run join as root on Linux" guidance in the docs.
-
-            migrate:
-              image: ghcr.io/${{ github.repository }}-control-plane:${{ github.ref_name }}
-              environment:
-                DATABASE_HOST: db
-                DATABASE_NAME: vapor_database
-                DATABASE_USERNAME: vapor_username
-                DATABASE_PASSWORD: vapor_password
-              depends_on:
-                db:
-                  condition: service_healthy
-              networks:
-                - strato-network
-              command: ["migrate", "--yes"]
-              deploy:
-                replicas: 0
-
-            db:
-              image: postgres:16-alpine
-              volumes:
-                - db_data:/var/lib/postgresql/data/pgdata
-              environment:
-                POSTGRES_USER: vapor_username
-                POSTGRES_PASSWORD: vapor_password
-                POSTGRES_DB: vapor_database
-                PGDATA: /var/lib/postgresql/data/strato
-              healthcheck:
-                test: ["CMD-SHELL", "pg_isready -U vapor_username -d vapor_database"]
-                interval: 5s
-                timeout: 5s
-                retries: 5
-              ports:
-                - "5432:5432"
-              networks:
-                - strato-network
-
-          EOF
-
-      - name: Create nginx config file
-        run: |
-          cat > nginx.conf << 'EOF'
-          events {
-              worker_connections 1024;
-          }
-
-          http {
-              upstream control-plane {
-                  server control-plane:8080;
-              }
-
-              upstream frontend {
-                  server frontend:3000;
-              }
-
-              server {
-                  listen 80;
-
-                  # WebSocket support
-                  proxy_http_version 1.1;
-                  proxy_set_header Upgrade $http_upgrade;
-                  proxy_set_header Connection "upgrade";
-                  proxy_set_header Host $host;
-                  proxy_set_header X-Real-IP $remote_addr;
-                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-                  proxy_set_header X-Forwarded-Proto $scheme;
-
-                  # API routes to control plane
-                  location /api/ {
-                      proxy_pass http://control-plane;
-                      proxy_read_timeout 3600s;
-                      proxy_send_timeout 3600s;
-                  }
-
-                  location /auth/ {
-                      proxy_pass http://control-plane;
-                  }
-
-                  # OAuth device grant for the CLI (/oauth/device_authorization,
-                  # /oauth/token, /oauth/revoke). Bare control-plane routes, so
-                  # they must bypass the frontend catch-all below.
-                  location /oauth/ {
-                      proxy_pass http://control-plane;
-                  }
-
-                  location /agent/ {
-                      proxy_pass http://control-plane;
-                      proxy_read_timeout 3600s;
-                      proxy_send_timeout 3600s;
-                  }
-
-                  location /health/ {
-                      proxy_pass http://control-plane;
-                  }
-
-                  location /organizations/ {
-                      proxy_pass http://control-plane;
-                  }
-
-                  # RFC 8935 SSF push-delivery callback (POST /ssf/events/:streamID)
-                  # that external SSF transmitters POST to. Bare control-plane route,
-                  # so it must bypass the frontend catch-all below.
-                  location /ssf/ {
-                      proxy_pass http://control-plane;
-                  }
-
-                  # Frontend catch-all
-                  location / {
-                      proxy_pass http://frontend;
-                  }
-              }
-          }
-          EOF
+          (cd "${DIRECTORY}" && ./setup.sh)
+          docker compose -f "${DIRECTORY}/docker-compose.yml" \
+            --env-file "${DIRECTORY}/.env" config --quiet
+          rm "${DIRECTORY}/.env"
+          tar -czf "strato-${VERSION}-compose.tar.gz" "${DIRECTORY}"
 
       # Asset names are the file basenames (deploy/agent/install.sh uploads
       # as install.sh, which is what the docs point users at).
@@ -1177,6 +1020,5 @@ jobs:
           gh release upload "$GITHUB_REF_NAME" \
             "strato-${VERSION}-source.tar.gz" \
             "strato-${VERSION}-source.zip" \
-            nginx.conf \
-            docker-compose.release.yml \
+            "strato-${VERSION}-compose.tar.gz" \
             deploy/agent/install.sh
