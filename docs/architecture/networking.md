@@ -40,7 +40,8 @@ Most of the layered model below is implemented. What exists today:
   handshake (STR-56). The document rides the sync (wire v26), the OVN
   localport + per-chassis namespace carry it (wire v27), guests are told how
   to reach the addresses (STR-53), and security groups can't take that
-  reachability away (STR-54) — see §Instance metadata (IMDS).
+  reachability away (STR-54) while an operator still can, one VM at a time
+  (`VM.metadataEnabled`, STR-185) — see §Instance metadata (IMDS).
 
 What genuinely remains missing (details in §Known gaps):
 
@@ -219,6 +220,16 @@ behind a mandatory IMDSv2-style token handshake and identifying its caller by
 source address within the namespace's network. Responses carry a hop limit of
 1, so a guest cannot relay them off-box. See [agent](./agent.md) §Instance
 metadata server and [ADR 0006](../adr/0006-imds-session-auth.md).
+
+**Whether a given VM is served at all is `VM.metadataEnabled`** (STR-185, wire
+v39), which travels as `InstanceMetadata.serviceEnabled`. The listener resolves
+the caller first and refuses it a step later, rather than the control plane
+dropping the instance from the servable set: an unserved instance still has to
+be *indexed*, or its addresses stop resolving `.ambiguous` on a collision and
+start resolving to the neighbour whose identity it was hardened away from.
+Absence of the field means enabled — a control plane that predates the switch
+opted nobody out — and the version gate therefore points the other way, at the
+agent (§The per-instance kill switch, below).
 
 The localport realization itself has **two halves with two different owners**,
 and that shape is load-bearing rather than incidental:
@@ -569,7 +580,9 @@ on Port_Groups** (the OpenStack/ovn-kubernetes pattern). Wire protocol v20
   attaches the default group when the caller picks none, and detach refuses to
   empty a NIC's set. Tightening the default group's egress does **not** cut
   instance metadata off — that has its own implicit allow, on purpose (see
-  §The implicit metadata allow). `SeedDefaultSecurityGroups` backfilled
+  §The implicit link-local allows). Denying one VM the service is
+  `VM.metadataEnabled`, not a rule (see §The per-instance kill switch).
+  `SeedDefaultSecurityGroups` backfilled
   pre-existing projects, adding a **deletable allow-all-ingress rule** to
   projects that already had workloads so agent upgrades could never cut live
   inbound traffic — deleting that rule is how an operator opts a project into real
@@ -695,16 +708,14 @@ cloud-init datasource retries — reads as a broken metadata service rather than
 as the policy outcome it is. AWS draws the same line: IMDS reachability there
 is not subject to security-group rules either.
 
-**The AWS parallel is deliberately partial.** AWS pairs that rule with a
-per-instance kill switch (`HttpEndpoint: disabled`, a hop limit, IMDSv2
-enforcement). Strato has two of the three fleet-wide — IMDSv2 is mandatory
-rather than optional, and the hop limit is `metadata_response_hop_limit` on the
-agent — but the only *per-workload* lever is `metadataEnabled`, which is per
-**network**. So an operator hardening one workload against SSRF cannot deny it
-the service short of moving the VM to its own network. That was academic while
-nothing listened; with STR-56's listener answering it is real, and it is
-tracked as issue #1013 / STR-185. The reserved ACL space above 1003 is where
-such a deny would go.
+**The AWS parallel now includes the kill switch** (STR-185; it did not when
+STR-54 landed). AWS pairs "not subject to security groups" with a per-instance
+`MetadataOptions` — `HttpEndpoint: disabled`, a hop limit, IMDSv2 enforcement —
+and Strato has all three, though two of them fleet-wide rather than per
+instance: IMDSv2 is mandatory rather than optional and cannot be weakened, and
+the hop limit is `metadata_response_hop_limit` on the agent. Neither is
+per-instance, and neither needs to be — see §The per-instance kill switch for
+why that is a decision rather than a remaining gap.
 
 The v6 collision that made these carve-outs dangerous is prevented on new
 writes and surfaced for old ones (STR-186). `fd00:ec2::254` is a ULA drawn from
@@ -739,12 +750,14 @@ in its own right rather than a plausible allocation, and nothing rejects one
 today. An operator who insists on numbering a network out of link-local space
 inherits both carve-outs pointed at their own addresses.
 
-The step above 1002 buys nothing *today* — a security-group rule can only
-allow, so nothing at rule priority could contradict this one. It is there
-because the rule vocabulary is control-plane data, and the switch-attached
-stateless NACLs below are the deny-capable shape: two ACLs matching at equal
-priority resolve arbitrarily in OVN, so sharing 1002 would make
-"non-overridable" a property of today's rule model rather than of this ACL.
+The step above 1002 still buys nothing against *rules* — a security-group rule
+can only allow, so nothing at rule priority can contradict this one — and it is
+there because the rule vocabulary is control-plane data, and the
+switch-attached stateless NACLs below are the deny-capable shape: two ACLs
+matching at equal priority resolve arbitrarily in OVN, so sharing 1002 would
+make "non-overridable" a property of today's rule model rather than of this
+ACL. What the step *has* bought is the room the kill switch's deny now sits in,
+one above it at 1004.
 
 Three scoping decisions, each narrowing what the carve-out opens:
 
@@ -775,6 +788,77 @@ keep getting IMDS dropped. The reverse is safe: `needsACLRewrite` returns false
 when the planned generation is *older* than the observed one, so an authority
 still on revision 3 leaves a revision-4 drop group alone rather than stripping
 the carve-out back off.
+
+### The per-instance kill switch
+
+`VM.metadataEnabled` (STR-185, wire v39) is the per-workload lever the allow
+above deliberately shipped without: an opt-*out*, defaulting on, that denies one
+VM the metadata service without moving it to a network of its own. It is EC2's
+`MetadataOptions.HttpEndpoint`, and it exists because an SSRF bug in a guest
+workload is the classic route to whatever instance identity the document
+carries — so the workload you most want hardened is a single one, not a network.
+
+**It is enforced twice, and the two layers answer different failures.**
+
+- **The listener refuses the caller** (`MetadataResponder`, step 4), after
+  identifying it and before the token handshake, with the same opaque `404` an
+  unknown address gets. This is the layer that makes the switch *unconditional*:
+  it needs no port group, so it holds for a NIC with no security groups at all
+  and it holds while the site's topology authority is still on an older build.
+  Throwing the switch also revokes any session the guest already minted, rather
+  than only refusing the next request carrying it.
+- **An ACL drops the packets**, on a second site-singleton port group
+  `pg_strato_no_metadata`, at priority **1004** — the space reserved above the
+  allow. This is the layer that makes it a *kill switch* rather than a refusal:
+  the guest cannot reach the chassis, so it cannot probe the endpoint, and
+  nothing a tenant can write reaches 1004, so an allow-all egress rule does not
+  undo it. Two ACLs, one per family, matching the **whole address** rather than
+  TCP/80 — the allow is narrowed to the port because a wider allow would only
+  widen what a guest may probe, and the deny wants exactly the opposite.
+  `drop`, not `reject`: a blackhole is what a disabled endpoint looks like, and
+  a refused connection would tell a probe that something is deliberately in the
+  way. `NetworkResolverEndpoint.reservedIndexes` is what lets the match be that
+  wide without shadowing the resolver carve-out that shares `169.254.0.0/16`.
+
+Membership follows the existing split exactly: the group and its ACLs are
+authored by the topology authority (unconditionally, so a port never waits a
+sync for it to exist), while each agent puts *its own* VMs' ports in it — from
+the same `reconcileMembership` pass that joins a port to its security groups,
+and from `joinSecurityGroups` at LSP creation so a fresh VM is never briefly
+able to reach what its operator switched off. An unmanaged NIC
+(`securityGroupIds` nil) is in no port group and so gets no deny; the listener
+covers it, which is why that layer is the one that decides.
+
+**The version gate points at the VM's own host.** A pre-v39 agent ignores
+`serviceEnabled` and keeps serving the guest, so `supportsMetadataOptOut`
+refuses to switch it off on a VM placed on one (`409`, naming the upgrade and
+the per-network alternative), and `VMPlacementRequirements.requiresMetadataOptOut`
+keeps a switched-off VM off such an agent in the first place. Turning the
+service back *on* is never refused — that is the behavior every agent already
+has. An older *authority* is not gated: it only means the deny ACL is missing,
+and the listener still refuses.
+
+Two things the switch deliberately does **not** cover:
+
+- **Sandboxes.** The listener serves `InstanceMetadata`, which only
+  `DesiredVMState` carries, so a sandbox has no document to switch off and its
+  port never joins the deny group.
+- **The hop limit and IMDSv2 enforcement**, AWS's other two `MetadataOptions`.
+  Both exist, both fleet-wide, and making either per-instance would buy nothing
+  here. IMDSv2 is mandatory and there is no v1 to enforce against
+  ([ADR 0006](../adr/0006-imds-session-auth.md)) — a per-instance
+  `HttpTokens: required` would toggle between "required" and "required". The
+  hop limit is `metadata_response_hop_limit`, already 1 by default, which is the
+  value AWS's per-instance knob exists to let you *lower to*; the reason it is
+  per instance there is a decade of instances launched at the old default of 64,
+  which Strato does not have.
+
+Editing the switch does **not** bump the VM's generation, like the network's
+`metadataEnabled`: nothing about how the VM is realized changes, and both
+enforcement points are level-triggered — `MetadataStore` applies at an equal
+generation for exactly this class of edit, and membership converges every sync.
+The update therefore rings the VM's placement directly rather than riding a
+mutation's dispatch.
 
 ### Known limitations / follow-ups
 

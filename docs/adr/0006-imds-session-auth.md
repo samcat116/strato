@@ -97,8 +97,15 @@ Sessions are keyed by `SHA256(token)`. Nothing retains the token itself.
   swept on mint. The cap evicts the soonest-expiring, so a loop costs a bounded
   amount and never evicts a well-behaved guest's newest token.
 - **Hop-limit and mandatory-v2 are fleet-wide, not per instance.** AWS exposes
-  both per instance; Strato's only per-workload lever remains `metadataEnabled`,
-  which is per network (issue #1013 / STR-185).
+  both per instance. Neither needs to be here, and STR-185 settled that rather
+  than leaving it open: mandatory-v2 has nothing to toggle, since this ADR
+  removes the v1 a per-instance `HttpTokens` would enforce against, and the hop
+  limit already defaults to the 1 that AWS's knob exists to let an operator
+  lower *to* — it is per instance there because of a decade of instances
+  launched at the old default of 64. What was genuinely missing was
+  `HttpEndpoint: disabled`, and `VM.metadataEnabled` (STR-185, wire v39) is it:
+  the listener refuses the caller after identifying it, and an OVN ACL above the
+  implicit metadata allow keeps the packets off the chassis.
 
 ## Alternatives considered
 

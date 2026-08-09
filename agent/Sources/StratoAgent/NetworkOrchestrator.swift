@@ -26,8 +26,14 @@ struct NetworkOrchestrator: Sendable {
     /// Without a network service, every NIC degrades to `.userMode` with the
     /// spec's addressing passed through — matching the drivers' historical
     /// "no network service → user-mode fallback" behavior.
+    ///
+    /// `metadataDenied` is the workload's per-instance metadata kill switch
+    /// (STR-185), a property of the VM rather than of any one NIC, so it is
+    /// passed alongside the spec list rather than read out of it. Sandboxes pass
+    /// false: they have no metadata document, so there is nothing to switch off.
     func prepareAttachments(
-        vmId: String, networks: [NetworkSpec], placement: NICPlacement = .hostNamespace
+        vmId: String, networks: [NetworkSpec], metadataDenied: Bool = false,
+        placement: NICPlacement = .hostNamespace
     ) async throws -> [ResolvedNetworkAttachment] {
         guard let networkService else {
             if !networks.isEmpty {
@@ -82,6 +88,7 @@ struct NetworkOrchestrator: Sendable {
                 domainName: spec.domainName,
                 leaseTime: spec.leaseTime,
                 securityGroupIds: spec.securityGroupIds,
+                metadataDenied: metadataDenied,
                 mtu: spec.mtu,
                 // `== true`: nil is a control plane with no opinion on the
                 // service, which advertises no route to it.

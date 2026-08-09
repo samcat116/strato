@@ -5316,6 +5316,11 @@ export interface components {
             graphicsConsole: boolean;
             /** @description Security groups for the VM's NIC (same project, at most 5). Omitted or empty means the project's default group — every NIC belongs to at least one group. */
             securityGroupIds?: string[];
+            /**
+             * @description Whether the instance metadata service answers this VM. Turning it off denies the guest `169.254.169.254` and `[fd00:ec2::254]` outright — the listener refuses it and an OVN ACL drops its packets — which is what hardening one workload against SSRF needs, and what the per-network `metadataEnabled` is too coarse to give. Note that the metadata service is also how a guest reads its cloud-init configuration, so a VM created with this off may not finish provisioning. Requires an agent new enough to honour it; placement is constrained to such agents.
+             * @default true
+             */
+            metadataEnabled: boolean;
         };
         UpdateVMRequest: {
             name?: string;
@@ -5329,6 +5334,8 @@ export interface components {
              * @description Target memory in bytes. On a running VM it must not exceed `maxMemory`.
              */
             memory?: number;
+            /** @description Whether the instance metadata service answers this VM. Editable on a running VM and applied without a restart. Switching it *off* is refused with `409` when the VM sits on an agent too old to honour it, rather than reported as applied while the guest keeps reading its metadata. */
+            metadataEnabled?: boolean;
         };
         VMDetail: {
             /** Format: uuid */
@@ -5366,6 +5373,8 @@ export interface components {
             tpmEnabled?: boolean;
             /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
             graphicsConsole?: boolean;
+            /** @description Whether the instance metadata service answers this VM. This is the VM's own switch, not the effective answer: a VM on a network with metadata turned off still reports `true` here unless someone turned it off for this VM. */
+            metadataEnabled?: boolean;
             /** @description Whether the guest agent is responding. Absent until the agent's slow poll has seen the guest once. */
             qgaAvailable?: boolean;
             /** @description What the guest OS calls itself, when it reported one. Distinct from `hostname`, which is the DNS label Strato registers it under. */

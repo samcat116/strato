@@ -861,6 +861,10 @@ public func configure(_ app: Application) async throws {
     // deployment — see `BoundDNSTextColumns`.
     app.migrations.add(BoundDNSTextColumns())
 
+    // STR-185: the per-instance metadata kill switch, so hardening one workload
+    // against SSRF no longer means moving it to a network of its own.
+    app.migrations.add(AddMetadataEnabledToVM())
+
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
     // Deliberately last in the list: it must run after every migration that
     // ever touched the table, and nothing is left to order after it.

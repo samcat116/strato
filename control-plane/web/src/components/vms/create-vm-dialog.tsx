@@ -55,6 +55,10 @@ export function CreateVMDialog({
   // cheaper, and most guests are reached over SSH — but it cannot be turned on
   // later, so this is the only chance to ask for it.
   const [graphicsConsole, setGraphicsConsole] = useState(false);
+  // On by default, unlike its neighbours: the metadata service is how a guest
+  // reads its own cloud-init configuration, so this is an escape hatch rather
+  // than a feature to opt into.
+  const [metadataEnabled, setMetadataEnabled] = useState(true);
   // Security groups for the VM's NIC (max 5). Empty → the server falls back
   // to the project's default group.
   const [securityGroupIds, setSecurityGroupIds] = useState<string[]>([]);
@@ -161,6 +165,11 @@ export function CreateVMDialog({
           // Same omit-unless-on rule (issue #566); Firecracker emulates no
           // display device and the API rejects the combination.
           graphicsConsole: !isFirecracker && graphicsConsole ? true : undefined,
+          // Omitted unless *off*, the inverse of the three above, because this
+          // one defaults on: sending `true` would only say what the server
+          // already assumes, while pinning a pre-STR-185 control plane to a key
+          // it does not know.
+          metadataEnabled: metadataEnabled ? undefined : false,
           // Omitted when empty → the server uses the project's default group.
           securityGroupIds:
             securityGroupIds.length > 0 ? securityGroupIds : undefined,
@@ -190,6 +199,7 @@ export function CreateVMDialog({
         setSecureBoot(false);
         setTpm(false);
         setGraphicsConsole(false);
+        setMetadataEnabled(true);
         setSecurityGroupIds([]);
         setQuotaError(null);
       },
@@ -537,6 +547,39 @@ export function CreateVMDialog({
                   works either way.
                 </p>
               )}
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <div className="space-y-1">
+                <p className="text-sm font-medium text-foreground">
+                  Instance metadata
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  The link-local service at 169.254.169.254 that a guest reads
+                  its own configuration and identity from.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  id="metadataEnabled"
+                  type="checkbox"
+                  checked={metadataEnabled}
+                  onChange={(e) => setMetadataEnabled(e.target.checked)}
+                  disabled={isLoading}
+                  className="h-4 w-4 rounded border-input bg-background accent-blue-600"
+                />
+                Serve instance metadata to this VM
+              </label>
+              <p className="text-xs text-muted-foreground">
+                Turning it off denies this VM the service outright, even where
+                its security groups would allow it — the lever for a workload
+                you want an SSRF bug to find nothing behind.{" "}
+                <strong>
+                  It is also how cloud-init configures the guest
+                </strong>
+                , so a VM created without it may not finish provisioning. This
+                one can be changed later.
+              </p>
             </div>
 
             <div className="space-y-2">
