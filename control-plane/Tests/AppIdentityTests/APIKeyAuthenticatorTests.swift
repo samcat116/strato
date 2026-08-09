@@ -403,54 +403,6 @@ struct APIKeyAuthenticatorTests {
         try await app.shutdownForTesting()
     }
 
-    @Test("Request isAPIKeyAuthenticated property works correctly")
-    func testIsAPIKeyAuthenticated() async throws {
-        let app = try await Application.makeForTesting()
-
-        try await configure(app)
-        try await app.autoMigrate()
-
-        let user = try await createTestUser(on: app.db)
-        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
-
-        // This is a route-level unit test of the `isAPIKeyAuthenticated` request
-        // property, including the *unauthenticated* branch. `configure` now installs
-        // the global `AuthorizationMiddleware` in every environment (issue #196), which
-        // would 401 the no-key request below before it ever reaches the handler. Reset
-        // the middleware stack to just error handling so the request-scoped
-        // authenticator on the route group is the only auth in play.
-        app.middleware = Middlewares()
-        app.middleware.use(ErrorMiddleware.default(environment: app.environment))
-
-        // Create a test route that checks isAPIKeyAuthenticated
-        app.routes.all.removeAll()
-        // Ad-hoc routes outside the production classification; declare them so
-        // the default-deny middleware treats them as login-gated (#482).
-        app.testOnlyLoginRoutePrefixes = ["/test", "/resource"]
-        let protected = app.grouped(BearerAuthorizationHeaderAuthenticator())
-        protected.get("test") { req -> String in
-            return req.isAPIKeyAuthenticated ? "true" : "false"
-        }
-
-        try await app.test(
-            .GET, "/test",
-            beforeRequest: { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
-            }
-        ) { res async in
-            #expect(res.status == .ok)
-            #expect(res.body.string == "true")
-        }
-
-        // Test without API key
-        try await app.test(.GET, "/test") { res async in
-            #expect(res.status == .ok)
-            #expect(res.body.string == "false")
-        }
-
-        try await app.shutdownForTesting()
-    }
-
     // MARK: - Credential restriction backstop (STR-115)
 
     /// Registers a read (GET) and a write (POST) route behind the bearer

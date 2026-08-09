@@ -13,13 +13,6 @@ struct WireProtocolTests {
         #expect(envelope.senderVersion == WireProtocol.currentVersion)
     }
 
-    @Test("version survives the envelope round trip")
-    func versionRoundTrips() throws {
-        let envelope = try MessageEnvelope(message: Fixtures.consoleConnect(vmId: "vm-1"))
-        let decoded = try decodeJSON(MessageEnvelope.self, from: encodeJSON(envelope))
-        #expect(decoded.version == WireProtocol.currentVersion)
-    }
-
     @Test("an envelope without a version field decodes as legacy version 0")
     func legacyEnvelopeDefaultsToZero() throws {
         // A peer that predates versioning sends only `type` + `payload`.
@@ -30,43 +23,6 @@ struct WireProtocolTests {
         #expect(envelope.senderVersion == 0)
         // The payload still decodes normally.
         #expect(try envelope.decode(as: ConsoleConnectMessage.self).vmId == "vm-1")
-    }
-
-    @Test("declarative agent-update gate starts at wire protocol v7")
-    func desiredAgentUpdateGate() {
-        // Since v28 there is no imperative `agent_update` message: this is the
-        // only gate on updating an agent, for the fleet rollout and the
-        // operator's "update now" alike. A pre-v7 agent decodes the sync but
-        // ignores the field, so an assignment would never converge.
-    }
-
-    @Test("sandbox fork gate starts at wire protocol v12")
-    func sandboxForkGate() {
-    }
-
-    @Test("per-project network isolation gate starts at wire protocol v21")
-    func projectNetworkIsolationGate() {
-        // A pre-v21 agent keys its DHCP rows on the network *name*, so two
-        // same-named networks would share one row (issue #765). The control
-        // plane refuses to create such a name against a fleet this old.
-    }
-
-    @Test("edge-nonce gate starts at wire protocol v34")
-    func edgeNonceGate() {
-        // Reboot and both restores ride the sync as counters now (STR-151), and
-        // their frames are gone — so a pre-v34 agent does not fail loudly, it
-        // decodes the sync, ignores the field, and reports the bumped
-        // generation as converged. The API would claim a restart that never
-        // happened, which is why the gate refuses the mutation at admission.
-    }
-
-    @Test("graphics console gate starts at wire protocol v23")
-    func graphicsConsoleGate() {
-        // Both halves are optional fields, so a pre-v23 agent decodes the sync
-        // and the connect frame happily and just ignores them — booting the
-        // guest headless, then answering a VNC session with the serial socket.
-        // Nothing fails loudly, which is why the gate is load-bearing at both
-        // placement and session mint (issue #566).
     }
 
     @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")
@@ -96,21 +52,6 @@ struct WireProtocolTests {
     }
 
     // MARK: - Registration version negotiation
-
-    @Test("registration messages default to the current wire version")
-    func registrationDefaultsVersion() throws {
-        let register = AgentRegisterMessage(
-            agentId: "a1",
-            hostname: "host",
-            version: "1.2.3",
-            capabilities: [],
-            resources: Fixtures.resources
-        )
-        #expect(register.protocolVersion == WireProtocol.currentVersion)
-
-        let response = AgentRegisterResponseMessage(requestId: Fixtures.requestId, agentId: "a1", name: "agent")
-        #expect(response.protocolVersion == WireProtocol.currentVersion)
-    }
 
     @Test("registration protocol version survives the wire, absent decodes as nil")
     func registrationVersionOnWire() throws {

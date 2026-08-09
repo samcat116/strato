@@ -89,10 +89,6 @@ struct SecurityGroupProtocolTests {
         #expect(legacyDecoded.securityGroupIds == nil)
     }
 
-    @Test("supportsSecurityGroups gates on v20")
-    func versionGate() {
-    }
-
     @Test("A rule's log flag round-trips, and its absence decodes to nil")
     func ruleLogFlag() throws {
         let logged = DesiredSecurityGroupRule(
