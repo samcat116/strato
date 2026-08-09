@@ -1,0 +1,44 @@
+control-plane/Tests/AppIdentityTests/GuestJWTSVIDMintTests.swift
+  s_c0da28fd6c98a8::t_fefc11076f01f3 205
+  s_c0da28fd6c98a8::t_694228f5f14228 117-132,160-204,207
+  s_e64eb3da2ecde9::t_98a6008e8134dc 206,208
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_c0da28fd6c98a8::t_694228f5f14228 241-247,250-256
+  s_c0da28fd6c98a8::t_fefc11076f01f3 248-249
+control-plane/Sources/App/configure.swift
+  s_c0da28fd6c98a8::t_694228f5f14228 245-255,260,264
+control-plane/Sources/App/Services/AgentGuestIdentityRateLimiter.swift
+  s_c0da28fd6c98a8::t_694228f5f14228 1-67,74-104
+  s_c0da28fd6c98a8::t_3294fc1ac30082 68-73
+control-plane/Sources/App/Controllers/AgentGuestIdentityController.swift
+  s_c0da28fd6c98a8::t_fefc11076f01f3 58
+  s_c0da28fd6c98a8::t_694228f5f14228 13,54-57,59-67,343
+control-plane/Tests/AppPlatformTests/RateLimitTests.swift
+  s_c0da28fd6c98a8::t_694228f5f14228 34-36,127-134
+  s_c0da28fd6c98a8::t_79d343e791614c 135-137
+  s_c0da28fd6c98a8::t_553756b30267a6 138-141
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "0a172718d7de2bfffa0e6cbed003947a636dc911",
+  "prompts": {},
+  "sessions": {
+    "s_c0da28fd6c98a8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe382-c79c-7c53-b27a-d5f33ec468ed",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e64eb3da2ecde9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3ea-91f4-7053-818a-8085597f43aa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
