@@ -150,11 +150,13 @@ process boundary can lose.
   by the sweep and surfaced to the client, never silently dropped).
 - **Coordination-store outage**: coordination fails open (issue #258 policy).
   Pull-mode agents keep converging on their own unconditional re-fetch (the
-  poll endpoint needs only PostgreSQL), and push-mode agents via their
-  socket-holding replica's periodic sync; desired-state doorbells are
+  poll endpoint's Valkey grant bookkeeping is bounded and fail-open), and
+  push-mode agents via their socket-holding replica's periodic sync. Every
+  coordination command has a two-second deadline, so the fail-open path does not
+  inherit the client's 30-second command timeout. Desired-state doorbells are
   unavailable until Valkey returns, so convergence falls back to the agent's own
-  poll interval. `/health/ready` reports `coordination: degraded` and keeps
-  serving traffic.
+  poll interval. `/health/ready` reports `coordination: degraded` and keeps serving
+  traffic.
 - **Session-store outage**: no fail-open path exists for browser auth. Every
   signed-in user is logged out and must re-authenticate with a passkey. Agents
   (SPIFFE mTLS) and API-key/CLI clients are unaffected, and the reconciler needs

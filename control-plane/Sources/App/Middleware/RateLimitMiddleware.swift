@@ -88,20 +88,27 @@ private enum RateLimitScope: String {
 /// Counters live in Valkey when configured (shared across replicas), otherwise in
 /// a process-local actor.
 struct RateLimitMiddleware: AsyncMiddleware {
+    /// A coordination dependency that cannot answer promptly must not consume
+    /// the caller's entire HTTP deadline before the limiter fails open.
+    static let backendDeadline: Duration = .seconds(2)
+
     let config: RateLimitConfig
     /// Shared in-memory fallback, used when Valkey isn't configured.
     let fallbackStore: InMemoryRateLimitStore
     /// Long-lived so its Lua digest cache is shared across requests.
-    private let valkeyStore: ValkeyRateLimitStore?
+    private let valkeyStore: (any RateLimitStore)?
+    private let backendDeadline: Duration
 
     init(
         config: RateLimitConfig,
         fallbackStore: InMemoryRateLimitStore,
-        valkeyStore: ValkeyRateLimitStore? = nil
+        valkeyStore: (any RateLimitStore)? = nil,
+        backendDeadline: Duration = RateLimitMiddleware.backendDeadline
     ) {
         self.config = config
         self.fallbackStore = fallbackStore
         self.valkeyStore = valkeyStore
+        self.backendDeadline = backendDeadline
     }
 
     func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
@@ -109,7 +116,7 @@ struct RateLimitMiddleware: AsyncMiddleware {
             return try await next.respond(to: request)
         }
 
-        let store = store(for: request)
+        let store = store()
         let identity = identity(for: request)
         let policy = policy(for: scope)
 
@@ -129,7 +136,9 @@ struct RateLimitMiddleware: AsyncMiddleware {
         let key = "rl:\(scope.rawValue):\(identity)"
         let count: RateLimitCount
         do {
-            count = try await store.hit(key, window: policy.window)
+            count = try await withBackendDeadline {
+                try await store.hit(key, window: policy.window)
+            }
         } catch {
             // Fail open: a limiter backend error must not take down the API.
             request.logger.error(
@@ -182,8 +191,13 @@ struct RateLimitMiddleware: AsyncMiddleware {
     /// locked out (or the backend errored — fail open rather than block auth).
     private func activeLockout(_ store: RateLimitStore, identity: String) async -> Int? {
         // `try?` flattens the backend's `Int?` result, so a missing key, a nil
-        // value, and a backend error all collapse to nil here (fail open).
-        guard let lockUntil = try? await store.readInt(lockKey(identity)) else { return nil }
+        // value, a backend error, and a backend that misses its deadline all
+        // collapse to nil here (fail open).
+        guard
+            let lockUntil = try? await withBackendDeadline({
+                try await store.readInt(lockKey(identity))
+            })
+        else { return nil }
         let now = Int(Date().timeIntervalSince1970)
         guard lockUntil > now else { return nil }
         return lockUntil - now
@@ -195,10 +209,18 @@ struct RateLimitMiddleware: AsyncMiddleware {
     private func recordAuthOutcome(_ status: HTTPResponseStatus, store: RateLimitStore, identity: String) async {
         switch status.code {
         case 200..<300:
-            try? await store.reset(failureKey(identity))
-            try? await store.reset(lockKey(identity))
+            try? await withBackendDeadline {
+                try await store.reset(failureKey(identity))
+            }
+            try? await withBackendDeadline {
+                try await store.reset(lockKey(identity))
+            }
         case 401, 403:
-            guard let failures = try? await store.hit(failureKey(identity), window: config.failureWindow) else {
+            guard
+                let failures = try? await withBackendDeadline({
+                    try await store.hit(failureKey(identity), window: config.failureWindow)
+                })
+            else {
                 return
             }
             let over = failures.count - config.failureThreshold
@@ -206,7 +228,9 @@ struct RateLimitMiddleware: AsyncMiddleware {
             // 2s, 4s, 8s, ... capped at failureMaxDelay.
             let delay = min(config.failureMaxDelay, config.failureBaseDelay << min(over - 1, 30))
             let lockUntil = Int(Date().timeIntervalSince1970) + delay
-            try? await store.writeInt(lockKey(identity), value: lockUntil, ttl: delay)
+            try? await withBackendDeadline {
+                try await store.writeInt(lockKey(identity), value: lockUntil, ttl: delay)
+            }
         default:
             break
         }
@@ -278,11 +302,27 @@ struct RateLimitMiddleware: AsyncMiddleware {
 
     // MARK: - Store selection
 
-    private func store(for request: Request) -> RateLimitStore {
-        if request.application.valkeyEnabled, let valkeyStore {
-            return valkeyStore
+    private func store() -> RateLimitStore { valkeyStore ?? fallbackStore }
+
+    /// Bound one backend operation independently of valkey-swift's longer
+    /// command timeout. The client honors task cancellation, so the losing
+    /// command releases its wait when the deadline wins.
+    private func withBackendDeadline<Value: Sendable>(
+        _ operation: @escaping @Sendable () async throws -> Value
+    ) async throws -> Value {
+        let deadline = backendDeadline
+        return try await withThrowingTaskGroup(of: Value.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: deadline)
+                throw RateLimitError.backendTimeout(deadline)
+            }
+            defer { group.cancelAll() }
+            guard let value = try await group.next() else {
+                preconditionFailure("rate-limit backend deadline group had no tasks")
+            }
+            return value
         }
-        return fallbackStore
     }
 
     // MARK: - Responses / headers

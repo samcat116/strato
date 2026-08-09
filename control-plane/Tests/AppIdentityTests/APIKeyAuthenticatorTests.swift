@@ -120,6 +120,38 @@ struct APIKeyAuthenticatorTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("API-key authentication does not create a browser session")
+    func testAPIKeyDoesNotCreateSession() async throws {
+        let app = try await Application.makeForTesting()
+
+        try await configure(app)
+        try await app.autoMigrate()
+
+        let user = try await createTestUser(on: app.db)
+        let (_, fullKey) = try await createTestAPIKey(for: user, on: app.db)
+
+        app.routes.all.removeAll()
+        app.testOnlyLoginRoutePrefixes = ["/test"]
+        app.get("test", "api-key-session-isolation") { req -> String in
+            try req.auth.require(User.self).username
+        }
+
+        try await app.test(
+            .GET, "/test/api-key-session-isolation",
+            beforeRequest: { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: fullKey)
+            }
+        ) { res async in
+            #expect(res.status == .ok)
+            #expect(res.body.string == "testuser")
+            // Before STR-206, SessionAuthenticator wrapped bearer auth and
+            // promoted this user into a new Valkey-backed browser session.
+            #expect(res.headers.setCookie?["vapor-session"] == nil)
+        }
+
+        try await app.shutdownForTesting()
+    }
+
     @Test("APIKeyAuthenticator rejects request without API key")
     func testMissingAPIKey() async throws {
         let app = try await Application.makeForTesting()

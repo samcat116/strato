@@ -339,11 +339,11 @@ struct SchedulerReservationTests {
     }
 }
 
-/// The deadline that bounds `CoordinationService.probe()` (issue #731). Without
-/// it the readiness probe inherits valkey-swift's 30s `commandTimeout` and a
-/// probe issued during a connection drop stalls `/health/ready` for ~24s.
-@Suite("Coordination probe timeout")
-struct StoreProbeTimeoutTests {
+/// The deadline that bounds coordination-store operations (issues #731 and
+/// STR-206). Without it readiness and fail-open request paths inherit
+/// valkey-swift's 30s `commandTimeout` during a connection drop.
+@Suite("Coordination store timeout")
+struct StoreTimeoutTests {
     private struct ProbeTestError: Error {}
 
     @Test("A fast operation returns without waiting on the deadline")
@@ -353,7 +353,7 @@ struct StoreProbeTimeoutTests {
         // A generous deadline that must not be waited on: the operation returns
         // immediately, so the helper must too (it cancels the timer, not block
         // on it).
-        try await withStoreProbeTimeout(.seconds(5)) {}
+        try await withStoreTimeout(.seconds(5)) {}
         #expect(clock.now - start < .seconds(1))
     }
 
@@ -361,8 +361,8 @@ struct StoreProbeTimeoutTests {
     func timesOut() async {
         let clock = ContinuousClock()
         let start = clock.now
-        await #expect(throws: StoreProbeTimeoutError.self) {
-            try await withStoreProbeTimeout(.milliseconds(50)) {
+        await #expect(throws: StoreTimeoutError.self) {
+            try await withStoreTimeout(.milliseconds(50)) {
                 // Far longer than the deadline; the timeout must win the race.
                 try await Task.sleep(for: .seconds(30))
             }
@@ -375,7 +375,7 @@ struct StoreProbeTimeoutTests {
     @Test("The operation's own error is surfaced, not swallowed by the timeout")
     func propagatesOperationError() async {
         await #expect(throws: ProbeTestError.self) {
-            try await withStoreProbeTimeout(.seconds(30)) {
+            try await withStoreTimeout(.seconds(30)) {
                 throw ProbeTestError()
             }
         }

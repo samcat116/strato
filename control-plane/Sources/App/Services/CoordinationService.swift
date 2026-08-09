@@ -529,7 +529,9 @@ actor CoordinationService {
         agentKey: String, ttlSeconds: Int = CoordinationService.presenceTTLSeconds
     ) async -> Bool {
         do {
-            try await store.setKey(Self.presenceKey(agentKey: agentKey), ttlSeconds: ttlSeconds)
+            try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.setKey(Self.presenceKey(agentKey: agentKey), ttlSeconds: ttlSeconds)
+            }
             return true
         } catch {
             logger.warning(
@@ -546,7 +548,9 @@ actor CoordinationService {
     /// live presence key. Best-effort, like every write here.
     func clearAgentPresence(agentKey: String) async {
         do {
-            try await store.deleteKey(Self.presenceKey(agentKey: agentKey))
+            try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.deleteKey(Self.presenceKey(agentKey: agentKey))
+            }
         } catch {
             logger.warning(
                 "Failed to clear agent presence in coordination store; TTL will reclaim it",
@@ -559,7 +563,9 @@ actor CoordinationService {
     /// of treating an outage as universal agent death.
     func isAgentPresent(agentKey: String) async -> Bool? {
         do {
-            return try await store.keyExists(Self.presenceKey(agentKey: agentKey))
+            return try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.keyExists(Self.presenceKey(agentKey: agentKey))
+            }
         } catch {
             logger.warning(
                 "Failed to read agent presence from coordination store",
@@ -573,8 +579,10 @@ actor CoordinationService {
     /// the database's online rows under the fail-open policy.
     func agentPresence(agentKeys: [String]) async -> [Bool]? {
         do {
-            return try await store.keysExist(
-                agentKeys.map { Self.presenceKey(agentKey: $0) })
+            return try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.keysExist(
+                    agentKeys.map { Self.presenceKey(agentKey: $0) })
+            }
         } catch {
             logger.warning(
                 "Failed to batch-read agent presence from coordination store",
@@ -583,12 +591,13 @@ actor CoordinationService {
         }
     }
 
-    /// Deadline for `probe()`. A same-cluster `EXISTS` round-trips in well under
-    /// a millisecond, so a probe still outstanding after this has hit a dropped
-    /// or stalling connection, not a slow-but-healthy one. Kept far below the
-    /// readiness probe's `timeoutSeconds: 5` so the whole `/health/ready` handler
-    /// returns inside the kubelet window even when coordination is unreachable.
-    static let probeDeadline: Duration = .seconds(2)
+    /// Deadline for every coordination-store operation. A same-cluster command
+    /// round-trips in well under a millisecond, so an operation still outstanding
+    /// after this has hit a dropped or stalling connection, not a slow-but-healthy
+    /// one. Fail-open behavior must be prompt enough for the caller to continue;
+    /// catching valkey-swift's 30-second command timeout is too late for an HTTP
+    /// request or an agent's desired-state poll (STR-206).
+    static let storeDeadline: Duration = .seconds(2)
 
     /// Round-trip the store so `/health/ready` can report coordination
     /// reachability. Deliberately the one method here that **rethrows**: every
@@ -597,7 +606,7 @@ actor CoordinationService {
     /// over it. Readiness grades the result as degraded, not fatal, so the
     /// fail-open policy still holds where it matters.
     ///
-    /// Bounded by ``probeDeadline``: the underlying client's `commandTimeout`
+    /// Bounded by ``storeDeadline``: the underlying client's `commandTimeout`
     /// defaults to 30s (valkey-swift), so a probe issued while the connection is
     /// being torn down would otherwise block for 30s and stall `/health/ready`
     /// long past `timeoutSeconds: 5` — the exact 30s-tail latency behind #731.
@@ -605,7 +614,7 @@ actor CoordinationService {
     /// surfaces as the thrown error readiness grades as `degraded` (still 200).
     func probe() async throws {
         let store = self.store
-        try await withStoreProbeTimeout(Self.probeDeadline) {
+        try await withStoreTimeout(Self.storeDeadline) {
             _ = try await store.keyExists("health:probe")
         }
     }
@@ -627,8 +636,10 @@ actor CoordinationService {
         agentId: String, imageId: UUID, ttlSeconds: Int = CoordinationService.imageDownloadGrantTTLSeconds
     ) async {
         do {
-            try await store.setKey(
-                Self.imageDownloadGrantKey(agentId: agentId, imageId: imageId), ttlSeconds: ttlSeconds)
+            try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.setKey(
+                    Self.imageDownloadGrantKey(agentId: agentId, imageId: imageId), ttlSeconds: ttlSeconds)
+            }
         } catch {
             logger.warning(
                 "Failed to record image download grant in coordination store",
@@ -645,7 +656,9 @@ actor CoordinationService {
     /// turn a Valkey outage into a fleet-wide image-pull outage.
     func hasImageDownloadGrant(agentId: String, imageId: UUID) async -> Bool? {
         do {
-            return try await store.keyExists(Self.imageDownloadGrantKey(agentId: agentId, imageId: imageId))
+            return try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.keyExists(Self.imageDownloadGrantKey(agentId: agentId, imageId: imageId))
+            }
         } catch {
             logger.warning(
                 "Failed to read image download grant from coordination store",
@@ -668,7 +681,9 @@ actor CoordinationService {
         -> Bool
     {
         do {
-            return try await store.acquireLock("lock:sweep:\(sweepName)", ttlSeconds: ttlSeconds)
+            return try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.acquireLock("lock:sweep:\(sweepName)", ttlSeconds: ttlSeconds)
+            }
         } catch {
             logger.warning(
                 "Failed to acquire sweep lock; proceeding without cluster exclusion",
@@ -698,13 +713,15 @@ actor CoordinationService {
         ttlSeconds: Int = CoordinationService.reservationTTLSeconds
     ) async -> Bool {
         do {
-            return try await store.tryReserve(
-                agentKey: Self.reservationKey(agentId: agentId),
-                vmId: vmId,
-                amounts: amounts,
-                capacity: capacity,
-                ttlSeconds: ttlSeconds
-            )
+            return try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.tryReserve(
+                    agentKey: Self.reservationKey(agentId: agentId),
+                    vmId: vmId,
+                    amounts: amounts,
+                    capacity: capacity,
+                    ttlSeconds: ttlSeconds
+                )
+            }
         } catch {
             logger.warning(
                 "Failed to write placement reservation; placing without one",
@@ -721,7 +738,10 @@ actor CoordinationService {
     /// already expired). Best-effort: the TTL is the backstop.
     func releaseReservation(agentId: String, vmId: String) async {
         do {
-            try await store.releaseReservation(agentKey: Self.reservationKey(agentId: agentId), vmId: vmId)
+            try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.releaseReservation(
+                    agentKey: Self.reservationKey(agentId: agentId), vmId: vmId)
+            }
         } catch {
             logger.warning(
                 "Failed to release placement reservation; TTL will reclaim it",
@@ -742,10 +762,14 @@ actor CoordinationService {
     func releaseReservations(agentId: String, vmIds: [String]) async {
         guard !vmIds.isEmpty else { return }
         do {
-            let reserved = try await store.reservedVMIds(agentKey: Self.reservationKey(agentId: agentId))
-            guard !reserved.isEmpty else { return }
-            for vmId in Set(reserved).intersection(vmIds) {
-                try await store.releaseReservation(agentKey: Self.reservationKey(agentId: agentId), vmId: vmId)
+            try await withStoreTimeout(Self.storeDeadline) {
+                let reserved = try await self.store.reservedVMIds(
+                    agentKey: Self.reservationKey(agentId: agentId))
+                guard !reserved.isEmpty else { return }
+                for vmId in Set(reserved).intersection(vmIds) {
+                    try await self.store.releaseReservation(
+                        agentKey: Self.reservationKey(agentId: agentId), vmId: vmId)
+                }
             }
         } catch {
             logger.warning(
@@ -801,9 +825,11 @@ actor CoordinationService {
     /// of whether anything rang.
     func publishDoorbell(agentKey: String, fromReplica replicaId: String) async {
         do {
-            try await store.publish(
-                channel: Self.doorbellChannel,
-                message: Self.doorbellPayload(agentKey: agentKey, fromReplica: replicaId))
+            try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.publish(
+                    channel: Self.doorbellChannel,
+                    message: Self.doorbellPayload(agentKey: agentKey, fromReplica: replicaId))
+            }
         } catch {
             logger.warning(
                 "Failed to publish desired-state doorbell; the agent's own re-fetch will converge it",
@@ -833,8 +859,10 @@ actor CoordinationService {
     func activeReservations(agentIds: [String]) async -> [String: ReservationAmounts] {
         guard !agentIds.isEmpty else { return [:] }
         do {
-            let totals = try await store.reservedTotals(
-                agentKeys: agentIds.map { Self.reservationKey(agentId: $0) })
+            let totals = try await withStoreTimeout(Self.storeDeadline) {
+                try await self.store.reservedTotals(
+                    agentKeys: agentIds.map { Self.reservationKey(agentId: $0) })
+            }
             guard totals.count == agentIds.count else {
                 throw CoordinationStoreError.unexpectedResponse
             }
@@ -928,33 +956,36 @@ struct ValkeyReachabilityLifecycleHandler: LifecycleHandler {
 /// `degraded` (still 200) under the fail-open policy, session storage is fatal.
 /// Either way the point is that the verdict arrives fast rather than after the
 /// client's 30s `commandTimeout`.
-struct StoreProbeTimeoutError: Error, CustomStringConvertible {
+struct StoreTimeoutError: Error, CustomStringConvertible {
     let deadline: Duration
-    var description: String { "store probe exceeded its \(deadline) deadline" }
+    var description: String { "store operation exceeded its \(deadline) deadline" }
 }
 
-/// Run `operation`, throwing `StoreProbeTimeoutError` if it has not finished
+/// Run `operation`, throwing `StoreTimeoutError` if it has not finished
 /// within `deadline`. Whichever child finishes first decides the result; the
 /// loser is cancelled. valkey-swift honors task cancellation, so a timed-out
 /// command stops awaiting the connection instead of running to the client's
 /// `commandTimeout`.
 ///
 /// Internal rather than private so the timeout behavior is unit-testable without
-/// standing up a Valkey. Production callers: `CoordinationService.probe()` and
-/// the session-store readiness check in `HealthController`.
-func withStoreProbeTimeout(
+/// standing up a Valkey. Production callers include every fail-open coordination
+/// operation and the session-store readiness check in `HealthController`.
+func withStoreTimeout<Value: Sendable>(
     _ deadline: Duration,
-    _ operation: @escaping @Sendable () async throws -> Void
-) async throws {
-    try await withThrowingTaskGroup(of: Void.self) { group in
+    _ operation: @escaping @Sendable () async throws -> Value
+) async throws -> Value {
+    try await withThrowingTaskGroup(of: Value.self) { group in
         group.addTask { try await operation() }
         group.addTask {
             try await Task.sleep(for: deadline)
-            throw StoreProbeTimeoutError(deadline: deadline)
+            throw StoreTimeoutError(deadline: deadline)
         }
         // Propagate the first outcome (the operation's success/failure or the
         // timeout), then cancel the loser on the way out.
         defer { group.cancelAll() }
-        _ = try await group.next()
+        guard let value = try await group.next() else {
+            preconditionFailure("store deadline group had no tasks")
+        }
+        return value
     }
 }
