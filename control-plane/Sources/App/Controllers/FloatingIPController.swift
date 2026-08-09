@@ -647,16 +647,14 @@ struct FloatingIPController: RouteCollection {
         return (canonical, gatewayIP.description)
     }
 
-    /// The agent whose network reconciler would realize NAT for the VM: the
-    /// site's network controller for a sited host, the hosting agent itself
-    /// for the legacy site-less model. Throws 409 in every state where
+    /// The site's network controller whose reconciler would realize NAT for
+    /// the VM. Throws 409 in every state where
     /// *nothing* would realize the NAT rule, so an attach can never persist
     /// an address the sync path won't back:
     /// - the VM is unplaced (the scheduler has no floating-IP capability
     ///   requirement, so a later placement could land on a too-old agent);
-    /// - the host is sited but the site has no designated network controller
-    ///   (assembly then sends *no* agent the network state — unlike the
-    ///   site-less model, the hosting agent has no topology authority);
+    /// - the site has no designated network controller (assembly then sends
+    ///   *no* agent the network state);
     /// - the site's controller is offline past the grace window, or came back
     ///   unable to author topology (issue #833).
     static func requireNATRealizingAgent(for vm: VM, on db: Database) async throws -> Agent {

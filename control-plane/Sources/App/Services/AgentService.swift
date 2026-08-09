@@ -398,7 +398,7 @@ actor AgentService {
             // the site's whole OVN deployment belongs to one org. Refusals are
             // logged, not fatal; the agent registers with its previous scope.
             var refusalReason: String?
-            if let agentID = agent.id {
+            if agent.id != nil {
                 refusalReason = "agent organization is fixed by its required site"
             }
             if let refusalReason {
@@ -1934,7 +1934,7 @@ actor AgentService {
     }
 
     /// The agent id of the site network controller responsible for the given
-    /// agent's networks, or nil for site-less agents / unconfigured sites.
+    /// agent's networks, or nil for unconfigured sites.
     /// Best-effort: on lookup failure the periodic sync timer still converges
     /// the controller.
     private func siteNetworkControllerID(forAgentId agentId: String) async -> String? {

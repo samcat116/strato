@@ -18,6 +18,25 @@ struct RequireSitePlacement: AsyncMigration {
             )
             """
 
+        // BackfillDefaultSites predates mandatory placement and intentionally
+        // skipped organizations that already owned a custom site. Such an
+        // organization can still have legacy NULL placements, so ensure the
+        // deterministic default exists before using it below. Organization
+        // names and site names are globally unique, making this idempotent.
+        try await sql.raw(
+            """
+            INSERT INTO sites (id, name, description, organization_id, created_at, updated_at)
+            SELECT gen_random_uuid(),
+                   o.name || ' Default Site',
+                   'Default availability zone for ' || o.name,
+                   o.id, now(), now()
+            FROM organizations o
+            WHERE NOT EXISTS (
+                SELECT 1 FROM sites s WHERE s.name = o.name || ' Default Site'
+            )
+            """
+        ).run()
+
         try await sql.raw(
             """
             \(unsafeRaw: scopes)

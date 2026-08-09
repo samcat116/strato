@@ -55,13 +55,8 @@ enum ResolverCapability {
             .mapValues { $0.map(\.name).sorted() }
         }
 
-        /// The agents that would withhold the resolver from a network pinned to
-        /// `siteID`, or the site-less agents for an unpinned network.
-        ///
-        /// The sync path asks a site-less receiving agent's own capability and
-        /// never consults agents assigned to unrelated sites. Restricting this
-        /// warning to the site-less complement keeps the API's explanation on
-        /// the same scope as that delivery decision.
+        /// The agents that would withhold the resolver from a network in
+        /// `siteID`.
         func incapableAgentNames(forSite siteID: UUID) -> [String] {
             return bySite[siteID] ?? []
         }

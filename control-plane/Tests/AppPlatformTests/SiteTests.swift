@@ -1299,4 +1299,33 @@ final class SiteTests {
             #expect(bareSitesAgain == 1)
         }
     }
+
+    @Test("Required placement creates a default alongside an existing custom site")
+    func requiredPlacementFallbackSite() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Placement Fallback Org")
+            let custom = Site(
+                name: "placement-custom-dc", organizationScope: .organization(try org.requireID()))
+            try await custom.save(on: app.db)
+
+            try await RequireSitePlacement().prepare(on: app.db)
+
+            let sites = try await Site.query(on: app.db)
+                .filter(\.$organization.$id == org.id!)
+                .all()
+            #expect(sites.count == 2)
+            #expect(sites.contains { $0.id == custom.id })
+            #expect(sites.contains {
+                $0.name == Site.defaultName(forOrganizationNamed: "Placement Fallback Org")
+            })
+
+            // The fallback creation and the constraints are both idempotent.
+            try await RequireSitePlacement().prepare(on: app.db)
+            let count = try await Site.query(on: app.db)
+                .filter(\.$organization.$id == org.id!)
+                .count()
+            #expect(count == 2)
+        }
+    }
 }

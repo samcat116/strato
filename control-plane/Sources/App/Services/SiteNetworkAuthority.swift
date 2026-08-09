@@ -98,8 +98,7 @@ enum SiteNetworkAuthority {
     }
 
     /// The authority for a site as such, for callers with no host agent in
-    /// hand (pinning a network to a site). Never returns `.selfAuthored` —
-    /// that case is a property of the *agent*, not the site.
+    /// hand (pinning a network to a site).
     static func resolve(forSite site: Site, on db: any Database) async throws -> Authority {
         guard let controllerID = site.$networkControllerAgent.id,
             let controller = try await Agent.find(controllerID, on: db)
