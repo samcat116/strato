@@ -324,12 +324,25 @@ final class DesiredStateReconciliationTests {
                 name: "fip-net", subnet: "10.30.0.0/24", gateway: "10.30.0.1",
                 projectID: vm.$project.id, externalAccess: true)
             try await network.save(on: app.db)
+            let networkID = try network.requireID()
+            let net0 = VMNetworkInterface(
+                vmID: vm.id!, logicalNetworkID: networkID,
+                macAddress: VMNetworkInterface.generateMACAddress(),
+                deviceName: "net0", orderIndex: 0)
+            try await net0.save(on: app.db)
+            let net1 = VMNetworkInterface(
+                vmID: vm.id!, logicalNetworkID: networkID,
+                macAddress: VMNetworkInterface.generateMACAddress(),
+                deviceName: "net1", orderIndex: 1)
+            net1.detachGeneration = vm.generation
+            try await net1.save(on: app.db)
             let nic = VMNetworkInterface(
-                vmID: vm.id!, logicalNetworkID: try network.requireID(),
-                macAddress: VMNetworkInterface.generateMACAddress())
+                vmID: vm.id!, logicalNetworkID: networkID,
+                macAddress: VMNetworkInterface.generateMACAddress(),
+                deviceName: "net2", orderIndex: 2)
             try await nic.save(on: app.db)
             try await VMInterfaceAddress(
-                interfaceID: nic.id!, logicalNetworkID: try network.requireID(), family: .ipv4,
+                interfaceID: nic.id!, logicalNetworkID: networkID, family: .ipv4,
                 address: "10.30.0.5", prefixLength: 24, gateway: "10.30.0.1"
             ).save(on: app.db)
 
@@ -352,7 +365,7 @@ final class DesiredStateReconciliationTests {
             #expect(fips[0].externalIP == "203.0.113.10")
             #expect(fips[0].logicalIP == "10.30.0.5")
             #expect(fips[0].vmId == vm.id)
-            #expect(fips[0].nicIndex == 0)
+            #expect(fips[0].nicIndex == 2)
 
             // Another agent's sync must not carry this VM's floating IP.
             let other = try await app.desiredStateAssembler.assemble(agentId: UUID().uuidString)

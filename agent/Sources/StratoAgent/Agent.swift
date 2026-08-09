@@ -2380,29 +2380,12 @@ extension Agent {
                 let metadataNetworks: [UUID]
                 do {
                     // This host's own workload ports' desired security-group
-                    // membership, derived from each NIC's spec (nicIndex is
-                    // the NIC's position in the spec list, matching the LSP
-                    // names createVMNetwork derives). Converged on every
-                    // agent; port groups + ACLs themselves are authored only
-                    // by the topology authority from `message.securityGroups`.
-                    var portMemberships = message.vms.flatMap { vm in
-                        // The VM's metadata kill switch (STR-185) is a property
-                        // of the instance, so it lands on every one of its
-                        // ports. Read off the served document rather than the
-                        // spec because that is where the switch travels — see
-                        // `InstanceMetadata.serviceEnabled` for why it rides
-                        // with the payload it governs. A VM with no `metadata`
-                        // at all is not denied: absence is "nobody was opted
-                        // out", never a denial.
-                        let metadataDenied = vm.metadata.map { !$0.isServiceEnabled } ?? false
-                        return vm.spec.networks.enumerated().map { index, spec in
-                            DesiredPortMembership(
-                                portName: OVNNaming.vmPortName(
-                                    vmId: vm.vmId.uuidString, nicIndex: index),
-                                securityGroupIds: spec.securityGroupIds,
-                                metadataDenied: metadataDenied)
-                        }
-                    }
+                    // membership, derived from each NIC's stable slot (with
+                    // compact array position only for legacy specs). Converged
+                    // on every agent; port groups + ACLs themselves are
+                    // authored only by the topology authority from
+                    // `message.securityGroups`.
+                    var portMemberships = VMPortMembershipPlanner.memberships(for: message.vms)
                     // The sandbox arm (STR-102). Three things here are exact
                     // rather than approximate, and each fails silently if it
                     // drifts — `reconcileMembership` says nothing about a port
