@@ -5404,7 +5404,7 @@ export interface components {
             securityGroupIds?: string[];
             /** @description Must be at least 1280 when the selected network has IPv6 enabled. */
             mtu?: number;
-        } & (unknown | unknown);
+        };
         UpdateVMRequest: {
             name?: string;
             /** @description The VM's DNS label. Renaming the VM deliberately does not move its records, so this is the only way its name in DNS changes. */

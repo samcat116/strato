@@ -9145,13 +9145,6 @@ components:
           minimum: 68
           maximum: 65535
           description: Must be at least 1280 when the selected network has IPv6 enabled.
-      oneOf:
-        - required: [networkId]
-          not:
-            required: [networkName]
-        - required: [networkName]
-          not:
-            required: [networkId]
     UpdateVMRequest:
       type: object
       properties:
