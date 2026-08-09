@@ -143,8 +143,6 @@ struct DesiredStateAssembler {
         // same reason: this runs for every agent on every sync, so a per-VM
         // lookup would be a fleet-wide load multiplier.
         let spiffeIDsByVM = try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
-        let guestIdentityConfig = app.guestIdentityIssuanceConfig
-        let guestIdentityAudiences = Array(guestIdentityConfig.allowedAudiences).sorted()
 
         var entries: [DesiredVMState] = []
         for vm in vms {
@@ -200,9 +198,7 @@ struct DesiredStateAssembler {
             let metadata = InstanceMetadata.build(
                 vm: vm, vmId: vmId, resolvedInterfaces: resolvedInterfaces,
                 region: region, availabilityZone: availabilityZone,
-                instanceSPIFFEID: spiffeIDsByVM[vmId],
-                audiences: guestIdentityAudiences,
-                ttlSeconds: guestIdentityConfig.maximumTTLSeconds)
+                instanceSPIFFEID: spiffeIDsByVM[vmId])
 
             // A zero nonce is "never asked for", and sending it would be a
             // slightly different claim than sending nothing — so both are

@@ -38,20 +38,17 @@ extension InstanceMetadata {
     /// which is exactly what makes it publishable across this boundary at all;
     /// `docs/architecture/guest-identity.md` rejects the metadata service as a
     /// carrier of SVIDs for the same reason it endorses it as a carrier of the
-    /// ID. `audiences` and `ttlSeconds` publish the issuer policy STR-57 now
-    /// enforces: the audience set is only a guest-side hint (the mint endpoint
-    /// remains authoritative), and the TTL is the same configured maximum the
-    /// endpoint clamps to. Nil means the VM has no registration — one an
-    /// administrator revoked — and nothing is vended.
+    /// ID. Audience and TTL policy stay empty until the agent has a guest-facing
+    /// bridge to the STR-57 mint endpoint; publishing them sooner would advertise
+    /// a capability the guest cannot use. Nil means the VM has no registration —
+    /// one an administrator revoked — and nothing is vended.
     static func build(
         vm: VM,
         vmId: UUID,
         resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         region: String?,
         availabilityZone: String?,
-        instanceSPIFFEID: String?,
-        audiences: [String],
-        ttlSeconds: Int?
+        instanceSPIFFEID: String?
     ) -> InstanceMetadata {
         InstanceMetadata(
             instanceId: vmId,
@@ -81,9 +78,7 @@ extension InstanceMetadata {
             userData: vm.userData,
             vendorData: nil,
             tags: [:],
-            identity: instanceSPIFFEID.map {
-                IdentityPolicy(spiffeId: $0, audiences: audiences, ttlSeconds: ttlSeconds)
-            }
+            identity: instanceSPIFFEID.map { IdentityPolicy(spiffeId: $0) }
         )
     }
 }

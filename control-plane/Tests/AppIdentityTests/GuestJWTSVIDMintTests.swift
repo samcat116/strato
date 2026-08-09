@@ -195,6 +195,15 @@ struct GuestJWTSVIDMintTests {
             #expect(firstThrottled.status == .tooManyRequests)
             #expect(firstThrottled.headers.first(name: "Retry-After") != nil)
 
+            let refusalEvent = try #require(
+                try await AuditEvent.query(on: app.db)
+                    .filter(\.$eventType == AuditEventType.guestIdentityRefused.rawValue)
+                    .first())
+            #expect(refusalEvent.status == Int(HTTPResponseStatus.tooManyRequests.code))
+            #expect(refusalEvent.username == "spiffe://strato.local/agent/mint-agent")
+            #expect(refusalEvent.resourceID == first.vm.id?.uuidString)
+            #expect(refusalEvent.metadata?["reason"] == GuestIdentityRefusal.rateLimited.rawValue)
+
             let secondAllowed = try await mint(
                 app: app,
                 port: port,

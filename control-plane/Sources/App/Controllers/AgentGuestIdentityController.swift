@@ -55,13 +55,18 @@ struct AgentGuestIdentityController: RouteCollection {
             authenticatedAgent: authenticatedAgent,
             request: req)
         if let rateLimit, rateLimit.exceeded {
-            Telemetry.recordGuestIdentityMint(outcome: GuestIdentityRefusal.rateLimited.rawValue)
-            req.logger.warning(
-                "guest_identity_rate_limit_exceeded",
-                metadata: [
-                    "agentIdentity": .string(authenticatedAgent.identity.key),
-                    "path": .string(req.url.path),
-                ])
+            _ = await refusalRecord(
+                .rateLimited,
+                req: req,
+                authenticatedAgent: authenticatedAgent,
+                agentID: nil,
+                resourceID: rawVMID,
+                organizationID: authenticatedAgent.organizationID,
+                audiences: [],
+                spiffeID: nil,
+                ttlSeconds: nil,
+                expiresAt: nil,
+                status: Int(HTTPResponseStatus.tooManyRequests.code))
             return rateLimit.limitedResponse()
         }
 
