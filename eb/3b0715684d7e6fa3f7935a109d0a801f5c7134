@@ -1,0 +1,269 @@
+control-plane/Tests/AppIdentityTests/SPIRERegistrationFlowTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 817-818,832-833,920-922,927
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 405-406,410-417
+agent/Sources/StratoAgentCore/FailureClassification.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 6-8,25-27
+agent/Tests/StratoAgentTests/ReconciliationTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 12-28,188-191,194,525-526,531-532,535-572,575,578,580,582-584,589-590,593,613,624,627,637-638,661-662,670,673
+control-plane/web/src/components/workloads/convergence-failure-alert.tsx
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-43
+control-plane/web/src/components/quotas/quota-card.tsx
+  s_5d7717eeeb4bf1::t_77d511b77f4751 23-24,105-112,117-119
+deploy/compose/docker-compose.yml
+  s_5d7717eeeb4bf1::t_77d511b77f4751 270-275,381-387
+control-plane/Tests/AppIAMTests/ResourceBindingCleanupTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 596-597,601
+shared/Tests/StratoSharedTests/SandboxProtocolTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 257,259-262
+deploy/compose/.env.example
+  s_5d7717eeeb4bf1::t_77d511b77f4751 62-68
+docs/deployment/iam.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 74-80
+control-plane/Sources/App/Models/vm.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 89-98,385-387,391
+control-plane/Sources/App/routes.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 30
+control-plane/Tests/AppPlatformTests/RateLimitTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 38-40,131-138
+  s_5d7717eeeb4bf1::t_25d3bb2249a2fa 139-145
+shared/Tests/StratoSharedTests/GuestIdentityMintingTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-34
+control-plane/Tests/AppIdentityTests/AgentOrganizationScopeTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 485,542
+CLAUDE.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 54,129,140
+control-plane/Sources/App/openapi.yaml
+  s_5d7717eeeb4bf1::t_77d511b77f4751 101-102,9290-9297,9977-9981,10107,10126-10129,10217,10232-10235,10239-10242,10246-10258,12225-12227,12232-12241,12255-12256,12263-12266,13143-13149,13170-13171,13195-13199,13220-13224,13257-13261,13303,13317-13318
+control-plane/Tests/AppPlatformTests/AgentVersionTargetTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-42
+agent/Tests/StratoAgentTests/SnapshotFootprintTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-88
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1049
+docs/api-reference.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 140-144,157-160
+control-plane/Tests/AppIAMTests/ProjectVisibilityTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 46
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 178-180
+control-plane/Tests/AppIAMTests/VolumeAuthorizationTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 67
+control-plane/Tests/AppResourceTests/QuotaComplianceServiceTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 54,83
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 87,120,149,396,446,465,511,636,664,725,782
+control-plane/Sources/App/Services/SPIFFE/SPIRERegistrationService.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 79-93
+control-plane/Tests/AppResourceTests/VolumeSnapshotGuardTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 50
+shared/Tests/StratoSharedTests/EnumDecodingTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 20,28,36,47
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 116-119,176,210-211,427-438,496-498,504-533,661-664,668-686,828,837-840,842-845,847-848,918,937-939,941-943
+  s_5d7717eeeb4bf1::t_ad70671685bf32 205-208,934-936
+control-plane/Sources/App/Services/AgentService.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 341-342,878-884,1074-1240,2705-2727
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 70,90
+control-plane/Sources/App/Middleware/RateLimitMiddleware.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 265-280
+control-plane/Tests/AppPlatformTests/ProjectResolutionTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 130,468-469,500
+control-plane/Sources/App/SchemaMigrator.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 87,98-105,114-123,126,141-147,149-165,168-178,182-215
+  s_5d7717eeeb4bf1::t_111cafe962fe7b 216
+docs/adr/0002-ceph-for-distributed-block-storage.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 184-186
+control-plane/Sources/App/DatabaseStatementTimeoutConfiguration.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-540
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 61-74,109,131-134,206-212,376-378,382-387,397,403-423,429-439,473-479,496-498,516-524,551-552,562,572-574,606,616,625-626,648-649,659,669-670
+control-plane/Sources/App/Extensions/Request+ProjectResolution.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 188
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 16,330,584,621,843-853,878-882,900-901,914-916,935-936,943,1395-1399,1401-1429,1541-1546,1548-1553,1565-1571,1580-1581
+agent/Sources/StratoAgentCore/CustomLogHandler.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 46-48
+control-plane/Sources/App/Migrations/AddWorkloadConvergenceObservability.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-26
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 317
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 157-162,184-185
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 97
+agent/Sources/StratoAgentCore/QEMUGraphicsDevice.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 16-18,20
+control-plane/Tests/AppIAMTests/VMAttachTargetDisclosureTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 121
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 88,550
+agent/Sources/StratoAgentCore/SnapshotFootprint.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-66
+control-plane/Tests/AppResourceTests/VolumeStuckSweepTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 68
+docs/deployment/agents.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 620-622
+control-plane/Sources/App/Migrations/AddSandboxCountToResourceQuota.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 42-47,52
+control-plane/web/src/components/quotas/quota-dialog.tsx
+  s_5d7717eeeb4bf1::t_77d511b77f4751 44-45,57,65-68,75,125-136,144,155,255
+control-plane/web/src/types/openapi.ts
+  s_5d7717eeeb4bf1::t_77d511b77f4751 5454-5458,5807-5808,5884-5885,5943-5948,5952-5958,6961,6972,6976-6977,7426-7427,7439,7454-7458,7470-7471,7489-7490,7520
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 7-9,38,48-55,70,120,122
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 41-44
+control-plane/web/src/types/api.ts
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1194-1199,1811-1812,1821,1830-1831,1853-1854,1866-1867
+control-plane/web/src/app/(dashboard)/sandboxes/detail/page.tsx
+  s_5d7717eeeb4bf1::t_77d511b77f4751 30,134
+  s_5d7717eeeb4bf1::t_360e584c2e4c09 135
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 590,605-606,640
+helm/strato-control-plane/README.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 121-132,150-151
+control-plane/Tests/AppPlatformTests/InputSizeBoundTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 425,829
+control-plane/Tests/AppPlatformTests/DatabaseStatementTimeoutConfigurationTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-324
+control-plane/Tests/AppPlatformTests/SteadyStateDivergenceTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-92
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-639
+control-plane/Sources/App/Models/VolumeSnapshot.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 47-52,54-57,59-74,140,151,238-253,286,291-300,303-324,362-365,368-372,390,393-394
+docs/architecture/overview.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 221-225
+control-plane/Sources/App/Services/QuotaUsageService.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 21,30,39-40
+control-plane/Tests/AppIAMTests/VolumeAttachProjectContainmentTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 29-30,61,69-70,136-156
+  s_5d7717eeeb4bf1::t_8b5195b8d32b46 157-158
+control-plane/Sources/App/Models/Sandbox.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 151-160,265-267,271
+agent/Tests/StratoAgentTests/SandboxReconciliationTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 15-31,164-167,170,394,400-401,404-410,413,424,426-428,433-434
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 38-141,165-194,312-315
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 92
+docs/architecture/guest-identity.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 3,9-13,457-462,673-675
+control-plane/Tests/AppResourceTests/QuotaUsageAggregatorTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 105-106
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 617-640
+control-plane/Sources/App/Services/AgentGuestIdentityRateLimiter.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-104
+control-plane/Sources/App/Controllers/ResourceQuotaController.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 270-286,333,680
+shared/Sources/StratoShared/SnapshotReconciliation.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 220-227,229-242,275,285
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 6-12,152,154,171,173,190,192-261,368-378,405-406,426-428,432
+helm/strato-control-plane/templates/deployment.yaml
+  s_5d7717eeeb4bf1::t_77d511b77f4751 180-186,295-302
+control-plane/Sources/App/Models/Volume.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 65-80,112,231,245,491-494,558-564,570-576,614
+control-plane/Tests/AppPlatformTests/ResourceConditionsTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 375,385,429,466,483,553-555,619,652-715
+  s_5d7717eeeb4bf1::t_3fd23d6b78b8d0 716-718
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 144
+control-plane/Sources/App/Services/WebhookEventService.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 103,111,328-330
+docs/architecture/agent.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 105-111,743-752,757,807-809
+helm/strato-control-plane/values.yaml
+  s_5d7717eeeb4bf1::t_77d511b77f4751 356-362,498-501,938-946
+  s_5d7717eeeb4bf1::t_6983ffb38f8305 947
+agent/Sources/StratoAgentCore/AgentConfig.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 6,16,79,163,197,351
+control-plane/web/src/app/(dashboard)/vms/detail/page.tsx
+  s_5d7717eeeb4bf1::t_77d511b77f4751 29,133
+  s_5d7717eeeb4bf1::t_7e91dd7a7ec9cc 134
+control-plane/Tests/AppIdentityTests/GuestJWTSVIDMintTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-443
+control-plane/Sources/App/configure.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 252-262,267,271,335,344-367,369-372,902-906,911-914,926-928,1008-1010
+  s_5d7717eeeb4bf1::t_1da5bba9e200c8 1011
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 632,681-699,960,1004,1052-1067,1139
+control-plane/Sources/App/Services/ResourceFinalizerService.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 333-336,339-341,388-395
+control-plane/Sources/App/Controllers/AgentGuestIdentityController.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-466
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 128-134,294-300
+control-plane/Sources/App/Services/AuditService.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 37-40
+control-plane/Tests/AppResourceTests/ProjectQuotaServiceTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 114
+docs/architecture/control-plane.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 259-261,295-303,314-323,341,627-628,644-647,663-666
+docs/architecture/storage.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 540-543,642-720
+  s_5d7717eeeb4bf1::t_561c9270eecc87 721
+shared/Sources/StratoShared/GuestIdentityMinting.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-37
+control-plane/Tests/AppResourceTests/VolumeAttachmentTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 64,310
+shared/Sources/StratoShared/WireProtocol.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 814-831,848-852
+docs/architecture/iam.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 934-941
+helm/strato-control-plane/templates/migration-job.yaml
+  s_5d7717eeeb4bf1::t_77d511b77f4751 59-64
+control-plane/Tests/AppPlatformTests/OpenAPISpecDriftTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 32
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 500,514,576
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 135,164
+docs/architecture/wire-protocol.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 282-295,428-432
+control-plane/Sources/App/Models/Project.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 154-174
+agent/Sources/StratoAgentCore/SnapshotRecordStore.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 17-24
+docs/deployment/observability.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 163,391-401
+  s_5d7717eeeb4bf1::t_1fe8ced8a29e3c 402
+agent/Sources/StratoAgent/Agent.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 187,195-200,4214-4222,4358-4360,4365-4366,5223-5227
+control-plane/Sources/App/Services/SPIFFE/GuestIdentityIssuanceConfig.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-73
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 42-45,49,52,62,68-77,125-126,166,171-172,174-175,243-340
+  s_5d7717eeeb4bf1::t_b0ec98828928f5 341
+control-plane/Tests/AppIdentityTests/GuestIdentityIssuanceConfigTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-52
+docs/deployment/docker-compose.md
+  s_5d7717eeeb4bf1::t_77d511b77f4751 195-196
+control-plane/Tests/AppResourceTests/WorkloadSizeValidationTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 47,56,68,98,105,107,115,117
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 99,147
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 88-90,102-103,111-112,164-202,238-239,449-450,481-482,518,520-526
+control-plane/Sources/App/Migrations/AddVolumeQuotaAccounting.swift
+  s_5d7717eeeb4bf1::t_77d511b77f4751 1-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "eb3b0715684d7e6fa3f7935a109d0a801f5c7134",
+  "prompts": {},
+  "sessions": {
+    "s_5d7717eeeb4bf1": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4af-40ef-7863-978f-c926590eb759",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
