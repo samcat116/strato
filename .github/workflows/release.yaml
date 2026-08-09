@@ -71,7 +71,9 @@ jobs:
           ### Using Docker Compose
 
           \`\`\`bash
-          gh release download "${GITHUB_REF#refs/tags/}" --pattern 'strato-*-compose.tar.gz'
+          gh release download "${GITHUB_REF#refs/tags/}" \
+            --repo "${{ github.repository }}" \
+            --pattern 'strato-*-compose.tar.gz'
           tar -xzf strato-*-compose.tar.gz
           cd "strato-${GITHUB_REF#refs/tags/v}-compose"
           ./setup.sh
