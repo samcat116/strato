@@ -1,0 +1,23 @@
+control-plane/Sources/App/DatabaseStatementTimeoutConfiguration.swift
+  s_3805ddcc2bf4a3::t_17d8fe4fd2d6a2 129-130,143-146,185,254-259,261-318,326,329,371,378,380,382,384,399,408-428,432,436,439,442-446,451-462
+  s_3805ddcc2bf4a3::t_4f2f813b74df74 260
+control-plane/Tests/AppPlatformTests/DatabaseStatementTimeoutConfigurationTests.swift
+  s_3805ddcc2bf4a3::t_9acbde210e4aac 2,219-243,255-282,298-324
+  s_3805ddcc2bf4a3::t_a866a1f4a38506 244-254
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "e3b765401a85b3b839d79ab05be50c9a4d898fcc",
+  "prompts": {},
+  "sessions": {
+    "s_3805ddcc2bf4a3": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe4ae-e6d0-7543-9224-3e5f392b4ed8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
