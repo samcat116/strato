@@ -356,6 +356,21 @@ final class NetworkControllerTests {
         }
     }
 
+    @Test("An IPv6 enable no-op uses the pair reloaded under the row lock")
+    func ipv6NoOpUsesLockedPair() throws {
+        let request = UpdateNetworkRequest(ipv6Enabled: true)
+
+        // The request began while the first pair was current. Another update
+        // committed the second pair before this request acquired the row lock.
+        // Re-deriving from the locked values must not restore the stale pair.
+        let result = try NetworkController.requestedIPv6Addressing(
+            request: request, currentSubnet6: "fd00:42::/64",
+            currentGateway6: "fd00:42::fe")
+        let requested = try #require(result)
+        #expect(requested.subnet6 == "fd00:42::/64")
+        #expect(requested.gateway6 == "fd00:42::fe")
+    }
+
     @Test("PUT /api/networks rejects removing IPv6 while v6 addresses are allocated (409)")
     func updateRejectsRemovingIPv6InUse() async throws {
         try await withNetworkTestApp { app, user, project, token in
@@ -1267,6 +1282,23 @@ final class NetworkControllerTests {
                 #expect(cleared.domainName == nil)
             }
         }
+    }
+
+    @Test("A primary-zone update preserves a domain claimed before the row lock")
+    func primaryZoneUpdateUsesLockedDomain() {
+        // The zone request originally saw old.example and would have prepared
+        // new.example. While it waited for the lock, an explicit domain update
+        // claimed operator.example. The locked value no longer follows the old
+        // zone and therefore survives the zone change.
+        let preserved = NetworkController.searchDomainAfterPrimaryZoneChange(
+            currentDomain: "operator.example", previousZoneName: "old.example",
+            nextZoneName: "new.example", domainNameExplicit: false)
+        #expect(preserved == "operator.example")
+
+        let followed = NetworkController.searchDomainAfterPrimaryZoneChange(
+            currentDomain: "old.example", previousZoneName: "old.example",
+            nextZoneName: "new.example", domainNameExplicit: false)
+        #expect(followed == "new.example")
     }
 
     @Test("The index scan is sequential and skips what it must not hand out")

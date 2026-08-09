@@ -286,8 +286,6 @@ struct NetworkController: RouteCollection {
         // Track changes that alter how agents realize the network's L3, so the
         // generation is bumped (and agents accept the new desired network state).
         let originalSubnet = network.subnet
-        let originalSubnet6 = network.subnet6
-
         if let newSubnet = request.subnet, newSubnet != network.subnet {
             guard interfaceCount == 0 else {
                 throw Abort(
@@ -320,79 +318,18 @@ struct NetworkController: RouteCollection {
         network.subnet = subnet
         network.gateway = gateway
 
-        // IPv6: enable (explicit /64 or generated ULA), change, or remove.
-        // The in-use guard counts allocated v6 addresses, not interfaces — a
-        // network full of pre-IPv6 NICs has no v6 addresses to invalidate, so
-        // *adding* IPv6 is always safe; existing NICs simply stay v4.
         let networkID = try network.requireID()
-        let v6AddressCount =
-            try await VMInterfaceAddress.query(on: req.db)
-            .filter(\.$logicalNetwork.$id == networkID)
-            .filter(\.$family == IPFamily.ipv6.rawValue)
-            .count()
-            + (try await SandboxInterfaceAddress.query(on: req.db)
-                .filter(\.$logicalNetwork.$id == networkID)
-                .filter(\.$family == IPFamily.ipv6.rawValue)
-                .count())
-
+        // Reject the contradictory shape before entering the transaction. The
+        // requested IPv6 result itself is derived from the locked row below:
+        // an enable/no-op must preserve a subnet or gateway committed after
+        // this request's initial read.
         if request.ipv6Enabled == false {
             guard request.subnet6 == nil, request.gateway6 == nil else {
                 throw Abort(.badRequest, reason: "subnet6/gateway6 cannot be combined with ipv6Enabled=false")
             }
-            if network.subnet6 != nil {
-                guard v6AddressCount == 0 else {
-                    throw Abort(
-                        .conflict,
-                        reason:
-                            "Network has \(v6AddressCount) allocated IPv6 address(es); removing IPv6 would invalidate them"
-                    )
-                }
-                network.subnet6 = nil
-                network.gateway6 = nil
-            }
-        } else if request.subnet6 != nil || request.gateway6 != nil || request.ipv6Enabled == true {
-            let newPair: (subnet6: String, gateway6: String)
-            if let requestedSubnet6 = request.subnet6 {
-                newPair = try Self.validateAddressing6(subnet6: requestedSubnet6, gateway6: request.gateway6)
-            } else if let currentSubnet6 = network.subnet6 {
-                // Gateway-only change (or a no-op ipv6Enabled=true).
-                newPair = try Self.validateAddressing6(
-                    subnet6: currentSubnet6, gateway6: request.gateway6 ?? network.gateway6)
-            } else {
-                // Enabling with no explicit prefix: generate a ULA (a caller
-                // gateway6 makes no sense against a prefix it cannot know).
-                guard request.gateway6 == nil else {
-                    throw Abort(.badRequest, reason: "gateway6 requires subnet6 (or an existing IPv6 subnet)")
-                }
-                let generated = IPv6Address.makeULASubnet64()
-                newPair = (generated.description, generated.firstHost.description)
-            }
-
-            if newPair.subnet6 != network.subnet6 {
-                // Same rule as v4 subnet changes, scoped to v6 allocations;
-                // adding IPv6 to a v4-only network passes (no v6 addresses).
-                guard network.subnet6 == nil || v6AddressCount == 0 else {
-                    throw Abort(
-                        .conflict,
-                        reason:
-                            "Network has \(v6AddressCount) allocated IPv6 address(es); changing the IPv6 subnet would invalidate them"
-                    )
-                }
-            } else if newPair.gateway6 != network.gateway6 {
-                // Same rule as v4 gateway changes: guests carry the old value.
-                guard v6AddressCount == 0 else {
-                    throw Abort(
-                        .conflict,
-                        reason:
-                            "Network has \(v6AddressCount) allocated IPv6 address(es); changing the IPv6 gateway would break their L3 configuration"
-                    )
-                }
-            }
-            network.subnet6 = newPair.subnet6
-            network.gateway6 = newPair.gateway6
         }
 
-        if network.subnet != originalSubnet || network.subnet6 != originalSubnet6 {
+        if network.subnet != originalSubnet {
             try await Self.assertNoSubnetOverlap(
                 subnet: network.subnet, subnet6: network.subnet6, projectId: network.$project.id,
                 excluding: network.id, on: req.db)
@@ -463,22 +400,20 @@ struct NetworkController: RouteCollection {
         // Both branches also move the search domain, which follows the primary
         // zone while the operator has not claimed it (STR-201) — see
         // `DNSZoneService.searchDomainFollowingPrimaryZone`.
+        let requestedPrimaryZoneName: String?
         if request.clearPrimaryDnsZone == true {
             guard request.primaryDnsZoneId == nil else {
                 throw Abort(
                     .badRequest,
                     reason: "primaryDnsZoneId cannot be combined with clearPrimaryDnsZone=true")
             }
-            if !domainNameExplicit {
-                let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
-                network.domainName = DNSZoneService.searchDomainFollowingPrimaryZone(
-                    current: network.domainName, previousZoneName: outgoing, nextZoneName: nil)
-            }
+            requestedPrimaryZoneName = nil
             network.$primaryDNSZone.id = nil
-        } else if let zoneID = request.primaryDnsZoneId, zoneID != network.$primaryDNSZone.id {
+        } else if let zoneID = request.primaryDnsZoneId {
             guard let zone = try await DNSZone.find(zoneID, on: req.db) else {
                 throw Abort(.badRequest, reason: "DNS zone \(zoneID) does not exist")
             }
+            requestedPrimaryZoneName = zone.name
             let attached = try await DNSZoneNetwork.query(on: req.db)
                 .filter(\.$zone.$id == zoneID)
                 .filter(\.$logicalNetwork.$id == networkID)
@@ -494,14 +429,9 @@ struct NetworkController: RouteCollection {
             }
             try await DNSZoneService.assertPrimaryZoneAssignable(
                 zone: zone, networkID: networkID, on: req.db)
-            if !domainNameExplicit {
-                let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
-                network.domainName = try Self.validatedDomainName(
-                    DNSZoneService.searchDomainFollowingPrimaryZone(
-                        current: network.domainName, previousZoneName: outgoing,
-                        nextZoneName: zone.name))
-            }
             network.$primaryDNSZone.id = zoneID
+        } else {
+            requestedPrimaryZoneName = nil
         }
 
         do {
@@ -551,10 +481,10 @@ struct NetworkController: RouteCollection {
                 if request.subnet != nil { current.subnet = prepared.subnet }
                 if request.gateway != nil { current.gateway = prepared.gateway }
 
-                let changesIPv6 =
-                    request.ipv6Enabled != nil
-                    || request.subnet6 != nil || request.gateway6 != nil
-                if changesIPv6 {
+                if let requestedIPv6 = try Self.requestedIPv6Addressing(
+                    request: request, currentSubnet6: current.subnet6,
+                    currentGateway6: current.gateway6)
+                {
                     let currentV6AddressCount =
                         try await VMInterfaceAddress.query(on: db)
                         .filter(\.$logicalNetwork.$id == networkID)
@@ -564,7 +494,7 @@ struct NetworkController: RouteCollection {
                             .filter(\.$logicalNetwork.$id == networkID)
                             .filter(\.$family == IPFamily.ipv6.rawValue)
                             .count())
-                    if prepared.subnet6 != current.subnet6 {
+                    if requestedIPv6.subnet6 != current.subnet6 {
                         guard current.subnet6 == nil || currentV6AddressCount == 0 else {
                             throw Abort(
                                 .conflict,
@@ -572,7 +502,7 @@ struct NetworkController: RouteCollection {
                                     "Network has \(currentV6AddressCount) allocated IPv6 address(es); changing IPv6 would invalidate them"
                             )
                         }
-                    } else if prepared.gateway6 != current.gateway6 {
+                    } else if requestedIPv6.gateway6 != current.gateway6 {
                         guard currentV6AddressCount == 0 else {
                             throw Abort(
                                 .conflict,
@@ -581,8 +511,8 @@ struct NetworkController: RouteCollection {
                             )
                         }
                     }
-                    current.subnet6 = prepared.subnet6
-                    current.gateway6 = prepared.gateway6
+                    current.subnet6 = requestedIPv6.subnet6
+                    current.gateway6 = requestedIPv6.gateway6
                 }
 
                 let validated = try Self.validateAddressing(
@@ -595,7 +525,7 @@ struct NetworkController: RouteCollection {
                     current.subnet6 = validated6.subnet6
                     current.gateway6 = validated6.gateway6
                 }
-                if changesSubnet || (changesIPv6 && prepared.subnet6 != oldSubnet6) {
+                if changesSubnet || current.subnet6 != oldSubnet6 {
                     try await Self.assertNoSubnetOverlap(
                         subnet: current.subnet, subnet6: current.subnet6,
                         projectId: current.$project.id, excluding: current.id, on: db)
@@ -627,8 +557,14 @@ struct NetworkController: RouteCollection {
                     current.resolverEnabled = prepared.resolverEnabled
                 }
                 if request.clearPrimaryDnsZone == true || request.primaryDnsZoneId != nil {
-                    current.$primaryDNSZone.id = prepared.$primaryDNSZone.id
-                    if !domainNameExplicit { current.domainName = prepared.domainName }
+                    let outgoing =
+                        domainNameExplicit
+                        ? nil : try await DNSZoneService.primaryZoneName(of: current, on: db)
+                    current.$primaryDNSZone.id = request.primaryDnsZoneId
+                    current.domainName = Self.searchDomainAfterPrimaryZoneChange(
+                        currentDomain: current.domainName, previousZoneName: outgoing,
+                        nextZoneName: requestedPrimaryZoneName,
+                        domainNameExplicit: domainNameExplicit)
                 }
 
                 let l3Changed =
@@ -915,6 +851,40 @@ struct NetworkController: RouteCollection {
         return (cidr.description, resolvedGateway.description)
     }
 
+    /// Derives an IPv6 edit from the row held under lock, not from the model
+    /// loaded before the transaction. In particular, `ipv6Enabled: true` is a
+    /// no-op for an already-enabled network and must preserve an IPv6 pair that
+    /// a concurrent request committed while this request was waiting.
+    static func requestedIPv6Addressing(
+        request: UpdateNetworkRequest, currentSubnet6: String?, currentGateway6: String?
+    ) throws -> (subnet6: String?, gateway6: String?)? {
+        guard request.ipv6Enabled != nil || request.subnet6 != nil || request.gateway6 != nil else {
+            return nil
+        }
+        if request.ipv6Enabled == false {
+            guard request.subnet6 == nil, request.gateway6 == nil else {
+                throw Abort(.badRequest, reason: "subnet6/gateway6 cannot be combined with ipv6Enabled=false")
+            }
+            return (nil, nil)
+        }
+        if let requestedSubnet6 = request.subnet6 {
+            let requested = try validateAddressing6(
+                subnet6: requestedSubnet6, gateway6: request.gateway6)
+            return (requested.subnet6, requested.gateway6)
+        }
+        if let currentSubnet6 {
+            let requested = try validateAddressing6(
+                subnet6: currentSubnet6, gateway6: request.gateway6 ?? currentGateway6)
+            return (requested.subnet6, requested.gateway6)
+        }
+
+        guard request.gateway6 == nil else {
+            throw Abort(.badRequest, reason: "gateway6 requires subnet6 (or an existing IPv6 subnet)")
+        }
+        let generated = IPv6Address.makeULASubnet64()
+        return (generated.description, generated.firstHost.description)
+    }
+
     /// Validates a list of DNS resolver addresses, dropping blanks. Either
     /// family is accepted (the list stays mixed on the wire; the agent splits
     /// it when programming DHCPv4 vs DHCPv6). IPv6 entries are canonicalized.
@@ -953,6 +923,19 @@ struct NetworkController: RouteCollection {
     static func validatedDomainName(_ raw: String?) throws -> String? {
         guard let raw, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
         return try DNSName.normalizedZoneName(raw, field: "Domain name", minimumLabels: 1)
+    }
+
+    /// Applies primary-zone following semantics to the domain value reloaded
+    /// under the network row lock. A concurrent explicit domain edit is then
+    /// visible here and is not replaced by a value derived before the lock.
+    static func searchDomainAfterPrimaryZoneChange(
+        currentDomain: String?, previousZoneName: String?, nextZoneName: String?,
+        domainNameExplicit: Bool
+    ) -> String? {
+        guard !domainNameExplicit else { return currentDomain }
+        return DNSZoneService.searchDomainFollowingPrimaryZone(
+            current: currentDomain, previousZoneName: previousZoneName,
+            nextZoneName: nextZoneName)
     }
 
     static func validateLeaseTime(_ leaseTime: Int?) throws {
