@@ -1,0 +1,63 @@
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_e64eb3da2ecde9::t_917ce48a2082ba 259,265-275,297
+  s_e64eb3da2ecde9::t_b0ca33ed4437dc 313-314
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_e64eb3da2ecde9::t_917ce48a2082ba 248-250
+docs/architecture/wire-protocol.md
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 631-636
+control-plane/Sources/App/configure.swift
+  s_e64eb3da2ecde9::t_917ce48a2082ba 854-855
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_e64eb3da2ecde9::t_b0ca33ed4437dc 233
+  s_e64eb3da2ecde9::t_0f852088a7f5ac 139-140,153-155,158,224-231,368-369,372,378-389,393,398
+  s_88f7800204a532::t_274c62f8c2be15 232
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_e64eb3da2ecde9::t_0f852088a7f5ac 81-118
+agent/Sources/StratoAgentCore/SnapshotFootprint.swift
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 12-14,24-25,31
+docs/architecture/storage.md
+  s_e64eb3da2ecde9::t_64a22c6fc96efc 681-686
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 655,663-670,675-678,680,687-691
+agent/Sources/StratoAgentCore/SnapshotRecordStore.swift
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 20-21
+agent/Tests/StratoAgentTests/SnapshotFootprintTests.swift
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 7-9
+control-plane/Sources/App/Migrations/AddVolumeQuotaAccounting.swift
+  s_e64eb3da2ecde9::t_917ce48a2082ba 18-20,68-78,118-122
+control-plane/Sources/App/Models/VolumeSnapshot.swift
+  s_e64eb3da2ecde9::t_917ce48a2082ba 55-57,64-68,247,369-370
+shared/Sources/StratoShared/WireProtocol.swift
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 812-820
+control-plane/Sources/App/openapi.yaml
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 10213-10214
+control-plane/web/src/types/openapi.ts
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 5940
+shared/Sources/StratoShared/SnapshotReconciliation.swift
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 236-237,241
+CLAUDE.md
+  s_e64eb3da2ecde9::t_0dfa9b68890a2e 128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "8df9355d36bb798bddd6232e291a4102106f336e",
+  "prompts": {},
+  "sessions": {
+    "s_88f7800204a532": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3ec-e8c1-77a2-aa41-b8b76e1ec762",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_e64eb3da2ecde9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe3ea-91f4-7053-818a-8085597f43aa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
