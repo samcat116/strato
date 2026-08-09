@@ -73,9 +73,11 @@ final class Volume: Model, @unchecked Sendable {
     @Field(key: "environment")
     var environment: String
 
-    // Volume specifications. `size` is **desired** — what the last accepted
-    // create or resize asked for — and the agent's report of what the image
-    // actually is lands in `observedSizeBytes` below.
+    // Volume specifications. `size` is **desired** — normally what the last
+    // accepted create or resize asked for. Attaching source-backed storage can
+    // raise it to the larger materialized virtual size the agent reported, so
+    // quota is admitted before that image enters a VM. The agent's report of
+    // what the image actually is lands in `observedSizeBytes` below.
     @Field(key: "size")
     var size: Int64  // Size in bytes
 
@@ -107,7 +109,7 @@ final class Volume: Model, @unchecked Sendable {
     var observedGeneration: Int64
 
     /// The virtual size the owning agent last reported the image actually has
-    /// (STR-199), as opposed to the `size` someone asked for.
+    /// (STR-199), as opposed to the desired `size`.
     ///
     /// NULL means **no agent has said** — a volume whose bytes are not on a
     /// host yet, one owned by a pre-v38 agent, or one whose size probe failed.
@@ -564,19 +566,23 @@ struct VolumeResponse: Content {
     let projectId: UUID?
     /// The project environment this volume's bytes are charged to (STR-181).
     let environment: String
-    /// The size **asked for** — the last create or resize the API accepted.
-    /// A resize answers `202` and converges, so this moves the moment the
-    /// mutation is accepted, well before any bytes do.
+    /// The desired size. Normally this is the last create or resize the API
+    /// accepted. Before a source-backed volume enters a VM, attachment can
+    /// raise it to the larger materialized virtual size reported by the agent.
+    /// A resize answers `202` and converges, so this otherwise moves the moment
+    /// the mutation is accepted, well before any bytes do.
     let size: Int64
     let sizeFormatted: String
     /// The size the owning agent reports the image **actually has** (STR-199).
     ///
     /// Null means no agent has said — the bytes are not on a host yet, or the
-    /// agent predates wire v38. Where it disagrees with `size`, a grow is still
-    /// outstanding, and `conditions` says whether it is in flight or degraded:
-    /// a grow refused because the volume's guest is running holds this at the
-    /// old size for as long as the guest keeps running. Reporting only `size`
-    /// is how a refused grow read as a completed one.
+    /// agent predates wire v38. Where it disagrees with `size`, either a grow is
+    /// outstanding or a source-backed volume has materialized larger than its
+    /// request but has not yet been attached. `conditions` says whether an
+    /// accepted grow is in flight or degraded: a grow refused because the
+    /// volume's guest is running holds this at the old size for as long as the
+    /// guest keeps running. Reporting only `size` is how a refused grow read as
+    /// a completed one.
     let observedSize: Int64?
     let observedSizeFormatted: String?
     let format: VolumeFormat

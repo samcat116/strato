@@ -228,12 +228,13 @@ struct QuotaEnforcementService {
         for project: Project,
         environment: String,
         sizeDelta: Int64,
+        reason: String = "the volume resize",
         on db: Database
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
-            let check = quota.canAccommodateStorage(sizeDelta, for: "the volume resize")
+            let check = quota.canAccommodateStorage(sizeDelta, for: reason)
             guard check.allowed else { return check }
-            try quota.reserveStorage(sizeDelta, for: "the volume resize")
+            try quota.reserveStorage(sizeDelta, for: reason)
             return check
         }
     }

@@ -416,6 +416,18 @@ struct VolumeController: RouteCollection {
             "Volume", in: volume.$project.id,
             sameProjectAs: "the VM", in: vm.$project.id)
 
+        // Environment-scoped quotas make the environment part of containment,
+        // not merely display metadata (STR-181). Letting a development volume
+        // attach to a production VM would keep charging the development quota
+        // while production consumed the bytes.
+        guard volume.environment == vm.environment else {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Volume belongs to environment '\(volume.environment)', but the VM belongs to '\(vm.environment)'. Volumes can only attach within the same environment."
+            )
+        }
+
         // IMPORTANT: Check that VM is QEMU type - volumes not supported for Firecracker
         guard vm.hypervisorType == .qemu else {
             throw Abort(
@@ -473,11 +485,44 @@ struct VolumeController: RouteCollection {
         let readonly = request.readonly ?? false
         let bootOrder = request.bootOrder
         let vmID = try vm.requireID()
+        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
+            throw Abort(.internalServerError, reason: "The volume's project no longer exists")
+        }
 
         let accepted = try await req.resourceMutation.accept(
             .attach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable tx in
+            // A cloned or image-backed volume is materialized at the source's
+            // virtual size, which can exceed the size the caller requested.
+            // Wait until the owning agent has measured it, then reserve any
+            // excess before attachment gives a guest the chance to grow the
+            // sparse file. Raising the desired size in the same transaction
+            // also turns the agent's refused shrink into a convergent no-op.
+            if volume.$sourceImage.id != nil || volume.$sourceVolume.id != nil {
+                guard volume.observedSizeBytes != nil else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Volume is still being materialized from its source. Wait for its size to be reported before attaching it."
+                    )
+                }
+            }
+            if let materializedSize = volume.observedSizeBytes, materializedSize > volume.size {
+                guard materializedSize <= WorkloadSizeLimits.maxDiskBytes else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "The materialized volume is larger than the maximum supported volume size."
+                    )
+                }
+                try await QuotaEnforcementService.reserveVolumeResize(
+                    for: project, environment: volume.environment,
+                    sizeDelta: materializedSize - volume.size,
+                    reason: "the materialized volume", on: tx)
+                volume.size = materializedSize
+            }
+
             // The desired attachment, and nothing else. There is no
             // `.attaching` status to set and revert: the agent reports what it
             // realized, and `conditions` is what a client watches.

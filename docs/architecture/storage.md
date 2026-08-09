@@ -660,15 +660,18 @@ What each object is charged:
 
 | Object | Admitted against | Charged |
 | -- | -- | -- |
-| Volume, clone | provisioned `size` | `size` |
+| Volume, clone | requested `size`; any larger materialized source size before attachment | desired `size` |
 | Resize | the **delta** | the new `size` |
 | Volume snapshot | the parent volume's **whole** size | the parent volume's **whole** size |
 
-A volume is charged the size it *asked for*, not `observed_size_bytes`. The two
-differ exactly when a grow is outstanding, and a grow the agent refused is
-blocked rather than withdrawn — it lands the moment the guest stops, with no API
-call in between to admit it. Charging the observed size would make a pending grow
-free.
+A volume is charged its desired `size`, not raw `observed_size_bytes`. Normally
+that is the size it asked for. Before an image-backed or cloned volume enters a
+VM, attachment requires the agent's materialized virtual size and atomically
+admits any delta above the request; on success, desired `size` rises to that
+floor. The other mismatch is an outstanding grow, and a grow the agent refused
+is blocked rather than withdrawn — it lands the moment the guest stops, with no
+API call in between to admit it. Charging that smaller observed size would make
+a pending grow free.
 
 For a snapshot, `size` is the parent volume's size at capture. An overlay cannot
 outgrow the volume behind it, so that is the bound, and both admitting and
@@ -686,13 +689,14 @@ Two things this deliberately does not do:
   already protects admission, while an overlay's reported footprint never stops
   moving; arming deletion on it would re-run the check every report and destroy
   snapshots because their volume diverged.
-- **No charge for a VM's boot disk twice.** The `volumes` term skips a volume
-  whose `storage_path` equals a VM's `disk_path`, even when detachment has
-  cleared the mutable `vm_id`, because `SUM(vms.disk)` already charges that
-  file. Only the rows `MigrateVMDisksToVolumes` backfilled can match; nothing
-  since inserts a volume for a VM's boot disk. Without it, a deployment upgraded
-  from before volumes existed would double every legacy VM's disk on the day it
-  upgraded. The predicate is the agent's own rule:
+- **No charge for a VM's boot disk twice.** For a volume whose `storage_path`
+  equals a VM's `disk_path`, even after detachment clears the mutable `vm_id`,
+  the `volumes` term deducts the bytes already reserved by `SUM(vms.disk)`.
+  Growth above that legacy VM size remains charged, while the compatibility row
+  stays out of `volume_count`. Only the rows `MigrateVMDisksToVolumes` backfilled
+  can match; nothing since inserts a volume for a VM's boot disk. Without the
+  deduction, an upgraded deployment would double every legacy VM's disk. The
+  path identity follows the agent's own rule:
   `LibvirtService.resolveDisks` dedupes the pair by path into a single disk.
 
 The enabling migration recomputes both `volume_count` and the complete

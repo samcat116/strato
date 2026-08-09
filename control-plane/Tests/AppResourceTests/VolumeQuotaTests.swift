@@ -230,11 +230,21 @@ final class VolumeQuotaTests {
             #expect(detached.storageBytes == vmDisk)
             #expect(detached.volumeCount == 0)
 
+            // Resizing changes the volume's desired size but not the legacy VM
+            // row. The shared file is still deduplicated; only the growth above
+            // the VM's original reservation is additional usage.
+            let grownVolumeSize = vmDisk + gb(5)
+            bootVolume.size = grownVolumeSize
+            try await bootVolume.save(on: app.db)
+            let grown = try await measure(quota, on: app.db)
+            #expect(grown.storageBytes == grownVolumeSize)
+            #expect(grown.volumeCount == 0)
+
             // A genuinely separate file is charged, attached or not.
             bootVolume.storagePath = "/var/lib/strato/volumes/other.qcow2"
             try await bootVolume.save(on: app.db)
             let counted = try await measure(quota, on: app.db)
-            #expect(counted.storageBytes == vmDisk + gb(10))
+            #expect(counted.storageBytes == vmDisk + grownVolumeSize)
             #expect(counted.volumeCount == 1)
         }
     }
@@ -362,6 +372,85 @@ final class VolumeQuotaTests {
             }
             let unchanged = try #require(try await Volume.find(volumeID, on: app.db))
             #expect(unchanged.size == gb(20), "a refused resize must not move the desired size")
+        }
+    }
+
+    @Test("Attaching an image-backed volume reserves its materialized virtual size")
+    func imageBackedAttachReservesMaterializedSize() async throws {
+        try await withVolumeQuotaApp { app, builder, user, project, token in
+            // The VM's 10 GiB boot disk and the requested 10 GiB volume leave
+            // exactly enough room for the materialized volume to grow to 30.
+            let quota = try await builder.createResourceQuota(
+                name: "materialized", maxStorageGB: 40, project: project)
+            let agentId = try await registerAgent(app: app, named: "image-volume-host")
+            let vm = try await builder.createVM(name: "image-volume-vm", project: project)
+            vm.hypervisorId = agentId
+            try await vm.save(on: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            let volume = try await seedVolume(
+                app: app, user: user, project: project, name: "image-volume", sizeGB: 10,
+                agentId: agentId)
+            volume.$sourceImage.id = try image.requireID()
+            volume.observedSizeBytes = gb(30)
+            try await volume.save(on: app.db)
+
+            try await app.test(.POST, "/api/volumes/\(try volume.requireID())/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AttachVolumeRequest(
+                        vmId: try vm.requireID(), deviceName: nil, bootOrder: nil, readonly: nil))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            #expect(reloaded.size == gb(30), "the desired size must adopt the materialized image")
+            let refreshedQuota = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(refreshedQuota.reservedStorage == gb(40))
+        }
+    }
+
+    @Test("An image-backed volume cannot attach before or beyond materialized-size admission")
+    func imageBackedAttachRequiresMaterializedSizeAdmission() async throws {
+        try await withVolumeQuotaApp { app, builder, user, project, token in
+            _ = try await builder.createResourceQuota(
+                name: "too-small", maxStorageGB: 30, project: project)
+            let agentId = try await registerAgent(app: app, named: "guarded-image-volume-host")
+            let vm = try await builder.createVM(name: "guarded-image-volume-vm", project: project)
+            vm.hypervisorId = agentId
+            try await vm.save(on: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+            let volume = try await seedVolume(
+                app: app, user: user, project: project, name: "guarded-image-volume", sizeGB: 10,
+                agentId: agentId)
+            volume.$sourceImage.id = try image.requireID()
+            try await volume.save(on: app.db)
+
+            func attach(expecting expected: HTTPStatus) async throws {
+                try await app.test(.POST, "/api/volumes/\(try volume.requireID())/attach") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        AttachVolumeRequest(
+                            vmId: try vm.requireID(), deviceName: nil, bootOrder: nil,
+                            readonly: nil))
+                } afterResponse: { res in
+                    #expect(res.status == expected)
+                }
+            }
+
+            // Before the agent reports the source's virtual size, there is no
+            // trustworthy figure against which attachment can be admitted.
+            try await attach(expecting: .conflict)
+
+            // Once reported, the 30 GiB materialization plus the VM's 10 GiB
+            // boot disk exceeds the 30 GiB quota and is refused atomically.
+            volume.observedSizeBytes = gb(30)
+            try await volume.save(on: app.db)
+            try await attach(expecting: .forbidden)
+
+            let unchanged = try #require(try await Volume.find(volume.id, on: app.db))
+            #expect(unchanged.size == gb(10))
+            #expect(unchanged.$vm.id == nil)
         }
     }
 

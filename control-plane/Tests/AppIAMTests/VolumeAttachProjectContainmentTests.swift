@@ -26,6 +26,8 @@ struct VolumeAttachProjectContainmentTests {
     /// reachability guard too.
     private func withVolumeAndVM(
         sameProject: Bool,
+        volumeEnvironment: String = "development",
+        vmEnvironment: String = "development",
         _ test: (Application, Volume, VM, String) async throws -> Void
     ) async throws {
         try await withTestApp { app in
@@ -56,7 +58,7 @@ struct VolumeAttachProjectContainmentTests {
             let volume = Volume(
                 name: "containment-volume",
                 description: "volume under the project-containment guard",
-                projectID: volumeProject.id!, environment: "development",
+                projectID: volumeProject.id!, environment: volumeEnvironment,
                 size: 10 * 1024 * 1024 * 1024,
                 status: .available,
                 createdByID: admin.id!)
@@ -64,7 +66,8 @@ struct VolumeAttachProjectContainmentTests {
             volume.storagePath = "/var/lib/strato/volumes/containment/volume.qcow2"
             try await volume.save(on: app.db)
 
-            let vm = try await builder.createVM(name: "containment-vm", project: vmProject)
+            let vm = try await builder.createVM(
+                name: "containment-vm", project: vmProject, environment: vmEnvironment)
             vm.hypervisorId = "agent-that-is-not-connected"
             try await vm.save(on: app.db)
 
@@ -128,6 +131,29 @@ struct VolumeAttachProjectContainmentTests {
             }
             #expect(reloaded.conditions.degraded != nil)
             #expect(reloaded.$vm.id == nil)
+        }
+    }
+
+    @Test("Attaching across environments in one project is refused with 400")
+    func crossEnvironmentAttachIsRefused() async throws {
+        try await withVolumeAndVM(
+            sameProject: true,
+            volumeEnvironment: "development",
+            vmEnvironment: "production"
+        ) { app, volume, vm, token in
+            try await app.test(.POST, "/api/volumes/\(volume.id!)/attach") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    AttachVolumeRequest(
+                        vmId: vm.id!, deviceName: nil, bootOrder: nil, readonly: nil))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("same environment"))
+            }
+
+            let reloaded = try #require(try await Volume.find(volume.id, on: app.db))
+            #expect(reloaded.$vm.id == nil)
+            #expect(reloaded.deviceName == nil)
         }
     }
 }

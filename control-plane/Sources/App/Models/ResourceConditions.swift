@@ -422,6 +422,7 @@ extension Volume: ConvergingResource {
         convergenceDeadline = committed.convergenceDeadline
         hypervisorId = committed.hypervisorId
         storagePath = committed.storagePath
+        observedSizeBytes = committed.observedSizeBytes
         finalizers = committed.finalizers
         // The desired size, for the same read-modify-write reason as the
         // attachment below: `accept` saves the whole model, so an attach or a

@@ -250,22 +250,27 @@ struct QuotaUsageAggregator {
     ///
     /// Three things about what is counted:
     ///
-    /// * **A volume is charged the size it asked for**, not
-    ///   `observed_size_bytes`. The two differ exactly when a grow is
-    ///   outstanding — STR-199's refused-because-the-guest-is-running case — and
-    ///   that grow is blocked, not withdrawn: it lands the moment the guest
-    ///   stops, with no admission point in between. Charging the observed size
-    ///   would make it free until then.
-    /// * **A volume that *is* a VM's boot disk is skipped**, because
-    ///   `SUM(vms.disk)` already charges that file. Only the rows
+    /// * **A volume is charged its desired size**, not raw
+    ///   `observed_size_bytes`. Normally that is the size it asked for. A
+    ///   source-backed attachment first admits any larger materialized virtual
+    ///   size and raises the desired value to match. The other mismatch is an
+    ///   outstanding grow — STR-199's refused-because-the-guest-is-running case
+    ///   — and that grow is blocked, not withdrawn: it lands the moment the
+    ///   guest stops, with no admission point in between. Charging the smaller
+    ///   observed size would make it free until then.
+    /// * **A volume that *is* a VM's boot disk is deduplicated**, because
+    ///   `SUM(vms.disk)` already charges the VM's original size. Only the rows
     ///   `MigrateVMDisksToVolumes` backfilled can match — nothing since inserts a
     ///   volume for a VM's boot disk — but for a deployment upgraded from before
     ///   volumes existed, counting both would double every legacy VM's disk and
     ///   the symptom would be creates refused against a quota nobody changed.
-    ///   Matching by path rather than the mutable `vm_id` keeps the exclusion
-    ///   after that compatibility volume is detached. This is the agent's own
-    ///   rule: `LibvirtService.resolveDisks` dedupes the pair by path into a
-    ///   single disk.
+    ///   Matching by path rather than the mutable `vm_id` keeps the deduction
+    ///   after that compatibility volume is detached. Only the overlapping
+    ///   bytes are deducted: a later volume resize is still charged above the
+    ///   VM row's original `disk` value. The compatibility row stays out of
+    ///   `volume_count`, since it is still the VM's one boot disk rather than a
+    ///   separately created volume. This is the agent's own identity rule:
+    ///   `LibvirtService.resolveDisks` dedupes the pair by path into one disk.
     /// * **A snapshot keeps the parent volume's whole size reserved.** Its live
     ///   overlay footprint is exposed separately for observability and billing,
     ///   but it cannot replace the reservation: the overlay can grow toward the
@@ -290,8 +295,8 @@ struct QuotaUsageAggregator {
         let totals = try await sql.raw(
             """
             SELECT
-                (SELECT COALESCE(SUM(size), 0)::bigint FROM volumes
-                 WHERE \(inScope) AND \(Self.volumeIsNotAVMBootDisk)) AS volume_bytes,
+                (SELECT COALESCE(SUM(\(Self.volumeReservedBytes)), 0)::bigint FROM volumes
+                 WHERE \(inScope)) AS volume_bytes,
                 (SELECT COUNT(*)::bigint FROM volumes
                  WHERE \(inScope) AND \(Self.volumeIsNotAVMBootDisk)) AS volume_count,
                 (SELECT COALESCE(SUM(size), 0)::bigint
@@ -306,7 +311,26 @@ struct QuotaUsageAggregator {
             volumeCount: Int(totals?.volume_count ?? 0))
     }
 
-    /// The boot-disk exclusion above, as a predicate on a `volumes` row.
+    /// Bytes this volume adds after deducting any VM-disk reservation for the
+    /// same physical path. `MAX` keeps a malformed duplicate VM path from
+    /// multiplying the deduction; the floor keeps a legacy row whose desired
+    /// size is stale below `vms.disk` from crediting storage back.
+    private static let volumeReservedBytes: SQLQueryString = """
+        GREATEST(
+            volumes.size - COALESCE(
+                (
+                    SELECT MAX(vms.disk)::bigint FROM vms
+                    WHERE vms.project_id = volumes.project_id
+                      AND vms.disk_path = volumes.storage_path
+                ),
+                0
+            ),
+            0
+        )
+        """
+
+    /// A compatibility boot-volume row does not consume a volume-count slot,
+    /// even after detachment clears its mutable `vm_id`.
     private static let volumeIsNotAVMBootDisk: SQLQueryString = """
         NOT EXISTS (
             SELECT 1 FROM vms
