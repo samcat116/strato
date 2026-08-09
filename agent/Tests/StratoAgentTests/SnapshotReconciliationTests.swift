@@ -39,10 +39,19 @@ struct SnapshotReconciliationTests {
 
         func presenceIsComplete() -> Bool { presenceComplete }
         func observedPresence() -> [String: VMPresence] { [:] }
+        func observedSizing() -> [String: VMSizing] { [:] }
+        func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
+        func observedSandboxPresence() -> [String: SandboxPresence] { [:] }
+        func adoptSandbox(_ item: ReconcileWorkItem) throws -> SandboxStatus {
+            throw UnsupportedTestActuation.sandbox
+        }
+        func observedVolumePresence() -> [String: VolumePresence]? { [:] }
         func observedSnapshotPresence() -> [String: SnapshotPresence]? {
             inventoryReadable ? artifacts : nil
         }
+        func observedEdgeNonces() -> [String: AppliedEdgeNonces] { [:] }
+        func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) {}
 
         func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
             performed.append((step, item.id))

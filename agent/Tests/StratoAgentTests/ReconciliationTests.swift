@@ -199,32 +199,41 @@ struct ReconciliationTests {
             sizing
         }
 
+        func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
+        func observedSandboxPresence() -> [String: SandboxPresence] { [:] }
+        func observedVolumePresence() -> [String: VolumePresence]? { [:] }
+        func observedSnapshotPresence() -> [String: SnapshotPresence]? { [:] }
+
         func setSizing(_ sizing: [String: VMSizing]) {
             self.sizing = sizing
         }
 
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus {
             if let failWith { throw failWith }
-            performed.append((.adopt, item.vmId))
-            presence[item.vmId] = .managed(adoptedStatus)
+            performed.append((.adopt, item.id))
+            presence[item.id] = .managed(adoptedStatus)
             return adoptedStatus
+        }
+
+        func adoptSandbox(_ item: ReconcileWorkItem) throws -> SandboxStatus {
+            throw UnsupportedTestActuation.sandbox
         }
 
         func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
             if let failWith { throw failWith }
-            performed.append((step, item.vmId))
+            performed.append((step, item.id))
             switch step {
-            case .create: presence[item.vmId] = .managed(.created)
-            case .boot, .resume: presence[item.vmId] = .managed(.running)
-            case .pause: presence[item.vmId] = .managed(.paused)
-            case .shutdown: presence[item.vmId] = .managed(.shutdown)
-            case .delete: presence.removeValue(forKey: item.vmId)
+            case .create: presence[item.id] = .managed(.created)
+            case .boot, .resume: presence[item.id] = .managed(.running)
+            case .pause: presence[item.id] = .managed(.paused)
+            case .shutdown: presence[item.id] = .managed(.shutdown)
+            case .delete: presence.removeValue(forKey: item.id)
             case .resize:
                 if let desired = item.desired {
-                    sizing[item.vmId] = VMSizing(cpus: desired.spec.cpus, memoryBytes: desired.spec.memoryBytes)
+                    sizing[item.id] = VMSizing(cpus: desired.spec.cpus, memoryBytes: desired.spec.memoryBytes)
                 }
-            case .reboot: presence[item.vmId] = .managed(.running)
-            case .restore: presence[item.vmId] = .managed(.running)
+            case .reboot: presence[item.id] = .managed(.running)
+            case .restore: presence[item.id] = .managed(.running)
             case .adopt, .export, .reconfigureNetworks: break
             case .attach, .detach: break  // volume-only steps; never planned for a VM
             }
@@ -266,7 +275,7 @@ struct ReconciliationTests {
             lastApplied: [:]
         )
         #expect(plan.items.count == 1)
-        #expect(plan.items[0].vmId == vmId.uuidString)
+        #expect(plan.items[0].id == vmId.uuidString)
         #expect(plan.items[0].steps == [.create, .boot])
     }
 
@@ -313,7 +322,7 @@ struct ReconciliationTests {
         )
         #expect(plan.unrecognized.isEmpty)
         #expect(plan.items.count == 1)
-        #expect(plan.items[0].vmId == vmId.uuidString)
+        #expect(plan.items[0].id == vmId.uuidString)
         #expect(plan.items[0].steps == [.delete])
         #expect(plan.items[0].generation == 5)
         #expect(plan.items[0].isTombstone)

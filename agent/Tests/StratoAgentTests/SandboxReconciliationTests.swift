@@ -95,13 +95,22 @@ struct SandboxReconciliationTests {
             adoptedSandboxStatus = status
         }
 
+        func presenceIsComplete() -> Bool { true }
         func observedPresence() -> [String: VMPresence] {
             vmPresence
         }
 
+        func observedSizing() -> [String: VMSizing] { [:] }
+        func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
+
         func observedSandboxPresence() -> [String: SandboxPresence] {
             sandboxPresence
         }
+
+        func observedVolumePresence() -> [String: VolumePresence]? { [:] }
+        func observedSnapshotPresence() -> [String: SnapshotPresence]? { [:] }
+        func observedEdgeNonces() -> [String: AppliedEdgeNonces] { [:] }
+        func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) {}
 
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus {
             if let failWith { throw failWith }
@@ -297,8 +306,8 @@ struct SandboxReconciliationTests {
         let sandboxItem = ReconcileWorkItem(
             kind: .sandbox, id: id, generation: 1, steps: [.boot],
             target: .tombstone(DesiredWorkloadTombstone(kind: .sandbox, workloadId: uuid, generation: 1)))
-        #expect(vmItem.laneKey == id)
-        #expect(sandboxItem.laneKey == "sandbox/" + id)
+        #expect(vmItem.laneKeys == [id])
+        #expect(sandboxItem.laneKeys == ["sandbox/" + id])
     }
 
     // MARK: - Reconciler end to end

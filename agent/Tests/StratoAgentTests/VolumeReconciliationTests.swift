@@ -84,10 +84,19 @@ struct VolumeReconciliationTests {
         }
         func presenceIsComplete() -> Bool { presenceComplete }
         func observedPresence() -> [String: VMPresence] { [:] }
+        func observedSizing() -> [String: VMSizing] { [:] }
+        func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
+        func observedSandboxPresence() -> [String: SandboxPresence] { [:] }
+        func adoptSandbox(_ item: ReconcileWorkItem) throws -> SandboxStatus {
+            throw UnsupportedTestActuation.sandbox
+        }
         func observedVolumePresence() -> [String: VolumePresence]? {
             inventoryReadable ? volumes : nil
         }
+        func observedSnapshotPresence() -> [String: SnapshotPresence]? { [:] }
+        func observedEdgeNonces() -> [String: AppliedEdgeNonces] { [:] }
+        func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) {}
 
         func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
             performed.append((step, item.id))
@@ -560,9 +569,19 @@ struct VolumeReconciliationTests {
             self.volumes = volumes
         }
 
+        func presenceIsComplete() -> Bool { true }
         func observedPresence() -> [String: VMPresence] { vms }
+        func observedSizing() -> [String: VMSizing] { [:] }
+        func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
         func observedVolumePresence() -> [String: VolumePresence]? { volumes }
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
+        func observedSandboxPresence() -> [String: SandboxPresence] { [:] }
+        func adoptSandbox(_ item: ReconcileWorkItem) throws -> SandboxStatus {
+            throw UnsupportedTestActuation.sandbox
+        }
+        func observedSnapshotPresence() -> [String: SnapshotPresence]? { [:] }
+        func observedEdgeNonces() -> [String: AppliedEdgeNonces] { [:] }
+        func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) {}
         func perform(_ step: ReconcileStep, item: ReconcileWorkItem) throws {
             performed.append((step, item.id))
         }
