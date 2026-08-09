@@ -163,7 +163,27 @@ struct DNSController: RouteCollection {
         }
 
         do {
-            try await zone.save(on: req.db)
+            try await req.db.transaction { db in
+                try await zone.save(on: db)
+
+                // A search domain that still spells this primary zone is
+                // following it, so a rename has to move both columns together.
+                // Otherwise the stale spelling can no longer be distinguished
+                // from one the operator chose and will never follow again.
+                guard zone.name != originalName else { return }
+                let primaryNetworks = try await LogicalNetwork.query(on: db)
+                    .filter(\.$primaryDNSZone.$id == zone.requireID())
+                    .all()
+                for network in primaryNetworks {
+                    let next = DNSZoneService.searchDomainFollowingPrimaryZone(
+                        current: network.domainName,
+                        previousZoneName: originalName,
+                        nextZoneName: zone.name)
+                    guard next != network.domainName else { continue }
+                    network.domainName = next
+                    try await network.save(on: db)
+                }
+            }
         } catch let error as any DatabaseError where error.isConstraintFailure {
             throw Abort(.conflict, reason: "A DNS zone named '\(zone.name)' already exists in this project")
         }
@@ -370,9 +390,19 @@ struct DNSController: RouteCollection {
         // `primary` and cannot have it changes nothing at all rather than
         // leaving a half-applied attachment behind.
         let promoting = request.primary == true && network.$primaryDNSZone.id != zoneID
+        var promotedDomainName: String?
         if promoting {
             try await DNSZoneService.assertPrimaryZoneAssignable(
                 zone: zone, networkID: networkID, on: req.db)
+            let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
+            // Zone names are stored through `normalizedZoneName`, whose rules
+            // are stricter than a search domain's. Derive this before writing
+            // the attachment so promotion still has no later validation path
+            // that can leave a half-applied row behind.
+            promotedDomainName = DNSZoneService.searchDomainFollowingPrimaryZone(
+                current: network.domainName,
+                previousZoneName: outgoing,
+                nextZoneName: zone.name)
         }
 
         // Deliberately not one transaction: the duplicate-attach catch below is
@@ -399,10 +429,7 @@ struct DNSController: RouteCollection {
             // primary zone points guests at it" that the resolver cannot supply
             // — a search list is guest-side config, not something a resolver
             // answers with.
-            let outgoing = try await DNSZoneService.primaryZoneName(of: network, on: req.db)
-            network.domainName = try NetworkController.validatedDomainName(
-                DNSZoneService.searchDomainFollowingPrimaryZone(
-                    current: network.domainName, previousZoneName: outgoing, nextZoneName: zone.name))
+            network.domainName = promotedDomainName
             network.$primaryDNSZone.id = zoneID
             try await network.save(on: req.db)
         }

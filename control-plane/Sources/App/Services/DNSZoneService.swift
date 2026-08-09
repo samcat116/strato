@@ -374,9 +374,10 @@ enum DNSZoneService {
     }
 
     /// The name of the zone this network currently registers into, if any — the
-    /// `previousZoneName` half of `searchDomainFollowingPrimaryZone`. A lookup
-    /// rather than a stored copy, so a renamed zone is never compared against a
-    /// spelling that decayed.
+    /// `previousZoneName` half of `searchDomainFollowingPrimaryZone`. Callers
+    /// moving the primary pointer need the live name; the zone-rename path has
+    /// the old spelling captured separately and moves following domains in the
+    /// same transaction as the rename.
     static func primaryZoneName(of network: LogicalNetwork, on db: any Database) async throws
         -> String?
     {

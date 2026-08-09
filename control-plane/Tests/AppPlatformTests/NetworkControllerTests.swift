@@ -812,7 +812,7 @@ final class NetworkControllerTests {
         #expect(unallocated.contains("no address allocated"))
     }
 
-    @Test("The capability index answers per site, and fleet-wide for an unpinned network")
+    @Test("The capability index answers per site, and from site-less agents when unpinned")
     func capabilityIndexScopesBySite() {
         let siteA = UUID()
         let siteB = UUID()
@@ -836,10 +836,9 @@ final class NetworkControllerTests {
         #expect(index.incapableAgentNames(forSite: siteB) == ["old-b"])
         // A site with nothing holding it back is capable, not unknown.
         #expect(index.incapableAgentNames(forSite: UUID()).isEmpty)
-        // An unpinned network has no site to bound the question over, so every
-        // host its VMs could land on counts — including the site-less ones.
-        #expect(
-            index.incapableAgentNames(forSite: nil) == ["old-a1", "old-a2", "old-b", "unsited"])
+        // The sync path asks a site-less receiving agent's own flag, so agents
+        // assigned to other sites cannot be named as the cause here.
+        #expect(index.incapableAgentNames(forSite: nil) == ["unsited"])
     }
 
     @Test("The backfill gives an address to a resolver-enabled network that has none")
@@ -876,6 +875,46 @@ final class NetworkControllerTests {
             // Idempotent: a second run allocates nothing further.
             try await BackfillResolverIndexes().prepare(on: app.db)
             #expect(try await LogicalNetwork.find(stranded.id, on: app.db)?.resolverIndex == allocated)
+        }
+    }
+
+    @Test("The backfill serializes with a concurrent live resolver allocation")
+    func backfillSerializesWithLiveAllocation() async throws {
+        try await withNetworkTestApp { app, _, project, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let stranded = try await builder.createNetwork(name: "backfill-race", project: project)
+
+            // Keep this row out of the backfill's pending set until its live
+            // allocation commits. Its transaction chooses an index, pauses,
+            // and gives the migration a chance to collide if the migration is
+            // not participating in the allocator's advisory lock.
+            let live = try await builder.createNetwork(name: "live-race", project: project)
+            live.resolverEnabled = false
+            try await live.save(on: app.db)
+            let liveID = try live.requireID()
+            let (selection, selected) = AsyncStream.makeStream(of: Void.self)
+
+            async let liveAllocation: Void = app.db.transaction { db in
+                let allocating = try #require(try await LogicalNetwork.find(liveID, on: db))
+                allocating.resolverEnabled = true
+                _ = try await ResolverAddressAllocator.ensureIndex(for: allocating, on: db)
+                selected.yield()
+                try await Task.sleep(for: .milliseconds(250))
+                try await allocating.save(on: db)
+            }
+
+            for await _ in selection {
+                break
+            }
+            async let backfill: Void = BackfillResolverIndexes().prepare(on: app.db)
+            _ = try await (liveAllocation, backfill)
+            selected.finish()
+
+            let filled = try #require(try await LogicalNetwork.find(stranded.id, on: app.db))
+            let allocatedLive = try #require(try await LogicalNetwork.find(liveID, on: app.db))
+            #expect(filled.resolverIndex != nil)
+            #expect(allocatedLive.resolverIndex != nil)
+            #expect(filled.resolverIndex != allocatedLive.resolverIndex)
         }
     }
 

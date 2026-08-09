@@ -349,8 +349,8 @@ use in code, tests, docs, and review. Architecture-level maps live in
   unresolvable until this is set.
 
   It **follows the primary zone while the operator has not claimed it** (STR-201)
-  — promotion sets it, re-pointing moves it, demotion clears it — and stops
-  following the moment someone sets a value of their own.
+  — promotion sets it, re-pointing or renaming the zone moves it, demotion
+  clears it — and stops following the moment someone sets a value of their own.
   `primaryDNSZone` already means "the zone this network's VMs register into", and
   "and resolve through" is the same intent; making the operator say it twice is
   what left a correctly realized zone inert.

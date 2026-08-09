@@ -466,6 +466,53 @@ final class DNSZoneTests {
         }
     }
 
+    @Test("Renaming a primary zone moves only search domains that still follow it")
+    func renamingPrimaryZoneMovesFollowingSearchDomains() async throws {
+        try await withDNSTestApp { app, _, _, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let following = try await builder.createNetwork(name: "net-rename-follow", project: project)
+            let chosen = try await builder.createNetwork(name: "net-rename-chosen", project: project)
+            chosen.domainName = "chosen.example"
+            try await chosen.save(on: app.db)
+            let zone = try await createZone(app: app, token: token, project: project)
+
+            for networkID in [try following.requireID(), try chosen.requireID()] {
+                try await app.test(.POST, "/api/dns-zones/\(zone.id)/networks") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        AttachDNSZoneRequest(networkId: networkID, primary: true))
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }
+
+            try await app.test(.PUT, "/api/dns-zones/\(zone.id)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateDNSZoneRequest(name: "renamed.internal"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let renamed = try res.content.decode(DNSZoneResponse.self)
+                #expect(renamed.name == "renamed.internal")
+            }
+
+            let moved = try #require(try await LogicalNetwork.find(following.id, on: app.db))
+            let untouched = try #require(try await LogicalNetwork.find(chosen.id, on: app.db))
+            #expect(moved.domainName == "renamed.internal")
+            #expect(untouched.domainName == "chosen.example")
+
+            // The new spelling still follows: demotion recognizes and clears
+            // it instead of treating a stale old name as operator-authored.
+            try await app.test(.PUT, "/api/networks/\(try moved.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(UpdateNetworkRequest(clearPrimaryDnsZone: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let cleared = try res.content.decode(NetworkResponse.self)
+                #expect(cleared.domainName == nil)
+            }
+        }
+    }
+
     @Test("A domain name sent alongside the primary zone wins over the derived one")
     func explicitDomainNameInTheSameRequestWins() async throws {
         try await withDNSTestApp { app, _, _, project, token in

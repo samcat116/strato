@@ -50,10 +50,10 @@ enum ResolverCapability {
     /// A fleet-wide snapshot of which sites are holding the resolver back.
     struct Index: Sendable {
         private let bySite: [UUID: [String]]
-        private let all: [String]
+        private let siteLess: [String]
 
         init(incapable: [Agent]) {
-            self.all = incapable.map(\.name).sorted()
+            self.siteLess = incapable.filter { $0.$site.id == nil }.map(\.name).sorted()
             self.bySite = Dictionary(grouping: incapable.filter { $0.$site.id != nil }) {
                 $0.$site.id!
             }
@@ -61,15 +61,14 @@ enum ResolverCapability {
         }
 
         /// The agents that would withhold the resolver from a network pinned to
-        /// `siteID`, or — for an **unpinned** network — from the fleet.
+        /// `siteID`, or the site-less agents for an unpinned network.
         ///
-        /// An unpinned network is deliberately answered fleet-wide rather than
-        /// per agent. The site-wide rule exists because a network's guests are
-        /// pointed at one address by one DHCP row while the process answering it
-        /// runs per host; an unpinned network has no site to bound that over, so
-        /// the honest scope is every host its VMs could land on.
+        /// The sync path asks a site-less receiving agent's own capability and
+        /// never consults agents assigned to unrelated sites. Restricting this
+        /// warning to the site-less complement keeps the API's explanation on
+        /// the same scope as that delivery decision.
         func incapableAgentNames(forSite siteID: UUID?) -> [String] {
-            guard let siteID else { return all }
+            guard let siteID else { return siteLess }
             return bySite[siteID] ?? []
         }
     }

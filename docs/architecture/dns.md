@@ -51,17 +51,19 @@ network with a primary zone and no `domainName` gives its guests
 
 So `domainName` **follows the primary zone while the operator has not claimed
 it**: promoting a zone sets the search domain to the zone's name, re-pointing the
-primary moves it, and clearing the primary clears it. The moment an operator sets
-a `domainName` of their own — including in the same request that sets the primary
-zone — it stops following and is never touched again.
+primary or renaming its zone moves it, and clearing the primary clears it. The
+moment an operator sets a `domainName` of their own — including in the same
+request that sets the primary zone — it stops following and is never touched
+again.
 
 The predicate is one function,
 `DNSZoneService.searchDomainFollowingPrimaryZone`, called from the two places
-that move `primary_dns_zone_id`: `DNSController.attachNetwork` (with
-`primary: true`) and `NetworkController.updateNetwork`. Those are the only two —
-detaching refuses while a zone is primary and deleting refuses while any
-attachment exists, so the FK's `ON DELETE SET NULL` is unreachable through the
-API.
+that move `primary_dns_zone_id` — `DNSController.attachNetwork` (with
+`primary: true`) and `NetworkController.updateNetwork` — and from
+`DNSController.updateZone`, which moves every still-following domain in the same
+transaction as a rename. Detaching refuses while a zone is primary and deleting
+refuses while any attachment exists, so the FK's `ON DELETE SET NULL` is
+unreachable through the API.
 
 ### When guests will not reach the resolver at all
 

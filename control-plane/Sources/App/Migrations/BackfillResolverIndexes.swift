@@ -32,61 +32,72 @@ import Vapor
 /// port and DHCP row converge level-triggered on every network reconcile.
 struct BackfillResolverIndexes: AsyncMigration {
     func prepare(on database: Database) async throws {
-        guard let sql = database as? any SQLDatabase else {
-            throw Abort(.internalServerError, reason: "BackfillResolverIndexes requires an SQL database")
-        }
-
-        // The whole used-set, including rows whose resolver is off: an index is
-        // kept when the flag is turned off, because some agent may still have
-        // the old address configured, and reusing it would put two networks on
-        // one address.
-        let usedRows = try await sql.select()
-            .column("resolver_index")
-            .from("logical_networks")
-            .where("resolver_index", .isNot, SQLLiteral.null)
-            .all(decoding: IndexRow.self)
-        var taken = Set(usedRows.compactMap(\.resolverIndex))
-
-        let pending = try await sql.select()
-            .column("id")
-            .from("logical_networks")
-            .where("resolver_enabled", .equal, SQLBind(true))
-            .where("resolver_index", .is, SQLLiteral.null)
-            .orderBy("id")
-            .all(decoding: IDRow.self)
-        guard !pending.isEmpty else { return }
-
-        var allocated = 0
-        for row in pending {
-            guard let index = ResolverAddressAllocator.firstFree(after: taken) else {
-                // Stop rather than throw. Exhaustion here needs ~65k networks,
-                // and a migration that refuses is a control plane that will not
-                // start — an operator cannot free addresses from a process that
-                // is down. The networks left without one report it through
-                // `ResolverCapability.zoneResolutionWarning`, which is the same
-                // state they were already in.
-                database.logger.warning(
-                    "Resolver address space exhausted during backfill; some networks keep none",
-                    metadata: [
-                        "allocated": .string(String(allocated)),
-                        "remaining": .string(String(pending.count - allocated)),
-                        "remedy": .string(
-                            "disable the resolver on networks that no longer need one, "
-                                + "then update the networks still without an address"),
-                    ])
-                break
+        try await database.transaction { db in
+            guard let sql = db as? any SQLDatabase else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "BackfillResolverIndexes requires an SQL database")
             }
-            taken.insert(index)
-            try await sql.update("logical_networks")
-                .set("resolver_index", to: SQLBind(index))
-                .where("id", .equal, SQLBind(row.id))
-                .run()
-            allocated += 1
-        }
 
-        database.logger.info(
-            "Backfilled link-local resolver addresses",
-            metadata: ["networks": .string(String(allocated))])
+            // The allocator's scan-then-write is only safe while every writer
+            // holds this transaction-scoped lock. This migration can overlap a
+            // second starting replica or an older replica serving network
+            // creates during a rolling upgrade, so it participates in exactly
+            // the same critical section as the live path.
+            try await ResolverAddressAllocator.lock(on: db)
+
+            // The whole used-set, including rows whose resolver is off: an index is
+            // kept when the flag is turned off, because some agent may still have
+            // the old address configured, and reusing it would put two networks on
+            // one address.
+            let usedRows = try await sql.select()
+                .column("resolver_index")
+                .from("logical_networks")
+                .where("resolver_index", .isNot, SQLLiteral.null)
+                .all(decoding: IndexRow.self)
+            var taken = Set(usedRows.compactMap(\.resolverIndex))
+
+            let pending = try await sql.select()
+                .column("id")
+                .from("logical_networks")
+                .where("resolver_enabled", .equal, SQLBind(true))
+                .where("resolver_index", .is, SQLLiteral.null)
+                .orderBy("id")
+                .all(decoding: IDRow.self)
+            guard !pending.isEmpty else { return }
+
+            var allocated = 0
+            for row in pending {
+                guard let index = ResolverAddressAllocator.firstFree(after: taken) else {
+                    // Stop rather than throw. Exhaustion here needs ~65k networks,
+                    // and a migration that refuses is a control plane that will not
+                    // start — an operator cannot free addresses from a process that
+                    // is down. The networks left without one report it through
+                    // `ResolverCapability.zoneResolutionWarning`, which is the same
+                    // state they were already in.
+                    db.logger.warning(
+                        "Resolver address space exhausted during backfill; some networks keep none",
+                        metadata: [
+                            "allocated": .string(String(allocated)),
+                            "remaining": .string(String(pending.count - allocated)),
+                            "remedy": .string(
+                                "disable the resolver on networks that no longer need one, "
+                                    + "then update the networks still without an address"),
+                        ])
+                    break
+                }
+                taken.insert(index)
+                try await sql.update("logical_networks")
+                    .set("resolver_index", to: SQLBind(index))
+                    .where("id", .equal, SQLBind(row.id))
+                    .run()
+                allocated += 1
+            }
+
+            db.logger.info(
+                "Backfilled link-local resolver addresses",
+                metadata: ["networks": .string(String(allocated))])
+        }
     }
 
     /// The column belongs to `AddResolverIndexToLogicalNetwork`; this migration
