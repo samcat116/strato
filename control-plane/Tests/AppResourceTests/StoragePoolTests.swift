@@ -94,7 +94,7 @@ struct StoragePoolTests {
         let volume = Volume(
             name: name,
             description: "",
-            projectID: project.id!,
+            projectID: project.id!, environment: "development",
             size: 1024 * 1024 * 1024,
             status: hypervisorId == nil ? .creating : .available,
             createdByID: user.id!

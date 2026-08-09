@@ -106,7 +106,4 @@ struct EdgeNonceProtocolTests {
         #expect(decoded.restoreFrom == nil)
     }
 
-    @Test("edge-nonce gate refuses anything below v34")
-    func gate() {
-    }
 }

@@ -1046,7 +1046,7 @@ struct AgentController: RouteCollection {
         }
         let force = request.force == true
 
-        agent.updateStatusBasedOnHeartbeat()
+        agent.status = agent.statusBasedOnHeartbeat
         guard agent.isOnline else {
             throw Abort(.conflict, reason: "Agent is offline; it must be connected to receive an update")
         }

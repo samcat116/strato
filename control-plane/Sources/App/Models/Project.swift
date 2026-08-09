@@ -151,6 +151,27 @@ extension Project {
         return environments.contains(environment)
     }
 
+    /// The environment a create lands in: the one it asked for, or this
+    /// project's default.
+    ///
+    /// One copy of "resolve then validate" for every resource that carries an
+    /// environment. VM and sandbox create resolved it inline in
+    /// `Request.resolveProjectForCreate`; volumes need the same answer (STR-181)
+    /// but reach their project through `authorizedProjectForCreate`, which has no
+    /// environment of its own, so the step lives here rather than in one of the
+    /// two request helpers.
+    func resolveEnvironment(_ requested: String?) throws -> String {
+        let environment = requested ?? defaultEnvironment
+        guard hasEnvironment(environment) else {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Environment '\(environment)' not available in project. Available: \(environments.joined(separator: ", "))"
+            )
+        }
+        return environment
+    }
+
     /// Adds a new environment to the project
     func addEnvironment(_ environment: String) {
         if !environments.contains(environment) {

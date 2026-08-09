@@ -162,7 +162,7 @@ final class ResourceFinalizerTests {
     func restampingDoesNotResurrectClearedTokens() async throws {
         try await withFinalizerApp { app, _, _, vm, _ in
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue, Self.foreign.rawValue]
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
 
             try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
@@ -182,7 +182,7 @@ final class ResourceFinalizerTests {
             let vmID = try vm.requireID()
 
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue, Self.foreign.rawValue]
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
 
             // The agent confirms teardown: its own token goes, the row does not.
@@ -205,7 +205,7 @@ final class ResourceFinalizerTests {
         try await withFinalizerApp { app, _, _, vm, _ in
             let vmID = try vm.requireID()
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
 
             let first = try await ResourceFinalizerService.clear(
@@ -228,7 +228,7 @@ final class ResourceFinalizerTests {
         try await withFinalizerApp { app, _, _, vm, _ in
             let vmID = try vm.requireID()
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
 
             let outcome = try await ResourceFinalizerService.clear(
@@ -245,7 +245,7 @@ final class ResourceFinalizerTests {
         try await withFinalizerApp { app, _, _, vm, _ in
             let vmID = try vm.requireID()
             vm.finalizers = [Self.foreign.rawValue]
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
 
             let outcome = try await ResourceFinalizerService.clear(
@@ -265,7 +265,7 @@ final class ResourceFinalizerTests {
             // Exactly the state a crash between the token's commit and the
             // row's leaves behind — the case the two-commit design leans on.
             vm.finalizers = []
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
 
             let outcome = try await ResourceFinalizerService.clear(
@@ -304,7 +304,7 @@ final class ResourceFinalizerTests {
         try await withFinalizerApp { app, _, _, vm, token in
             vm.hypervisorId = UUID().uuidString
             vm.finalizers = [ResourceFinalizer.agentAbsent.rawValue, Self.foreign.rawValue]
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             let vmID = try vm.requireID()
 
@@ -331,7 +331,7 @@ final class ResourceFinalizerTests {
         try await withFinalizerApp { app, _, _, vm, _ in
             let vmID = try vm.requireID()
             vm.finalizers = []
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             try await self.backdate(VM.self, id: vmID, bySeconds: 600, on: app.db)
 
@@ -346,7 +346,7 @@ final class ResourceFinalizerTests {
         try await withFinalizerApp { app, _, _, vm, _ in
             let vmID = try vm.requireID()
             vm.finalizers = [Self.foreign.rawValue]
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             try await self.backdate(VM.self, id: vmID, bySeconds: 600, on: app.db)
 
@@ -379,9 +379,9 @@ final class ResourceFinalizerTests {
             let placedAndLive = try await builder.createVM(name: "live", project: project)
 
             placedAndTerminating.hypervisorId = UUID().uuidString
-            placedAndTerminating.setDesiredStatus(.absent)
+            placedAndTerminating.setFixtureDesiredStatus(.absent)
             try await placedAndTerminating.save(on: app.db)
-            unplacedAndTerminating.setDesiredStatus(.absent)
+            unplacedAndTerminating.setFixtureDesiredStatus(.absent)
             try await unplacedAndTerminating.save(on: app.db)
             placedAndLive.hypervisorId = UUID().uuidString
             try await placedAndLive.save(on: app.db)

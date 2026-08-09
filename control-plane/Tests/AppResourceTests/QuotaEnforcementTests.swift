@@ -22,8 +22,8 @@ final class QuotaEnforcementTests {
         let cpu: Int?
         let memory: Int64?
         let disk: Int64?
-        /// VM create names its network explicitly (issue #765). Only the
-        /// success paths need one — a quota rejection fires first.
+        /// VM create names its network explicitly (issue #765). Requests that
+        /// need to reach later validation must provide one.
         var networkName: String? = nil
     }
 
@@ -511,7 +511,8 @@ final class QuotaEnforcementTests {
                 try req.content.encode(
                     CreateVMBody(
                         name: "too-big", imageId: image.id, projectId: project.id,
-                        environment: "development", cpu: 8, memory: gb(2), disk: gb(10)))
+                        environment: "development", cpu: 8, memory: gb(2), disk: gb(10),
+                        networkName: "default"))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
                 // The frontend surfaces the inline quota error only when the reason

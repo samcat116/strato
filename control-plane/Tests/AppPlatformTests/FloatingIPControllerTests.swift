@@ -425,6 +425,65 @@ final class FloatingIPControllerTests {
         }
     }
 
+    @Test("Concurrent Floating IP attachments advance one network generation each")
+    func concurrentAttachmentsAdvanceConsecutiveGenerations() async throws {
+        try await withFloatingIPTestApp { app, _, org, project, token in
+            let pool = try await self.createPool(app: app, org: org, token: token)
+            let network = LogicalNetwork(
+                name: "concurrent-fip-net", subnet: "10.42.0.0/24", gateway: "10.42.0.1",
+                projectID: try project.requireID(), externalAccess: true)
+            try await network.save(on: app.db)
+            let (firstVM, _) = try await self.createVMWithNIC(
+                app: app, org: org, project: project, network: network, fixedIP: "10.42.0.5")
+            let (secondVM, _) = try await self.createVMWithNIC(
+                app: app, org: org, project: project, network: network, fixedIP: "10.42.0.6")
+
+            func allocate() async throws -> UUID {
+                var id: UUID?
+                try await app.test(.POST, "/api/floating-ips") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode([
+                        "poolId": pool.id.uuidString,
+                        "projectId": try project.requireID().uuidString,
+                    ])
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                    id = try res.content.decode(FloatingIPResponse.self).id
+                }
+                return try #require(id)
+            }
+
+            let firstFIP = try await allocate()
+            let secondFIP = try await allocate()
+            let startGeneration = network.generation
+
+            async let firstAttach: Void = {
+                try await app.test(.POST, "/api/floating-ips/\(firstFIP)/attach") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["vmId": try firstVM.requireID().uuidString])
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }()
+            async let secondAttach: Void = {
+                try await app.test(.POST, "/api/floating-ips/\(secondFIP)/attach") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(["vmId": try secondVM.requireID().uuidString])
+                } afterResponse: { res in
+                    #expect(res.status == .ok)
+                }
+            }()
+            _ = try await (firstAttach, secondAttach)
+
+            let stored = try #require(try await LogicalNetwork.find(network.id, on: app.db))
+            let storedFirst = try #require(try await FloatingIP.find(firstFIP, on: app.db))
+            let storedSecond = try #require(try await FloatingIP.find(secondFIP, on: app.db))
+            #expect(stored.generation == startGeneration + 2)
+            #expect(storedFirst.$interface.id != nil)
+            #expect(storedSecond.$interface.id != nil)
+        }
+    }
+
     /// Registers an agent at the given wire protocol version and places the
     /// VM on it, so attach hits the realizing-agent version gate.
     private func placeVM(

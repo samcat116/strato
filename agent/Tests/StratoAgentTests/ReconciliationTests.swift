@@ -70,6 +70,23 @@ struct ReconciliationTests {
         #expect(VMNetworkInterfaceDiff.between(current: legacy, desired: desired).removed.isEmpty)
     }
 
+    private final class TestClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private var instant = Date(timeIntervalSince1970: 1_000)
+
+        func now() -> Date {
+            lock.lock()
+            defer { lock.unlock() }
+            return instant
+        }
+
+        func advance(by interval: TimeInterval) {
+            lock.lock()
+            defer { lock.unlock() }
+            instant = instant.addingTimeInterval(interval)
+        }
+    }
+
     private static func spec(cpus: Int = 1) -> VMSpec {
         VMSpec(cpus: cpus, memoryBytes: 1 << 30, boot: .disk(firmware: nil))
     }
@@ -229,10 +246,13 @@ struct ReconciliationTests {
         }
     }
 
-    private func makeReconciler(_ actuator: MockActuator) -> Reconciler {
+    private func makeReconciler(
+        _ actuator: MockActuator,
+        now: @escaping @Sendable () -> Date = Date.init
+    ) -> Reconciler {
         Reconciler(
             actuator: actuator, queue: SerialTaskQueue(), logger: Logger(label: "test"),
-            metadataStore: MetadataStore())
+            metadataStore: MetadataStore(), now: now)
     }
 
     // MARK: - Pure diff engine
@@ -623,38 +643,75 @@ struct ReconciliationTests {
         #expect(generation == 1)
     }
 
-    @Test("Failing convergence stops retrying after the per-generation attempt cap")
-    func failureAttemptCap() async {
+    @Test("Transient failures retry at every boundary and continue hourly at one generation")
+    func transientFailureBackoff() async {
         struct Boom: Error {}
         let vmId = UUID()
         let actuator = MockActuator()
         await actuator.setFailure(Boom())
-        let reconciler = makeReconciler(actuator)
+        let clock = TestClock()
+        let reconciler = makeReconciler(actuator, now: clock.now)
         let message = Self.sync([Self.desired(vmId, status: .running, generation: 1)])
 
-        // Each sync re-drives one attempt until the cap; further syncs are skipped.
-        for attempt in 1...(Reconciler.maxAttemptsPerGeneration + 3) {
-            await reconciler.apply(message)
-            _ = await actuator.waitForReports(min(attempt, Reconciler.maxAttemptsPerGeneration))
-        }
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(1)
+
+        // Mutation nudges and the instant before each boundary do not consume
+        // another attempt. The exact boundary does.
+        await reconciler.apply(message)
+        await reconciler.apply(message)
+        clock.advance(by: 59)
+        await reconciler.apply(message)
+        #expect(await actuator.reportCount == 1)
+
+        clock.advance(by: 1)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(2)
+        clock.advance(by: 299)
+        await reconciler.apply(message)
+        #expect(await actuator.reportCount == 2)
+
+        clock.advance(by: 1)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(3)
+        clock.advance(by: 899)
+        await reconciler.apply(message)
+        #expect(await actuator.reportCount == 3)
+
+        clock.advance(by: 1)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(4)
+        clock.advance(by: 3_599)
+        await reconciler.apply(message)
+        #expect(await actuator.reportCount == 4)
+
+        clock.advance(by: 1)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(5)
+        clock.advance(by: 3_600)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(6)
 
         let reports = await actuator.reportCount
-        #expect(reports == Reconciler.maxAttemptsPerGeneration)
+        #expect(reports == 6)
         let lastError = await reconciler.lastError(for: vmId.uuidString)
         #expect(lastError != nil)
+        #expect(await reconciler.retryCapSuppressions == 0)
 
-        // A new generation re-arms the loop.
+        // The same generation recovers once the transient condition clears.
         await actuator.setFailure(nil)
-        await reconciler.apply(Self.sync([Self.desired(vmId, status: .running, generation: 2)]))
-        _ = await actuator.waitForReports(Reconciler.maxAttemptsPerGeneration + 1)
+        clock.advance(by: 3_600)
+        await reconciler.apply(message)
+        _ = await actuator.waitForReports(7)
         let performed = await actuator.performed
         #expect(performed.map(\.step) == [.create, .boot])
         let clearedError = await reconciler.lastError(for: vmId.uuidString)
         #expect(clearedError == nil)
+        let generation = await reconciler.observedGeneration(for: vmId.uuidString)
+        #expect(generation == 1)
     }
 
-    @Test("Permanent failures exhaust the attempt cap on the first attempt")
+    @Test("Permanent retry suppression warns and increments its counter once")
     func permanentFailureStopsRetriesImmediately() async {
         let vmId = UUID()
         let actuator = MockActuator()
@@ -674,6 +731,7 @@ struct ReconciliationTests {
         #expect(reports == 1)
         let lastError = await reconciler.lastError(for: vmId.uuidString)
         #expect(lastError?.contains("qemu-img missing") == true)
+        #expect(await reconciler.retryCapSuppressions == 1)
 
         // A new generation (operator retry after fixing the host) re-arms
         // the loop exactly like a capped transient failure.
@@ -684,9 +742,10 @@ struct ReconciliationTests {
         #expect(performed.map(\.step) == [.create, .boot])
         let clearedError = await reconciler.lastError(for: vmId.uuidString)
         #expect(clearedError == nil)
+        #expect(await reconciler.retryCapSuppressions == 1)
     }
 
-    @Test("Waiting on a dependency reports no error and retries past the attempt cap")
+    @Test("Waiting on a dependency reports no error and retries every sync")
     func dependencyPendingWaitsWithoutFailing() async {
         let vmId = UUID()
         let actuator = MockActuator()
@@ -696,8 +755,8 @@ struct ReconciliationTests {
         let reconciler = makeReconciler(actuator)
         let message = Self.sync([Self.desired(vmId, status: .running, generation: 1)])
 
-        // Every sync keeps re-driving the item, well past the attempt cap...
-        let rounds = Reconciler.maxAttemptsPerGeneration + 2
+        // Every sync keeps re-driving the item without any backoff.
+        let rounds = 5
         for attempt in 1...rounds {
             await reconciler.apply(message)
             _ = await actuator.waitForReports(attempt)
@@ -720,8 +779,8 @@ struct ReconciliationTests {
         #expect(generation == 1)
     }
 
-    @Test("Tombstoned deletes are exempt from the attempt cap")
-    func tombstonedDeleteRetriesPastCap() async {
+    @Test("Tombstoned deletes are exempt from transient backoff")
+    func tombstonedDeleteRetriesEverySync() async {
         struct Boom: Error {}
         let vmId = UUID()
         let actuator = MockActuator(presence: [vmId.uuidString: .managed(.running)])
@@ -729,10 +788,10 @@ struct ReconciliationTests {
         let reconciler = makeReconciler(actuator)
 
         // A tombstoned workload has no control-plane row, so nothing can ever
-        // mint a new generation to re-arm a capped failure — every sync must
+        // mint a new generation to re-arm a terminal failure — every sync must
         // keep retrying the delete or the stray process leaks until restart.
         let tombstone = DesiredWorkloadTombstone(kind: .vm, workloadId: vmId, generation: 1)
-        let rounds = Reconciler.maxAttemptsPerGeneration + 2
+        let rounds = 5
         for attempt in 1...rounds {
             await reconciler.apply(Self.sync([], tombstones: [tombstone]))
             _ = await actuator.waitForReports(attempt)

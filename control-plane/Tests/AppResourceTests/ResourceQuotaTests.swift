@@ -84,6 +84,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: 1000,
                         maxVMs: 50,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         environment: nil,
                         isEnabled: nil
@@ -116,6 +117,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: 200,
                         maxVMs: 10,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         environment: nil,
                         isEnabled: nil
@@ -144,6 +146,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: 500,
                         maxVMs: 25,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         environment: "production",
                         isEnabled: nil
@@ -390,6 +393,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: 200.0,
                         maxVMs: 10,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         isEnabled: nil
                     ))
@@ -439,6 +443,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: nil,
                         maxVMs: nil,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         isEnabled: nil
                     ))
@@ -457,6 +462,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: nil,
                         maxVMs: 3,  // Less than the 4 VMs in scope
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         isEnabled: nil
                     ))
@@ -502,6 +508,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: nil,
                         maxVMs: nil,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         isEnabled: false
                     ))
@@ -626,6 +633,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: 1000,
                         maxVMs: 50,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         environment: nil,
                         isEnabled: nil
@@ -653,6 +661,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: nil,
                         maxVMs: nil,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         isEnabled: nil
                     ))
@@ -713,6 +722,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: nil,
                         maxVMs: 1,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         isEnabled: nil
                     ))
@@ -769,6 +779,7 @@ final class ResourceQuotaTests {
                         maxStorageGB: nil,
                         maxVMs: nil,
                         maxSandboxes: nil,
+                        maxVolumes: nil,
                         maxNetworks: nil,
                         isEnabled: nil
                     ))

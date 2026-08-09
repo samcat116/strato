@@ -588,7 +588,7 @@ struct VolumeReconciliationTests {
     /// The regression behind STR-199. The guard refusing to grow a volume whose
     /// guest is still running names a remedy — stop it, or detach — and while
     /// the refusal was classified permanent, applying that remedy did nothing:
-    /// the attempt cap had already been exhausted at the first refusal, so no
+    /// permanent-failure suppression had already engaged, so no
     /// later sync re-drove the grow and the volume sat short of a size nothing
     /// had withdrawn until someone asked for a *different* one.
     @Test("A blocked grow is retried on every sync and converges when the block clears")
@@ -603,8 +603,8 @@ struct VolumeReconciliationTests {
         let reconciler = Self.reconciler(actuator)
         let message = Self.sync(volumes: [Self.desired(id, generation: 3, sizeBytes: 3 << 30)])
 
-        // Every sync re-drives the refused grow, well past the attempt cap.
-        let rounds = Reconciler.maxAttemptsPerGeneration + 3
+        // Every sync re-drives the refused grow without backoff.
+        let rounds = 6
         for round in 1...rounds {
             await reconciler.apply(message)
             _ = await actuator.waitForReports(round)
@@ -638,7 +638,7 @@ struct VolumeReconciliationTests {
         let reconciler = Self.reconciler(actuator)
         let message = Self.sync(volumes: [Self.desired(id, generation: 3, sizeBytes: 3 << 30)])
 
-        for _ in 1...(Reconciler.maxAttemptsPerGeneration + 2) {
+        for _ in 1...5 {
             await reconciler.apply(message)
             _ = await actuator.waitForReports(1)
         }

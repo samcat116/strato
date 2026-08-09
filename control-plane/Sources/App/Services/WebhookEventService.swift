@@ -100,6 +100,7 @@ struct QuotaUsageSnapshot: Sendable {
     let storage: Int64
     let vms: Int
     let sandboxes: Int
+    let volumes: Int
 
     init(of quota: ResourceQuota) {
         self.vcpus = quota.reservedVCPUs
@@ -107,6 +108,7 @@ struct QuotaUsageSnapshot: Sendable {
         self.storage = quota.reservedStorage
         self.vms = quota.vmCount
         self.sandboxes = quota.sandboxCount
+        self.volumes = quota.volumeCount
     }
 }
 
@@ -323,6 +325,9 @@ enum WebhookEvents {
             ("storage", baseline.storage, quota.reservedStorage, quota.maxStorage),
             ("vms", Int64(baseline.vms), Int64(quota.vmCount), Int64(quota.maxVMs)),
             ("sandboxes", Int64(baseline.sandboxes), Int64(quota.sandboxCount), Int64(quota.maxSandboxes)),
+            // A nil volume limit means no limit, and lands here as 0 — which the
+            // `limit > 0` guard below already skips (STR-181).
+            ("volumes", Int64(baseline.volumes), Int64(quota.volumeCount), Int64(quota.maxVolumes ?? 0)),
         ]
 
         for entry in pools {

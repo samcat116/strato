@@ -297,11 +297,6 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.lastHeartbeat = lastHeartbeat
     }
 
-    func updateResources(_ resources: AgentResources) {
-        _ = updateAvailableResources(resources)
-        self.lastHeartbeat = Date()
-    }
-
     /// Applies the mutable capacity fields from a periodic report and returns
     /// whether the row actually changed. Liveness timestamp policy belongs to
     /// `AgentService`, which can coalesce the heartbeat and observed-state
@@ -485,11 +480,6 @@ extension Agent {
             return .offline
         }
         return status
-    }
-
-    /// Update agent status based on heartbeat age.
-    func updateStatusBasedOnHeartbeat() {
-        status = statusBasedOnHeartbeat
     }
 
     /// The agent's org-or-OU owner; nil only for rows that predate mandatory

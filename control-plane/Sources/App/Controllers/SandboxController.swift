@@ -583,6 +583,14 @@ struct SandboxController: RouteCollection {
                     // The bump to generation 1 distinguishes "never confirmed by
                     // any agent" (observed_generation 0) from "confirmed".
                     sandbox.setDesiredStatus(initialDesiredStatus)
+                    guard
+                        case .applied = try await sandbox.advanceDesiredStateGeneration(
+                            expectedGeneration: 0, on: db)
+                    else {
+                        throw Abort(
+                            .internalServerError,
+                            reason: "Failed to initialize the sandbox desired-state generation")
+                    }
                     // How long the create has to converge before the
                     // stuck-convergence sweep marks the sandbox degraded
                     // (STR-147), stamped with the insert for the reason the VM
@@ -648,7 +656,8 @@ struct SandboxController: RouteCollection {
         // desired-state sync carries the sandbox to its agent. Observed-state
         // reports — not this request — decide whether it converged.
         req.resourceMutation.dispatch(
-            .create, resourceType: Sandbox.self, resourceID: sandboxID, hypervisorId: nil,
+            .create, resourceType: Sandbox.self, resourceID: sandboxID,
+            targetGeneration: accepted.targetGeneration, hypervisorId: nil,
             strategy: .placement { @Sendable [app = req.application] db in
                 try await app.agentService.createSandbox(sandbox: sandbox, db: db)
             }, app: req.application)

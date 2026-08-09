@@ -811,7 +811,24 @@ public enum WireProtocol {
     /// `VMMemoryStats.freeBytes`,
     /// `SandboxExecStartedMessage.sandboxId`, `SandboxExecOutputMessage.stream`,
     /// `ConsoleSpec.console`/`.serial`) and the enum cases nothing produced.
-    /// Version 39: a per-instance metadata kill switch (STR-185).
+    ///
+    /// Version 39: a volume snapshot reports the footprint it has *now*
+    /// (STR-181). `ObservedSnapshotFacts` gains `currentSizeBytes: Int64?`.
+    /// Agent→control-plane only, no frame added or removed, and — like v38 — no
+    /// capability gate, because the control plane does not change what it sends
+    /// based on the answer.
+    ///
+    /// It is a second size field rather than a redefinition of `sizeBytes`, and
+    /// that is the whole point. `sizeBytes` is measured once, when the capture
+    /// happens; for a VM checkpoint and a sandbox snapshot that is the artifact's
+    /// final size, but a volume snapshot's overlay is stat'd immediately after
+    /// `qemu-img create`, so the recorded number is an empty qcow2's header and
+    /// stays there however far the volume diverges. Reusing the field would have
+    /// reinterpreted v38 snapshot observations as ~200 KB. A distinct optional
+    /// field keeps that reporting honest: nil means "no re-measurement reported".
+    /// Quota reservation remains the parent-sized admission bound either way.
+    ///
+    /// Version 39 also adds a per-instance metadata kill switch (STR-185).
     /// `InstanceMetadata` gains `serviceEnabled`, EC2's
     /// `MetadataOptions.HttpEndpoint` — the per-workload lever an operator
     /// hardening a single VM against SSRF needs.
@@ -830,17 +847,20 @@ public enum WireProtocol {
     ///
     /// v38 closed the historical skew window and removed every legacy dual
     /// path. v39 and v40 deliberately keep v38 as the floor for rolling
-    /// upgrades: both revisions add optional fields, and their behavior changes
-    /// are protected by `supportsMetadataOptOut` and
-    /// `supportsVMNetworkHotplug`. Create-time NIC arrays remain compatible
-    /// because pre-v40 agents already realize every `NetworkSpec` they receive.
+    /// upgrades. The snapshot measurement and v40 NIC identity/reporting fields
+    /// are optional and safely ignored by older decoders; the metadata kill
+    /// switch and post-create network hot-plug behavior are protected by
+    /// `supportsMetadataOptOut` and `supportsVMNetworkHotplug`. Create-time NIC
+    /// arrays remain compatible because pre-v40 agents already realize every
+    /// `NetworkSpec` they receive.
     ///
     /// Moving this floor is a deployment decision. An agent below it cannot
     /// connect, and the declarative self-update rides the sync it can no longer
-    /// receive. Once no v38 agents remain, the floor can move to 39 and this
-    /// these feature gates can be retired. If a broader skew window is ever
-    /// reintroduced, resurrect the pre-v38 gates from history rather than
-    /// re-deriving their silent-failure cases.
+    /// receive. Once no v38 agents remain, the floor can move to 39 and the
+    /// metadata gate can be retired; the network-hot-plug gate remains until
+    /// the floor reaches 40. If a broader skew window is ever reintroduced,
+    /// resurrect the pre-v38 gates from history rather than re-deriving their
+    /// silent-failure cases.
     public static let minimumSupportedVersion = 38
 
     /// The lowest protocol version that honours the per-instance metadata kill

@@ -218,9 +218,11 @@ Every decision lands in the decision log, and the **can-i / who-can** API
 Organization → optional nested **folders** (materialized
 path/depth) → projects (with environments). **Groups** — optionally
 SCIM-provisioned — grant access. **Resource quotas** (vCPU, memory,
-storage, VM count, sandbox count; optionally per-environment) attach at
-org, folder, or project level and are enforced on VM and sandbox
-create/delete; sandboxes draw from the same vCPU/memory pools as VMs.
+storage, VM count, sandbox count, and an optional volume count; optionally
+per-environment) attach at org, folder, or project level and are enforced on VM,
+sandbox and volume create/delete — including volume clone, resize and snapshot
+(STR-181). Sandboxes draw from the same vCPU/memory pools as VMs, and volumes
+from the same storage pool as VM disks.
 
 ## Observability
 

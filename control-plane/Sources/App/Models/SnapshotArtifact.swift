@@ -36,9 +36,8 @@ protocol SnapshotArtifactResource: ConvergingResource, FinalizableResource {
 
     var desiredStatus: DesiredSnapshotStatus { get set }
 
-    /// Settable, unlike `ConvergingResource`'s read-only view of the same
-    /// columns: the mutation helpers bump the generation and the observed-state
-    /// applier advances the observation, both through this protocol.
+    /// Settable so the shared SQL writer can refresh the database-assigned
+    /// generation and the observed-state applier can advance the observation.
     var generation: Int64 { get set }
     var observedGeneration: Int64 { get set }
 
@@ -106,11 +105,10 @@ extension SnapshotArtifactResource {
     /// Most families draw on no storage pool; the two that do override this.
     var storageQuotaScope: (projectID: UUID, environment: String)? { nil }
 
-    /// Records a new desired state and bumps the generation so the owning agent
-    /// treats it as newer than whatever it last applied.
+    /// Records a new desired state in memory. The owning mutation service
+    /// advances the generation in SQL before saving it.
     func setDesiredStatus(_ newDesired: DesiredSnapshotStatus) {
         desiredStatus = newDesired
-        generation += 1
     }
 
     /// Everything the desired state asks for exists on the agent.

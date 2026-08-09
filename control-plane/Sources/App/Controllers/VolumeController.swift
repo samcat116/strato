@@ -113,6 +113,10 @@ struct VolumeController: RouteCollection {
             requested: request.projectId,
             action: "create_volume", resourceKind: "volumes")
         let projectId = try project.requireID()
+        // Which of the project's environments the bytes are charged to
+        // (STR-181). Volumes have never carried one, which is the structural
+        // reason nothing counted them: a quota's scope predicate filters on it.
+        let environment = try project.resolveEnvironment(request.environment)
 
         // Validate format and volume type
         let format = try VolumeNaming.parseFormat(request.format)
@@ -169,6 +173,7 @@ struct VolumeController: RouteCollection {
             name: request.name,
             description: request.description ?? "",
             projectID: projectId,
+            environment: environment,
             size: sizeBytes,
             format: format,
             volumeType: volumeType,
@@ -195,20 +200,31 @@ struct VolumeController: RouteCollection {
         volume.extendConvergenceDeadline(
             by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
         volume.setDesiredStatus(.present)
+        volume.generation = 1
 
-        // The creator's explicit, revocable binding on the volume, in the same
-        // transaction as the row (issue #477).
-        try await req.db.transaction { db in
+        // The first visible desired state is generation 1. Reserve storage
+        // first, then commit the insert, creator binding, and attribution
+        // together. Create cannot use `ResourceMutation.accept`, because that
+        // service operates on a row that already exists.
+        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            try await QuotaEnforcementService.reserveVolume(
+                for: project, environment: environment, size: sizeBytes, on: db)
             try await volume.save(on: db)
+            let volumeID = try volume.requireID()
             try await RoleBindingService.grant(
                 principalType: .user,
-                principalID: user.id!,
+                principalID: userID,
                 role: .admin,
                 nodeType: .volume,
-                nodeID: volume.id!,
-                createdBy: user.id,
+                nodeID: volumeID,
+                createdBy: userID,
                 on: db
             )
+            let event = try await ResourceEvent.record(
+                .create, resourceKind: .volume, resourceID: volumeID,
+                actor: .user(userID), on: db)
+            return ResourceMutation.Accepted(
+                mutationID: try event.requireID(), targetGeneration: volume.generation)
         }
 
         let volumeId = try volume.requireID()
@@ -218,9 +234,10 @@ struct VolumeController: RouteCollection {
         // `DesiredStateAssembler` finds a volume by its `hypervisorId`, so an
         // unplaced one is in nobody's desired state. On throw, `dispatch`
         // degrades the volume with the reason.
-        let accepted = try await req.resourceMutation.accept(
-            .create, on: volume, actor: .user(userID),
-            dispatch: .placement { @Sendable db in
+        req.resourceMutation.dispatch(
+            .create, resourceType: Volume.self, resourceID: volumeId,
+            targetGeneration: accepted.targetGeneration, hypervisorId: nil,
+            strategy: .placement { @Sendable db in
                 let agents = await app.agentService.getAgentList()
                 guard
                     let agent = VolumeService.selectVolumeAgent(
@@ -239,7 +256,7 @@ struct VolumeController: RouteCollection {
                 ).create(on: db)
                 await app.agentService.syncDesiredState(agentId: agentId)
             },
-            on: req.db, app: app)
+            app: app)
 
         req.logger.info(
             "Volume creation requested",
@@ -407,6 +424,18 @@ struct VolumeController: RouteCollection {
             "Volume", in: volume.$project.id,
             sameProjectAs: "the VM", in: vm.$project.id)
 
+        // Environment-scoped quotas make the environment part of containment,
+        // not merely display metadata (STR-181). Letting a development volume
+        // attach to a production VM would keep charging the development quota
+        // while production consumed the bytes.
+        guard volume.environment == vm.environment else {
+            throw Abort(
+                .badRequest,
+                reason:
+                    "Volume belongs to environment '\(volume.environment)', but the VM belongs to '\(vm.environment)'. Volumes can only attach within the same environment."
+            )
+        }
+
         // IMPORTANT: Check that VM is QEMU type - volumes not supported for Firecracker
         guard vm.hypervisorType == .qemu else {
             throw Abort(
@@ -464,11 +493,44 @@ struct VolumeController: RouteCollection {
         let readonly = request.readonly ?? false
         let bootOrder = request.bootOrder
         let vmID = try vm.requireID()
+        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
+            throw Abort(.internalServerError, reason: "The volume's project no longer exists")
+        }
 
         let accepted = try await req.resourceMutation.accept(
             .attach, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable tx in
+            // A cloned or image-backed volume is materialized at the source's
+            // virtual size, which can exceed the size the caller requested.
+            // Wait until the owning agent has measured it, then reserve any
+            // excess before attachment gives a guest the chance to grow the
+            // sparse file. Raising the desired size in the same transaction
+            // also turns the agent's refused shrink into a convergent no-op.
+            if volume.$sourceImage.id != nil || volume.$sourceVolume.id != nil {
+                guard volume.observedSizeBytes != nil else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "Volume is still being materialized from its source. Wait for its size to be reported before attaching it."
+                    )
+                }
+            }
+            if let materializedSize = volume.observedSizeBytes, materializedSize > volume.size {
+                guard materializedSize <= WorkloadSizeLimits.maxDiskBytes else {
+                    throw Abort(
+                        .conflict,
+                        reason:
+                            "The materialized volume is larger than the maximum supported volume size."
+                    )
+                }
+                try await QuotaEnforcementService.reserveVolumeResize(
+                    for: project, environment: volume.environment,
+                    sizeDelta: materializedSize - volume.size,
+                    reason: "the materialized volume", on: tx)
+                volume.size = materializedSize
+            }
+
             // The desired attachment, and nothing else. There is no
             // `.attaching` status to set and revert: the agent reports what it
             // realized, and `conditions` is what a client watches.
@@ -596,15 +658,36 @@ struct VolumeController: RouteCollection {
 
         let previousSize = volume.size
         let userID = try user.requireID()
+        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
+            throw Abort(.internalServerError, reason: "The volume's project no longer exists")
+        }
+        let environment = volume.environment
         let accepted = try await req.resourceMutation.accept(
             .resize, on: volume, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
-        ) { @Sendable _ in
+        ) { @Sendable db in
+            // Re-check against the row under the lock, not the one the request
+            // read: `lockAndRefresh` adopts the committed size, so a resize that
+            // landed in between is visible here and this one may now be a
+            // shrink. The guard above cannot see that race.
+            guard newSizeBytes > volume.size else {
+                throw Abort(
+                    .conflict,
+                    reason:
+                        "The volume was resized to \(volume.sizeGB) GB while this request was in flight; a resize must grow it."
+                )
+            }
+            // Only the delta, and *before* the size write below, so the resync
+            // baseline still reflects the old size — the `reserveVMResize`
+            // contract (STR-181). `accept` runs this inside its transaction,
+            // after locking the row, so a rejection unwinds the whole mutation.
+            try await QuotaEnforcementService.reserveVolumeResize(
+                for: project, environment: environment,
+                sizeDelta: newSizeBytes - volume.size, on: db)
             // The size on the row is the *desired* size from here on. The agent
             // grows the disk and confirms by generation, which is what makes a
             // resize whose sync was dropped simply happen on the next one.
             volume.size = newSizeBytes
-            volume.bumpGeneration()
         }
 
         req.logger.info(
@@ -679,7 +762,6 @@ struct VolumeController: RouteCollection {
             // pair is only ever written by an agent's observed report.
             volume.iopsTotal = request.iopsTotal
             volume.bpsTotal = request.bpsTotal
-            volume.bumpGeneration()
         }
 
         req.logger.info(
@@ -743,6 +825,7 @@ struct VolumeController: RouteCollection {
             description: request.description ?? "",
             volumeID: try volume.requireID(),
             projectID: volume.$project.id,
+            environment: volume.environment,
             size: volume.size,
             agentId: agentId,
             expiresAt: try SnapshotRetention.expiry(requested: request.ttlSeconds),
@@ -751,9 +834,18 @@ struct VolumeController: RouteCollection {
         snapshot.extendConvergenceDeadline(
             by: OperationResourceKind.volumeSnapshot.completionBudgetSeconds(for: .create))
 
+        guard let project = try await Project.find(volume.$project.id, on: req.db) else {
+            throw Abort(.internalServerError, reason: "The volume's project no longer exists")
+        }
+
         // Creator binding on the snapshot, in the same transaction as the row
-        // (issue #477), alongside the attribution event.
+        // (issue #477), alongside the attribution event — behind the storage
+        // reservation, which admits against the parent volume's *whole* size
+        // (STR-181): an overlay grows toward it with no API call to refuse along
+        // the way, so the pool has to be able to absorb it fully grown.
         let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            try await QuotaEnforcementService.reserveVolumeSnapshot(
+                for: project, environment: volume.environment, size: volume.size, on: db)
             try await snapshot.save(on: db)
             try await RoleBindingService.grant(
                 principalType: .user,
@@ -823,6 +915,7 @@ struct VolumeController: RouteCollection {
             name: request.name,
             description: request.description ?? "Clone of \(sourceVolume.name)",
             projectID: sourceVolume.$project.id,
+            environment: sourceVolume.environment,
             size: sourceVolume.size,
             format: sourceVolume.format,
             volumeType: sourceVolume.volumeType,
@@ -835,20 +928,35 @@ struct VolumeController: RouteCollection {
         newVolume.extendConvergenceDeadline(
             by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
         newVolume.setDesiredStatus(.present)
+        newVolume.generation = 1
 
-        // Creator binding on the cloned volume, in the same transaction as
-        // the row (issue #477).
-        try await req.db.transaction { db in
+        let userID = try user.requireID()
+        // Same create-only transaction as the ordinary volume path: reserve
+        // the clone's full storage footprint first, then make generation 1,
+        // attribution, and creator access visible together.
+        guard let sourceProject = try await Project.find(sourceVolume.$project.id, on: req.db) else {
+            throw Abort(.internalServerError, reason: "The volume's project no longer exists")
+        }
+        let accepted = try await req.db.transaction { db -> ResourceMutation.Accepted in
+            try await QuotaEnforcementService.reserveVolume(
+                for: sourceProject, environment: sourceVolume.environment,
+                size: sourceVolume.size, on: db)
             try await newVolume.save(on: db)
+            let newVolumeID = try newVolume.requireID()
             try await RoleBindingService.grant(
                 principalType: .user,
-                principalID: user.id!,
+                principalID: userID,
                 role: .admin,
                 nodeType: .volume,
-                nodeID: newVolume.id!,
-                createdBy: user.id,
+                nodeID: newVolumeID,
+                createdBy: userID,
                 on: db
             )
+            let event = try await ResourceEvent.record(
+                .create, resourceKind: .volume, resourceID: newVolumeID,
+                actor: .user(userID), on: db)
+            return ResourceMutation.Accepted(
+                mutationID: try event.requireID(), targetGeneration: newVolume.generation)
         }
 
         // The clone is a create *strategy* on the new volume's desired entry,
@@ -856,17 +964,17 @@ struct VolumeController: RouteCollection {
         // therefore never marked busy and never has to be restored afterwards —
         // it is simply read, by an agent that already holds it.
         let newVolumeID = try newVolume.requireID()
-        let userID = try user.requireID()
         let app = req.application
-        let accepted = try await req.resourceMutation.accept(
-            .create, on: newVolume, actor: .user(userID),
-            dispatch: .placement { @Sendable db in
+        req.resourceMutation.dispatch(
+            .create, resourceType: Volume.self, resourceID: newVolumeID,
+            targetGeneration: accepted.targetGeneration, hypervisorId: sourceAgentId,
+            strategy: .placement { @Sendable db in
                 try await VolumeReplica(
                     volumeID: newVolumeID, agentId: sourceAgentId, state: .provisioning
                 ).create(on: db)
                 await app.agentService.syncDesiredState(agentId: sourceAgentId)
             },
-            on: req.db, app: app)
+            app: app)
 
         req.logger.info(
             "Volume clone requested",

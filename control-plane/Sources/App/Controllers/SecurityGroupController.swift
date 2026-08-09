@@ -309,12 +309,18 @@ struct SecurityGroupController: RouteCollection {
     /// generation guard sees "already applied"). `generation = generation + 1`
     /// makes the row's lock serialize the increments instead.
     private static func bumpGeneration(of groupId: UUID, on db: Database) async throws {
-        guard let sql = db as? any SQLDatabase else {
-            throw Abort(.internalServerError, reason: "Generation bump requires an SQL database")
+        switch try await DesiredStateGenerationWriter.advance(
+            schema: SecurityGroup.schema, id: groupId, on: db)
+        {
+        case .applied:
+            return
+        case .missing:
+            throw Abort(.notFound, reason: "Security group no longer exists")
+        case .superseded:
+            // No expected generation was supplied, so an existing row always
+            // advances. Keep the impossible case loud.
+            throw Abort(.internalServerError, reason: "Security-group generation did not advance")
         }
-        try await sql.raw(
-            "UPDATE security_groups SET generation = generation + 1 WHERE id = \(bind: groupId)"
-        ).run()
     }
 
     // MARK: - Attach / detach

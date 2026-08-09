@@ -172,7 +172,11 @@ struct VMController: RouteCollection {
                         hostname, forVM: vmID, in: zones, on: db)
                 }
 
-                vm.bumpGeneration()
+                // `ResourceMutation.accept` holds the VM row lock and advances
+                // the generation atomically after this closure. Its next value
+                // is therefore stable here and is the generation at which the
+                // agent must report this interface as applied.
+                let targetGeneration = vm.generation + 1
                 let interface = VMNetworkInterface(
                     vmID: vmID,
                     logicalNetworkID: networkID,
@@ -180,7 +184,7 @@ struct VMController: RouteCollection {
                     mtu: request.mtu,
                     deviceName: "net\(orderIndex)",
                     orderIndex: orderIndex)
-                interface.attachGeneration = vm.generation
+                interface.attachGeneration = targetGeneration
                 try await interface.save(on: db)
                 let interfaceID = try interface.requireID()
 
@@ -285,11 +289,14 @@ struct VMController: RouteCollection {
                 try await Self.requireDHCPNetworkForHotplug(
                     interface.$logicalNetwork.get(on: db))
             }
-            vm.bumpGeneration()
+            // The row is locked by `ResourceMutation.accept`; its atomic
+            // generation advance immediately after this closure will produce
+            // this exact value.
+            let targetGeneration = vm.generation + 1
             if kind == .detach {
-                interface.detachGeneration = vm.generation
+                interface.detachGeneration = targetGeneration
             } else {
-                interface.attachGeneration = vm.generation
+                interface.attachGeneration = targetGeneration
             }
             try await interface.save(on: db)
         }
@@ -727,9 +734,9 @@ struct VMController: RouteCollection {
                 // A retried attempt reuses this model after its insert was
                 // rolled back: Fluent recorded the generated id and marked the
                 // model as existing, so saving again would UPDATE a row that no
-                // longer exists (and the failed attempt's setDesiredStatus
-                // already bumped the generation). Reset both so every attempt
-                // starts as a fresh insert.
+                // longer exists (and the failed attempt's SQL writer refreshed
+                // its in-memory generation). Reset both so every attempt starts
+                // as a fresh insert.
                 vm.id = nil
                 vm.$id.exists = false
                 vm.generation = initialGeneration
@@ -808,6 +815,14 @@ struct VMController: RouteCollection {
                     // to generation 1 distinguishes "never confirmed by any agent"
                     // (observed_generation 0) from "confirmed" (issue #260).
                     vm.setDesiredStatus(.shutdown)
+                    guard
+                        case .applied = try await vm.advanceDesiredStateGeneration(
+                            expectedGeneration: 0, on: db)
+                    else {
+                        throw Abort(
+                            .internalServerError,
+                            reason: "Failed to initialize the VM desired-state generation")
+                    }
 
                     // Update VM with generated paths
                     try await vm.update(on: db)
@@ -985,7 +1000,8 @@ struct VMController: RouteCollection {
         // VM (spec assembled from the database) to its agent. Observed-state
         // reports — not this request — decide whether it converged.
         req.resourceMutation.dispatch(
-            .create, resourceType: VM.self, resourceID: vmID, hypervisorId: nil,
+            .create, resourceType: VM.self, resourceID: vmID,
+            targetGeneration: accepted.targetGeneration, hypervisorId: nil,
             strategy: .placement { @Sendable [app = req.application] db in
                 try await app.agentService.createVM(vm: vm, db: db, image: image)
             }, app: req.application)
@@ -1187,7 +1203,15 @@ struct VMController: RouteCollection {
                 existingVM.maxMemory = max(existingVM.maxMemory, newMemory)
                 // The stopped VM still has a desired-state entry the agent
                 // syncs on; bump so the new spec isn't dropped as stale.
-                existingVM.bumpGeneration()
+                let expectedGeneration = existingVM.generation
+                guard
+                    case .applied = try await existingVM.advanceDesiredStateGeneration(
+                        expectedGeneration: expectedGeneration, on: db)
+                else {
+                    throw Abort(
+                        .internalServerError,
+                        reason: "Failed to advance the locked VM generation")
+                }
                 try await existingVM.save(on: db)
                 return metadataEnabledChanged
             }
@@ -1251,7 +1275,6 @@ struct VMController: RouteCollection {
             // generation it builds on came from `accept`'s refresh, so the
             // loser of a race lands strictly above the winner rather than
             // reusing its number.
-            existingVM.bumpGeneration()
         }
         // The resize's own dispatch reaches this VM's agent and its site
         // controller — which already covers a kill-switch edge riding along,

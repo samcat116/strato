@@ -256,7 +256,9 @@ observedGeneration / phase / degraded. Nothing stores it: `converged` is
 failedGeneration ≠ generation`, and `phase`/`degraded` read the
 `convergence_phase` / `last_error` / `failed_generation` columns that
 `ObservedStateApplier` mirrors from each report (clearing them when an attempt
-finally succeeds). A client refetches the resource: done is `converged` at or
+finally succeeds). VM and Sandbox also persist `last_error_at`, stamped only
+when the error/generation pair changes and exposed as
+`degraded.lastErrorAt`. A client refetches the resource: done is `converged` at or
 past its `targetGeneration`; failed is a `degraded` whose `sinceGeneration`
 equals it.
 
@@ -290,6 +292,15 @@ replay on every sync with the user told nothing. That is also why
 `ObservedStateApplier` defers its own row save into those calls rather than
 committing the agent's mirrored `failed_generation` first.
 
+That mutation verdict path is gated by `convergence_deadline`. A current-
+generation failure with a deadline retains the existing failure semantics:
+realign unachieved desired state and emit `operation.failed`. Without a
+deadline it is a steady-state repair failure, so the applier persists the
+observed status, error and timestamp but leaves desired status and generation
+unchanged and emits no mutation outcome. The agent can therefore recover at
+the same generation instead of having the control plane silently withdraw the
+intent it was repairing (STR-123).
+
 **The stuck-convergence sweep** is the backstop. Every accepted mutation stamps
 `convergence_deadline = max(existing, now + budget(kind))` — a *deadline*
 rather than a `lastMutationKind`, so a reboot issued during a slow create can
@@ -299,6 +310,16 @@ realigned with observed reality. Unlike the operation sweep it replaced, it
 runs **lock-free on every replica**: the write is idempotent and convergent,
 and clearing the deadline is a conditional `UPDATE` that exactly one pass wins,
 so the completion webhook still fires once.
+
+**The steady-state divergence sweep** is the no-mutation counterpart
+(STR-123). Every heartbeat-monitor tick counts VMs and sandboxes with no
+deadline, a non-absent desired state, an acknowledged generation, and an
+unsatisfied observed status lasting at least 15 minutes. It records
+`strato_diverged_workloads{kind="vm|sandbox"}` including zeros. A nullable
+`divergence_detected_at` marker is claimed with a conditional PostgreSQL
+`UPDATE`, so every replica may sweep while only one logs the warning for an
+episode. A successful convergence or a new observed-status episode clears the
+marker. The sweep does not emit a webhook or bump the generation.
 
 **Volumes run on the same flow** (STR-148, ADR 0001 stage 5). `Volume` is a
 `ConvergingResource` and a `FinalizableResource` like `VM` and `Sandbox`, with
@@ -317,7 +338,7 @@ bytes and the attachment. And `resolveForStuckOperation` reverts a failed
 *attachment* but deliberately not a failed *size*: an unachieved attach left in
 place replays destructively on every later sync, while the control plane does
 not know what size the agent actually realized, and a desired size larger than
-reality is harmless to re-attempt under the agent's own attempt cap.
+reality is harmless to re-attempt under the agent's own retry backoff.
 
 **Snapshot artifacts run on the same flow** (STR-150, ADR 0001 stage 8). All
 three families — `VolumeSnapshot`, `VMSnapshot`, `SandboxSnapshot` — are
@@ -603,8 +624,8 @@ live Valkey presence key exists), pub/sub subscription re-arming, the
 periodic sync to this replica's agents (every other tick, revision-gated to
 agents whose desired state changed since their last successful sync; every
 20th tick — ~10 minutes — forces an unconditional full-fleet resend, the
-backstop for a lost doorbell), and five sweeps — stuck convergence (STR-147),
-stranded volume attachments (STR-129), orphaned terminating resources
+backstop for a lost doorbell), and six sweeps — stuck convergence (STR-147),
+steady-state divergence (STR-123), stranded volume attachments (STR-129), orphaned terminating resources
 (STR-144), expired sandboxes (TTL + retention reaping), and agent auto-update
 rollout.
 
@@ -619,6 +640,10 @@ and the one non-idempotent effect — the completion webhook — is claimed by a
 conditional `UPDATE` on the convergence deadline. That is the ADR 0001
 multi-replica argument in miniature: coordination demoted from a correctness
 dependency to a latency optimization.
+
+The steady-state divergence sweep is also replica-local and lock-free. Its
+level-triggered count is harmless to repeat, and its only edge-triggered
+effect — the warning — is claimed through `divergence_detected_at` on the row.
 
 Fire-and-forget work must go through `app.backgroundTasks.spawn { ... }`
 (`Services/BackgroundTaskRegistry.swift`) — shutdown drains the registry so
@@ -635,9 +660,10 @@ what makes the test harness safe.
   `revertDesiredToObserved()` (called when a mutation fails so unachieved
   intent doesn't replay). Alongside it they mirror the agent's reported
   convergence progress — `convergencePhase`, `lastError`, `failedGeneration`
-  — which only `ObservedStateApplier` writes and only the `conditions`
-  projection reads, plus `convergenceDeadline`, which only the mutation path
-  writes and only the stuck-convergence sweep reads.
+  and `lastErrorAt` — which the report and mutation-failure paths write and the
+  `conditions` projection reads. `convergenceDeadline` distinguishes an
+  outstanding mutation from steady-state repair, and
+  `divergenceDetectedAt` claims sustained-divergence warning episodes.
 - `ResourceEvent` is foreign-key-free on *every* id it carries, since the audit
   row has to outlive both the resource it names and the principal that acted.
   It inherited the pattern from the retired `resource_operations` table, whose

@@ -353,7 +353,7 @@ struct CreateNetworkRequest: Content, ValidatedRequestBody {
     }
 }
 
-struct UpdateNetworkRequest: Content, ValidatedRequestBody {
+struct UpdateNetworkRequest: Content, ValidatedRequestBody, Sendable {
     /// Rejected while any VM interface references the network.
     var name: String?
     /// Rejected while any VM interface references the network.

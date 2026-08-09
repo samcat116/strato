@@ -392,7 +392,7 @@ final class VMInstanceIdentityTests {
                 nodeType: .project, nodeID: try project.requireID(), createdBy: user.id,
                 on: app.db)
 
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             let reaped = try await VM.reap(vm, on: app.db, app: app)
             #expect(reaped)

@@ -61,7 +61,7 @@ struct VolumeAttachmentTests {
         let volume = Volume(
             name: name,
             description: "",
-            projectID: try project.requireID(),
+            projectID: try project.requireID(), environment: "development",
             size: 10 * 1024 * 1024 * 1024,
             status: vm == nil ? .available : .attached,
             createdByID: try user.requireID())
@@ -110,7 +110,7 @@ struct VolumeAttachmentTests {
             // The unplaced delete path: nothing has to confirm a teardown that
             // never reached an agent, so the first clear reaps the row.
             vm.finalizers = []
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             let outcome = try await ResourceFinalizerService.clear(
                 .agentAbsent, from: vm, on: app.db, app: app)
@@ -144,7 +144,7 @@ struct VolumeAttachmentTests {
                 named: "reusable-volume", attachedTo: vm, on: app, user: admin, project: project)
 
             vm.finalizers = []
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
 
@@ -239,7 +239,10 @@ struct VolumeAttachmentTests {
             let reloaded = try #require(try await Volume.find(second.id, on: app.db))
             #expect(reloaded.deviceName == "disk1")
             #expect(reloaded.$vm.id == vm.id)
-            #expect(reloaded.generation > generationBefore)
+            // `claim` is deliberately state-only. The HTTP path wraps it in
+            // `ResourceMutation.accept`, which owns the single generation
+            // advance after the attachment mutation succeeds.
+            #expect(reloaded.generation == generationBefore)
         }
     }
 
@@ -304,7 +307,7 @@ struct VolumeAttachmentTests {
         try await withAttachmentApp { app, _, admin, project, vm, _ in
             let volume = Volume(
                 name: "nameless-attachment", description: "",
-                projectID: try project.requireID(), size: 1 << 30, status: .attached,
+                projectID: try project.requireID(), environment: "development", size: 1 << 30, status: .attached,
                 createdByID: try admin.requireID())
             volume.$vm.id = try vm.requireID()
 

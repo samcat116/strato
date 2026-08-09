@@ -38,6 +38,49 @@ struct ObservedStateApplier {
         ]
     }
 
+    /// Revalidates one row selected by the report's bulk prefetch before the
+    /// report can write it. The bulk query is only an index of candidates; the
+    /// row lock and refresh establish the authoritative desired state and
+    /// placement at the moment this entry is applied.
+    private func withLockedCurrent<R: ConvergingResource>(
+        _ resource: R,
+        reportedBy agentId: String,
+        on db: any Database,
+        applying body: @escaping @Sendable (R, any Database) async throws -> Void
+    ) async throws {
+        try await db.transaction { tx in
+            guard try await resource.lockAndRefresh(on: tx) else { return }
+            let resourceID = try resource.requireID()
+            guard resource.hypervisorId == agentId else {
+                app.logger.debug(
+                    "Ignoring an observed-state entry after the resource moved to another agent",
+                    metadata: [
+                        "resourceKind": .string(R.operationResourceKind.rawValue),
+                        "resourceId": .string(resourceID.uuidString),
+                        "reportingAgentId": .string(agentId),
+                        "currentAgentId": .string(resource.hypervisorId ?? "unplaced"),
+                    ])
+                return
+            }
+            try await body(resource, tx)
+        }
+    }
+
+    private func logSupersededFailureReport<R: ConvergingResource>(
+        _ resource: R, reportedGeneration: Int64?
+    ) throws {
+        guard let reportedGeneration, reportedGeneration < resource.generation else { return }
+        let resourceID = try resource.requireID()
+        app.logger.debug(
+            "Observed failure belongs to a superseded desired-state generation",
+            metadata: [
+                "resourceKind": .string(R.operationResourceKind.rawValue),
+                "resourceId": .string(resourceID.uuidString),
+                "reportedGeneration": .stringConvertible(reportedGeneration),
+                "currentGeneration": .stringConvertible(resource.generation),
+            ])
+    }
+
     /// Apply one report, returning what the caller should do about the
     /// workloads the agent holds that no sync accounted for.
     @discardableResult
@@ -148,24 +191,33 @@ struct ObservedStateApplier {
         for vm in dbVMs {
             guard let vmID = vm.id else { continue }
             if let observed = reported[vmID] {
-                try await applyObservedVMState(
-                    vm: vm,
-                    observed: observed,
-                    interfaces: interfacesByVMID[vmID] ?? [],
-                    on: db
-                )
+                let interfaces = interfacesByVMID[vmID] ?? []
+                try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
+                    try await applyObservedVMState(
+                        vm: vm, observed: observed, interfaces: interfaces, on: tx)
+                }
             } else {
-                try await handleReportedAbsence(vm: vm, agentId: report.agentId, on: db)
+                try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
+                    try await handleReportedAbsence(
+                        vm: vm, agentId: report.agentId, on: tx)
+                }
             }
         }
 
         for sandbox in dbSandboxes {
             guard let sandboxID = sandbox.id else { continue }
             if let observed = reportedSandboxes[sandboxID] {
-                try await applyObservedSandboxState(sandbox: sandbox, observed: observed, on: db)
+                try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
+                    sandbox, tx in
+                    try await applyObservedSandboxState(
+                        sandbox: sandbox, observed: observed, on: tx)
+                }
             } else {
-                try await handleReportedSandboxAbsence(
-                    sandbox: sandbox, agentId: report.agentId, on: db)
+                try await withLockedCurrent(sandbox, reportedBy: report.agentId, on: db) {
+                    sandbox, tx in
+                    try await handleReportedSandboxAbsence(
+                        sandbox: sandbox, agentId: report.agentId, on: tx)
+                }
             }
         }
 
@@ -187,11 +239,17 @@ struct ObservedStateApplier {
             for volume in dbVolumes {
                 guard let volumeID = volume.id else { continue }
                 if let observed = reportedVolumes[volumeID] {
-                    try await applyObservedVolumeState(
-                        volume: volume, observed: observed, agentId: report.agentId, on: db)
+                    try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
+                        volume, tx in
+                        try await applyObservedVolumeState(
+                            volume: volume, observed: observed, agentId: report.agentId, on: tx)
+                    }
                 } else {
-                    try await handleReportedVolumeAbsence(
-                        volume: volume, agentId: report.agentId, on: db)
+                    try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
+                        volume, tx in
+                        try await handleReportedVolumeAbsence(
+                            volume: volume, agentId: report.agentId, on: tx)
+                    }
                 }
             }
         }
@@ -527,6 +585,7 @@ struct ObservedStateApplier {
         on db: Database
     ) async throws {
         let vmID = try vm.requireID()
+        try logSupersededFailureReport(vm, reportedGeneration: observed.failedGeneration)
 
         // Where the VM stood before this report. Every convergence outcome
         // below is a *transition* out of this state, which is what makes the
@@ -571,7 +630,7 @@ struct ObservedStateApplier {
         // the API can project it as the VM's `conditions` block. Recorded on
         // both the converging and settled paths — the phase only exists on the
         // former, and the error pair has to be *cleared* on the latter.
-        var changed = vm.recordConvergence(
+        var changed = vm.recordTimestampedConvergence(
             phase: observed.convergencePhase,
             lastError: observed.lastError,
             failedGeneration: observed.failedGeneration
@@ -636,6 +695,25 @@ struct ObservedStateApplier {
                 Telemetry.vmDriftDetected()
             }
         }
+        if vm.desiredSatisfied, vm.divergenceDetectedAt != nil {
+            vm.divergenceDetectedAt = nil
+            changed = true
+        }
+
+        let failedCurrentGeneration =
+            observed.lastError != nil && observed.failedGeneration == vm.generation
+        // No deadline means no user mutation is outstanding. This is a
+        // steady-state repair failure: persist exactly what the agent observed,
+        // but retain the desired state and generation so the level-triggered
+        // loop can heal it later. In particular, do not synthesize a stale
+        // mutation outcome from whichever resource event happens to be latest.
+        if failedCurrentGeneration, vm.convergenceDeadline == nil {
+            if changed {
+                try await vm.save(on: db)
+            }
+            await emitVMStatusTransition(statusTransition, vm: vm, on: db)
+            return
+        }
         // Deletions are settled by absence from the report, never by a status.
         //
         // The save is deferred to the transition below where there is one:
@@ -659,7 +737,7 @@ struct ObservedStateApplier {
             // The agent converged to the current generation and the observed
             // status satisfies the desired one: everything outstanding reached
             // its goal.
-            try await ResourceConvergence.recordSuccess(vm, on: db)
+            _ = try await ResourceConvergence.recordSuccess(vm, on: db)
             await emitVMStatusTransition(statusTransition, vm: vm, on: db)
         } else if let lastError = observed.lastError, observed.failedGeneration == vm.generation {
             // The agent tried to converge to *this* generation and failed —
@@ -693,17 +771,17 @@ struct ObservedStateApplier {
                 Telemetry.vmEnteredError(reason: "convergence_failed")
             }
 
-            let recorded = try await ResourceConvergence.recordFailure(
+            let outcome = try await ResourceConvergence.recordFailure(
                 vm, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
-            if !recorded, changed {
+            if outcome == .alreadyRecorded, changed {
                 // A repeat of an already-recorded failure: nothing was
                 // persisted by the call above, so this report's own changes
                 // (observed generation, status) still need writing.
                 try await vm.save(on: db)
             }
             await emitVMStatusTransition(statusTransition, vm: vm, on: db)
-            if recorded, enteredError {
+            if outcome == .recorded, enteredError {
                 await WebhookEvents.emitVMStateChanged(
                     vm: vm, previous: previousStatus, current: .error, on: db, logger: app.logger)
             }
@@ -896,7 +974,7 @@ struct ObservedStateApplier {
         // often because the agent restarted and lost its in-memory view. Drop
         // whatever it last said, rather than leave `conditions` claiming a
         // download that nothing is doing (STR-142).
-        let convergenceCleared = vm.recordConvergence(
+        let convergenceCleared = vm.recordTimestampedConvergence(
             phase: nil, lastError: nil, failedGeneration: nil)
 
         // Same established-state rule as the heartbeat reconciliation: only
@@ -934,12 +1012,13 @@ struct ObservedStateApplier {
         on db: Database
     ) async throws {
         let sandboxID = try sandbox.requireID()
+        try logSupersededFailureReport(sandbox, reportedGeneration: observed.failedGeneration)
         let wasConverged = sandbox.isConverged
         let failedBefore = sandbox.failedGeneration
 
         // Convergence progress for the `conditions` block (STR-142) — same
         // contract as VMs, recorded on both paths for the same reasons.
-        var changed = sandbox.recordConvergence(
+        var changed = sandbox.recordTimestampedConvergence(
             phase: observed.convergencePhase,
             lastError: observed.lastError,
             failedGeneration: observed.failedGeneration
@@ -987,6 +1066,22 @@ struct ObservedStateApplier {
             sandbox.exitCode = observed.exitCode
             changed = true
         }
+        if sandbox.desiredSatisfied, sandbox.divergenceDetectedAt != nil {
+            sandbox.divergenceDetectedAt = nil
+            changed = true
+        }
+
+        let failedCurrentGeneration =
+            observed.lastError != nil && observed.failedGeneration == sandbox.generation
+        // A failure with no deadline belongs to steady-state repair, not to a
+        // pending mutation. Keep intent and generation intact and emit no
+        // operation outcome; a later same-generation retry can still recover.
+        if failedCurrentGeneration, sandbox.convergenceDeadline == nil {
+            if changed {
+                try await sandbox.save(on: db)
+            }
+            return
+        }
         // Deletions are settled by absence from the report, never by a status.
         // The save is deferred to the transition where there is one, for the
         // reason the VM path defers it.
@@ -1002,7 +1097,7 @@ struct ObservedStateApplier {
         }
 
         if !wasConverged, sandbox.isConverged {
-            try await ResourceConvergence.recordSuccess(sandbox, on: db)
+            _ = try await ResourceConvergence.recordSuccess(sandbox, on: db)
         } else if let lastError = observed.lastError, observed.failedGeneration == sandbox.generation {
             // The agent tried to converge to *this* generation and failed —
             // report the real reason instead of waiting out the convergence
@@ -1015,10 +1110,10 @@ struct ObservedStateApplier {
             if failedBefore != sandbox.generation, observed.status == .unknown {
                 sandbox.setStatus(.error)
             }
-            let recorded = try await ResourceConvergence.recordFailure(
+            let outcome = try await ResourceConvergence.recordFailure(
                 sandbox, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
-            if !recorded, changed {
+            if outcome == .alreadyRecorded, changed {
                 try await sandbox.save(on: db)
             }
         }
@@ -1058,7 +1153,7 @@ struct ObservedStateApplier {
 
         // Nothing to report means no progress to report — same rationale as
         // the VM path (STR-142).
-        let convergenceCleared = sandbox.recordConvergence(
+        let convergenceCleared = sandbox.recordTimestampedConvergence(
             phase: nil, lastError: nil, failedGeneration: nil)
 
         // Only escalate established sandboxes: a never-confirmed row
@@ -1097,6 +1192,7 @@ struct ObservedStateApplier {
         on db: Database
     ) async throws {
         let volumeID = try volume.requireID()
+        try logSupersededFailureReport(volume, reportedGeneration: observed.failedGeneration)
         // Captured before anything mutates, for exactly the reasons the VM
         // path documents: `recordConvergence` mirrors the agent's own
         // `failedGeneration` onto the model and would otherwise satisfy the
@@ -1226,16 +1322,16 @@ struct ObservedStateApplier {
         }
 
         if !wasConverged, volume.isConverged {
-            try await ResourceConvergence.recordSuccess(volume, on: db)
+            _ = try await ResourceConvergence.recordSuccess(volume, on: db)
         } else if let lastError = observed.lastError, observed.failedGeneration == volume.generation {
             let mutation =
                 try await ResourceEvent.latest(
                     .requested, resourceKind: .volume, resourceID: volumeID, on: db
                 )?.mutation ?? .create
-            let recorded = try await ResourceConvergence.recordFailure(
+            let outcome = try await ResourceConvergence.recordFailure(
                 volume, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
-            if !recorded, changed {
+            if outcome == .alreadyRecorded, changed {
                 try await volume.save(on: db)
             }
         }
@@ -1279,9 +1375,15 @@ struct ObservedStateApplier {
                 // would apply one family's facts to another's row, so it is
                 // checked rather than assumed.
                 guard observed.kind == A.artifactKind else { continue }
-                try await applyObservedSnapshotState(artifact: artifact, observed: observed, on: db)
+                try await withLockedCurrent(artifact, reportedBy: agentId, on: db) { artifact, tx in
+                    try await applyObservedSnapshotState(
+                        artifact: artifact, observed: observed, on: tx)
+                }
             } else {
-                try await handleReportedSnapshotAbsence(artifact: artifact, agentId: agentId, on: db)
+                try await withLockedCurrent(artifact, reportedBy: agentId, on: db) { artifact, tx in
+                    try await handleReportedSnapshotAbsence(
+                        artifact: artifact, agentId: agentId, on: tx)
+                }
             }
         }
     }
@@ -1294,6 +1396,7 @@ struct ObservedStateApplier {
         on db: Database
     ) async throws {
         let artifactID = try artifact.requireID()
+        try logSupersededFailureReport(artifact, reportedGeneration: observed.failedGeneration)
         // Captured before anything mutates, for the reasons the VM path
         // documents: `recordConvergence` mirrors the agent's own
         // `failedGeneration` onto the model and would otherwise satisfy the
@@ -1356,16 +1459,16 @@ struct ObservedStateApplier {
         }
 
         if !wasConverged, artifact.isConverged {
-            try await ResourceConvergence.recordSuccess(artifact, on: db)
+            _ = try await ResourceConvergence.recordSuccess(artifact, on: db)
         } else if let lastError = observed.lastError, observed.failedGeneration == artifact.generation {
             let mutation =
                 try await ResourceEvent.latest(
                     .requested, resourceKind: A.operationResourceKind, resourceID: artifactID, on: db
                 )?.mutation ?? .create
-            let recorded = try await ResourceConvergence.recordFailure(
+            let outcome = try await ResourceConvergence.recordFailure(
                 artifact, mutation: mutation, reason: lastError,
                 telemetryReason: "convergence_failed", alreadyRecordedAt: failedBefore, on: db)
-            if !recorded, changed {
+            if outcome == .alreadyRecorded, changed {
                 try await artifact.save(on: db)
             }
         }

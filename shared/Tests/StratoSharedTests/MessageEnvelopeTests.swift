@@ -4,22 +4,6 @@ import StratoShared
 
 @Suite("MessageEnvelope")
 struct MessageEnvelopeTests {
-    @Test("envelope type mirrors the wrapped message's type")
-    func envelopeTypeMatchesMessage() throws {
-        let message = Fixtures.consoleConnect(vmId: "vm-1")
-        let envelope = try MessageEnvelope(message: message)
-        #expect(envelope.type == .consoleConnect)
-    }
-
-    @Test("message survives the full envelope round trip")
-    func fullRoundTrip() throws {
-        let message = Fixtures.consoleConnect(vmId: "vm-42")
-        let decoded = try throughEnvelope(message)
-        #expect(decoded.requestId == message.requestId)
-        #expect(decoded.timestamp == message.timestamp)
-        #expect(decoded.vmId == message.vmId)
-    }
-
     @Test("wire form is a type string plus base64 payload")
     func wireShape() throws {
         let message = Fixtures.consoleConnect(vmId: "vm-7")

@@ -13,7 +13,7 @@ import StratoShared
 // stays free of hypervisor SDKs so the whole engine is unit-testable.
 //
 // Issue #417 generalized the engine over `WorkloadKind`: the diff, generation
-// guard, attempt cap, and failure classification are shared between VMs and
+// guard, retry policy, and failure classification are shared between VMs and
 // sandboxes (deliberately not forked — two copies would drift); only the step
 // vocabulary and the actuator routing differ per kind.
 //
@@ -385,7 +385,7 @@ public struct ReconcileWorkItem: Sendable {
 
     /// Whether this item is a confirmed teardown of a workload with no
     /// control-plane row. These are the only items the blast-radius guard
-    /// counts, and the only ones exempt from the attempt cap.
+    /// counts, and the only ones exempt from retry suppression and backoff.
     public var isTombstone: Bool {
         if case .tombstone = target { return true }
         return false
@@ -641,7 +641,7 @@ public protocol ReconcileActuator: Sendable {
 public enum VolumeConvergenceError: ClassifiableError, LocalizedError, Sendable {
     /// Something the agent cannot do however many times it is asked: a shrink,
     /// an unknown format, a host with no storage backend. Permanent, so the
-    /// attempt cap short-circuits and the control plane degrades the volume
+    /// retry policy suppresses it and the control plane degrades the volume
     /// with the reason instead of waiting out a completion budget.
     case unsupported(String)
     /// Something this volume depends on has not converged yet — its clone
@@ -678,7 +678,7 @@ public enum SnapshotConvergenceError: ClassifiableError, LocalizedError, Sendabl
     /// Something this host cannot do however many times it is asked: capture a
     /// volume snapshot of an attached volume, export a family that has no
     /// off-node representation, run a backend it does not have. Permanent, so
-    /// the attempt cap short-circuits and the control plane degrades the
+    /// the retry policy suppresses it and the control plane degrades the
     /// artifact with the reason instead of waiting out a completion budget.
     case unsupported(String)
     /// The artifact's *parent* has not converged yet — the volume or VM being
@@ -902,12 +902,17 @@ struct FamilyScopedSnapshot<Family: SnapshotArtifactFamily>: ReconcilableDesired
 // MARK: - Reconciler
 
 public actor Reconciler {
-    /// Attempts per (workload, generation) before the reconciler stops
-    /// re-driving a failing convergence. A new generation resets the count, so
-    /// operator action (retry, spec fix) always re-arms the loop; without a
-    /// cap, a permanently failing create (e.g. bad image) would re-run on
-    /// every periodic sync forever.
-    public static let maxAttemptsPerGeneration = 3
+    /// Backoff after each transient failure at one generation. Once the fourth
+    /// attempt fails, the reconciler keeps trying hourly until the workload
+    /// converges or a newer generation replaces it.
+    static func transientRetryDelay(afterAttempt attempt: Int) -> TimeInterval {
+        switch attempt {
+        case ...1: 60
+        case 2: 5 * 60
+        case 3: 15 * 60
+        default: 60 * 60
+        }
+    }
 
     /// Identity of one workload across the reconciler's bookkeeping: ids only
     /// collide across kinds by UUID accident, but the kind is what routes
@@ -932,6 +937,11 @@ public actor Reconciler {
         var generation: Int64
         var attempts: Int
         var lastError: String
+        var classification: FailureClassification
+        var retryNotBefore: Date?
+        /// Whether the warning and process-local counter for a terminal
+        /// permanent failure have already been emitted for this generation.
+        var terminalSuppressionReported = false
         /// How many times a `blocked` item has now re-reported the same reason.
         ///
         /// Blocked items burn no attempt, so `attempts` cannot say how long one
@@ -949,6 +959,8 @@ public actor Reconciler {
     /// What this host's metadata service serves, projected from each sync's
     /// `DesiredVMState.metadata` (STR-52).
     private let metadataStore: MetadataStore
+    /// Injectable wall clock for deterministic backoff tests.
+    private let now: @Sendable () -> Date
 
     /// Last generation fully applied per workload. Rejects older syncs (the
     /// generation guard) and feeds `observed_generation` in reports.
@@ -961,6 +973,9 @@ public actor Reconciler {
     /// `convergencePhase` in observed reports.
     private var currentPhase: [WorkloadRef: String] = [:]
     private var failures: [WorkloadRef: ConvergenceFailure] = [:]
+    /// Number of permanent failures that have suppressed their first retry.
+    /// Process-local by design; it resets when the agent restarts.
+    public private(set) var retryCapSuppressions = 0
     /// Workloads this host holds that the last sync neither listed nor
     /// tombstoned, re-derived wholesale on every sync and reported to the
     /// control plane until it decides what they are.
@@ -979,13 +994,15 @@ public actor Reconciler {
         queue: SerialTaskQueue,
         logger: Logger,
         teardownGuard: TeardownGuard = TeardownGuard(),
-        metadataStore: MetadataStore
+        metadataStore: MetadataStore,
+        now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.actuator = actuator
         self.queue = queue
         self.logger = logger
         self.teardownGuard = teardownGuard
         self.metadataStore = metadataStore
+        self.now = now
     }
 
     // MARK: Report accessors
@@ -1438,24 +1455,41 @@ public actor Reconciler {
             // level-triggered timer will pick up any residual drift afterward.
             return false
         }
-        // Tombstoned teardowns are exempt from the attempt cap: the workload
-        // has no control-plane row, so nothing can ever mint a new generation
-        // to re-arm a capped failure and the stray would leak until restart.
-        // They are level-triggered and cheap, so retrying on every sync is fine.
-        if let failure = failures[ref],
-            !item.isTombstone,
-            failure.generation == item.generation,
-            failure.attempts >= Self.maxAttemptsPerGeneration
+        // Tombstoned teardowns bypass both terminal suppression and transient
+        // backoff. Their control-plane row is already gone, so retaining the
+        // stray until an hourly retry would unnecessarily prolong the leak.
+        if var failure = failures[ref], !item.isTombstone,
+            failure.generation == item.generation
         {
-            logger.debug(
-                "Skipping convergence retry; attempt cap reached for this generation",
-                metadata: [
-                    "kind": .string(item.kind.rawValue),
-                    "workloadId": .string(item.id),
-                    "generation": .stringConvertible(item.generation),
-                    "lastError": .string(failure.lastError),
-                ])
-            return false
+            let metadata: Logger.Metadata = [
+                "kind": .string(item.kind.rawValue),
+                "workloadId": .string(item.id),
+                "generation": .stringConvertible(item.generation),
+                "lastError": .string(failure.lastError),
+            ]
+            switch failure.classification {
+            case .permanent:
+                if !failure.terminalSuppressionReported {
+                    failure.terminalSuppressionReported = true
+                    failures[ref] = failure
+                    retryCapSuppressions += 1
+                    logger.warning(
+                        "Suppressing convergence retry after a permanent failure",
+                        metadata: metadata)
+                }
+                return false
+            case .transient:
+                if let retryNotBefore = failure.retryNotBefore, now() < retryNotBefore {
+                    var backoffMetadata = metadata
+                    backoffMetadata["retryNotBefore"] = .stringConvertible(retryNotBefore)
+                    logger.debug(
+                        "Skipping convergence retry during transient backoff",
+                        metadata: backoffMetadata)
+                    return false
+                }
+            case .blocked, .waitingOnDependency:
+                break
+            }
         }
         return true
     }
@@ -1567,9 +1601,19 @@ public actor Reconciler {
 
             var failure =
                 failures[ref]
-                ?? ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
+                ?? ConvergenceFailure(
+                    generation: item.generation,
+                    attempts: 0,
+                    lastError: "",
+                    classification: classification,
+                    retryNotBefore: nil)
             if failure.generation != item.generation {
-                failure = ConvergenceFailure(generation: item.generation, attempts: 0, lastError: "")
+                failure = ConvergenceFailure(
+                    generation: item.generation,
+                    attempts: 0,
+                    lastError: "",
+                    classification: classification,
+                    retryNotBefore: nil)
             }
             // A blocked failure burns no attempt (STR-199). It is recorded like
             // any other — the reason names a remedy, and an operator who never
@@ -1581,13 +1625,13 @@ public actor Reconciler {
             if classification != .blocked {
                 failure.attempts += 1
             }
-            // A permanent failure (host misconfiguration: missing binary,
-            // permissions, disk full) cannot succeed on retry — exhaust the
-            // budget now so the remaining attempts aren't burned re-running a
-            // doomed convergence. A new generation (operator retry after
-            // fixing the host) still re-arms the loop as usual.
-            if classification == .permanent {
-                failure.attempts = max(failure.attempts, Self.maxAttemptsPerGeneration)
+            failure.classification = classification
+            failure.terminalSuppressionReported = false
+            if classification == .transient {
+                failure.retryNotBefore = now().addingTimeInterval(
+                    Self.transientRetryDelay(afterAttempt: failure.attempts))
+            } else {
+                failure.retryNotBefore = nil
             }
             let reason = error.localizedDescription
             // A blocked item is re-driven on every sync for as long as the
@@ -1596,7 +1640,8 @@ public actor Reconciler {
             // `blockedRelogInterval` repeats after that — often enough that an
             // operator who starts tailing mid-block still sees it at error
             // level, rarely enough to stay readable. Everything else logs each
-            // attempt, as before: their attempts are capped at three.
+            // attempt. Transient failures are rate-limited by backoff rather
+            // than terminated after a fixed budget.
             let repeating = classification == .blocked && failure.lastError == reason
             failure.blockedRepeats = repeating ? failure.blockedRepeats + 1 : 0
             failure.lastError = reason

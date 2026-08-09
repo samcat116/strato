@@ -132,7 +132,7 @@ final class ImageDownloadScopingTests {
             let volume = Volume(
                 name: "scoped-volume",
                 description: "volume from image",
-                projectID: project.id!,
+                projectID: project.id!, environment: "development",
                 size: 10 * 1024 * 1024 * 1024,
                 format: .qcow2,
                 volumeType: .boot,
@@ -161,7 +161,7 @@ final class ImageDownloadScopingTests {
             let volume = Volume(
                 name: "elsewhere-volume",
                 description: "volume from image",
-                projectID: project.id!,
+                projectID: project.id!, environment: "development",
                 size: 10 * 1024 * 1024 * 1024,
                 format: .qcow2,
                 volumeType: .boot,

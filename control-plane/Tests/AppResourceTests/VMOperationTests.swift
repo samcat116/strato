@@ -452,7 +452,7 @@ final class VMOperationTests {
         try await withVMTestApp { app, user, vm, token in
             // A mutation in flight: desired state moved and the agent has not
             // confirmed it, which is what the operation mutex used to key on.
-            vm.setDesiredStatus(.shutdown)
+            vm.setFixtureDesiredStatus(.shutdown)
             vm.extendConvergenceDeadline(by: 600)
             try await vm.save(on: app.db)
             _ = try await record(.shutdown, on: vm, by: user, on: app.db)
@@ -585,7 +585,7 @@ final class VMOperationTests {
     @Test("The façade reports pending, then succeeded, as the VM converges")
     func facadeFollowsConvergence() async throws {
         try await withVMTestApp { app, user, vm, token in
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
             let event = try await record(.boot, on: vm, by: user, on: app.db)
             let eventID = try event.requireID()
@@ -616,7 +616,7 @@ final class VMOperationTests {
     @Test("The façade reports failed when the VM is degraded at the mutation's generation")
     func facadeReportsDegradedAsFailed() async throws {
         try await withVMTestApp { app, user, vm, token in
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
             let event = try await record(.boot, on: vm, by: user, on: app.db)
 
@@ -643,7 +643,7 @@ final class VMOperationTests {
     @Test("A VM converged at the generation a failure names reports failed on both readers")
     func facadeAndConditionsAgreeAtOneGeneration() async throws {
         try await withVMTestApp { app, user, vm, token in
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
             try await vm.save(on: app.db)
@@ -674,7 +674,7 @@ final class VMOperationTests {
     @Test("A superseded mutation reads as succeeded, not pending forever")
     func facadeReportsSupersededAsSucceeded() async throws {
         try await withVMTestApp { app, user, vm, token in
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
             let event = try await record(.boot, on: vm, by: user, on: app.db)
 
@@ -682,7 +682,7 @@ final class VMOperationTests {
             // mutation has already moved the target on. The old one is not
             // pending — the reconciler is past it.
             vm.observedGeneration = vm.generation
-            vm.setDesiredStatus(.shutdown)
+            vm.setFixtureDesiredStatus(.shutdown)
             try await vm.save(on: app.db)
 
             try await app.test(.GET, "/api/operations/\(try event.requireID())") { req in
@@ -699,7 +699,7 @@ final class VMOperationTests {
         try await withVMTestApp { app, user, vm, token in
             let vmID = try vm.requireID()
             ResourceFinalizerService.stampForDeletion(vm)
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             let event = try await record(.delete, on: vm, by: user, on: app.db)
             let eventID = try event.requireID()
@@ -742,7 +742,7 @@ final class VMOperationTests {
         try await withVMTestApp { app, user, vm, token in
             let vmID = try vm.requireID()
             ResourceFinalizerService.stampForDeletion(vm)
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
             try await vm.save(on: app.db)
             let event = try await record(.delete, on: vm, by: user, on: app.db)
@@ -818,7 +818,7 @@ final class VMOperationTests {
     @Test("The sweep degrades a VM past its convergence deadline")
     func sweepDegradesOverdueConvergence() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
             try await vm.save(on: app.db)
             _ = try await record(.boot, on: vm, by: user, on: app.db)
@@ -841,7 +841,7 @@ final class VMOperationTests {
     @Test("The sweep is idempotent, so every replica can run it lock-free")
     func sweepIsIdempotent() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
             try await vm.save(on: app.db)
             _ = try await record(.boot, on: vm, by: user, on: app.db)
@@ -870,7 +870,7 @@ final class VMOperationTests {
     @Test("The sweep does not degrade a VM that is already degraded at this generation")
     func sweepDoesNotDegradeTwice() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            vm.setDesiredStatus(.running)
+            vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
             vm.observedGeneration = vm.generation
             vm.lastError = "resize failed: no space left on device"
@@ -892,7 +892,7 @@ final class VMOperationTests {
     @Test("The sweep leaves a VM that converged before its deadline alone")
     func sweepIgnoresConvergedVM() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            vm.setDesiredStatus(.shutdown)
+            vm.setFixtureDesiredStatus(.shutdown)
             vm.observedGeneration = vm.generation
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
             try await vm.save(on: app.db)
@@ -909,7 +909,7 @@ final class VMOperationTests {
     func sweepDoesNotRevertATerminatingVM() async throws {
         try await withVMTestApp { app, user, vm, _ in
             ResourceFinalizerService.stampForDeletion(vm)
-            vm.setDesiredStatus(.absent)
+            vm.setFixtureDesiredStatus(.absent)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
             try await vm.save(on: app.db)
             _ = try await record(.delete, on: vm, by: user, on: app.db)

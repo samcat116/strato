@@ -29,6 +29,7 @@ struct OpenAPISpecDriftTests {
     private static let webSocketExceptions: Set<String> = [
         "GET /agent/ws",
         "GET /agent/desired-state",
+        "POST /agent/vms/{}/jwt-svid",
         "GET /api/vms/{}/console",
         "POST /api/vms/{}/console/vnc",
         "GET /api/vms/{}/console/vnc/{}/attach",

@@ -118,7 +118,7 @@ struct VMAttachTargetDisclosureTests {
             let volume = Volume(
                 name: "disclosure-volume",
                 description: "volume whose attach names a foreign VM",
-                projectID: try home.requireID(),
+                projectID: try home.requireID(), environment: "development",
                 size: 10 * 1024 * 1024 * 1024,
                 status: .available,
                 createdByID: try admin.requireID())

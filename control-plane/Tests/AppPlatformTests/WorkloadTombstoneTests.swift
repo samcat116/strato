@@ -497,7 +497,7 @@ final class WorkloadTombstoneTests {
             // physical host as the VM, and both are dispatched through the
             // replica row rather than `hypervisorId`.
             let attached = Volume(
-                name: "attached-vol", description: "", projectID: try project.requireID(),
+                name: "attached-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
             attached.hypervisorId = oldId
             attached.attachedAgentId = oldId
@@ -511,7 +511,7 @@ final class WorkloadTombstoneTests {
             ).create(on: app.db)
 
             let detached = Volume(
-                name: "detached-vol", description: "", projectID: try project.requireID(),
+                name: "detached-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
             detached.hypervisorId = oldId
             try await detached.save(on: app.db)
@@ -573,7 +573,7 @@ final class WorkloadTombstoneTests {
             try await stayed.save(on: app.db)
 
             let stayedVolume = Volume(
-                name: "stayed-vol", description: "", projectID: try project.requireID(),
+                name: "stayed-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
             stayedVolume.hypervisorId = oldId
             stayedVolume.$vm.id = try stayed.requireID()

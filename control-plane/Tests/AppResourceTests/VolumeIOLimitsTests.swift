@@ -96,7 +96,7 @@ final class VolumeIOLimitsTests {
         let volume = Volume(
             name: "io-limit-target",
             description: "",
-            projectID: project.id!,
+            projectID: project.id!, environment: "development",
             size: 10 << 30,
             format: .qcow2,
             volumeType: .data,
@@ -144,7 +144,7 @@ final class VolumeIOLimitsTests {
         CreateVolumeRequest(
             name: "io-limit-create",
             description: "volume created with ceilings",
-            projectId: project.id!,
+            projectId: project.id!, environment: nil,
             sizeGB: 10,
             format: "qcow2",
             volumeType: "data",

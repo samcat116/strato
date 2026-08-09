@@ -12,6 +12,18 @@ import Metrics
 /// See `docs/deployment/observability.md` for the alert runbook built on these.
 enum Telemetry {
 
+    // MARK: - Desired-state ordering (STR-125)
+
+    /// A background writer reached a resource after another desired-state
+    /// mutation had already advanced it. The guarded writer drops or re-decides
+    /// that stale work instead of overwriting the newer intent.
+    static func desiredStateWriteConflict(resourceKind: String, writer: String) {
+        Counter(
+            label: "strato_desired_state_write_conflicts_total",
+            dimensions: [("resource_kind", resourceKind), ("writer", writer)]
+        ).increment()
+    }
+
     // MARK: - Agent lifecycle
 
     /// An agent successfully (re)registered with the control plane.
@@ -111,6 +123,13 @@ enum Telemetry {
     /// counter tracks how often drift happens at all.
     static func vmDriftDetected() {
         Counter(label: "strato_vm_drift_total").increment()
+    }
+
+    /// Workloads whose observed state has remained different from desired
+    /// state past the steady-state grace window. Recorded for both bounded
+    /// kinds on every sweep, including zero, so recovered series do not stick.
+    static func recordDivergedWorkloads(kind: String, count: Int) {
+        Gauge(label: "strato_diverged_workloads", dimensions: [("kind", kind)]).record(count)
     }
 
     // MARK: - Teardown safety (STR-98)
@@ -271,5 +290,12 @@ enum Telemetry {
     /// every agent is refetching its full state on every poll.
     static func recordDesiredStatePoll(outcome: String) {
         Counter(label: "strato_agent_poll_total", dimensions: [("outcome", outcome)]).increment()
+    }
+
+    static func recordGuestIdentityMint(outcome: String) {
+        Counter(
+            label: "strato_guest_identity_mints_total",
+            dimensions: [("outcome", outcome)]
+        ).increment()
     }
 }

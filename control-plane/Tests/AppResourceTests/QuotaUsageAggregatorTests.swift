@@ -102,7 +102,8 @@ struct QuotaUsageAggregatorTests {
                 + sandboxes.reduce(Int64(0)) { $0 + $1.memory },
             storageBytes: vms.reduce(Int64(0)) { $0 + $1.disk } + snapshotBytes,
             vmCount: vms.count,
-            sandboxCount: sandboxes.count
+            sandboxCount: sandboxes.count,
+            volumeCount: 0
         )
     }
 
