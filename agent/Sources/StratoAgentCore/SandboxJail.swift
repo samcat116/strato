@@ -238,8 +238,7 @@ public struct SandboxJailPlan: Sendable, Equatable {
     public static func hostSupportsMemoryCeiling(
         readFile: (String) -> String? = { try? String(contentsOfFile: $0, encoding: .utf8) }
     ) -> Bool {
-        guard let controllers = readFile("/sys/fs/cgroup/cgroup.controllers") else { return false }
-        return controllers.split(whereSeparator: { $0.isWhitespace }).contains("memory")
+        HostMemoryController.isAvailable(readFile: readFile)
     }
 
     /// Fixed FNV-1a 64 (not Swift's per-process-seeded `Hasher`), so uid

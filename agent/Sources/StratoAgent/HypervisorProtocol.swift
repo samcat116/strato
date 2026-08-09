@@ -113,6 +113,11 @@ public protocol HypervisorService: Actor, Sendable {
     ///   - spec: The desired spec this boot is converging on
     func redefineVM(vmId: String, spec: VMSpec) async throws
 
+    /// Converges the backend's process-memory ceiling before a boot. Backends
+    /// without a persistent VMM process definition use the default no-op;
+    /// libvirt treats this as required whenever cgroup memory support exists.
+    func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws
+
     /// Boots (starts) a VM
     /// - Parameter vmId: The VM identifier
     func bootVM(vmId: String) async throws
@@ -213,6 +218,12 @@ public protocol HypervisorService: Actor, Sendable {
     ///
     /// Backends holding their VM set in memory always know, and always answer.
     func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)?
+
+    /// The same committed reservation together with the exact workload IDs
+    /// that produced it, when the backend can provide them atomically. Agent
+    /// admission uses membership to keep a manifest orphan reserved when its
+    /// daemon-side workload has disappeared.
+    func reservationInventory() async -> HypervisorReservationInventory?
 
     /// Re-adopts a VM whose hypervisor process survived an agent restart
     /// (reconciliation phase 2, issue #260): reconnects the control session
@@ -325,6 +336,15 @@ public protocol HypervisorService: Actor, Sendable {
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    /// In-memory backends expose only an aggregate. Their orphan entries are
+    /// outside that aggregate, so unknown membership deliberately makes the
+    /// agent retain every orphan's manifest reservation.
+    func reservationInventory() async -> HypervisorReservationInventory? {
+        guard let reserved = await reservedResources() else { return nil }
+        return HypervisorReservationInventory(
+            reservation: HostReservation(cpus: reserved.vcpus, memoryBytes: reserved.memoryBytes))
+    }
+
     /// Backends must opt in to online resize; without an explicit
     /// implementation a sizing change waits for the VM's next boot.
     func resizeVM(vmId: String, spec: VMSpec) async throws {
@@ -373,6 +393,8 @@ public extension HypervisorService {
     /// from a stored configuration) need nothing before a boot: a spawn that
     /// reads the spec has no stored ceiling to widen.
     func redefineVM(vmId: String, spec: VMSpec) async throws {}
+
+    func ensureMemoryCeiling(vmId: String, spec: VMSpec) async throws {}
 
     /// Backends must opt in to full-VM checkpoints (issue #564). Without an
     /// explicit implementation the control plane's capability gate keeps the

@@ -489,6 +489,14 @@ carries one loads and starts — the agent logs that the key is ignored — beca
 libvirt now selects the emulator from its own capabilities and supervises swtpm
 per domain. Delete them at your convenience.
 
+`qemu_memory_overhead_mb` controls the QEMU process allowance above current
+guest RAM. It defaults to 512 MiB and accepts 128–4096 MiB. On a host with the
+cgroup-v2 memory controller, the agent applies guest RAM plus this allowance as
+libvirt's persistent and live hard memory limit. The allowance protects the host
+from VMM overhead or runaway process memory; it is not added to scheduling or
+quota accounting. A host without that controller logs one warning and runs QEMU
+without the ceiling, matching Firecracker's graceful-degradation policy.
+
 ### What the QEMU driver can be asked for
 
 Every QEMU placement is a libvirt domain. Disk hot-plug, online resize,

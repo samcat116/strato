@@ -218,6 +218,8 @@ private func launchAgent(options: AgentOptions) async throws {
             "sandboxJailerMode": .string(finalSandboxJailerMode.rawValue),
             "hypervisorType": .string(finalHypervisorType.rawValue),
             "hardwareAcceleration": .string(finalHardwareAcceleration ? "enabled" : "disabled"),
+            "qemuMemoryOverheadMB": .stringConvertible(
+                config.qemuMemoryOverheadMB ?? AgentConfig.defaultQEMUMemoryOverheadMB),
             "logLevel": .string(finalLogLevel),
             "simulation": .string(finalSimulation?.enabled == true ? "enabled" : "disabled"),
         ])
@@ -278,6 +280,7 @@ private func launchAgent(options: AgentOptions) async throws {
         sandboxWarmCacheMaxSizeBytes: config.sandboxWarmCacheMaxSizeBytes,
         hypervisorType: finalHypervisorType,
         hardwareAccelerationEnabled: finalHardwareAcceleration,
+        qemuMemoryOverheadBytes: config.qemuMemoryOverheadBytes,
         simulation: finalSimulation,
         spiffeConfig: config.spiffe,
         teardownGuard: config.teardownGuard,
