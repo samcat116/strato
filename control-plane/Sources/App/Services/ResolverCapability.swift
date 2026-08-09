@@ -52,7 +52,7 @@ enum ResolverCapability {
         private let bySite: [UUID: [String]]
         init(incapable: [Agent]) {
             self.bySite = Dictionary(grouping: incapable) { $0.$site.id }
-            .mapValues { $0.map(\.name).sorted() }
+                .mapValues { $0.map(\.name).sorted() }
         }
 
         /// The agents that would withhold the resolver from a network in
