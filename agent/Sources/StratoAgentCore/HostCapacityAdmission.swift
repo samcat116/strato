@@ -28,6 +28,31 @@ public struct HostReservation: Sendable, Equatable, Hashable {
     }
 }
 
+/// A backend's committed reservation and, when it can say, the exact workload
+/// inventory that produced it. Keeping the two in one value is important for
+/// daemon-backed drivers: an independently fetched ID list can race the
+/// reservation sweep and make an absent orphan look accounted for when it is
+/// not.
+public struct HypervisorReservationInventory: Sendable, Equatable {
+    public let reservation: HostReservation
+    public let workloadIDs: Set<String>?
+
+    public init(reservation: HostReservation, workloadIDs: Set<String>? = nil) {
+        self.reservation = reservation
+        self.workloadIDs = workloadIDs
+    }
+
+    /// Adds durable manifest reservations that are absent from the backend's
+    /// inventory. A backend that cannot identify the members of its aggregate
+    /// is handled conservatively: every orphan remains reserved.
+    public func includingMissingWorkloads(_ workloads: [String: HostReservation]) -> HostReservation {
+        workloads.reduce(reservation) { total, workload in
+            guard workloadIDs?.contains(workload.key) != true else { return total }
+            return total.addingSaturating(workload.value)
+        }
+    }
+}
+
 /// The raw, un-clamped host accounting an admission decision needs.
 public struct HostCapacitySnapshot: Sendable, Equatable {
     public let total: HostReservation
@@ -176,5 +201,14 @@ public enum VMHostReservation {
             memory = spec.memoryBytes
         }
         return HostReservation(cpus: spec.cpus, memoryBytes: memory)
+    }
+}
+
+/// Sandboxes share the host's 1:1 CPU and memory pools with VMs. Keeping this
+/// conversion beside the VM version makes create and boot admission use the
+/// same reservation semantics as heartbeat accounting.
+public enum SandboxHostReservation {
+    public static func forSpec(_ spec: SandboxSpec) -> HostReservation {
+        HostReservation(cpus: spec.cpus, memoryBytes: spec.memoryBytes)
     }
 }

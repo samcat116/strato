@@ -108,6 +108,44 @@ struct HostCapacityAdmissionTests {
                 == HostReservation(cpus: 2, memoryBytes: 2 * gib))
     }
 
+    @Test("backend inventory keeps only missing orphan reservations")
+    func missingOrphanReservations() {
+        let inventory = HypervisorReservationInventory(
+            reservation: HostReservation(cpus: 2, memoryBytes: 2 * gib),
+            workloadIDs: ["present-orphan"])
+        let orphans = [
+            "present-orphan": HostReservation(cpus: 2, memoryBytes: 2 * gib),
+            "missing-orphan": HostReservation(cpus: 4, memoryBytes: 4 * gib),
+        ]
+
+        #expect(
+            inventory.includingMissingWorkloads(orphans)
+                == HostReservation(cpus: 6, memoryBytes: 6 * gib))
+    }
+
+    @Test("aggregate-only backends keep every orphan reserved")
+    func aggregateOnlyInventoryIsConservative() {
+        let inventory = HypervisorReservationInventory(
+            reservation: HostReservation(cpus: 2, memoryBytes: 2 * gib))
+        let orphans = [
+            "orphan-a": HostReservation(cpus: 1, memoryBytes: 1 * gib),
+            "orphan-b": HostReservation(cpus: 3, memoryBytes: 3 * gib),
+        ]
+
+        #expect(
+            inventory.includingMissingWorkloads(orphans)
+                == HostReservation(cpus: 6, memoryBytes: 6 * gib))
+    }
+
+    @Test("sandbox sizing uses the shared host reservation pools")
+    func sandboxReservationSemantics() {
+        let spec = SandboxSpec(
+            image: "docker.io/library/alpine:3.20", cpus: 3, memoryBytes: 768 * 1024 * 1024)
+        #expect(
+            SandboxHostReservation.forSpec(spec)
+                == HostReservation(cpus: 3, memoryBytes: 768 * 1024 * 1024))
+    }
+
     @Test("capacity refusals are permanent and actionable")
     func refusalClassification() {
         let error = HostCapacityAdmissionError(

@@ -219,6 +219,12 @@ public protocol HypervisorService: Actor, Sendable {
     /// Backends holding their VM set in memory always know, and always answer.
     func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)?
 
+    /// The same committed reservation together with the exact workload IDs
+    /// that produced it, when the backend can provide them atomically. Agent
+    /// admission uses membership to keep a manifest orphan reserved when its
+    /// daemon-side workload has disappeared.
+    func reservationInventory() async -> HypervisorReservationInventory?
+
     /// Re-adopts a VM whose hypervisor process survived an agent restart
     /// (reconciliation phase 2, issue #260): reconnects the control session
     /// and returns the VM's observed status. Backends without a reattachable
@@ -330,6 +336,15 @@ public protocol HypervisorService: Actor, Sendable {
 // MARK: - Default Implementations
 
 public extension HypervisorService {
+    /// In-memory backends expose only an aggregate. Their orphan entries are
+    /// outside that aggregate, so unknown membership deliberately makes the
+    /// agent retain every orphan's manifest reservation.
+    func reservationInventory() async -> HypervisorReservationInventory? {
+        guard let reserved = await reservedResources() else { return nil }
+        return HypervisorReservationInventory(
+            reservation: HostReservation(cpus: reserved.vcpus, memoryBytes: reserved.memoryBytes))
+    }
+
     /// Backends must opt in to online resize; without an explicit
     /// implementation a sizing change waits for the VM's next boot.
     func resizeVM(vmId: String, spec: VMSpec) async throws {

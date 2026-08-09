@@ -2198,7 +2198,7 @@ actor Agent {
         // available = total - reserved (1:1, no overcommit) so the scheduler treats
         // CPU/memory as hard constraints; overcommit ratios can be layered on later.
         var reserved = HostReservation()
-        var backendsIncludingOrphans: Set<HypervisorType> = []
+        var backendsWithInventory: Set<HypervisorType> = []
 
         for (type, service) in hypervisorServices {
             // Falls back to the manifest, never to nothing: under-reporting
@@ -2208,25 +2208,44 @@ actor Agent {
             // without knowing, not merely one that runs out of time. A driver
             // returning a synthesized zero was indistinguishable from an idle
             // host, which is how STR-190 stayed invisible in the field.
-            let observed = await observe(type, "reserved-resources") {
-                await service.reservedResources()
+            let observed = await observe(type, "reservation-inventory") {
+                await service.reservationInventory()
             }
-            // Libvirt's inventory is daemon-wide and includes domains this
-            // process has not re-adopted yet. Other services hold only their
-            // in-process sessions, so their orphan manifests still need adding.
-            if type == .qemu, libvirtService != nil, observed != nil {
-                backendsIncludingOrphans.insert(type)
+            var durableReservations = orphanedVMs.reduce(into: [String: HostReservation]()) {
+                reservations, orphan in
+                guard orphan.value.hypervisorType == type else { return }
+                reservations[orphan.key] = VMHostReservation.forSpec(
+                    orphan.value.spec, hypervisorType: type, architecture: .current)
             }
-            let backendReserved = observed ?? manifestReservations(for: type)
-            reserved = reserved.addingSaturating(
-                HostReservation(cpus: backendReserved.vcpus, memoryBytes: backendReserved.memoryBytes))
+            if let observed {
+                // A daemon inventory with membership can also prove that a
+                // managed manifest entry disappeared out of band. Retain that
+                // entry's reservation for the same reason as a missing orphan:
+                // re-create diffs from its old spec and claims growth only.
+                if observed.workloadIDs != nil {
+                    for (vmId, entry) in managedVMs where entry.hypervisorType == type {
+                        durableReservations[vmId] = VMHostReservation.forSpec(
+                            entry.spec, hypervisorType: type, architecture: .current)
+                    }
+                }
+                reserved = reserved.addingSaturating(
+                    observed.includingMissingWorkloads(durableReservations))
+            } else {
+                let managed = manifestReservations(for: type)
+                reserved = reserved.addingSaturating(
+                    HostReservation(cpus: managed.vcpus, memoryBytes: managed.memoryBytes))
+                for orphan in durableReservations.values {
+                    reserved = reserved.addingSaturating(orphan)
+                }
+            }
+            backendsWithInventory.insert(type)
         }
 
-        // VMs orphaned by a restart are not managed by any service, but their
-        // hypervisor processes may still be running — the scheduler must not hand
-        // their capacity to new placements until they are deleted or re-created.
+        // Preserve orphan reservations even when this build has no service for
+        // their backend. They are durable evidence of host consumption, and an
+        // unavailable driver is not evidence that the workload disappeared.
         for entry in orphanedVMs.values {
-            guard !backendsIncludingOrphans.contains(entry.hypervisorType) else { continue }
+            guard !backendsWithInventory.contains(entry.hypervisorType) else { continue }
             reserved = reserved.addingSaturating(
                 VMHostReservation.forSpec(
                     entry.spec, hypervisorType: entry.hypervisorType, architecture: .current))
@@ -4813,7 +4832,7 @@ extension Agent: ReconcileActuator {
         case .create:
             try await sandboxReconcileCreate(item)
         case .boot:
-            try await requireSandboxRuntime().bootSandbox(sandboxId: item.id)
+            try await sandboxReconcileBoot(item)
         case .shutdown:
             try await requireSandboxRuntime().shutdownSandbox(sandboxId: item.id)
         case .delete:
@@ -4912,10 +4931,21 @@ extension Agent: ReconcileActuator {
         }
         let runtime = try requireSandboxRuntime()
 
-        // Resolve the placement before reserving anything, so a host that
-        // cannot realize a sandbox NIC at all surfaces the permanent reason
-        // immediately instead of a transient network-prep failure that retries
-        // until the operation budget expires.
+        let currentReservation =
+            (managedSandboxes[item.id] ?? orphanedSandboxes[item.id])?.sandboxSpec
+            .map(SandboxHostReservation.forSpec) ?? HostReservation()
+        let desiredReservation = SandboxHostReservation.forSpec(desired.spec)
+        let raw = await rawHostCapacitySnapshot()
+        let claim = try capacityAdmissionLedger.claim(
+            .positiveDelta(from: currentReservation, to: desiredReservation),
+            snapshot: raw, agentName: initialAgentID)
+        defer { capacityAdmissionLedger.release(claim) }
+
+        // Resolve the placement after admission but before doing network or
+        // runtime work. This is still a pure validation step: a host that
+        // cannot realize a sandbox NIC surfaces the permanent reason without
+        // leaving any network resources behind, and the deferred claim release
+        // covers the refusal.
         let networks = desired.spec.network.map { [$0] } ?? []
         // A network-free sandbox never reaches the placement, so don't refuse an
         // unjailed one over a NIC it doesn't have.
@@ -4945,6 +4975,33 @@ extension Agent: ReconcileActuator {
             appliedEdges: (managedSandboxes[item.id] ?? orphanedSandboxes[item.id])?.appliedEdges)
         orphanedSandboxes.removeValue(forKey: item.id)
         persistManifest()
+    }
+
+    private func sandboxReconcileBoot(_ item: ReconcileWorkItem) async throws {
+        guard let desired = item.desiredSandbox,
+            let currentSpec = (managedSandboxes[item.id] ?? orphanedSandboxes[item.id])?.sandboxSpec
+        else {
+            throw HypervisorServiceError.invalidConfiguration(
+                "boot work item without a managed sandbox spec")
+        }
+        let runtime = try requireSandboxRuntime()
+
+        let raw = await rawHostCapacitySnapshot()
+        let growth = HostReservation.positiveDelta(
+            from: SandboxHostReservation.forSpec(currentSpec),
+            to: SandboxHostReservation.forSpec(desired.spec))
+        let claim: HostCapacityClaim?
+        do {
+            try capacityAdmissionLedger.validateExistingReservation(
+                snapshot: raw, agentName: initialAgentID)
+            claim = try capacityAdmissionLedger.claim(
+                growth, snapshot: raw, agentName: initialAgentID)
+        } catch let refusal as HostCapacityAdmissionError {
+            throw DependencyPendingError(refusal.localizedDescription)
+        }
+        defer { capacityAdmissionLedger.release(claim) }
+
+        try await runtime.bootSandbox(sandboxId: item.id)
     }
 
     private func sandboxReconcileDelete(_ item: ReconcileWorkItem) async throws {

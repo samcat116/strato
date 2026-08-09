@@ -42,7 +42,7 @@ import StratoShared
 ///   qcow2 for checkpoints, so `createVM` writes it before defining the domain
 ///   (STR-188).
 ///
-/// The two caches below (`lastKnownVMIds`, `lastKnownReservations`) are the only
+/// The two caches below (`lastKnownVMIds`, `lastKnownReservationInventory`) are the only
 /// retained state, they hold *the last answer libvirtd gave* rather than a model
 /// of it, and neither is keyed by VM id. Treat any new dictionary keyed by VM id
 /// as a smell worth justifying in review.
@@ -156,7 +156,7 @@ actor LibvirtService: HypervisorService {
     /// this target has none.
     private var lastKnownVMIds = LastKnownInventory<[String]>(
         staleThreshold: LibvirtService.staleInventoryThreshold)
-    private var lastKnownReservations = LastKnownInventory<(vcpus: Int, memoryBytes: Int64)>(
+    private var lastKnownReservationInventory = LastKnownInventory<HypervisorReservationInventory>(
         staleThreshold: LibvirtService.staleInventoryThreshold)
 
     /// The lifecycle subscription's hand-off to the agent (STR-135), created in
@@ -1093,11 +1093,11 @@ actor LibvirtService: HypervisorService {
     /// headroom at any moment, so reserving it is the correct answer rather
     /// than a conservative one. For the overwhelmingly common VM with no
     /// headroom the two are the same number.
-    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)? {
+    func reservationInventory() async -> HypervisorReservationInventory? {
         do {
             // One `call`, not one per domain: the whole sweep shares a budget so
             // a host with many VMs cannot spend N budgets inside one heartbeat.
-            let reserved = try await call(
+            let inventory = try await call(
                 "libvirt-reservations", vmId: Self.hostScope, seconds: StageBudget.statusQuerySeconds
             ) { client, deadline in
                 let domains = try await client.connectListAllDomains(
@@ -1108,7 +1108,7 @@ actor LibvirtService: HypervisorService {
                 // already share one absolute deadline, so serializing them turns
                 // a host's domain count into `N x RTT` inside a budget sized for
                 // a single query — on a busy host, reliably unfinishable.
-                return try await withThrowingTaskGroup(of: DomainGetInfoRet.self) { group in
+                let reservation = try await withThrowingTaskGroup(of: DomainGetInfoRet.self) { group in
                     for dom in domains {
                         group.addTask {
                             try await client.domainGetInfo(dom: dom, deadline: deadline)
@@ -1124,12 +1124,21 @@ actor LibvirtService: HypervisorService {
                     // package with no daemon in it — this target has no tests.
                     return LibvirtDomain.reservation(from: infos)
                 }
+                return HypervisorReservationInventory(
+                    reservation: HostReservation(
+                        cpus: reservation.vcpus, memoryBytes: reservation.memoryBytes),
+                    workloadIDs: Set(domains.map(\.name)))
             }
-            lastKnownReservations.record(reserved)
-            return reserved
+            lastKnownReservationInventory.record(inventory)
+            return inventory
         } catch {
-            return stale(lastKnownReservations, "host reservations", error)
+            return stale(lastKnownReservationInventory, "host reservation inventory", error)
         }
+    }
+
+    func reservedResources() async -> (vcpus: Int, memoryBytes: Int64)? {
+        guard let inventory = await reservationInventory() else { return nil }
+        return (inventory.reservation.cpus, inventory.reservation.memoryBytes)
     }
 
     /// Serves a cached inventory answer after a live query failed, escalating
