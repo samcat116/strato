@@ -1,0 +1,331 @@
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 10-12,52,56-57,62,64-65,71,93-94,98-101,120-121,125-126,148-149,153,174,176,178,185,207,209,211,250-251,255,272-273,285-286,297,301-302,349-350,352,356,362-373,383-384,483,492,582,606-607,609-610,616-618,622,624-626,630-636,639-642,647-648,651-690
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 18-139,456-459,467-493
+  s_b46c3107f6ba4b::t_8528b0fd7211f2 494
+control-plane/Tests/AppResourceTests/VolumeObservedSizeTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 103
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 122,127,159,165,174,305-306,421,662,764,797,817,837,892,954,984
+control-plane/Tests/AppIAMTests/VMAttachTargetDisclosureTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 22,126-131
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 34,170,191,195-196,231,236-237
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 50,53,59,61,71,73,277,565,597,682,699,757-759,765-766,768-774,833,943,1026,1207,1247
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 74,100,205,221,628,637,1074-1075,1078,1085,1087-1090,1094-1095,1118-1121
+control-plane/Sources/App/Models/Volume.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 517-519,543,559,574-587
+  s_b46c3107f6ba4b::t_b71b71183717c5 588-589
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 54-55,62,237,412-416,1204-1239,1241-1243,1280-1284,1293-1302,1315,1619-1638,1688-1690,1695-1700,1702-1706,1712-1727,1730,1734-1736
+control-plane/Sources/App/Controllers/UserController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 209-210,212,234-239,267,271,275,862-863,871,1140
+control-plane/Tests/AppIdentityTests/APIKeyAuthenticatorTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 547,554-556
+control-plane/Tests/AppPlatformTests/ResourceFinalizerTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 170
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 96-102,172-199,249-317,391-392,507-545,661-662
+control-plane/web/src/lib/api/authorization.ts
+  s_b46c3107f6ba4b::t_ab219b5b135186 5-6,11,14-15
+control-plane/Tests/AppIAMTests/ProjectTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 52,157,386,394,486,531,535
+control-plane/web/src/lib/hooks/use-current-org-access.ts
+  s_b46c3107f6ba4b::t_ab219b5b135186 17-19,27
+control-plane/Sources/App/IAM/RoleBindingService.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 3,6-7,9-139,186,214,261
+control-plane/Tests/AppPlatformTests/WebhookTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 440
+control-plane/Tests/AppIdentityTests/AgentOrganizationScopeTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 487,544
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 224-243,308,339
+control-plane/Tests/AppIAMTests/OrganizationMemberRoleTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 1,9-11,14-26,40,43,52,56,63-65,72,79,82-83,87,91,96-97,101,103,105,109-110,114,118-119,123-124,126,129,133-134,138-139,142,145,153,158,167-169,174-175,179,187-188,195,200-249
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 11-12,290,380,386,400,406
+control-plane/Sources/App/Controllers/GroupController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 193-194
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 58,100,114,137-138,177-183,248-249,253,257-258,261-262,281-283,292-293,302,321,331,354-358,360,363-372,396-405,413-415,426,438,482,574-576,586,624-626,637,674,720-722,764,773,796-798,815,909,930-931,993,995-1004,1016-1018,1029,1051,1068-1069,1090-1091,1096
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 122,166-169,175,187,194,202-212
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 6-7,35-38,47,51-55
+control-plane/Tests/AppIdentityTests/GroupTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 81,169,214
+control-plane/Tests/AppPlatformTests/ResourceMutationTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 186,211,246,252-253,435-436,477-478
+control-plane/Sources/App/Migrations/AddVolumeReplicaAgentIndex.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 1-26
+control-plane/Sources/App/Models/VolumeReplica.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 15-18
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 97-102,225-227,253-254
+control-plane/Sources/App/Services/ProjectContainment.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 39
+control-plane/web/src/lib/hooks/use-permissions.ts
+  s_b46c3107f6ba4b::t_ab219b5b135186 3,11,13,16,23
+control-plane/Sources/App/configure.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 836,932-940,945-947
+  s_b46c3107f6ba4b::t_d33664009fe191 948
+control-plane/Sources/App/Services/SCIM/UserSCIMHandler.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 49,212
+control-plane/Sources/App/Models/SnapshotArtifact.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 33,97-99
+control-plane/Tests/AppIAMTests/IAMBatchDecisionTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 319,324-325,329-331,337,339,347,349
+control-plane/Sources/App/Controllers/SCIMTokenController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 191,193
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 3,7,48-49,52,54,74-94,125-139,244-340
+control-plane/Sources/App/Extensions/Request+VolumeAuthorization.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 5,9-10,15-16,21
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 143-144,160,673-674,676,679-693,730-737,750-753
+control-plane/web/src/types/openapi.ts
+  s_b46c3107f6ba4b::t_ab219b5b135186 3950-3951,3953,4273-4274,4340,5974-5975,6002-6012,6470-6471,6473,6758-6761,6781-6787,6796-6800,6901-6904,7350-7353,7355-7356,7366-7369,7371-7372,7378-7381,8092-8093,8096-8098,8100-8102,8105,8114,8125-8128,8157,8512,8521-8522,8535-8536,8547,8549-8550,8761-8765,8794-8798,8818-8822,16278,16287,16297
+control-plane/Sources/App/IAM/Cedar/EntitySliceLoader.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 88,368,434,436,438-441
+control-plane/Sources/App/Controllers/OrganizationalUnitMemberController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 17-18,24,48-49,67,83,87,92,149,151-153,156,162-163,170,174-175,192,197,219-221,242,245,269-271,303,308,328-330,364-367
+control-plane/web/src/lib/hooks/use-iam.ts
+  s_b46c3107f6ba4b::t_ab219b5b135186 8,26-30
+  s_b46c3107f6ba4b::t_f2c4443921303f 31-34
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 46,136,255,271,427,637,985,988,1001,1004
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 51,93,116,508,631,734,779,840,935,1062
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 20,24-25,35,41,53,64,68,105-107,131,139-141,143-144,172,177,202,214-215,217,219,223,235-244
+  s_b46c3107f6ba4b::t_c2de8cfc04be90 245
+control-plane/Sources/App/openapi.yaml
+  s_b46c3107f6ba4b::t_ab219b5b135186 206,5714-5715,5717,5719-5723,5730,5737,6260,6262,6358,10172,10224-10231,10279-10299,11153-11157,11747,11749-11751,11775,11788-11794,11811-11812,11814-11816,11998,12000-12002,12901,12914-12918,12930,12939-12943,12955,12957-12958,14397,14399-14400,14405,14407-14409,14411,14419,14425-14426,14428,14440,14445-14446,14471-14472,14544,14548-14549,15292-15294,15300,15315,15317,15335,15337-15339,15361-15362,15364,15366,15797,15799-15800,15802-15803,15863,15865-15866,15868-15869,15917,15919-15920,15922-15923
+control-plane/Sources/App/Services/ResourceFinalizerService.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 12,72-75,82-84,86
+control-plane/Tests/AppIAMTests/IAMWhoCanTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 98,118,187,387,416-417,543-544,549,556-557,568,593-594,615-616,645-646,648-649
+control-plane/Sources/App/IAM/MemberRoleResolver.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 5,7-10,19,23-24,26-27,30,35-37,39,52,69-71
+control-plane/Sources/App/IAM/Cedar/RoleDescriptor.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 31
+control-plane/web/src/components/project-members/add-group-dialog.tsx
+  s_b46c3107f6ba4b::t_ab219b5b135186 24,50-53,55-57,65,75-79,81,83,147-149,158,160-162,164,185
+control-plane/Tests/AppIAMTests/PolicyEndpointTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 129,131-132,134-135,536-537,541,570-571,575,599,633
+control-plane/Tests/AppIdentityTests/OIDCIdentityMappingTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 15,73,94,130,137,144-145,153,163,177,185,401,462,472,482,502,532,541,559,562,564,571,574,581,583,604-605,612,633-634,649
+control-plane/Sources/App/Extensions/Request+VMAuthorization.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 5,13-14,19,26,28,40,64,66
+control-plane/Tests/AppIAMTests/IAMRoleBindingTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 140,147,201,227,250,261,292,298,305-306,312,342-343,351,393
+control-plane/Tests/AppResourceTests/ResourceQuotaTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 50,355
+control-plane/Tests/AppIAMTests/CrossOrgBindingTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 99,141,174,189,203,236,286,292
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 70-71,100,142,149,202,238,248,262,318,333,371,383,453,492-493,500,502,510,528,530,544
+control-plane/Sources/App/Controllers/VMController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 105,115,122,239,378,381,386,390,517,526,532,1002,1035,1487,1546,1550,1562,1584,1603,1625,1672,1691
+control-plane/Tests/AppIdentityTests/OIDCAuthFlowTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 415
+control-plane/Sources/App/Models/ResourceConditions.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 261-269,304-305,440-442,475-477,505-510
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 311,321-327,342-348,367-375,390-393
+control-plane/Sources/App/Models/Agent.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 537-546
+control-plane/Tests/AppIAMTests/CredentialRestrictionEnforcementTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 223-224,226-227,233,235,237-238,244,323-326,487,491-493
+control-plane/Tests/AppIdentityTests/OIDCValidationTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 63
+control-plane/Tests/AppIdentityTests/UserCreationAndClaimTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 136,148,163,213
+control-plane/web/src/components/project-members/members-section.tsx
+  s_b46c3107f6ba4b::t_ab219b5b135186 26-28,31
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 235-236
+control-plane/web/src/lib/api/iam.ts
+  s_b46c3107f6ba4b::t_ab219b5b135186 6-7,35-41
+  s_b46c3107f6ba4b::t_7e1040baa2aeed 42-44
+control-plane/Sources/App/Migrations/CanonicalizeMembershipRoleStorage.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 1-447
+control-plane/Tests/AppIdentityTests/OIDCControllerTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 12-21,85,91,96-97,105,112,115,125-126,139,189,276,313,325,342,437-466,938
+control-plane/Sources/App/Extensions/Request+ProjectResolution.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 91-92,108,121,149,173,178
+control-plane/Sources/App/Controllers/LogsController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 32,82
+control-plane/Tests/AppIAMTests/VolumeAttachProjectContainmentTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 66-71
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 42,51-52
+control-plane/Sources/App/Services/AgentService.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 1653
+control-plane/Sources/App/IAM/GuardrailWriteReport.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 271,274
+docs/operations/volume-replica-cutover.md
+  s_b46c3107f6ba4b::t_ab219b5b135186 1-76
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 386,1855
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 41,144,165,169-170,194,199-200,261-262,266
+control-plane/Sources/App/Controllers/RoleController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 453-454,456
+control-plane/Sources/App/Models/OIDCProvider.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 84-87,121,143,371,390,408,429-439,458-459,477-523,545,572
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 324-328,342-346
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 481,540-541,577,599
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 131,180,185,187,196,200,312,315,322-329,333-373,375-380,384-385,389,392,396,398,409,419-421,423-426,432,435-440,444
+control-plane/Tests/AppIAMTests/IAMDecisionLogEndpointTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 61-62,68-71,123-124,135-138,143-144,146,148-149,152,159-165,177-178,193,220,223-224,226,239,241,243,254-255,267
+docs/adr/0004-cedar-for-authorization.md
+  s_b46c3107f6ba4b::t_ab219b5b135186 122-124,152-155
+docs/architecture/control-plane.md
+  s_b46c3107f6ba4b::t_ab219b5b135186 80-82
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 47,100,104
+control-plane/Sources/App/Migrations/CanonicalizeIAMDecisionLog.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 1-67
+control-plane/Tests/AppIAMTests/OrganizationMemberAuthzTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 16-23,69,82,122
+control-plane/Sources/App/Controllers/IAMDecisionLogController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 6,25,29,47,51,63,65-66,73,93-94,112-113,120,123,131
+control-plane/Sources/App/Models/Organization.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 83-86,97,102,137,139,153-156
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 219,228,240,249,296-298,315-317
+control-plane/Sources/App/IAM/WhoCanService.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 33-35,71,459,466,489,502,525,552,614-616,728
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_b46c3107f6ba4b::t_ab219b5b135186 51-53,58
+control-plane/Sources/App/Models/RoleBinding.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 5,28-31,57,79
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 191
+control-plane/Tests/AppResourceTests/VolumeStuckSweepTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 235
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 114-135
+control-plane/Sources/App/Models/IAMRoleDefinition.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 58,135
+control-plane/web/src/lib/hooks/index.ts
+  s_b46c3107f6ba4b::t_ab219b5b135186 129
+control-plane/Sources/App/Commands/BootstrapCommand.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 193-194
+control-plane/Tests/AppIAMTests/RestrictedCredentialListTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 295,298,301
+control-plane/Sources/App/Services/OrganizationAccessService.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 8-9,11-12,21,43,51,60,68-69
+control-plane/Tests/AppPlatformTests/DNSZoneTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 1234
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 170-171
+control-plane/Tests/AppIAMTests/AuthorizationCheckTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 49-50,67-68,70-71,84-85,96-97,99-100,102-103,124-125,127-128,148-149,162-163
+control-plane/web/src/components/project-members/members-table.tsx
+  s_b46c3107f6ba4b::t_ab219b5b135186 26,48-51,76,79,82,155,161,163-165,167
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 65,70,75,82-85,92-94,101-104
+control-plane/Tests/AppPlatformTests/BootstrapCommandTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 53,60,63,66
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 114
+docs/architecture/iam.md
+  s_b46c3107f6ba4b::t_ab219b5b135186 280,291-299,430,499,502-505,1114-1116,1128-1132,1135-1136,1142-1145,1155,1389
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 20-21,44-46,49-55,61-66,72,75-79,83-92,111,328-329,331,334,339,362,370,379,383,385,387,390,392,403,407-416,444-446,448,453,455-467,470,472-473,482
+control-plane/Sources/App/IAM/RoleStore.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 163
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 236
+control-plane/web/src/types/api.ts
+  s_b46c3107f6ba4b::t_ab219b5b135186 47,260-263,294-295,328-329,331-335,338
+control-plane/Tests/AppPlatformTests/DesiredStateReconciliationTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 637
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 311-312
+control-plane/Sources/App/Services/VolumeService.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 24-40,43-123,130-142,144-174,193-206
+  s_b46c3107f6ba4b::t_147808c49ddc99 207
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 142,171
+control-plane/Sources/App/Models/StoragePool.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 97-99,106
+control-plane/Tests/AppResourceTests/VolumeSnapshotGuardTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 60-65
+control-plane/web/src/components/project-members/add-member-dialog.tsx
+  s_b46c3107f6ba4b::t_ab219b5b135186 23-27,43-46,48-50,56,67-71,73-75,118-120,129,131-132,135-138,159
+docs/deployment/membership-role-cutover.md
+  s_b46c3107f6ba4b::t_ab219b5b135186 1-102
+control-plane/Sources/App/Controllers/ServiceAccountController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 384
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 58-59,95,152,163,195,243,283,332,403,530,561,628,635-636,638
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 13-14
+control-plane/Sources/App/Controllers/VNCWebSocketController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 81,164-166
+control-plane/Sources/App/Migrations/MakeVolumeReplicasAuthoritative.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 1-184
+control-plane/Sources/App/Controllers/OrganizationController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 50,57-59,94,124-125,129,195,236,419,427-428,448,472-477,482,484,487,492,500-503,534,537,542-554,559,586,592,595,601-605,611,616,622-629,631-638,640-644,650-660,663-672
+control-plane/Sources/App/IAM/IAMDecisionEngine.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 31-32,104-105
+control-plane/Tests/AppIAMTests/ProjectMemberTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 1-2,6,9-11,14-17,51-60,62-72,75-76,82,87-89,93-94,98,100,102-105,109-110,118-119,124-126,130-131,143-146,150-151,156-157,162-164,166,169,171-174,178-179,181,189,193-195,199-200,203,211,218,231,237-244,246,263-264,269-294
+control-plane/web/src/components/users/create-user-dialog.tsx
+  s_b46c3107f6ba4b::t_ab219b5b135186 31-36,68,82,217,227,229-230,233
+control-plane/Tests/AppIdentityTests/BaseTestCase.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 44
+control-plane/Tests/AppPlatformTests/ListCountBatchingTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 375-378
+control-plane/Sources/App/Extensions/Request+SandboxAuthorization.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 5,9,14-15,20
+control-plane/Sources/App/IAM/OffboardingSweep.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 9-10
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 677,720,887
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 6-7,434,444,488-489,494,502,504,506-507,514
+control-plane/web/src/app/(dashboard)/projects/[projectId]/page.tsx
+  s_b46c3107f6ba4b::t_ab219b5b135186 23-25,28
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 244
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 27,30,36,38-39,41,51,201,259,316,346
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 32,36,48,314-315,347,402,412,428,436,547,688,695,697
+control-plane/Tests/AppIAMTests/OrganizationalUnitTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 38
+control-plane/Tests/AppIAMTests/FolderMemberTests.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 117,124,137,144,156,193,213-214,221,232-233,271-272,279,324,332,358,417,434,454,490,516,522,583,595-596,614,621
+docs/architecture/authorization-edge-audit.md
+  s_b46c3107f6ba4b::t_ab219b5b135186 18,20-23,35-37,78-81
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 442-454,458,462-464,468,849-869
+  s_b46c3107f6ba4b::t_b544b1161a8cbe 870-871
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_b46c3107f6ba4b::t_ab219b5b135186 3,5-6,25,34,48,52,57,65-87,91-97,100,102-112,114-123,129,131,135,139-140,142-144,157,162,164-167,172-176,189,193,200,202,207,211-215,228,232-234,236-243,245-247,249-251,254-255,260-262,266-267,271-274
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f6253b0a19db3b92d0115f02decf5164e3aa3667",
+  "prompts": {},
+  "sessions": {
+    "s_b46c3107f6ba4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99d-01a5-7800-bc01-500acb3b32fa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
