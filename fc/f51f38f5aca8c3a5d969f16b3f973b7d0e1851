@@ -1,0 +1,66 @@
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_64ad39a6aebb27::t_0ae9ab099a6936 108-109,544-547,554-556,563,567-568,573-577,584-586,1388-1390,1395,1398,1400,1409-1412,1420-1422
+  s_64ad39a6aebb27::t_40495c7124b8f1 564,569,578
+  s_64ad39a6aebb27::t_714c7b8591eb6b 121-122,532-533,1383-1384,1401-1403
+  s_64ad39a6aebb27::t_c95211d26a6140 601-603
+shared/Tests/StratoSharedTests/SandboxProtocolTests.swift
+  s_64ad39a6aebb27::t_accd54db591ecf 163-167,169-171,211-213,216,218-220
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_64ad39a6aebb27::t_2d66ce94b37309 141-156,200-215
+  s_64ad39a6aebb27::t_ceaaf23e17784f 394-400,403,469-473,475
+  s_a42a9d2784714b::t_f006b6e15dc14a 216-217
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  s_64ad39a6aebb27::t_1e08dc4c16c48d 347,359
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_64ad39a6aebb27::t_365ee43c6851b9 361-365,368-372
+  s_64ad39a6aebb27::t_2c918f7d1ec453 109-110,113-115,146,149,151-153,183-184,187-189,203,206-208,233,238-239,271,291-292,295-296,305-308,358-360,366-367,373-384
+  s_64ad39a6aebb27::t_7ba901ce084c23 385
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_64ad39a6aebb27::t_5f3366c4710c5b 1010-1013,1015,1078-1093,1098-1105,1107-1117,1171,1173
+  s_64ad39a6aebb27::t_714c7b8591eb6b 1305,1307-1308,1318-1319
+shared/Tests/StratoSharedTests/AgentAutoUpdateProtocolTests.swift
+  s_64ad39a6aebb27::t_accd54db591ecf 30-35,37,68-71,73,75
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_64ad39a6aebb27::t_1e08dc4c16c48d 150,185,213
+shared/Tests/StratoSharedTests/SecurityGroupProtocolTests.swift
+  s_64ad39a6aebb27::t_2d66ce94b37309 59-65,68,80-84,86-88
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_64ad39a6aebb27::t_1e08dc4c16c48d 126,159,180
+shared/Tests/StratoSharedTests/SnapshotReconciliationTests.swift
+  s_64ad39a6aebb27::t_2d66ce94b37309 56-64,67,70-73,75-76,78,80
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_64ad39a6aebb27::t_351dc2eee8e088 149
+shared/Sources/StratoShared/VMSpec.swift
+  s_64ad39a6aebb27::t_0ae9ab099a6936 27,36,42-43,52,306,335-337,355-356,372-373
+  s_64ad39a6aebb27::t_714c7b8591eb6b 106-107,280-282
+agent/Tests/StratoAgentTests/SnapshotReconciliationTests.swift
+  s_64ad39a6aebb27::t_351dc2eee8e088 94-95,250,252
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_64ad39a6aebb27::t_1e08dc4c16c48d 127-130,162,200,227,275
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  s_64ad39a6aebb27::t_1e08dc4c16c48d 145,174
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "fcf51f38f5aca8c3a5d969f16b3f973b7d0e1851",
+  "prompts": {},
+  "sessions": {
+    "s_64ad39a6aebb27": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6b-5f9d-7830-8770-78c3e0922e59",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a42a9d2784714b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec72-ad30-7452-8c83-cd7fbb9c43c4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
