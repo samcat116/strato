@@ -79,7 +79,9 @@ struct InstanceMetadataTests {
 
         // The rest of the desired entry is unaffected by riding alongside it.
         #expect(decoded.vms.first?.generation == 9)
-        #expect(decoded.vms.first?.imageInfo?.filename == "debian-12.qcow2")
+        #expect(
+            decoded.vms.first?.imageInfo?.artifact(ofKind: .diskImage)?.filename
+                == "debian-12.qcow2")
     }
 
     @Test("Metadata NICs survive the round trip in order, dual-stack and bare alike")

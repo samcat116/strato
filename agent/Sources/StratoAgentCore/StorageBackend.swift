@@ -46,21 +46,9 @@ public struct DiskAttachment: Sendable, Equatable {
 /// and caching as needed). Implemented by the agent's `ImageCacheService`;
 /// abstracted here so the storage layer stays testable without networking.
 public protocol ImageSource: Sendable {
-    /// Returns a local filesystem path holding the image's (primary disk) bytes,
-    /// downloading them first if they are not cached.
-    func localImagePath(for imageInfo: ImageInfo) async throws -> String
-
     /// Returns a local filesystem path holding the bytes of a specific typed
     /// artifact (kernel, rootfs, ...), downloading it first if not cached.
-    /// Defaults to the primary-disk path for sources that don't distinguish
-    /// artifact kinds.
     func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String
-}
-
-extension ImageSource {
-    public func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
-        try await localImagePath(for: imageInfo)
-    }
 }
 
 // MARK: - Volume Info

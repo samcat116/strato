@@ -495,12 +495,15 @@ final class ImageControllerTests {
             }
 
             let id = try #require(imageID)
-            let saved = try await Image.find(id, on: app.db)
-            let image = try #require(saved)
-            #expect(image.expectedChecksum == supplied.lowercased())
+            let artifact = try #require(
+                try await ImageArtifact.query(on: app.db)
+                    .filter(\.$image.$id == id)
+                    .filter(\.$kind == .diskImage)
+                    .first())
+            #expect(artifact.expectedChecksum == supplied.lowercased())
             // The observed digest stays empty until the download actually runs;
             // the caller's claim must never be mistaken for it.
-            #expect(image.checksum == nil)
+            #expect(artifact.checksum.isEmpty)
         }
     }
 
@@ -521,9 +524,12 @@ final class ImageControllerTests {
             }
 
             let id = try #require(imageID)
-            let saved = try await Image.find(id, on: app.db)
-            let image = try #require(saved)
-            #expect(image.expectedChecksum == nil)
+            let artifact = try #require(
+                try await ImageArtifact.query(on: app.db)
+                    .filter(\.$image.$id == id)
+                    .filter(\.$kind == .diskImage)
+                    .first())
+            #expect(artifact.expectedChecksum == nil)
         }
     }
 
@@ -1018,8 +1024,9 @@ final class ImageControllerTests {
             let imageId = image.id!
 
             // Create actual file in storage
-            let relativePath = ImageObjectKey.image(
-                projectId: project.id!, imageId: imageId, filename: "test.qcow2")
+            let relativePath = ImageObjectKey.artifact(
+                projectId: project.id!, imageId: imageId,
+                kind: ArtifactKind.diskImage.rawValue, filename: "test.qcow2")
             let filePath = "\(tempStoragePath)/\(relativePath)"
             try FileManager.default.createDirectory(
                 atPath: (filePath as NSString).deletingLastPathComponent,
@@ -1152,6 +1159,22 @@ final class ImageControllerTests {
 
     // MARK: - Download Image Tests
 
+    @Test("Download requires an explicit artifact kind")
+    func testDownloadRequiresArtifactKind() async throws {
+        try await withImageTestApp { app, user, _, project, authToken, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+
+            try await app.test(
+                .GET, "/api/projects/\(project.id!)/images/\(image.id!)/download"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
     @Test("Download image returns 400 for non-ready image")
     func testDownloadImageNotReady() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
@@ -1162,7 +1185,7 @@ final class ImageControllerTests {
                 uploadedBy: user
             )
 
-            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download") { req in
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=disk-image") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -1175,7 +1198,7 @@ final class ImageControllerTests {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let fakeImageId = UUID()
 
-            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(fakeImageId)/download") { req in
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(fakeImageId)/download?artifact=disk-image") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .notFound)
@@ -1189,7 +1212,7 @@ final class ImageControllerTests {
             let builder = TestDataBuilder(db: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
-            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download") { _ in
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=disk-image") { _ in
                 // No auth header
             } afterResponse: { res in
                 #expect(res.status == .unauthorized)

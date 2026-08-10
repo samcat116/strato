@@ -30,8 +30,8 @@ struct WireProtocolTests {
         #expect(!WireProtocol.supportsVMNetworkHotplug(38))
         #expect(!WireProtocol.supportsVMNetworkHotplug(39))
         #expect(WireProtocol.supportsVMNetworkHotplug(40))
-        #expect(WireProtocol.currentVersion == 40)
-        #expect(WireProtocol.minimumSupportedVersion == 38)
+        #expect(WireProtocol.currentVersion == 41)
+        #expect(WireProtocol.minimumSupportedVersion == 41)
     }
     @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")
     func sandboxForkGuestGate() {

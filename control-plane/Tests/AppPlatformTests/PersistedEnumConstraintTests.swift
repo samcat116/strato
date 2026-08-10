@@ -12,7 +12,6 @@ struct PersistedEnumConstraintTests {
     func registryMatchesModelEnums() {
         let expected: [String: Set<String>] = [
             "agents.status": rawValues(AgentStatus.self),
-            "images.format": rawValues(ImageFormat.self),
             "images.architecture": rawValues(CPUArchitecture.self),
             "images.status": rawValues(ImageStatus.self),
             "image_artifacts.kind": rawValues(ArtifactKind.self),

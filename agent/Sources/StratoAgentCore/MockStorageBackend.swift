@@ -133,11 +133,14 @@ public actor MockStorageBackend: StorageBackend {
     public func createVolumeFromImage(volumeId: String, imageInfo: ImageInfo, format: DiskFormat) async throws
         -> DiskAttachment
     {
+        guard let diskImage = imageInfo.artifact(ofKind: .diskImage) else {
+            throw StorageBackendError.imageSourceUnavailable
+        }
         let path = volumePath(volumeId: volumeId, format: format)
         logger.info(
             "Creating mock volume from image (mock mode; image not downloaded)",
             metadata: ["volumeId": .string(volumeId), "imageId": .string(imageInfo.imageId.uuidString)])
-        volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: imageInfo.size)
+        volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: diskImage.size)
         persist()
         return DiskAttachment(path: path, format: format)
     }
@@ -147,6 +150,9 @@ public actor MockStorageBackend: StorageBackend {
     public func materializeDisk(
         at path: String, from imageInfo: ImageInfo, format: DiskFormat, artifactKind: ArtifactKind
     ) async throws -> DiskAttachment {
+        guard imageInfo.artifact(ofKind: artifactKind) != nil else {
+            throw StorageBackendError.imageSourceUnavailable
+        }
         logger.info(
             "Materializing mock disk (mock mode; image not downloaded)",
             metadata: [

@@ -17,7 +17,6 @@ struct VMSpecBuilderTests {
             name: "test-image",
             description: "Test image",
             projectID: UUID(),
-            filename: "test.qcow2",
             uploadedByID: UUID(),
             defaultCpu: defaultCpu,
             defaultMemory: defaultMemory,

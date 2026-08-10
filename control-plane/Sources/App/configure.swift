@@ -650,6 +650,10 @@ public func configure(_ app: Application) async throws {
     // the full migration history.
     app.migrations.add(EnforcePersistedEnumValues())
 
+    // STR-230: inventory/remediate typed image artifacts, then remove the
+    // duplicate top-level file and fetch-lifecycle columns.
+    app.migrations.add(MakeImageArtifactsAuthoritative())
+
     // virtio-balloon guest memory stats (issue #567).
     app.migrations.add(AddGuestMemoryStatsToVM())
 

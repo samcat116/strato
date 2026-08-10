@@ -180,23 +180,38 @@ struct ImageController: RouteCollection {
             name: createRequest.name,
             description: createRequest.description ?? "",
             projectID: projectID,
-            filename: filename,
             architecture: createRequest.architecture ?? .x86_64,
             status: .pending,
             uploadedByID: userID,
-            sourceURL: sourceURL,
             defaultCpu: createRequest.defaultCpu,
             defaultMemory: createRequest.defaultMemory,
             defaultDisk: createRequest.defaultDisk,
             defaultCmdline: createRequest.defaultCmdline
         )
-        image.expectedChecksum = expectedChecksum
-
         try await image.save(on: req.db)
 
+        let imageID = try image.requireID()
+        let artifact = ImageArtifact(
+            imageID: imageID,
+            kind: .diskImage,
+            format: nil,
+            architecture: image.architecture,
+            filename: filename,
+            size: 0,
+            checksum: "",
+            storagePath: ImageObjectKey.artifact(
+                projectId: projectID, imageId: imageID,
+                kind: ArtifactKind.diskImage.rawValue, filename: filename),
+            status: .pending,
+            sourceURL: sourceURL,
+            expectedChecksum: expectedChecksum
+        )
+        try await artifact.save(on: req.db)
+        image.$artifacts.value = [artifact]
+
         // Grant the creator's IAM binding.
-        let imageId = try image.requireID().uuidString
-        try await grantImageCreatorBinding(req: req, imageID: try image.requireID(), userID: userID)
+        let imageId = imageID.uuidString
+        try await grantImageCreatorBinding(req: req, imageID: imageID, userID: userID)
 
         // Start background fetch
         req.logger.info(
@@ -209,7 +224,7 @@ struct ImageController: RouteCollection {
         // Queue the fetch asynchronously
         Task {
             do {
-                try await req.imageFetchService.startFetch(imageId: image.id!)
+                try await req.imageFetchService.startArtifactFetch(artifactId: artifact.id!)
             } catch {
                 req.logger.error(
                     "Failed to start image fetch: \(error)",
@@ -251,7 +266,6 @@ struct ImageController: RouteCollection {
             name: createRequest.name,
             description: createRequest.description ?? "",
             projectID: projectID,
-            filename: "",
             architecture: createRequest.architecture ?? .x86_64,
             status: .pending,
             uploadedByID: userID,
@@ -303,7 +317,6 @@ struct ImageController: RouteCollection {
             name: "Uploading...",
             description: "",
             projectID: projectID,
-            filename: "temp",
             status: .uploading,
             uploadedByID: userID
         )
@@ -325,8 +338,9 @@ struct ImageController: RouteCollection {
                 maxBytes: Self.maxUploadBytes
             ) { uploadedFilename, _ in
                 let validated = try ImageValidationService.validateFilename(uploadedFilename)
-                return ImageObjectKey.image(
-                    projectId: projectID, imageId: imageID, filename: validated)
+                return ImageObjectKey.artifact(
+                    projectId: projectID, imageId: imageID,
+                    kind: ArtifactKind.diskImage.rawValue, filename: validated)
             }
         } catch {
             try await tempImage.delete(on: req.db)
@@ -408,16 +422,10 @@ struct ImageController: RouteCollection {
             format = claimed
         }
 
-        // Update image record
+        // Update image metadata. File metadata lives only on the artifact row.
         tempImage.name = name
         tempImage.description = description
-        tempImage.filename = filename
-        tempImage.size = size
-        tempImage.format = format
         tempImage.architecture = architecture
-        tempImage.checksum = checksum
-        tempImage.storagePath = relativePath
-        tempImage.status = .ready
         tempImage.defaultCpu = defaultCpu
         tempImage.defaultMemory = defaultMemory
         tempImage.defaultDisk = defaultDisk
@@ -438,8 +446,7 @@ struct ImageController: RouteCollection {
             storagePath: relativePath
         )
         try await diskArtifact.save(on: req.db)
-        // Reflect the new artifact in the response (relation isn't auto-loaded).
-        tempImage.$artifacts.value = [diskArtifact]
+        try await tempImage.recomputeStatus(on: req.db)
 
         // Grant the creator's IAM binding.
         try await grantImageCreatorBinding(req: req, imageID: imageID, userID: userID)
@@ -567,18 +574,7 @@ struct ImageController: RouteCollection {
         )
         try await artifact.save(on: req.db)
 
-        // Keep the image's legacy single-file columns pointed at the disk-image so
-        // the QEMU disk path and pre-artifact agents stay coherent.
-        if kind == .diskImage {
-            image.filename = filename
-            image.size = size
-            image.format = format ?? .raw
-            image.checksum = checksum
-            image.storagePath = relativePath
-            try await image.save(on: req.db)
-        }
-
-        try await recomputeStatus(image: image, on: req.db)
+        try await image.recomputeStatus(on: req.db)
 
         req.logger.info(
             "Image artifact uploaded",
@@ -637,6 +633,7 @@ struct ImageController: RouteCollection {
         }
         let filename = try ImageValidationService.validateArtifactFilename(
             url.lastPathComponent.isEmpty ? kind.rawValue : url.lastPathComponent)
+        let expectedChecksum = try fetchRequest.checksum.map(normalizedExpectedChecksum(_:))
 
         // The storage layout mirrors uploaded artifacts: {project}/{image}/{kind}/{filename}.
         let relativePath = ImageObjectKey.artifact(
@@ -662,12 +659,13 @@ struct ImageController: RouteCollection {
             checksum: "",
             storagePath: relativePath,
             status: .pending,
-            sourceURL: fetchRequest.sourceURL
+            sourceURL: fetchRequest.sourceURL,
+            expectedChecksum: expectedChecksum
         )
         try await artifact.save(on: req.db)
 
         // Removing a prior ready artifact may drop the image below bootable.
-        try await recomputeStatus(image: image, on: req.db)
+        try await image.recomputeStatus(on: req.db)
 
         let artifactId = artifact.id!
         Task {
@@ -729,7 +727,7 @@ struct ImageController: RouteCollection {
         try? await req.application.imageObjectStore.delete(key: artifact.storagePath)
         try await artifact.delete(on: req.db)
 
-        try await recomputeStatus(image: image, on: req.db)
+        try await image.recomputeStatus(on: req.db)
 
         req.logger.info(
             "Image artifact deleted",
@@ -737,23 +735,6 @@ struct ImageController: RouteCollection {
 
         try await image.$artifacts.load(on: req.db)
         return ImageResponse(from: image)
-    }
-
-    /// Recomputes an image's status from its current artifact set: `.ready` when
-    /// some hypervisor can boot it, otherwise `.pending`. Persists only on change.
-    /// Never overrides an `.error` state or an in-progress download/upload.
-    private func recomputeStatus(image: Image, on db: any Database) async throws {
-        try await image.$artifacts.load(on: db)
-
-        guard image.status == .ready || image.status == .pending else {
-            return  // don't clobber error/downloading/uploading/validating states
-        }
-
-        let newStatus: ImageStatus = image.compatibleHypervisors().isEmpty ? .pending : .ready
-        if image.status != newStatus {
-            image.status = newStatus
-            try await image.save(on: db)
-        }
     }
 
     // MARK: - Update Image
@@ -810,6 +791,7 @@ struct ImageController: RouteCollection {
         }
 
         try await image.save(on: req.db)
+        try await image.recomputeStatus(on: req.db)
 
         req.logger.info("Image updated", metadata: ["image_id": .string(imageID.uuidString)])
 
@@ -882,16 +864,11 @@ struct ImageController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid project or image ID")
         }
 
-        // Optional artifact selector (kernel/rootfs/initramfs/disk-image). Absent
-        // means the legacy whole-image disk download.
-        let artifactKind: ArtifactKind?
-        if let artifactParam = req.query[String.self, at: "artifact"] {
-            guard let kind = ArtifactKind(rawValue: artifactParam) else {
-                throw Abort(.badRequest, reason: "Unknown artifact kind '\(artifactParam)'")
-            }
-            artifactKind = kind
-        } else {
-            artifactKind = nil
+        guard let artifactParam = req.query[String.self, at: "artifact"] else {
+            throw Abort(.badRequest, reason: "An artifact query parameter is required")
+        }
+        guard let artifactKind = ArtifactKind(rawValue: artifactParam) else {
+            throw Abort(.badRequest, reason: "Unknown artifact kind '\(artifactParam)'")
         }
 
         // Agent path: a forwarded client certificate means the request came
@@ -919,7 +896,7 @@ struct ImageController: RouteCollection {
                     "imageId": .string(imageID.uuidString),
                     "agent": .string(agent.identity.key),
                     "organizationId": .string(agent.organizationID?.uuidString ?? "platform"),
-                    "artifact": .string(artifactKind?.rawValue ?? "disk"),
+                    "artifact": .string(artifactKind.rawValue),
                 ])
 
             return try await serveImageFile(
@@ -1013,7 +990,7 @@ struct ImageController: RouteCollection {
     // MARK: - Serve Image File (shared helper)
 
     private func serveImageFile(
-        req: Request, imageID: UUID, projectID: UUID, artifactKind: ArtifactKind?
+        req: Request, imageID: UUID, projectID: UUID, artifactKind: ArtifactKind
     ) async throws -> Response {
         guard let image = try await Image.find(imageID, on: req.db) else {
             throw Abort(.notFound, reason: "Image not found")
@@ -1031,25 +1008,16 @@ struct ImageController: RouteCollection {
 
         let store = req.application.imageObjectStore
 
-        // Serve a specific typed artifact when requested.
-        if let artifactKind {
-            guard
-                let artifact = try await image.$artifacts.query(on: req.db)
-                    .filter(\.$kind == artifactKind)
-                    .first()
-            else {
-                throw Abort(.notFound, reason: "Image has no \(artifactKind.rawValue) artifact")
-            }
-            return try await store.stream(
-                key: artifact.storagePath, filename: artifact.filename, on: req)
+        guard
+            let artifact = try await image.$artifacts.query(on: req.db)
+                .filter(\.$kind == artifactKind)
+                .filter(\.$status == .ready)
+                .first()
+        else {
+            throw Abort(.notFound, reason: "Image has no ready \(artifactKind.rawValue) artifact")
         }
-
-        // Legacy whole-image disk download.
-        guard let storagePath = image.storagePath else {
-            throw Abort(.internalServerError, reason: "Image storage path not set")
-        }
-
-        return try await store.stream(key: storagePath, filename: image.filename, on: req)
+        return try await store.stream(
+            key: artifact.storagePath, filename: artifact.filename, on: req)
     }
 
     // MARK: - Get Image Status
@@ -1081,6 +1049,7 @@ struct ImageController: RouteCollection {
             throw Abort(.forbidden, reason: "Access denied to image")
         }
 
+        try await image.$artifacts.load(on: req.db)
         return ImageStatusResponse(from: image)
     }
 }
@@ -1092,4 +1061,11 @@ struct ArtifactFetchRequest: Content {
     /// Raw value of `ArtifactKind` (disk-image/kernel/rootfs/initramfs).
     let kind: String
     let sourceURL: String
+    let checksum: String?
+
+    init(kind: String, sourceURL: String, checksum: String? = nil) {
+        self.kind = kind
+        self.sourceURL = sourceURL
+        self.checksum = checksum
+    }
 }

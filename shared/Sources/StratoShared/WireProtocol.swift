@@ -841,27 +841,21 @@ public enum WireProtocol {
     /// security control while the API reports it as applied.
     /// Version 40: stable VM NIC identity and applied-interface reporting for
     /// declarative QEMU network hot-plug (STR-202).
-    public static let currentVersion = 40
+    ///
+    /// Version 41: `ImageInfo` carries only an architecture and an explicit
+    /// typed artifact set (STR-230). The single-file filename/checksum/size/URL
+    /// fields and their tolerant decoder are removed. This is intentionally a
+    /// lockstep cutover: a peer must select `.diskImage`, `.kernel`, `.rootfs`,
+    /// or `.initramfs` rather than infer one file as the whole image.
+    public static let currentVersion = 41
 
     /// The lowest protocol version this build will talk to at all.
     ///
-    /// v38 closed the historical skew window and removed every legacy dual
-    /// path. v39 and v40 deliberately keep v38 as the floor for rolling
-    /// upgrades. The snapshot measurement and v40 NIC identity/reporting fields
-    /// are optional and safely ignored by older decoders; the metadata kill
-    /// switch and post-create network hot-plug behavior are protected by
-    /// `supportsMetadataOptOut` and `supportsVMNetworkHotplug`. Create-time NIC
-    /// arrays remain compatible because pre-v40 agents already realize every
-    /// `NetworkSpec` they receive.
-    ///
-    /// Moving this floor is a deployment decision. An agent below it cannot
-    /// connect, and the declarative self-update rides the sync it can no longer
-    /// receive. Once no v38 agents remain, the floor can move to 39 and the
-    /// metadata gate can be retired; the network-hot-plug gate remains until
-    /// the floor reaches 40. If a broader skew window is ever reintroduced,
-    /// resurrect the pre-v38 gates from history rather than re-deriving their
-    /// silent-failure cases.
-    public static let minimumSupportedVersion = 38
+    /// v41 removes required fields older agents need to decode `ImageInfo`, so
+    /// accepting an older peer would let registration succeed only for the next
+    /// desired-state payload to fail. Keep the floor at the current version and
+    /// deploy the coordinated control-plane/agent build as one storage cutover.
+    public static let minimumSupportedVersion = 41
 
     /// The lowest protocol version that honours the per-instance metadata kill
     /// switch (see `currentVersion` version 39 notes).

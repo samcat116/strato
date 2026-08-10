@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import StratoShared
+import Vapor
 @testable import App
 
 @Suite("VMSpecBuilder.buildImageInfo — artifact set")
@@ -10,14 +11,11 @@ struct VMSpecBuilderImageInfoTests {
             name: "img",
             description: "",
             projectID: UUID(),
-            filename: "disk.qcow2",
             architecture: architecture,
             status: .ready,
             uploadedByID: UUID()
         )
         image.id = UUID()
-        image.checksum = "diskchk"
-        image.storagePath = "p/disk.qcow2"
         return image
     }
 
@@ -31,18 +29,18 @@ struct VMSpecBuilderImageInfoTests {
             architecture: .x86_64,
             filename: "\(kind.rawValue).bin",
             size: 5,
-            checksum: checksum,
+            checksum: String(repeating: checksum, count: 64),
             storagePath: "p/\(kind.rawValue)"
         )
     }
 
-    @Test("Emits one download descriptor per artifact, with the disk image as primary")
+    @Test("Emits one explicit download descriptor per artifact")
     func emitsArtifactSet() throws {
         let image = readyImage(architecture: .x86_64)
         image.$artifacts.value = [
             artifact(.diskImage, format: .qcow2, checksum: "d"),
-            artifact(.kernel, checksum: "k"),
-            artifact(.rootfs, format: .raw, checksum: "r"),
+            artifact(.kernel, checksum: "a"),
+            artifact(.rootfs, format: .raw, checksum: "b"),
         ]
 
         let info = try VMSpecBuilder.buildImageInfo(from: image)
@@ -62,23 +60,18 @@ struct VMSpecBuilderImageInfoTests {
         let urls = Set(info.artifacts.map(\.downloadURL))
         #expect(urls.count == 3)
 
-        // Top-level fields describe the primary (disk-image) artifact.
-        #expect(info.checksum == "d")
-        #expect(info.artifact(ofKind: .kernel)?.checksum == "k")
-        #expect(info.artifact(ofKind: .rootfs)?.checksum == "r")
+        #expect(info.artifact(ofKind: .diskImage)?.checksum == String(repeating: "d", count: 64))
+        #expect(info.artifact(ofKind: .kernel)?.checksum == String(repeating: "a", count: 64))
+        #expect(info.artifact(ofKind: .rootfs)?.checksum == String(repeating: "b", count: 64))
     }
 
-    @Test("Falls back to legacy fields when no artifacts are present")
-    func legacyFallback() throws {
+    @Test("Fails explicitly when a ready image has no usable artifacts")
+    func missingArtifactsFail() throws {
         let image = readyImage(architecture: .arm64)
         image.$artifacts.value = []
 
-        let info = try VMSpecBuilder.buildImageInfo(from: image)
-
-        #expect(info.artifacts.isEmpty)
-        #expect(info.architecture == .arm64)
-        #expect(info.checksum == "diskchk")
-        #expect(info.downloadURL.hasPrefix("/api/projects/"))
-        #expect(!info.downloadURL.contains("artifact="))
+        #expect(throws: Abort.self) {
+            try VMSpecBuilder.buildImageInfo(from: image)
+        }
     }
 }

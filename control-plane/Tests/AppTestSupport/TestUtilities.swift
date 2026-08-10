@@ -651,20 +651,39 @@ package struct TestDataBuilder {
         sourceURL: String? = nil,
         checksum: String? = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     ) async throws -> Image {
+        let projectID = try project.requireID()
         let image = Image(
             name: name,
             description: description,
-            projectID: project.id!,
-            filename: filename,
-            size: size,
-            format: format,
+            projectID: projectID,
             status: status,
-            uploadedByID: uploadedBy.id!,
-            sourceURL: sourceURL
+            uploadedByID: uploadedBy.id!
         )
-        image.storagePath = storagePath
-        image.checksum = checksum
         try await image.save(on: db)
+
+        if status == .ready || storagePath != nil || sourceURL != nil {
+            let imageID = try image.requireID()
+            let artifact = ImageArtifact(
+                imageID: imageID,
+                kind: .diskImage,
+                format: format,
+                architecture: image.architecture,
+                filename: filename,
+                size: size,
+                checksum: checksum ?? "",
+                storagePath: storagePath
+                    ?? ImageObjectKey.artifact(
+                        projectId: projectID,
+                        imageId: imageID,
+                        kind: "disk-image",
+                        filename: filename),
+                status: status == .ready ? .ready : .pending,
+                sourceURL: sourceURL,
+                expectedChecksum: status == .ready ? nil : checksum
+            )
+            try await artifact.save(on: db)
+            image.$artifacts.value = [artifact]
+        }
         return image
     }
 }
@@ -673,15 +692,9 @@ package struct TestDataBuilder {
 
 /// Mock ImageFetchService that does nothing (prevents real HTTP requests in tests)
 package actor MockImageFetchService: ImageFetchServiceProtocol {
-    package var startedFetches: [UUID] = []
     package var startedArtifactFetches: [UUID] = []
 
     package init() {}
-
-    package func startFetch(imageId: UUID) async throws {
-        startedFetches.append(imageId)
-        // No-op: don't actually fetch anything
-    }
 
     package func startArtifactFetch(artifactId: UUID) async throws {
         startedArtifactFetches.append(artifactId)

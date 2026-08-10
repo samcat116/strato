@@ -9,7 +9,6 @@ import Crypto
 
 /// Protocol for image fetch services (enables testing with mocks)
 protocol ImageFetchServiceProtocol: Sendable {
-    func startFetch(imageId: UUID) async throws
     /// Fetches a single typed artifact from its `sourceURL` in the background.
     func startArtifactFetch(artifactId: UUID) async throws
 }
@@ -17,7 +16,6 @@ protocol ImageFetchServiceProtocol: Sendable {
 /// Actor service for managing background image fetches from URLs
 actor ImageFetchService: ImageFetchServiceProtocol {
     private let app: Application
-    private var activeFetches: [UUID: Task<Void, Error>] = [:]
     private var activeArtifactFetches: [UUID: Task<Void, Error>] = [:]
 
     /// Progress update interval in bytes (update every 1MB)
@@ -26,141 +24,6 @@ actor ImageFetchService: ImageFetchServiceProtocol {
     init(app: Application) {
         self.app = app
     }
-
-    /// Starts fetching an image from its source URL
-    func startFetch(imageId: UUID) async throws {
-        // Cancel any existing fetch for this image
-        if let existingTask = activeFetches[imageId] {
-            existingTask.cancel()
-            activeFetches.removeValue(forKey: imageId)
-        }
-
-        // Start new fetch task
-        let task = Task {
-            try await performFetch(imageId: imageId)
-        }
-
-        activeFetches[imageId] = task
-    }
-
-    /// Performs the actual fetch operation
-    private func performFetch(imageId: UUID) async throws {
-        let db = app.db
-        let logger = app.logger
-
-        // Get the image record
-        guard let image = try await Image.find(imageId, on: db) else {
-            throw ImageError.imageNotFound(imageId)
-        }
-
-        guard let sourceURL = image.sourceURL, let url = URL(string: sourceURL) else {
-            try await updateImageError(imageId: imageId, error: "Invalid source URL", db: db)
-            throw ImageError.downloadFailed("Invalid source URL")
-        }
-
-        logger.info(
-            "Starting image fetch",
-            metadata: [
-                "image_id": .string(imageId.uuidString),
-                "source_url": .string(sourceURL),
-            ])
-
-        // Update status to downloading
-        image.status = .downloading
-        image.downloadProgress = 0
-        try await image.save(on: db)
-
-        let store = app.imageObjectStore
-        let projectId = image.$project.id
-
-        do {
-            let relativePath = ImageObjectKey.image(
-                projectId: projectId, imageId: imageId, filename: image.filename)
-
-            // Perform the download
-            let (size, checksum, format) = try await downloadFile(
-                from: url,
-                to: relativePath,
-                in: store
-            ) { [weak self] progress in
-                try await self?.updateProgress(imageId: imageId, progress: progress, db: db)
-            }
-
-            // Verify against the caller's expected digest before publishing. The
-            // download already hashed every byte in-stream, so this costs nothing
-            // beyond the comparison. A mismatch means the bytes aren't what was
-            // asked for: bin them rather than leave an unreferenced file behind,
-            // and fail the image instead of serving it to an agent.
-            if let expected = image.expectedChecksum, expected != checksum {
-                image.status = .validating
-                try await image.save(on: db)
-
-                try? await store.delete(key: relativePath)
-
-                app.logger.warning(
-                    "Image checksum mismatch",
-                    metadata: [
-                        "image_id": .string(imageId.uuidString),
-                        "expected": .string(expected),
-                        "actual": .string(checksum),
-                    ])
-                throw ImageError.downloadFailed(
-                    "Checksum verification failed: expected \(expected), got \(checksum)")
-            }
-
-            // Update image with results
-            image.size = size
-            image.checksum = checksum
-            image.format = format
-            image.storagePath = relativePath
-            image.status = .ready
-            image.downloadProgress = 100
-            image.errorMessage = nil
-
-            try await image.save(on: db)
-
-            // Register the fetched file as the image's disk-image artifact so the
-            // typed artifact set matches uploaded images. Replace any prior
-            // disk-image artifact from an earlier fetch attempt.
-            try await image.$artifacts.query(on: db)
-                .filter(\.$kind == .diskImage)
-                .delete()
-            let diskArtifact = ImageArtifact(
-                imageID: imageId,
-                kind: .diskImage,
-                format: format,
-                architecture: image.architecture,
-                filename: image.filename,
-                size: size,
-                checksum: checksum,
-                storagePath: relativePath
-            )
-            try await diskArtifact.save(on: db)
-
-            logger.info(
-                "Image fetch completed",
-                metadata: [
-                    "image_id": .string(imageId.uuidString),
-                    "size": .stringConvertible(size),
-                    "checksum": .string(checksum),
-                ])
-
-        } catch is CancellationError {
-            logger.info("Image fetch cancelled", metadata: ["image_id": .string(imageId.uuidString)])
-            try await updateImageError(imageId: imageId, error: "Download cancelled", db: db)
-            throw CancellationError()
-
-        } catch {
-            logger.error("Image fetch failed: \(error)", metadata: ["image_id": .string(imageId.uuidString)])
-            try await updateImageError(imageId: imageId, error: error.localizedDescription, db: db)
-            throw error
-        }
-
-        // Remove from active fetches
-        activeFetches.removeValue(forKey: imageId)
-    }
-
-    // MARK: - Artifact Fetch
 
     /// Starts fetching a single artifact from its source URL.
     func startArtifactFetch(artifactId: UUID) async throws {
@@ -176,6 +39,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
     /// Downloads one artifact's bytes, filling in size/checksum/format and
     /// flipping it to `.ready`, then recomputes the parent image's status.
     private func performArtifactFetch(artifactId: UUID) async throws {
+        defer { activeArtifactFetches.removeValue(forKey: artifactId) }
         let db = app.db
         let logger = app.logger
 
@@ -201,6 +65,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         artifact.status = .downloading
         artifact.downloadProgress = 0
         try await artifact.save(on: db)
+        try await recomputeImageStatus(imageId: imageId, db: db)
 
         let store = app.imageObjectStore
 
@@ -210,6 +75,19 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             ) {
                 [weak self] progress in
                 try await self?.updateArtifactProgress(artifactId: artifactId, progress: progress, db: db)
+            }
+
+            if let expected = artifact.expectedChecksum, expected != checksum {
+                try? await store.delete(key: artifact.storagePath)
+                logger.warning(
+                    "Artifact checksum mismatch",
+                    metadata: [
+                        "artifact_id": .string(artifactId.uuidString),
+                        "expected": .string(expected),
+                        "actual": .string(checksum),
+                    ])
+                throw ImageError.downloadFailed(
+                    "Checksum verification failed: expected \(expected), got \(checksum)")
             }
 
             artifact.size = size
@@ -223,16 +101,6 @@ actor ImageFetchService: ImageFetchServiceProtocol {
             artifact.errorMessage = nil
             try await artifact.save(on: db)
 
-            // Keep the image's legacy single-file columns pointed at the disk-image.
-            if artifact.kind == .diskImage, let image = try await Image.find(imageId, on: db) {
-                image.filename = artifact.filename
-                image.size = size
-                image.format = format
-                image.checksum = checksum
-                image.storagePath = artifact.storagePath
-                try await image.save(on: db)
-            }
-
             try await recomputeImageStatus(imageId: imageId, db: db)
 
             logger.info(
@@ -243,6 +111,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                 ])
         } catch is CancellationError {
             try await updateArtifactError(artifactId: artifactId, error: "Download cancelled", db: db)
+            try await recomputeImageStatus(imageId: imageId, db: db)
             throw CancellationError()
         } catch {
             logger.error(
@@ -250,24 +119,16 @@ actor ImageFetchService: ImageFetchServiceProtocol {
                 metadata: ["artifact_id": .string(artifactId.uuidString)])
             try await updateArtifactError(
                 artifactId: artifactId, error: error.localizedDescription, db: db)
+            try await recomputeImageStatus(imageId: imageId, db: db)
             throw error
         }
-
-        activeArtifactFetches.removeValue(forKey: artifactId)
     }
 
     /// Recomputes the parent image's status from its (freshly loaded) artifact
-    /// set: `.ready` when some hypervisor can boot it, otherwise `.pending`.
-    /// Leaves error/in-progress image states alone.
+    /// set, including download and error lifecycle when no bootable set exists.
     private func recomputeImageStatus(imageId: UUID, db: Database) async throws {
         guard let image = try await Image.find(imageId, on: db) else { return }
-        try await image.$artifacts.load(on: db)
-        guard image.status == .ready || image.status == .pending else { return }
-        let newStatus: ImageStatus = image.compatibleHypervisors().isEmpty ? .pending : .ready
-        if image.status != newStatus {
-            image.status = newStatus
-            try await image.save(on: db)
-        }
+        try await image.recomputeStatus(on: db)
     }
 
     private func updateArtifactProgress(artifactId: UUID, progress: Int, db: Database) async throws {
@@ -453,25 +314,6 @@ actor ImageFetchService: ImageFetchServiceProtocol {
         let format = formatDetected ?? .raw
 
         return (totalBytesWritten, checksum, format)
-    }
-
-    /// Updates the download progress in the database
-    private func updateProgress(imageId: UUID, progress: Int, db: Database) async throws {
-        guard let image = try await Image.find(imageId, on: db) else {
-            return
-        }
-        image.downloadProgress = progress
-        try await image.save(on: db)
-    }
-
-    /// Updates the image with an error status
-    private func updateImageError(imageId: UUID, error: String, db: Database) async throws {
-        guard let image = try await Image.find(imageId, on: db) else {
-            return
-        }
-        image.status = .error
-        image.errorMessage = error
-        try await image.save(on: db)
     }
 
 }

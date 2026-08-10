@@ -63,10 +63,6 @@ struct EnforcePersistedEnumValues: AsyncMigration {
             usesPostgresNativeEnum: true
         ),
         .init(
-            table: "images", column: "format",
-            allowedValues: ["qcow2", "raw", "vmdk", "vhd", "vhdx"], defaultValue: "qcow2"
-        ),
-        .init(
             table: "images", column: "architecture", allowedValues: ["x86_64", "arm64"],
             defaultValue: "x86_64"
         ),

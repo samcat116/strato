@@ -11,7 +11,6 @@ struct ImageCompatibilityTests {
             name: "img",
             description: "",
             projectID: UUID(),
-            filename: "disk.qcow2",
             architecture: architecture,
             uploadedByID: UUID()
         )
@@ -29,7 +28,7 @@ struct ImageCompatibilityTests {
             architecture: arch,
             filename: kind.rawValue,
             size: 1,
-            checksum: "c",
+            checksum: String(repeating: "c", count: 64),
             storagePath: "p"
         )
     }

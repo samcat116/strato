@@ -356,7 +356,7 @@ struct VMSpecBuilder {
         // One download descriptor per typed artifact. Exclude any artifact
         // that isn't fully materialized — a pending/downloading URL fetch has no
         // real checksum or bytes yet and must never reach an agent.
-        let artifacts = (image.$artifacts.value ?? []).filter { $0.status == .ready }.map { artifact in
+        let artifacts = (image.$artifacts.value ?? []).filter(\.isUsable).map { artifact in
             ArtifactInfo(
                 kind: artifact.kind,
                 filename: artifact.filename,
@@ -366,36 +366,16 @@ struct VMSpecBuilder {
             )
         }
 
-        // Top-level fields describe the primary disk for the QEMU disk path and
-        // legacy agents. Prefer the disk-image artifact; fall back to any artifact,
-        // then to the image's own single-file columns.
-        let primary = artifacts.first { $0.kind == .diskImage } ?? artifacts.first
-        if let primary {
-            return ImageInfo(
-                imageId: imageId,
-                projectId: projectId,
-                filename: primary.filename,
-                checksum: primary.checksum,
-                size: primary.size,
-                downloadURL: primary.downloadURL,
-                architecture: image.architecture,
-                artifacts: artifacts
-            )
-        }
-
-        // No artifacts (image predates the backfill): fall back to legacy fields.
-        guard let checksum = image.checksum else {
-            throw Abort(.internalServerError, reason: "Image checksum is required")
+        guard !artifacts.isEmpty else {
+            throw Abort(
+                .internalServerError,
+                reason: "Ready image \(imageId) has no ready typed artifacts")
         }
         return ImageInfo(
             imageId: imageId,
             projectId: projectId,
-            filename: image.filename,
-            checksum: checksum,
-            size: image.size,
-            downloadURL: downloadPath,
             architecture: image.architecture,
-            artifacts: []
+            artifacts: artifacts
         )
     }
 }

@@ -85,8 +85,10 @@ struct ImageDownloadMTLSTests {
         return (project, image, bytes)
     }
 
-    private func downloadPath(project: Project, image: Image) -> String {
-        "/api/projects/\(project.id!)/images/\(image.id!)/download"
+    private func downloadPath(
+        project: Project, image: Image, artifact: ArtifactKind = .diskImage
+    ) -> String {
+        "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=\(artifact.rawValue)"
     }
 
     @Test("An agent SVID identity downloads an image it was assigned")
@@ -139,7 +141,7 @@ struct ImageDownloadMTLSTests {
             let response = try await app.client.get(
                 URI(
                     string:
-                        "http://127.0.0.1:\(port)\(self.downloadPath(project: project, image: image))?artifact=kernel"
+                        "http://127.0.0.1:\(port)\(self.downloadPath(project: project, image: image, artifact: .kernel))"
                 )
             ) { req in
                 req.headers.add(name: header.name, value: header.value)

@@ -59,9 +59,8 @@ struct DesiredStateAssembler {
             .filter(\.$hypervisorId == agentId)
             .with(\.$volumes)
             .with(\.$networkInterfaces) { $0.with(\.$addresses) }
-            // Artifacts loaded too so buildImageInfo emits the typed artifact
-            // set (kernel/rootfs distribution, issue #214) rather than the
-            // legacy single-file fallback.
+            // Artifacts are required so buildImageInfo can emit the explicit
+            // typed set each hypervisor selects from.
             .with(\.$sourceImage) { image in
                 image.with(\.$artifacts)
             }

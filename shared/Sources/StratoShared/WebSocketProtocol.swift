@@ -371,56 +371,24 @@ public struct ArtifactInfo: Codable, Sendable {
 
 /// Contains information for the agent to download and cache an image.
 ///
-/// The top-level `filename`/`checksum`/`size`/`downloadURL` describe the
-/// primary disk image and are retained for the QEMU disk path and for
-/// backward compatibility. Multi-backend drivers read `artifacts` to fetch the
-/// specific typed files they need. `architecture` and `artifacts` decode as
-/// absent (nil / empty) from legacy single-file payloads. Like
-/// `ArtifactInfo.downloadURL`, the download URL is a control-plane-relative
-/// path fetched over SVID mTLS.
+/// Every stored file is represented exactly once in `artifacts`. Hypervisor
+/// drivers select the kind they require and fail explicitly when it is absent.
 public struct ImageInfo: Codable, Sendable {
     public let imageId: UUID
     public let projectId: UUID
-    public let filename: String
-    public let checksum: String
-    public let size: Int64
-    public let downloadURL: String
-    /// Guest CPU architecture of the image; nil only for legacy payloads.
-    public let architecture: CPUArchitecture?
-    /// Typed artifact set. Empty for legacy single-file payloads, in which case
-    /// the top-level fields describe the (disk) image.
+    public let architecture: CPUArchitecture
     public let artifacts: [ArtifactInfo]
 
     public init(
         imageId: UUID,
         projectId: UUID,
-        filename: String,
-        checksum: String,
-        size: Int64,
-        downloadURL: String,
-        architecture: CPUArchitecture? = nil,
-        artifacts: [ArtifactInfo] = []
+        architecture: CPUArchitecture,
+        artifacts: [ArtifactInfo]
     ) {
         self.imageId = imageId
         self.projectId = projectId
-        self.filename = filename
-        self.checksum = checksum
-        self.size = size
-        self.downloadURL = downloadURL
         self.architecture = architecture
         self.artifacts = artifacts
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        imageId = try container.decode(UUID.self, forKey: .imageId)
-        projectId = try container.decode(UUID.self, forKey: .projectId)
-        filename = try container.decode(String.self, forKey: .filename)
-        checksum = try container.decode(String.self, forKey: .checksum)
-        size = try container.decode(Int64.self, forKey: .size)
-        downloadURL = try container.decode(String.self, forKey: .downloadURL)
-        architecture = try container.decodeIfPresent(CPUArchitecture.self, forKey: .architecture)
-        artifacts = try container.decodeIfPresent([ArtifactInfo].self, forKey: .artifacts) ?? []
     }
 
     /// The artifact of a given kind, if present in the set.

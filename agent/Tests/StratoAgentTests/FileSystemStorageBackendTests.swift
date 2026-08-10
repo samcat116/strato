@@ -86,17 +86,20 @@ private func imageInfoJSON(format: String, virtualSize: Int64 = 1_073_741_824) -
 
 private struct StaticImageSource: ImageSource {
     let path: String
-    func localImagePath(for imageInfo: ImageInfo) async throws -> String { path }
+    func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String { path }
 }
 
 private func makeImageInfo() -> ImageInfo {
     ImageInfo(
         imageId: UUID(),
         projectId: UUID(),
-        filename: "debian.qcow2",
-        checksum: "abc",
-        size: 1024,
-        downloadURL: "http://localhost:8080/images/x"
+        architecture: .x86_64,
+        artifacts: [
+            ArtifactInfo(
+                kind: .diskImage, filename: "debian.qcow2",
+                checksum: String(repeating: "a", count: 64), size: 1024,
+                downloadURL: "http://localhost:8080/images/x?artifact=disk-image")
+        ]
     )
 }
 
