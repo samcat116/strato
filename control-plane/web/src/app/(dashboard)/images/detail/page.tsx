@@ -149,7 +149,7 @@ export default function ImageDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="text-xl font-bold text-foreground">
-              {image.sizeFormatted}
+              {image.sizeFormatted || "—"}
             </div>
           </CardContent>
         </Card>
@@ -162,7 +162,7 @@ export default function ImageDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="text-xl font-bold text-foreground uppercase">
-              {image.format}
+              {image.format || "—"}
             </div>
           </CardContent>
         </Card>
@@ -216,7 +216,7 @@ export default function ImageDetailPage() {
             </div>
             <div>
               <p className="text-muted-foreground">Filename</p>
-              <p className="text-foreground">{image.filename}</p>
+              <p className="text-foreground">{image.filename || "—"}</p>
             </div>
             {image.sourceURL && (
               <div className="col-span-2">

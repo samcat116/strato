@@ -77,9 +77,11 @@ export function ImageTable({
                   {image.description}
                 </p>
               )}
-              <p className="text-xs text-muted-foreground truncate max-w-xs">
-                {image.filename}
-              </p>
+              {image.filename && (
+                <p className="text-xs text-muted-foreground truncate max-w-xs">
+                  {image.filename}
+                </p>
+              )}
             </TableCell>
             <TableCell>
               <ImageStatusBadge
@@ -93,7 +95,7 @@ export function ImageTable({
               )}
             </TableCell>
             <TableCell className="text-foreground/80 uppercase">
-              {image.format}
+              {image.format || "—"}
             </TableCell>
             <TableCell className="text-foreground/80">
               {image.architecture}

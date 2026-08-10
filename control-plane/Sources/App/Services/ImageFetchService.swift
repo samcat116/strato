@@ -27,9 +27,14 @@ actor ImageFetchService: ImageFetchServiceProtocol {
 
     /// Starts fetching a single artifact from its source URL.
     func startArtifactFetch(artifactId: UUID) async throws {
-        if let existing = activeArtifactFetches[artifactId] {
+        // Do not register a replacement until the task it supersedes has
+        // finished its cancellation path. Besides preventing concurrent
+        // writers for the same object, the loop handles concurrent callers:
+        // after awaiting, another caller may have installed a newer task that
+        // this invocation must also cancel before it can become authoritative.
+        while let existing = activeArtifactFetches[artifactId] {
             existing.cancel()
-            activeArtifactFetches.removeValue(forKey: artifactId)
+            _ = await existing.result
         }
         activeArtifactFetches[artifactId] = Task {
             try await performArtifactFetch(artifactId: artifactId)
@@ -40,6 +45,7 @@ actor ImageFetchService: ImageFetchServiceProtocol {
     /// flipping it to `.ready`, then recomputes the parent image's status.
     private func performArtifactFetch(artifactId: UUID) async throws {
         defer { activeArtifactFetches.removeValue(forKey: artifactId) }
+        try Task.checkCancellation()
         let db = app.db
         let logger = app.logger
 
