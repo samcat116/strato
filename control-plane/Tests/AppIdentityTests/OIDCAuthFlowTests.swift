@@ -412,7 +412,7 @@ final class OIDCAuthFlowTests {
                 .filter(\.$user.$id == resolvedUser.id!)
                 .filter(\.$organization.$id == org.id!)
                 .first()
-            #expect(membership?.role == "member")
+            #expect(membership?.roleID == nil)
 
             // The token exchange posted the authorization-code grant to the
             // configured endpoint as a URL-encoded form with our credentials.

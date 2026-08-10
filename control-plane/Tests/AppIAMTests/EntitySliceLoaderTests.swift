@@ -551,26 +551,6 @@ final class EntitySliceLoaderTests {
         }
     }
 
-    @Test("A binding whose role value is not a UUID is dropped (under-grant, never crash)")
-    func nonUUIDRoleValueDropped() async throws {
-        try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
-            let tree = try await buildTree(builder, prefix: "Legacy")
-            let user = try await builder.createUser(username: "legacy-user", email: "legacy@example.com")
-
-            // A pre-backfill row shape: the role column holding a name. The
-            // migration rewrites these; any straggler must under-grant.
-            let row = RoleBinding(
-                principalType: .user, principalID: user.id!, role: .viewer,
-                nodeType: .organization, nodeID: tree.org.id!)
-            row.role = "viewer"
-            try await row.save(on: app.db)
-
-            let slice = try await EntitySliceLoader.load(userID: user.id!, node: tree.vmNode, on: app.db)
-            #expect(slice.grants.roleIDs.isEmpty)
-        }
-    }
-
     // MARK: - Cross-check against the real evaluator
 
     /// What the engine would decide from this slice for an unconditioned check

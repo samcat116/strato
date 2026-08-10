@@ -21,14 +21,12 @@ import {
 } from "@/components/ui/select";
 import {
   useGroups,
+  useBindableRoles,
   useGrantProjectGroup,
   projectMemberErrorMessage,
 } from "@/lib/hooks";
 import { toast } from "sonner";
 import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
-import type { ProjectRole } from "@/types/api";
-
-const ROLES: ProjectRole[] = ["admin", "member", "viewer"];
 
 interface AddGroupDialogProps {
   projectId: string;
@@ -49,8 +47,14 @@ export function AddGroupDialog({
   const { data: groups = [], isLoading: groupsLoading } =
     useGroups(organizationId);
   const grant = useGrantProjectGroup(projectId);
+  const { data: roles = [], isLoading: rolesLoading } = useBindableRoles(
+    "project",
+    projectId
+  );
   const [groupId, setGroupId] = useState("");
-  const [role, setRole] = useState<ProjectRole>("member");
+  const [role, setRole] = useState("");
+  const selectedRole =
+    role || roles.find((candidate) => candidate.name === "editor")?.id || roles[0]?.id || "";
 
   const available = groups.filter((g) => !excludeGroupIds.includes(g.id));
 
@@ -58,7 +62,7 @@ export function AddGroupDialog({
     onOpenChange(false);
     setTimeout(() => {
       setGroupId("");
-      setRole("member");
+      setRole("");
     }, 200);
   };
 
@@ -68,10 +72,15 @@ export function AddGroupDialog({
       toast.error("Please select a group");
       return;
     }
+    if (!selectedRole) {
+      toast.error("No role is available for this project");
+      return;
+    }
+    const roleName = roles.find((candidate) => candidate.id === selectedRole)?.name ?? selectedRole;
     try {
-      const result = await grant.mutateAsync({ groupId, role });
+      const result = await grant.mutateAsync({ groupId, role: selectedRole });
       toast.success("Group access granted");
-      warnAboutGrantCeilings(result, `The group's ${role} role`);
+      warnAboutGrantCeilings(result, `The group's ${roleName} role`);
       handleClose();
     } catch (error) {
       toast.error(projectMemberErrorMessage(error, "Failed to grant group"));
@@ -135,9 +144,9 @@ export function AddGroupDialog({
                 Role
               </Label>
               <Select
-                value={role}
-                onValueChange={(v) => setRole(v as ProjectRole)}
-                disabled={grant.isPending}
+                value={selectedRole}
+                onValueChange={setRole}
+                disabled={grant.isPending || rolesLoading || roles.length === 0}
               >
                 <SelectTrigger
                   id="pgRole"
@@ -146,13 +155,13 @@ export function AddGroupDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border">
-                  {ROLES.map((r) => (
+                  {roles.map((candidate) => (
                     <SelectItem
-                      key={r}
-                      value={r}
-                      className="text-foreground capitalize focus:bg-accent focus:text-accent-foreground"
+                      key={candidate.id}
+                      value={candidate.id}
+                      className="text-foreground focus:bg-accent focus:text-accent-foreground"
                     >
-                      {r}
+                      {candidate.name}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -173,7 +182,7 @@ export function AddGroupDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={grant.isPending}
+              disabled={grant.isPending || !selectedRole}
             >
               {grant.isPending ? (
                 <>

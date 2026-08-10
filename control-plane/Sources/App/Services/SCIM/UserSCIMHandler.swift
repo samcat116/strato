@@ -46,8 +46,7 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         // Add user to organization as member
         let membership = UserOrganization(
             userID: userID,
-            organizationID: organizationID,
-            role: "member"
+            organizationID: organizationID
         )
         try await membership.save(on: db)
 
@@ -210,7 +209,7 @@ struct UserSCIMHandler: SCIMResourceHandler, @unchecked Sendable {
         try await user.save(on: db)
 
         // Remove the organization membership and everything held inside the
-        // org — group memberships, project mirror rows, and role bindings
+        // org — group memberships and role bindings
         // across the org's whole subtree (issue #485). Bindings the user
         // holds in other orgs are those orgs' grants and stay.
         try await db.transaction { transaction in

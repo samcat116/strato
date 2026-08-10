@@ -30,8 +30,9 @@ struct WhoCanPrincipalRef: Content, Hashable, Sendable {
 struct WhoCanEntry: Content, Hashable, Sendable {
     let principal: WhoCanPrincipalRef
     let source: WhoCanSource
-    /// The role that carries the action; nil for non-binding sources.
-    let role: String?
+    /// The canonical role id that carries the action; nil for non-binding
+    /// sources.
+    let role: UUID?
     /// The tree node the binding is attached to — the resource itself when the
     /// grant is direct, an ancestor when it is inherited.
     let grantedOn: IAMNode?
@@ -67,7 +68,7 @@ struct WhoCanEntry: Content, Hashable, Sendable {
     init(
         principal: WhoCanPrincipalRef,
         source: WhoCanSource,
-        role: String?,
+        role: UUID?,
         grantedOn: IAMNode?,
         via: WhoCanPrincipalRef?,
         expiresAt: Date?,
@@ -455,15 +456,14 @@ enum WhoCanService {
         false
     }
 
-    /// The `role_bindings.role` values (role-definition ids in uuidString
-    /// form) of every role that grants `action` and is bindable somewhere on
+    /// The role-definition ids of every role that grants `action` and is bindable somewhere on
     /// `chain`: the platform-owned rows plus rows owned by the chain's org or
     /// project. The action-set filter runs in Swift — the in-scope role set
     /// is small, and it keeps the query free of dialect-specific array
     /// operators.
     static func grantingRoleBindingValues(
         action: String, chain: [IAMNode], on db: any Database
-    ) async throws -> [String] {
+    ) async throws -> [UUID] {
         let orgID = chain.first { $0.type == .organization }?.id
         let projectID = chain.first { $0.type == .project }?.id
         let candidates = try await IAMRoleDefinition.query(on: db)
@@ -486,7 +486,7 @@ enum WhoCanService {
         return
             candidates
             .filter { $0.actions.contains(action) }
-            .compactMap { $0.id?.uuidString }
+            .compactMap(\.id)
     }
 
     /// Bindings along the chain whose role carries the action, plus the users
@@ -499,7 +499,7 @@ enum WhoCanService {
         guard !grantingRoles.isEmpty else { return [] }
 
         let bindings = try await RoleBinding.query(on: db)
-            .filter(\.$role ~~ grantingRoles)
+            .filter(\.$roleID ~~ grantingRoles)
             .group(.or) { anyNode in
                 for node in chain {
                     anyNode.group(.and) { thisNode in
@@ -522,7 +522,7 @@ enum WhoCanService {
                 WhoCanEntry(
                     principal: WhoCanPrincipalRef(type: principalType, id: binding.principalID),
                     source: .binding,
-                    role: roleLabel(binding.role),
+                    role: binding.roleID,
                     grantedOn: IAMNode(type: nodeType, id: binding.nodeID),
                     via: nil,
                     expiresAt: binding.expiresAt
@@ -549,7 +549,7 @@ enum WhoCanService {
                     WhoCanEntry(
                         principal: WhoCanPrincipalRef(type: .user, id: membership.$user.id),
                         source: .binding,
-                        role: roleLabel(binding.role),
+                        role: binding.roleID,
                         grantedOn: IAMNode(type: nodeType, id: binding.nodeID),
                         via: group,
                         expiresAt: binding.expiresAt
@@ -558,14 +558,6 @@ enum WhoCanService {
             }
         }
         return entries
-    }
-
-    /// Seeded roles keep reporting their names ("admin"), not their row ids —
-    /// the who-can API's role field predates row identity and its consumers
-    /// render it. User-created roles surface their id until the API grows
-    /// display names (issue #605).
-    private static func roleLabel(_ bindingValue: String) -> String {
-        UUID(uuidString: bindingValue).flatMap { IAMRole(seededID: $0)?.rawValue } ?? bindingValue
     }
 
     /// Org members, for the two actions membership grants directly.
@@ -619,7 +611,9 @@ enum WhoCanService {
             if lhs.principal.id != rhs.principal.id {
                 return lhs.principal.id.uuidString < rhs.principal.id.uuidString
             }
-            if lhs.role != rhs.role { return (lhs.role ?? "") < (rhs.role ?? "") }
+            if lhs.role != rhs.role {
+                return (lhs.role?.uuidString ?? "") < (rhs.role?.uuidString ?? "")
+            }
             return (lhs.via?.id.uuidString ?? "") < (rhs.via?.id.uuidString ?? "")
         }
     }
@@ -731,7 +725,7 @@ enum WhoCanService {
         guard !grantingRoles.isEmpty else { return false }
 
         let matches = try await RoleBinding.query(on: db)
-            .filter(\.$role ~~ grantingRoles)
+            .filter(\.$roleID ~~ grantingRoles)
             .filter(\.$principalType == IAMPrincipalType.group.rawValue)
             .filter(\.$principalID == groupID)
             .group(.or) { anyNode in

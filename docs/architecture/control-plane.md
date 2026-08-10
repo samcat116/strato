@@ -77,9 +77,9 @@ against ~2.4s for the four targets in parallel. Keep them roughly balanced.
    (STR-183). `STRATO_RUN_MIGRATIONS=false` turns a replica into a verifier: it
    refuses to boot if anything is unapplied rather than migrating itself.
 5. Post-migration convergence: the Cedar policy set is compiled at its
-   current version, stored secrets are re-encrypted, and `role_bindings` are
-   backfilled from the relational mirrors (org members, project
-   members/grants) — each runs every boot and no-ops when converged.
+   current version and stored secrets are re-encrypted. Grant completeness is
+   a schema-migration invariant; startup does not scan membership relations to
+   repair `role_bindings`.
 6. Scheduler registration (`app.useScheduler`), SPIRE configuration, OTel
    bootstrap, and lifecycle handlers (agent heartbeat monitor, hourly audit
    retention, SSF polling).

@@ -50,20 +50,20 @@ struct BootstrapCommandTests {
             #expect(user.currentOrganizationId == org.id)
 
             let membership = try #require(try await UserOrganization.query(on: app.db).first())
-            #expect(membership.role == "admin")
+            #expect(membership.roleID == IAMRole.admin.seededID)
 
             let project = try #require(try await Project.query(on: app.db).first())
             #expect(project.name == "E2E")
             let expectedPath = "/\(org.id!.uuidString)/\(project.id!.uuidString)"
             #expect(project.path == expectedPath)
 
-            // IAM dual-write: explicit admin bindings on both the org and the project.
+            // Explicit authoritative admin bindings on both the org and project.
             let orgBindings = try await RoleBindingService.activeBindings(
                 nodeType: .organization, nodeID: org.id!, on: app.db)
-            #expect(orgBindings.map(\.role) == [IAMRole.admin.seededID.uuidString])
+            #expect(orgBindings.map(\.roleID) == [IAMRole.admin.seededID])
             let projectBindings = try await RoleBindingService.activeBindings(
                 nodeType: .project, nodeID: project.id!, on: app.db)
-            #expect(projectBindings.map(\.role) == [IAMRole.admin.seededID.uuidString])
+            #expect(projectBindings.map(\.roleID) == [IAMRole.admin.seededID])
 
             // --quiet prints exactly the key, and its hash matches the stored row.
             let printedKey = try #require(console.lines.first).trimmingCharacters(in: .whitespacesAndNewlines)

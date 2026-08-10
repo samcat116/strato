@@ -381,10 +381,7 @@ struct ServiceAccountController: RouteCollection {
             .all()
         var roles: [UUID: [String]] = [:]
         for binding in bindings {
-            guard
-                let roleID = UUID(uuidString: binding.role),
-                let role = IAMRole(seededID: roleID)
-            else { continue }
+            guard let role = IAMRole(seededID: binding.roleID) else { continue }
             roles[binding.principalID, default: []].append(role.rawValue)
         }
         return roles.mapValues { $0.sorted() }

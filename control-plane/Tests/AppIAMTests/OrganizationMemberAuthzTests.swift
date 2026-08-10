@@ -13,6 +13,14 @@ import AppTestSupport
 /// else in the API.
 @Suite("Organization Member Authorization Tests", .serialized)
 final class OrganizationMemberAuthzTests {
+    private struct AddRequest: Content {
+        let userEmail: String
+        let role: UUID?
+    }
+
+    private struct UpdateRequest: Content {
+        let role: UUID?
+    }
 
     private func withMemberAuthzApp(
         _ test: (Application, Organization, User, String, User) async throws -> Void
@@ -58,7 +66,7 @@ final class OrganizationMemberAuthzTests {
             // evaluator denies member management.
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: callerToken)
-                try req.content.encode(["userEmail": target.email, "role": "member"])
+                try req.content.encode(AddRequest(userEmail: target.email, role: nil))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -71,7 +79,7 @@ final class OrganizationMemberAuthzTests {
 
             try await app.test(.PATCH, "/api/organizations/\(org.id!)/members/\(target.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: callerToken)
-                try req.content.encode(["role": "admin"])
+                try req.content.encode(UpdateRequest(role: IAMRole.admin.seededID))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -111,7 +119,7 @@ final class OrganizationMemberAuthzTests {
 
             try await app.test(.POST, "/api/organizations/\(org.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: sysAdminToken)
-                try req.content.encode(["userEmail": target.email, "role": "member"])
+                try req.content.encode(AddRequest(userEmail: target.email, role: nil))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }

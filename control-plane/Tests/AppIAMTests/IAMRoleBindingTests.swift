@@ -137,14 +137,14 @@ final class IAMRoleBindingTests {
             let activeNow = try await RoleBindingService.activeBindings(
                 principalType: .user, principalID: principal, on: app.db)
             #expect(activeNow.count == 1)
-            #expect(activeNow.first?.role == IAMRole.viewer.seededID.uuidString)
+            #expect(activeNow.first?.roleID == IAMRole.viewer.seededID)
 
             // Role-scoped revoke removes only that role; revokeAll clears the node.
             try await RoleBindingService.revoke(
                 principalType: .user, principalID: principal, role: .viewer,
                 nodeType: .project, nodeID: node, on: app.db)
             rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
-            #expect(rows.map(\.role) == [IAMRole.editor.seededID.uuidString])
+            #expect(rows.map(\.roleID) == [IAMRole.editor.seededID])
 
             try await RoleBindingService.revokeAll(nodeType: .project, nodeID: node, on: app.db)
             rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
@@ -198,7 +198,7 @@ final class IAMRoleBindingTests {
             try await RejectConditionedRoleBindings().prepare(on: app.db)
 
             let rows = try await bindings(on: app.db, nodeType: .project, nodeID: node)
-            #expect(rows.map(\.role) == [IAMRole.viewer.seededID.uuidString])
+            #expect(rows.map(\.roleID) == [IAMRole.viewer.seededID])
             // Validated, which Postgres grants only after re-scanning the whole
             // table — proof the sweep left no conditioned row behind.
             let stateAfter = try await conditionedRoleBindingConstraint(on: app.db)
@@ -224,44 +224,7 @@ final class IAMRoleBindingTests {
         }
     }
 
-    // MARK: - Backfills
-
-    @Test("Mirror backfill maps org admins and project roles; bare members get no binding")
-    func backfillFromMirrors() async throws {
-        try await withApp { app in
-            let builder = TestDataBuilder(db: app.db)
-            let org = try await builder.createOrganization(name: "BF Org")
-            let admin = try await builder.createUser(username: "bfadmin", email: "bfadmin@example.com")
-            let member = try await builder.createUser(username: "bfmember", email: "bfmember@example.com")
-            try await builder.addUserToOrganization(user: admin, organization: org, role: "admin")
-            try await builder.addUserToOrganization(user: member, organization: org, role: "member")
-            let project = try await builder.createProject(name: "BF Project", description: "d", organization: org)
-            try await ProjectMember(projectID: project.id!, userID: member.id!, role: "member").save(on: app.db)
-            let group = Group(name: "BF Group", description: "d", organizationID: org.id!)
-            try await group.save(on: app.db)
-            try await ProjectGroupGrant(projectID: project.id!, groupID: group.id!, role: "viewer").save(on: app.db)
-
-            try await RoleBindingBackfill.backfillFromMirrors(app)
-            // Idempotent: a second run inserts nothing new.
-            try await RoleBindingBackfill.backfillFromMirrors(app)
-
-            let orgBindings = try await bindings(on: app.db, nodeType: .organization, nodeID: org.id!)
-            #expect(orgBindings.count == 1)
-            #expect(orgBindings.first?.principalID == admin.id)
-            #expect(orgBindings.first?.role == IAMRole.admin.seededID.uuidString)
-
-            let projectBindings = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
-            #expect(projectBindings.count == 2)
-            let userBinding = projectBindings.first { $0.principalType == IAMPrincipalType.user.rawValue }
-            #expect(userBinding?.principalID == member.id)
-            #expect(userBinding?.role == IAMRole.editor.seededID.uuidString)
-            let groupBinding = projectBindings.first { $0.principalType == IAMPrincipalType.group.rawValue }
-            #expect(groupBinding?.principalID == group.id)
-            #expect(groupBinding?.role == IAMRole.viewer.seededID.uuidString)
-        }
-    }
-
-    // MARK: - Dual-writes through the API
+    // MARK: - Authoritative API writes
 
     @Test("Organization create dual-writes admin + default-project creator bindings")
     func orgCreateWritesBindings() async throws {
@@ -284,7 +247,7 @@ final class IAMRoleBindingTests {
             let orgBindings = try await bindings(on: app.db, nodeType: .organization, nodeID: createdOrgID)
             #expect(orgBindings.count == 1)
             #expect(orgBindings.first?.principalID == creator.id)
-            #expect(orgBindings.first?.role == IAMRole.admin.seededID.uuidString)
+            #expect(orgBindings.first?.roleID == IAMRole.admin.seededID)
             #expect(orgBindings.first?.createdBy == creator.id)
 
             // The auto-created default project carries a creator binding.
@@ -295,7 +258,7 @@ final class IAMRoleBindingTests {
             let projectBindings = try await bindings(on: app.db, nodeType: .project, nodeID: projectID)
             #expect(projectBindings.count == 1)
             #expect(projectBindings.first?.principalID == creator.id)
-            #expect(projectBindings.first?.role == IAMRole.admin.seededID.uuidString)
+            #expect(projectBindings.first?.roleID == IAMRole.admin.seededID)
 
             // The org also gets a default site so it can enroll agents right
             // away (enrollment requires one).
@@ -326,26 +289,27 @@ final class IAMRoleBindingTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
-                        userEmail: target.email, userID: nil, role: "member"))
+                        userEmail: target.email, userID: nil, role: IAMRole.editor.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
             var rows = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
             #expect(rows.count == 1)
-            #expect(rows.first?.role == IAMRole.editor.seededID.uuidString)
+            #expect(rows.first?.roleID == IAMRole.editor.seededID)
             #expect(rows.first?.principalID == target.id)
             #expect(rows.first?.createdBy == actor.id)
 
             // Role change → the editor binding is replaced by admin.
             try await app.test(.PATCH, "/api/projects/\(project.id!)/members/\(target.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(ProjectMemberController.UpdateMemberRoleRequest(role: "admin"))
+                try req.content.encode(
+                    ProjectMemberController.UpdateMemberRoleRequest(role: IAMRole.admin.seededID))
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
             rows = try await bindings(on: app.db, nodeType: .project, nodeID: project.id!)
             #expect(rows.count == 1)
-            #expect(rows.first?.role == IAMRole.admin.seededID.uuidString)
+            #expect(rows.first?.roleID == IAMRole.admin.seededID)
 
             // Revoke → no bindings left on the node.
             try await app.test(.DELETE, "/api/projects/\(project.id!)/members/\(target.id!)") { req in
@@ -375,7 +339,8 @@ final class IAMRoleBindingTests {
             try await app.test(.POST, "/api/projects/\(project.id!)/groups") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
-                    ProjectMemberController.GrantGroupRequest(groupID: group.id!, role: "viewer"))
+                    ProjectMemberController.GrantGroupRequest(
+                        groupID: group.id!, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
@@ -383,7 +348,7 @@ final class IAMRoleBindingTests {
             #expect(rows.count == 1)
             #expect(rows.first?.principalType == IAMPrincipalType.group.rawValue)
             #expect(rows.first?.principalID == group.id)
-            #expect(rows.first?.role == IAMRole.viewer.seededID.uuidString)
+            #expect(rows.first?.roleID == IAMRole.viewer.seededID)
 
             try await app.test(.DELETE, "/api/projects/\(project.id!)/groups/\(group.id!)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -425,7 +390,7 @@ final class IAMRoleBindingTests {
             let rows = try await bindings(on: app.db, nodeType: .project, nodeID: createdID)
             #expect(rows.count == 1)
             #expect(rows.first?.principalID == creator.id)
-            #expect(rows.first?.role == IAMRole.admin.seededID.uuidString)
+            #expect(rows.first?.roleID == IAMRole.admin.seededID)
         }
     }
 }

@@ -372,8 +372,10 @@ final class ListCountBatchingTests {
                 try await measure(on: app, as: user, path: "/api/organizations") { req in
                     let organizations = try await OrganizationController().index(req: req)
                     #expect(organizations.count == expected)
-                    #expect(organizations.first { $0.name == "org-000" }?.userRole == "admin")
-                    #expect(organizations.filter { $0.userRole == "member" }.count == expected - 1)
+                    #expect(
+                        organizations.first { $0.name == "org-000" }?.userRole
+                            == IAMRole.admin.seededID)
+                    #expect(organizations.filter { $0.userRole == nil }.count == expected - 1)
                 }
             }
 

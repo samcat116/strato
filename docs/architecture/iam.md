@@ -277,7 +277,7 @@ free-form Cedar text. Of that vocabulary **only `expires_at` is implemented**;
 see "Conditions are not implemented yet" below.
 
 ```
-(principal_type, principal_id, role, node_type, node_id,
+(principal_type, principal_id, role_id, node_type, node_id,
  condition, expires_at, created_by, created_at)
 ```
 
@@ -288,6 +288,15 @@ see "Conditions are not implemented yet" below.
 - Nodes: any tree node — Org, Folder, Project, or an **individual resource**.
   Resource-level bindings exist from day one.
 - Many-to-many. The one-parent rule constrains *resources*, never principals.
+- **Role identity is always a UUID.** `role_id` is a Postgres UUID naming an
+  `iam_roles` row; request DTOs accept UUIDs only. Names and historical
+  membership literals are not decoded on reads or writes.
+- **`role_bindings` is the sole grant store.** Project user grants and group
+  grants have no relational mirror tables. `user_organizations` remains
+  because bare organization membership is an identity fact; its nullable
+  `role_id` is display metadata and never an authorization input. See the
+  [membership role cutover runbook](/deployment/membership-role-cutover) for
+  the preflight inventory and post-migration checks.
 - **Which nodes have a write surface.** Org grants go through the org members
   API, project grants through the project members/groups APIs, and folder
   grants through `/api/organizations/{orgID}/ous/{ouID}/members` and
@@ -487,22 +496,13 @@ live bindings cannot be deleted (`409` with the count) — dropping it would
 silently revoke whatever those bindings grant, with nothing in the bindings
 list to show it happened.
 
-**Granting names the role by id or by name** (`MemberRoleResolver`, STR-111).
+**Granting names the role only by UUID** (`MemberRoleResolver`, STR-229).
 `GET /api/iam/roles/bindable?nodeType=&nodeId=` lists what can be granted at a
 node — the platform defaults plus every role owned along the ancestor chain —
-and the member endpoints (project, folder, org) accept every name it hands
-back, resolved in that same scope, for the same reason the action catalogue
-exists: the picker must not offer something the write path would reject. Order
-matters twice:
-
-- the **fixed vocabulary wins**. `viewer`/`operator`/`editor`/`admin` and the
-  legacy project names (`admin`/`member`/`viewer`) are resolved first, so they
-  keep meaning what they have always meant even in a deployment that names a
-  role of its own `viewer`. That role stays grantable by id.
-- an **ambiguous name is a `400` naming both ids**, never a silent pick. Names
-  are unique per owner, not globally, so an org and a project beneath it can
-  each define `deployer`; choosing one for the caller would grant access nobody
-  asked for.
+and the member endpoints accept the selected row id. The write path verifies
+that the id still exists and is still bindable at the target node. Role names
+are display data only: they are returned beside the id in grant listings, but
+are never decoded as grant input or stored as policy identity.
 
 ### Authored policies (shipped with #606)
 

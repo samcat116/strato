@@ -2,7 +2,7 @@ import Fluent
 import Foundation
 import Vapor
 
-/// A role grant: `principal` holds `role` on `node` (an org-tree node or an
+/// A role grant: `principal` holds `roleID` on `node` (an org-tree node or an
 /// individual resource), optionally expiring. Conditions are reserved, not
 /// implemented — see `condition`.
 ///
@@ -25,13 +25,10 @@ final class RoleBinding: Model, @unchecked Sendable {
     @Field(key: "principal_id")
     var principalID: UUID
 
-    /// The granted role, as the `iam_roles` row id in `UUID.uuidString`
-    /// (uppercase) form. A string column rather than a typed uuid because
-    /// the table's five-column unique constraint predates role-row identity.
-    /// Rows whose value parses to no known role are dropped by every read
-    /// path (under-grant, never over-grant).
-    @Field(key: "role")
-    var role: String
+    /// The granted `iam_roles` row id. The UUID column rejects role names and
+    /// legacy membership literals at the persistence boundary.
+    @Field(key: "role_id")
+    var roleID: UUID
 
     @Field(key: "node_type")
     var nodeType: String
@@ -57,7 +54,7 @@ final class RoleBinding: Model, @unchecked Sendable {
     @OptionalField(key: "expires_at")
     var expiresAt: Date?
 
-    /// The user who wrote the grant; nil for system-written rows (backfills).
+    /// The user who wrote the grant; nil for system-written rows and migrations.
     @OptionalField(key: "created_by")
     var createdBy: UUID?
 
@@ -79,7 +76,7 @@ final class RoleBinding: Model, @unchecked Sendable {
         self.id = id
         self.principalType = principalType.rawValue
         self.principalID = principalID
-        self.role = roleID.uuidString
+        self.roleID = roleID
         self.nodeType = nodeType.rawValue
         self.nodeID = nodeID
         self.expiresAt = expiresAt
