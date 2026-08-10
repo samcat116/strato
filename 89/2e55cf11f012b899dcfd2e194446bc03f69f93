@@ -1,0 +1,45 @@
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_59e96616c802df::t_22e419a298ec15 170-176,249-252,254-255,257-260
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_59e96616c802df::t_862f8aed7e323f 284,289
+  s_59e96616c802df::t_005cf4cba5e300 172-199,249-283,285-288,290-317
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  s_59e96616c802df::t_005cf4cba5e300 308-340
+  s_59e96616c802df::t_6d9dc1ac1cc6db 48-49,52,54
+control-plane/Sources/App/Services/ObservedStateApplier.swift
+  s_59e96616c802df::t_12836f3030ded6 1204-1215,1222-1239,1241-1243,1280-1284,1293-1302,1315,1687-1689,1694-1699,1701-1705,1711-1726,1729,1733-1735
+  s_59e96616c802df::t_862f8aed7e323f 1216-1221
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_59e96616c802df::t_005cf4cba5e300 842
+control-plane/Sources/App/Models/VolumeReplica.swift
+  s_59e96616c802df::t_22e419a298ec15 15-18
+control-plane/Tests/AppResourceTests/VolumeSizeValidationTests.swift
+  s_59e96616c802df::t_005cf4cba5e300 158-177
+control-plane/Sources/App/Models/StoragePool.swift
+  s_59e96616c802df::t_22e419a298ec15 97-99,106
+docs/operations/volume-replica-cutover.md
+  s_59e96616c802df::t_7c1f31e79ea52d 4-5,42-43,57-61
+  s_59e96616c802df::t_6cb398c9526c6d 62
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_59e96616c802df::t_0843c6e95ff05c 684-697,734-741,754-757
+control-plane/Sources/App/Services/VolumeService.swift
+  s_59e96616c802df::t_6d9dc1ac1cc6db 148-151
+control-plane/Sources/App/Migrations/MakeVolumeReplicasAuthoritative.swift
+  s_59e96616c802df::t_22e419a298ec15 9-10,66-68,70,108-109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "892e55cf11f012b899dcfd2e194446bc03f69f93",
+  "prompts": {},
+  "sessions": {
+    "s_59e96616c802df": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99b-9431-7de1-b7b3-70443ae7a949",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
