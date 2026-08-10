@@ -3029,7 +3029,7 @@ export interface paths {
         put?: never;
         /**
          * Move a project to another organization or folder
-         * @description Requires admin on the project and on the destination organization. Exactly one destination must resolve: `organizationalUnitId` (a folder) or `organizationId`.
+         * @description Requires admin on the project and on the destination organization. Exactly one destination must resolve: `organizationalUnitId` (a folder) or `organizationId`. Project-wide network quotas on the destination hierarchy are enforced before the move commits.
          */
         post: operations["transferProject"];
         delete?: never;
