@@ -56,16 +56,16 @@ struct SecurityGroupProtocolTests {
         #expect(groups[0].rules[1].protocolName == nil)
     }
 
-    @Test("DesiredStateMessage from an older control plane decodes securityGroups to nil")
-    func securityGroupsBackwardCompatible() throws {
-        // Nil (not []): absence means "this control plane has no opinion on
-        // security groups", which the agent must not read as "tear down all
-        // port groups".
-        let legacy = """
-            {"requestId":"r","timestamp":0,"syncId":"s","vms":[]}
+    @Test("A non-authoritative desired message keeps securityGroups nil")
+    func securityGroupsSemanticAbsence() throws {
+        // Nil (not []): absence means this sender has no opinion on security
+        // groups, which the agent must not read as "tear down all port groups".
+        let nonAuthoritative = """
+            {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
+             "networks":[],"networksAuthoritative":false,"tombstones":[],"volumes":[],"snapshots":[]}
             """
         let decoded = try WireProtocol.makeDecoder().decode(
-            DesiredStateMessage.self, from: Data(legacy.utf8))
+            DesiredStateMessage.self, from: Data(nonAuthoritative.utf8))
         #expect(decoded.securityGroups == nil)
     }
 
@@ -77,16 +77,15 @@ struct SecurityGroupProtocolTests {
         let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: data)
         #expect(decoded.securityGroupIds == ids)
 
-        // A spec from a pre-security-group control plane has no key at all:
-        // nil marks the NIC unmanaged (it joins no port groups, including the
-        // drop group), preserving legacy traffic. (`networkId` is present
-        // regardless — it has been required since wire v21.)
-        let legacy = """
-            {"network":"default","networkId":"\(UUID().uuidString)"}
+        // Nil marks the NIC unmanaged: it joins no port groups, including the
+        // drop group.
+        let unmanaged = """
+            {"network":"default","networkId":"\(UUID().uuidString)",
+             "dhcpEnabled":false,"dnsServers":[]}
             """
-        let legacyDecoded = try WireProtocol.makeDecoder().decode(
-            NetworkSpec.self, from: Data(legacy.utf8))
-        #expect(legacyDecoded.securityGroupIds == nil)
+        let unmanagedDecoded = try WireProtocol.makeDecoder().decode(
+            NetworkSpec.self, from: Data(unmanaged.utf8))
+        #expect(unmanagedDecoded.securityGroupIds == nil)
     }
 
     @Test("A rule's log flag round-trips, and its absence decodes to nil")

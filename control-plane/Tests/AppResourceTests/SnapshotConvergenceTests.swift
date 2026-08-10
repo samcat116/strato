@@ -147,7 +147,7 @@ final class SnapshotConvergenceTests {
                 on: app, user: user, project: project, vm: vm, agentId: agentId)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.snapshots?.first)
+            let entry = try #require(message.snapshots.first)
             #expect(entry.snapshotId == snapshot.id)
             #expect(entry.kind == .vmCheckpoint)
             #expect(entry.parentId == vm.id)
@@ -182,7 +182,7 @@ final class SnapshotConvergenceTests {
             try await snapshot.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.snapshots?.first { $0.kind == .sandboxSnapshot })
+            let entry = try #require(message.snapshots.first { $0.kind == .sandboxSnapshot })
             #expect(entry.capture?.sandboxMode == .stop)
             // No export desired, so no upload slots — an export is a placement
             // fact the operator has to ask for.
@@ -210,7 +210,7 @@ final class SnapshotConvergenceTests {
             try await snapshot.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.snapshots?.first { $0.kind == .sandboxSnapshot })
+            let entry = try #require(message.snapshots.first { $0.kind == .sandboxSnapshot })
             let export = try #require(entry.export)
             #expect(Set(export.uploads.map(\.kind)) == Set(SandboxSnapshotArtifactKind.allCases))
             // Control-plane-relative paths presented with the agent's SVID, so

@@ -91,8 +91,8 @@ struct SnapshotReconciliationTests {
     }
 
     private static func sync(
-        _ snapshots: [DesiredSnapshotState]?,
-        tombstones: [DesiredWorkloadTombstone]? = nil
+        _ snapshots: [DesiredSnapshotState],
+        tombstones: [DesiredWorkloadTombstone] = []
     ) -> DesiredStateMessage {
         DesiredStateMessage(syncId: "s", vms: [], tombstones: tombstones, snapshots: snapshots)
     }
@@ -247,26 +247,9 @@ struct SnapshotReconciliationTests {
         #expect(await actuator.artifacts[id.uuidString] == nil)
     }
 
-    // MARK: - Silence
+    // MARK: - Unknown local inventory
 
-    /// A sync from a pre-v33 control plane says nothing about snapshots.
-    /// Planning against an empty desired list would report every artifact on
-    /// the host as unaccounted for and invite a future reading of that silence
-    /// as teardown.
-    @Test("A nil snapshots field skips the whole snapshot half")
-    func nilSnapshotsSkipsTheHalf() async {
-        let id = UUID()
-        let actuator = MockSnapshotActuator(artifacts: [id.uuidString: Self.present(.vmCheckpoint)])
-        let reconciler = Self.reconciler(actuator)
-
-        await reconciler.apply(Self.sync(nil))
-        try? await Task.sleep(for: .milliseconds(50))
-
-        #expect(await actuator.performed.isEmpty)
-        #expect(await reconciler.unrecognizedWorkloads().isEmpty)
-    }
-
-    /// The other side of the same rule: an inventory the agent cannot read is
+    /// An inventory the agent cannot read is
     /// "I don't know", not "there is nothing here". Planning against `[:]` would
     /// re-capture every desired artifact, checkpointing live guests over ones
     /// already on disk.
