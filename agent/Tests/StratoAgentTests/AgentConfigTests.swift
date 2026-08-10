@@ -376,10 +376,12 @@ struct AgentConfigTests {
         }
     }
 
-    @Test("Unknown top-level and nested settings fail clearly", arguments: [
-        ("log_levle", "\"debug\""),
-        ("spiffe.trust_domian", "\"strato.local\""),
-    ])
+    @Test(
+        "Unknown top-level and nested settings fail clearly",
+        arguments: [
+            ("log_levle", "\"debug\""),
+            ("spiffe.trust_domian", "\"strato.local\""),
+        ])
     func unknownSettingsRejected(key: String, value: String) throws {
         try withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
