@@ -146,7 +146,7 @@ struct VolumeReconciliationTests {
     }
 
     private static func sync(
-        volumes: [DesiredVolumeState]?, tombstones: [DesiredWorkloadTombstone] = []
+        volumes: [DesiredVolumeState], tombstones: [DesiredWorkloadTombstone] = []
     ) -> DesiredStateMessage {
         DesiredStateMessage(vms: [], tombstones: tombstones, volumes: volumes)
     }
@@ -419,27 +419,6 @@ struct VolumeReconciliationTests {
             kind: .volume, id: id.uuidString, generation: 1, steps: [.create],
             target: .volume(Self.desired(id)))
         #expect(item.laneKeys == ["volume/" + id.uuidString])
-    }
-
-    // MARK: - The asymmetric-absence guard
-
-    /// The headline safety property of the whole conversion. A control plane
-    /// that says nothing about volumes — one below wire v31, or one mid-rollback
-    /// — must leave every volume on the host exactly where it is. Planning
-    /// against an empty desired list instead would report all of them as
-    /// unaccounted for and invite a future reading of that silence as teardown.
-    @Test("A sync with no volumes field touches nothing and reports nothing")
-    func nilVolumesFieldIsNotAnEmptyDesiredList() async {
-        let id = UUID()
-        let actuator = MockVolumeActuator(volumes: [id.uuidString: .managed(Self.facts())])
-        let reconciler = Self.reconciler(actuator)
-
-        await reconciler.apply(Self.sync(volumes: nil))
-        try? await Task.sleep(for: .milliseconds(50))
-
-        #expect(await actuator.performed.isEmpty)
-        #expect(await actuator.volumes.count == 1)
-        #expect(await reconciler.unrecognizedWorkloads().isEmpty)
     }
 
     /// An agent that cannot read its own workload manifest converges no volumes

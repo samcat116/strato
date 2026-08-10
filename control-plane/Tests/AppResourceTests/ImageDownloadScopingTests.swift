@@ -142,7 +142,7 @@ final class ImageDownloadScopingTests {
             try await volume.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(message.volumes?.first?.source?.kind == DesiredVolumeSource.image)
+            #expect(message.volumes.first?.source?.kind == DesiredVolumeSource.image)
             #expect(await self.hasGrant(app: app, agentId: agentId, image: image))
         }
     }
@@ -171,7 +171,7 @@ final class ImageDownloadScopingTests {
             try await volume.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: other)
-            #expect(message.volumes?.isEmpty == true)
+            #expect(message.volumes.isEmpty)
             #expect(await self.hasGrant(app: app, agentId: other, image: image) == false)
         }
     }

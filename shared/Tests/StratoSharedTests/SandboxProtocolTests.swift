@@ -160,17 +160,15 @@ struct SandboxProtocolTests {
         #expect(reportKeys.contains("sandboxes"))
     }
 
-    @Test("DesiredStateMessage from a pre-sandbox control plane decodes sandboxes to []")
-    func desiredSandboxesBackwardCompatible() throws {
-        // A pre-v5 control plane emits no `sandboxes` key at all; the agent must
-        // tolerate its absence rather than fail the whole sync — and must gate
-        // teardown on supportsSandboxSync, not on this decoded-empty list.
-        let legacy = """
-            {"requestId":"r","timestamp":0,"syncId":"s","vms":[]}
+    @Test("The current desired schema rejects a missing sandbox inventory")
+    func desiredSandboxesAreRequired() {
+        let malformed = """
+            {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"networks":[],
+             "networksAuthoritative":true,"tombstones":[],"volumes":[],"snapshots":[]}
             """
-        let decoded = try decodeJSON(DesiredStateMessage.self, from: legacy)
-        #expect(decoded.sandboxes.isEmpty)
-        #expect(decoded.syncId == "s")
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(DesiredStateMessage.self, from: malformed)
+        }
     }
 
     @Test("ObservedStateReport carries sandbox observations through the envelope")
@@ -210,16 +208,16 @@ struct SandboxProtocolTests {
         #expect(decoded.sandboxes[1].exitCode == nil)
     }
 
-    @Test("ObservedStateReport from a pre-sandbox agent decodes sandboxes to []")
-    func observedSandboxesBackwardCompatible() throws {
-        let legacy = """
+    @Test("The current observed schema rejects a missing sandbox inventory")
+    func observedSandboxesAreRequired() {
+        let malformed = """
             {"requestId":"r","timestamp":0,"agentId":"agent-1","vms":[],
              "resources":{"totalCPU":8,"availableCPU":4,"totalMemory":16,"availableMemory":8,
-                          "totalDisk":100,"availableDisk":50}}
+                          "totalDisk":100,"availableDisk":50},"unrecognized":[]}
             """
-        let decoded = try decodeJSON(ObservedStateReport.self, from: legacy)
-        #expect(decoded.sandboxes.isEmpty)
-        #expect(decoded.agentId == "agent-1")
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(ObservedStateReport.self, from: malformed)
+        }
     }
 
     @Test("DesiredSandboxStatus decoding is strict: unknown values fail the sync")

@@ -124,10 +124,10 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].tombstoneGeneration == 7)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones?.count == 1)
-            #expect(sync.tombstones?[0].workloadId == strayId)
-            #expect(sync.tombstones?[0].kind == .vm)
-            #expect(sync.tombstones?[0].generation == 7)
+            #expect(sync.tombstones.count == 1)
+            #expect(sync.tombstones[0].workloadId == strayId)
+            #expect(sync.tombstones[0].kind == .vm)
+            #expect(sync.tombstones[0].generation == 7)
         }
     }
 
@@ -159,7 +159,7 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].tombstoneGeneration == nil)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones?.isEmpty == true)
+            #expect(sync.tombstones.isEmpty)
             // And the VM itself is untouched — no teardown, no error status.
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status != .error)
@@ -197,7 +197,7 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].placedOnAgentId == oldId)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: newId)
-            #expect(sync.tombstones?.isEmpty == true)
+            #expect(sync.tombstones.isEmpty)
         }
     }
 
@@ -224,7 +224,7 @@ final class WorkloadTombstoneTests {
             #expect(try await self.claims(for: agentId, on: app).isEmpty)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones?.isEmpty == true)
+            #expect(sync.tombstones.isEmpty)
         }
     }
 
@@ -272,7 +272,7 @@ final class WorkloadTombstoneTests {
 
             #expect(try await self.claims(for: agentId, on: app).isEmpty)
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones?.isEmpty == true)
+            #expect(sync.tombstones.isEmpty)
             #expect(sync.vms.map(\.vmId) == [vmID])
         }
     }

@@ -123,7 +123,7 @@ final class VolumeConvergenceTests {
                 on: app, user: user, project: project, agentId: agentId, size: 20 << 30)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.volumes?.first)
+            let entry = try #require(message.volumes.first)
             #expect(entry.volumeId == volume.id)
             #expect(entry.sizeBytes == 20 << 30)
             #expect(entry.format == "qcow2")
@@ -156,7 +156,7 @@ final class VolumeConvergenceTests {
             try await volume.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let attachment = try #require(message.volumes?.first?.attachment)
+            let attachment = try #require(message.volumes.first?.attachment)
             #expect(attachment.vmId == vm.id)
             #expect(attachment.deviceName.rawValue == "disk1")
             #expect(attachment.readonly)
@@ -177,7 +177,7 @@ final class VolumeConvergenceTests {
             try await clone.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.volumes?.first { $0.volumeId == clone.id })
+            let entry = try #require(message.volumes.first { $0.volumeId == clone.id })
             #expect(entry.source?.kind == DesiredVolumeSource.clone)
             #expect(entry.source?.sourceVolumeId == source.id)
         }
