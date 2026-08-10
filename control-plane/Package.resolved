@@ -393,8 +393,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swift-server/swift-openapi-vapor.git",
       "state" : {
-        "revision" : "b53c1517e889d5479567729fbe143a59da302ffc",
-        "version" : "1.0.1"
+        "revision" : "307560c9a94ba69dc4eb43b1e00534bc86aed440",
+        "version" : "1.1.0"
       }
     },
     {
