@@ -479,8 +479,8 @@ services:
     restart: unless-stopped
 
   # Only the proxy publishes a port; everything else stays on the internal
-  # network. Routes /api, /auth, /agent, /health, /organizations to the
-  # control plane and everything else to the frontend.
+  # network. Routes the browser-facing control-plane prefixes to the control
+  # plane and everything else to the frontend.
   proxy:
     image: nginx:alpine
     ports:

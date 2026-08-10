@@ -8,11 +8,17 @@ on:
     branches: [main, develop]
     paths:
       - "helm/**"
+      - "control-plane/web/src/lib/control-plane-route-prefixes.json"
+      - "deploy/compose/nginx.conf"
+      - ".github/scripts/test-control-plane-route-parity.py"
       - ".github/workflows/helm-test.yml"
   pull_request:
     branches: [main, develop]
     paths:
       - "helm/**"
+      - "control-plane/web/src/lib/control-plane-route-prefixes.json"
+      - "deploy/compose/nginx.conf"
+      - ".github/scripts/test-control-plane-route-parity.py"
       - ".github/workflows/helm-test.yml"
   workflow_dispatch:
 
@@ -80,6 +86,24 @@ jobs:
         run: |
           helm template strato-test helm/strato-control-plane/ > /tmp/default-template.yaml
           echo "Default template generated successfully"
+
+      - name: Assert control-plane route parity
+        run: |
+          helm template strato-routes helm/strato-control-plane/ \
+            --set gateway.enabled=true \
+            --set strato.externalHostname=strato.example.test \
+            > /tmp/gateway-template.yaml
+          python3 .github/scripts/test-control-plane-route-parity.py \
+            /tmp/gateway-template.yaml
+
+      - name: Assert Helm notes only recommend supported agent URLs
+        run: |
+          notes=helm/strato-control-plane/templates/NOTES.txt
+          ! grep -q 'ws://' "$notes"
+          grep -q 'wss://{{ include "strato-control-plane.gateway.agentsHost" . }}/agent/ws' "$notes"
+          grep -q 'wss://agents.<host>/agent/ws' "$notes"
+          grep -q 'TLS passthrough' "$notes"
+          grep -q 'agent-mtls port' "$notes"
 
       - name: Assert no dev secrets in default render
         run: |
