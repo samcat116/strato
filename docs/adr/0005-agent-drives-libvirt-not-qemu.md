@@ -109,7 +109,8 @@ for real under `virtqemud`.
 ### 3. libvirt's reachability *is* QEMU availability
 
 There is no binary probe left. libvirtd selects the emulator from its own
-capabilities, so a `qemu_binary_path` would have no consumer and no meaning.
+capabilities, so an agent-level emulator override would have no consumer or
+meaning.
 `HypervisorProbe.qemuReport` takes the libvirt status instead and reports
 `.qemu` unavailable for a daemon it cannot reach; the **version floor** stays in
 `HostPreflight`, which owns the check and its remediation and demotes the entry
@@ -145,7 +146,7 @@ misleading message underneath its real failure.
 ## Alternatives considered
 
 - **Keep both drivers.** This is what shipped through STR-133–135, behind a
-  per-node `qemu_driver` key (issue #902), and it was the right way to *migrate*:
+  per-node driver selector (issue #902), and it was the right way to *migrate*:
   nothing about the choice reached the control plane, so a fleet rolled over one
   node at a time and a node could be moved back by editing one line. It is a bad
   steady state. Two drivers for one `HypervisorType` means every capability is
@@ -229,11 +230,9 @@ misleading message underneath its real failure.
 
 ### Removed or demoted
 
-- `qemu_driver`, `qemu_binary_path` and `swtpm_binary_path` are retired config
-  keys. A config still carrying one starts and logs that it is ignored, rather
-  than failing — an unattended fleet upgrade must not become a fleet-wide
-  outage — and `qemu_driver = "process"` in particular can no longer change
-  behaviour in silence.
+- The process driver's configuration surface is gone. Agent configuration is
+  strict, so obsolete settings and typos fail at startup instead of being
+  ignored.
 - `ENABLE_QEMU_PROCESS_LOG_FILES` disappears with the `swift-qemu` package that
   read it.
 - The QEMU guest agent's `guest-exec` path is gone. Nothing called it, and qga's

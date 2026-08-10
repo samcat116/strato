@@ -195,6 +195,91 @@ public struct OVNNorthboundTLSConfig: Sendable, Equatable {
 }
 
 public struct AgentConfig {
+    private static let knownSettingPaths: Set<[String]> = [
+        ["control_plane_url"],
+        ["log_level"],
+        ["network_mode"],
+        ["ovn_encap_ip"],
+        ["ovn_encap_type"],
+        ["ovn_remote"],
+        ["ovn_bootstrap_chassis"],
+        ["ovn_northbound"],
+        ["ovn_northbound_tls", "ca_cert"],
+        ["ovn_northbound_tls", "client_cert"],
+        ["ovn_northbound_tls", "client_key"],
+        ["ovn_northbound_tls", "verify_server_certificate"],
+        ["ovn_northbound_tls", "server_hostname"],
+        ["enable_hvf"],
+        ["enable_kvm"],
+        ["qemu_memory_overhead_mb"],
+        ["vm_storage_dir"],
+        ["volume_storage_dir"],
+        ["image_cache_dir"],
+        ["image_cache_max_size_gb"],
+        ["sandbox_image_cache_dir"],
+        ["sandbox_image_cache_max_size_gb"],
+        ["firmware_path_arm64"],
+        ["firmware_path_x86_64"],
+        ["firmware_code_path"],
+        ["firmware_vars_template"],
+        ["secure_boot_firmware_code_path"],
+        ["secure_boot_firmware_vars_template"],
+        ["firecracker_binary_path"],
+        ["firecracker_socket_dir"],
+        ["sandbox_guest_image_path"],
+        ["sandbox_jailer_mode"],
+        ["sandbox_jailer_binary_path"],
+        ["sandbox_jailer_chroot_dir"],
+        ["sandbox_jailer_uid_base"],
+        ["sandbox_warm_start"],
+        ["sandbox_warm_cache_max_size_gb"],
+        ["hypervisor_type"],
+        ["spiffe", "enabled"],
+        ["spiffe", "trust_domain"],
+        ["spiffe", "workload_api_socket_path"],
+        ["spiffe", "source_type"],
+        ["spiffe", "certificate_path"],
+        ["spiffe", "private_key_path"],
+        ["spiffe", "trust_bundle_path"],
+        ["spiffe", "control_plane_spiffe_id"],
+        ["ovn_uplink", "external_cidr"],
+        ["ovn_uplink", "gateway"],
+        ["ovn_uplink", "bridge"],
+        ["ovn_uplink", "physnet"],
+        ["ovn_uplink", "external_cidr6"],
+        ["ovn_uplink", "gateway6"],
+        ["ovn_dynamic_routing", "enabled"],
+        ["ovn_dynamic_routing", "redistribute"],
+        ["ovn_dynamic_routing", "vrf_name"],
+        ["ovn_dynamic_routing", "maintain_vrf"],
+        ["ovn_dynamic_routing", "routing_protocols"],
+        ["resolver", "enabled"],
+        ["resolver", "coredns_binary_path"],
+        ["resolver", "config_dir"],
+        ["resolver", "rate_limit_pps"],
+        ["simulation", "enabled"],
+        ["simulation", "cpu_cores"],
+        ["simulation", "memory_mb"],
+        ["simulation", "disk_gb"],
+        ["simulation", "sandbox_log_interval_ms"],
+        ["simulation", "sandbox_exit_after_seconds"],
+        ["reconcile_teardown_minimum"],
+        ["reconcile_teardown_percent"],
+        ["allow_bulk_teardown"],
+        ["desired_state_full_refetch_seconds"],
+        ["metadata_service"],
+        ["metadata_response_hop_limit"],
+    ]
+
+    private static let knownTablePaths: Set<[String]> = [
+        ["ovn_northbound_tls"],
+        ["spiffe"],
+        ["ovn_uplink"],
+        ["ovn_dynamic_routing"],
+        ["resolver"],
+        ["simulation"],
+    ]
+
     public let controlPlaneURL: String
     public let logLevel: String?
     public let networkMode: NetworkMode?
@@ -486,6 +571,7 @@ public struct AgentConfig {
 
         let tomlString = try String(contentsOf: fileURL, encoding: .utf8)
         let tomlData = try Toml(withString: tomlString)
+        try validateKnownSettings(tomlData)
 
         // Extract configuration values from TOML
         guard let controlPlaneURL = tomlData.string("control_plane_url") else {
@@ -555,27 +641,6 @@ public struct AgentConfig {
         // time" — an operator who wants no cache bound should omit the key.
         let imageCacheMaxSizeGB = try Self.positiveInt(tomlData, key: "image_cache_max_size_gb")
         let sandboxImageCacheMaxSizeGB = try Self.positiveInt(tomlData, key: "sandbox_image_cache_max_size_gb")
-        // Keys retired with the process QEMU driver (STR-136). Read only to
-        // say so: unknown keys are otherwise ignored, and a node whose config
-        // still says `qemu_driver = "process"` would change behaviour in
-        // silence — which is the one outcome an operator must not discover from
-        // a VM that started somewhere unexpected. Warned rather than rejected,
-        // so an unattended fleet upgrade is not a fleet-wide outage.
-        for (key, note) in [
-            ("qemu_driver", "the agent always drives QEMU through libvirtd now"),
-            ("qemu_binary_path", "libvirt selects the emulator from its own capabilities"),
-            ("swtpm_binary_path", "libvirt starts and supervises swtpm per domain"),
-            ("qemu_socket_dir", "libvirt owns each domain's sockets under its own state directory"),
-        ] where tomlData.string(key) != nil {
-            logger?.warning("\(key) is no longer used and will be ignored: \(note) (STR-136)")
-        }
-        // The pull transport became the only one at wire v38; the pin existed
-        // for the push-era rollout.
-        if tomlData.bool("desired_state_pull") != nil {
-            logger?.warning(
-                "desired_state_pull is no longer used and will be ignored: the long-poll is the only desired-state transport now"
-            )
-        }
         let firmwarePathARM64 = tomlData.string("firmware_path_arm64")
         let firmwarePathX86_64 = tomlData.string("firmware_path_x86_64")
         // Split EDK2 firmware (issue #565). CODE and VARS only mean anything as
@@ -644,10 +709,9 @@ public struct AgentConfig {
         let metadataService = tomlData.bool("metadata_service")
         let metadataResponseHopLimit = tomlData.int("metadata_response_hop_limit")
         if let metadataResponseHopLimit, !(1...255).contains(metadataResponseHopLimit) {
-            // Validated rather than clamped, for `qemu_driver`'s reason: a hop
-            // limit outside the IP field's range is a mistake, and silently
-            // substituting a working value hides it until someone wonders why
-            // the setting did nothing.
+            // A hop limit outside the IP field's range is a mistake, and
+            // silently substituting a working value hides it until someone
+            // wonders why the setting did nothing.
             throw AgentConfigError.invalidConfiguration(
                 "metadata_response_hop_limit must be between 1 and 255, got \(metadataResponseHopLimit)")
         }
@@ -907,6 +971,30 @@ public struct AgentConfig {
         return value
     }
 
+    /// Reject settings the agent does not consume. This makes removed options
+    /// and ordinary typos fail at startup instead of silently doing nothing.
+    private static func validateKnownSettings(_ toml: Toml) throws {
+        if let unknownKey = toml.keyNames
+            .map(\.components)
+            .filter({ !knownSettingPaths.contains($0) })
+            .sorted(by: { $0.lexicographicallyPrecedes($1) })
+            .first
+        {
+            throw AgentConfigError.invalidConfiguration(
+                "unknown setting '\(unknownKey.joined(separator: "."))'")
+        }
+
+        if let unknownTable = toml.tableNames
+            .map(\.components)
+            .filter({ !knownTablePaths.contains($0) })
+            .sorted(by: { $0.lexicographicallyPrecedes($1) })
+            .first
+        {
+            throw AgentConfigError.invalidConfiguration(
+                "unknown section '[\(unknownTable.joined(separator: "."))]'")
+        }
+    }
+
     /// Default config file path (platform-specific)
     public static var defaultConfigPath: String {
         #if os(macOS)
@@ -925,23 +1013,21 @@ public struct AgentConfig {
         [defaultConfigPath, fallbackConfigPath]
     }
 
-    /// Loads the first config file that parses out of `searchPaths`, falling
-    /// back to the built-in defaults. `searchPaths` is injectable so tests can
-    /// pin the search (or skip it entirely) instead of reading whatever the
-    /// host operator installed.
+    /// Loads the first config file that exists in `searchPaths`, or falls back
+    /// to the built-in defaults when none exist. A present file must be valid:
+    /// silently skipping it could start the agent with unintended defaults.
+    /// `searchPaths` is injectable so tests can pin the search (or skip it
+    /// entirely) instead of reading whatever the host operator installed.
     public static func loadDefaultConfig(
         searchPaths: [String] = defaultConfigSearchPaths,
         logger: Logger? = nil
-    ) -> AgentConfig {
+    ) throws -> AgentConfig {
         for path in searchPaths {
-            do {
-                return try load(from: path, logger: logger)
-            } catch {
-                logger?.warning("Failed to load config from \(path): \(error)")
-            }
+            guard FileManager.default.fileExists(atPath: path) else { continue }
+            return try load(from: path, logger: logger)
         }
 
-        // Return default configuration if no config file found
+        // Return default configuration only if no config file was found.
         logger?.info("Using default configuration")
         return builtinDefaults
     }

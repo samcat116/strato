@@ -27,12 +27,6 @@ struct AgentOptions: ParsableArguments {
     @Option(name: .long, help: "Agent ID (defaults to hostname)")
     var agentID: String?
 
-    // Retired with the process QEMU driver (STR-136): libvirt owns each
-    // domain's sockets. Still accepted so deployed unit files and wrappers
-    // that pass it keep starting; warned about in launchAgent.
-    @Option(name: .long, help: .hidden)
-    var qemuSocketDir: String?
-
     @Option(name: .long, help: "Log level (overrides config file)")
     var logLevel: String?
 
@@ -103,14 +97,15 @@ private func launchAgent(options: AgentOptions) async throws {
             throw ExitCode.failure
         }
     } else {
-        config = AgentConfig.loadDefaultConfig(logger: logger)
+        do {
+            config = try AgentConfig.loadDefaultConfig(logger: logger)
+        } catch {
+            logger.error("Failed to load configuration: \(error)")
+            throw ExitCode.failure
+        }
     }
 
     // Override config values with command-line arguments if provided
-    if options.qemuSocketDir != nil {
-        logger.warning(
-            "--qemu-socket-dir is no longer used and will be ignored: libvirt owns each domain's sockets (STR-136)")
-    }
     let finalLogLevel = options.logLevel ?? config.logLevel ?? "info"
     let finalAgentID = options.agentID ?? ProcessInfo.processInfo.hostName
 

@@ -69,10 +69,6 @@ log_level = "info"
 # node needs libvirt >= 11.5 reachable there (deploy/agent/install.sh
 # provisions it) and stops attracting QEMU placements while it is not.
 # libvirt selects the emulator binary from its own capabilities.
-#
-# Three keys retired with the process QEMU driver (STR-136): qemu_driver,
-# qemu_binary_path and swtpm_binary_path. A config that still carries one
-# starts fine — the agent logs that it is ignored.
 
 # QEMU process memory allowance above the VM's current guest memory. When the
 # host exposes the cgroup-v2 memory controller, the agent programs guest memory
