@@ -84,16 +84,31 @@ else
   manifest_schema=$(jq -er '.schemaVersion | numbers' "$manifest_path" 2>/dev/null || true)
   manifest_version=$(jq -er '.version | strings' "$manifest_path" 2>/dev/null || true)
   capabilities_type=$(jq -er '.capabilities | type' "$manifest_path" 2>/dev/null || true)
+  artifacts_type=$(jq -er '.artifacts | type' "$manifest_path" 2>/dev/null || true)
+  manifest_valid=$(jq -er '
+    .schemaVersion == 2
+      and (.version | type == "string")
+      and ((.gitSHA == null) or (.gitSHA | type == "string"))
+      and (.capabilities | type == "array")
+      and all(.capabilities[]; type == "string")
+      and (.artifacts | type == "array")
+      and all(.artifacts[];
+        type == "object"
+          and (.arch | type == "string")
+          and (.kernel | type == "string")
+          and (.initramfs | type == "string")
+          and (.bootArgs | type == "string"))
+  ' "$manifest_path" 2>/dev/null || true)
   printf '%s\n' \
-    "Installed guest: manifest_schema=${manifest_schema:-missing} version=${manifest_version:-missing} capabilities=${capabilities_type:-missing} path=$manifest_path"
-  if [[ "$manifest_schema" != 2 || "$capabilities_type" != array ]]; then
+    "Installed guest: manifest_schema=${manifest_schema:-missing} version=${manifest_version:-missing} capabilities=${capabilities_type:-missing} artifacts=${artifacts_type:-missing} shape=${manifest_valid:-invalid} path=$manifest_path"
+  if [[ "$manifest_valid" != true ]]; then
     blockers=$((blockers + 1))
   fi
 fi
 
 # Active flat and jailed config drives. Missing roots mean this host has no
 # sandboxes in that layout; find errors are suppressed only for that case.
-flat_root="${vm_storage_dir}/sandboxes"
+flat_root="${vm_storage_dir}"
 if [[ -d "$flat_root" ]]; then
   while IFS= read -r -d '' config; do
     sandbox_id=${config#"${flat_root}/"}

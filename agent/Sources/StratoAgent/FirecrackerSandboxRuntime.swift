@@ -3158,7 +3158,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         default:
             return false
         }
-        echoedId == sandboxId && echoedNonce == expectedNonce
+        return echoedId == sandboxId && echoedNonce == expectedNonce
     }
 
     /// Read the boot nonce back from a sandbox's staged config drive (at its

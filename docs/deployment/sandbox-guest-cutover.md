@@ -18,6 +18,7 @@ SELECT
     agent_id,
     guest_control_protocol_version,
     fork_layout_version,
+    exported_at,
     storage_path
 FROM sandbox_snapshots
 ORDER BY agent_id NULLS LAST, sandbox_id, id;
@@ -34,12 +35,25 @@ SELECT
     agent_id,
     guest_control_protocol_version,
     fork_layout_version,
+    exported_at,
     storage_path
 FROM sandbox_snapshots
 WHERE desired_status <> 'Absent'
-  AND guest_control_protocol_version IS DISTINCT FROM 4
+  AND (
+      guest_control_protocol_version IS DISTINCT FROM 4
+      OR exported_at IS NOT NULL
+  )
 ORDER BY agent_id NULLS LAST, sandbox_id, id;
 ```
+
+Every export created before this cutover is a conservative blocker even when
+its recorded guest protocol is v4. The database records the exported
+`config.img` checksum, but not its decoded schema, and an object-store-only copy
+is absent from every host preflight. A network-free protocol-v4 sandbox could
+still have been stamped with config schema 1 by the previous agent. Purge these
+exports before deploying the v2-only writer, then recapture and re-export them
+after the strict agent is running. This avoids declaring an uninspected object
+restorable based only on its guest protocol metadata.
 
 `fork_layout_version` is included in the inventory because it determines fork
 eligibility. A missing layout is an unjailed/in-place-only checkpoint, not a
@@ -86,16 +100,16 @@ agent/scripts/sandbox-guest-cutover-preflight.sh \
 
 The script reports:
 
-- the installed `guest.json` schema, image version, and capabilities field;
+- the installed `guest.json` schema and complete required manifest shape;
 - active flat and jailed config-drive schema versions;
 - every locally recorded sandbox checkpoint's guest protocol, fork layout,
   storage path, and archived config-drive schema.
 
-It exits nonzero for a missing/unreadable installed manifest, manifest schema
-other than 2, a config schema other than 2 or missing its identity fields,
-missing checkpoint metadata/artifacts, or guest control protocol other than 4.
-A host with no installed guest image is not a blocker by itself because it
-cannot advertise the sandbox runtime.
+It exits nonzero for a missing/unreadable installed manifest, a manifest that
+does not fully match schema 2, a config schema other than 2 or missing its
+identity fields, missing checkpoint metadata/artifacts, or guest control
+protocol other than 4. A host with no installed guest image is not a blocker by
+itself because it cannot advertise the sandbox runtime.
 
 ## Remediation
 
@@ -106,11 +120,12 @@ cannot advertise the sandbox runtime.
 3. Recreate active sandboxes whose config drive is schema 1 or whose running
    guest predates protocol v4. Config drives and guest memory are per-sandbox;
    replacing `/var/lib/strato/sandbox/guest` does not mutate them.
-4. For each legacy checkpoint, either delete it through
+4. Delete every pre-cutover exported checkpoint and every other legacy
+   checkpoint through
    `DELETE /api/sandboxes/{sandboxID}/snapshots/{snapshotID}`, or boot/recreate
-   the source sandbox on the current guest, capture a replacement checkpoint,
-   export the replacement when off-agent durability is required, and then
-   delete the old checkpoint. Delete live forks first when lineage protection
+   the source sandbox on the current guest after deploying the v2-only writer,
+   capture a replacement checkpoint, and export the replacement when off-agent
+   durability is required. Delete live forks first when lineage protection
    refuses the old checkpoint's deletion.
 5. Do not remove `config.img`, snapshot directories, snapshot-record entries,
    or exported objects by hand. The asynchronous API deletion keeps agent
