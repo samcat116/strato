@@ -1,0 +1,23 @@
+agent/scripts/sandbox-guest-cutover-preflight.sh
+  s_96cbd44874abe4::t_f5f07d5d5528b7 87-101,103-104,111
+docs/deployment/sandbox-guest-cutover.md
+  s_96cbd44874abe4::t_f5f07d5d5528b7 21,38,42-45,49-57,103,108-112,123-124,126-128
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_96cbd44874abe4::t_f5f07d5d5528b7 3161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "bd3bd291089959de69bc2d89f7513b01bb9853f8",
+  "prompts": {},
+  "sessions": {
+    "s_96cbd44874abe4": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6c-108e-7333-ae23-7a439b43213b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
