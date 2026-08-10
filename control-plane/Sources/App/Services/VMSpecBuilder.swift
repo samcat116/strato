@@ -378,4 +378,16 @@ struct VMSpecBuilder {
             artifacts: artifacts
         )
     }
+
+    /// Builds the stricter image descriptor used to materialize a managed
+    /// volume. Firecracker's kernel/rootfs pair can boot a VM directly but
+    /// cannot seed the disk-image-only volume creation path.
+    static func buildDiskImageInfo(from image: Image) throws -> ImageInfo {
+        guard image.usableDiskArtifact != nil else {
+            throw Abort(
+                .badRequest,
+                reason: "Image does not have a usable disk-image artifact")
+        }
+        return try buildImageInfo(from: image)
+    }
 }

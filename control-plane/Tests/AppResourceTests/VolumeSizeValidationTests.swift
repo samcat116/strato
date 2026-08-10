@@ -155,6 +155,72 @@ final class VolumeSizeValidationTests {
         }
     }
 
+    @Test("POST /api/volumes rejects a Firecracker-only source image")
+    func createRejectsSourceImageWithoutDiskArtifact() async throws {
+        try await withVolumeTestApp { app, _, user, project, token in
+            let image = Image(
+                name: "firecracker-only",
+                description: "",
+                projectID: try project.requireID(),
+                architecture: .arm64,
+                status: .ready,
+                uploadedByID: try user.requireID())
+            try await image.save(on: app.db)
+            let imageID = try image.requireID()
+
+            let checksum = String(repeating: "c", count: 64)
+            try await ImageArtifact(
+                imageID: imageID,
+                kind: .kernel,
+                format: nil,
+                architecture: .arm64,
+                filename: "vmlinux",
+                size: 1,
+                checksum: checksum,
+                storagePath: "images/\(imageID)/kernel/vmlinux"
+            ).save(on: app.db)
+            try await ImageArtifact(
+                imageID: imageID,
+                kind: .rootfs,
+                format: .raw,
+                architecture: .arm64,
+                filename: "rootfs.raw",
+                size: 1,
+                checksum: checksum,
+                storagePath: "images/\(imageID)/rootfs/rootfs.raw"
+            ).save(on: app.db)
+            try await RoleBindingService.grant(
+                principalType: .user,
+                principalID: try user.requireID(),
+                role: .admin,
+                nodeType: .image,
+                nodeID: imageID,
+                createdBy: try user.requireID(),
+                on: app.db)
+
+            let body = CreateVolumeRequest(
+                name: "from-firecracker",
+                description: "must be rejected",
+                projectId: try project.requireID(),
+                environment: nil,
+                sizeGB: 10,
+                format: "qcow2",
+                volumeType: "data",
+                sourceImageId: imageID,
+                iopsTotal: nil,
+                bpsTotal: nil)
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(body)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("disk-image"))
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 0)
+        }
+    }
+
     // MARK: - Resize
 
     @Test(

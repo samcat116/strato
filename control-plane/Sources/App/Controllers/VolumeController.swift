@@ -143,6 +143,12 @@ struct VolumeController: RouteCollection {
             guard image.status == .ready else {
                 throw Abort(.badRequest, reason: "Source image is not ready (status: '\(image.status.rawValue)')")
             }
+            try await image.$artifacts.load(on: req.db)
+            guard image.usableDiskArtifact != nil else {
+                throw Abort(
+                    .badRequest,
+                    reason: "Source image does not have a usable disk-image artifact")
+            }
             sourceImage = image
         }
 

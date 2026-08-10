@@ -188,30 +188,34 @@ struct ImageController: RouteCollection {
             defaultDisk: createRequest.defaultDisk,
             defaultCmdline: createRequest.defaultCmdline
         )
-        try await image.save(on: req.db)
+        let artifact = try await req.db.transaction { db -> ImageArtifact in
+            try await image.save(on: db)
 
+            let imageID = try image.requireID()
+            let artifact = ImageArtifact(
+                imageID: imageID,
+                kind: .diskImage,
+                format: nil,
+                architecture: image.architecture,
+                filename: filename,
+                size: 0,
+                checksum: "",
+                storagePath: ImageObjectKey.artifact(
+                    projectId: projectID, imageId: imageID,
+                    kind: ArtifactKind.diskImage.rawValue, filename: filename),
+                status: .pending,
+                sourceURL: sourceURL,
+                expectedChecksum: expectedChecksum
+            )
+            try await artifact.save(on: db)
+            try await grantImageCreatorBinding(
+                imageID: imageID, userID: userID, on: db)
+            return artifact
+        }
         let imageID = try image.requireID()
-        let artifact = ImageArtifact(
-            imageID: imageID,
-            kind: .diskImage,
-            format: nil,
-            architecture: image.architecture,
-            filename: filename,
-            size: 0,
-            checksum: "",
-            storagePath: ImageObjectKey.artifact(
-                projectId: projectID, imageId: imageID,
-                kind: ArtifactKind.diskImage.rawValue, filename: filename),
-            status: .pending,
-            sourceURL: sourceURL,
-            expectedChecksum: expectedChecksum
-        )
-        try await artifact.save(on: req.db)
         image.$artifacts.value = [artifact]
 
-        // Grant the creator's IAM binding.
         let imageId = imageID.uuidString
-        try await grantImageCreatorBinding(req: req, imageID: imageID, userID: userID)
 
         // Start background fetch
         req.logger.info(
@@ -274,9 +278,11 @@ struct ImageController: RouteCollection {
             defaultDisk: createRequest.defaultDisk,
             defaultCmdline: createRequest.defaultCmdline
         )
-        try await image.save(on: req.db)
-
-        try await grantImageCreatorBinding(req: req, imageID: image.id!, userID: userID)
+        try await req.db.transaction { db in
+            try await image.save(on: db)
+            try await grantImageCreatorBinding(
+                imageID: try image.requireID(), userID: userID, on: db)
+        }
 
         req.logger.info(
             "Empty image shell created",
@@ -290,7 +296,7 @@ struct ImageController: RouteCollection {
     /// Grants the creator's admin role binding on a new image (issue #477) —
     /// the authoritative grant Cedar evaluates.
     private func grantImageCreatorBinding(
-        req: Request, imageID: UUID, userID: UUID
+        imageID: UUID, userID: UUID, on database: any Database
     ) async throws {
         try await RoleBindingService.grant(
             principalType: .user,
@@ -299,7 +305,7 @@ struct ImageController: RouteCollection {
             nodeType: .image,
             nodeID: imageID,
             createdBy: userID,
-            on: req.db
+            on: database
         )
     }
 
@@ -455,7 +461,8 @@ struct ImageController: RouteCollection {
             try await tempImage.recomputeStatus(on: req.db)
 
             // Grant the creator's IAM binding.
-            try await grantImageCreatorBinding(req: req, imageID: imageID, userID: userID)
+            try await grantImageCreatorBinding(
+                imageID: imageID, userID: userID, on: req.db)
         } catch {
             throw await failUpload(error)
         }

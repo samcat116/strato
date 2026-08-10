@@ -685,7 +685,7 @@ struct DesiredStateAssembler {
                 source = .clone(from: sourceVolumeID, format: volume.format.rawValue)
             } else if let image = volume.sourceImage, image.status == .ready, let imageId = image.id {
                 do {
-                    source = .image(try VMSpecBuilder.buildImageInfo(from: image))
+                    source = .image(try VMSpecBuilder.buildDiskImageInfo(from: image))
                     // Emitting the URLs is what authorizes the fetch, exactly as
                     // it does for a VM's boot image (issue #562). This grant
                     // moved here from the old create RPC's dispatch: with no

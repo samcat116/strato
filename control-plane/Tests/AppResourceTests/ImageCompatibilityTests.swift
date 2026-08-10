@@ -112,6 +112,21 @@ struct ImageCompatibilityTests {
         #expect(response.errorMessage == nil)
     }
 
+    @Test("Image response reports progress from a downloading Firecracker artifact")
+    func imageResponseReportsActiveDownload() {
+        let image = makeImage(architecture: .arm64)
+        image.status = .downloading
+        let kernel = artifact(.kernel, arch: .arm64)
+        kernel.status = .downloading
+        kernel.downloadProgress = 42
+        image.$artifacts.value = [kernel]
+
+        let response = ImageResponse(from: image)
+
+        #expect(response.downloadProgress == 42)
+        #expect(response.errorMessage == nil)
+    }
+
     @Test("Status response reports an error from a failed Firecracker artifact")
     func statusReportsActiveError() {
         let image = makeImage(architecture: .arm64)
@@ -124,6 +139,21 @@ struct ImageCompatibilityTests {
         let response = ImageStatusResponse(from: image)
 
         #expect(response.errorMessage == "kernel import failed")
+        #expect(response.downloadProgress == nil)
+    }
+
+    @Test("Image response reports an error from a failed Firecracker artifact")
+    func imageResponseReportsActiveError() {
+        let image = makeImage(architecture: .arm64)
+        image.status = .error
+        let rootfs = artifact(.rootfs, arch: .arm64, format: .raw)
+        rootfs.status = .error
+        rootfs.errorMessage = "rootfs import failed"
+        image.$artifacts.value = [rootfs]
+
+        let response = ImageResponse(from: image)
+
+        #expect(response.errorMessage == "rootfs import failed")
         #expect(response.downloadProgress == nil)
     }
 }

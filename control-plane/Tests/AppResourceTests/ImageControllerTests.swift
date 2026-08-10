@@ -278,6 +278,48 @@ final class ImageControllerTests {
         Self.cleanupTempStorageDirectory(tempStoragePath)
     }
 
+    /// Runs an operation while PostgreSQL rejects every image-artifact insert,
+    /// then restores the schema before returning or rethrowing.
+    private func withFailingImageArtifactInserts(
+        on app: Application,
+        _ operation: () async throws -> Void
+    ) async throws {
+        let sql = try #require(app.db as? any SQLDatabase)
+        try await sql.raw(
+            """
+            CREATE FUNCTION fail_image_artifact_insert() RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'forced image artifact insert failure';
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        ).run()
+        try await sql.raw(
+            """
+            CREATE TRIGGER fail_image_artifact_insert
+            BEFORE INSERT ON image_artifacts
+            FOR EACH ROW EXECUTE FUNCTION fail_image_artifact_insert()
+            """
+        ).run()
+
+        func removeFailureTrigger() async {
+            try? await sql.raw(
+                "DROP TRIGGER IF EXISTS fail_image_artifact_insert ON image_artifacts"
+            ).run()
+            try? await sql.raw(
+                "DROP FUNCTION IF EXISTS fail_image_artifact_insert()"
+            ).run()
+        }
+
+        do {
+            try await operation()
+        } catch {
+            await removeFailureTrigger()
+            throw error
+        }
+        await removeFailureTrigger()
+    }
+
     // MARK: - Artifact Disk Format Tests
 
     /// The artifact path validates filenames through a separate whitelist to the
@@ -708,6 +750,31 @@ final class ImageControllerTests {
                 #expect(response.status == .pending)
                 #expect(response.sourceURL == "https://example.com/image.qcow2")
             }
+        }
+    }
+
+    @Test("Create from URL rolls back when artifact persistence fails")
+    func testCreateImageFromURLArtifactFailureRollsBack() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            try await self.withFailingImageArtifactInserts(on: app) {
+                try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                    req.headers.contentType = .json
+                    try req.content.encode(
+                        CreateImageRequest(
+                            name: "rolled-back-url-import",
+                            sourceURL: "https://example.com/disk.qcow2"))
+                } afterResponse: { res in
+                    #expect(res.status == .internalServerError)
+                }
+            }
+
+            #expect(try await Image.query(on: app.db).count() == 0)
+            #expect(try await ImageArtifact.query(on: app.db).count() == 0)
+            #expect(
+                try await RoleBinding.query(on: app.db)
+                    .filter(\.$nodeType == IAMNodeType.image.rawValue)
+                    .count() == 0)
         }
     }
 
@@ -1706,40 +1773,13 @@ final class ImageControllerTests {
     @Test("A database failure after object publication cleans up the upload")
     func testArtifactPersistenceFailureCleansUpUpload() async throws {
         try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
-            let sql = try #require(app.db as? any SQLDatabase)
-            try await sql.raw(
-                """
-                CREATE FUNCTION fail_image_artifact_insert() RETURNS trigger AS $$
-                BEGIN
-                    RAISE EXCEPTION 'forced image artifact insert failure';
-                END;
-                $$ LANGUAGE plpgsql
-                """
-            ).run()
-            try await sql.raw(
-                """
-                CREATE TRIGGER fail_image_artifact_insert
-                BEFORE INSERT ON image_artifacts
-                FOR EACH ROW EXECUTE FUNCTION fail_image_artifact_insert()
-                """
-            ).run()
-
-            func removeFailureTrigger() async {
-                try? await sql.raw(
-                    "DROP TRIGGER IF EXISTS fail_image_artifact_insert ON image_artifacts"
-                ).run()
-                try? await sql.raw(
-                    "DROP FUNCTION IF EXISTS fail_image_artifact_insert()"
-                ).run()
-            }
-
             let (body, boundary) = Self.createMultipartFormData(
                 name: "Database failure",
                 description: nil,
                 filename: "failed.qcow2",
                 fileContent: Self.createQCOW2Buffer())
 
-            do {
+            try await self.withFailingImageArtifactInserts(on: app) {
                 try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                     req.headers.contentType = HTTPMediaType(
@@ -1749,11 +1789,7 @@ final class ImageControllerTests {
                 } afterResponse: { res in
                     #expect(res.status == .internalServerError)
                 }
-            } catch {
-                await removeFailureTrigger()
-                throw error
             }
-            await removeFailureTrigger()
 
             #expect(try await Image.query(on: app.db).count() == 0)
 

@@ -123,6 +123,29 @@ extension Image {
         ($artifacts.value ?? []).first { $0.kind == .diskImage }
     }
 
+    /// The disk artifact that is complete and architecture-compatible enough
+    /// to seed a managed volume.
+    var usableDiskArtifact: ImageArtifact? {
+        diskArtifact.flatMap { artifact in
+            artifact.architecture == architecture && artifact.isUsable ? artifact : nil
+        }
+    }
+
+    /// The artifact whose state explains the aggregate image lifecycle.
+    /// Falls back to the disk convenience projection outside active/error
+    /// states so existing single-disk API fields retain their meaning.
+    var lifecycleArtifact: ImageArtifact? {
+        let artifacts = $artifacts.value ?? []
+        switch status {
+        case .downloading:
+            return artifacts.first { $0.status == .downloading }
+        case .error:
+            return artifacts.first { $0.status == .error }
+        default:
+            return diskArtifact
+        }
+    }
+
     // MARK: - Hypervisor Compatibility
 
     /// The hypervisor types that can run this image, derived from the artifact
@@ -307,8 +330,8 @@ struct ImageResponse: Content {
         self.checksum = diskArtifact?.checksum
         self.status = image.status
         self.sourceURL = diskArtifact?.sourceURL
-        self.downloadProgress = diskArtifact?.downloadProgress
-        self.errorMessage = diskArtifact?.errorMessage
+        self.downloadProgress = image.lifecycleArtifact?.downloadProgress
+        self.errorMessage = image.lifecycleArtifact?.errorMessage
         self.defaultCpu = image.defaultCpu
         self.defaultMemory = image.defaultMemory
         self.defaultDisk = image.defaultDisk
@@ -332,19 +355,9 @@ struct ImageStatusResponse: Content {
     init(from image: Image) {
         self.id = image.id ?? UUID()
         self.status = image.status
-        let artifacts = image.$artifacts.value ?? []
-        let lifecycleArtifact: ImageArtifact?
-        switch image.status {
-        case .downloading:
-            lifecycleArtifact = artifacts.first { $0.status == .downloading }
-        case .error:
-            lifecycleArtifact = artifacts.first { $0.status == .error }
-        default:
-            lifecycleArtifact = image.diskArtifact
-        }
         let diskArtifact = image.diskArtifact
-        self.downloadProgress = lifecycleArtifact?.downloadProgress
-        self.errorMessage = lifecycleArtifact?.errorMessage
+        self.downloadProgress = image.lifecycleArtifact?.downloadProgress
+        self.errorMessage = image.lifecycleArtifact?.errorMessage
         self.size = diskArtifact?.size
         self.checksum = diskArtifact?.checksum
     }
