@@ -32,7 +32,8 @@ struct MakeImageArtifactsAuthoritative: AsyncMigration {
                 .filter(\.$imageID == imageID)
                 .all()
 
-            let legacyComplete = image.storagePath?.isEmpty == false
+            let legacyComplete =
+                image.storagePath?.isEmpty == false
                 && image.checksum?.isEmpty == false
                 && !image.filename.isEmpty
                 && ImageFormat(rawValue: image.format) != nil
@@ -47,11 +48,13 @@ struct MakeImageArtifactsAuthoritative: AsyncMigration {
                 row.filename = image.filename
                 row.size = image.size
                 row.checksum = image.checksum ?? ""
-                row.storagePath = image.storagePath
+                row.storagePath =
+                    image.storagePath
                     ?? ImageObjectKey.artifact(
                         projectId: image.projectID, imageId: imageID,
                         kind: ArtifactKind.diskImage.rawValue, filename: image.filename)
-                row.status = legacyComplete && image.status == ImageStatus.ready.rawValue
+                row.status =
+                    legacyComplete && image.status == ImageStatus.ready.rawValue
                     ? ArtifactStatus.ready.rawValue
                     : artifactStatus(for: image.status)
                 row.sourceURL = image.sourceURL
@@ -97,7 +100,8 @@ struct MakeImageArtifactsAuthoritative: AsyncMigration {
                     .all()
                 let validKinds = Set(
                     refreshed.filter { Self.isValid($0, architecture: image.architecture) }.map(\.kind))
-                let bootable = validKinds.contains(ArtifactKind.diskImage.rawValue)
+                let bootable =
+                    validKinds.contains(ArtifactKind.diskImage.rawValue)
                     || (validKinds.contains(ArtifactKind.kernel.rawValue)
                         && validKinds.contains(ArtifactKind.rootfs.rawValue))
                 if !bootable { incompleteReadyImages.append(imageID) }

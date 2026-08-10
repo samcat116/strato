@@ -1185,7 +1185,8 @@ final class ImageControllerTests {
                 uploadedBy: user
             )
 
-            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=disk-image") { req in
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=disk-image") {
+                req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -1198,7 +1199,8 @@ final class ImageControllerTests {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let fakeImageId = UUID()
 
-            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(fakeImageId)/download?artifact=disk-image") { req in
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(fakeImageId)/download?artifact=disk-image")
+            { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .notFound)
@@ -1212,7 +1214,8 @@ final class ImageControllerTests {
             let builder = TestDataBuilder(db: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
-            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=disk-image") { _ in
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=disk-image") {
+                _ in
                 // No auth header
             } afterResponse: { res in
                 #expect(res.status == .unauthorized)
