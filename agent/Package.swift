@@ -79,6 +79,7 @@ let package = Package(
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Configuration", package: "swift-configuration"),
+                .product(name: "Toml", package: "swift-toml"),
                 .product(name: "TomlConfiguration", package: "swift-toml"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIOCore", package: "swift-nio"),

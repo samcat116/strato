@@ -642,6 +642,7 @@ public func configure(_ app: Application) async throws {
     // that enrollment requires one. Ordered after CreateSite and the org
     // tables it reads.
     app.migrations.add(BackfillDefaultSites())
+    app.migrations.add(RequireSitePlacement())
 
     // FluentKit force-unwraps persisted @Enum raw values on first property
     // access. Normalize casing drift and put a database validation boundary in

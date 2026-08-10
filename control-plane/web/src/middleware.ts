@@ -1,21 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { isControlPlanePath } from "@/lib/control-plane-routes";
 import { GRAVATAR_COOKIE, GRAVATAR_ENV_VAR, parseGravatarEnabled } from "@/lib/gravatar";
-
-const controlPlanePrefixes = [
-  "/api",
-  "/auth",
-  "/agent",
-  "/health",
-  "/organizations",
-  "/ssf",
-];
-
-function isControlPlanePath(pathname: string): boolean {
-  return controlPlanePrefixes.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
-  );
-}
 
 // Emit HSTS at runtime, per request. Whether the browser-facing connection is
 // HTTPS is not something next.config's headers() can know — it's baked at build

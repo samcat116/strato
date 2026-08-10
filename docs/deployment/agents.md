@@ -491,12 +491,6 @@ values stop startup instead of falling back to TOML. Environment variables are
 read from the process at startup; the agent does not load `.env` files or
 reload configuration while running.
 
-Three keys retired when the process QEMU driver was deleted (STR-136):
-`qemu_driver`, `qemu_binary_path` and `swtpm_binary_path`. A config that still
-carries one loads and starts — the agent logs that the key is ignored — because
-libvirt now selects the emulator from its own capabilities and supervises swtpm
-per domain. Delete them at your convenience.
-
 `qemu_memory_overhead_mb` controls the QEMU process allowance above current
 guest RAM. It defaults to 512 MiB and accepts 128–4096 MiB. On a host with the
 cgroup-v2 memory controller, the agent applies guest RAM plus this allowance as

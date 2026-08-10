@@ -40,28 +40,16 @@ struct SchedulableAgent: Sendable {
     let supportsInterVMNetworking: Bool
     /// Site (availability zone) the agent belongs to; nil for site-less agents.
     let siteID: UUID?
-    /// Wire protocol version the agent last registered with; nil for unknown
-    /// (rows predating the column). Site-pinned placement requires
-    /// site-authority support: a pre-v4 agent is kept on legacy per-node
-    /// network scoping, so a pinned-network VM placed there would get its
-    /// switch in the agent's local NB instead of the site's shared one.
-    let wireProtocolVersion: Int?
     /// Whether this agent can run sandbox workloads (issue #415): it
-    /// advertised the sandbox runtime at registration AND speaks a wire
-    /// protocol that carries sandbox desired state. Callers fold both in —
-    /// either alone is insufficient (a v5 build may lack the runtime, and a
-    /// capable runtime behind a pre-v5 protocol could never receive the
-    /// desired entries).
+    /// advertised the sandbox runtime at registration.
     let supportsSandboxWorkloads: Bool
     /// Whether this agent can realize a **sandbox NIC** (STR-103): it
     /// advertised OVN, the jailer barrier, and a guest image that configures
-    /// the interface, AND speaks a wire protocol that carries the NIC's
-    /// security groups. Strictly stronger than `supportsSandboxWorkloads` — a
+    /// the interface. Strictly stronger than `supportsSandboxWorkloads` — a
     /// host with only that runs network-free sandboxes and nothing else.
     let supportsSandboxNetworking: Bool
     /// Whether this agent can give a guest an emulated TPM 2.0 (issue #565):
-    /// it advertised swtpm AND speaks a wire protocol that carries the machine
-    /// profile. Same two-signal rule as `supportsSandboxWorkloads`.
+    /// it advertised swtpm at registration.
     let supportsVTPM: Bool
 
     init(
@@ -79,7 +67,6 @@ struct SchedulableAgent: Sendable {
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
         siteID: UUID? = nil,
-        wireProtocolVersion: Int? = nil,
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
         supportsVTPM: Bool = false
@@ -98,7 +85,6 @@ struct SchedulableAgent: Sendable {
         self.architecture = architecture
         self.supportsInterVMNetworking = supportsInterVMNetworking
         self.siteID = siteID
-        self.wireProtocolVersion = wireProtocolVersion
         self.supportsSandboxWorkloads = supportsSandboxWorkloads
         self.supportsSandboxNetworking = supportsSandboxNetworking
         self.supportsVTPM = supportsVTPM
@@ -154,7 +140,6 @@ struct SchedulableAgent: Sendable {
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
             siteID: siteID,
-            wireProtocolVersion: wireProtocolVersion,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
             supportsVTPM: supportsVTPM
@@ -200,11 +185,6 @@ struct VMPlacementRequirements: Sendable {
     /// silently loses its TPM fails Windows setup with nothing in the API
     /// explaining why.
     let requiresVTPM: Bool
-    /// Whether the VM's per-instance metadata switch is off (STR-185). Hard
-    /// constraint during the v38→v39 rollout: an older agent ignores
-    /// `InstanceMetadata.serviceEnabled` and serves the guest its identity
-    /// while the API reports the switch as thrown.
-    let requiresMetadataOptOut: Bool
     /// Whether the VM asks for UEFI Secure Boot. Hard constraint on the wire
     /// protocol only — any agent that understands the machine profile can
     /// resolve a signed firmware set (or fail the create loudly if its host
@@ -224,8 +204,7 @@ struct VMPlacementRequirements: Sendable {
         siteID: UUID? = nil,
         requiresSandboxRuntime: Bool = false,
         requiresSandboxNetworking: Bool = false,
-        requiresVTPM: Bool = false,
-        requiresMetadataOptOut: Bool = false
+        requiresVTPM: Bool = false
     ) {
         self.cpu = cpu
         self.memory = memory
@@ -237,7 +216,6 @@ struct VMPlacementRequirements: Sendable {
         self.requiresSandboxRuntime = requiresSandboxRuntime
         self.requiresSandboxNetworking = requiresSandboxNetworking
         self.requiresVTPM = requiresVTPM
-        self.requiresMetadataOptOut = requiresMetadataOptOut
     }
 }
 
@@ -251,7 +229,6 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case sandboxRuntimeUnsatisfied(eligibleAgents: Int)
     case sandboxNetworkingUnsatisfied(eligibleAgents: Int)
     case vtpmUnsatisfied(eligibleAgents: Int)
-    case metadataOptOutUnsatisfied(eligibleAgents: Int)
     case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
@@ -292,11 +269,6 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
                 + "hypervisor node (Debian/Ubuntu: `apt install swtpm swtpm-tools`), restart libvirtd there "
                 + "(it caches host capabilities, so installing the package alone changes nothing), and let its "
                 + "agent re-register"
-        case .metadataOptOutUnsatisfied(let eligibleAgents):
-            return
-                "No eligible agent is new enough to switch the metadata service off for one VM "
-                + "(\(eligibleAgents) agent(s) checked) — upgrade the agents on your hypervisor nodes, or "
-                + "create the VM with 'metadataEnabled' left on"
         case .siteUnsatisfied(let requiredSiteID):
             return
                 "No online agent belongs to site \(requiredSiteID) required by the VM's network pinning"
@@ -364,8 +336,7 @@ final class SchedulerService: @unchecked Sendable {
             hypervisorType: vm.hypervisorType,
             architecture: architecture,
             siteID: siteID,
-            requiresVTPM: vm.tpmEnabled,
-            requiresMetadataOptOut: !vm.metadataEnabled
+            requiresVTPM: vm.tpmEnabled
         )
     }
 
@@ -608,20 +579,6 @@ final class SchedulerService: @unchecked Sendable {
                 throw SchedulerError.vtpmUnsatisfied(eligibleAgents: machineCapable.count)
             }
             machineCapable = tpmCapable
-        }
-
-        // The metadata kill switch rides `InstanceMetadata.serviceEnabled`,
-        // which only a v39+ agent reads. During the one-version rollout window,
-        // refuse an older agent rather than report a security control that it
-        // silently ignores (STR-185).
-        if requirements.requiresMetadataOptOut {
-            let optOutCapable = machineCapable.filter {
-                WireProtocol.supportsMetadataOptOut($0.wireProtocolVersion ?? 0)
-            }
-            guard !optOutCapable.isEmpty else {
-                throw SchedulerError.metadataOptOutUnsatisfied(eligibleAgents: machineCapable.count)
-            }
-            machineCapable = optOutCapable
         }
 
         // An agent with unknown architecture cannot prove it satisfies an

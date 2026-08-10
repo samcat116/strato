@@ -22,7 +22,7 @@ struct MetadataResponderTests {
         mac: String = "52:54:00:00:00:01",
         ipv4: String? = nil,
         ipv6: String? = nil,
-        serviceEnabled: Bool? = nil
+        serviceEnabled: Bool = true
     ) -> InstanceMetadata {
         InstanceMetadata(
             instanceId: vmId,
@@ -296,22 +296,6 @@ struct MetadataResponderTests {
         // out, only that nothing answers.
         #expect(refused.status == missing.status)
         #expect(refused.body == missing.body)
-    }
-
-    @Test("An absent serviceEnabled serves, so a control plane that predates the switch opts nobody out")
-    func absentSwitchServes() async {
-        let vmId = UUID()
-        let responder = Self.responder(instances: [
-            Self.instance(vmId, network: Self.networkA, ipv4: "10.0.0.5", serviceEnabled: nil)
-        ])
-        let now = ContinuousClock.now
-        let token = await Self.mint(responder, from: "10.0.0.5", at: now).body
-        let response = await responder.respond(
-            to: Self.request(
-                "GET", "/latest/meta-data/instance-id", from: "10.0.0.5", (MetadataHeaderName.token, token)),
-            at: now)
-        #expect(response.status == 200)
-        #expect(response.body == vmId.uuidString)
     }
 
     @Test("Throwing the switch retires the session the guest already holds")

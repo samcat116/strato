@@ -361,29 +361,67 @@ struct AgentConfigTests {
         }
     }
 
-    /// The three keys that retired with the process QEMU driver (STR-136).
-    /// A config still carrying them has to keep loading — an unattended fleet
-    /// upgrade must not turn into a fleet-wide outage — and the one that
-    /// matters is `qemu_driver = "process"`, which now means something else
-    /// entirely and must not change behaviour in silence.
     @Test(
-        "A config carrying a retired QEMU key still loads",
+        "Retired settings fail as unknown",
         arguments: [
-            "qemu_driver = \"process\"", "qemu_driver = \"libvirt\"", "qemu_driver = \"libvirtd\"",
-            "qemu_binary_path = \"/usr/bin/qemu-system-x86_64\"", "swtpm_binary_path = \"/usr/bin/swtpm\"",
+            ("qemu_driver", "\"process\""),
+            ("qemu_binary_path", "\"/usr/bin/qemu-system-x86_64\""),
+            ("swtpm_binary_path", "\"/usr/bin/swtpm\""),
+            ("qemu_socket_dir", "\"/run/strato/qemu\""),
+            ("desired_state_pull", "true"),
         ])
-    func retiredQEMUKeysAreIgnored(_ line: String) async throws {
+    func retiredSettingsRejected(key: String, value: String) async throws {
         try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try """
             control_plane_url = "ws://localhost:8080/agent/ws"
-            \(line)
+            \(key) = \(value)
             """.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            // Including the value that used to be a hard rejection: there is no
-            // vocabulary left to misspell.
-            let config = try await loadConfig(from: configPath)
-            #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
+            await #expect {
+                try await loadConfig(from: configPath)
+            } throws: { error in
+                error.localizedDescription == "Invalid configuration: unknown setting '\(key)'"
+            }
+        }
+    }
+
+    @Test(
+        "Unknown top-level and nested settings fail clearly",
+        arguments: [
+            ("log_levle", "\"debug\""),
+            ("spiffe.trust_domian", "\"strato.local\""),
+        ])
+    func unknownSettingsRejected(key: String, value: String) async throws {
+        try await withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            \(key) = \(value)
+            """.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            await #expect {
+                try await loadConfig(from: configPath)
+            } throws: { error in
+                error.localizedDescription == "Invalid configuration: unknown setting '\(key)'"
+            }
+        }
+    }
+
+    @Test("Unknown sections fail clearly even when empty")
+    func unknownSectionRejected() async throws {
+        try await withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try """
+            control_plane_url = "ws://localhost:8080/agent/ws"
+            [obsolete]
+            """.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            await #expect {
+                try await loadConfig(from: configPath)
+            } throws: { error in
+                error.localizedDescription == "Invalid configuration: unknown section '[obsolete]'"
+            }
         }
     }
 
@@ -465,6 +503,19 @@ struct AgentConfigTests {
     }
 
     // MARK: - TOML Loading Tests
+
+    @Test("The checked-in example is a valid agent configuration")
+    func loadCheckedInExample() async throws {
+        let repositoryRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let config = try await loadConfig(
+            from: repositoryRoot.appendingPathComponent("config.toml.example").path)
+
+        #expect(config.controlPlaneURL == "wss://localhost:8080/agent/ws")
+    }
 
     @Test("Load valid TOML configuration")
     func loadValidConfig() async throws {
@@ -876,7 +927,7 @@ struct AgentConfigTests {
         #expect(config.vmStoragePath == AgentConfig.defaultVMStoragePath)
     }
 
-    @Test("Default config search tries paths in order and skips unreadable ones")
+    @Test("Default config search skips absent paths but rejects a present invalid file")
     func loadDefaultConfigSearchOrder() async throws {
         try await withTempDirectory { tempDirectory in
             let secondPath = tempDirectory.appendingPathComponent("second.toml").path
@@ -889,20 +940,38 @@ struct AgentConfigTests {
             let skipped = try await loadDefaultConfig(searchPaths: [missingPath, secondPath])
             #expect(skipped.controlPlaneURL == "ws://second:8080/agent/ws")
 
-            // ...and so is one that exists but does not parse, or parses
-            // without the required control_plane_url: the contract is the
-            // first config that *loads*, not the first that is present.
+            // A present config is authoritative. Syntax errors and missing
+            // required settings must not fall through to another file or the
+            // built-in defaults.
             let malformedPath = tempDirectory.appendingPathComponent("malformed.toml").path
             try "[this is not valid toml".write(toFile: malformedPath, atomically: true, encoding: .utf8)
             let incompletePath = tempDirectory.appendingPathComponent("incomplete.toml").path
             try "log_level = \"debug\"".write(toFile: incompletePath, atomically: true, encoding: .utf8)
 
-            let unparseable = try await loadDefaultConfig(
-                searchPaths: [malformedPath, incompletePath, secondPath])
-            #expect(unparseable.controlPlaneURL == "ws://second:8080/agent/ws")
+            await #expect(throws: Error.self) {
+                try await loadDefaultConfig(
+                    searchPaths: [malformedPath, incompletePath, secondPath])
+            }
+            await #expect(throws: AgentConfigError.self) {
+                try await loadDefaultConfig(searchPaths: [incompletePath, secondPath])
+            }
 
-            // Every path failing falls through to the built-in defaults.
-            let exhausted = try await loadDefaultConfig(searchPaths: [missingPath, malformedPath])
+            let obsoletePath = tempDirectory.appendingPathComponent("obsolete.toml").path
+            try """
+            control_plane_url = "ws://obsolete:8080/agent/ws"
+            qemu_driver = "process"
+            """.write(toFile: obsoletePath, atomically: true, encoding: .utf8)
+            await #expect {
+                try await loadDefaultConfig(searchPaths: [obsoletePath, secondPath])
+            } throws: { error in
+                error.localizedDescription
+                    == "Invalid configuration: unknown setting 'qemu_driver'"
+            }
+
+            // Every path being absent falls through to the built-in defaults.
+            let anotherMissingPath = tempDirectory.appendingPathComponent("also-missing.toml").path
+            let exhausted = try await loadDefaultConfig(
+                searchPaths: [missingPath, anotherMissingPath])
             #expect(exhausted.controlPlaneURL == AgentConfig.builtinDefaults.controlPlaneURL)
 
             let firstPath = tempDirectory.appendingPathComponent("first.toml").path

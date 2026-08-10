@@ -246,18 +246,29 @@ struct HypervisorHangResilienceTests {
             self.hangFor = hangFor
         }
 
+        func presenceIsComplete() -> Bool { true }
         func observedPresence() -> [String: VMPresence] { [:] }
+        func observedSizing() -> [String: VMSizing] { [:] }
+        func observedNetworkSpecs() -> [String: [NetworkSpec]] { [:] }
 
         func adoptVM(_ item: ReconcileWorkItem) throws -> VMStatus { .running }
+        func observedSandboxPresence() -> [String: SandboxPresence] { [:] }
+        func adoptSandbox(_ item: ReconcileWorkItem) throws -> SandboxStatus {
+            throw UnsupportedTestActuation.sandbox
+        }
+        func observedVolumePresence() -> [String: VolumePresence]? { [:] }
+        func observedSnapshotPresence() -> [String: SnapshotPresence]? { [:] }
+        func observedEdgeNonces() -> [String: AppliedEdgeNonces] { [:] }
+        func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) {}
 
         func perform(_ step: ReconcileStep, item: ReconcileWorkItem) async throws {
-            if item.vmId == hangFor {
-                running.insert(item.vmId)
+            if item.id == hangFor {
+                running.insert(item.id)
                 await gate.wait()
                 return
             }
             if step == .boot {
-                completed.insert(item.vmId)
+                completed.insert(item.id)
             }
         }
 

@@ -242,16 +242,13 @@ struct AgentMessageTests {
         #expect(decoded.protocolVersion == WireProtocol.currentVersion)
     }
 
-    /// `protocolVersion` is optional so responses from control planes that
-    /// predate protocol versioning still decode; the register response carries
-    /// no credential of its own since agents authenticate by SVID.
-    @Test func agentRegisterResponseDecodesWithoutProtocolVersion() throws {
+    @Test func agentRegisterResponseRequiresProtocolVersion() throws {
         let json = """
             {"type":"agent_register_response","requestId":"r","timestamp":0,
              "agentId":"a","name":"n"}
             """
-        let decoded = try decodeJSON(AgentRegisterResponseMessage.self, from: json)
-        #expect(decoded.protocolVersion == nil)
-        #expect(decoded.name == "n")
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(AgentRegisterResponseMessage.self, from: json)
+        }
     }
 }
