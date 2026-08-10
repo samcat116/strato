@@ -11,10 +11,8 @@ enum SecurityGroupService {
     /// Returns the project's default security group, creating it — with pure
     /// AWS default-group semantics (allow all ingress from the group itself,
     /// allow all egress; no blanket ingress) — when the project predates the
-    /// call. Projects that existed when security groups landed got theirs
-    /// from `SeedDefaultSecurityGroups`; this is the path for projects
-    /// created afterwards and a defensive fallback everywhere the default is
-    /// assumed.
+    /// call. This is the creation path and a defensive fallback everywhere the
+    /// default is assumed.
     ///
     /// Call inside the transaction that consumes the group so a concurrent
     /// creator can't observe the invariant half-established; the partial

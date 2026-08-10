@@ -500,8 +500,8 @@ final class WorkloadTombstoneTests {
                 size: 1 << 30, createdByID: try user.requireID())
             attached.attachedAgentId = oldId
             attached.$vm.id = try vm.requireID()
-            // An attached row names its device: `NormalizeVolumeAttachments`
-            // makes that a check constraint (STR-129).
+            // An attached row names its device; the schema enforces that as a
+            // check constraint (STR-129).
             attached.deviceName = "disk0"
             try await attached.save(on: app.db)
             try await VolumeReplica(
@@ -570,8 +570,8 @@ final class WorkloadTombstoneTests {
                 name: "stayed-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
             stayedVolume.$vm.id = try stayed.requireID()
-            // An attached row names its device: `NormalizeVolumeAttachments`
-            // makes that a check constraint (STR-129).
+            // An attached row names its device; the schema enforces that as a
+            // check constraint (STR-129).
             stayedVolume.deviceName = "disk0"
             try await stayedVolume.save(on: app.db)
             try await placeVolume(stayedVolume, on: oldId, using: app.db)

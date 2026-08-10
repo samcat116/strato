@@ -1312,9 +1312,8 @@ actor AgentService {
         let db = app.db
 
         do {
-            // The same predicate `NormalizeVolumeAttachments` repairs on, column
-            // for column: they describe one state, so they must agree or a row
-            // the one-off repair fixes is one this backstop never sees again.
+            // This mirrors the schema constraint column for column: the fields
+            // describe one state, so they must agree.
             let strandedVolumes = try await Volume.query(on: db)
                 .filter(\.$vm.$id == nil)
                 .group(.or) { unresolved in

@@ -420,8 +420,8 @@ enum SchemaMigrator {
 ///
 /// The one real case is `CREATE INDEX CONCURRENTLY`, which Postgres forbids
 /// inside a transaction block. No production migration conforms today —
-/// `AddHotPathIndexes` deliberately uses plain creates — but the escape hatch
-/// exists before a table gets large enough to need one, because discovering it
+/// the current baseline uses plain creates — but the escape hatch exists before
+/// a table gets large enough to need one, because discovering it
 /// is missing while writing that migration is the wrong time.
 ///
 /// **Opting out gives up the atomicity this migrator exists for.** A crash

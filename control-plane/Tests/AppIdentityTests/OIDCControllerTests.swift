@@ -553,57 +553,6 @@ final class OIDCControllerTests: BaseTestCase {
         }
     }
 
-    @Test("Issuer backfill derives exact and templated issuers, skips unresolvable")
-    func testIssuerBackfill() async throws {
-        try await withApp { app in
-            try await setupCommonTestData(on: app.db)
-            let org = testOrganization.id!
-            func mk(_ name: String, _ url: String) async throws -> OIDCProvider {
-                try await makeProvider(on: app.db, organizationID: org, name: name, discoveryURL: url)
-            }
-            // Providers created after startup have issuer NULL; run the real
-            // backfill SQL against them.
-            let google = try await mk("g", "https://accounts.google.com/.well-known/openid-configuration")
-            let common = try await mk(
-                "c", "https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration")
-            let orgs = try await mk(
-                "o", "https://login.microsoftonline.com/organizations/v2.0/.well-known/openid-configuration")
-            let single = try await mk(
-                "s",
-                "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0/.well-known/openid-configuration"
-            )
-            // Non-Microsoft host with a literal `common` path segment: the exact
-            // stripped URL is its real issuer and must be backfilled, not skipped.
-            let nonMS = try await mk("n", "https://idp.example.com/common/.well-known/openid-configuration")
-            // Microsoft v1.0 `common` (no /v2.0): the real issuer is on the
-            // sts.windows.net host, templated per tenant.
-            let msV1 = try await mk("v1", "https://login.microsoftonline.com/common/.well-known/openid-configuration")
-
-            try await AddIssuerToOIDCProvider.backfillIssuers(on: app.db)
-
-            // Standard IdP: exact issuer (discovery URL minus the well-known suffix).
-            let googleIssuer = try await OIDCProvider.find(google.id!, on: app.db)?.issuer
-            #expect(googleIssuer == "https://accounts.google.com")
-            // Entra multi-tenant aliases: templated so issuerMatches accepts the
-            // concrete-tenant token.
-            let commonIssuer = try await OIDCProvider.find(common.id!, on: app.db)?.issuer
-            #expect(commonIssuer == "https://login.microsoftonline.com/{tenantid}/v2.0")
-            let orgsIssuer = try await OIDCProvider.find(orgs.id!, on: app.db)?.issuer
-            #expect(orgsIssuer == "https://login.microsoftonline.com/{tenantid}/v2.0")
-            // Entra single-tenant (concrete GUID): exact, not templated.
-            let singleIssuer = try await OIDCProvider.find(single.id!, on: app.db)?.issuer
-            #expect(singleIssuer == "https://login.microsoftonline.com/11111111-1111-1111-1111-111111111111/v2.0")
-            // A `/common/` segment on a non-Microsoft host is a literal path, not a
-            // multi-tenant alias: backfill the exact issuer.
-            let nonMSIssuer = try await OIDCProvider.find(nonMS.id!, on: app.db)?.issuer
-            #expect(nonMSIssuer == "https://idp.example.com/common")
-            // Microsoft v1.0 multi-tenant `common`: issuer is on sts.windows.net,
-            // templated per tenant.
-            let msV1Issuer = try await OIDCProvider.find(msV1.id!, on: app.db)?.issuer
-            #expect(msV1Issuer == "https://sts.windows.net/{tenantid}/")
-        }
-    }
-
     @Test("Update rejects non-HTTPS endpoint URLs")
     func testUpdateRejectsInsecureURLs() async throws {
         try await withApp { app in

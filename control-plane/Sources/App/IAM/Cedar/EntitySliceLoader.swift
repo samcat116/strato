@@ -108,8 +108,8 @@ struct CedarEntitySlice: Equatable, Sendable {
     /// an open one — so they are skipped, which can only under-grant, and
     /// counted so the caller can log them.
     ///
-    /// Since STR-108 the database refuses to store one
-    /// (`RejectConditionedRoleBindings`), so this stays zero; the skip remains
+    /// Since STR-108 the database constraint refuses to store one, so this
+    /// stays zero; the skip remains
     /// as defence in depth for a row written against an older schema, and as
     /// the reason a future condition implementation cannot stop at the writer.
     let skippedConditionedBindings: Int

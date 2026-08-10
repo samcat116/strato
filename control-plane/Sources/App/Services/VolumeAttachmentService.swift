@@ -18,8 +18,7 @@ import Vapor
 /// columns together, and claim runs under the same per-subject advisory lock
 /// idiom `IPAMService.lockAllocations` uses, so the read-allocate-write cycle
 /// behind an auto-generated device name serializes across replicas. The
-/// `(vm_id, device_name)` unique index added by `NormalizeVolumeAttachments` is
-/// the backstop, not the only defense.
+/// `(vm_id, device_name)` unique index is the backstop, not the only defense.
 enum VolumeAttachmentService {
 
     // MARK: - Serialization

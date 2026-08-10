@@ -283,16 +283,21 @@ final class HierarchyMaintenanceTests {
         }
     }
 
-    @Test("The startup sweep rebuilds drift an older folder move left behind")
-    func startupSweepRebuildsDrift() async throws {
+    @Test("The maintenance repair rebuilds drift and is idempotent")
+    func maintenanceRepairRebuildsDrift() async throws {
         try await withApp { app, _, fx in
             let correct = fx.project.path
             fx.project.path = "/\(fx.organization.id!)/\(UUID())/\(fx.project.id!)"
             try await fx.project.save(on: app.db)
 
-            // Idempotent: the second pass has nothing left to correct.
-            try await RebuildDriftedHierarchyPaths().prepare(on: app.db)
-            try await RebuildDriftedHierarchyPaths().prepare(on: app.db)
+            let request = HierarchyRepairRequest(
+                repairAll: true, repairOptions: .init(rebuildPaths: true))
+            let first = try await HierarchyMaintenanceService.performHierarchyRepair(
+                repairRequest: request, on: app.db)
+            let second = try await HierarchyMaintenanceService.performHierarchyRepair(
+                repairRequest: request, on: app.db)
+            #expect(first.repairedIssues.count == 1)
+            #expect(second.repairedIssues.isEmpty)
 
             let project = try #require(try await Project.find(fx.project.id!, on: app.db))
             #expect(project.path == correct)
