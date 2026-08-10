@@ -1,0 +1,46 @@
+control-plane/Sources/App/Models/ResourceQuota.swift
+  s_5bad541345f252::t_8652a8b68cf817 462
+  s_5bad541345f252::t_e85bf27184b031 422-426,429-430,460-461,463,467
+control-plane/Tests/AppIAMTests/ProjectTests.swift
+  s_5bad541345f252::t_e85bf27184b031 477-501,505-509,514-537,540-549,552-553
+  s_5bad541345f252::t_412c9567f87834 502-504,510-513,538-539,550-551
+  s_784c6556cda9d6::t_c13cfecef0650f 476
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_5bad541345f252::t_d446bc726a8d78 652-653
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_5bad541345f252::t_e85bf27184b031 554,557-579
+  s_5bad541345f252::t_8652a8b68cf817 555-556
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_5bad541345f252::t_e85bf27184b031 38,278,285-323
+  s_5bad541345f252::t_8652a8b68cf817 56,275,324,529-539,547-549,561,565-568
+  s_5bad541345f252::t_d446bc726a8d78 500-502,540-546
+  s_5bad541345f252::t_2c4ef35fb6c89a 503-505,528
+  s_5bad541345f252::t_8d2a854cea1143 325
+  s_5bad541345f252::t_ac302cec5840ed 569
+control-plane/Sources/App/openapi.yaml
+  s_5bad541345f252::t_e85bf27184b031 4172-4173
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "77892928e241732e266f499b0cfa550af913bf31",
+  "prompts": {},
+  "sessions": {
+    "s_5bad541345f252": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed8c-f5ab-7932-af6a-3f893ac9fb7f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_784c6556cda9d6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed8f-a5b9-7d92-acea-fa8b221dd357",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
