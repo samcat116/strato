@@ -272,6 +272,20 @@ impl GuestConfig {
         Self::from_slice(&bytes[..end])
     }
 
+    /// Validate the document-level contract before acting on any config-drive
+    /// mode. Warm-hold templates do not resolve a workload at boot, but they
+    /// must reject retired schemas and identity-less drives just like a cold
+    /// sandbox does.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.schema_version != SCHEMA_VERSION {
+            return Err(ConfigError::UnsupportedSchema(self.schema_version));
+        }
+        if self.sandbox_id.is_empty() || self.identity_nonce.is_empty() {
+            return Err(ConfigError::MissingIdentity);
+        }
+        Ok(())
+    }
+
     /// Merge the image config with the overrides into the concrete process to
     /// exec.
     ///
@@ -287,12 +301,7 @@ impl GuestConfig {
     ///   * **cwd**: `overrides.workdir` ?? image `WorkingDir` ?? `/`.
     ///   * **user**: `overrides.user` ?? image `User` ?? `0:0`, numeric only.
     pub fn resolve_process(&self) -> Result<ResolvedProcess, ConfigError> {
-        if self.schema_version != SCHEMA_VERSION {
-            return Err(ConfigError::UnsupportedSchema(self.schema_version));
-        }
-        if self.sandbox_id.is_empty() || self.identity_nonce.is_empty() {
-            return Err(ConfigError::MissingIdentity);
-        }
+        self.validate()?;
         resolve_process(&self.image_config, &self.overrides)
     }
 }
@@ -650,6 +659,22 @@ mod tests {
         let json = br#"{"schema_version":2,"sandbox_id":"s","identity_nonce":"n","rootfs":{"device":"/dev/vda"},"warm_hold":true}"#;
         let cfg = GuestConfig::from_slice(json).expect("parse");
         assert!(cfg.warm_hold);
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn warm_hold_still_rejects_legacy_schema_and_missing_identity() {
+        let mut c = base_config();
+        c.warm_hold = true;
+        c.schema_version = SCHEMA_VERSION - 1;
+        assert_eq!(
+            c.validate(),
+            Err(ConfigError::UnsupportedSchema(SCHEMA_VERSION - 1))
+        );
+
+        c.schema_version = SCHEMA_VERSION;
+        c.identity_nonce.clear();
+        assert_eq!(c.validate(), Err(ConfigError::MissingIdentity));
     }
 
     #[test]
