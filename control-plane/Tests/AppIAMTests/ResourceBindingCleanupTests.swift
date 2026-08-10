@@ -568,7 +568,7 @@ struct ResourceBindingCleanupTests {
 
         let image = Image(
             name: "image-\(suffix)", description: "", projectID: projectID,
-            filename: "disk.qcow2", size: 1024, format: .qcow2, status: .ready, uploadedByID: ownerID)
+            status: .ready, uploadedByID: ownerID)
         try await image.save(on: db)
 
         let network = LogicalNetwork(

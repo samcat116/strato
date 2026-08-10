@@ -5,10 +5,9 @@ import Vapor
 /// Where the control plane keeps image bytes.
 ///
 /// Object keys are the same relative paths the database has always stored in
-/// `Image.storagePath` / `ImageArtifact.storagePath`
-/// (`{projectId}/{imageId}/{filename}`, or `{projectId}/{imageId}/{kind}/{filename}`
-/// for typed artifacts), so switching backends needs no migration of existing
-/// rows — only of the bytes themselves.
+/// `ImageArtifact.storagePath` (`{projectId}/{imageId}/{kind}/{filename}`), so
+/// switching backends needs no database representation change — only movement
+/// of the bytes themselves.
 ///
 /// Agents never talk to a store directly. They fetch through the control
 /// plane's `/download` route, which is what lets that route's authentication
@@ -57,11 +56,6 @@ protocol ImageObjectWriter: Sendable {
 // MARK: - Key construction
 
 enum ImageObjectKey {
-    /// `{projectId}/{imageId}/{filename}` — an image's primary disk.
-    static func image(projectId: UUID, imageId: UUID, filename: String) -> String {
-        "\(projectId)/\(imageId)/\(filename)"
-    }
-
     /// `{projectId}/{imageId}/{kind}/{filename}` — a typed artifact. The kind
     /// segment keeps artifacts of different kinds from colliding on filename
     /// (a `rootfs` and a `disk-image` may both be called `disk.img`).

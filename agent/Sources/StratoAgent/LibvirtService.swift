@@ -2158,40 +2158,34 @@ actor LibvirtService: HypervisorService {
     private func resolveDisks(vmId: String, spec: VMSpec, imageInfo: ImageInfo?) async throws -> [ResolvedDisk] {
         var disks: [ResolvedDisk] = []
 
-        if let imageInfo, let storage {
+        if let imageInfo {
+            guard let storage else {
+                throw HypervisorServiceError.diskError(
+                    "cannot materialize disk-image artifact for VM \(vmId): storage backend is unavailable")
+            }
             logger.info(
                 "Materializing boot disk from image",
                 metadata: ["vmId": .string(vmId), "imageId": .string(imageInfo.imageId.uuidString)])
-            do {
-                // Its own generous budget: multi-GB downloads are legitimate
-                // and must not be squeezed into the define envelope.
-                // `.cancelAndWait` because materialization writes through a
-                // deterministic staging path and clears any partial it finds,
-                // so abandoning a slow attempt would let a retry delete its
-                // output mid-write and publish a truncated disk.
-                let attachment = try await StageBudget.run(
-                    seconds: StageBudget.imageMaterializationSeconds,
-                    stage: "image materialization", onTimeout: .cancelAndWait
-                ) { [vmStoragePath] in
-                    try await storage.materializeDisk(
-                        at: "\(vmStoragePath)/\(vmId)/disk.qcow2", from: imageInfo, format: .qcow2,
-                        artifactKind: .diskImage)
-                }
-                // Flagged as a boot disk, which it is by construction — the
-                // image is what this VM boots from. Not cosmetic: `<boot order>`
-                // is emitted for every disk that carries the flag, so leaving
-                // this one unflagged would let a *data* volume the operator
-                // happened to attach with a `bootOrder` become the domain's only
-                // boot entry, and the guest would boot the wrong disk. The value
-                // itself is only a flag; `DomainXMLBuilder.derivedBootOrders`
-                // numbers positionally, and this disk is first.
-                disks.append(
-                    ResolvedDisk(path: attachment.path, format: attachment.format, bootOrder: 0))
-            } catch {
-                logger.error(
-                    "Failed to materialize boot disk from image, falling back to spec volumes",
-                    metadata: ["vmId": .string(vmId), "error": .string(error.localizedDescription)])
+            // Its own generous budget: multi-GB downloads are legitimate
+            // and must not be squeezed into the define envelope.
+            let attachment = try await StageBudget.run(
+                seconds: StageBudget.imageMaterializationSeconds,
+                stage: "image materialization", onTimeout: .cancelAndWait
+            ) { [vmStoragePath] in
+                try await storage.materializeDisk(
+                    at: "\(vmStoragePath)/\(vmId)/disk.qcow2", from: imageInfo, format: .qcow2,
+                    artifactKind: .diskImage)
             }
+            // Flagged as a boot disk, which it is by construction — the
+            // image is what this VM boots from. Not cosmetic: `<boot order>`
+            // is emitted for every disk that carries the flag, so leaving
+            // this one unflagged would let a *data* volume the operator
+            // happened to attach with a `bootOrder` become the domain's only
+            // boot entry, and the guest would boot the wrong disk. The value
+            // itself is only a flag; `DomainXMLBuilder.derivedBootOrders`
+            // numbers positionally, and this disk is first.
+            disks.append(
+                ResolvedDisk(path: attachment.path, format: attachment.format, bootOrder: 0))
         }
 
         var seen = Set(disks.map(\.path))

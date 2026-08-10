@@ -5,41 +5,8 @@ import Testing
 import AppTestSupport
 @testable import App
 
-@Suite("Pre-enforcement migration enum safety", .serialized)
+@Suite("Migration enum safety", .serialized)
 struct MigrationEnumSafetyTests {
-    @Test("Image artifact backfill does not decode malformed enum values")
-    func imageArtifactBackfillUsesRawValues() async throws {
-        try await withTestApp { app in
-            let sql = try #require(app.db as? any SQLDatabase)
-            let builder = TestDataBuilder(db: app.db)
-            let user = try await builder.createUser()
-            let organization = try await builder.createOrganization()
-            let project = try await builder.createProject(
-                name: "enum-safety", description: "", organization: organization)
-            let image = try await builder.createImage(
-                name: "enum-safety", project: project, uploadedBy: user,
-                storagePath: "enum-safety/disk.qcow2")
-
-            try await removeConstraint(table: "images", column: "format", on: app.db)
-            try await removeConstraint(table: "image_artifacts", column: "format", on: app.db)
-            try await sql.raw(
-                "UPDATE images SET format = 'future-format' WHERE id = \(bind: image.id!)"
-            ).run()
-
-            // This migration runs before EnforcePersistedEnumValues during an
-            // upgrade. It must carry the raw value without asking FluentKit to
-            // construct an enum, which would force-unwrap and trap.
-            try await BackfillImageArtifacts().prepare(on: app.db)
-
-            let row = try #require(
-                try await sql.raw(
-                    "SELECT format FROM image_artifacts WHERE image_id = \(bind: image.id!)"
-                ).first()
-            )
-            #expect(try row.decode(column: "format", as: String.self) == "future-format")
-        }
-    }
-
     @Test("VM disk backfill does not load malformed VM enum values")
     func vmDiskBackfillUsesSchemaSnapshot() async throws {
         try await withTestApp { app in

@@ -660,13 +660,10 @@ struct VMController: RouteCollection {
         // Link VM to source image
         vm.$sourceImage.id = image.id
 
-        // When the image carries a typed artifact set, it must include what
-        // the target hypervisor needs (a disk image for QEMU; a kernel +
-        // rootfs for Firecracker of the image's architecture). Images with
-        // no artifacts (legacy, pre-backfill) are left permissive — their
-        // compatibility is unknown, matching pre-#214 behavior.
-        let loadedArtifacts = image.$artifacts.value ?? []
-        if !loadedArtifacts.isEmpty, !image.isUsable(by: vm.hypervisorType) {
+        // The typed artifact set must include what the target hypervisor needs:
+        // a disk image for QEMU, or an architecture-matched kernel + rootfs for
+        // Firecracker. An empty or incomplete set is an explicit failure.
+        if !image.isUsable(by: vm.hypervisorType) {
             let available = image.compatibleHypervisors()
                 .map(\.rawValue).sorted().joined(separator: ", ")
             throw Abort(

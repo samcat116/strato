@@ -651,6 +651,12 @@ public func configure(_ app: Application) async throws {
     // the full migration history.
     app.migrations.add(EnforcePersistedEnumValues())
 
+    // STR-230: add the artifact-side fetch expectation in its own recorded
+    // migration so a failed inventory remains retryable; then remediate typed
+    // artifacts and remove the duplicate image columns.
+    app.migrations.add(AddExpectedChecksumToImageArtifact())
+    app.migrations.add(MakeImageArtifactsAuthoritative())
+
     // virtio-balloon guest memory stats (issue #567).
     app.migrations.add(AddGuestMemoryStatsToVM())
 

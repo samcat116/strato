@@ -293,7 +293,8 @@ export function CreateVMDialog({
           </option>
           {readyImages.map((image) => (
             <option key={image.id} value={image.id!}>
-              {image.name} ({image.sizeFormatted})
+              {image.name}
+              {image.sizeFormatted ? ` (${image.sizeFormatted})` : ""}
             </option>
           ))}
         </select>

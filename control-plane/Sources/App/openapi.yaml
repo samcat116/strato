@@ -1132,20 +1132,20 @@ paths:
       - $ref: "#/components/parameters/ImageID"
       - name: artifact
         in: query
-        required: false
-        description: Which artifact to download. Omit for the legacy whole-image disk.
+        required: true
+        description: Which typed artifact to download.
         schema:
           $ref: "#/components/schemas/ArtifactKind"
     get:
       operationId: downloadImage
-      summary: Download image (or artifact) bytes
+      summary: Download image artifact bytes
       description: |
         Streams raw bytes. Authenticated either by a user session or, for
         agents, a forwarded SPIFFE SVID client certificate over mTLS.
       tags: [Images]
       responses:
         "200":
-          description: The image bytes.
+          description: The artifact bytes.
           content:
             application/octet-stream:
               schema:
@@ -9887,15 +9887,14 @@ components:
           description: Artifact kind (see ArtifactKind).
         sourceURL:
           type: string
+        checksum:
+          type: string
+          description: Optional 64-hex SHA-256 the fetched bytes must match.
     Image:
       type: object
       required:
         - name
         - description
-        - filename
-        - size
-        - sizeFormatted
-        - format
         - architecture
         - status
         - artifacts
@@ -9913,9 +9912,11 @@ components:
           format: uuid
         filename:
           type: string
+          description: Convenience projection of the disk-image artifact, when present.
         size:
           type: integer
           format: int64
+          description: Convenience projection of the disk-image artifact, when present.
         sizeFormatted:
           type: string
           description: Display form of `size` in binary units (e.g. `2.4 GiB`).

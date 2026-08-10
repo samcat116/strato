@@ -44,6 +44,10 @@ export function ImageActions({
   const [editOpen, setEditOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const deleteImage = useDeleteImage(projectId);
+  const diskArtifact = image.artifacts.find(
+    (artifact) =>
+      artifact.kind === "disk-image" && artifact.status === "ready"
+  );
 
   const handleDelete = async () => {
     if (!image.id) {
@@ -64,15 +68,19 @@ export function ImageActions({
   };
 
   const handleDownload = () => {
-    if (!image.id) {
-      console.error("Cannot download image without ID");
+    if (!image.id || !diskArtifact) {
+      console.error("Cannot download image without a ready disk artifact");
       return;
     }
-    const downloadURL = imagesApi.getDownloadURL(projectId, image.id);
+    const downloadURL = imagesApi.getDownloadURL(
+      projectId,
+      image.id,
+      diskArtifact.kind
+    );
     window.open(downloadURL, "_blank");
   };
 
-  const canDownload = image.status === "ready";
+  const canDownload = Boolean(image.id && diskArtifact);
 
   return (
     <>

@@ -807,9 +807,9 @@ export interface paths {
     };
     "/api/projects/{projectID}/images/{imageID}/download": {
         parameters: {
-            query?: {
-                /** @description Which artifact to download. Omit for the legacy whole-image disk. */
-                artifact?: components["schemas"]["ArtifactKind"];
+            query: {
+                /** @description Which typed artifact to download. */
+                artifact: components["schemas"]["ArtifactKind"];
             };
             header?: never;
             path: {
@@ -821,7 +821,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Download image (or artifact) bytes
+         * Download image artifact bytes
          * @description Streams raw bytes. Authenticated either by a user session or, for
          *     agents, a forwarded SPIFFE SVID client certificate over mTLS.
          */
@@ -5792,6 +5792,8 @@ export interface components {
             /** @description Artifact kind (see ArtifactKind). */
             kind: string;
             sourceURL: string;
+            /** @description Optional 64-hex SHA-256 the fetched bytes must match. */
+            checksum?: string;
         };
         Image: {
             /** Format: uuid */
@@ -5800,12 +5802,16 @@ export interface components {
             description: string;
             /** Format: uuid */
             projectId?: string;
-            filename: string;
-            /** Format: int64 */
-            size: number;
+            /** @description Convenience projection of the disk-image artifact, when present. */
+            filename?: string;
+            /**
+             * Format: int64
+             * @description Convenience projection of the disk-image artifact, when present.
+             */
+            size?: number;
             /** @description Display form of `size` in binary units (e.g. `2.4 GiB`). */
-            sizeFormatted: string;
-            format: components["schemas"]["ImageFormat"];
+            sizeFormatted?: string;
+            format?: components["schemas"]["ImageFormat"];
             architecture: components["schemas"]["CPUArchitecture"];
             checksum?: string;
             status: components["schemas"]["ImageStatus"];
@@ -10750,9 +10756,9 @@ export interface operations {
     };
     downloadImage: {
         parameters: {
-            query?: {
-                /** @description Which artifact to download. Omit for the legacy whole-image disk. */
-                artifact?: components["schemas"]["ArtifactKind"];
+            query: {
+                /** @description Which typed artifact to download. */
+                artifact: components["schemas"]["ArtifactKind"];
             };
             header?: never;
             path: {
@@ -10765,7 +10771,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The image bytes. */
+            /** @description The artifact bytes. */
             200: {
                 headers: {
                     [name: string]: unknown;

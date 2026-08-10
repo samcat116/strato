@@ -51,7 +51,16 @@ export function CreateVolumeDialog({
   const { data: images, isLoading: imagesLoading } = useImages(projectId);
 
   const readyImages = useMemo(
-    () => images?.filter((img) => img.status === "ready" && img.id) || [],
+    () =>
+      images?.filter(
+        (img) =>
+          img.status === "ready" &&
+          img.id &&
+          img.artifacts.some(
+            (artifact) =>
+              artifact.kind === "disk-image" && artifact.status === "ready"
+          )
+      ) || [],
     [images]
   );
 
@@ -236,7 +245,8 @@ export function CreateVolumeDialog({
                   <option value="">None (empty volume)</option>
                   {readyImages.map((image) => (
                     <option key={image.id} value={image.id!}>
-                      {image.name} ({image.sizeFormatted})
+                      {image.name}
+                      {image.sizeFormatted ? ` (${image.sizeFormatted})` : ""}
                     </option>
                   ))}
                 </select>

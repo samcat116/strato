@@ -31,8 +31,8 @@ struct ImageCommand: AsyncParsableCommand {
                         headers: ["id", "name", "format", "arch", "size", "status", "created"])
                     for image in images {
                         table.addRow([
-                            image.id ?? "", image.name, image.format.rawValue,
-                            image.architecture.rawValue, image.sizeFormatted,
+                            image.id ?? "", image.name, image.format?.rawValue ?? "—",
+                            image.architecture.rawValue, image.sizeFormatted ?? "—",
                             image.status.rawValue, formatDate(image.createdAt),
                         ])
                     }
@@ -64,9 +64,9 @@ struct ImageCommand: AsyncParsableCommand {
                     table.addRow(["id", image.id ?? ""])
                     table.addRow(["name", image.name])
                     table.addRow(["description", image.description])
-                    table.addRow(["format", image.format.rawValue])
+                    table.addRow(["format", image.format?.rawValue ?? "—"])
                     table.addRow(["architecture", image.architecture.rawValue])
-                    table.addRow(["size", image.sizeFormatted])
+                    table.addRow(["size", image.sizeFormatted ?? "—"])
                     table.addRow(["status", image.status.rawValue])
                     table.addRow(["created", formatDate(image.createdAt)])
                     return table

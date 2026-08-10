@@ -1605,10 +1605,10 @@ export interface Image {
   name: string;
   description: string;
   projectId?: string;
-  filename: string;
-  size: number;
-  sizeFormatted: string;
-  format: ImageFormat;
+  filename?: string;
+  size?: number;
+  sizeFormatted?: string;
+  format?: ImageFormat;
   architecture: CPUArchitecture;
   checksum?: string;
   status: ImageStatus;

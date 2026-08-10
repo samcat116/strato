@@ -1,6 +1,7 @@
 import Fluent
 import Foundation
 import NIOCore
+import StratoShared
 import Testing
 import Vapor
 
@@ -106,10 +107,10 @@ struct ImageFetchRedirectTests {
         await teardown()
     }
 
-    /// Saves a pending image pointing at `sourceURL` and returns its id.
+    /// Saves a pending disk artifact pointing at `sourceURL`.
     private func makePendingImage(
         app: Application, sourceURL: String, expectedChecksum: String? = nil
-    ) async throws -> UUID {
+    ) async throws -> (imageID: UUID, artifactID: UUID) {
         let builder = TestDataBuilder(db: app.db)
         let user = try await builder.createUser()
         let org = try await builder.createOrganization()
@@ -120,28 +121,44 @@ struct ImageFetchRedirectTests {
             name: "redirected",
             description: "",
             projectID: try project.requireID(),
-            filename: "image.qcow2",
             architecture: .x86_64,
             status: .pending,
-            uploadedByID: try user.requireID(),
-            sourceURL: sourceURL
+            uploadedByID: try user.requireID()
         )
-        image.expectedChecksum = expectedChecksum
         try await image.save(on: app.db)
-        return try image.requireID()
+        let imageID = try image.requireID()
+        let artifact = ImageArtifact(
+            imageID: imageID,
+            kind: .diskImage,
+            format: nil,
+            architecture: .x86_64,
+            filename: "image.qcow2",
+            size: 0,
+            checksum: "",
+            storagePath: ImageObjectKey.artifact(
+                projectId: try project.requireID(), imageId: imageID,
+                kind: ArtifactKind.diskImage.rawValue, filename: "image.qcow2"),
+            status: .pending,
+            sourceURL: sourceURL,
+            expectedChecksum: expectedChecksum
+        )
+        try await artifact.save(on: app.db)
+        return (imageID, try artifact.requireID())
     }
 
     /// Polls until the image leaves the in-flight states, so the test doesn't
     /// race the detached fetch task.
     private func waitForTerminalStatus(
         app: Application, imageID: UUID, timeout: Duration = .seconds(10)
-    ) async throws -> Image {
+    ) async throws -> (Image, ImageArtifact) {
         let deadline = ContinuousClock.now.advanced(by: timeout)
         while ContinuousClock.now < deadline {
             if let image = try await Image.find(imageID, on: app.db),
-                image.status == .ready || image.status == .error
+                let artifact = try await ImageArtifact.query(on: app.db)
+                    .filter(\.$image.$id == imageID).filter(\.$kind == .diskImage).first(),
+                artifact.status == .ready || artifact.status == .error
             {
-                return image
+                return (image, artifact)
             }
             try await Task.sleep(for: .milliseconds(50))
         }
@@ -153,30 +170,30 @@ struct ImageFetchRedirectTests {
     @Test("A 302 to the real image is followed and the image becomes ready")
     func testFetchFollowsRedirect() async throws {
         try await withFetchApp { app, port in
-            let imageID = try await makePendingImage(
+            let ids = try await makePendingImage(
                 app: app, sourceURL: "http://127.0.0.1:\(port)/redirect")
 
-            try await app.imageFetchService.startFetch(imageId: imageID)
-            let image = try await waitForTerminalStatus(app: app, imageID: imageID)
+            try await app.imageFetchService.startArtifactFetch(artifactId: ids.artifactID)
+            let (image, artifact) = try await waitForTerminalStatus(app: app, imageID: ids.imageID)
 
             #expect(image.status == .ready)
-            #expect(image.errorMessage == nil)
-            #expect(image.format == .qcow2)
-            #expect(image.size == Int64(Self.qcow2Bytes().count))
+            #expect(artifact.errorMessage == nil)
+            #expect(artifact.format == .qcow2)
+            #expect(artifact.size == Int64(Self.qcow2Bytes().count))
         }
     }
 
     @Test("A redirect chain is followed to the image")
     func testFetchFollowsRedirectChain() async throws {
         try await withFetchApp(redirectHops: 3) { app, port in
-            let imageID = try await makePendingImage(
+            let ids = try await makePendingImage(
                 app: app, sourceURL: "http://127.0.0.1:\(port)/redirect")
 
-            try await app.imageFetchService.startFetch(imageId: imageID)
-            let image = try await waitForTerminalStatus(app: app, imageID: imageID)
+            try await app.imageFetchService.startArtifactFetch(artifactId: ids.artifactID)
+            let (image, artifact) = try await waitForTerminalStatus(app: app, imageID: ids.imageID)
 
             #expect(image.status == .ready)
-            #expect(image.format == .qcow2)
+            #expect(artifact.format == .qcow2)
         }
     }
 
@@ -185,16 +202,16 @@ struct ImageFetchRedirectTests {
     @Test("A redirected download still fails a mismatched checksum")
     func testRedirectedFetchVerifiesChecksum() async throws {
         try await withFetchApp { app, port in
-            let imageID = try await makePendingImage(
+            let ids = try await makePendingImage(
                 app: app,
                 sourceURL: "http://127.0.0.1:\(port)/redirect",
                 expectedChecksum: String(repeating: "0", count: 64))
 
-            try await app.imageFetchService.startFetch(imageId: imageID)
-            let image = try await waitForTerminalStatus(app: app, imageID: imageID)
+            try await app.imageFetchService.startArtifactFetch(artifactId: ids.artifactID)
+            let (image, artifact) = try await waitForTerminalStatus(app: app, imageID: ids.imageID)
 
             #expect(image.status == .error)
-            #expect(image.errorMessage?.contains("Checksum verification failed") == true)
+            #expect(artifact.errorMessage?.contains("Checksum verification failed") == true)
         }
     }
 
@@ -207,17 +224,17 @@ struct ImageFetchRedirectTests {
     @Test("A fetch connects to the validated address, not a re-resolved one")
     func testFetchPinsTheValidatedAddress() async throws {
         try await withFetchApp(approvedAddresses: ["::1"]) { app, port in
-            let imageID = try await makePendingImage(
+            let ids = try await makePendingImage(
                 app: app, sourceURL: "http://localhost:\(port)/image.qcow2")
 
-            try await app.imageFetchService.startFetch(imageId: imageID)
+            try await app.imageFetchService.startArtifactFetch(artifactId: ids.artifactID)
             // Longer than the guarded client's connect timeout: the fetch settles
             // only once the connection to the pinned address has given up.
-            let image = try await waitForTerminalStatus(
-                app: app, imageID: imageID, timeout: .seconds(20))
+            let (image, artifact) = try await waitForTerminalStatus(
+                app: app, imageID: ids.imageID, timeout: .seconds(20))
 
             #expect(image.status == .error)
-            #expect(image.size == 0)
+            #expect(artifact.size == 0)
         }
     }
 
@@ -227,15 +244,15 @@ struct ImageFetchRedirectTests {
     @Test("A pinned fetch follows its redirect chain to the image")
     func testPinnedFetchFollowsRedirectChain() async throws {
         try await withFetchApp(redirectHops: 2, approvedAddresses: ["127.0.0.1"]) { app, port in
-            let imageID = try await makePendingImage(
+            let ids = try await makePendingImage(
                 app: app, sourceURL: "http://localhost:\(port)/redirect")
 
-            try await app.imageFetchService.startFetch(imageId: imageID)
-            let image = try await waitForTerminalStatus(app: app, imageID: imageID)
+            try await app.imageFetchService.startArtifactFetch(artifactId: ids.artifactID)
+            let (image, artifact) = try await waitForTerminalStatus(app: app, imageID: ids.imageID)
 
             #expect(image.status == .ready)
-            #expect(image.format == .qcow2)
-            #expect(image.size == Int64(Self.qcow2Bytes().count))
+            #expect(artifact.format == .qcow2)
+            #expect(artifact.size == Int64(Self.qcow2Bytes().count))
         }
     }
 
@@ -245,16 +262,16 @@ struct ImageFetchRedirectTests {
             from: ByteBuffer(bytes: Self.qcow2Bytes()))
 
         try await withFetchApp { app, port in
-            let imageID = try await makePendingImage(
+            let ids = try await makePendingImage(
                 app: app,
                 sourceURL: "http://127.0.0.1:\(port)/redirect",
                 expectedChecksum: expected)
 
-            try await app.imageFetchService.startFetch(imageId: imageID)
-            let image = try await waitForTerminalStatus(app: app, imageID: imageID)
+            try await app.imageFetchService.startArtifactFetch(artifactId: ids.artifactID)
+            let (image, artifact) = try await waitForTerminalStatus(app: app, imageID: ids.imageID)
 
             #expect(image.status == .ready)
-            #expect(image.checksum == expected)
+            #expect(artifact.checksum == expected)
         }
     }
 }

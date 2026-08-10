@@ -58,9 +58,8 @@ struct DesiredStateAssembler {
             .filter(\.$hypervisorId == agentId)
             .with(\.$volumes)
             .with(\.$networkInterfaces) { $0.with(\.$addresses) }
-            // Artifacts loaded too so buildImageInfo emits the typed artifact
-            // set (kernel/rootfs distribution, issue #214) rather than the
-            // legacy single-file fallback.
+            // Artifacts are required so buildImageInfo can emit the explicit
+            // typed set each hypervisor selects from.
             .with(\.$sourceImage) { image in
                 image.with(\.$artifacts)
             }
@@ -706,7 +705,7 @@ struct DesiredStateAssembler {
                 source = .clone(from: sourceVolumeID, format: volume.format.rawValue)
             } else if let image = volume.sourceImage, image.status == .ready, let imageId = image.id {
                 do {
-                    source = .image(try VMSpecBuilder.buildImageInfo(from: image))
+                    source = .image(try VMSpecBuilder.buildDiskImageInfo(from: image))
                     // Emitting the URLs is what authorizes the fetch, exactly as
                     // it does for a VM's boot image (issue #562). This grant
                     // moved here from the old create RPC's dispatch: with no

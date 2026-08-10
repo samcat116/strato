@@ -11,9 +11,10 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Bump this value whenever
-    /// a coordinated release changes an on-wire representation or its semantics.
-    public static let currentVersion = 40
+    /// The only wire/schema version this build accepts. Version 41 removes the
+    /// single-file `ImageInfo` representation in favor of explicit typed image
+    /// artifacts (STR-230).
+    public static let currentVersion = 41
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

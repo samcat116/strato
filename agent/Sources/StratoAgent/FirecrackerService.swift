@@ -102,7 +102,19 @@ actor FirecrackerService: HypervisorService {
 
         // Realize kernel/rootfs from the image's artifact set when present.
         var rootDrive: (id: String, path: String, readOnly: Bool)?
-        if let imageInfo = imageInfo, let storage = storage {
+        if let imageInfo {
+            guard let storage, let imageSource else {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "Firecracker cannot realize typed image artifacts without storage and image-source services")
+            }
+            guard imageInfo.artifact(ofKind: .kernel) != nil else {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "Firecracker image \(imageInfo.imageId) has no kernel artifact")
+            }
+            guard imageInfo.artifact(ofKind: .rootfs) != nil else {
+                throw HypervisorServiceError.invalidConfiguration(
+                    "Firecracker image \(imageInfo.imageId) has no rootfs artifact")
+            }
             logger.info(
                 "Realizing boot artifacts from image",
                 metadata: [
@@ -117,26 +129,23 @@ actor FirecrackerService: HypervisorService {
                 // drop any stale spec initramfs so the image kernel is never
                 // paired with a legacy/nonexistent initrd, then use the image's
                 // initramfs only if it provides one.
-                if imageInfo.artifact(ofKind: .kernel) != nil, let imageSource = imageSource {
-                    kernelPath = try await imageSource.localImagePath(for: imageInfo, kind: .kernel)
-                    if imageInfo.artifact(ofKind: .initramfs) != nil {
-                        initramfsPath = try await imageSource.localImagePath(for: imageInfo, kind: .initramfs)
-                    } else {
-                        initramfsPath = nil
-                    }
+                kernelPath = try await imageSource.localImagePath(for: imageInfo, kind: .kernel)
+                if imageInfo.artifact(ofKind: .initramfs) != nil {
+                    initramfsPath = try await imageSource.localImagePath(for: imageInfo, kind: .initramfs)
+                } else {
+                    initramfsPath = nil
                 }
 
                 // Firecracker attaches drives as raw block devices. The storage
                 // layer converts the artifact (e.g. a qcow2 rootfs) to raw during
                 // materialization; a plain copy of a qcow2 file would hand the
-                // guest an unbootable rootfs. Prefer a dedicated rootfs artifact,
-                // falling back to the primary disk image for legacy images.
-                let rootfsKind: ArtifactKind = imageInfo.artifact(ofKind: .rootfs) != nil ? .rootfs : .diskImage
+                // guest an unbootable rootfs. The typed rootfs is mandatory;
+                // a disk image is a different artifact role, never a fallback.
                 let attachment = try await storage.materializeDisk(
                     at: "\(vmStoragePath)/\(vmId)/rootfs.raw",
                     from: imageInfo,
                     format: .raw,
-                    artifactKind: rootfsKind
+                    artifactKind: .rootfs
                 )
                 rootDrive = (id: "rootfs", path: attachment.path, readOnly: false)
             } catch {

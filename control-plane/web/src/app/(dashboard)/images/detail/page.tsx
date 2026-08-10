@@ -83,6 +83,11 @@ export default function ImageDetailPage() {
     );
   }
 
+  const diskArtifact = image.artifacts.find(
+    (artifact) =>
+      artifact.kind === "disk-image" && artifact.status === "ready"
+  );
+
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       {/* Header */}
@@ -110,9 +115,13 @@ export default function ImageDetailPage() {
           <Button
             variant="outline"
             className="border-input"
-            disabled={image.status !== "ready"}
+            disabled={!diskArtifact}
             onClick={() =>
-              window.open(imagesApi.getDownloadURL(projectId, id), "_blank")
+              diskArtifact &&
+              window.open(
+                imagesApi.getDownloadURL(projectId, id, diskArtifact.kind),
+                "_blank"
+              )
             }
           >
             <Download className="h-4 w-4 mr-2" />
@@ -149,7 +158,7 @@ export default function ImageDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="text-xl font-bold text-foreground">
-              {image.sizeFormatted}
+              {image.sizeFormatted || "—"}
             </div>
           </CardContent>
         </Card>
@@ -162,7 +171,7 @@ export default function ImageDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="text-xl font-bold text-foreground uppercase">
-              {image.format}
+              {image.format || "—"}
             </div>
           </CardContent>
         </Card>
@@ -216,7 +225,7 @@ export default function ImageDetailPage() {
             </div>
             <div>
               <p className="text-muted-foreground">Filename</p>
-              <p className="text-foreground">{image.filename}</p>
+              <p className="text-foreground">{image.filename || "—"}</p>
             </div>
             {image.sourceURL && (
               <div className="col-span-2">
@@ -293,20 +302,41 @@ export default function ImageDetailPage() {
                       </span>
                     )}
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="text-red-600 hover:text-red-700 hover:bg-accent"
-                    disabled={deleteArtifact.isPending}
-                    onClick={() =>
-                      deleteArtifact.mutate({
-                        imageId: id,
-                        kind: artifact.kind as ArtifactKind,
-                      })
-                    }
-                  >
-                    Remove
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    {artifact.status === "ready" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() =>
+                          window.open(
+                            imagesApi.getDownloadURL(
+                              projectId,
+                              id,
+                              artifact.kind
+                            ),
+                            "_blank"
+                          )
+                        }
+                      >
+                        <Download className="h-4 w-4 mr-2" />
+                        Download
+                      </Button>
+                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-red-600 hover:text-red-700 hover:bg-accent"
+                      disabled={deleteArtifact.isPending}
+                      onClick={() =>
+                        deleteArtifact.mutate({
+                          imageId: id,
+                          kind: artifact.kind as ArtifactKind,
+                        })
+                      }
+                    >
+                      Remove
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

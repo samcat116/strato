@@ -59,10 +59,13 @@ enum Fixtures {
     static let imageInfo = ImageInfo(
         imageId: uuidA,
         projectId: uuidB,
-        filename: "debian-12.qcow2",
-        checksum: "sha256:abcdef",
-        size: 2_147_483_648,
-        downloadURL: "/api/projects/\(uuidB)/images/\(uuidA)/download"
+        architecture: .x86_64,
+        artifacts: [
+            ArtifactInfo(
+                kind: .diskImage, filename: "debian-12.qcow2",
+                checksum: String(repeating: "a", count: 64), size: 2_147_483_648,
+                downloadURL: "/api/projects/\(uuidB)/images/\(uuidA)/download?artifact=disk-image")
+        ]
     )
 
     static let resources = AgentResources(

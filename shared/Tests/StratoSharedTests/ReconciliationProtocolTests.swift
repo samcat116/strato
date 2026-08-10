@@ -18,10 +18,13 @@ struct ReconciliationProtocolTests {
                     imageInfo: ImageInfo(
                         imageId: UUID(),
                         projectId: UUID(),
-                        filename: "debian.qcow2",
-                        checksum: "abc",
-                        size: 1024,
-                        downloadURL: "https://example.test/dl"
+                        architecture: .x86_64,
+                        artifacts: [
+                            ArtifactInfo(
+                                kind: .diskImage, filename: "debian.qcow2",
+                                checksum: String(repeating: "a", count: 64), size: 1024,
+                                downloadURL: "https://example.test/dl?artifact=disk-image")
+                        ]
                     )
                 )
             ]
@@ -40,7 +43,7 @@ struct ReconciliationProtocolTests {
         #expect(decoded.vms[0].vmId == message.vms[0].vmId)
         #expect(decoded.vms[0].desiredStatus == .running)
         #expect(decoded.vms[0].generation == 7)
-        #expect(decoded.vms[0].imageInfo?.filename == "debian.qcow2")
+        #expect(decoded.vms[0].imageInfo?.artifact(ofKind: .diskImage)?.filename == "debian.qcow2")
     }
 
     @Test("DesiredStateMessage carries networks through the envelope")
