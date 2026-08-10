@@ -130,17 +130,19 @@ public actor MockStorageBackend: StorageBackend {
     /// Records the volume without fetching the image. Deliberately never touches
     /// the `ImageSource`: a real materialization would download the full image
     /// on every simulated agent it lands on.
-    public func createVolumeFromImage(volumeId: String, imageInfo: ImageInfo, format: DiskFormat) async throws
+    public func createVolumeFromImage(
+        volumeId: String, imageInfo: ImageInfo, format: DiskFormat, artifactKind: ArtifactKind
+    ) async throws
         -> DiskAttachment
     {
-        guard let diskImage = imageInfo.artifact(ofKind: .diskImage) else {
+        guard let sourceArtifact = imageInfo.artifact(ofKind: artifactKind) else {
             throw StorageBackendError.imageSourceUnavailable
         }
         let path = volumePath(volumeId: volumeId, format: format)
         logger.info(
             "Creating mock volume from image (mock mode; image not downloaded)",
             metadata: ["volumeId": .string(volumeId), "imageId": .string(imageInfo.imageId.uuidString)])
-        volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: diskImage.size)
+        volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: sourceArtifact.size)
         persist()
         return DiskAttachment(path: path, format: format)
     }
@@ -160,6 +162,16 @@ public actor MockStorageBackend: StorageBackend {
                 "imageId": .string(imageInfo.imageId.uuidString),
                 "artifactKind": .string(artifactKind.rawValue),
             ])
+        return DiskAttachment(path: path, format: format)
+    }
+
+    public func adoptVolume(
+        volumeId: String, existingPath: String, format: DiskFormat
+    ) async throws -> DiskAttachment {
+        let size = volumes.values.first(where: { $0.path == existingPath })?.sizeBytes ?? 0
+        let path = volumePath(volumeId: volumeId, format: format)
+        volumes[volumeId] = MockVolume(path: path, format: format, sizeBytes: size)
+        persist()
         return DiskAttachment(path: path, format: format)
     }
 

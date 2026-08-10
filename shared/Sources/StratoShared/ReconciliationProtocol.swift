@@ -246,10 +246,19 @@ public struct DesiredVolumeSource: Codable, Sendable {
     /// fetched over SVID mTLS — no signature, so nothing here expires and the
     /// entry stays safe to sit in a sync indefinitely.
     public let imageInfo: ImageInfo?
+    /// The typed image artifact whose bytes initialize this volume. Required
+    /// for `image`: QEMU boot/data volumes use `.diskImage`, while a
+    /// Firecracker boot volume uses `.rootfs`.
+    public let artifactKind: ArtifactKind?
     /// Present for `clone`. The volume/VM co-location constraint guarantees the
     /// source lives on this same agent, and the agent derives the source path
     /// from its own layout — no path travels on the wire (STR-180).
     public let sourceVolumeId: UUID?
+    /// The VM that currently owns an attached clone source. The agent holds
+    /// this VM's reconciliation lane for the complete copy, so a later desired
+    /// state cannot start the source guest while its bytes are being read. Nil
+    /// for a detached clone source.
+    public let sourceVMId: UUID?
     /// The source volume's format, when known, so the agent can pick a copy
     /// strategy without probing. Advisory: the backend detects rather than
     /// assumes.
@@ -258,21 +267,29 @@ public struct DesiredVolumeSource: Codable, Sendable {
     public init(
         kind: String,
         imageInfo: ImageInfo? = nil,
+        artifactKind: ArtifactKind? = nil,
         sourceVolumeId: UUID? = nil,
+        sourceVMId: UUID? = nil,
         sourceFormat: String? = nil
     ) {
         self.kind = kind
         self.imageInfo = imageInfo
+        self.artifactKind = artifactKind
         self.sourceVolumeId = sourceVolumeId
+        self.sourceVMId = sourceVMId
         self.sourceFormat = sourceFormat
     }
 
-    public static func image(_ info: ImageInfo) -> DesiredVolumeSource {
-        DesiredVolumeSource(kind: Self.image, imageInfo: info)
+    public static func image(_ info: ImageInfo, artifactKind: ArtifactKind) -> DesiredVolumeSource {
+        DesiredVolumeSource(kind: Self.image, imageInfo: info, artifactKind: artifactKind)
     }
 
-    public static func clone(from volumeId: UUID, format: String? = nil) -> DesiredVolumeSource {
-        DesiredVolumeSource(kind: Self.clone, sourceVolumeId: volumeId, sourceFormat: format)
+    public static func clone(
+        from volumeId: UUID, sourceVMId: UUID? = nil, format: String? = nil
+    ) -> DesiredVolumeSource {
+        DesiredVolumeSource(
+            kind: Self.clone, sourceVolumeId: volumeId, sourceVMId: sourceVMId,
+            sourceFormat: format)
     }
 }
 

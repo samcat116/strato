@@ -37,7 +37,8 @@ struct MockStorageBackendTests {
         let sut = backend(root: root)
 
         let attachment = try await sut.createVolume(volumeId: "vol-1", sizeBytes: 1024, format: .qcow2)
-        _ = try await sut.createVolumeFromImage(volumeId: "vol-2", imageInfo: imageInfo(), format: .raw)
+        _ = try await sut.createVolumeFromImage(
+            volumeId: "vol-2", imageInfo: imageInfo(), format: .raw, artifactKind: .diskImage)
         _ = try await sut.createSnapshot(volumeId: "vol-1", snapshotId: "snap-1", volumePath: attachment.path)
 
         #expect(!FileManager.default.fileExists(atPath: attachment.path))
@@ -59,7 +60,8 @@ struct MockStorageBackendTests {
     func fromImageSize() async throws {
         let sut = backend(root: "/tmp/x")
         let image = imageInfo(size: 8 * 1024 * 1024 * 1024)
-        let attachment = try await sut.createVolumeFromImage(volumeId: "vol-1", imageInfo: image, format: .qcow2)
+        let attachment = try await sut.createVolumeFromImage(
+            volumeId: "vol-1", imageInfo: image, format: .qcow2, artifactKind: .diskImage)
 
         let info = try await sut.volumeInfo(volumePath: attachment.path)
         #expect(info.virtualSize == 8 * 1024 * 1024 * 1024)
@@ -139,7 +141,9 @@ struct MockStorageBackendTests {
         let before = MockStorageBackend(
             logger: Logger(label: "test"), volumeStoragePath: "/tmp/x", metadataPath: metadata)
         let attachment = try await before.createVolume(volumeId: "vol-1", sizeBytes: 4096, format: .qcow2)
-        _ = try await before.createVolumeFromImage(volumeId: "vol-2", imageInfo: imageInfo(size: 2048), format: .raw)
+        _ = try await before.createVolumeFromImage(
+            volumeId: "vol-2", imageInfo: imageInfo(size: 2048), format: .raw,
+            artifactKind: .diskImage)
 
         // A new process, same agent: same metadata path.
         let after = MockStorageBackend(
@@ -195,7 +199,8 @@ struct MockStorageBackendTests {
         let sut = MockStorageBackend(
             logger: Logger(label: "test"), volumeStoragePath: "/tmp/x", metadataPath: metadata)
         let attachment = try await sut.createVolumeFromImage(
-            volumeId: "vol-1", imageInfo: imageInfo(size: 8 * 1024 * 1024 * 1024), format: .qcow2)
+            volumeId: "vol-1", imageInfo: imageInfo(size: 8 * 1024 * 1024 * 1024), format: .qcow2,
+            artifactKind: .diskImage)
 
         // The reported volume does not exist, and the metadata is tiny — not a
         // multi-GB image.

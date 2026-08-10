@@ -19,7 +19,7 @@ enum HostResources {
 
     /// Total and free bytes of the filesystem backing the given path.
     ///
-    /// If `path` does not yet exist (e.g. the VM storage directory hasn't been
+    /// If `path` does not yet exist (e.g. the storage directory hasn't been
     /// created), the nearest existing ancestor directory is queried instead, since
     /// it resolves to the same filesystem. Returns `nil` if capacity cannot be read.
     static func diskCapacity(forPath path: String) -> (total: Int64, free: Int64)? {

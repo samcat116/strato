@@ -76,12 +76,15 @@ struct StoragePoolTests {
             agentId: name,
             hostname: "\(name).test",
             version: "1.0.0",
-            capabilities: ["qemu"],
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
+            hypervisors: [
+                HypervisorSupport(
+                    type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+            ],
             protocolVersion: WireProtocol.currentVersion
         )
         let org = try await TestDataBuilder(db: app.db).createOrganization(

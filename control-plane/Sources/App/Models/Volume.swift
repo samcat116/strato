@@ -338,15 +338,16 @@ extension Volume {
         return desiredStatus == .present
     }
 
-    /// Snapshots require a detached volume (issue #747). The filesystem
-    /// backend's snapshot is a qcow2 overlay whose backing file is the volume,
+    /// Snapshots require stable, detached bytes. The filesystem backend's
+    /// snapshot is a qcow2 overlay whose backing file is the volume,
     /// and nothing redirects a running QEMU's active layer onto that overlay —
     /// the guest keeps writing to the same base the overlay points at, so the
     /// "snapshot" never diverges from the live volume and captures no
-    /// point-in-time state. Rather than return a silently-wrong snapshot for
-    /// the case operators most rely on, an attached volume is refused until a
-    /// real live-snapshot path (QMP `blockdev-snapshot-sync` plus the layer
-    /// bookkeeping it implies) exists.
+    /// point-in-time state. Stopping the VM only makes capture momentarily safe;
+    /// a later start mutates the backing file and silently changes the snapshot.
+    /// An attached volume is therefore refused until capture either redirects
+    /// the VM to a new active layer or makes the snapshot independent of the
+    /// mutable base.
     var canSnapshot: Bool {
         return $vm.id == nil && desiredStatus == .present && bytesAtRest
     }
@@ -371,7 +372,7 @@ extension Volume {
     /// tear the bytes, and a copy of the pre-resize volume is a perfectly good
     /// point-in-time copy.
     var canClone: Bool {
-        return $vm.id == nil && desiredStatus == .present && bytesAtRest
+        return desiredStatus == .present && bytesAtRest
     }
 
     /// A volume is deletable unless it is attached to a VM (detach it first).

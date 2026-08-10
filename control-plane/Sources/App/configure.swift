@@ -955,6 +955,10 @@ public func configure(_ app: Application) async throws {
     // the agent can report today.
     app.migrations.add(RemoveVolumeSnapshotRestoringStatus())
 
+    // STR-231: inventory and adopt every VM boot disk as one canonical managed
+    // Volume, then remove VM-side path/readonly compatibility state.
+    app.migrations.add(MakeVMBootVolumesAuthoritative())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

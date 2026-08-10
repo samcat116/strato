@@ -128,7 +128,7 @@ struct VolumeIOLimitsTests {
         #expect(try encodedKeys(desired).contains("ioLimits") == false)
     }
 
-    @Test func volumeSpecCarriesLimitsAndToleratesTheirAbsence() throws {
+    @Test func volumeSpecCarriesLimitsAndRequiresManagedIdentity() throws {
         let spec = VolumeSpec(
             volumeId: UUID(),
             deviceName: VolumeDeviceName.disk(1),
@@ -139,6 +139,8 @@ struct VolumeIOLimitsTests {
         let json = """
             { "deviceName": "disk1", "readonly": false }
             """
-        #expect(try decodeJSON(VolumeSpec.self, from: json).ioLimits == nil)
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(VolumeSpec.self, from: json)
+        }
     }
 }

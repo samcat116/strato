@@ -205,7 +205,7 @@ final class VM: Model, @unchecked Sendable {
     @OptionalParent(key: "image_id")
     var sourceImage: Image?
 
-    // Volumes attached to this VM (QEMU only - requires eager loading with .with(\.$volumes))
+    // Managed boot and data volumes attached to this VM. Requires eager loading.
     @Children(for: \.$vm)
     var volumes: [Volume]
 
@@ -240,12 +240,6 @@ final class VM: Model, @unchecked Sendable {
     // Disk configuration
     @Field(key: "disk")
     var disk: Int64
-
-    @OptionalField(key: "disk_path")
-    var diskPath: String?
-
-    @Field(key: "readonly_disk")
-    var readonlyDisk: Bool
 
     // Payload configuration (kernel, initramfs, etc.)
     @OptionalField(key: "kernel_path")
@@ -324,7 +318,6 @@ final class VM: Model, @unchecked Sendable {
         maxMemory: Int64? = nil,
         hugepages: Bool = false,
         sharedMemory: Bool = false,
-        readonlyDisk: Bool = false,
         consoleMode: ConsoleMode = .pty,
         serialMode: ConsoleMode = .pty,
         secureBoot: Bool = false,
@@ -353,7 +346,6 @@ final class VM: Model, @unchecked Sendable {
         self.hypervisorType = hypervisorType
         self.hugepages = hugepages
         self.sharedMemory = sharedMemory
-        self.readonlyDisk = readonlyDisk
         self.consoleMode = consoleMode
         self.serialMode = serialMode
         self.secureBoot = secureBoot
