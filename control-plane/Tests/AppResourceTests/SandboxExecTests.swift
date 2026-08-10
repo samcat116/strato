@@ -70,7 +70,6 @@ final class SandboxExecTests {
             agentId: agentName,
             hostname: "test-host",
             version: "1.0.0",
-            capabilities: ["firecracker"],
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,

@@ -75,7 +75,6 @@ final class AgentOrganizationScopeTests {
             agentId: agentName,
             hostname: "host-\(agentName)",
             version: "1.0.0",
-            capabilities: ["qemu"],
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,

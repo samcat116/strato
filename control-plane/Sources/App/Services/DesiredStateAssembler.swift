@@ -52,8 +52,7 @@ struct DesiredStateAssembler {
         // The agent's site, loaded here rather than inside
         // `networkAssemblyScope` because two things need it now: topology
         // authority, and the `region` every VM's instance metadata carries. One
-        // row read either way — `find` of a nil id queries nothing, so a
-        // site-less agent still reads none.
+        // row read either way; a missing agent still queries no site.
         let site = try await Site.find(agent?.$site.id, on: db)
         let vms = try await VM.query(on: db)
             .filter(\.$hypervisorId == agentId)
@@ -132,9 +131,8 @@ struct DesiredStateAssembler {
         // resolved once for the whole sync. The site's *name* names the coarse
         // half, not its advisory `regionCode`: that slug is operator-optional,
         // so falling back to the name would make the field's namespace depend
-        // on whether someone filled it in. A site-less agent (the legacy
-        // single-node model) simply has no region to report; whether a guest is
-        // *told* either half is the renderer's call, not this one.
+        // on whether someone filled it in. Whether a guest is *told* either
+        // half is the renderer's call, not this one.
         let region = site?.name
         let availabilityZone = agent?.name
 
@@ -237,8 +235,8 @@ struct DesiredStateAssembler {
         // agent may write topology at all — depends on its site membership
         // (issue #343); see `networkAssemblyScope`.
         // Floating IPs attached to NICs of VMs the receiving agent's topology
-        // writes cover (issue #344): its own VMs for a site-less agent, every
-        // site VM for the site's controller. Keyed by network id, matching
+        // writes cover (issue #344): every site VM for the site's controller.
+        // Keyed by network id, matching
         // how the NAT rule lands on that network's router. Omitted entirely
         // for pre-v12 agents — they would decode and silently ignore the
         // field, so sending it only misstates what the sync achieved; the
@@ -543,16 +541,14 @@ struct DesiredStateAssembler {
     /// and treating "not currently connected" as "not in the site" would flip
     /// the resolver on during a rolling restart and off again afterwards.
     ///
-    /// A site-less agent (the legacy single-node model) answers for itself: it
-    /// is the only host its networks can place on. An agent this assembly could
-    /// not load at all is not asked — the caller sends nil rather than an
-    /// opinion, because `false` here is a teardown instruction rather than
-    /// silence.
+    /// An agent this assembly could not load at all is not asked — the caller
+    /// sends nil rather than an opinion, because `false` here is a teardown
+    /// instruction rather than silence.
     private func resolverCapableSiteWide(agent: Agent, site: Site?, on db: any Database)
         async throws -> Bool
     {
         guard let site, let siteID = site.id else {
-            return agent.resolverCapable
+            throw Abort(.internalServerError, reason: "Agent references a missing site")
         }
         // One query returning the offending names rather than a count plus a
         // second lookup on failure: the common answer materializes zero rows, so
@@ -1083,16 +1079,11 @@ struct DesiredStateAssembler {
         // the legacy per-node scope, which is what a missing row already does.
         guard let agent,
             let agentUUID = agent.id,
-            let siteID = agent.$site.id,
-            let site, site.id == siteID
+            let site, site.id == agent.$site.id
         else {
-            return NetworkAssemblyScope(
-                networkIDs: ownReferences,
-                authoritative: true,
-                floatingIPAgentIDs: [agentId],
-                coveredVMs: ownVMs,
-                coveredSandboxes: ownSandboxes)
+            throw Abort(.internalServerError, reason: "Cannot assemble topology without an agent site")
         }
+        let siteID = agent.$site.id
 
         guard let controllerID = site.$networkControllerAgent.id else {
             // No designated controller: nobody may author topology, so the

@@ -498,6 +498,27 @@ package struct TestDataBuilder {
         externalAccess: Bool = true,
         site: Site? = nil
     ) async throws -> LogicalNetwork {
+        let placementSite: Site
+        if let site {
+            placementSite = site
+        } else {
+            guard let organizationID = try await project.getRootOrganizationId(on: db) else {
+                throw Abort(.internalServerError, reason: "Test project has no owning organization")
+            }
+            if let existing = try await Site.query(on: db)
+                .filter(\.$organization.$id == organizationID)
+                .first()
+            {
+                placementSite = existing
+            } else {
+                let created = Site(
+                    name: "Test Site \(organizationID.uuidString)",
+                    organizationScope: .organization(organizationID)
+                )
+                try await created.save(on: db)
+                placementSite = created
+            }
+        }
         let network = LogicalNetwork(
             name: name,
             subnet: subnet,
@@ -507,7 +528,7 @@ package struct TestDataBuilder {
             projectID: try project.requireID(),
             dhcpEnabled: dhcpEnabled,
             externalAccess: externalAccess,
-            siteID: site?.id
+            siteID: try placementSite.requireID()
         )
         try await network.save(on: db)
         return network

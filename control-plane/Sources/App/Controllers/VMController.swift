@@ -136,7 +136,7 @@ struct VMController: RouteCollection {
                 .attach, on: vm, actor: .user(userID), dispatch: .stateSync,
                 on: req.db, app: req.application
             ) { @Sendable db in
-                let agent = try await Self.requireNetworkHotplugCapableAgent(vm, on: db)
+                let agent = try await Self.requirePlacedAgentForNetworkHotplug(vm, on: db)
                 let existing = try await VMNetworkInterface.query(on: db)
                     .filter(\.$vm.$id == vmID)
                     .all()
@@ -157,7 +157,7 @@ struct VMController: RouteCollection {
                     projectID: projectID,
                     on: db)
                 try Self.requireDHCPNetworkForHotplug(network)
-                if let requiredSite = network.$site.id, agent.$site.id != requiredSite {
+                if agent.$site.id != network.$site.id {
                     throw Abort(
                         .conflict,
                         reason: "This network is pinned to a different site than the VM's agent")
@@ -273,7 +273,7 @@ struct VMController: RouteCollection {
             kind, on: vm, actor: .user(userID), dispatch: .stateSync,
             on: req.db, app: req.application
         ) { @Sendable db in
-            _ = try await Self.requireNetworkHotplugCapableAgent(vm, on: db)
+            _ = try await Self.requirePlacedAgentForNetworkHotplug(vm, on: db)
             guard
                 let interface = try await VMNetworkInterface.query(on: db)
                     .filter(\.$id == interfaceID)
@@ -1364,10 +1364,8 @@ struct VMController: RouteCollection {
         }
     }
 
-    /// Applies the metadata switch from a row-locking transaction. Placement
-    /// takes the same lock, so `vm.hypervisorId` is current here: either the
-    /// update commits first and constrains placement, or placement commits
-    /// first and this gate checks the selected agent's actual wire version.
+    /// Applies the metadata switch from a row-locking transaction so a racing
+    /// placement or update cannot make this request save stale VM state.
     ///
     /// When the request omits the field, adopt the committed value before the
     /// whole-model save. Otherwise a request loaded before a competing switch
@@ -1385,12 +1383,6 @@ struct VMController: RouteCollection {
             return false
         }
 
-        // Turning the service on asks for behavior every agent already has.
-        // Turning it off must never be reported against an agent that ignores
-        // the field.
-        if !requested, requested != committed.metadataEnabled {
-            try await requireMetadataOptOutCapableAgent(vm, on: db)
-        }
         vm.metadataEnabled = requested
         return requested != committed.metadataEnabled
     }
@@ -1749,7 +1741,7 @@ struct VMController: RouteCollection {
     /// had nowhere to go; a nonce is desired state, so it converges when the
     /// agent comes back, exactly like start and stop.
     static func requireEdgeNonceCapableAgent(
-        _ agentId: String?, requiring capability: String? = nil, app: Application
+        _ agentId: String?, requiring snapshotKind: SnapshotArtifactKind? = nil, app: Application
     ) async throws {
         guard let agentId else {
             throw Abort(.conflict, reason: "VM is not placed on any agent")
@@ -1757,62 +1749,21 @@ struct VMController: RouteCollection {
         guard let agent = await app.agentService.getAgentInfo(agentId) else {
             throw Abort(.conflict, reason: "Agent '\(agentId)' is unknown")
         }
-        if let capability, !agent.capabilities.contains(capability) {
+        if let snapshotKind, !agent.supportsSnapshotArtifact(snapshotKind) {
             throw Abort(
                 .conflict,
                 reason:
-                    "Agent '\(agentId)' cannot realize this request (capability '\(capability)' not "
-                    + "advertised); upgrade the agent, or place the VM on a host with a backend that can.")
+                    "Agent '\(agentId)' cannot realize this request (the required snapshot backend "
+                    + "is unavailable); place the VM on a host with a capable backend.")
         }
     }
 
-    /// Refuse to switch the metadata service off for a VM whose agent would not
-    /// honour it (STR-185).
-    ///
-    /// The refusal exists because the alternative is the worst outcome a
-    /// security control has: `VM.metadataEnabled` reads `false`, the UI shows
-    /// the switch thrown, and a pre-v39 agent goes on serving the guest its
-    /// instance identity — which is precisely the thing an operator threw the
-    /// switch to stop an SSRF reaching. A 409 naming the upgrade is the honest
-    /// answer.
-    ///
-    /// **An unplaced VM passes.** Unlike `requireEdgeNonceCapableAgent`, whose
-    /// verbs need a host to act on, this is a stored intent that placement
-    /// enforces later: `VMPlacementRequirements.requiresMetadataOptOut` keeps a
-    /// switched-off VM off a pre-v39 agent in the first place, so a VM with no
-    /// agent yet is not a VM whose switch cannot be honoured — it is one whose
-    /// host has not been chosen, and this constrains that choice.
-    ///
-    /// An agent the service has never heard of is treated the same way, and for
-    /// the same reason: a missing row is an unknown version, not a known-old
-    /// one. Read it through the caller's transaction so the row lock does not
-    /// consume one pooled connection while this lookup waits for another.
-    static func requireMetadataOptOutCapableAgent(_ vm: VM, on db: any Database) async throws {
-        guard let agentId = vm.hypervisorId,
-            let agentUUID = UUID(uuidString: agentId),
-            let agent = try await Agent.find(agentUUID, on: db)
-        else { return }
-        guard !WireProtocol.supportsMetadataOptOut(agent.wireProtocolVersion ?? 0) else { return }
-        throw Abort(
-            .conflict,
-            reason:
-                "Agent '\(agentId)' is too old to switch the metadata service off for one VM (wire protocol "
-                + "v\(WireProtocol.metadataOptOutMinimumVersion) required), and would keep serving this guest "
-                + "its metadata. Upgrade the agent, or turn 'metadataEnabled' off on the whole network.")
-    }
-
-    static func requireNetworkHotplugCapableAgent(_ vm: VM, on db: any Database) async throws -> Agent {
+    static func requirePlacedAgentForNetworkHotplug(_ vm: VM, on db: any Database) async throws -> Agent {
         guard let agentID = vm.hypervisorId,
             let agentUUID = UUID(uuidString: agentID),
             let agent = try await Agent.find(agentUUID, on: db)
         else {
             throw Abort(.conflict, reason: "The VM must be placed on an agent before its interfaces can change")
-        }
-        guard WireProtocol.supportsVMNetworkHotplug(agent.wireProtocolVersion ?? 0) else {
-            throw Abort(
-                .conflict,
-                reason: "Agent '\(agentID)' is too old for VM network hot-plug (wire protocol "
-                    + "v\(WireProtocol.vmNetworkHotplugMinimumVersion) required). Upgrade the agent first.")
         }
         return agent
     }

@@ -127,8 +127,8 @@ ingress:
 # side by side during migration, gated by their own `enabled` toggles.
 #
 # The model routes everything through one LoadBalancer on :443 by SNI:
-#   web host       -> HTTPRoute, TLS terminated at the Gateway -> control plane
-#                     (/api, /auth, /agent, /health, /organizations) + frontend
+#   web host       -> HTTPRoute, TLS terminated at the Gateway -> browser-facing
+#                     control-plane prefixes + the frontend catch-all
 #   agents.<host>  -> TLSRoute passthrough -> control-plane `agent-mtls` (Envoy
 #                     sidecar :8443); TLS must NOT be terminated at the edge so
 #                     the sidecar sees the agent SVID client cert

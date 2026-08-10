@@ -9,9 +9,8 @@ import Vapor
 /// the site's gateway.
 ///
 /// Pools are infrastructure, scoped like sites: an org-or-OU owner, plus an
-/// optional pin to one site. A site-pinned pool only attaches to NICs on
-/// networks of that site (one OVN deployment advertises/answers for the
-/// addresses); an unpinned pool is for the legacy single-node model.
+/// required placement in one site. A pool only attaches to NICs on networks
+/// of that site (one OVN deployment advertises/answers for the addresses).
 final class FloatingIPPool: Model, @unchecked Sendable {
     static let schema = "floating_ip_pools"
 
@@ -34,10 +33,9 @@ final class FloatingIPPool: Model, @unchecked Sendable {
     @OptionalField(key: "gateway")
     var gateway: String?
 
-    /// Site whose OVN deployment answers for these addresses; nil for
-    /// single-node deployments.
-    @OptionalParent(key: "site_id")
-    var site: Site?
+    /// Site whose OVN deployment answers for these addresses.
+    @Parent(key: "site_id")
+    var site: Site
 
     /// Owning organization scope (exactly one of the two), mirroring `Site`.
     @OptionalParent(key: "organization_id")
@@ -62,7 +60,7 @@ final class FloatingIPPool: Model, @unchecked Sendable {
         name: String,
         cidr: String,
         gateway: String? = nil,
-        siteID: UUID? = nil,
+        siteID: UUID,
         organizationScope: OrganizationScope? = nil
     ) {
         self.id = id
@@ -99,7 +97,7 @@ struct CreateFloatingIPPoolRequest: Content {
     /// Gateway inside the range, excluded from allocation.
     let gateway: String?
     /// Site whose OVN deployment answers for the range.
-    let siteId: UUID?
+    let siteId: UUID
     /// Owning scope; exactly one of the two is required.
     let organizationId: UUID?
     let organizationalUnitId: UUID?
@@ -109,7 +107,7 @@ struct CreateFloatingIPPoolRequest: Content {
 /// `UpdateSiteRequest`. The CIDR is immutable while addresses are allocated.
 struct UpdateFloatingIPPoolRequest: Content {
     let gateway: String?
-    let siteId: UUID?
+    let siteId: UUID
 }
 
 struct FloatingIPPoolResponse: Content {
@@ -117,7 +115,7 @@ struct FloatingIPPoolResponse: Content {
     let name: String
     let cidr: String
     let gateway: String?
-    let siteId: UUID?
+    let siteId: UUID
     let organizationId: UUID?
     let organizationalUnitId: UUID?
     let allocatedCount: Int

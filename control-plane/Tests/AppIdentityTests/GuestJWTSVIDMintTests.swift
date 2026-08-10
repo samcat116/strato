@@ -52,7 +52,6 @@ struct GuestJWTSVIDMintTests {
             trustDomain: trustDomain,
             hostname: "\(name).test",
             version: "1.0.0",
-            capabilities: ["qemu"],
             status: .online,
             resources: AgentResources(
                 totalCPU: 8,

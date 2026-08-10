@@ -164,12 +164,12 @@ enum SnapshotArtifactMutation {
         guard info.status == .online else {
             throw Abort(.conflict, reason: "Agent '\(agentId)' is offline")
         }
-        guard info.capabilities.contains(kind.agentCapability) else {
+        guard info.supportsSnapshotArtifact(kind) else {
             throw Abort(
                 .conflict,
                 reason: "Agent '\(agentId)' cannot capture \(kind.rawValue) artifacts "
-                    + "(capability '\(kind.agentCapability)' not advertised); "
-                    + "upgrade the agent, or place the workload on a host with a backend that can.")
+                    + "(the required snapshot backend is unavailable); "
+                    + "place the workload on a host with a capable backend.")
         }
     }
 }

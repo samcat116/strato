@@ -81,7 +81,6 @@ final class AgentAutoUpdateTests {
             name: name,
             hostname: "\(name).example",
             version: version,
-            capabilities: ["qemu"],
             status: online ? .online : .offline,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,

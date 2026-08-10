@@ -7,12 +7,16 @@ import Testing
 struct SimulationConfigTests {
 
     // Helper to create and clean up temporary directories
-    private func withTempDirectory<T>(_ body: (URL) throws -> T) rethrows -> T {
+    private func withTempDirectory<T>(_ body: (URL) async throws -> T) async rethrows -> T {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("sim-config-tests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tempDirectory) }
-        return try body(tempDirectory)
+        return try await body(tempDirectory)
+    }
+
+    private func loadConfig(from path: String) async throws -> AgentConfig {
+        try await AgentConfig.load(from: path, environmentVariables: [:])
     }
 
     // MARK: - Resolved capacity
@@ -60,8 +64,8 @@ struct SimulationConfigTests {
     // MARK: - TOML parsing
 
     @Test("Load [simulation] section from config")
-    func loadSimulationSection() throws {
-        try withTempDirectory { tempDirectory in
+    func loadSimulationSection() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
 
@@ -76,7 +80,7 @@ struct SimulationConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             let sim = try #require(config.simulation)
             #expect(sim.enabled == true)
             #expect(sim.cpuCores == 16)
@@ -89,8 +93,8 @@ struct SimulationConfigTests {
     }
 
     @Test("A [simulation] section with only enabled uses capacity defaults")
-    func loadSimulationSectionDefaults() throws {
-        try withTempDirectory { tempDirectory in
+    func loadSimulationSectionDefaults() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
 
@@ -100,7 +104,7 @@ struct SimulationConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             let sim = try #require(config.simulation)
             #expect(sim.enabled == true)
             #expect(sim.cpuCores == nil)
@@ -111,8 +115,8 @@ struct SimulationConfigTests {
     }
 
     @Test("No [simulation] section leaves simulation nil (normal agent)")
-    func noSimulationSection() throws {
-        try withTempDirectory { tempDirectory in
+    func noSimulationSection() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 network_mode = "ovn"
@@ -120,7 +124,7 @@ struct SimulationConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             #expect(config.simulation == nil)
         }
     }

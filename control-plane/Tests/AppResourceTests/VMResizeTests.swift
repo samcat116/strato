@@ -61,7 +61,6 @@ final class VMResizeTests {
                 name: "hv-resize-\(UUID().uuidString.prefix(8))",
                 hostname: "hv.example",
                 version: "1.0.0",
-                capabilities: ["qemu"],
                 status: .online,
                 resources: AgentResources(
                     totalCPU: 32, availableCPU: agentAvailableCPU,

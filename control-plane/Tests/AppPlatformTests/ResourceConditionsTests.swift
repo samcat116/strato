@@ -54,20 +54,24 @@ final class ResourceConditionsTests {
     private func registerAgent(
         app: Application,
         named agentName: String,
-        capabilities: [String]
+        hypervisorType: HypervisorType
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: agentName,
             hostname: "test-host",
             version: "1.0.0",
-            capabilities: capabilities,
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
+            hypervisors: [
+                HypervisorSupport(
+                    type: hypervisorType, available: true, accelerated: true,
+                    capabilities: .capabilities(for: hypervisorType))
+            ],
             protocolVersion: WireProtocol.currentVersion,
-            sandboxCapable: capabilities.contains("firecracker")
+            sandboxCapable: hypervisorType == .firecracker
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let agentUUID = try await app.agentService.registerAgent(
@@ -393,7 +397,7 @@ final class ResourceConditionsTests {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
-                app: app, named: "cond-agent", capabilities: ["qemu"])
+                app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)
             try await vm.save(on: app.db)
@@ -423,7 +427,7 @@ final class ResourceConditionsTests {
         try await withTestApp { app, user, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
-                app: app, named: "cond-agent", capabilities: ["qemu"])
+                app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)  // generation 1
             vm.extendConvergenceDeadline(by: 120)
@@ -458,7 +462,7 @@ final class ResourceConditionsTests {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
-                app: app, named: "cond-agent", capabilities: ["qemu"])
+                app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)  // generation 1
             vm.lastError = "boot failed: no bootable device"
@@ -489,7 +493,7 @@ final class ResourceConditionsTests {
         try await withTestApp { app, _, project in
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
-                app: app, named: "cond-agent", capabilities: ["qemu"])
+                app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)
             vm.convergencePhase = "downloading image"
@@ -516,7 +520,7 @@ final class ResourceConditionsTests {
             let sandbox = try await TestDataBuilder(db: app.db)
                 .createSandbox(name: "cond-sandbox", project: project)
             let agentId = try await self.registerAgent(
-                app: app, named: "cond-fc-agent", capabilities: ["firecracker"])
+                app: app, named: "cond-fc-agent", hypervisorType: .firecracker)
             sandbox.hypervisorId = agentId
             sandbox.setFixtureDesiredStatus(.running)  // generation 1
             try await sandbox.save(on: app.db)
@@ -564,7 +568,7 @@ final class ResourceConditionsTests {
             try await self.subscribeToEverything(app: app)
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
-                app: app, named: "cond-agent", capabilities: ["qemu"])
+                app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
@@ -610,7 +614,7 @@ final class ResourceConditionsTests {
             try await self.subscribeToEverything(app: app)
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
-                app: app, named: "cond-agent", capabilities: ["qemu"])
+                app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)
@@ -655,7 +659,7 @@ final class ResourceConditionsTests {
             try await self.subscribeToEverything(app: app)
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
-                app: app, named: "cond-agent", capabilities: ["qemu"])
+                app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.desiredStatus = .running
             vm.setStatus(.shutdown)
@@ -722,7 +726,7 @@ final class ResourceConditionsTests {
             try await self.subscribeToEverything(app: app)
             let vm = try await TestDataBuilder(db: app.db).createVM(name: "cond-vm", project: project)
             let agentId = try await self.registerAgent(
-                app: app, named: "cond-agent", capabilities: ["qemu"])
+                app: app, named: "cond-agent", hypervisorType: .qemu)
             vm.hypervisorId = agentId
             vm.setFixtureDesiredStatus(.running)
             vm.setStatus(.running)

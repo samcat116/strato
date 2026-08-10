@@ -273,7 +273,9 @@ struct MetadataControlProtocolTests {
         MetadataSnapshot(
             networkId: UUID(), origin: .live,
             instances: (0..<instances).map { index in
-                InstanceMetadata(instanceId: UUID(), hostname: "host-\(index)", projectId: UUID())
+                InstanceMetadata(
+                    instanceId: UUID(), hostname: "host-\(index)", projectId: UUID(),
+                    serviceEnabled: true)
             })
     }
 

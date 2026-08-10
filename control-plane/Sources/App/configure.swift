@@ -642,6 +642,7 @@ public func configure(_ app: Application) async throws {
     // that enrollment requires one. Ordered after CreateSite and the org
     // tables it reads.
     app.migrations.add(BackfillDefaultSites())
+    app.migrations.add(RequireSitePlacement())
 
     // FluentKit force-unwraps persisted @Enum raw values on first property
     // access. Normalize casing drift and put a database validation boundary in
@@ -918,13 +919,16 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddWorkloadConvergenceObservability())
 
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
-    // Deliberately last in the list: it must run after every migration that
-    // ever touched the table, and nothing is left to order after it.
+    // It must run after every migration that ever touched the table.
     app.migrations.add(DropResourceOperations())
 
     // STR-232: after an inventory-and-repair preflight, replicas become the
     // only volume placement/path authority and the legacy columns are dropped.
     app.migrations.add(MakeVolumeReplicasAuthoritative())
+
+    // STR-222: structured hypervisor, network, sandbox, TPM, and resolver
+    // reports are the only source of agent capability truth.
+    app.migrations.add(DropLegacyAgentCapabilities())
 
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row

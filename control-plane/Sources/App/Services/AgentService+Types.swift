@@ -27,9 +27,10 @@ enum AgentServiceError: Error, LocalizedError, Sendable {
             return "Invalid response from agent: \(message)"
         case .unsupportedProtocolVersion(let agentName, let version):
             return
-                "Agent '\(agentName)' registered with wire protocol version \(version), below this control "
-                + "plane's floor (v\(WireProtocol.minimumSupportedVersion)); Strato deploys the control plane "
-                + "and its agents in lockstep. Upgrade the agent."
+                "Agent '\(agentName)' registered with wire protocol version \(version); this control plane "
+                + "requires exactly v\(WireProtocol.currentVersion). Strato deploys the control plane and "
+                + "agents together. Deploy matching builds; an agent rejected before self-update must be "
+                + "updated manually."
         case .missingOrganizationScope(let agentName):
             return
                 "Agent '\(agentName)' is new but its registration token carries no organization; "
