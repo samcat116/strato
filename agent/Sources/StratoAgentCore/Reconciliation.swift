@@ -1640,8 +1640,8 @@ public actor Reconciler {
     }
 
     /// How many repeats of an unchanged `blocked` reason pass between error
-    /// lines. Roughly a quarter-hour at the periodic sync floor, sooner on a
-    /// doorbell-driven agent — the point is that a stuck volume keeps saying so
+    /// lines. Roughly a quarter-hour at the full-refetch floor, sooner when
+    /// desired state changes — the point is that a stuck volume keeps saying so
     /// rather than falling silent after its first refusal.
     static let blockedRelogInterval = 20
 

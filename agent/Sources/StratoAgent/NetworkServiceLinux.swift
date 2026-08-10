@@ -59,7 +59,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
     /// Highest network `generation` this agent has applied, per network id. A
     /// full-list sync whose entry for a network is older than what's recorded is
-    /// stale (actor-reentrancy reordering of an update push vs. a periodic sync)
+    /// stale (actor-reentrancy reordering of two fetched payloads)
     /// and is skipped, so it can't roll the network's L3 realization backward —
     /// the same guard the VM reconciler applies per VM.
     private var networkGenerations: [UUID: Int64] = [:]
@@ -1430,7 +1430,7 @@ extension NetworkServiceLinux {
                 try await DNSZoneReconciler.reconcile(zones: dnsZones, actuator: self, logger: logger)
             } catch {
                 // The row snapshot couldn't be read, so teardown can't be
-                // computed safely; the periodic sync retries.
+                // computed safely; the next full desired-state payload retries.
                 logger.error(
                     "DNS zone reconciliation could not complete",
                     metadata: ["error": .string(error.localizedDescription)])
@@ -1647,7 +1647,7 @@ extension NetworkServiceLinux {
         } catch {
             // Without a trustworthy snapshot, removals can't be computed safely.
             // Creates are idempotent, so skip the whole pass and let the next
-            // periodic sync retry rather than guess.
+            // full desired-state payload retry rather than guess.
             logger.error(
                 "Could not read chassis service ports; skipping this pass",
                 metadata: ["error": .string(error.localizedDescription)])
@@ -1700,8 +1700,8 @@ extension NetworkServiceLinux {
     /// The logical switch port this binds to may not exist yet: on a
     /// non-controller agent the site's network controller writes it, and the two
     /// syncs are independent. That needs no retry logic — `ovn-controller`
-    /// simply leaves the port unbound until the row appears, and the next
-    /// periodic sync re-verifies.
+    /// simply leaves the port unbound until the row appears, and the next full
+    /// desired-state payload re-verifies.
     private func attemptChassisServiceSetup(networkId: UUID) async {
         guard let ipBinaryPath else {
             let message =
@@ -1834,7 +1834,8 @@ extension NetworkServiceLinux {
     #endif
 
     /// Best-effort per-network DHCP row convergence; a failing network is
-    /// logged and left for the next periodic sync, like reconcile steps.
+    /// logged and left for the next full desired-state payload, like other
+    /// reconcile steps.
     private func attemptDHCPConvergence(for network: DesiredNetworkState, dhcpEnabled: Bool) async {
         #if os(Linux)
         do {

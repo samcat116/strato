@@ -395,7 +395,7 @@ private final class AgentTestClient: Sendable {
             let envelope = try await nextEnvelope(timeout: duration)
             Issue.record("Unexpected WebSocket frame while agent was clean: \(envelope.type)")
         } catch is TimeoutError {
-            // Expected: no periodic sync was emitted.
+            // Expected: no desired-state frame was pushed over the WebSocket.
         }
     }
 

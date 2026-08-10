@@ -280,7 +280,7 @@ private final class ExecWSClient: Sendable {
     }
 
     /// Await the next inbound frame decoded as a wire envelope, optionally
-    /// skipping envelope types that share the socket (periodic syncs).
+    /// skipping other envelope types that share the socket.
     func nextEnvelope(
         skipping: Set<MessageType> = [],
         timeout: Duration = .seconds(30)

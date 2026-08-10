@@ -282,7 +282,8 @@ struct ValkeyCoordinationStore: CoordinationStore {
     /// tracked background task re-subscribes whenever the subscription ends —
     /// with backoff on errors — until shutdown cancels it. Messages published
     /// while re-subscribing are lost, which is fine: pub/sub here is a latency
-    /// optimization and the periodic sync is the correctness backstop.
+    /// optimization and each agent's unconditional refetch is the correctness
+    /// backstop.
     func subscribe(channel: String, handler: @escaping @Sendable (String) -> Void) async throws {
         let client = self.client
         let logger = app.logger
@@ -463,13 +464,13 @@ actor InMemoryCoordinationStore: CoordinationStore {
 ///   between selecting an agent and the agent's resource reports catching up.
 ///
 /// And the channel families (pub/sub, latency optimization only — the agent's
-/// periodic sync is the correctness backstop, so lost messages are safe):
+/// unconditional refetch is the correctness backstop, so lost messages are safe):
 /// - `agent:doorbell` — a fleet-wide broadcast of agent keys whose desired
-///   state changed (STR-146). Every replica subscribes and asks its own parked
-///   polls and sockets whether it can reach that agent; at most one can, and
-///   the rest no-op. Contentless and unrouted on purpose — over-ringing is
-///   free, and under-ringing costs only latency because the agent re-fetches
-///   unconditionally on its own timer.
+///   state changed (STR-146). Every replica subscribes and checks its own
+///   parked polls; at most one can reach that agent, and the rest no-op.
+///   Contentless and unrouted on purpose — over-ringing is free, and
+///   under-ringing costs only latency because the agent re-fetches
+///   unconditionally on its own interval.
 ///
 /// Degradation policy: coordination narrows races but must never make the
 /// control plane less available than it was without it. Store errors are
@@ -498,7 +499,7 @@ actor CoordinationService {
     /// agent whose placement is revoked mid-pull keeps fetching until the
     /// grant expires, rather than failing an in-progress download. Long enough
     /// to cover a slow multi-gigabyte pull and its retries, and refreshed by
-    /// every periodic sync (~60s) for as long as the placement stands.
+    /// each full desired-state fetch for as long as the placement stands.
     static let imageDownloadGrantTTLSeconds = 30 * 60
 
     private let store: any CoordinationStore
@@ -632,7 +633,7 @@ actor CoordinationService {
     /// is never later than the URL the agent is about to fetch.
     ///
     /// Failures are logged, not thrown: the fetch it authorizes fails open on
-    /// the read side, and the next periodic sync rewrites the grant anyway.
+    /// the read side, and the next full desired-state fetch rewrites the grant.
     func grantImageDownload(
         agentId: String, imageId: UUID, ttlSeconds: Int = CoordinationService.imageDownloadGrantTTLSeconds
     ) async {
@@ -785,9 +786,8 @@ actor CoordinationService {
     /// The one channel every replica listens on for "this agent's desired
     /// state changed" (STR-146). Not `replica:{id}:`-scoped, and deliberately
     /// so: the point of the broadcast doorbell is that a mutation does not have
-    /// to know which replica can reach the agent. Each replica decides for
-    /// itself whether it holds that agent's parked poll or socket; at most one
-    /// does, and the rest no-op.
+    /// to know which replica can reach the agent. Each replica decides whether
+    /// it holds that agent's parked poll; at most one does, and the rest no-op.
     ///
     /// Follows the `policy-set:version` precedent, which is the other
     /// fleet-wide broadcast here.

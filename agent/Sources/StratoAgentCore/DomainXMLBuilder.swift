@@ -161,7 +161,7 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
 ///   domain `SHUTOFF` and satisfies the create contract's "exists, not running"
 ///   (issue #260) directly. A driver that reached for `domainCreateXML` instead
 ///   would define *and start* a transient domain — every fresh VM booting once,
-///   with the next periodic sync shutting it down again, and nothing left for an
+///   with the next full desired-state payload shutting it down again, and nothing left for an
 ///   agent restart to adopt.
 /// - **The three QMP monitors.** libvirt owns the monitor; re-adoption and the
 ///   balloon-stats probe become libvirt API calls, not sockets.

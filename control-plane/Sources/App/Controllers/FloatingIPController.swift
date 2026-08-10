@@ -526,8 +526,8 @@ struct FloatingIPController: RouteCollection {
             throw Abort(.conflict, reason: "Interface already has a floating IP attached")
         }
 
-        // Push the new NAT desired state to the fleet (the site's controller
-        // realizes it); a lost nudge is caught by the periodic sync.
+        // Ring the fleet for the new NAT desired state (the site's controller
+        // realizes it); a lost doorbell is caught by unconditional refetches.
         await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(

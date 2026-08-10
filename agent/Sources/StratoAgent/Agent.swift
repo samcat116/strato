@@ -1502,7 +1502,7 @@ actor Agent {
 
         guard let url = URL(string: controlPlaneHTTPBase + Self.desiredStatePollPath) else {
             logger.error(
-                "Could not build the desired-state poll URL; staying on pushed syncs",
+                "Could not build the desired-state poll URL; desired-state sync cannot start",
                 metadata: ["base": .string(controlPlaneHTTPBase)])
             return
         }
@@ -1526,9 +1526,9 @@ actor Agent {
                 try await downloader.poll(url: url, ifNoneMatch: ifNoneMatch)
             },
             deliver: { [weak self] envelope in
-                // Straight onto the same inbound path a pushed frame takes, so
-                // a polled sync lands on the `.desiredState` serialization lane
-                // and inherits the ordering guarantees the reconciler relies on.
+                // Straight onto the ordinary inbound path so the fetched sync
+                // lands on the `.desiredState` serialization lane and inherits
+                // the ordering guarantees the reconciler relies on.
                 await self?.routeInboundMessage(envelope)
             },
             logger: logger,

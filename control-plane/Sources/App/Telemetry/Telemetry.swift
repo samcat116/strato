@@ -1,3 +1,4 @@
+import Foundation
 import Metrics
 
 /// Central definitions for the operational metrics surfaced for production
@@ -11,6 +12,26 @@ import Metrics
 ///
 /// See `docs/deployment/observability.md` for the alert runbook built on these.
 enum Telemetry {
+
+    /// The two request shapes the desired-state endpoint accepts. Keeping the
+    /// metric dimension typed prevents validators or other request data from
+    /// becoming labels and bounds the series to these two values.
+    enum DesiredStatePollMode: String, CaseIterable, Sendable {
+        case conditional
+        case unconditional
+
+        static func from(ifNoneMatch: String?) -> Self {
+            ifNoneMatch == nil ? .unconditional : .conditional
+        }
+    }
+
+    /// Bounded outcomes emitted by the desired-state endpoint.
+    enum DesiredStatePollOutcome: String, CaseIterable, Sendable {
+        case served
+        case notModified = "not_modified"
+        case assemblyBudgetExhausted = "assembly_budget_exhausted"
+        case parkRefused = "park_refused"
+    }
 
     // MARK: - Desired-state ordering (STR-125)
 
@@ -266,30 +287,33 @@ enum Telemetry {
         ).increment()
     }
 
-    // MARK: - Reconciliation / desired-state sync
+    // MARK: - Desired-state polling
 
-    /// A desired-state sync to a locally-socketed agent resolved. `outcome` is
-    /// `sent` or `failed` (assembly or send threw — the periodic timer will
-    /// retry). The timer captures assemble+send latency. Complements the
-    /// level-triggered failure counters (`strato_vm_errors_total`,
-    /// `strato_vm_drift_total`); the pushed-state size is carried on the sync
-    /// span rather than a metric to avoid a misleading fleet-wide gauge.
-    static func recordDesiredStateSync(outcome: String, durationSeconds: Double) {
-        Counter(label: "strato_agent_sync_total", dimensions: [("outcome", outcome)]).increment()
-        Timer(label: "strato_agent_sync_duration_seconds").recordSeconds(durationSeconds)
-    }
-
-    /// A desired-state long-poll resolved (STR-146). `outcome` is `served` (a
-    /// full payload went out) or `not_modified` (the poll parked out its hold
-    /// window with nothing to say).
+    /// A desired-state long-poll resolved (STR-146). Both dimensions are typed
+    /// finite sets; no ETag, agent identity, or response detail can create an
+    /// unbounded counter series.
     ///
     /// The ratio is the health signal for the pull transport: a fleet that is
     /// converged should sit almost entirely on `not_modified`, so a sustained
     /// `served` rate with no mutation traffic means the digest is churning —
     /// some per-assembly value escaped `DesiredStateDigest.volatilePaths` and
     /// every agent is refetching its full state on every poll.
-    static func recordDesiredStatePoll(outcome: String) {
-        Counter(label: "strato_agent_poll_total", dimensions: [("outcome", outcome)]).increment()
+    static func recordDesiredStatePoll(mode: DesiredStatePollMode, outcome: DesiredStatePollOutcome) {
+        Counter(
+            label: "strato_agent_poll_total",
+            dimensions: [("mode", mode.rawValue), ("outcome", outcome.rawValue)]
+        ).increment()
+    }
+
+    /// Unix timestamp of the last full payload served to an agent in response
+    /// to a request without `If-None-Match`. Conditional `200`s deliberately
+    /// do not update it: they prove the latency path works, not the periodic
+    /// correctness backstop. Called only after the full response is encoded.
+    static func recordDesiredStateFullRefetch(agentName: String, at date: Date = Date()) {
+        Gauge(
+            label: "strato_agent_desired_state_last_full_refetch_timestamp_seconds",
+            dimensions: [("agent", agentName)]
+        ).record(date.timeIntervalSince1970)
     }
 
     static func recordGuestIdentityMint(outcome: String) {

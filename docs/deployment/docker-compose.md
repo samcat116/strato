@@ -208,8 +208,9 @@ The single `valkey` service backs two stores with opposite failure contracts:
 
 - **Coordination** (agent presence, sweep locks, scheduler reservations,
   rate-limit counters) is *fail-open*. Losing it degrades
-  convergence, never correctness — agents keep converging via the periodic sync,
-  and `/health/ready` grades it `degraded` while still serving traffic.
+  convergence, never correctness — agents keep converging via their
+  unconditional desired-state refetch, and `/health/ready` grades it `degraded`
+  while still serving traffic.
 - **Session storage** cannot fail open at all. Losing it logs every signed-in
   user out at once, and since passkeys are the only interactive authentication,
   everyone re-authenticates with a security key. `/health/ready` grades it fatal.

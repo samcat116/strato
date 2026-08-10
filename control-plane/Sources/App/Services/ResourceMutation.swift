@@ -4,17 +4,16 @@ import Vapor
 
 /// The agent-facing seam a mutation depends on, so the accept path can be
 /// exercised through its own interface with an in-memory fake instead of a live
-/// agent socket. Production adapter: `AgentService` (conformance below); test
-/// adapter: a fake that records syncs.
+/// agent connection. Production adapter: `AgentService` (conformance below);
+/// test adapter: a fake that records sync signals.
 protocol AgentDispatch: Sendable {
     /// Whether the resource's owning agent is online somewhere in the cluster.
     /// False for an unplaced resource (nil id) or an offline/unknown agent.
     func agentIsOnline(agentId: String) async -> Bool
 
-    /// Signal that the agent's desired state changed — by ringing the
-    /// broadcast doorbell, plus a direct push when this replica holds the
-    /// socket of a push-mode agent. Losing the signal is safe: the agent
-    /// re-fetches (or is re-pushed) on its own interval regardless.
+    /// Signal that the agent's desired state changed by ringing the broadcast
+    /// doorbell. Losing the signal is safe: the agent re-fetches
+    /// unconditionally on its own interval regardless.
     func syncDesiredState(agentId: String) async
 }
 

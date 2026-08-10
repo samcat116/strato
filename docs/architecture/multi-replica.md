@@ -64,10 +64,9 @@ which replica an agent's socket happens to be on is simply not a question the
 mutation path has to answer.
 
 - **On mutation** the serving replica writes desired state to PostgreSQL, acts
-  on it locally (waking a poll parked here, pushing over a locally held socket
-  if the agent is still push-mode), and publishes the agent's key on the one
+  on it locally (waking a poll parked here), and publishes the agent's key on the one
   `agent:doorbell` channel. Every replica evaluates that broadcast against its
-  own parked polls and sockets; at most one can act, and the rest no-op. The
+  own parked polls; at most one can act, and the rest no-op. The
   payload carries the publisher's replica id so a replica ignores its own echo.
 - **Fleet-wide mutations** (security groups, networks, site topology, floating
   IPs) ring the wildcard key `*` rather than enumerating the fleet. Before
@@ -153,9 +152,8 @@ boundary.
   in PostgreSQL, and they settle from observed-state reports (or are degraded
   by the sweep and surfaced to the client, never silently dropped).
 - **Coordination-store outage**: coordination fails open (issue #258 policy).
-  Pull-mode agents keep converging on their own unconditional re-fetch (the
-  poll endpoint's Valkey grant bookkeeping is bounded and fail-open), and
-  push-mode agents via their socket-holding replica's periodic sync. Every
+  Agents keep converging on their own unconditional re-fetch (the poll
+  endpoint's Valkey grant bookkeeping is bounded and fail-open). Every
   coordination command has a two-second deadline, so the fail-open path does not
   inherit the client's 30-second command timeout. Desired-state doorbells are
   unavailable until Valkey returns, so convergence falls back to the agent's own

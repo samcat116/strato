@@ -52,8 +52,8 @@ struct HealthController: RouteCollection {
     /// - **migrations** (fatal) — schema application must have finished.
     /// - **coordination** (degraded) — the coordination store is documented as
     ///   fail-open (`docs/architecture/multi-replica.md`); agents still converge
-    ///   via the periodic sync. Reported, but never a reason to pull a replica
-    ///   out of rotation.
+    ///   via their unconditional refetch. Reported, but never a reason to pull
+    ///   a replica out of rotation.
     /// - **session-store** (fatal when it is its own endpoint, else degraded) —
     ///   Valkey-backed like coordination, but it can be a *different* Valkey
     ///   (issue #855), and the grade follows that. Readiness only helps when a
