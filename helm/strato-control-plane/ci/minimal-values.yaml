@@ -45,9 +45,6 @@ replicaCount: 1
 autoscaling:
   enabled: false
 
-ingress:
-  enabled: false
-
 podDisruptionBudget:
   enabled: false
 
@@ -64,7 +61,3 @@ monitoring:
 initContainers:
   waitForDB:
     enabled: false
-
-# Disable migration job for CI
-migration:
-  enabled: false

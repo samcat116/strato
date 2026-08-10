@@ -195,8 +195,6 @@ Get the primary hostname
 {{- define "strato-control-plane.hostname" -}}
 {{- if .Values.gateway.enabled }}
 {{- include "strato-control-plane.gateway.webHost" . }}
-{{- else if .Values.ingress.enabled }}
-{{- (first .Values.ingress.hosts).host }}
 {{- else }}
 {{- "localhost" }}
 {{- end }}
@@ -221,12 +219,6 @@ Get the WebAuthn origin URL (protocol + domain + port)
 {{- .Values.strato.webauthn.relyingPartyOrigin }}
 {{- else if .Values.gateway.enabled }}
 {{- printf "https://%s" (include "strato-control-plane.gateway.webHost" .) }}
-{{- else if .Values.ingress.enabled }}
-{{- if .Values.ingress.tls }}
-{{- printf "https://%s" (first .Values.ingress.hosts).host }}
-{{- else }}
-{{- printf "http://%s" (first .Values.ingress.hosts).host }}
-{{- end }}
 {{- else }}
 {{- printf "http://localhost:%d" (int .Values.service.port) }}
 {{- end }}
@@ -235,9 +227,9 @@ Get the WebAuthn origin URL (protocol + domain + port)
 {{/*
 Whether browsers reach the control plane over HTTPS, used to gate the Secure
 session cookie + HSTS (HTTP_TLS_ENABLED). Derived from the resolved WebAuthn
-origin's scheme so it can never disagree with it — this covers an explicit
-https:// relyingPartyOrigin (e.g. TLS terminated by an external gateway) as well
-as the ingress.tls case. An explicit strato.httpTlsEnabled overrides the default.
+origin's scheme so it can never disagree with it. This covers an explicit
+https:// relyingPartyOrigin, such as TLS terminated by an external gateway.
+An explicit strato.httpTlsEnabled overrides the default.
 */}}
 {{- define "strato-control-plane.tlsEnabled" -}}
 {{- if not (kindIs "invalid" .Values.strato.httpTlsEnabled) }}

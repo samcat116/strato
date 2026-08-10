@@ -106,7 +106,8 @@ public func configure(_ app: Application) async throws {
     // production to TLS would set `Secure` on the session cookie, and browsers on
     // http:// would then drop it — breaking login. So this is opt-in: deployments
     // that terminate TLS set HTTP_TLS_ENABLED=true (the Helm chart derives it from
-    // ingress.tls). Governs both HSTS and the Secure cookie flag below.
+    // the resolved browser-facing origin). Governs both HSTS and the Secure cookie
+    // flag below.
     let servedOverTLS = Environment.get("HTTP_TLS_ENABLED").flatMap(Bool.init) ?? false
     // Insert at the front so it wraps Vapor's default ErrorMiddleware (which is
     // registered ahead of any `.use`-appended middleware). Otherwise the 4xx/5xx

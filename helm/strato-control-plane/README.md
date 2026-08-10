@@ -123,12 +123,11 @@ immediately after authentication. This avoids nonstandard startup parameters,
 so it is compatible with PgBouncer's default session pooling. Transaction and
 statement pooling are not supported because they cannot preserve a session
 setting on one backend connection. The default serving budget is five minutes
-(`strato.database.statementTimeoutMs: 300000`). `SchemaMigrator` temporarily
-uses the narrowly scoped 15-minute `migration.statementTimeoutMs` budget on its
-pinned connection in either the migration Job or a serving pod, because schema
-changes can legitimately take longer. Both values are milliseconds and must be
-positive integers no greater than 2147483647; an invalid value makes the control
-plane fail during startup rather than run with an unbounded query.
+(`strato.database.statementTimeoutMs: 300000`). `SchemaMigrator` uses that same
+bounded budget by default on its pinned connection and restores it before the
+pod begins serving. The value is in milliseconds and must be a positive integer
+no greater than 2147483647; an invalid value makes the control plane fail during
+startup rather than run with an unbounded query.
 
 ## Values Reference
 
@@ -148,16 +147,14 @@ plane fail during startup rather than run with an unbounded query.
 | `resources.requests.memory` | string | `"512Mi"` | Memory request |
 | `strato.logLevel` | string | `"info"` | Log level (debug, info, warn, error) |
 | `strato.database.statementTimeoutMs` | int | `300000` | Maximum duration in milliseconds for statements on normal pooled control-plane connections |
-| `migration.statementTimeoutMs` | int | `900000` | Longer, still-bounded timeout used only on the pinned migration connection in any process that migrates |
-| `strato.webauthn.relyingPartyId` | string | `""` | WebAuthn relying party identifier; empty derives it from the gateway/ingress hostname (falling back to `localhost`) |
+| `strato.webauthn.relyingPartyId` | string | `""` | WebAuthn relying party identifier; empty derives it from the Gateway hostname (falling back to `localhost`) |
 | `strato.webauthn.relyingPartyName` | string | `"Strato"` | WebAuthn relying party name |
-| `strato.webauthn.relyingPartyOrigin` | string | `""` | WebAuthn relying party origin; empty derives it from the gateway/ingress settings (falling back to `http://localhost:8080`) |
+| `strato.webauthn.relyingPartyOrigin` | string | `""` | WebAuthn relying party origin; empty derives it from the Gateway settings (falling back to `http://localhost:8080`) |
 | `strato.selfRegistrationEnabled` | bool | `true` | Allow visitors to create their own accounts from the sign-in screen. The first account is always creatable, so this can be `false` from the start |
 | `postgresql.enabled` | bool | `true` | Enable PostgreSQL subchart |
 | `postgresql.auth.database` | string | `"vapor_database"` | PostgreSQL database name |
 | `postgresql.auth.username` | string | `"vapor_username"` | PostgreSQL username |
 | `postgresql.auth.password` | string | `""` | PostgreSQL password (auto-generated when empty) |
-| `ingress.enabled` | bool | `false` | Enable the legacy ingress-nginx path (superseded by `gateway`) |
 | `gateway.enabled` | bool | `false` | Route external traffic via Gateway API (Envoy Gateway): HTTPRoute for UI/API + frontend, TLS-passthrough TLSRoutes for `agents.<host>` (Envoy sidecar mTLS) and `spire.<host>` (SPIRE node API), all sharing :443 by SNI |
 | `gateway.create` | bool | `false` | Render the Gateway (and optional GatewayClass) instead of only attaching routes to an operator-provided one |
 | `gateway.hostnames.web` / `.agents` / `.spire` | string | `""` | SNI hosts; empty derives `<host>`, `agents.<host>`, `spire.<host>` from `strato.externalHostname` |
