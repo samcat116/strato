@@ -1,10 +1,50 @@
 import Foundation
+import StratoShared
 import Testing
 
 @testable import StratoAgentCore
 
 @Suite("Cloud-init user-data document assembly")
 struct CloudInitUserDataDocumentTests {
+
+    private static func metadata(keys: [String], userData: String?) -> InstanceMetadata {
+        InstanceMetadata(
+            instanceId: UUID(uuidString: "0F6AFCDE-2F3A-4F1C-B704-F8F9AAE2E17B")!,
+            projectId: UUID(uuidString: "A9F5B93D-1BC2-4F14-9969-B5035713AD7C")!,
+            sshAuthorizedKeys: keys,
+            userData: userData,
+            serviceEnabled: true)
+    }
+
+    @Test("NoCloud-net user-data is byte-identical to the seed ISO renderer")
+    func noCloudNetGoldenParity() {
+        let keys = ["  ssh-ed25519 AAAA key@host  ", "", "   "]
+        let callerMIME = """
+            Content-Type: multipart/mixed; boundary="callerboundary"
+            MIME-Version: 1.0
+
+            --callerboundary
+            Content-Type: text/x-shellscript
+
+            #!/bin/sh
+            true
+            --callerboundary--
+            """
+        let payloads: [String?] = [
+            nil,
+            "#cloud-config\nruncmd:\n  - echo strato-cloud-init-boundary\n",
+            "#!/bin/sh\necho caller\n",
+            callerMIME,
+        ]
+
+        for payload in payloads {
+            let seedISO = CloudInitProvisioner.userDataDocument(
+                sshAuthorizedKeys: keys, userData: payload)
+            let noCloudNet = CloudInitProvisioner.userDataDocument(
+                for: Self.metadata(keys: keys, userData: payload))
+            #expect(noCloudNet.utf8.elementsEqual(seedISO.utf8))
+        }
+    }
 
     // MARK: - No caller payload (legacy single-document path)
 

@@ -87,12 +87,12 @@ Sessions are keyed by `SHA256(token)`. Nothing retains the token itself.
   avoids the problem rather than a mitigation of it, which matters because the
   repository has no constant-time helper to reach for. A heap dump yields
   digests.
-- **Guest tooling works; guest tooling finds little.** cloud-init's Ec2
-  datasource can now complete the handshake, and will get 404 for most of the
-  tree until STR-65. Nothing depends on this yet — Strato still writes a NoCloud
-  seed ISO, and `datasource_list` puts NoCloud first — but the partial tree is
-  reachable and will look like a broken EC2 rather than a deliberate subset
-  until STR-65 lands.
+- **Guest tooling works; the EC2 tree remains partial.** cloud-init's Ec2
+  datasource can complete the handshake and read instance ID, hostname, and
+  user data, but will get 404 for the rest of the tree until STR-65. STR-60's
+  NoCloud-net documents share those authenticated paths and are byte-identical
+  to the seed ISO renderer; nothing depends on them until STR-64 supplies the
+  guest's `seedfrom` stub.
 - **A guest can mint without limit**, so sessions are capped per instance and
   swept on mint. The cap evicts the soonest-expiring, so a loop costs a bounded
   amount and never evicts a well-behaved guest's newest token.

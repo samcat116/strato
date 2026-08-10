@@ -1181,13 +1181,15 @@ verification on real multi-node hardware (recipe in
   than a refused connection — that is the failure mode to watch for when
   rolling this out. The same namespace now also holds the network's resolver
   (STR-40), so a convergence failure there costs both services at once.
-- **cloud-init's Ec2 datasource can complete the handshake, and will find
-  almost nothing.** The listener speaks EC2's header names deliberately
+- **cloud-init's Ec2 datasource can complete the handshake, but the EC2 tree is
+  still partial.** The listener speaks EC2's header names deliberately
   ([ADR 0006](../adr/0006-imds-session-auth.md)), so a guest that probes
-  `/latest/meta-data/instance-id` gets an answer — but the rest of the EC2 tree
-  is 404 until STR-65 renders it, and `user-data` until STR-60. Nothing depends
-  on this today: Strato still writes a NoCloud seed ISO, and `datasource_list`
-  puts NoCloud ahead of Ec2.
+  `/latest/meta-data/instance-id` gets an answer and `/latest/user-data` now
+  carries the same bytes as the seed ISO. The rest of the EC2 tree is 404 until
+  STR-65 renders it. NoCloud-net's exact `/latest/meta-data`,
+  `/latest/user-data`, and optional `/latest/network-config` documents are
+  ready, but nothing depends on them until STR-64 replaces the full seed ISO
+  with a `seedfrom` stub; `datasource_list` still puts NoCloud ahead of Ec2.
 - **A downgrade below wire v37 strips a network's resolver addresses** from its
   localport and reverts the DHCP row in the same sync, so guests are told to use
   the network's configured servers again at their next lease (within one

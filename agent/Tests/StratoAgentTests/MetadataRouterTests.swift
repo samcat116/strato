@@ -91,8 +91,10 @@ struct MetadataRouterTests {
     func documentPaths() {
         #expect(Self.route("GET", "/latest") == .document(.root))
         #expect(Self.route("GET", "/latest/") == .document(.root))
-        #expect(Self.route("GET", "/latest/meta-data") == .document(.metaDataIndex))
+        #expect(Self.route("GET", "/latest/meta-data") == .document(.noCloudMetaData))
         #expect(Self.route("GET", "/latest/meta-data/") == .document(.metaDataIndex))
+        #expect(Self.route("GET", "/latest/user-data") == .document(.userData))
+        #expect(Self.route("GET", "/latest/network-config") == .document(.networkConfig))
         #expect(Self.route("GET", "/latest/meta-data/instance-id") == .document(.instanceID))
         #expect(Self.route("GET", "/latest/meta-data/hostname") == .document(.hostname))
     }
@@ -102,7 +104,7 @@ struct MetadataRouterTests {
         // If the router rejected here, anything that could reach the address
         // could map the tree without ever holding a session.
         #expect(Self.route("GET", "/latest/meta-data/ami-id") == .unknownDocument)
-        #expect(Self.route("GET", "/latest/user-data") == .unknownDocument)
+        #expect(Self.route("GET", "/latest/user-data/") == .unknownDocument)
         #expect(Self.route("GET", "/") == .unknownDocument)
     }
 
