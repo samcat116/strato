@@ -6,6 +6,25 @@ import Testing
 
 @Suite("Agent dependency health gates")
 struct AgentDependencyHealthTests {
+    @Test("Duplicate dependency IDs retain only the freshest observation")
+    func duplicateDependencyIDs() throws {
+        let older = observation(
+            .libvirt, capability: .qemuPlacement, state: .unhealthy,
+            checkedAt: Date(timeIntervalSince1970: 100))
+        let networking = observation(
+            .ovnOvs, capability: .overlayNetworking, state: .healthy,
+            checkedAt: Date(timeIntervalSince1970: 150))
+        let newer = observation(
+            .libvirt, capability: .qemuPlacement, state: .healthy,
+            checkedAt: Date(timeIntervalSince1970: 200))
+
+        let normalized = AgentService.normalizedDependencyObservations([older, networking, newer])
+
+        #expect(normalized.map(\.id) == [.libvirt, .ovnOvs])
+        #expect(try #require(normalized.first).checkedAt == newer.checkedAt)
+        #expect(try #require(normalized.first).functionalState == .healthy)
+    }
+
     @Test("Fresh health gates only the capability it affects")
     func featureScopedGating() {
         let now = Date()

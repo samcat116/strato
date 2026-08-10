@@ -1766,6 +1766,7 @@ actor Agent {
             var registry: [any NodeDependencyModule] = [
                 SPIRENodeDependencyModule(
                     systemd: systemd,
+                    source: spiffeConfig?.sourceType == "files" ? .files : .workloadAPI,
                     version: {
                         await spireVersionCache.value(maxAge: 300) {
                             await DependencyVersionProbe.version(
@@ -1781,7 +1782,8 @@ actor Agent {
                             return .ready(expiresAt: try await svidManager.getSVID().expiresAt)
                         } catch {
                             return .unavailable(
-                                "SPIRE Workload API did not provide a usable X.509 SVID: \(error.localizedDescription)")
+                                "SPIFFE identity source did not provide a usable X.509 SVID: \(error.localizedDescription)"
+                            )
                         }
                     })
             ]

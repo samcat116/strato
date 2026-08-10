@@ -6,6 +6,11 @@ public enum SPIREIdentityHealth: Sendable, Equatable {
     case unavailable(String)
 }
 
+public enum SPIREIdentitySource: Sendable, Equatable {
+    case workloadAPI
+    case files
+}
+
 public struct NodeDependencyFunctionalHealth: Sendable, Equatable {
     public let state: NodeDependencyFunctionalState
     public let reason: NodeDependencyFailureReason?
@@ -35,23 +40,33 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
     public let affectedCapabilities = [NodeCapability.workloadIdentity]
 
     private let systemd: any SystemdControlling
+    private let source: SPIREIdentitySource
     private let version: @Sendable () async -> String?
     private let svid: @Sendable () async -> SPIREIdentityHealth
     private let now: @Sendable () -> Date
 
     public init(
         systemd: any SystemdControlling,
+        source: SPIREIdentitySource = .workloadAPI,
         version: @escaping @Sendable () async -> String?,
         svid: @escaping @Sendable () async -> SPIREIdentityHealth,
         now: @escaping @Sendable () -> Date = Date.init
     ) {
         self.systemd = systemd
+        self.source = source
         self.version = version
         self.svid = svid
         self.now = now
     }
 
     public func inspect() async -> NodeDependencyInspection {
+        if source == .files {
+            return identityInspection(
+                supervisorState: .notApplicable,
+                installedVersion: nil,
+                identityHealth: await svid())
+        }
+
         async let unit = systemd.inspect(unit: "spire-agent.service")
         async let installedVersion = version()
         async let identity = svid()
@@ -81,30 +96,41 @@ public struct SPIRENodeDependencyModule: NodeDependencyModule {
                 reason: .init(code: .missingBinary, message: "spire-agent executable is not installed"))
         }
 
+        return identityInspection(
+            supervisorState: .active,
+            installedVersion: installed,
+            identityHealth: identityHealth)
+    }
+
+    private func identityInspection(
+        supervisorState: NodeDependencySupervisorState,
+        installedVersion: String?,
+        identityHealth: SPIREIdentityHealth
+    ) -> NodeDependencyInspection {
         switch identityHealth {
         case .unavailable(let detail):
             return NodeDependencyInspection(
-                supervisorState: .active, installedVersion: installed,
+                supervisorState: supervisorState, installedVersion: installedVersion,
                 compatibility: .compatible, functionalState: .unhealthy,
                 reason: .init(code: .functionalProbeFailed, message: detail))
         case .ready(let expiresAt):
             let remaining = expiresAt.timeIntervalSince(now())
             if remaining <= 0 {
                 return NodeDependencyInspection(
-                    supervisorState: .active, installedVersion: installed,
+                    supervisorState: supervisorState, installedVersion: installedVersion,
                     compatibility: .compatible, functionalState: .unhealthy,
                     reason: .init(code: .functionalProbeFailed, message: "the current X.509 SVID is expired"))
             }
             if remaining < 300 {
                 return NodeDependencyInspection(
-                    supervisorState: .active, installedVersion: installed,
+                    supervisorState: supervisorState, installedVersion: installedVersion,
                     compatibility: .compatible, functionalState: .degraded,
                     reason: .init(
                         code: .functionalProbeFailed,
                         message: "the current X.509 SVID expires in less than five minutes"))
             }
             return NodeDependencyInspection(
-                supervisorState: .active, installedVersion: installed,
+                supervisorState: supervisorState, installedVersion: installedVersion,
                 compatibility: .compatible, functionalState: .healthy)
         }
     }

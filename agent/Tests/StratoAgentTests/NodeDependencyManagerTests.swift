@@ -234,6 +234,22 @@ struct InitialNodeDependencyModuleTests {
         #expect(observation.reason?.code == .functionalProbeFailed)
     }
 
+    @Test("File-based SPIFFE does not require a local SPIRE service or binary")
+    func fileSPIFFEState() async {
+        let fileIdentity = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: .missing("spire-agent.service")),
+            source: .files,
+            version: { nil },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+
+        let observation = await fileIdentity.inspect()
+        #expect(observation.supervisorState == .notApplicable)
+        #expect(observation.installedVersion == nil)
+        #expect(observation.compatibility == .compatible)
+        #expect(observation.functionalState == .healthy)
+        #expect(observation.reason == nil)
+    }
+
     @Test("Libvirt enforces the exact version boundary")
     func libvirtVersionBoundary() async {
         let systemd = FakeSystemd(defaultObservation: active)

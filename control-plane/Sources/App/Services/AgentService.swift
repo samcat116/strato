@@ -295,6 +295,8 @@ actor AgentService {
         let db = app.db
         var organizationScope = organizationScope
         var siteID = siteID
+        let dependencyObservations = normalizedDependencyObservations(
+            message.dependencyObservations, agentName: agentName)
         // Set when this registration creates the agent row, so the enrollment it
         // drew its scope from can be marked used after a successful save.
         var newAgentEnrollment: AgentEnrollment?
@@ -336,7 +338,7 @@ actor AgentService {
             agent.sandboxNetworkingCapable = message.sandboxNetworkingCapable ?? false
             agent.tpmCapable = message.tpmCapable ?? false
             agent.resolverCapable = message.resolverCapable ?? false
-            agent.dependencyObservations = message.dependencyObservations
+            agent.dependencyObservations = dependencyObservations
             _ = agent.updateAvailableResources(message.resources)
             agent.lastHeartbeat = Date()
             agent.status = .online
@@ -381,6 +383,7 @@ actor AgentService {
             }
             // Create new agent
             agent = Agent.from(registration: message, name: agentName, trustDomain: trustDomain)
+            agent.dependencyObservations = dependencyObservations
             agent.$site.id = siteID
             agent.status = .online
             newAgentEnrollment = enrollment
@@ -786,12 +789,16 @@ actor AgentService {
         to agent: Agent
     ) -> Bool {
         var changed = agent.updateAvailableResources(resources)
-        let previous = Dictionary(uniqueKeysWithValues: agent.dependencyObservations.map { ($0.id, $0) })
-        if agent.dependencyObservations != dependencyObservations {
-            agent.dependencyObservations = dependencyObservations
+        let storedObservations = normalizedDependencyObservations(
+            agent.dependencyObservations, agentName: agent.name)
+        let incomingObservations = normalizedDependencyObservations(
+            dependencyObservations, agentName: agent.name)
+        let previous = Dictionary(uniqueKeysWithValues: storedObservations.map { ($0.id, $0) })
+        if agent.dependencyObservations != incomingObservations {
+            agent.dependencyObservations = incomingObservations
             changed = true
         }
-        for observation in dependencyObservations {
+        for observation in incomingObservations {
             Telemetry.recordDependency(agentName: agent.name, observation: observation)
             if previous[observation.id]?.functionalState != observation.functionalState
                 || previous[observation.id]?.reason?.code != observation.reason?.code
@@ -822,6 +829,51 @@ actor AgentService {
             return true
         }
         return false
+    }
+
+    /// Canonicalize an agent-controlled wire array before it is indexed or
+    /// persisted. A dependency ID names one registry module, so duplicate IDs
+    /// are malformed; retaining the freshest sample keeps ingestion resilient
+    /// without letting array order replace newer health with older health.
+    private func normalizedDependencyObservations(
+        _ observations: [NodeDependencyObservation],
+        agentName: String
+    ) -> [NodeDependencyObservation] {
+        let normalized = Self.normalizedDependencyObservations(observations)
+        guard normalized.count != observations.count else { return normalized }
+
+        var seen = Set<NodeDependencyID>()
+        let duplicateIDs = Set(
+            observations.compactMap { observation in
+                seen.insert(observation.id).inserted ? nil : observation.id.rawValue
+            }
+        ).sorted()
+        app.logger.warning(
+            "Agent reported duplicate dependency observations; retaining the freshest sample",
+            metadata: [
+                "agent": .string(agentName),
+                "dependencyIds": .array(duplicateIDs.map { .string($0) }),
+            ])
+        return normalized
+    }
+
+    /// Pure test seam for the dependency-observation wire invariant.
+    static func normalizedDependencyObservations(
+        _ observations: [NodeDependencyObservation]
+    ) -> [NodeDependencyObservation] {
+        var orderedIDs: [NodeDependencyID] = []
+        var byID: [NodeDependencyID: NodeDependencyObservation] = [:]
+        for observation in observations {
+            guard let current = byID[observation.id] else {
+                orderedIDs.append(observation.id)
+                byID[observation.id] = observation
+                continue
+            }
+            if observation.checkedAt >= current.checkedAt {
+                byID[observation.id] = observation
+            }
+        }
+        return orderedIDs.compactMap { byID[$0] }
     }
 
     /// Refresh the agent's presence key at most once per half TTL. Failed
