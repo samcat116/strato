@@ -833,6 +833,7 @@ public func configure(_ app: Application) async throws {
     // instead of a scope enum a separate middleware did (STR-115).
     app.migrations.add(AddCredentialRestrictions())
     app.migrations.add(AddCredentialToIAMDecisionLog())
+    app.migrations.add(CanonicalizeIAMDecisionLog())
 
     // ADR 0001 stage 5 (STR-148): volumes become desired state. The columns
     // that make a volume a converging, finalizable resource, and the widened
@@ -928,9 +929,22 @@ public func configure(_ app: Application) async throws {
     // It must run after every migration that ever touched the table.
     app.migrations.add(DropResourceOperations())
 
+    // STR-232: replace the legacy placement index before the cutover drops it.
+    // Desired-state assembly and observed-state application both resolve
+    // replicas by agent and active state on every reconciliation cycle.
+    app.migrations.add(AddVolumeReplicaAgentIndex())
+
+    // After an inventory-and-repair preflight, replicas become the only volume
+    // placement/path authority and the legacy columns are dropped.
+    app.migrations.add(MakeVolumeReplicasAuthoritative())
+
     // STR-222: structured hypervisor, network, sandbox, TPM, and resolver
     // reports are the only source of agent capability truth.
     app.migrations.add(DropLegacyAgentCapabilities())
+
+    // STR-229: canonical UUID role identity, one-time binding completeness
+    // proof, and removal of the project/group grant mirrors.
+    app.migrations.add(CanonicalizeMembershipRoleStorage())
 
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
@@ -992,14 +1006,6 @@ public func configure(_ app: Application) async throws {
     // so a key added after upgrade still picks up rows written before it
     // existed. No-op without a key.
     try await secretsEncryption.encryptStoredSecrets(on: app.db, logger: app.logger)
-
-    // IAM phase 1: populate role_bindings from the relational mirrors
-    // (user_organizations, project_members, project_group_grants). Idempotent,
-    // so re-running every boot also repairs any grant a crashed request
-    // missed.
-    if app.environment != .testing {
-        try await RoleBindingBackfill.backfillFromMirrors(app)
-    }
 
     // Initialize the WebAuthn decoy credential key (generates if not exists),
     // so the first login begin doesn't pay the generate-and-store round trip.

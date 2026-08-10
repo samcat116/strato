@@ -308,17 +308,21 @@ struct VMSpecBuilderTests {
     /// An attached volume, as `volumeSpecs` sees it after `.with(\.$volumes)`.
     /// Filtered on the *desired* attachment since STR-148, so the VM binding —
     /// not the observed status — is what puts it in the spec.
-    private func attachedVolume(
-        id: UUID, deviceName: String?, bootOrder: Int?, storagePath: String = "/var/lib/strato/v.qcow2"
-    ) -> Volume {
+    private func attachedVolume(id: UUID, deviceName: String?, bootOrder: Int?) -> Volume {
         let volume = Volume(
             id: id, name: "v-\(id.uuidString.prefix(4))", description: "",
             projectID: UUID(), environment: "development", size: 1 << 30, status: .attached, createdByID: UUID())
         volume.$vm.id = UUID()
         volume.deviceName = deviceName
         volume.bootOrder = bootOrder
-        volume.storagePath = storagePath
         return volume
+    }
+
+    private func storagePaths(for volumes: [Volume]) -> [UUID: String] {
+        Dictionary(
+            uniqueKeysWithValues: volumes.compactMap { volume in
+                volume.id.map { ($0, "/var/lib/strato/volumes/\($0).qcow2") }
+            })
     }
 
     @Test("Volume order is the same whatever order the rows arrive in")
@@ -335,8 +339,13 @@ struct VMSpecBuilderTests {
             attachedVolume(id: ids[3], deviceName: "disk3", bootOrder: nil),
         ]
 
-        let forward = VMSpecBuilder.volumeSpecs(from: volumes).map(\.deviceName.rawValue)
-        let reversed = VMSpecBuilder.volumeSpecs(from: volumes.reversed()).map(\.deviceName.rawValue)
+        let paths = storagePaths(for: volumes)
+        let forward = VMSpecBuilder.volumeSpecs(
+            from: volumes, storagePathsByVolumeID: paths
+        ).map(\.deviceName.rawValue)
+        let reversed = VMSpecBuilder.volumeSpecs(
+            from: volumes.reversed(), storagePathsByVolumeID: paths
+        ).map(\.deviceName.rawValue)
 
         // Explicit boot orders first, then device name inside each tier.
         #expect(forward == ["disk1", "disk2", "disk3", "disk9"])
@@ -355,8 +364,15 @@ struct VMSpecBuilderTests {
             attachedVolume(id: first, deviceName: "disk0", bootOrder: 0),
         ]
 
-        #expect(VMSpecBuilder.volumeSpecs(from: volumes).map(\.volumeId) == [first, second])
-        #expect(VMSpecBuilder.volumeSpecs(from: volumes.reversed()).map(\.volumeId) == [first, second])
+        let paths = storagePaths(for: volumes)
+        #expect(
+            VMSpecBuilder.volumeSpecs(
+                from: volumes, storagePathsByVolumeID: paths
+            ).map(\.volumeId) == [first, second])
+        #expect(
+            VMSpecBuilder.volumeSpecs(
+                from: volumes.reversed(), storagePathsByVolumeID: paths
+            ).map(\.volumeId) == [first, second])
     }
 
     @Test("An attached volume with no legal device name is left out of the spec")
@@ -371,7 +387,10 @@ struct VMSpecBuilderTests {
             attachedVolume(id: UUID(), deviceName: "not a legal id", bootOrder: nil),
         ]
 
-        #expect(VMSpecBuilder.volumeSpecs(from: volumes).map(\.deviceName.rawValue) == ["disk1"])
+        #expect(
+            VMSpecBuilder.volumeSpecs(
+                from: volumes, storagePathsByVolumeID: storagePaths(for: volumes)
+            ).map(\.deviceName.rawValue) == ["disk1"])
     }
 
     @Test("VMSpecBuilder omits volumes when no disk path is set")

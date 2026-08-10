@@ -483,8 +483,8 @@ final class AgentOrganizationScopeTests {
             let volume = Volume(
                 name: "anchor-vol", description: "v", projectID: project.id!, environment: "development",
                 size: 1 << 30, createdByID: admin.id!)
-            volume.hypervisorId = agentUUID.uuidString
             try await volume.save(on: app.db)
+            try await placeVolume(volume, on: agentUUID.uuidString, using: app.db)
 
             try await app.test(.PATCH, "/api/agents/\(agentUUID.uuidString)/organization") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -540,8 +540,8 @@ final class AgentOrganizationScopeTests {
             let foreignVolume = Volume(
                 name: "tenant-vol", description: "v", projectID: foreignProject.id!, environment: "development",
                 size: 1 << 30, createdByID: orgAdmin.id!)
-            foreignVolume.hypervisorId = agentUUID.uuidString
             try await foreignVolume.save(on: app.db)
+            try await placeVolume(foreignVolume, on: agentUUID.uuidString, using: app.db)
 
             try await app.test(.POST, "/api/agents/\(agentUUID.uuidString)/actions/force-offline") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: orgAdminToken)

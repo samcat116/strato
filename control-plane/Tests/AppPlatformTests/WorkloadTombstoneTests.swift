@@ -478,7 +478,7 @@ final class WorkloadTombstoneTests {
         }
     }
 
-    @Test("Adoption moves everything volume dispatch reads, not just hypervisorId")
+    @Test("Adoption moves authoritative volume placement")
     func adoptionRepointsVolumePlacement() async throws {
         try await withTombstoneApp { app, builder, org, project, token in
             let oldAgent = try await self.makeAgent(app: app, org: org, name: "ts-old")
@@ -498,7 +498,6 @@ final class WorkloadTombstoneTests {
             let attached = Volume(
                 name: "attached-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
-            attached.hypervisorId = oldId
             attached.attachedAgentId = oldId
             attached.$vm.id = try vm.requireID()
             // An attached row names its device: `NormalizeVolumeAttachments`
@@ -512,7 +511,6 @@ final class WorkloadTombstoneTests {
             let detached = Volume(
                 name: "detached-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
-            detached.hypervisorId = oldId
             try await detached.save(on: app.db)
             try await VolumeReplica(
                 volumeID: try detached.requireID(), agentId: oldId, datasetPath: nil, state: .healthy
@@ -539,18 +537,15 @@ final class WorkloadTombstoneTests {
                     #expect(body.adoptedVolumes == 2)
                 })
 
-            // `VolumeService.placement(of:)` consults the replica row first, so
-            // this is the assertion that actually proves an operation on these
-            // disks would reach the adopting host.
+            // Replica placement is the dispatch source, so this proves future
+            // operations on both disks reach the adopting host.
             let replicaAgents = try await VolumeReplica.query(on: app.db)
                 .all()
                 .map(\.agentId)
             #expect(Set(replicaAgents) == [newId])
 
             let reloadedAttached = try #require(await Volume.find(attached.id, on: app.db))
-            #expect(reloadedAttached.hypervisorId == newId)
             #expect(reloadedAttached.attachedAgentId == newId)
-            #expect(try await Volume.find(detached.id, on: app.db)?.hypervisorId == newId)
         }
     }
 
@@ -574,12 +569,12 @@ final class WorkloadTombstoneTests {
             let stayedVolume = Volume(
                 name: "stayed-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
-            stayedVolume.hypervisorId = oldId
             stayedVolume.$vm.id = try stayed.requireID()
             // An attached row names its device: `NormalizeVolumeAttachments`
             // makes that a check constraint (STR-129).
             stayedVolume.deviceName = "disk0"
             try await stayedVolume.save(on: app.db)
+            try await placeVolume(stayedVolume, on: oldId, using: app.db)
 
             _ = try await app.observedStateApplier.apply(
                 self.report(
@@ -601,7 +596,7 @@ final class WorkloadTombstoneTests {
                     #expect(body.adoptedVolumes == 0)
                 })
 
-            #expect(try await Volume.find(stayedVolume.id, on: app.db)?.hypervisorId == oldId)
+            #expect(try await VolumeService.agentHolding(stayedVolume, on: app.db) == oldId)
         }
     }
 

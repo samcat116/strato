@@ -78,7 +78,7 @@ struct VNCWebSocketController: RouteCollection {
         // restricted credential is intersected against that action rather than
         // against the request's HTTP method (STR-115), which is what the
         // scope-era carve-out here had to approximate.
-        guard try await req.can("view_console", on: "virtual_machine", id: vmId.uuidString) else {
+        guard try await req.can("vm:viewConsole", on: IAMNode(type: .virtualMachine, id: vmId)) else {
             req.logger.warning(
                 "Graphics console access denied",
                 metadata: ["vmId": .string(vmId.uuidString), "userId": .string(userId)])
@@ -161,7 +161,9 @@ struct VNCWebSocketController: RouteCollection {
                 try? await ws.close(code: .policyViolation)
                 return
             }
-            guard (try? await req.can("view_console", on: "virtual_machine", id: vmId.uuidString)) == true else {
+            guard
+                (try? await req.can("vm:viewConsole", on: IAMNode(type: .virtualMachine, id: vmId))) == true
+            else {
                 try? await ws.send(
                     ConsoleSessionManager.errorControlFrame(
                         "You do not have permission to access this VM console"))

@@ -188,7 +188,7 @@ final class SandboxSnapshotTests {
             let ownerBindings = try await RoleBinding.query(on: app.db)
                 .filter(\.$principalType == IAMPrincipalType.user.rawValue)
                 .filter(\.$principalID == user.id!)
-                .filter(\.$role == IAMRole.admin.seededID.uuidString)
+                .filter(\.$roleID == IAMRole.admin.seededID)
                 .filter(\.$nodeType == IAMNodeType.sandboxSnapshot.rawValue)
                 .filter(\.$nodeID == snapshot.id!)
                 .count()

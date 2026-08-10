@@ -78,7 +78,7 @@ final class GroupTests: BaseTestCase {
             let memberOrg = UserOrganization(
                 userID: memberUser.id!,
                 organizationID: testOrganization.id!,
-                role: "member"
+                roleID: nil
             )
             try await memberOrg.save(on: app.db)
 
@@ -166,7 +166,7 @@ final class GroupTests: BaseTestCase {
                 let userOrg = UserOrganization(
                     userID: user.id!,
                     organizationID: testOrganization.id!,
-                    role: "member"
+                    roleID: nil
                 )
                 try await userOrg.save(on: app.db)
             }
@@ -211,7 +211,7 @@ final class GroupTests: BaseTestCase {
             let userOrg = UserOrganization(
                 userID: user.id!,
                 organizationID: testOrganization.id!,
-                role: "member"
+                roleID: nil
             )
             try await userOrg.save(on: app.db)
 

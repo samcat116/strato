@@ -102,7 +102,7 @@ struct VMController: RouteCollection {
     }
 
     func listOperations(req: Request) async throws -> [OperationResponse] {
-        let vm = try await fetchVMWithPermission(req: req, permission: "read")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:read")
         let vmID = try vm.requireID()
 
         let limit = try req.intQuery("limit", default: 20, in: 1...100)
@@ -112,14 +112,14 @@ struct VMController: RouteCollection {
     }
 
     func listInterfaces(req: Request) async throws -> [NetworkInterfaceResponse] {
-        let vm = try await fetchVMWithPermission(req: req, permission: "read")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:read")
         try await Self.loadInterfaces(for: vm, on: req.db)
         return vm.networkInterfaces.inDeviceOrder.map { NetworkInterfaceResponse(from: $0, vm: vm) }
     }
 
     func attachInterface(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Attaching a VM network interface")
-        let vm = try await fetchVMWithPermission(req: req, permission: "update")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:update")
         guard vm.hypervisorType == .qemu else {
             throw Abort(.conflict, reason: "Post-create network-interface changes are supported only for QEMU VMs")
         }
@@ -236,7 +236,7 @@ struct VMController: RouteCollection {
 
     private func mutateInterface(req: Request, requestedKind: VMOperationKind?) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM network interface")
-        let vm = try await fetchVMWithPermission(req: req, permission: "update")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:update")
         guard vm.hypervisorType == .qemu else {
             throw Abort(.conflict, reason: "Post-create network-interface changes are supported only for QEMU VMs")
         }
@@ -375,19 +375,19 @@ struct VMController: RouteCollection {
 
     /// Fetch a VM by its :vmID route parameter and enforce a permission on it.
     ///
-    /// Delegates to the shared `Request.authorizedVM(_:permission:)` helper so the
+    /// Delegates to the shared `Request.authorizedVM(_:action:)` helper so the
     /// per-object authorization logic lives in one place (also used by other VM-scoped
     /// controllers such as `LogsController`).
-    private func fetchVMWithPermission(req: Request, permission: String) async throws -> VM {
+    private func fetchVMWithAction(req: Request, action: String) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
 
-        return try await req.authorizedVM(vmID, permission: permission)
+        return try await req.authorizedVM(vmID, action: action)
     }
 
     func show(req: Request) async throws -> VMDetailResponse {
-        let vm = try await fetchVMWithPermission(req: req, permission: "read")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:read")
         try await vm.$networkInterfaces.load(on: req.db)
         for interface in vm.networkInterfaces {
             try await interface.$addresses.load(on: req.db)
@@ -514,7 +514,7 @@ struct VMController: RouteCollection {
         }
 
         // Check user permission on image
-        let hasImagePermission = try await req.can("read", on: "image", id: imageId.uuidString)
+        let hasImagePermission = try await req.can("image:read", on: IAMNode(type: .image, id: imageId))
 
         guard hasImagePermission else {
             throw Abort(.forbidden, reason: "Access denied to image")
@@ -523,12 +523,13 @@ struct VMController: RouteCollection {
         let image: Image = foundImage
 
         // Resolve the target project and environment (org membership, the
-        // create_resources permission, and environment validity). Shared with
+        // vm:create action, and environment validity). Shared with
         // sandbox creation via `req.resolveProjectForCreate` (issue #675).
         let (project, environment) = try await req.resolveProjectForCreate(
             requestedProjectId: createRequest.projectId,
             requestedEnvironment: createRequest.environment,
             user: user,
+            action: "vm:create",
             resourceKind: "VMs"
         )
         let projectId = try project.requireID()
@@ -998,7 +999,7 @@ struct VMController: RouteCollection {
         // reports — not this request — decide whether it converged.
         req.resourceMutation.dispatch(
             .create, resourceType: VM.self, resourceID: vmID,
-            targetGeneration: accepted.targetGeneration, hypervisorId: nil,
+            targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
                 try await app.agentService.createVM(vm: vm, db: db, image: image)
             }, app: req.application)
@@ -1031,7 +1032,7 @@ struct VMController: RouteCollection {
     /// Metadata-only updates keep their historical `200` + VM body.
     func update(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
-        let existingVM = try await fetchVMWithPermission(req: req, permission: "update")
+        let existingVM = try await fetchVMWithAction(req: req, action: "vm:update")
 
         // Decodable rather than Content: `balloonTarget` needs to tell an
         // absent key from an explicit null, which needs a hand-written decode,
@@ -1483,7 +1484,7 @@ struct VMController: RouteCollection {
 
     func delete(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
-        let vm = try await fetchVMWithPermission(req: req, permission: "delete")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:delete")
 
         // Deletion via state sync: desired becomes `.absent`, the VM is
         // stamped with the finalizers its teardown owes, the agent tears the
@@ -1542,11 +1543,11 @@ struct VMController: RouteCollection {
         let accepted = try await req.resourceMutation.accept(
             .delete, on: vm, actor: .user(userID), dispatch: strategy,
             on: req.db, app: app
-        ) { @Sendable _ in
+        ) { @Sendable db in
             // Stamp before the mark: `stampForDeletion` reads whether the VM
             // is already terminating, and re-stamping a second DELETE would
             // resurrect tokens their participants have already cleared.
-            ResourceFinalizerService.stampForDeletion(vm)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: db)
             vm.setDesiredStatus(.absent)
         }
         // The delete path skips the enforcement lookup: a client follows a
@@ -1558,7 +1559,7 @@ struct VMController: RouteCollection {
 
     func pause(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
-        let vm = try await fetchVMWithPermission(req: req, permission: "pause")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:pause")
 
         guard vm.canPause else {
             throw Abort(.badRequest, reason: "VM cannot be paused in current state: \(vm.status.rawValue)")
@@ -1580,7 +1581,7 @@ struct VMController: RouteCollection {
 
     func resume(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
-        let vm = try await fetchVMWithPermission(req: req, permission: "resume")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:resume")
 
         guard vm.canResume else {
             throw Abort(.badRequest, reason: "VM cannot be resumed in current state: \(vm.status.rawValue)")
@@ -1599,7 +1600,7 @@ struct VMController: RouteCollection {
     }
 
     func status(req: Request) async throws -> VMDetailResponse {
-        let vm = try await fetchVMWithPermission(req: req, permission: "read")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:read")
 
         // The database row *is* the observed state: the owning agent's
         // periodic observed-state reports keep it fresh (issue #260), so no
@@ -1621,7 +1622,7 @@ struct VMController: RouteCollection {
 
     func start(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
-        let vm = try await fetchVMWithPermission(req: req, permission: "start")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:start")
 
         guard vm.canStart else {
             throw Abort(.badRequest, reason: "VM cannot be started in current state: \(vm.status.rawValue)")
@@ -1668,7 +1669,7 @@ struct VMController: RouteCollection {
 
     func stop(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
-        let vm = try await fetchVMWithPermission(req: req, permission: "stop")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:stop")
 
         guard vm.canStop else {
             throw Abort(.badRequest, reason: "VM cannot be stopped in current state: \(vm.status.rawValue)")
@@ -1687,7 +1688,7 @@ struct VMController: RouteCollection {
 
     func restart(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a VM")
-        let vm = try await fetchVMWithPermission(req: req, permission: "restart")
+        let vm = try await fetchVMWithAction(req: req, action: "vm:restart")
 
         guard vm.isRunning else {
             throw Abort(.badRequest, reason: "VM must be running to restart. Current state: \(vm.status.rawValue)")

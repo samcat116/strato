@@ -450,18 +450,10 @@ struct RoleController: RouteCollection {
         )
     }
 
-    /// The node's own read action — `project:read` for a project, `vm:read`
-    /// for a VM, and so on. Derived from the translator so a new node type
-    /// gets its gate from the same mapping the rest of the API uses.
+    /// The node's own canonical read action — `project:read` for a project,
+    /// `vm:read` for a VM, and so on.
     private func requireNodeRead(_ node: IAMNode, req: Request) async throws {
-        guard
-            let action = IAMActionTranslator.translate(
-                permission: "read", resourceType: node.type.rawValue, resourceID: node.id.uuidString, path: ""
-            )?.action
-        else {
-            throw Abort(.badRequest, reason: "No read action is defined for '\(node.type.rawValue)'")
-        }
-        guard try await req.can(action, on: node) else {
+        guard try await req.can(node.type.readAction, on: node) else {
             throw Abort(.forbidden, reason: "Listing the roles bindable here requires read access to it")
         }
     }

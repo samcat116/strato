@@ -634,7 +634,7 @@ final class DesiredStateReconciliationTests {
         try await withVMTestApp { app, user, vm, _ in
             let agentId = try await self.registerAgent(app: app, vm: vm, protocolVersion: WireProtocol.currentVersion)
 
-            ResourceFinalizerService.stampForDeletion(vm)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
             vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             _ = try await ResourceEvent.record(

@@ -51,7 +51,6 @@ final class WorkloadPrincipalTests {
             principal: principal,
             action: action,
             node: node,
-            legacyEquivalent: nil,
             context: IAMCheckContext(path: "/test", method: "GET", requestID: "test"),
             state: .detached,
             app: app,

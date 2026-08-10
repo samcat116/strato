@@ -55,7 +55,7 @@ enum IAMRoleOwnerType: String, Codable, Sendable, CaseIterable {
 /// zero-UUID sentinel (`IAMRoleDefinition.platformOwnerID`) and org/project
 /// owners follow the same polymorphic-pointer convention as `role_bindings`.
 /// Bindings referencing a role deleted out from under them (org-delete
-/// cascade) are dangling UUID strings that every read path drops — a harmless
+/// cascade) are dangling UUID ids that every read path drops — a harmless
 /// under-grant.
 final class IAMRoleDefinition: Model, @unchecked Sendable {
     static let schema = "iam_roles"
@@ -132,7 +132,7 @@ final class IAMRoleDefinition: Model, @unchecked Sendable {
 
 extension IAMRole {
     /// Fixed, well-known row ids for the seeded roles — identical on every
-    /// deployment, so migrations can backfill `role_bindings.role` by
+    /// deployment, so migrations can backfill `role_bindings.role_id` by
     /// constant and code can reference "the admin role" without a lookup.
     var seededID: UUID {
         switch self {

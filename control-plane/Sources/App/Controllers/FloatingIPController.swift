@@ -29,15 +29,11 @@ struct FloatingIPController: RouteCollection {
 
     // MARK: - Pools (infrastructure, site-style authz)
 
-    /// The (resourceType, id) pair naming the scope's owning node for
-    /// permission checks against the IAM hierarchy.
-
-    /// `manage_agents` on the org/OU scope a pool is being created under —
+    /// `agent:manage` on the org/OU scope a pool is being created under —
     /// the same trust level as site management: a pool decides which external
     /// addresses a site answers for.
     private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
-        let resource = scope.checkResource
-        let allowed = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
+        let allowed = try await req.can("agent:manage", on: scope.checkNode)
         guard allowed else {
             throw Abort(
                 .forbidden, reason: "You don't have permission to manage floating IP pools for this organization")
@@ -49,7 +45,7 @@ struct FloatingIPController: RouteCollection {
     /// authorizing only the pool's own org/OU would let one tenant's admin
     /// claim (and block) another tenant's site.
     private func requireSiteManage(_ req: Request, site: Site) async throws {
-        let allowed = try await req.can("manage", on: "site", id: try site.requireID().uuidString)
+        let allowed = try await req.can("site:manage", on: IAMNode(type: .site, id: try site.requireID()))
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have 'manage' permission on this site")
         }
@@ -315,7 +311,8 @@ struct FloatingIPController: RouteCollection {
         // that is logged and that a guardrail can narrow.
         var visibility: ProjectVisibility?
         if let requestedProjectId {
-            let hasAccess = try await req.can("view_project", on: "project", id: requestedProjectId.uuidString)
+            let hasAccess = try await req.can(
+                "project:read", on: IAMNode(type: .project, id: requestedProjectId))
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
             }
@@ -347,7 +344,7 @@ struct FloatingIPController: RouteCollection {
 
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
-            action: "create_floating_ip", resourceKind: "floating IPs", verb: "allocate")
+            action: "floatingip:create", resourceKind: "floating IPs", verb: "allocate")
         let projectId = try project.requireID()
 
         guard let pool = try await FloatingIPPool.find(request.poolId, on: req.db) else {
@@ -402,7 +399,7 @@ struct FloatingIPController: RouteCollection {
     /// GET /api/floating-ips/:floatingIpId
     @Sendable
     func getFloatingIP(req: Request) async throws -> FloatingIPResponse {
-        let floatingIP = try await fetchFloatingIPWithPermission(req: req, permission: "read")
+        let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:read")
         let interface = try await loadedInterface(of: floatingIP, on: req.db)
         return try FloatingIPResponse(from: floatingIP, interface: interface)
     }
@@ -412,7 +409,7 @@ struct FloatingIPController: RouteCollection {
     /// down its NAT as a side effect; detaching first makes that explicit.
     @Sendable
     func releaseFloatingIP(req: Request) async throws -> HTTPStatus {
-        let floatingIP = try await fetchFloatingIPWithPermission(req: req, permission: "delete")
+        let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:release")
         guard floatingIP.$interface.id == nil else {
             throw Abort(.conflict, reason: "Floating IP is attached; detach it first")
         }
@@ -428,7 +425,7 @@ struct FloatingIPController: RouteCollection {
     /// POST /api/floating-ips/:floatingIpId/attach
     @Sendable
     func attachFloatingIP(req: Request) async throws -> FloatingIPResponse {
-        let floatingIP = try await fetchFloatingIPWithPermission(req: req, permission: "update")
+        let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:attach")
         let request = try req.content.decode(AttachFloatingIPRequest.self)
 
         // Owning the floating IP is not enough: attaching changes the *VM's*
@@ -436,7 +433,7 @@ struct FloatingIPController: RouteCollection {
         // the VM too (the volume-attach rule). An unreachable VM is answered as
         // absent whether it is missing or merely forbidden — see `reachableVM`
         // (issue #881).
-        let vm = try await req.reachableVM(request.vmId, permission: "update")
+        let vm = try await req.reachableVM(request.vmId, action: "vm:update")
         // After the VM check, never before: a containment refusal handed to a
         // caller who can't touch the VM would tell them it exists in another
         // project (issue #777).
@@ -547,7 +544,7 @@ struct FloatingIPController: RouteCollection {
     /// POST /api/floating-ips/:floatingIpId/detach
     @Sendable
     func detachFloatingIP(req: Request) async throws -> FloatingIPResponse {
-        let floatingIP = try await fetchFloatingIPWithPermission(req: req, permission: "update")
+        let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:detach")
         guard floatingIP.$interface.id != nil else {
             return try FloatingIPResponse(from: floatingIP)
         }
@@ -688,16 +685,16 @@ struct FloatingIPController: RouteCollection {
         }
     }
 
-    private func fetchFloatingIPWithPermission(req: Request, permission: String) async throws -> FloatingIP {
+    private func fetchFloatingIPWithAction(req: Request, action: String) async throws -> FloatingIP {
         guard let floatingIpId = req.parameters.get("floatingIpId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid floating IP ID")
         }
         guard let floatingIP = try await FloatingIP.find(floatingIpId, on: req.db) else {
             throw Abort(.notFound, reason: "Floating IP not found")
         }
-        let allowed = try await req.can(permission, on: "floating_ip", id: floatingIpId.uuidString)
+        let allowed = try await req.can(action, on: IAMNode(type: .floatingIP, id: floatingIpId))
         guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this floating IP")
+            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this floating IP")
         }
         return floatingIP
     }

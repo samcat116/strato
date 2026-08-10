@@ -19,7 +19,7 @@ import AppTestSupport
 /// a VM in another tenant's project were distinguishable to a caller who could
 /// see neither: an existence oracle over VM ids.
 ///
-/// The fix is `Request.reachableVM(_:permission:)`: one `404` for both cases at
+/// The fix is `Request.reachableVM(_:action:)`: one `404` for both cases at
 /// every site. These tests pin the status and the indistinguishability — the
 /// reasons must match once the id is elided, not merely share a status — and
 /// pin that the refusal is not unconditional, by checking that a caller who
@@ -122,9 +122,13 @@ struct VMAttachTargetDisclosureTests {
                 size: 10 * 1024 * 1024 * 1024,
                 status: .available,
                 createdByID: try admin.requireID())
-            volume.hypervisorId = "agent-that-is-not-connected"
-            volume.storagePath = "/var/lib/strato/volumes/disclosure/volume.qcow2"
             try await volume.save(on: app.db)
+            try await placeVolume(
+                volume,
+                on: "agent-that-is-not-connected",
+                at: "/var/lib/strato/volumes/disclosure/volume.qcow2",
+                using: app.db
+            )
 
             let group = SecurityGroup(projectID: try home.requireID(), name: "disclosure-group")
             try await group.save(on: app.db)

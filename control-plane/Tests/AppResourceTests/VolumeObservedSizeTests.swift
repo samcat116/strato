@@ -96,12 +96,11 @@ final class VolumeObservedSizeTests {
             createdByID: user.id!,
             poolID: pool.id
         )
-        volume.hypervisorId = agentId
-        volume.storagePath = "/var/lib/strato/volumes/v/volume.qcow2"
         volume.generation = generation
         volume.observedGeneration = observedGeneration
         volume.observedSizeBytes = observedSizeBytes
         try await volume.save(on: app.db)
+        try await placeVolume(volume, on: agentId, using: app.db)
         return volume
     }
 

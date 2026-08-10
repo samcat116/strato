@@ -128,8 +128,7 @@ struct OIDCIdentityService {
         let username = userInfo.preferredUsername ?? userInfo.email ?? "oidc_\(userInfo.subject.prefix(8))"
         let displayName = userInfo.name ?? username
         let email = userInfo.email ?? ""
-        // The claim-driven role, resolved across the unified vocabulary — a
-        // legacy literal, or a scoped custom role id (issue #611).
+        // The claim-driven canonical role id, or bare membership.
         let resolvedRole = await resolveDesiredOrgRole(
             provider: provider, organizationID: organizationID, groupValues: groupValues)
 
@@ -178,14 +177,14 @@ struct OIDCIdentityService {
             let membership = UserOrganization(
                 userID: userID,
                 organizationID: organizationID,
-                role: resolvedRole.storedRole
+                roleID: resolvedRole?.id
             )
             try await membership.save(on: transaction)
 
             // The claim-driven role gets its binding on the org node, in the
-            // same transaction as the mirror row — without it the new user
+            // same transaction as the membership row — without it the new user
             // authenticates but fails every permission check. Bare membership
-            // (default "member") maps to no binding.
+            // maps to no binding.
             //
             // Deliberately not gated by the write-time ceiling check (#484),
             // unlike the administrative grant APIs: this runs during sign-in,
@@ -194,11 +193,11 @@ struct OIDCIdentityService {
             // request this user makes, so a ceiling is enforced either way —
             // what is given up is only the explanation at write time, for a
             // grant no human is watching anyway.
-            if let bindingRoleID = resolvedRole.bindingRoleID {
+            if let resolvedRole {
                 try await RoleBindingService.grant(
                     principalType: .user,
                     principalID: userID,
-                    roleID: bindingRoleID,
+                    roleID: resolvedRole.id,
                     nodeType: .organization,
                     nodeID: organizationID,
                     createdBy: nil,
@@ -310,96 +309,93 @@ struct OIDCIdentityService {
         guard mapsOrganizationRole(provider), let userID = user.id else { return }
 
         guard
-            let membership = try await UserOrganization.query(on: db)
+            try await UserOrganization.query(on: db)
                 .filter(\.$user.$id == userID)
                 .filter(\.$organization.$id == organizationID)
-                .first()
+                .first() != nil
         else {
             return
         }
 
         let resolved = await resolveDesiredOrgRole(
             provider: provider, organizationID: organizationID, groupValues: groupValues)
-        guard membership.role != resolved.storedRole else { return }
-
-        if membership.role == "admin" {
-            // Only admins who can actually sign in count: an admin disabled
-            // by SSF or deactivated via SCIM keeps their membership row but
-            // is blocked at login, so demoting the last *usable* admin would
-            // still lock the org out.
-            let otherAdmins = try await UserOrganization.query(on: db)
-                .filter(\.$organization.$id == organizationID)
-                .filter(\.$role == "admin")
-                .filter(\.$user.$id != userID)
-                .join(User.self, on: \UserOrganization.$user.$id == \User.$id)
-                .filter(User.self, \.$disabledAt == nil)
-                .group(.or) { active in
-                    active.filter(User.self, \.$scimProvisioned == false)
-                    active.filter(User.self, \.$scimActive == true)
-                }
-                .count()
-            if otherAdmins == 0 {
-                logger.warning(
-                    "OIDC role mapping would demote the organization's last admin; skipping",
-                    metadata: [
-                        "user_id": .string(userID.uuidString),
-                        "organization_id": .string(organizationID.uuidString),
-                    ])
+        let node = IAMNode(type: .organization, id: organizationID)
+        try await RoleBindingService.withMembershipNodeLocked(node, on: db) { transaction in
+            guard
+                let membership = try await UserOrganization.query(on: transaction)
+                    .filter(\.$user.$id == userID)
+                    .filter(\.$organization.$id == organizationID)
+                    .first()
+            else {
                 return
             }
-        }
 
-        let previousRole = membership.role
-        membership.role = resolved.storedRole
-        try await db.transaction { transaction in
+            let currentBindings = try await RoleBindingService.activeBindings(
+                principalType: .user, principalID: userID,
+                nodeType: .organization, nodeID: organizationID, on: transaction)
+            let desiredBindingMatches =
+                if let roleID = resolved?.id {
+                    currentBindings.count == 1 && currentBindings[0].roleID == roleID
+                } else {
+                    currentBindings.isEmpty
+                }
+            guard membership.roleID != resolved?.id || !desiredBindingMatches else { return }
+
+            let heldAdminBinding = currentBindings.contains { $0.roleID == IAMRole.admin.seededID }
+            if heldAdminBinding {
+                // Only admins who can actually sign in count: an admin disabled
+                // by SSF or deactivated via SCIM keeps their membership row but
+                // is blocked at login, so demoting the last *usable* admin would
+                // still lock the org out. The org-row lock serializes this with
+                // every other membership demotion and removal.
+                let otherAdmins = try await RoleBinding.query(on: transaction)
+                    .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                    .filter(\.$principalID != userID)
+                    .filter(\.$roleID == IAMRole.admin.seededID)
+                    .filter(\.$nodeType == IAMNodeType.organization.rawValue)
+                    .filter(\.$nodeID == organizationID)
+                    .active()
+                    .join(User.self, on: \RoleBinding.$principalID == \User.$id)
+                    .filter(User.self, \.$disabledAt == nil)
+                    .group(.or) { active in
+                        active.filter(User.self, \.$scimProvisioned == false)
+                        active.filter(User.self, \.$scimActive == true)
+                    }
+                    .count()
+                if otherAdmins == 0 {
+                    logger.warning(
+                        "OIDC role mapping would demote the organization's last admin; skipping",
+                        metadata: [
+                            "user_id": .string(userID.uuidString),
+                            "organization_id": .string(organizationID.uuidString),
+                        ])
+                    return
+                }
+            }
+
+            membership.roleID = resolved?.id
             try await membership.save(on: transaction)
-            // Swap the role binding with the mirror-row update. The previously
-            // stored value may be a legacy literal or a role id; bare
-            // membership ("member") has no binding on either side.
-            if let oldBindingID = MemberRoleResolver.organizationStoredRoleID(previousRole) {
-                try await RoleBindingService.revoke(
-                    principalType: .user,
-                    principalID: userID,
-                    roleID: oldBindingID,
-                    nodeType: .organization,
-                    nodeID: organizationID,
-                    on: transaction
-                )
-            }
-            if let newBindingID = resolved.bindingRoleID {
-                try await RoleBindingService.grant(
-                    principalType: .user,
-                    principalID: userID,
-                    roleID: newBindingID,
-                    nodeType: .organization,
-                    nodeID: organizationID,
-                    createdBy: nil,
-                    on: transaction
-                )
-            }
+            try await RoleBindingService.setExclusiveGrant(
+                principalType: .user, principalID: userID, roleID: resolved?.id,
+                node: node, createdBy: nil, on: transaction)
         }
     }
 
-    /// The raw org role token the claims call for, before resolution. In
-    /// precedence order (issue #611):
-    ///  1. any configured admin claim value present → the literal `"admin"`;
+    /// The canonical org role id the claims call for. In precedence order:
+    ///  1. any configured admin claim value present → the seeded admin id;
     ///  2. the first role mapping whose claim value is present → its role id;
     ///  3. the provider's configured default role.
     ///
-    /// Admin claim values keep the top of the order for backward compatibility:
-    /// an org that grants "admin" by claim keeps doing so even if a role mapping
-    /// also matches. The returned value is a *token* — a legacy literal, an IAM
-    /// name, or a role id — that `resolveDesiredOrgRole` turns into a binding.
-    func desiredOrganizationRole(provider: OIDCProvider, groupValues: [String]) -> String {
+    func desiredOrganizationRole(provider: OIDCProvider, groupValues: [String]) -> UUID? {
         let adminValues = Set(provider.adminClaimValuesArray)
         if !adminValues.isEmpty && groupValues.contains(where: adminValues.contains) {
-            return "admin"
+            return IAMRole.admin.seededID
         }
         let claimValues = Set(groupValues)
         for mapping in provider.roleMappingsArray where claimValues.contains(mapping.claimValue) {
-            return mapping.roleID.uuidString
+            return mapping.roleID
         }
-        return provider.defaultRole
+        return provider.defaultRoleID
     }
 
     /// True when the provider drives the org role from claims at all — either
@@ -410,8 +406,7 @@ struct OIDCIdentityService {
         !(provider.adminClaimValuesArray.isEmpty && provider.roleMappingsArray.isEmpty)
     }
 
-    /// Resolve the claim-driven role token to a concrete org membership role
-    /// and binding, scoped to the organization (issue #611).
+    /// Resolve the claim-driven role id, scoped to the organization.
     ///
     /// Resolution is lenient: a provider whose mapping names a role that was
     /// since deleted or moved out of scope must not block the login. On failure
@@ -421,27 +416,32 @@ struct OIDCIdentityService {
     /// after-the-fact path.
     func resolveDesiredOrgRole(
         provider: OIDCProvider, organizationID: UUID, groupValues: [String]
-    ) async -> MemberRoleResolver.ResolvedOrgRole {
-        let raw = desiredOrganizationRole(provider: provider, groupValues: groupValues)
+    ) async -> MemberRoleResolver.Resolved? {
+        let requestedRoleID = desiredOrganizationRole(provider: provider, groupValues: groupValues)
+        guard let requestedRoleID else { return nil }
         do {
-            return try await MemberRoleResolver.resolveOrganizationRole(
-                raw, organizationID: organizationID, on: db)
+            return try await MemberRoleResolver.resolve(
+                requestedRoleID,
+                scopeNode: IAMNode(type: .organization, id: organizationID),
+                on: db)
         } catch {
             logger.warning(
                 "OIDC role mapping did not resolve; falling back to the provider default role",
                 metadata: [
                     "organization_id": .string(organizationID.uuidString),
-                    "requested_role": .string(raw),
+                    "requested_role_id": .string(requestedRoleID.uuidString),
                     "error": .string(String(describing: error)),
                 ])
-            if raw != provider.defaultRole,
-                let fallback = try? await MemberRoleResolver.resolveOrganizationRole(
-                    provider.defaultRole, organizationID: organizationID, on: db)
+            if requestedRoleID != provider.defaultRoleID,
+                let fallbackID = provider.defaultRoleID,
+                let fallback = try? await MemberRoleResolver.resolve(
+                    fallbackID,
+                    scopeNode: IAMNode(type: .organization, id: organizationID),
+                    on: db)
             {
                 return fallback
             }
-            return MemberRoleResolver.ResolvedOrgRole(
-                storedRole: "member", bindingRoleID: nil, actions: [], label: "member")
+            return nil
         }
     }
 }

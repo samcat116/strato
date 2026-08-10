@@ -67,7 +67,8 @@ struct DNSController: RouteCollection {
         // and a tier-2 guardrail can narrow it.
         var visibility: ProjectVisibility?
         if let requestedProjectID {
-            let hasAccess = try await req.can("view_project", on: "project", id: requestedProjectID.uuidString)
+            let hasAccess = try await req.can(
+                "project:read", on: IAMNode(type: .project, id: requestedProjectID))
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
             }
@@ -96,7 +97,7 @@ struct DNSController: RouteCollection {
 
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
-            action: "create_dns_zone", resourceKind: "DNS zones")
+            action: "dns:create", resourceKind: "DNS zones")
         let projectID = try project.requireID()
 
         let name = try DNSName.normalizedZoneName(request.name)
@@ -138,14 +139,14 @@ struct DNSController: RouteCollection {
     /// GET /api/dns-zones/:zoneId
     @Sendable
     func getZone(req: Request) async throws -> DNSZoneResponse {
-        let zone = try await fetchZone(req: req, permission: "read")
+        let zone = try await fetchZone(req: req, action: "dns:read")
         return try await Self.responses(for: [zone], on: req.db)[0]
     }
 
     /// PUT /api/dns-zones/:zoneId
     @Sendable
     func updateZone(req: Request) async throws -> DNSZoneResponse {
-        let zone = try await fetchZone(req: req, permission: "update")
+        let zone = try await fetchZone(req: req, action: "dns:update")
         let request = try req.content.decodeValidated(UpdateDNSZoneRequest.self)
         let originalName = zone.name
 
@@ -198,7 +199,7 @@ struct DNSController: RouteCollection {
     /// DELETE /api/dns-zones/:zoneId
     @Sendable
     func deleteZone(req: Request) async throws -> HTTPStatus {
-        let zone = try await fetchZone(req: req, permission: "delete")
+        let zone = try await fetchZone(req: req, action: "dns:delete")
         let zoneID = try zone.requireID()
 
         // Attachments are the zone's blast radius: deleting one that networks
@@ -234,7 +235,7 @@ struct DNSController: RouteCollection {
     /// derived ∪ authored, exactly as a realization driver will see them.
     @Sendable
     func getRecordSet(req: Request) async throws -> AssembledDNSZone {
-        let zone = try await fetchZone(req: req, permission: "read")
+        let zone = try await fetchZone(req: req, action: "dns:read")
         return try await DNSZoneAssembler.assemble(zone: zone, on: req.db)
     }
 
@@ -244,7 +245,7 @@ struct DNSController: RouteCollection {
     @Sendable
     func listRecords(req: Request) async throws -> PagedResponse<DNSRecordResponse> {
         let paging = try ListPaging.decode(from: req)
-        let zone = try await fetchZone(req: req, permission: "read")
+        let zone = try await fetchZone(req: req, action: "dns:read")
         let zoneID = try zone.requireID()
         let records = try await DNSRecord.query(on: req.db)
             .filter(\.$zone.$id == zoneID)
@@ -258,7 +259,7 @@ struct DNSController: RouteCollection {
     @Sendable
     func createRecord(req: Request) async throws -> DNSRecordResponse {
         let user = try req.auth.require(User.self)
-        let zone = try await fetchZone(req: req, permission: "create")
+        let zone = try await fetchZone(req: req, action: "dns:create")
         let zoneID = try zone.requireID()
         let request = try req.content.decodeValidated(CreateDNSRecordRequest.self)
 
@@ -314,7 +315,7 @@ struct DNSController: RouteCollection {
     /// GET /api/dns-zones/:zoneId/records/:recordId
     @Sendable
     func getRecord(req: Request) async throws -> DNSRecordResponse {
-        let (zone, record) = try await fetchRecord(req: req, permission: "read")
+        let (zone, record) = try await fetchRecord(req: req, action: "dns:read")
         return try DNSRecordResponse(from: record, zoneName: zone.name)
     }
 
@@ -329,7 +330,7 @@ struct DNSController: RouteCollection {
     /// TTL uneditable without deleting members first.
     @Sendable
     func updateRecord(req: Request) async throws -> DNSRecordResponse {
-        let (zone, record) = try await fetchRecord(req: req, permission: "update")
+        let (zone, record) = try await fetchRecord(req: req, action: "dns:update")
         let zoneID = try zone.requireID()
         let request = try req.content.decodeValidated(UpdateDNSRecordRequest.self)
 
@@ -367,7 +368,7 @@ struct DNSController: RouteCollection {
     /// DELETE /api/dns-zones/:zoneId/records/:recordId
     @Sendable
     func deleteRecord(req: Request) async throws -> HTTPStatus {
-        let (_, record) = try await fetchRecord(req: req, permission: "delete")
+        let (_, record) = try await fetchRecord(req: req, action: "dns:delete")
         try await record.delete(on: req.db)
         await req.application.agentService.syncDesiredStateToFleet()
         return .noContent
@@ -379,7 +380,7 @@ struct DNSController: RouteCollection {
     /// resolve this zone", optionally also making it the network's primary.
     @Sendable
     func attachNetwork(req: Request) async throws -> DNSZoneResponse {
-        let zone = try await fetchZone(req: req, permission: "attach")
+        let zone = try await fetchZone(req: req, action: "dns:attach")
         let zoneID = try zone.requireID()
         let request = try req.content.decode(AttachDNSZoneRequest.self)
 
@@ -449,7 +450,7 @@ struct DNSController: RouteCollection {
     /// DELETE /api/dns-zones/:zoneId/networks/:networkId
     @Sendable
     func detachNetwork(req: Request) async throws -> HTTPStatus {
-        let zone = try await fetchZone(req: req, permission: "detach")
+        let zone = try await fetchZone(req: req, action: "dns:detach")
         let zoneID = try zone.requireID()
         guard let networkID = req.parameters.get("networkId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid network ID")
@@ -488,18 +489,17 @@ struct DNSController: RouteCollection {
 
     // MARK: - Helpers
 
-    /// The zone's own permission check. `permission` speaks the legacy
-    /// vocabulary the translator maps onto `dns:*`.
-    private func fetchZone(req: Request, permission: String) async throws -> DNSZone {
+    /// The zone's own canonical action check.
+    private func fetchZone(req: Request, action: String) async throws -> DNSZone {
         guard let zoneID = req.parameters.get("zoneId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid DNS zone ID")
         }
         guard let zone = try await DNSZone.find(zoneID, on: req.db) else {
             throw Abort(.notFound, reason: "DNS zone not found")
         }
-        let allowed = try await req.can(permission, on: "dns_zone", id: zoneID.uuidString)
+        let allowed = try await req.can(action, on: IAMNode(type: .dnsZone, id: zoneID))
         guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this DNS zone")
+            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this DNS zone")
         }
         return zone
     }
@@ -507,7 +507,7 @@ struct DNSController: RouteCollection {
     /// A record and its zone, authorized on the *record* — a binding on the
     /// zone reaches it through the tree, and a binding on the record alone
     /// reaches only that row.
-    private func fetchRecord(req: Request, permission: String) async throws -> (DNSZone, DNSRecord) {
+    private func fetchRecord(req: Request, action: String) async throws -> (DNSZone, DNSRecord) {
         guard let zoneID = req.parameters.get("zoneId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid DNS zone ID")
         }
@@ -525,9 +525,9 @@ struct DNSController: RouteCollection {
         else {
             throw Abort(.notFound, reason: "Record not found in this DNS zone")
         }
-        let allowed = try await req.can(permission, on: "dns_record", id: recordID.uuidString)
+        let allowed = try await req.can(action, on: IAMNode(type: .dnsRecord, id: recordID))
         guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this DNS record")
+            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this DNS record")
         }
         return (zone, record)
     }
@@ -541,7 +541,7 @@ struct DNSController: RouteCollection {
         guard let network = try await LogicalNetwork.find(networkID, on: req.db) else {
             throw Abort(.badRequest, reason: "Network \(networkID) does not exist")
         }
-        let allowed = try await req.can("update", on: "network", id: networkID.uuidString)
+        let allowed = try await req.can("network:update", on: IAMNode(type: .network, id: networkID))
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have permission to modify this network")
         }

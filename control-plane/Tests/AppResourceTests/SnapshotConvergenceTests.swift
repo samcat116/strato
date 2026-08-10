@@ -308,8 +308,8 @@ final class SnapshotConvergenceTests {
             let accepted = try await app.resourceMutation.accept(
                 .delete, on: deleteCopy, actor: .user(try user.requireID()),
                 dispatch: .directResolution { _ in false }, on: app.db, app: app
-            ) { _ in
-                ResourceFinalizerService.stampForDeletion(deleteCopy)
+            ) { db in
+                try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
                 deleteCopy.setDesiredStatus(.absent)
             }
             #expect(accepted.targetGeneration == 11)

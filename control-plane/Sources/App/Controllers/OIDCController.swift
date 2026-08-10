@@ -71,7 +71,7 @@ struct OIDCController: RouteCollection {
 
         // Validate claim-mapping configuration
         try await validateClaimMappingConfig(
-            defaultRole: createRequest.defaultRole,
+            defaultRoleID: createRequest.defaultRoleID,
             groupMappings: createRequest.groupMappings,
             adminClaimValues: createRequest.adminClaimValues,
             roleMappings: createRequest.roleMappings,
@@ -97,7 +97,7 @@ struct OIDCController: RouteCollection {
             groupMappings: createRequest.groupMappings ?? [],
             adminClaimValues: createRequest.adminClaimValues ?? [],
             roleMappings: createRequest.roleMappings ?? [],
-            defaultRole: createRequest.defaultRole ?? "member"
+            defaultRoleID: createRequest.defaultRoleID
         )
 
         try await provider.save(on: req.db)
@@ -202,7 +202,7 @@ struct OIDCController: RouteCollection {
         if let useNonce = updateRequest.useNonce { provider.useNonce = useNonce }
 
         try await validateClaimMappingConfig(
-            defaultRole: updateRequest.defaultRole,
+            defaultRoleID: updateRequest.defaultRoleID,
             groupMappings: updateRequest.groupMappings,
             adminClaimValues: updateRequest.adminClaimValues,
             roleMappings: updateRequest.roleMappings,
@@ -218,7 +218,7 @@ struct OIDCController: RouteCollection {
             provider.setAdminClaimValuesArray(adminClaimValues)
         }
         if let roleMappings = updateRequest.roleMappings { provider.setRoleMappingsArray(roleMappings) }
-        if let defaultRole = updateRequest.defaultRole { provider.defaultRole = defaultRole }
+        if updateRequest.updatesDefaultRoleID { provider.defaultRoleID = updateRequest.defaultRoleID }
 
         // Same HTTPS validation the create path applies — the login flow posts
         // the client secret to the stored token endpoint, so an edit must not
@@ -625,7 +625,7 @@ struct OIDCController: RouteCollection {
         guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
-        guard try await req.can("view_organization", on: "organization", id: organizationID.uuidString) else {
+        guard try await req.can("org:read", on: IAMNode(type: .organization, id: organizationID)) else {
             throw Abort(.forbidden, reason: "Access denied to organization")
         }
     }
@@ -634,7 +634,7 @@ struct OIDCController: RouteCollection {
         guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
-        guard try await req.can("manage_members", on: "organization", id: organizationID.uuidString) else {
+        guard try await req.can("org:update", on: IAMNode(type: .organization, id: organizationID)) else {
             throw Abort(.forbidden, reason: "Admin access required")
         }
     }
@@ -1071,31 +1071,28 @@ struct OIDCController: RouteCollection {
     }
 
     /// Validate the claim-mapping fields of a create/update request: the
-    /// default role and every role mapping must resolve to a role bindable at
-    /// the org (a legacy literal, an IAM name, or an org-scoped role id —
-    /// issue #611), admin claim values must not be blank, and every group
+    /// default role and every role mapping must name a role bindable at the
+    /// organization, admin claim values must not be blank, and every group
     /// mapping must reference a group in the provider's organization.
     private func validateClaimMappingConfig(
-        defaultRole: String?,
+        defaultRoleID: UUID?,
         groupMappings: [OIDCGroupMapping]?,
         adminClaimValues: [String]?,
         roleMappings: [OIDCRoleMapping]?,
         organizationID: UUID,
         on db: Database
     ) async throws {
-        // The default role now spans the unified vocabulary: still `member` or
-        // `admin`, but also an IAM role name or a role owned at or above the
-        // org, by id or by name. Resolving it here rejects a bad id or an
-        // out-of-scope role up front, so the login path's lenient resolver is
-        // only ever the after-the-fact (role deleted since) safety net.
-        if let defaultRole = defaultRole {
+        if let defaultRoleID {
             do {
-                _ = try await MemberRoleResolver.resolveOrganizationRole(
-                    defaultRole, organizationID: organizationID, on: db)
+                _ = try await MemberRoleResolver.resolve(
+                    defaultRoleID,
+                    scopeNode: IAMNode(type: .organization, id: organizationID),
+                    on: db)
             } catch {
                 throw Abort(
                     .badRequest,
-                    reason: "Default role '\(defaultRole)' is not bindable in this organization: \(abortReason(error))")
+                    reason:
+                        "Default role '\(defaultRoleID)' is not bindable in this organization: \(abortReason(error))")
             }
         }
 
@@ -1118,8 +1115,10 @@ struct OIDCController: RouteCollection {
                     throw Abort(.badRequest, reason: "Role mapping claim values must not be empty")
                 }
                 do {
-                    _ = try await MemberRoleResolver.resolveOrganizationRole(
-                        mapping.roleID.uuidString, organizationID: organizationID, on: db)
+                    _ = try await MemberRoleResolver.resolve(
+                        mapping.roleID,
+                        scopeNode: IAMNode(type: .organization, id: organizationID),
+                        on: db)
                 } catch {
                     throw Abort(
                         .badRequest,

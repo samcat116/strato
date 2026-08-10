@@ -383,7 +383,7 @@ final class SandboxTests {
             let ownerBindings = try await RoleBinding.query(on: app.db)
                 .filter(\.$principalType == IAMPrincipalType.user.rawValue)
                 .filter(\.$principalID == user.id!)
-                .filter(\.$role == IAMRole.admin.seededID.uuidString)
+                .filter(\.$roleID == IAMRole.admin.seededID)
                 .filter(\.$nodeType == IAMNodeType.sandbox.rawValue)
                 .filter(\.$nodeID == body.resource.id!)
                 .count()
@@ -1852,7 +1852,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
-            ResourceFinalizerService.stampForDeletion(sandbox)
+            try await ResourceFinalizerService.stampForDeletion(sandbox, on: app.db)
             sandbox.setFixtureDesiredStatus(.absent)
             try await sandbox.save(on: app.db)
             let request = try await ResourceEvent.record(

@@ -206,17 +206,10 @@ struct UserController: RouteCollection {
         let createdByID = currentUser.id
         let rawToken = AccountClaimToken.generateToken()
 
-        // Optional org assignment: provisioning the invitee into an org up front
-        // keeps them admin-managed (they don't land on self-onboarding with no
-        // memberships). Only "admin"/"member" are valid org roles.
+        // Optional org assignment: a nil role is bare membership; otherwise the
+        // request carries a canonical role id.
         let assignedOrgID = body.organizationId
-        let requestedRole = body.role?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let assignedRole = (requestedRole?.isEmpty == false ? requestedRole! : "member")
-        if assignedOrgID != nil {
-            guard assignedRole == "admin" || assignedRole == "member" else {
-                throw Abort(.badRequest, reason: "role must be 'admin' or 'member'")
-            }
-        }
+        let assignedRoleID = body.role
 
         // Create the user, its claim token, and any org membership in one
         // transaction so the token row is visible the instant the user row is.
@@ -237,6 +230,12 @@ struct UserController: RouteCollection {
             if let orgID = assignedOrgID {
                 guard try await Organization.find(orgID, on: db) != nil else {
                     throw Abort(.badRequest, reason: "Assigned organization not found")
+                }
+                if let assignedRoleID {
+                    _ = try await MemberRoleResolver.resolve(
+                        assignedRoleID,
+                        scopeNode: IAMNode(type: .organization, id: orgID),
+                        on: db)
                 }
             }
 
@@ -265,17 +264,15 @@ struct UserController: RouteCollection {
                 let membership = UserOrganization(
                     userID: try user.requireID(),
                     organizationID: orgID,
-                    role: assignedRole
+                    roleID: assignedRoleID
                 )
                 try await membership.save(on: db)
 
-                // Org admins get an admin binding on the org node, in the same
-                // transaction as the mirror row.
-                if let bindingRole = IAMRole.fromOrganizationRole(assignedRole) {
+                if let assignedRoleID {
                     try await RoleBindingService.grant(
                         principalType: .user,
                         principalID: try user.requireID(),
-                        role: bindingRole,
+                        roleID: assignedRoleID,
                         nodeType: .organization,
                         nodeID: orgID,
                         createdBy: createdByID,
@@ -862,8 +859,8 @@ struct AdminCreateUserRequest: Content {
     /// Optional org to provision the invitee into up front. Without it the
     /// account is created unassigned and the admin manages membership later.
     let organizationId: UUID?
-    /// Org role for `organizationId` — "admin" or "member" (defaults to member).
-    let role: String?
+    /// Canonical org role id; nil means bare membership.
+    let role: UUID?
 
     init(
         username: String,
@@ -871,7 +868,7 @@ struct AdminCreateUserRequest: Content {
         displayName: String,
         isSystemAdmin: Bool?,
         organizationId: UUID? = nil,
-        role: String? = nil
+        role: UUID? = nil
     ) {
         self.username = username
         self.email = email
@@ -1140,8 +1137,7 @@ extension UserController {
             // Add user to default organization as member
             let membership = UserOrganization(
                 userID: user.id!,
-                organizationID: defaultOrg.id!,
-                role: "member"
+                organizationID: defaultOrg.id!
             )
             try await membership.save(on: req.db)
         }

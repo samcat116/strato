@@ -48,7 +48,7 @@ struct ImageController: RouteCollection {
         let projectID = try await req.requireProject().requireID()
 
         // Check user permission on project (view_project permission allows listing images)
-        let hasPermission = try await req.can("view_project", on: "project", id: projectID.uuidString)
+        let hasPermission = try await req.can("project:read", on: IAMNode(type: .project, id: projectID))
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to project")
@@ -90,7 +90,7 @@ struct ImageController: RouteCollection {
         }
 
         // Check permission
-        let hasPermission = try await req.can("read", on: "image", id: imageID.uuidString)
+        let hasPermission = try await req.can("image:read", on: IAMNode(type: .image, id: imageID))
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to image")
@@ -113,7 +113,7 @@ struct ImageController: RouteCollection {
         // Verify project exists and user has create permission
         let projectID = try await req.requireProject().requireID()
 
-        let hasPermission = try await req.can("update_project", on: "project", id: projectID.uuidString)
+        let hasPermission = try await req.can("image:create", on: IAMNode(type: .project, id: projectID))
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to create images in project")
@@ -505,7 +505,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Image not found in project")
         }
 
-        let hasPermission = try await req.can("update", on: "image", id: imageID.uuidString)
+        let hasPermission = try await req.can("image:update", on: IAMNode(type: .image, id: imageID))
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to update image")
         }
@@ -628,7 +628,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Image not found in project")
         }
 
-        let hasPermission = try await req.can("update", on: "image", id: imageID.uuidString)
+        let hasPermission = try await req.can("image:update", on: IAMNode(type: .image, id: imageID))
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to update image")
         }
@@ -731,7 +731,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Image not found in project")
         }
 
-        let hasPermission = try await req.can("update", on: "image", id: imageID.uuidString)
+        let hasPermission = try await req.can("image:update", on: IAMNode(type: .image, id: imageID))
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to update image")
         }
@@ -776,7 +776,7 @@ struct ImageController: RouteCollection {
         }
 
         // Check permission
-        let hasPermission = try await req.can("update", on: "image", id: imageID.uuidString)
+        let hasPermission = try await req.can("image:update", on: IAMNode(type: .image, id: imageID))
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to update image")
@@ -837,7 +837,7 @@ struct ImageController: RouteCollection {
         }
 
         // Check permission
-        let hasPermission = try await req.can("delete", on: "image", id: imageID.uuidString)
+        let hasPermission = try await req.can("image:delete", on: IAMNode(type: .image, id: imageID))
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to delete image")
@@ -932,7 +932,7 @@ struct ImageController: RouteCollection {
             throw Abort(.notFound, reason: "Image not found")
         }
 
-        let hasPermission = try await req.can("download", on: "image", id: imageID.uuidString)
+        let hasPermission = try await req.can("image:download", on: IAMNode(type: .image, id: imageID))
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to download image")
@@ -1059,7 +1059,7 @@ struct ImageController: RouteCollection {
         }
 
         // Check permission
-        let hasPermission = try await req.can("read", on: "image", id: imageID.uuidString)
+        let hasPermission = try await req.can("image:read", on: IAMNode(type: .image, id: imageID))
 
         guard hasPermission else {
             throw Abort(.forbidden, reason: "Access denied to image")

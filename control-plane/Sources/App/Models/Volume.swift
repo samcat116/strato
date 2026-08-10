@@ -155,14 +155,6 @@ final class Volume: Model, @unchecked Sendable {
     @OptionalField(key: "attached_agent_id")
     var attachedAgentId: String?
 
-    // Legacy storage location, dual-written alongside the volume's
-    // VolumeReplica row until nothing reads these columns anymore.
-    @OptionalField(key: "storage_path")
-    var storagePath: String?
-
-    @OptionalField(key: "hypervisor_id")
-    var hypervisorId: String?
-
     // VM attachment (null when detached)
     @OptionalParent(key: "vm_id")
     var vm: VM?
@@ -264,66 +256,6 @@ final class Volume: Model, @unchecked Sendable {
 }
 
 extension Volume: Content {}
-
-// MARK: - Public DTO
-
-extension Volume {
-    struct Public: Content {
-        let id: UUID?
-        let name: String
-        let description: String
-        let projectId: UUID?
-        let size: Int64
-        let sizeGB: Double
-        let format: VolumeFormat
-        let volumeType: VolumeType
-        let status: VolumeStatus
-        let errorMessage: String?
-        let poolId: UUID?
-        let attachedAgentId: String?
-        let storagePath: String?
-        let hypervisorId: String?
-        let vmId: UUID?
-        let deviceName: String?
-        let bootOrder: Int?
-        let readonly: Bool
-        let conditions: ResourceConditions
-        let sourceImageId: UUID?
-        let sourceVolumeId: UUID?
-        let createdById: UUID?
-        let createdAt: Date?
-        let updatedAt: Date?
-    }
-
-    func asPublic() -> Public {
-        return Public(
-            id: self.id,
-            name: self.name,
-            description: self.description,
-            projectId: self.$project.id,
-            size: self.size,
-            sizeGB: self.sizeGB,
-            format: self.format,
-            volumeType: self.volumeType,
-            status: self.status,
-            errorMessage: self.errorMessage,
-            poolId: self.$pool.id,
-            attachedAgentId: self.attachedAgentId,
-            storagePath: self.storagePath,
-            hypervisorId: self.hypervisorId,
-            vmId: self.$vm.id,
-            deviceName: self.deviceName,
-            bootOrder: self.bootOrder,
-            readonly: self.readonly,
-            conditions: self.conditions,
-            sourceImageId: self.$sourceImage.id,
-            sourceVolumeId: self.$sourceVolume.id,
-            createdById: self.$createdBy.id,
-            createdAt: self.createdAt,
-            updatedAt: self.updatedAt
-        )
-    }
-}
 
 // MARK: - Computed Properties
 
@@ -582,7 +514,9 @@ struct VolumeResponse: Content {
     let errorMessage: String?
     let poolId: UUID?
     let attachedAgentId: String?
-    let hypervisorId: String?
+    /// Physical copies and their agent-owned paths. Placement/path is no longer
+    /// flattened onto the logical volume row.
+    let replicas: [VolumeReplicaResponse]
     let vmId: UUID?
     let deviceName: String?
     let bootOrder: Int?
@@ -606,7 +540,7 @@ struct VolumeResponse: Content {
     let createdAt: Date?
     let updatedAt: Date?
 
-    init(from volume: Volume) {
+    init(from volume: Volume, replicas: [VolumeReplica] = []) {
         self.id = volume.id
         self.name = volume.name
         self.description = volume.description
@@ -622,7 +556,7 @@ struct VolumeResponse: Content {
         self.errorMessage = volume.errorMessage
         self.poolId = volume.$pool.id
         self.attachedAgentId = volume.attachedAgentId
-        self.hypervisorId = volume.hypervisorId
+        self.replicas = replicas.map(VolumeReplicaResponse.init(from:))
         self.vmId = volume.$vm.id
         self.deviceName = volume.deviceName
         self.bootOrder = volume.bootOrder
@@ -635,5 +569,21 @@ struct VolumeResponse: Content {
         self.createdById = volume.$createdBy.id
         self.createdAt = volume.createdAt
         self.updatedAt = volume.updatedAt
+    }
+}
+
+struct VolumeReplicaResponse: Content {
+    let id: UUID?
+    let agentId: String
+    let datasetPath: String?
+    let state: VolumeReplicaState
+    let generation: Int64
+
+    init(from replica: VolumeReplica) {
+        id = replica.id
+        agentId = replica.agentId
+        datasetPath = replica.datasetPath
+        state = replica.state
+        generation = replica.generation
     }
 }

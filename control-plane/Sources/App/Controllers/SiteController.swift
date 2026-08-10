@@ -24,25 +24,21 @@ struct SiteController: RouteCollection {
     // changes which node authors a site's whole SDN. Delegated to the owning
     // org (manage_agents / site#manage); system admins retain full access.
 
-    /// The (resourceType, id) pair naming the scope's owning node for
-    /// permission checks against the IAM hierarchy.
-
-    /// `manage_agents` on the org/OU scope a new site is being created under
+    /// `agent:manage` on the org/OU scope a new site is being created under
     /// (system admins pass through the evaluator's tier-1 policy).
     private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
-        let resource = scope.checkResource
-        let allowed = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
+        let allowed = try await req.can("agent:manage", on: scope.checkNode)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have permission to manage sites for this organization")
         }
     }
 
-    /// The given permission on the site itself (resolved through the site's
+    /// The given canonical action on the site itself (resolved through the site's
     /// parent scope in the IAM tree).
-    private func requireSitePermission(_ req: Request, site: Site, permission: String) async throws {
-        let allowed = try await req.can(permission, on: "site", id: try site.requireID().uuidString)
+    private func requireSiteAction(_ req: Request, site: Site, action: String) async throws {
+        let allowed = try await req.can(action, on: IAMNode(type: .site, id: try site.requireID()))
         guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this site")
+            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this site")
         }
     }
 
@@ -52,7 +48,7 @@ struct SiteController: RouteCollection {
     /// shares the root org but must not move an agent the evaluator wouldn't
     /// let them manage.
     private func requireAgentManage(_ req: Request, agent: Agent) async throws {
-        let allowed = try await req.can("manage", on: "agent", id: try agent.requireID().uuidString)
+        let allowed = try await req.can("agent:manage", on: IAMNode(type: .agent, id: try agent.requireID()))
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have 'manage' permission on this agent")
         }
@@ -202,7 +198,7 @@ struct SiteController: RouteCollection {
 
     func getSite(req: Request) async throws -> SiteResponse {
         let site = try await findSite(req)
-        try await requireSitePermission(req, site: site, permission: "view")
+        try await requireSiteAction(req, site: site, action: "site:read")
         return try await SiteResponse(from: site, controller: Self.controller(of: site, on: req.db))
     }
 
@@ -260,7 +256,7 @@ struct SiteController: RouteCollection {
 
     func updateSite(req: Request) async throws -> SiteResponse {
         let site = try await findSite(req)
-        try await requireSitePermission(req, site: site, permission: "manage")
+        try await requireSiteAction(req, site: site, action: "site:manage")
         let update = try req.content.decode(UpdateSiteRequest.self)
 
         if let controllerId = update.networkControllerAgentId {
@@ -317,7 +313,7 @@ struct SiteController: RouteCollection {
 
     func deleteSite(req: Request) async throws -> HTTPStatus {
         let site = try await findSite(req)
-        try await requireSitePermission(req, site: site, permission: "manage")
+        try await requireSiteAction(req, site: site, action: "site:manage")
         let siteId = try site.requireID()
 
         // Refuse while anything references the site: a cascade would silently
@@ -347,7 +343,7 @@ struct SiteController: RouteCollection {
 
     func assignAgent(req: Request) async throws -> AgentResponse {
         let site = try await findSite(req)
-        try await requireSitePermission(req, site: site, permission: "manage")
+        try await requireSiteAction(req, site: site, action: "site:manage")
         guard let agentId = req.parameters.get("agentId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid agent ID")
         }

@@ -258,7 +258,15 @@ extension ConvergenceDerived {
 /// kinds instead of switching on `OperationResourceKind` at every step.
 /// Everything on it already existed on `VM` and `Sandbox`; only
 /// `convergenceDeadline` is new.
-protocol ConvergingResource: Model, ConvergenceDerived, Sendable where IDValue == UUID {
+protocol AgentPlacedResource {
+    /// Every agent whose desired-state sync carries this resource. Most
+    /// resources have one placement; a volume derives the set from its active
+    /// replica rows.
+    func placementAgentIDs(on db: any Database) async throws -> [String]
+}
+
+protocol ConvergingResource: Model, ConvergenceDerived, AgentPlacedResource, Sendable
+where IDValue == UUID {
     static var operationResourceKind: OperationResourceKind { get }
 
     /// Writable only so the shared SQL generation writer can copy the value
@@ -267,9 +275,6 @@ protocol ConvergingResource: Model, ConvergenceDerived, Sendable where IDValue =
 
     var name: String { get }
     var projectID: UUID { get }
-
-    /// The agent this workload is placed on, or nil if it never reached one.
-    var hypervisorId: String? { get }
 
     var convergenceDeadline: Date? { get set }
 
@@ -296,8 +301,8 @@ protocol ConvergingResource: Model, ConvergenceDerived, Sendable where IDValue =
     /// whole row, so without this its pre-request snapshot of these columns
     /// would be written back over whatever committed in between:
     /// `observedGeneration` would go *backwards*, un-converging a client that
-    /// was already satisfied, and a `hypervisorId` the scheduler had just
-    /// assigned would be nulled. `ResourceMutation.accept` calls this under the
+    /// was already satisfied, and placement the scheduler had just assigned
+    /// could be overwritten. `ResourceMutation.accept` calls this under the
     /// row lock, before the mutation closure runs, so the closure builds on
     /// committed state.
     ///
@@ -432,6 +437,9 @@ extension ConvergingResource {
 extension VM: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .virtualMachine }
     var projectID: UUID { $project.id }
+    func placementAgentIDs(on db: any Database) async throws -> [String] {
+        hypervisorId.map { [$0] } ?? []
+    }
 
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [VM] {
         try await VM.query(on: db).filter(\.$convergenceDeadline <= now).all()
@@ -464,6 +472,9 @@ extension VM: ConvergingResource {
 extension Sandbox: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .sandbox }
     var projectID: UUID { $project.id }
+    func placementAgentIDs(on db: any Database) async throws -> [String] {
+        hypervisorId.map { [$0] } ?? []
+    }
 
     static func overdueForConvergence(at now: Date, on db: any Database) async throws -> [Sandbox] {
         try await Sandbox.query(on: db).filter(\.$convergenceDeadline <= now).all()
@@ -491,6 +502,12 @@ extension Sandbox: ConvergingResource {
 extension Volume: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .volume }
     var projectID: UUID { $project.id }
+    func placementAgentIDs(on db: any Database) async throws -> [String] {
+        if desiredStatus == .absent {
+            return try await VolumeService.agentIDsWithPhysicalReplicas(of: self, on: db)
+        }
+        return try await VolumeService.agentIDs(holding: self, on: db)
+    }
 
     /// A volume's convergence progress and its most recent failure share one
     /// column pair with its user-facing error, so `ConvergenceObservable`'s
@@ -513,8 +530,6 @@ extension Volume: ConvergingResource {
         errorMessage = committed.errorMessage
         failedGeneration = committed.failedGeneration
         convergenceDeadline = committed.convergenceDeadline
-        hypervisorId = committed.hypervisorId
-        storagePath = committed.storagePath
         observedSizeBytes = committed.observedSizeBytes
         finalizers = committed.finalizers
         // The desired size, for the same read-modify-write reason as the

@@ -35,7 +35,7 @@ final class OrganizationalUnitTests {
             let userOrg = UserOrganization(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
-                role: "admin"
+                roleID: IAMRole.admin.seededID
             )
             try await userOrg.save(on: app.db)
 

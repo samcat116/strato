@@ -62,9 +62,13 @@ struct VolumeAttachProjectContainmentTests {
                 size: 10 * 1024 * 1024 * 1024,
                 status: .available,
                 createdByID: admin.id!)
-            volume.hypervisorId = "agent-that-is-not-connected"
-            volume.storagePath = "/var/lib/strato/volumes/containment/volume.qcow2"
             try await volume.save(on: app.db)
+            try await placeVolume(
+                volume,
+                on: "agent-that-is-not-connected",
+                at: "/var/lib/strato/volumes/containment/volume.qcow2",
+                using: app.db
+            )
 
             let vm = try await builder.createVM(
                 name: "containment-vm", project: vmProject, environment: vmEnvironment)

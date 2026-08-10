@@ -15,6 +15,128 @@ import AppTestSupport
 @Suite("Migration Round Trip", .serialized)
 struct MigrationRoundTripTests {
 
+    @Test("Membership role cutover canonicalizes legacy tokens and removes project mirrors")
+    func membershipRoleCutover() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "role-cutover", email: "role-cutover@example.com")
+            let org = try await builder.createOrganization(name: "Role Cutover Org")
+            let project = try await builder.createProject(
+                name: "Role Cutover Project", description: "", organization: org)
+            let group = try await builder.createGroup(
+                name: "Role Cutover Group", description: "", organization: org)
+            let userID = try user.requireID()
+            let organizationID = try org.requireID()
+            let projectID = try project.requireID()
+            let groupID = try group.requireID()
+            let customRoleID = UUID()
+            try await IAMRoleDefinition(
+                id: customRoleID, name: "auditor", ownerType: .organization,
+                ownerID: organizationID,
+                cedarText: RoleDescriptor.canonicalPermitText(
+                    id: customRoleID, actions: ["vm:read"]),
+                actions: ["vm:read"], managed: false
+            ).save(on: app.db)
+            let provider = OIDCProvider(
+                organizationID: organizationID, name: "Cutover IdP",
+                clientID: "client", clientSecret: "secret",
+                authorizationEndpoint: "https://idp.example.com/authorize",
+                tokenEndpoint: "https://idp.example.com/token",
+                jwksURI: "https://idp.example.com/jwks")
+            try await provider.save(on: app.db)
+            let providerID = try provider.requireID()
+
+            // Recreate the immediately pre-STR-229 schema, then seed every
+            // historical storage format through SQL because live models are
+            // intentionally unable to express it.
+            try await CanonicalizeMembershipRoleStorage().revert(on: app.db)
+            try await sql.raw(
+                """
+                INSERT INTO user_organizations (id, user_id, organization_id, role, created_at)
+                VALUES (\(bind: UUID()), \(bind: userID),
+                        \(bind: organizationID), 'admin', now())
+                """
+            ).run()
+            try await sql.raw(
+                """
+                INSERT INTO project_members (id, project_id, user_id, role, created_at)
+                VALUES (\(bind: UUID()), \(bind: projectID),
+                        \(bind: userID), 'member', now())
+                """
+            ).run()
+            try await sql.raw(
+                """
+                INSERT INTO project_group_grants (id, project_id, group_id, role, created_at)
+                VALUES (\(bind: UUID()), \(bind: projectID),
+                        \(bind: groupID), 'viewer', now())
+                """
+            ).run()
+            try await sql.raw(
+                """
+                INSERT INTO role_bindings
+                    (id, principal_type, principal_id, role, node_type, node_id, created_at, expires_at)
+                VALUES (\(bind: UUID()), 'user', \(bind: userID),
+                        'operator', 'project', \(bind: projectID), now(), NULL),
+                       (\(bind: UUID()), 'user', \(bind: userID),
+                        \(bind: IAMRole.editor.seededID.uuidString), 'project', \(bind: projectID),
+                        now(), now() - interval '1 hour')
+                """
+            ).run()
+            try await sql.raw(
+                "UPDATE oidc_providers SET default_role = 'auditor' WHERE id = \(bind: providerID)"
+            ).run()
+
+            try await CanonicalizeMembershipRoleStorage().prepare(on: app.db)
+
+            let membership = try #require(
+                try await UserOrganization.query(on: app.db)
+                    .filter(\.$user.$id == userID)
+                    .filter(\.$organization.$id == organizationID)
+                    .first())
+            #expect(membership.roleID == IAMRole.admin.seededID)
+
+            let storedRoles = Set(
+                try await RoleBinding.query(on: app.db).all().map(\.roleID))
+            #expect(
+                storedRoles
+                    == Set([
+                        IAMRole.admin.seededID,
+                        IAMRole.editor.seededID,
+                        IAMRole.viewer.seededID,
+                        IAMRole.operator.seededID,
+                    ]))
+            let editorBinding = try #require(
+                try await RoleBinding.query(on: app.db)
+                    .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+                    .filter(\.$principalID == userID)
+                    .filter(\.$roleID == IAMRole.editor.seededID)
+                    .filter(\.$nodeType == IAMNodeType.project.rawValue)
+                    .filter(\.$nodeID == projectID)
+                    .first())
+            #expect(editorBinding.expiresAt == nil)
+            let storedProvider = try #require(try await OIDCProvider.find(provider.id, on: app.db))
+            #expect(storedProvider.defaultRoleID == customRoleID)
+
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT id FROM project_members").all()
+            }
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT id FROM project_group_grants").all()
+            }
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT role FROM role_bindings").all()
+            }
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT role FROM user_organizations").all()
+            }
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT default_role FROM oidc_providers").all()
+            }
+        }
+    }
+
     @Test("All migrations apply, revert, and re-apply cleanly")
     func migrationsRoundTrip() async throws {
         try await withTestApp { app in
@@ -331,10 +453,42 @@ struct MigrationRoundTripTests {
                 // snapshot tables got theirs in their create migrations for the
                 // quota aggregate, and volume snapshots joined that aggregate.
                 + AddVolumeQuotaAccounting.indexes
+                // Replica placement replaced the old `volumes.hypervisor_id`
+                // lookup, so both reconciliation directions need the new
+                // agent-leading index on a fully migrated schema.
+                + [AddVolumeReplicaAgentIndex.index]
             for index in expected {
                 let exists = present.contains(index.name)
                 #expect(exists, "missing index \(index.name)")
             }
+        }
+    }
+
+    @Test("The volume replica agent lookup index round-trips")
+    func volumeReplicaAgentIndexRoundTrips() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+            let migration = AddVolumeReplicaAgentIndex()
+
+            // Idempotent on an already-migrated database.
+            try await migration.prepare(on: app.db)
+            var row = try await sql.raw(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                    + "AND indexname = \(bind: AddVolumeReplicaAgentIndex.index.name)"
+            ).first()
+            let definition = try #require(try row?.decode(column: "indexdef", as: String.self))
+            #expect(definition.contains("(agent_id, state)"))
+
+            try await migration.revert(on: app.db)
+            row = try await sql.raw(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                    + "AND indexname = \(bind: AddVolumeReplicaAgentIndex.index.name)"
+            ).first()
+            #expect(row == nil)
+
+            // Restore it so the migrated schema remains representative for
+            // any later assertions in this serialized suite.
+            try await migration.prepare(on: app.db)
         }
     }
 

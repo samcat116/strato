@@ -55,7 +55,8 @@ struct SecurityGroupController: RouteCollection {
         // and a tier-2 guardrail can narrow it.
         var visibility: ProjectVisibility?
         if let requestedProjectId {
-            let hasAccess = try await req.can("view_project", on: "project", id: requestedProjectId.uuidString)
+            let hasAccess = try await req.can(
+                "project:read", on: IAMNode(type: .project, id: requestedProjectId))
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
             }
@@ -91,7 +92,7 @@ struct SecurityGroupController: RouteCollection {
 
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
-            action: "create_security_group", resourceKind: "security groups")
+            action: "securitygroup:create", resourceKind: "security groups")
         let projectId = try project.requireID()
 
         // Trimmed and bounded by `CreateSecurityGroupRequest.validate()`.
@@ -148,7 +149,7 @@ struct SecurityGroupController: RouteCollection {
     /// GET /api/security-groups/:groupId
     @Sendable
     func getGroup(req: Request) async throws -> SecurityGroupResponse {
-        let group = try await fetchGroupWithPermission(req: req, permission: "read")
+        let group = try await fetchGroupWithAction(req: req, action: "securitygroup:read")
         try await group.$rules.load(on: req.db)
         let count = try await SecurityGroupService.attachmentCount(
             forGroup: try group.requireID(), on: req.db)
@@ -159,7 +160,7 @@ struct SecurityGroupController: RouteCollection {
     /// their own endpoints.
     @Sendable
     func updateGroup(req: Request) async throws -> SecurityGroupResponse {
-        let group = try await fetchGroupWithPermission(req: req, permission: "update")
+        let group = try await fetchGroupWithAction(req: req, action: "securitygroup:update")
         let request = try req.content.decodeValidated(UpdateSecurityGroupRequest.self)
 
         if let newName = request.name, newName != group.name {
@@ -191,7 +192,7 @@ struct SecurityGroupController: RouteCollection {
     /// DELETE /api/security-groups/:groupId
     @Sendable
     func deleteGroup(req: Request) async throws -> HTTPStatus {
-        let group = try await fetchGroupWithPermission(req: req, permission: "delete")
+        let group = try await fetchGroupWithAction(req: req, action: "securitygroup:delete")
         let groupId = try group.requireID()
 
         guard !group.isDefault else {
@@ -239,7 +240,7 @@ struct SecurityGroupController: RouteCollection {
     /// POST /api/security-groups/:groupId/rules
     @Sendable
     func createRule(req: Request) async throws -> SecurityGroupRuleResponse {
-        let group = try await fetchGroupWithPermission(req: req, permission: "update")
+        let group = try await fetchGroupWithAction(req: req, action: "securitygroup:update")
         let groupId = try group.requireID()
         let request = try req.content.decode(CreateSecurityGroupRuleRequest.self)
 
@@ -279,7 +280,7 @@ struct SecurityGroupController: RouteCollection {
     /// DELETE /api/security-groups/:groupId/rules/:ruleId
     @Sendable
     func deleteRule(req: Request) async throws -> HTTPStatus {
-        let group = try await fetchGroupWithPermission(req: req, permission: "update")
+        let group = try await fetchGroupWithAction(req: req, action: "securitygroup:update")
         let groupId = try group.requireID()
         guard let ruleId = req.parameters.get("ruleId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid rule ID")
@@ -328,7 +329,7 @@ struct SecurityGroupController: RouteCollection {
     /// POST /api/security-groups/:groupId/attach
     @Sendable
     func attachGroup(req: Request) async throws -> HTTPStatus {
-        let group = try await fetchGroupWithPermission(req: req, permission: "attach")
+        let group = try await fetchGroupWithAction(req: req, action: "securitygroup:attach")
         let groupId = try group.requireID()
         let request = try req.content.decode(AttachSecurityGroupRequest.self)
 
@@ -399,7 +400,7 @@ struct SecurityGroupController: RouteCollection {
     /// POST /api/security-groups/:groupId/detach
     @Sendable
     func detachGroup(req: Request) async throws -> HTTPStatus {
-        let group = try await fetchGroupWithPermission(req: req, permission: "detach")
+        let group = try await fetchGroupWithAction(req: req, action: "securitygroup:detach")
         let groupId = try group.requireID()
         let request = try req.content.decode(AttachSecurityGroupRequest.self)
 
@@ -526,7 +527,7 @@ struct SecurityGroupController: RouteCollection {
         // Owning the group is not enough, and an unreachable VM is answered as
         // absent whether it is missing or merely forbidden — see
         // `reachableVM` (issue #881).
-        let vm = try await req.reachableVM(vmId, permission: "update")
+        let vm = try await req.reachableVM(vmId, action: "vm:update")
         // After the VM check, never before: a containment refusal handed to a
         // caller who can't touch the VM would tell them it exists in another
         // project (issue #777).
@@ -557,7 +558,7 @@ struct SecurityGroupController: RouteCollection {
     private func resolveSandboxNIC(
         req: Request, sandboxId: UUID, request: AttachSecurityGroupRequest, group: SecurityGroup
     ) async throws -> NICTarget {
-        let sandbox = try await req.authorizedSandbox(sandboxId, permission: "update")
+        let sandbox = try await req.authorizedSandbox(sandboxId, action: "sandbox:update")
         try ProjectContainment.require(
             "Sandbox", in: sandbox.$project.id,
             sameProjectAs: "the security group", in: group.$project.id)
@@ -624,16 +625,17 @@ struct SecurityGroupController: RouteCollection {
         }
     }
 
-    private func fetchGroupWithPermission(req: Request, permission: String) async throws -> SecurityGroup {
+    private func fetchGroupWithAction(req: Request, action: String) async throws -> SecurityGroup {
         guard let groupId = req.parameters.get("groupId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid security group ID")
         }
         guard let group = try await SecurityGroup.find(groupId, on: req.db) else {
             throw Abort(.notFound, reason: "Security group not found")
         }
-        let allowed = try await req.can(permission, on: "security_group", id: groupId.uuidString)
+        let allowed = try await req.can(
+            action, on: IAMNode(type: .securityGroup, id: groupId))
         guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this security group")
+            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this security group")
         }
         return group
     }

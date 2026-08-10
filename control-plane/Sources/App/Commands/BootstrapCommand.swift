@@ -190,7 +190,8 @@ struct BootstrapCommand: AsyncCommand {
             try await organization.save(on: db)
             let orgID = try organization.requireID()
 
-            let membership = UserOrganization(userID: userID, organizationID: orgID, role: "admin")
+            let membership = UserOrganization(
+                userID: userID, organizationID: orgID, roleID: IAMRole.admin.seededID)
             try await membership.save(on: db)
             try await RoleBindingService.grant(
                 principalType: .user,

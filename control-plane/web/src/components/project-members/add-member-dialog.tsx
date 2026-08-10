@@ -20,16 +20,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useGrantProjectMember, projectMemberErrorMessage } from "@/lib/hooks";
+import {
+  useBindableRoles,
+  useGrantProjectMember,
+  projectMemberErrorMessage,
+} from "@/lib/hooks";
 import { toast } from "sonner";
 import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
-import type { ProjectRole } from "@/types/api";
-
-const ROLES: { value: ProjectRole; label: string; hint: string }[] = [
-  { value: "admin", label: "Admin", hint: "Full control, including members" },
-  { value: "member", label: "Member", hint: "Create and manage resources" },
-  { value: "viewer", label: "Viewer", hint: "Read-only access" },
-];
 
 interface AddMemberDialogProps {
   projectId: string;
@@ -43,14 +40,20 @@ export function AddMemberDialog({
   onOpenChange,
 }: AddMemberDialogProps) {
   const grant = useGrantProjectMember(projectId);
+  const { data: roles = [], isLoading: rolesLoading } = useBindableRoles(
+    "project",
+    projectId
+  );
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<ProjectRole>("member");
+  const [role, setRole] = useState("");
+  const selectedRole =
+    role || roles.find((candidate) => candidate.name === "editor")?.id || roles[0]?.id || "";
 
   const handleClose = () => {
     onOpenChange(false);
     setTimeout(() => {
       setEmail("");
-      setRole("member");
+      setRole("");
     }, 200);
   };
 
@@ -61,10 +64,15 @@ export function AddMemberDialog({
       toast.error("Please enter the user's email address");
       return;
     }
+    if (!selectedRole) {
+      toast.error("No role is available for this project");
+      return;
+    }
+    const roleName = roles.find((candidate) => candidate.id === selectedRole)?.name ?? selectedRole;
     try {
-      const result = await grant.mutateAsync({ userEmail: trimmed, role });
-      toast.success(`Granted ${trimmed} the ${role} role`);
-      warnAboutGrantCeilings(result, `${trimmed}'s ${role} role`);
+      const result = await grant.mutateAsync({ userEmail: trimmed, role: selectedRole });
+      toast.success(`Granted ${trimmed} the ${roleName} role`);
+      warnAboutGrantCeilings(result, `${trimmed}'s ${roleName} role`);
       handleClose();
     } catch (error) {
       toast.error(projectMemberErrorMessage(error, "Failed to add member"));
@@ -107,9 +115,9 @@ export function AddMemberDialog({
                 Role
               </Label>
               <Select
-                value={role}
-                onValueChange={(v) => setRole(v as ProjectRole)}
-                disabled={grant.isPending}
+                value={selectedRole}
+                onValueChange={setRole}
+                disabled={grant.isPending || rolesLoading || roles.length === 0}
               >
                 <SelectTrigger
                   id="pmRole"
@@ -118,13 +126,16 @@ export function AddMemberDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border">
-                  {ROLES.map((r) => (
+                  {roles.map((candidate) => (
                     <SelectItem
-                      key={r.value}
-                      value={r.value}
+                      key={candidate.id}
+                      value={candidate.id}
                       className="text-foreground focus:bg-accent focus:text-accent-foreground"
                     >
-                      {r.label} — <span className="text-muted-foreground">{r.hint}</span>
+                      {candidate.name}
+                      {candidate.description && (
+                        <> — <span className="text-muted-foreground">{candidate.description}</span></>
+                      )}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -145,7 +156,7 @@ export function AddMemberDialog({
             <Button
               type="submit"
               className="bg-primary hover:bg-primary/90"
-              disabled={grant.isPending}
+              disabled={grant.isPending || !selectedRole}
             >
               {grant.isPending ? (
                 <>

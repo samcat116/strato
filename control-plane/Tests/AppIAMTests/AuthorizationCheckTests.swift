@@ -46,11 +46,8 @@ final class AuthorizationCheckTests {
         try await app.shutdownForTesting()
     }
 
-    private func item(
-        key: String, resourceType: String, resourceId: String, permission: String
-    ) -> AuthorizationController.PermissionCheckItem {
-        AuthorizationController.PermissionCheckItem(
-            key: key, resourceType: resourceType, resourceId: resourceId, permission: permission)
+    private func item(key: String, action: String, node: IAMNode) -> AuthorizationController.ActionCheckItem {
+        AuthorizationController.ActionCheckItem(key: key, action: action, node: node)
     }
 
     @Test("Per-resource verdicts reflect the caller's bindings per key")
@@ -67,11 +64,11 @@ final class AuthorizationCheckTests {
                 try req.content.encode(
                     AuthorizationController.CheckRequest(checks: [
                         self.item(
-                            key: "manage_org", resourceType: "organization",
-                            resourceId: org.id!.uuidString, permission: "manage_members"),
+                            key: "manage_org", action: "org:update",
+                            node: IAMNode(type: .organization, id: org.id!)),
                         self.item(
-                            key: "view_proj", resourceType: "project",
-                            resourceId: project.id!.uuidString, permission: "view_project"),
+                            key: "view_proj", action: "project:read",
+                            node: IAMNode(type: .project, id: project.id!)),
                     ]))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -84,8 +81,8 @@ final class AuthorizationCheckTests {
         }
     }
 
-    @Test("Native IAM action names are accepted alongside legacy permission names")
-    func nativeActionVocabulary() async throws {
+    @Test("Canonical actions and typed nodes are evaluated directly")
+    func canonicalActionVocabulary() async throws {
         try await withApp { app, user, org, project, token in
             try await RoleBindingService.grant(
                 principalType: .user, principalID: user.id!, role: .viewer,
@@ -96,14 +93,14 @@ final class AuthorizationCheckTests {
                 try req.content.encode(
                     AuthorizationController.CheckRequest(checks: [
                         self.item(
-                            key: "read", resourceType: "project",
-                            resourceId: project.id!.uuidString, permission: "project:read"),
+                            key: "read", action: "project:read",
+                            node: IAMNode(type: .project, id: project.id!)),
                         self.item(
-                            key: "update", resourceType: "project",
-                            resourceId: project.id!.uuidString, permission: "project:update"),
+                            key: "update", action: "project:update",
+                            node: IAMNode(type: .project, id: project.id!)),
                         self.item(
-                            key: "org_read", resourceType: "organization",
-                            resourceId: org.id!.uuidString, permission: "org:read"),
+                            key: "org_read", action: "org:read",
+                            node: IAMNode(type: .organization, id: org.id!)),
                     ]))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -124,11 +121,11 @@ final class AuthorizationCheckTests {
                 try req.content.encode(
                     AuthorizationController.CheckRequest(checks: [
                         self.item(
-                            key: "a", resourceType: "organization",
-                            resourceId: org.id!.uuidString, permission: "manage_members"),
+                            key: "a", action: "org:update",
+                            node: IAMNode(type: .organization, id: org.id!)),
                         self.item(
-                            key: "b", resourceType: "project",
-                            resourceId: project.id!.uuidString, permission: "manage_project"),
+                            key: "b", action: "project:update",
+                            node: IAMNode(type: .project, id: project.id!)),
                     ]))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -148,8 +145,8 @@ final class AuthorizationCheckTests {
                 try req.content.encode(
                     AuthorizationController.CheckRequest(checks: [
                         self.item(
-                            key: "a", resourceType: "organization",
-                            resourceId: org.id!.uuidString, permission: "view_organization")
+                            key: "a", action: "org:read",
+                            node: IAMNode(type: .organization, id: org.id!))
                     ]))
             } afterResponse: { res in
                 #expect(res.status == .unauthorized)
@@ -162,8 +159,8 @@ final class AuthorizationCheckTests {
         try await withApp { app, _, _, project, token in
             let items = (0..<51).map {
                 self.item(
-                    key: "k\($0)", resourceType: "project",
-                    resourceId: project.id!.uuidString, permission: "view_project")
+                    key: "k\($0)", action: "project:read",
+                    node: IAMNode(type: .project, id: project.id!))
             }
 
             try await app.test(.POST, "/api/authorization/check") { req in

@@ -51,14 +51,18 @@ struct VolumeSnapshotGuardTests {
                 size: 10 * 1024 * 1024 * 1024,
                 status: status,
                 createdByID: admin.id!)
-            volume.hypervisorId = "agent-that-is-not-connected"
-            volume.storagePath = "/var/lib/strato/volumes/guard/volume.qcow2"
             if attachedToVM {
                 let vm = try await builder.createVM(name: "guard-vm", project: project)
                 volume.$vm.id = vm.id
                 volume.deviceName = "disk1"
             }
             try await volume.save(on: app.db)
+            try await placeVolume(
+                volume,
+                on: "agent-that-is-not-connected",
+                at: "/var/lib/strato/volumes/guard/volume.qcow2",
+                using: app.db
+            )
 
             try await test(app, volume, token)
         }

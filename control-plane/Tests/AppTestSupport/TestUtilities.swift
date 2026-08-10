@@ -439,22 +439,33 @@ package struct TestDataBuilder {
         organization: Organization,
         role: String = "member"
     ) async throws {
+        let roleID: UUID?
+        switch role {
+        case "member": roleID = nil
+        case "viewer": roleID = IAMRole.viewer.seededID
+        case "operator": roleID = IAMRole.operator.seededID
+        case "editor": roleID = IAMRole.editor.seededID
+        case "admin": roleID = IAMRole.admin.seededID
+        default:
+            guard let customRoleID = UUID(uuidString: role) else {
+                throw TestSetupError.message("Unknown organization role fixture '\(role)'")
+            }
+            roleID = customRoleID
+        }
         let userOrg = UserOrganization(
             userID: user.id!,
             organizationID: organization.id!,
-            role: role
+            roleID: roleID
         )
         try await userOrg.save(on: db)
 
-        // Mirror the dual-write the API performs: an org admin carries an
-        // `admin` role binding (a bare member carries none — membership itself
-        // grants only org:read + project:create). Without this the Cedar
-        // evaluator, which answers from `role_bindings`, sees no grant.
-        if let bindingRole = IAMRole.fromOrganizationRole(role) {
+        // Organization membership remains relational, while any role grant is
+        // represented only by its authoritative binding.
+        if let roleID {
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: user.id!,
-                role: bindingRole,
+                roleID: roleID,
                 nodeType: .organization,
                 nodeID: organization.id!,
                 createdBy: nil,
@@ -833,6 +844,29 @@ package func conditionedRoleBindingConstraint(
 /// does, validated or not.
 package func conditionedRoleBindingsAreRefused(on db: any Database) async throws -> Bool {
     try await conditionedRoleBindingConstraint(on: db) != .absent
+}
+
+/// Give a saved test volume its authoritative physical placement. Passing no
+/// agent deliberately leaves the volume unplaced for tests that exercise that
+/// state.
+@discardableResult
+package func placeVolume(
+    _ volume: Volume,
+    on agentID: String?,
+    at datasetPath: String? = "/var/lib/strato/volumes/test/volume.qcow2",
+    state: VolumeReplicaState = .healthy,
+    using db: any Database
+) async throws -> VolumeReplica? {
+    guard let agentID else { return nil }
+    let replica = VolumeReplica(
+        volumeID: try volume.requireID(),
+        agentId: agentID,
+        datasetPath: datasetPath,
+        state: state,
+        generation: volume.observedGeneration
+    )
+    try await replica.create(on: db)
+    return replica
 }
 
 private func sqlDatabaseForTest(_ db: any Database) throws -> any SQLDatabase {

@@ -1231,9 +1231,6 @@ final class DNSZoneTests {
         #expect(CedarSchemaBuilder.descendantTypes(of: .dnsZone).contains(.dnsRecord))
         #expect(CedarSchemaBuilder.descendantTypes(of: .project).contains(.dnsRecord))
 
-        let translated = IAMActionTranslator.translate(
-            permission: "attach", resourceType: "dns_zone", resourceID: UUID().uuidString,
-            path: "/api/dns-zones/x/networks")
-        #expect(translated?.action == "dns:attach")
+        #expect(CedarSchemaBuilder.resourceTypes(for: "dns:attach").contains(.dnsZone))
     }
 }

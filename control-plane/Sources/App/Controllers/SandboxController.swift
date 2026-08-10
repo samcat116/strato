@@ -119,12 +119,12 @@ struct SandboxController: RouteCollection {
 
     /// Fetch a sandbox by its :sandboxID route parameter and enforce a
     /// permission on it (per-handler defense in depth over the middleware).
-    func fetchSandboxWithPermission(req: Request, permission: String) async throws -> Sandbox {
+    func fetchSandboxWithAction(req: Request, action: String) async throws -> Sandbox {
         guard let sandboxID = req.parameters.get("sandboxID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid sandbox ID")
         }
 
-        return try await req.authorizedSandbox(sandboxID, permission: permission)
+        return try await req.authorizedSandbox(sandboxID, action: action)
     }
 
     /// Loads the NIC and everything the response reports about it: its
@@ -156,13 +156,13 @@ struct SandboxController: RouteCollection {
 
     func show(req: Request) async throws -> SandboxDetailResponse {
         _ = try req.requireActingPrincipal()
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
         return try await Self.detailResponse(for: sandbox, on: req.db)
     }
 
     func status(req: Request) async throws -> SandboxDetailResponse {
         _ = try req.requireActingPrincipal()
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
 
         // The database row *is* the observed state: the owning agent's
         // periodic observed-state reports keep it fresh, so no agent
@@ -171,7 +171,7 @@ struct SandboxController: RouteCollection {
     }
 
     func listOperations(req: Request) async throws -> [OperationResponse] {
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
         let sandboxID = try sandbox.requireID()
 
         let limit = try req.intQuery("limit", default: 20, in: 1...100)
@@ -302,7 +302,8 @@ struct SandboxController: RouteCollection {
                         "'restoreFrom' cannot be combined with image, CPU, memory, or process overrides; a fork preserves the checkpointed machine shape"
                 )
             }
-            let canReadSnapshot = try await req.can("read", on: "sandbox_snapshot", id: snapshotID.uuidString)
+            let canReadSnapshot = try await req.can(
+                "sandbox:read", on: IAMNode(type: .sandboxSnapshot, id: snapshotID))
             guard canReadSnapshot else {
                 throw Abort(.forbidden, reason: "You don't have permission to read this snapshot")
             }
@@ -417,6 +418,7 @@ struct SandboxController: RouteCollection {
             requestedProjectId: createRequest.projectId,
             requestedEnvironment: createRequest.environment,
             user: user,
+            action: "sandbox:create",
             resourceKind: "sandboxes"
         )
         let projectId = try project.requireID()
@@ -657,7 +659,7 @@ struct SandboxController: RouteCollection {
         // reports — not this request — decide whether it converged.
         req.resourceMutation.dispatch(
             .create, resourceType: Sandbox.self, resourceID: sandboxID,
-            targetGeneration: accepted.targetGeneration, hypervisorId: nil,
+            targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
                 try await app.agentService.createSandbox(sandbox: sandbox, db: db)
             }, app: req.application)
@@ -759,7 +761,7 @@ struct SandboxController: RouteCollection {
 
     func update(req: Request) async throws -> SandboxDetailResponse {
         _ = try req.requireActingPrincipal()
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "update")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:update")
 
         struct UpdateSandboxRequest: Content, ValidatedRequestBody {
             var name: String?
@@ -792,7 +794,7 @@ struct SandboxController: RouteCollection {
 
     func start(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a sandbox")
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "start")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:start")
 
         guard sandbox.canStart else {
             throw Abort(
@@ -812,7 +814,7 @@ struct SandboxController: RouteCollection {
 
     func stop(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a sandbox")
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "stop")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:stop")
 
         guard sandbox.canStop else {
             throw Abort(
@@ -832,7 +834,7 @@ struct SandboxController: RouteCollection {
 
     func restart(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a sandbox")
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "restart")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:restart")
 
         guard sandbox.isRunning else {
             throw Abort(
@@ -887,7 +889,7 @@ struct SandboxController: RouteCollection {
             throw Abort(.badRequest, reason: "'command' must be a non-empty array of strings")
         }
 
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "exec")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:exec")
         let sandboxID = try sandbox.requireID()
 
         guard sandbox.isRunning else {
@@ -949,7 +951,7 @@ struct SandboxController: RouteCollection {
 
     func delete(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Mutating a sandbox")
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "delete")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:delete")
 
         // Deletion via state sync, exactly like VMs: desired becomes
         // `.absent`, the sandbox is stamped with the finalizers its teardown
@@ -979,7 +981,7 @@ struct SandboxController: RouteCollection {
         ) { @Sendable db in
             try await Self.requireSnapshotLineageDeletable(for: sandboxID, on: db)
             // Stamp before the mark — see the VM delete path for why.
-            ResourceFinalizerService.stampForDeletion(sandbox)
+            try await ResourceFinalizerService.stampForDeletion(sandbox, on: db)
             sandbox.setDesiredStatus(.absent)
         }
         return try await Self.acceptedResponse(for: sandbox, accepted, on: req)

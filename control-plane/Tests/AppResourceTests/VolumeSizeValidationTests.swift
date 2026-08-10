@@ -221,6 +221,26 @@ final class VolumeSizeValidationTests {
         }
     }
 
+    @Test("POST /api/volumes rejects an unimplemented replicated default pool")
+    func createRejectsReplicatedPool() async throws {
+        try await withVolumeTestApp { app, _, project, token in
+            let pool = try await StoragePool.defaultPool(on: app.db)
+            pool.mode = .replicated
+            pool.replicationFactor = 2
+            try await pool.save(on: app.db)
+
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(self.createBody(project: project, sizeGB: 10))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 0)
+            #expect(try await VolumeReplica.query(on: app.db).count() == 0)
+        }
+    }
+
     // MARK: - Resize
 
     @Test(
@@ -281,11 +301,11 @@ final class VolumeSizeValidationTests {
             let vm = try await builder.createVM(name: "resize-vm", project: project)
             let volume = try await self.makeAvailableVolume(
                 app: app, user: user, project: project, sizeGB: 10)
-            volume.hypervisorId = agentId
             volume.$vm.id = try vm.requireID()
             volume.deviceName = "disk1"
             volume.status = .attached
             try await volume.save(on: app.db)
+            try await placeVolume(volume, on: agentId, using: app.db)
             let generationBefore = volume.generation
 
             try await app.test(.POST, "/api/volumes/\(volume.id!)/resize") { req in
@@ -312,11 +332,11 @@ final class VolumeSizeValidationTests {
             let vm = try await builder.createVM(name: "shrink-vm", project: project)
             let volume = try await self.makeAvailableVolume(
                 app: app, user: user, project: project, sizeGB: 10)
-            volume.hypervisorId = agentId
             volume.$vm.id = try vm.requireID()
             volume.deviceName = "disk1"
             volume.status = .attached
             try await volume.save(on: app.db)
+            try await placeVolume(volume, on: agentId, using: app.db)
 
             try await app.test(.POST, "/api/volumes/\(volume.id!)/resize") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)

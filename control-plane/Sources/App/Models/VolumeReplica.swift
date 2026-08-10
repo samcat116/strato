@@ -12,10 +12,10 @@ public enum VolumeReplicaState: String, Codable, CaseIterable, Sendable {
 }
 
 /// One physical copy ("region") of a volume on one agent. A `local`-pool
-/// volume has exactly one replica; a `replicated`-pool volume has
-/// `replicationFactor` replicas on distinct member agents. The logical volume
-/// (size, format, attachment) stays on `Volume` — replicas only record where
-/// the bytes live and the health of each copy.
+/// volume has exactly one replica. The reserved `replicated` pool mode is not
+/// executable until a storage backend can keep copies coherent. The logical
+/// volume (size, format, attachment) stays on `Volume` — replicas only record
+/// where the bytes live and the health of each copy.
 final class VolumeReplica: Model, @unchecked Sendable {
     static let schema = "volume_replicas"
 

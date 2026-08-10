@@ -6,8 +6,8 @@ import Vapor
 ///
 /// When a user leaves an organization — removed by an admin, or offboarded by
 /// the IdP through SCIM — everything they held *inside* that org goes with the
-/// membership: their memberships in the org's groups, their project-member
-/// mirror rows, and their role bindings on any node rooted in the org.
+/// membership: their memberships in the org's groups and their role bindings
+/// on any node rooted in the org.
 /// Sweeping the whole subtree matters because bindings need no membership to
 /// grant (cross-org bindings are supported by design): a project binding left
 /// behind would silently keep working as external access nobody gated through
@@ -35,20 +35,6 @@ enum OffboardingSweep {
                 .filter(\.$user.$id == userID)
                 .filter(\.$group.$id ~~ orgGroupIDs)
                 .delete()
-        }
-
-        // Project-member mirror rows in the org's projects. The bindings they
-        // mirror are swept below; the members list renders from these rows and
-        // has to agree with what enforcement sees.
-        let projectMemberships = try await ProjectMember.query(on: db)
-            .filter(\.$user.$id == userID)
-            .all()
-        for row in projectMemberships {
-            let chain = try await IAMResourceTree.ancestors(
-                of: IAMNode(type: .project, id: row.$project.id), on: db)
-            if let root = chain.last, root.type == .organization, root.id == organizationID {
-                try await row.delete(on: db)
-            }
         }
 
         try await RoleBindingService.revokeAll(

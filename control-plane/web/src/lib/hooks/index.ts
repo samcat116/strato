@@ -126,6 +126,7 @@ export {
 } from "./use-groups";
 export {
   useRoles,
+  useBindableRoles,
   useCreateRole,
   useUpdateRole,
   useDeleteRole,

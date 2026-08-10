@@ -5,6 +5,7 @@ import type {
   IAMPolicyCreateRequest,
   IAMPolicyUpdateRequest,
   IAMPolicyValidateRequest,
+  IAMNodeType,
   IAMRoleCreateRequest,
   IAMRoleOwnerType,
   IAMRoleUpdateRequest,
@@ -18,6 +19,15 @@ export function useRoles(ownerType: IAMRoleOwnerType, ownerId: string) {
     queryKey: ["iam-roles", ownerType, ownerId],
     queryFn: () => iamApi.listRoles(ownerType, ownerId),
     enabled: !!ownerId,
+    select: (data) => data.roles,
+  });
+}
+
+export function useBindableRoles(nodeType: IAMNodeType, nodeId: string) {
+  return useQuery({
+    queryKey: ["iam-bindable-roles", nodeType, nodeId],
+    queryFn: () => iamApi.listBindableRoles(nodeType, nodeId),
+    enabled: !!nodeId,
     select: (data) => data.roles,
   });
 }
