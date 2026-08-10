@@ -94,16 +94,16 @@ private func launchAgent(options: AgentOptions) async throws {
 
     // Load configuration from file or defaults
     let config: AgentConfig
-    if let configFile = options.configFile {
-        do {
-            config = try AgentConfig.load(from: configFile)
+    do {
+        if let configFile = options.configFile {
+            config = try await AgentConfig.load(from: configFile, logger: logger)
             logger.info("Loaded configuration from: \(configFile)")
-        } catch {
-            logger.error("Failed to load configuration from \(configFile): \(error)")
-            throw ExitCode.failure
+        } else {
+            config = try await AgentConfig.loadDefaultConfig(logger: logger)
         }
-    } else {
-        config = AgentConfig.loadDefaultConfig(logger: logger)
+    } catch {
+        logger.error("Failed to load agent configuration: \(error)")
+        throw ExitCode.failure
     }
 
     // Override config values with command-line arguments if provided

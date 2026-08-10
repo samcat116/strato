@@ -25,6 +25,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.2.0"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.0"),
         .package(url: "https://github.com/apple/swift-crypto.git", "3.0.0"..<"5.0.0"),
+        .package(url: "https://github.com/apple/swift-configuration.git", from: "1.2.0"),
         .package(url: "https://github.com/samcat116/swift-toml.git", branch: "master"),
         // SPIFFE Workload API (gRPC over Unix domain socket)
         .package(url: "https://github.com/grpc/grpc-swift-2.git", from: "2.0.0"),
@@ -77,7 +78,8 @@ let package = Package(
             dependencies: [
                 .product(name: "StratoShared", package: "shared"),
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "Toml", package: "swift-toml"),
+                .product(name: "Configuration", package: "swift-configuration"),
+                .product(name: "TomlConfiguration", package: "swift-toml"),
                 .product(name: "Crypto", package: "swift-crypto"),
                 .product(name: "NIOCore", package: "swift-nio"),
                 // The guest-facing instance metadata listener (STR-56) — the

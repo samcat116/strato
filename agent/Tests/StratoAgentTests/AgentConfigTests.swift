@@ -7,7 +7,7 @@ import Logging
 struct AgentConfigTests {
 
     // Helper to create and clean up temporary directories
-    func withTempDirectory<T>(_ body: (URL) throws -> T) rethrows -> T {
+    func withTempDirectory<T>(_ body: (URL) async throws -> T) async rethrows -> T {
         let tempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("agent-config-tests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: tempDirectory, withIntermediateDirectories: true)
@@ -16,14 +16,24 @@ struct AgentConfigTests {
             try? FileManager.default.removeItem(at: tempDirectory)
         }
 
-        return try body(tempDirectory)
+        return try await body(tempDirectory)
+    }
+
+    private func loadConfig(from path: String) async throws -> AgentConfig {
+        try await AgentConfig.load(from: path, environmentVariables: [:])
+    }
+
+    private func loadDefaultConfig(searchPaths: [String]) async throws -> AgentConfig {
+        try await AgentConfig.loadDefaultConfig(
+            searchPaths: searchPaths,
+            environmentVariables: [:])
     }
 
     // MARK: - Storage paths
 
     @Test("Load volume_storage_dir alongside vm_storage_dir")
-    func loadVolumeStorageDir() throws {
-        try withTempDirectory { tempDirectory in
+    func loadVolumeStorageDir() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 vm_storage_dir = "/srv/strato/vms"
@@ -32,7 +42,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.vmStoragePath == "/srv/strato/vms")
             #expect(config.volumeStoragePath == "/srv/strato/volumes")
@@ -40,13 +50,13 @@ struct AgentConfigTests {
     }
 
     @Test("volume_storage_dir defaults to nil (platform default path) when absent")
-    func volumeStorageDirDefaultNil() throws {
-        try withTempDirectory { tempDirectory in
+    func volumeStorageDirDefaultNil() async throws {
+        try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
                 toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.volumeStoragePath == nil)
         }
@@ -55,8 +65,8 @@ struct AgentConfigTests {
     // MARK: - Warm start (issue #426)
 
     @Test("Load warm-start settings")
-    func loadWarmStartSettings() throws {
-        try withTempDirectory { tempDirectory in
+    func loadWarmStartSettings() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 sandbox_warm_start = false
@@ -65,7 +75,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.sandboxWarmStart == false, "the documented kill switch must actually load")
             #expect(config.sandboxWarmCacheMaxSizeGB == 40)
@@ -75,13 +85,13 @@ struct AgentConfigTests {
     }
 
     @Test("Warm-start settings default to nil (enabled, default budget) when absent")
-    func warmStartSettingsDefaultNil() throws {
-        try withTempDirectory { tempDirectory in
+    func warmStartSettingsDefaultNil() async throws {
+        try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
                 toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.sandboxWarmStart == nil)
             #expect(config.sandboxWarmCacheMaxSizeGB == nil)
@@ -89,8 +99,8 @@ struct AgentConfigTests {
     }
 
     @Test("A non-positive warm cache budget is rejected")
-    func nonPositiveWarmCacheBudgetRejected() throws {
-        try withTempDirectory { tempDirectory in
+    func nonPositiveWarmCacheBudgetRejected() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 sandbox_warm_cache_max_size_gb = 0
@@ -98,8 +108,8 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            #expect(throws: AgentConfigError.self) {
-                try AgentConfig.load(from: configPath)
+            await #expect(throws: AgentConfigError.self) {
+                try await loadConfig(from: configPath)
             }
         }
     }
@@ -107,8 +117,8 @@ struct AgentConfigTests {
     // MARK: - Pinned control-plane SPIFFE ID (issue #552)
 
     @Test("control_plane_spiffe_id defaults to spiffe://<trust_domain>/control-plane")
-    func controlPlaneSPIFFEIDDefault() throws {
-        try withTempDirectory { tempDirectory in
+    func controlPlaneSPIFFEIDDefault() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "wss://cp.example:8443/agent/ws"
                 [spiffe]
@@ -118,7 +128,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             let spiffe = try #require(config.spiffe)
             #expect(spiffe.controlPlaneSPIFFEID == nil)
@@ -133,8 +143,8 @@ struct AgentConfigTests {
     }
 
     @Test("An explicit control_plane_spiffe_id overrides the derived default")
-    func controlPlaneSPIFFEIDOverride() throws {
-        try withTempDirectory { tempDirectory in
+    func controlPlaneSPIFFEIDOverride() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "wss://cp.example:8443/agent/ws"
                 [spiffe]
@@ -145,7 +155,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             let spiffe = try #require(config.spiffe)
             #expect(spiffe.resolvedControlPlaneSPIFFEID == "spiffe://prod.example.com/cp/primary")
@@ -162,8 +172,8 @@ struct AgentConfigTests {
             "spiffe://prod.example.com",  // no workload path
             "spiffe://prod.example.com/",  // empty workload path
         ])
-    func malformedControlPlaneSPIFFEIDRejected(id: String) throws {
-        try withTempDirectory { tempDirectory in
+    func malformedControlPlaneSPIFFEIDRejected(id: String) async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "wss://cp.example:8443/agent/ws"
                 [spiffe]
@@ -173,18 +183,18 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            #expect(throws: AgentConfigError.self) {
-                try AgentConfig.load(from: configPath)
+            await #expect(throws: AgentConfigError.self) {
+                try await loadConfig(from: configPath)
             }
         }
     }
 
     @Test("An empty trust_domain is rejected rather than deriving a malformed pinned ID")
-    func emptyTrustDomainRejected() throws {
+    func emptyTrustDomainRejected() async throws {
         // Without an explicit control_plane_spiffe_id the pinned identity is
         // derived, so validating only the override would let this through and
         // surface as every handshake failing with a pin mismatch.
-        try withTempDirectory { tempDirectory in
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "wss://cp.example:8443/agent/ws"
                 [spiffe]
@@ -194,8 +204,8 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            #expect(throws: AgentConfigError.self) {
-                try AgentConfig.load(from: configPath)
+            await #expect(throws: AgentConfigError.self) {
+                try await loadConfig(from: configPath)
             }
         }
     }
@@ -214,8 +224,8 @@ struct AgentConfigTests {
     // MARK: - Image cache settings
 
     @Test("Load image cache settings")
-    func loadImageCacheSettings() throws {
-        try withTempDirectory { tempDirectory in
+    func loadImageCacheSettings() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 image_cache_dir = "/mnt/big/strato-images"
@@ -226,7 +236,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             let expectedImageBytes: Int64 = 50 * 1024 * 1024 * 1024
             let expectedSandboxBytes: Int64 = 20 * 1024 * 1024 * 1024
@@ -240,13 +250,13 @@ struct AgentConfigTests {
     }
 
     @Test("Image cache settings default to nil (unbounded, default paths) when absent")
-    func imageCacheSettingsDefaultNil() throws {
-        try withTempDirectory { tempDirectory in
+    func imageCacheSettingsDefaultNil() async throws {
+        try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
                 toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.imageCacheDir == nil)
             #expect(config.imageCacheMaxSizeGB == nil)
@@ -257,8 +267,8 @@ struct AgentConfigTests {
     }
 
     @Test("Non-positive cache budgets are rejected")
-    func nonPositiveCacheBudgetRejected() throws {
-        try withTempDirectory { tempDirectory in
+    func nonPositiveCacheBudgetRejected() async throws {
+        try await withTempDirectory { tempDirectory in
             for key in ["image_cache_max_size_gb", "sandbox_image_cache_max_size_gb"] {
                 let tomlContent = """
                     control_plane_url = "ws://localhost:8080/agent/ws"
@@ -267,8 +277,8 @@ struct AgentConfigTests {
                 let configPath = tempDirectory.appendingPathComponent("config.toml").path
                 try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-                #expect(throws: AgentConfigError.self) {
-                    try AgentConfig.load(from: configPath)
+                await #expect(throws: AgentConfigError.self) {
+                    try await loadConfig(from: configPath)
                 }
             }
         }
@@ -277,12 +287,12 @@ struct AgentConfigTests {
     // MARK: - Sandbox jailer settings (issue #425)
 
     @Test("QEMU memory overhead defaults to 512 MiB and loads valid bounds")
-    func qemuMemoryOverhead() throws {
-        try withTempDirectory { tempDirectory in
+    func qemuMemoryOverhead() async throws {
+        try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
                 toFile: configPath, atomically: true, encoding: .utf8)
-            var config = try AgentConfig.load(from: configPath)
+            var config = try await loadConfig(from: configPath)
             #expect(config.qemuMemoryOverheadMB == nil)
             #expect(config.qemuMemoryOverheadBytes == 512 * 1024 * 1024)
 
@@ -291,31 +301,31 @@ struct AgentConfigTests {
                 control_plane_url = "ws://x:8080/agent/ws"
                 qemu_memory_overhead_mb = \(value)
                 """.write(toFile: configPath, atomically: true, encoding: .utf8)
-                config = try AgentConfig.load(from: configPath)
+                config = try await loadConfig(from: configPath)
                 #expect(config.qemuMemoryOverheadMB == value)
             }
         }
     }
 
     @Test("QEMU memory overhead rejects values outside 128 through 4096 MiB")
-    func invalidQEMUMemoryOverhead() throws {
-        try withTempDirectory { tempDirectory in
+    func invalidQEMUMemoryOverhead() async throws {
+        try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             for value in [127, 4097] {
                 try """
                 control_plane_url = "ws://x:8080/agent/ws"
                 qemu_memory_overhead_mb = \(value)
                 """.write(toFile: configPath, atomically: true, encoding: .utf8)
-                #expect(throws: AgentConfigError.self) {
-                    try AgentConfig.load(from: configPath)
+                await #expect(throws: AgentConfigError.self) {
+                    try await loadConfig(from: configPath)
                 }
             }
         }
     }
 
     @Test("Load sandbox jailer settings")
-    func loadSandboxJailerSettings() throws {
-        try withTempDirectory { tempDirectory in
+    func loadSandboxJailerSettings() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 sandbox_jailer_mode = "required"
@@ -326,7 +336,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.sandboxJailerMode == .required)
             #expect(config.sandboxJailerBinaryPath == "/opt/fc/jailer")
@@ -336,13 +346,13 @@ struct AgentConfigTests {
     }
 
     @Test("Sandbox jailer settings default to nil when absent")
-    func sandboxJailerSettingsDefaultNil() throws {
-        try withTempDirectory { tempDirectory in
+    func sandboxJailerSettingsDefaultNil() async throws {
+        try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
                 toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.sandboxJailerMode == nil)
             #expect(config.sandboxJailerBinaryPath == nil)
@@ -362,8 +372,8 @@ struct AgentConfigTests {
             "qemu_driver = \"process\"", "qemu_driver = \"libvirt\"", "qemu_driver = \"libvirtd\"",
             "qemu_binary_path = \"/usr/bin/qemu-system-x86_64\"", "swtpm_binary_path = \"/usr/bin/swtpm\"",
         ])
-    func retiredQEMUKeysAreIgnored(_ line: String) throws {
-        try withTempDirectory { tempDirectory in
+    func retiredQEMUKeysAreIgnored(_ line: String) async throws {
+        try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try """
             control_plane_url = "ws://localhost:8080/agent/ws"
@@ -372,14 +382,14 @@ struct AgentConfigTests {
 
             // Including the value that used to be a hard rejection: there is no
             // vocabulary left to misspell.
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
         }
     }
 
     @Test("A misspelled sandbox_jailer_mode is rejected, never silently weakened to auto")
-    func invalidSandboxJailerModeRejected() throws {
-        try withTempDirectory { tempDirectory in
+    func invalidSandboxJailerModeRejected() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 sandbox_jailer_mode = "requierd"
@@ -387,15 +397,15 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            #expect(throws: AgentConfigError.self) {
-                try AgentConfig.load(from: configPath)
+            await #expect(throws: AgentConfigError.self) {
+                try await loadConfig(from: configPath)
             }
         }
     }
 
     @Test("A uid base without room for the per-sandbox range is rejected")
-    func invalidSandboxJailerUidBaseRejected() throws {
-        try withTempDirectory { tempDirectory in
+    func invalidSandboxJailerUidBaseRejected() async throws {
+        try await withTempDirectory { tempDirectory in
             for bad in ["0", "-5", "4294967295"] {
                 let tomlContent = """
                     control_plane_url = "ws://localhost:8080/agent/ws"
@@ -404,18 +414,18 @@ struct AgentConfigTests {
                 let configPath = tempDirectory.appendingPathComponent("config.toml").path
                 try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-                #expect(throws: AgentConfigError.self) {
-                    try AgentConfig.load(from: configPath)
+                await #expect(throws: AgentConfigError.self) {
+                    try await loadConfig(from: configPath)
                 }
             }
         }
     }
 
     @Test("Jailer defaults: binary beside firecracker, chroot under VM storage")
-    func sandboxJailerDefaults() throws {
+    func sandboxJailerDefaults() async throws {
         // Probe a fixture rather than the host's installs so the result does
         // not depend on whether a real jailer is present on the test machine.
-        try withTempDirectory { tempDirectory in
+        try await withTempDirectory { tempDirectory in
             let sibling = tempDirectory.appendingPathComponent("bin")
             let wellKnown = tempDirectory.appendingPathComponent("well-known")
             try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
@@ -457,8 +467,8 @@ struct AgentConfigTests {
     // MARK: - TOML Loading Tests
 
     @Test("Load valid TOML configuration")
-    func loadValidConfig() throws {
-        try withTempDirectory { tempDirectory in
+    func loadValidConfig() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 log_level = "info"
@@ -470,7 +480,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
             #expect(config.logLevel == "info")
@@ -481,8 +491,8 @@ struct AgentConfigTests {
     }
 
     @Test("Load OVN chassis bootstrap settings")
-    func loadOVNChassisSettings() throws {
-        try withTempDirectory { tempDirectory in
+    func loadOVNChassisSettings() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 network_mode = "ovn"
@@ -495,7 +505,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.ovnRemote == "tcp:central:6642")
             #expect(config.ovnEncapType == "geneve")
@@ -510,8 +520,8 @@ struct AgentConfigTests {
     }
 
     @Test("Load OVN northbound connection string")
-    func loadOVNNorthbound() throws {
-        try withTempDirectory { tempDirectory in
+    func loadOVNNorthbound() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 network_mode = "ovn"
@@ -520,14 +530,14 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             #expect(config.ovnNorthbound == "tcp:central:6641")
         }
     }
 
     @Test("Load [ovn_dynamic_routing] settings")
-    func loadOVNDynamicRouting() throws {
-        try withTempDirectory { tempDirectory in
+    func loadOVNDynamicRouting() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 network_mode = "ovn"
@@ -542,7 +552,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             let routing = try #require(config.ovnDynamicRouting)
             #expect(routing.enabled)
             #expect(routing.redistribute == ["nat"])
@@ -552,13 +562,13 @@ struct AgentConfigTests {
         }
     }
 
-    @Test("[ovn_dynamic_routing] defaults: absent section is nil; bare section is disabled with defaults")
-    func ovnDynamicRoutingDefaults() throws {
-        try withTempDirectory { tempDirectory in
+    @Test("[ovn_dynamic_routing] defaults: absent section is nil; enabled-only uses field defaults")
+    func ovnDynamicRoutingDefaults() async throws {
+        try await withTempDirectory { tempDirectory in
             let absentPath = tempDirectory.appendingPathComponent("absent.toml").path
             try "control_plane_url = \"ws://localhost:8080/agent/ws\"".write(
                 toFile: absentPath, atomically: true, encoding: .utf8)
-            #expect(try AgentConfig.load(from: absentPath).ovnDynamicRouting == nil)
+            #expect(try await loadConfig(from: absentPath).ovnDynamicRouting == nil)
 
             let barePath = tempDirectory.appendingPathComponent("bare.toml").path
             try """
@@ -567,7 +577,7 @@ struct AgentConfigTests {
             [ovn_dynamic_routing]
             enabled = true
             """.write(toFile: barePath, atomically: true, encoding: .utf8)
-            let routing = try #require(try AgentConfig.load(from: barePath).ovnDynamicRouting)
+            let routing = try #require(try await loadConfig(from: barePath).ovnDynamicRouting)
             #expect(routing.enabled)
             #expect(routing.redistribute == OVNDynamicRoutingConfig.defaultRedistribute)
             #expect(routing.routingProtocols == OVNDynamicRoutingConfig.defaultRoutingProtocols)
@@ -577,8 +587,8 @@ struct AgentConfigTests {
     }
 
     @Test("An unsupported redistribute or protocol value is rejected, never silently dropped")
-    func ovnDynamicRoutingRejectsInvalidValues() throws {
-        try withTempDirectory { tempDirectory in
+    func ovnDynamicRoutingRejectsInvalidValues() async throws {
+        try await withTempDirectory { tempDirectory in
             for badLine in [
                 "redistribute = [\"connected\", \"nats\"]",
                 "routing_protocols = [\"OSPF\"]",
@@ -592,16 +602,16 @@ struct AgentConfigTests {
                     """
                 let configPath = tempDirectory.appendingPathComponent("config.toml").path
                 try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
-                #expect(throws: AgentConfigError.self) {
-                    _ = try AgentConfig.load(from: configPath)
+                await #expect(throws: AgentConfigError.self) {
+                    _ = try await loadConfig(from: configPath)
                 }
             }
         }
     }
 
     @Test("Load [ovn_northbound_tls] with an ssl: endpoint")
-    func loadOVNNorthboundTLS() throws {
-        try withTempDirectory { tempDirectory in
+    func loadOVNNorthboundTLS() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 network_mode = "ovn"
@@ -616,7 +626,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             let tls = try #require(config.ovnNorthboundTLS)
             #expect(tls.caCertPath == "/etc/strato/pki/cacert.pem")
             #expect(tls.clientCertPath == "/etc/strato/pki/agent-cert.pem")
@@ -634,8 +644,8 @@ struct AgentConfigTests {
     }
 
     @Test("[ovn_northbound_tls] without an ssl: endpoint is rejected — TLS settings must never be silently ignored")
-    func ovnNorthboundTLSRequiresSSLEndpoint() throws {
-        try withTempDirectory { tempDirectory in
+    func ovnNorthboundTLSRequiresSSLEndpoint() async throws {
+        try await withTempDirectory { tempDirectory in
             for endpointLine in ["ovn_northbound = \"tcp:central:6641\"", ""] {
                 let tomlContent = """
                     control_plane_url = "ws://localhost:8080/agent/ws"
@@ -647,16 +657,16 @@ struct AgentConfigTests {
                 let configPath = tempDirectory.appendingPathComponent("config.toml").path
                 try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-                #expect(throws: AgentConfigError.self) {
-                    _ = try AgentConfig.load(from: configPath)
+                await #expect(throws: AgentConfigError.self) {
+                    _ = try await loadConfig(from: configPath)
                 }
             }
         }
     }
 
     @Test("A client certificate without its key (or vice versa) is rejected")
-    func ovnNorthboundTLSClientPairValidated() throws {
-        try withTempDirectory { tempDirectory in
+    func ovnNorthboundTLSClientPairValidated() async throws {
+        try await withTempDirectory { tempDirectory in
             for lonelyKey in ["client_cert", "client_key"] {
                 let tomlContent = """
                     control_plane_url = "ws://localhost:8080/agent/ws"
@@ -668,16 +678,16 @@ struct AgentConfigTests {
                 let configPath = tempDirectory.appendingPathComponent("config.toml").path
                 try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-                #expect(throws: AgentConfigError.self) {
-                    _ = try AgentConfig.load(from: configPath)
+                await #expect(throws: AgentConfigError.self) {
+                    _ = try await loadConfig(from: configPath)
                 }
             }
         }
     }
 
     @Test("ovn_northbound_tls defaults to nil, and an ssl: endpoint works without it (system trust roots)")
-    func ovnNorthboundTLSDefaultsNil() throws {
-        try withTempDirectory { tempDirectory in
+    func ovnNorthboundTLSDefaultsNil() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://minimal:8080/ws"
                 ovn_northbound = "ssl:central:6641"
@@ -685,29 +695,29 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             #expect(config.ovnNorthbound == "ssl:central:6641")
             #expect(config.ovnNorthboundTLS == nil)
         }
     }
 
     @Test("ovn_northbound defaults to nil (legacy local socket)")
-    func ovnNorthboundDefaultsNil() throws {
-        try withTempDirectory { tempDirectory in
+    func ovnNorthboundDefaultsNil() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://minimal:8080/ws"
                 """
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             #expect(config.ovnNorthbound == nil)
         }
     }
 
     @Test("A malformed ovn_northbound is rejected at load time")
-    func ovnNorthboundValidated() throws {
-        try withTempDirectory { tempDirectory in
+    func ovnNorthboundValidated() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://minimal:8080/ws"
                 ovn_northbound = "central:6641"
@@ -715,22 +725,22 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            #expect(throws: AgentConfigError.self) {
-                _ = try AgentConfig.load(from: configPath)
+            await #expect(throws: AgentConfigError.self) {
+                _ = try await loadConfig(from: configPath)
             }
         }
     }
 
     @Test("Chassis bootstrap defaults to enabled when keys are absent")
-    func ovnChassisSettingsDefault() throws {
-        try withTempDirectory { tempDirectory in
+    func ovnChassisSettingsDefault() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://minimal:8080/ws"
                 """
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             #expect(config.ovnBootstrapChassis == nil)
             let chassis = config.ovnChassisConfig
             #expect(chassis.bootstrapEnabled)
@@ -740,8 +750,8 @@ struct AgentConfigTests {
     }
 
     @Test("Load minimal TOML configuration")
-    func loadMinimalConfig() throws {
-        try withTempDirectory { tempDirectory in
+    func loadMinimalConfig() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://minimal:8080/ws"
                 """
@@ -749,7 +759,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("minimal.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.controlPlaneURL == "ws://minimal:8080/ws")
             #expect(config.logLevel == nil)
@@ -758,8 +768,8 @@ struct AgentConfigTests {
     }
 
     @Test("Load configuration with user network mode")
-    func loadConfigWithUserNetworkMode() throws {
-        try withTempDirectory { tempDirectory in
+    func loadConfigWithUserNetworkMode() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 network_mode = "user"
@@ -768,7 +778,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("user-mode.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.networkMode == .user)
         }
@@ -777,17 +787,21 @@ struct AgentConfigTests {
     // MARK: - Error Handling Tests
 
     @Test("Loading non-existent config file throws error")
-    func loadConfigFileNotFound() {
+    func loadConfigFileNotFound() async {
         let nonExistentPath = "/tmp/does-not-exist-\(UUID().uuidString).toml"
 
-        #expect(throws: AgentConfigError.self) {
-            try AgentConfig.load(from: nonExistentPath)
+        await #expect(throws: AgentConfigError.self) {
+            try await AgentConfig.load(
+                from: nonExistentPath,
+                environmentVariables: [
+                    "CONTROL_PLANE_URL": "ws://environment:8080/agent/ws"
+                ])
         }
     }
 
     @Test("Loading config without required field throws error")
-    func loadConfigMissingRequiredField() throws {
-        try withTempDirectory { tempDirectory in
+    func loadConfigMissingRequiredField() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 log_level = "debug"
                 """
@@ -795,15 +809,15 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("missing-url.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            #expect(throws: AgentConfigError.self) {
-                try AgentConfig.load(from: configPath)
+            await #expect(throws: AgentConfigError.self) {
+                try await loadConfig(from: configPath)
             }
         }
     }
 
     @Test("Loading config with invalid network mode throws error")
-    func loadConfigInvalidNetworkMode() throws {
-        try withTempDirectory { tempDirectory in
+    func loadConfigInvalidNetworkMode() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 network_mode = "invalid_mode"
@@ -812,15 +826,15 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("invalid-mode.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            #expect(throws: AgentConfigError.self) {
-                try AgentConfig.load(from: configPath)
+            await #expect(throws: AgentConfigError.self) {
+                try await loadConfig(from: configPath)
             }
         }
     }
 
     @Test("Loading invalid TOML throws error")
-    func loadConfigInvalidTOML() throws {
-        try withTempDirectory { tempDirectory in
+    func loadConfigInvalidTOML() async throws {
+        try await withTempDirectory { tempDirectory in
             let invalidToml = """
                 control_plane_url = ws://localhost:8080/agent/ws
                 [this is not valid toml
@@ -829,8 +843,8 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("invalid.toml").path
             try invalidToml.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            #expect(throws: Error.self) {
-                try AgentConfig.load(from: configPath)
+            await #expect(throws: Error.self) {
+                try await loadConfig(from: configPath)
             }
         }
     }
@@ -838,10 +852,10 @@ struct AgentConfigTests {
     // MARK: - Default Config Tests
 
     @Test("Load default configuration")
-    func loadDefaultConfig() {
+    func loadDefaultConfig() async throws {
         // Empty search paths: exercise the built-in defaults rather than
         // whatever config file the host operator happens to have installed.
-        let config = AgentConfig.loadDefaultConfig(searchPaths: [])
+        let config = try await loadDefaultConfig(searchPaths: [])
 
         #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
 
@@ -863,8 +877,8 @@ struct AgentConfigTests {
     }
 
     @Test("Default config search tries paths in order and skips unreadable ones")
-    func loadDefaultConfigSearchOrder() throws {
-        try withTempDirectory { tempDirectory in
+    func loadDefaultConfigSearchOrder() async throws {
+        try await withTempDirectory { tempDirectory in
             let secondPath = tempDirectory.appendingPathComponent("second.toml").path
             try """
             control_plane_url = "ws://second:8080/agent/ws"
@@ -872,7 +886,7 @@ struct AgentConfigTests {
 
             // An absent file is skipped...
             let missingPath = tempDirectory.appendingPathComponent("missing.toml").path
-            let skipped = AgentConfig.loadDefaultConfig(searchPaths: [missingPath, secondPath])
+            let skipped = try await loadDefaultConfig(searchPaths: [missingPath, secondPath])
             #expect(skipped.controlPlaneURL == "ws://second:8080/agent/ws")
 
             // ...and so is one that exists but does not parse, or parses
@@ -883,12 +897,12 @@ struct AgentConfigTests {
             let incompletePath = tempDirectory.appendingPathComponent("incomplete.toml").path
             try "log_level = \"debug\"".write(toFile: incompletePath, atomically: true, encoding: .utf8)
 
-            let unparseable = AgentConfig.loadDefaultConfig(
+            let unparseable = try await loadDefaultConfig(
                 searchPaths: [malformedPath, incompletePath, secondPath])
             #expect(unparseable.controlPlaneURL == "ws://second:8080/agent/ws")
 
             // Every path failing falls through to the built-in defaults.
-            let exhausted = AgentConfig.loadDefaultConfig(searchPaths: [missingPath, malformedPath])
+            let exhausted = try await loadDefaultConfig(searchPaths: [missingPath, malformedPath])
             #expect(exhausted.controlPlaneURL == AgentConfig.builtinDefaults.controlPlaneURL)
 
             let firstPath = tempDirectory.appendingPathComponent("first.toml").path
@@ -896,8 +910,152 @@ struct AgentConfigTests {
             control_plane_url = "ws://first:8080/agent/ws"
             """.write(toFile: firstPath, atomically: true, encoding: .utf8)
 
-            let first = AgentConfig.loadDefaultConfig(searchPaths: [firstPath, secondPath])
+            let first = try await loadDefaultConfig(searchPaths: [firstPath, secondPath])
             #expect(first.controlPlaneURL == "ws://first:8080/agent/ws")
+        }
+    }
+
+    // MARK: - Environment Configuration Tests
+
+    @Test("Environment values override TOML and absent values fall back to TOML")
+    func environmentOverridesTOML() async throws {
+        try await withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try """
+            control_plane_url = "ws://toml:8080/agent/ws"
+            log_level = "info"
+            network_mode = "ovn"
+            enable_kvm = true
+            qemu_memory_overhead_mb = 256
+            vm_storage_dir = "/toml/vms"
+
+            [spiffe]
+            enabled = false
+            trust_domain = "toml.example"
+
+            [ovn_dynamic_routing]
+            enabled = false
+            redistribute = ["connected"]
+            routing_protocols = ["BGP"]
+            """.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try await AgentConfig.load(
+                from: configPath,
+                environmentVariables: [
+                    "CONTROL_PLANE_URL": "ws://environment:8080/agent/ws",
+                    "LOG_LEVEL": "debug",
+                    "NETWORK_MODE": "user",
+                    "ENABLE_KVM": "false",
+                    "QEMU_MEMORY_OVERHEAD_MB": "768",
+                    "SPIFFE_ENABLED": "true",
+                    "SPIFFE_TRUST_DOMAIN": "environment.example",
+                    "OVN_DYNAMIC_ROUTING_ENABLED": "true",
+                    "OVN_DYNAMIC_ROUTING_REDISTRIBUTE": "nat, static",
+                    "OVN_DYNAMIC_ROUTING_ROUTING_PROTOCOLS": "BGP, BFD",
+                ])
+
+            #expect(config.controlPlaneURL == "ws://environment:8080/agent/ws")
+            #expect(config.logLevel == "debug")
+            #expect(config.networkMode == .user)
+            #expect(config.enableKVM == false)
+            #expect(config.qemuMemoryOverheadMB == 768)
+            #expect(config.vmStoragePath == "/toml/vms")
+            #expect(config.spiffe?.enabled == true)
+            #expect(config.spiffe?.trustDomain == "environment.example")
+            #expect(config.ovnDynamicRouting?.enabled == true)
+            #expect(config.ovnDynamicRouting?.redistribute == ["nat", "static"])
+            #expect(config.ovnDynamicRouting?.routingProtocols == ["BGP", "BFD"])
+        }
+    }
+
+    @Test("Environment-only configuration overlays built-in defaults when no file loads")
+    func environmentOverlaysBuiltInDefaults() async throws {
+        let config = try await AgentConfig.loadDefaultConfig(
+            searchPaths: [],
+            environmentVariables: [
+                "CONTROL_PLANE_URL": "ws://environment:8080/agent/ws",
+                "LOG_LEVEL": "trace",
+                "SIMULATION_ENABLED": "true",
+                "SIMULATION_CPU_CORES": "24",
+            ])
+
+        #expect(config.controlPlaneURL == "ws://environment:8080/agent/ws")
+        #expect(config.logLevel == "trace")
+        #expect(config.vmStoragePath == AgentConfig.defaultVMStoragePath)
+        #expect(config.simulation?.enabled == true)
+        #expect(config.simulation?.cpuCores == 24)
+    }
+
+    @Test("Invalid environment value reports its logical key")
+    func invalidEnvironmentTypeReportsKey() async throws {
+        try await withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://toml:8080/agent/ws\"".write(
+                toFile: configPath, atomically: true, encoding: .utf8)
+
+            do {
+                _ = try await AgentConfig.load(
+                    from: configPath,
+                    environmentVariables: ["QEMU_MEMORY_OVERHEAD_MB": "not-an-integer"])
+                Issue.record("Expected malformed environment configuration to fail")
+            } catch AgentConfigError.invalidConfiguration(let message) {
+                #expect(message.contains("qemu_memory_overhead_mb"))
+            } catch {
+                Issue.record("Expected AgentConfigError.invalidConfiguration, got \(error)")
+            }
+        }
+    }
+
+    @Test("Environment values retain enum, bounds, and paired-field validation")
+    func invalidEnvironmentSemanticsFail() async throws {
+        try await withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try "control_plane_url = \"ws://toml:8080/agent/ws\"".write(
+                toFile: configPath, atomically: true, encoding: .utf8)
+
+            for environmentVariables in [
+                ["NETWORK_MODE": "invalid"],
+                ["QEMU_MEMORY_OVERHEAD_MB": "127"],
+                ["FIRMWARE_CODE_PATH": "/firmware/code.fd"],
+                ["OVN_UPLINK_BRIDGE": "br-ex"],
+            ] {
+                await #expect(throws: AgentConfigError.self) {
+                    _ = try await AgentConfig.load(
+                        from: configPath,
+                        environmentVariables: environmentVariables)
+                }
+            }
+        }
+    }
+
+    @Test("Invalid environment configuration fails when no file loads")
+    func invalidEnvironmentFailsWithoutFile() async {
+        await #expect(throws: AgentConfigError.self) {
+            _ = try await AgentConfig.loadDefaultConfig(
+                searchPaths: [],
+                environmentVariables: ["NETWORK_MODE": "invalid"])
+        }
+    }
+
+    @Test("Empty TOML sections do not configure nested settings")
+    func emptySectionsHaveNoEffect() async throws {
+        try await withTempDirectory { tempDirectory in
+            let configPath = tempDirectory.appendingPathComponent("config.toml").path
+            try """
+            control_plane_url = "ws://toml:8080/agent/ws"
+
+            [simulation]
+
+            [resolver]
+
+            [ovn_uplink]
+            """.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+            let config = try await loadConfig(from: configPath)
+
+            #expect(config.simulation == nil)
+            #expect(config.resolver == nil)
+            #expect(config.ovnUplink == nil)
         }
     }
 
@@ -918,8 +1076,8 @@ struct AgentConfigTests {
     // MARK: - Platform-Specific Configuration Tests
 
     @Test("Platform-specific settings are handled correctly")
-    func loadConfigWithPlatformSpecificSettings() throws {
-        try withTempDirectory { tempDirectory in
+    func loadConfigWithPlatformSpecificSettings() async throws {
+        try await withTempDirectory { tempDirectory in
             #if os(macOS)
             // Test that KVM warning appears on macOS
             let tomlContent = """
@@ -938,7 +1096,7 @@ struct AgentConfigTests {
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
             // Should load successfully despite platform-specific warnings
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
             #expect(config.controlPlaneURL == "ws://localhost:8080/agent/ws")
         }
     }
@@ -946,8 +1104,8 @@ struct AgentConfigTests {
     // MARK: - Teardown blast-radius guard (STR-98)
 
     @Test("Load the teardown guard settings")
-    func loadTeardownGuardSettings() throws {
-        try withTempDirectory { tempDirectory in
+    func loadTeardownGuardSettings() async throws {
+        try await withTempDirectory { tempDirectory in
             let tomlContent = """
                 control_plane_url = "ws://localhost:8080/agent/ws"
                 reconcile_teardown_minimum = 10
@@ -957,7 +1115,7 @@ struct AgentConfigTests {
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try tomlContent.write(toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.reconcileTeardownMinimum == 10)
             #expect(config.reconcileTeardownPercent == 50)
@@ -970,13 +1128,13 @@ struct AgentConfigTests {
     }
 
     @Test("The teardown guard defaults to on, at 3 workloads and 25%")
-    func teardownGuardDefaults() throws {
-        try withTempDirectory { tempDirectory in
+    func teardownGuardDefaults() async throws {
+        try await withTempDirectory { tempDirectory in
             let configPath = tempDirectory.appendingPathComponent("config.toml").path
             try "control_plane_url = \"ws://x:8080/agent/ws\"".write(
                 toFile: configPath, atomically: true, encoding: .utf8)
 
-            let config = try AgentConfig.load(from: configPath)
+            let config = try await loadConfig(from: configPath)
 
             #expect(config.reconcileTeardownMinimum == nil)
             #expect(config.allowBulkTeardown == nil)
