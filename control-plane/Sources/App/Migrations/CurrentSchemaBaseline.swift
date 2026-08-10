@@ -5,10 +5,10 @@ import SQLKit
 
 /// The STR-234 baseline mechanism.
 ///
-/// Fresh databases are created from `CurrentSchema.sql`. Databases that contain
-/// any application table are rejected: this cutover deliberately requires a
-/// fresh database instead of guessing that an arbitrary historical schema is
-/// safe to mark as current.
+/// Fresh databases are created from `CurrentSchema.sql`. Databases whose
+/// `public` schema contains any application table are rejected: this cutover
+/// deliberately requires a fresh database instead of guessing that an
+/// arbitrary historical schema is safe to mark as current.
 ///
 /// The bundled SQL was captured after STR-234's prerequisite schema cutovers;
 /// see ADR 0009 for provenance and the rebuild-only transition decision.
@@ -27,7 +27,7 @@ struct CurrentSchemaBaseline: AsyncMigration {
             """
             SELECT tablename
             FROM pg_tables
-            WHERE schemaname = current_schema()
+            WHERE schemaname = 'public'
               AND tablename <> '_fluent_migrations'
             ORDER BY tablename
             """
@@ -169,7 +169,7 @@ enum CurrentSchemaBaselineError: Error, CustomStringConvertible, Sendable {
             return "The bundled CurrentSchema.sql baseline is missing"
         case .freshDatabaseRequired(let tables):
             return """
-                The STR-234 schema baseline requires a fresh database, but the current schema already \(tables.count) \(tables.count == 1 ? "table" : "tables"): \(tables.joined(separator: ", ")). No existing table was changed. Export any data that must be retained, rebuild the database, and import it through the current application model.
+                The STR-234 schema baseline requires a fresh database, but the public schema already has \(tables.count) \(tables.count == 1 ? "table" : "tables"): \(tables.joined(separator: ", ")). No existing table was changed. Export any data that must be retained, rebuild the database, and import it through the current application model.
                 """
         case .irreversible:
             return "The current-schema baseline is irreversible; discard and recreate the database instead"

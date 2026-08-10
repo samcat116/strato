@@ -83,6 +83,50 @@ struct CurrentSchemaBaselineTests {
         try await app.shutdownForTesting()
     }
 
+    @Test("A custom search path cannot hide existing public data")
+    func customSearchPathStillChecksPublicSchema() async throws {
+        let app = try await Application.makeForBareDatabaseTesting()
+        do {
+            let sql = try #require(app.db as? any SQLDatabase)
+            try await sql.raw("CREATE SCHEMA baseline_shadow").run()
+            try await sql.raw(
+                "CREATE TABLE public.operator_data (id integer PRIMARY KEY, value text NOT NULL)"
+            ).run()
+            try await sql.raw(
+                "INSERT INTO public.operator_data (id, value) VALUES (7, 'retain me')"
+            ).run()
+
+            try await app.db.transaction { database in
+                let transactionSQL = try #require(database as? any SQLDatabase)
+                try await transactionSQL.raw(
+                    "SET LOCAL search_path TO baseline_shadow, public"
+                ).run()
+
+                let currentSchema = try await transactionSQL.raw(
+                    "SELECT current_schema() AS schema"
+                ).first(decodingColumn: "schema", as: String.self)
+                #expect(currentSchema == "baseline_shadow")
+
+                do {
+                    try await CurrentSchemaBaseline().prepare(on: database)
+                    Issue.record("Expected the baseline to reject the populated public schema")
+                } catch let error as CurrentSchemaBaselineError {
+                    #expect(error.description.contains("public schema"))
+                    #expect(error.description.contains("operator_data"))
+                }
+            }
+
+            let retained = try await sql.raw(
+                "SELECT value FROM public.operator_data WHERE id = 7"
+            ).first(decodingColumn: "value", as: String.self)
+            #expect(retained == "retain me")
+        } catch {
+            try? await app.shutdownForTesting()
+            throw error
+        }
+        try await app.shutdownForTesting()
+    }
+
     private func catalogCounts(on database: any Database) async throws -> CatalogCounts {
         let sql = try #require(database as? any SQLDatabase)
         return try #require(

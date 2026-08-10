@@ -35,11 +35,12 @@ database, so teardown must discard the database explicitly.
 ## Existing databases require a rebuild
 
 There is no in-place marker migration. The baseline queries `pg_tables` before
-executing DDL and accepts only a schema with no application tables (the
+executing DDL and accepts only a `public` schema with no application tables,
+matching the schema explicitly targeted by `CurrentSchema.sql`. The
 `_fluent_migrations` bookkeeping table is ignored because `SchemaMigrator`
-creates it before previewing migrations). If any application table exists, the
-process fails with the complete table list before the baseline changes schema or
-data.
+creates it before previewing migrations. If any application table exists in
+`public`, the process fails with the complete table list before the baseline
+changes schema or data.
 
 Operators must therefore:
 
@@ -73,9 +74,10 @@ encoding differences) is `79bd505a06c0e20e36d670eb8302201c`.
 
 The baseline tests apply only `CurrentSchemaBaseline` to an empty database and
 compare that same catalog manifest. They also verify that a populated unknown
-schema is rejected without changing its sentinel row or recording the baseline.
-The historical migration sources remain available in Git at `74b81d8` and its
-ancestors when a past transition needs forensic review.
+schema is rejected without changing its sentinel row or recording the baseline,
+including when the connection's search path selects an empty custom schema
+before `public`. The historical migration sources remain available in Git at
+`74b81d8` and its ancestors when a past transition needs forensic review.
 
 ## Consequences
 
