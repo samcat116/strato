@@ -27,13 +27,8 @@ final class CLISession: Model, @unchecked Sendable {
     @Field(key: "client_name")
     var clientName: String
 
-    /// The legacy `read`/`write`/`admin` scopes the user approved. Superseded
-    /// by the restriction columns below (STR-115); see `APIKey.scopes`.
-    @Field(key: "scopes")
-    var scopes: [String]
-
-    @OptionalField(key: "restriction_actions")
-    var restrictionActions: [String]?
+    @Field(key: "restriction_actions")
+    var restrictionActions: [String]
 
     @OptionalField(key: "restriction_node_type")
     var restrictionNodeType: String?
@@ -83,7 +78,7 @@ final class CLISession: Model, @unchecked Sendable {
         id: UUID? = nil,
         userID: UUID,
         clientName: String,
-        scopes: [String],
+        restriction: CredentialRestriction = .unrestricted,
         accessTokenHash: String,
         accessTokenPrefix: String,
         accessTokenExpiresAt: Date,
@@ -93,7 +88,9 @@ final class CLISession: Model, @unchecked Sendable {
         self.id = id
         self.$user.id = userID
         self.clientName = clientName
-        self.scopes = scopes
+        self.restrictionActions = restriction.actions
+        self.restrictionNodeType = restriction.node?.type.rawValue
+        self.restrictionNodeID = restriction.node?.id
         self.accessTokenHash = accessTokenHash
         self.accessTokenPrefix = accessTokenPrefix
         self.accessTokenExpiresAt = accessTokenExpiresAt
@@ -179,14 +176,12 @@ struct TokenResponse: Content {
     let tokenType: String
     let expiresIn: Int
     let refreshToken: String
-    let scope: String
 
     enum CodingKeys: String, CodingKey {
         case accessToken = "access_token"
         case tokenType = "token_type"
         case expiresIn = "expires_in"
         case refreshToken = "refresh_token"
-        case scope
     }
 }
 
@@ -206,7 +201,6 @@ struct OAuthErrorResponse: Content {
 struct PendingDeviceAuthorizationResponse: Content {
     let userCode: String
     let clientName: String
-    let scopes: [String]
     /// What the client asked to be able to do — what the approval page shows
     /// the user before they hand over a session.
     let restriction: CredentialRestrictionPayload
@@ -219,7 +213,6 @@ struct PendingDeviceAuthorizationResponse: Content {
 struct CLISessionResponse: Content {
     let id: UUID?
     let clientName: String
-    let scopes: [String]
     let restriction: CredentialRestrictionPayload
     let accessTokenPrefix: String
     let createdAt: Date?
@@ -230,7 +223,6 @@ struct CLISessionResponse: Content {
     init(from session: CLISession) {
         self.id = session.id
         self.clientName = session.clientName
-        self.scopes = session.scopes
         self.restriction = CredentialRestrictionPayload(session.restriction)
         self.accessTokenPrefix = session.accessTokenPrefix
         self.createdAt = session.createdAt

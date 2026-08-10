@@ -10,9 +10,8 @@ export function isUnrestricted(restriction?: CredentialRestriction): boolean {
 }
 
 /**
- * Long action lists are real — a legacy read-scoped credential resolves to
- * every `:read` and `:list` in the registry — and thirty badges in a table cell
- * is not information, it's noise.
+ * Long action lists are real, and thirty badges in a table cell is not
+ * information, it's noise.
  */
 const MAX_VISIBLE_ACTIONS = 6;
 

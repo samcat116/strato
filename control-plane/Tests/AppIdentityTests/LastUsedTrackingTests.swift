@@ -57,7 +57,6 @@ struct LastUsedTrackingTests {
         let session = CLISession(
             userID: try user.requireID(),
             clientName: "test-cli",
-            scopes: ["read", "write"],
             accessTokenHash: CLISession.hashToken(accessToken),
             accessTokenPrefix: String(accessToken.prefix(8)),
             accessTokenExpiresAt: Date().addingTimeInterval(CLISession.accessTokenLifetime),

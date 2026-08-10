@@ -806,9 +806,7 @@ export interface APIKey {
   id: string;
   name: string;
   keyPrefix: string;
-  /** @deprecated Superseded by `restriction`; kept for older clients. */
-  scopes: string[];
-  /** The effective restriction, stored or derived from `scopes`. */
+  /** The canonical restriction enforced for this key. */
   restriction: CredentialRestriction;
   isActive: boolean;
   createdAt: string;
@@ -825,8 +823,6 @@ export interface CreateAPIKeyResponse {
   name: string;
   key: string;
   keyPrefix: string;
-  /** @deprecated Superseded by `restriction`. */
-  scopes: string[];
   restriction: CredentialRestriction;
   expiresAt?: string;
   createdAt?: string;
@@ -1555,8 +1551,6 @@ export interface UpdateOrganizationRequest {
 
 export interface CreateAPIKeyRequest {
   name: string;
-  /** @deprecated Ignored when `restriction` is present. */
-  scopes?: string[];
   /** Omit for a key as wide as its owner. */
   restriction?: CredentialRestriction;
   expiresInDays?: number;
@@ -2248,8 +2242,6 @@ export interface WorkloadIdentityOverview {
 export interface PendingDeviceAuthorization {
   userCode: string;
   clientName: string;
-  /** @deprecated Superseded by `restriction`. */
-  scopes: string[];
   /** What the client asked to be able to do. */
   restriction: CredentialRestriction;
   requestIP?: string;
@@ -2261,8 +2253,6 @@ export interface PendingDeviceAuthorization {
 export interface CLISession {
   id: string;
   clientName: string;
-  /** @deprecated Superseded by `restriction`. */
-  scopes: string[];
   restriction: CredentialRestriction;
   accessTokenPrefix: string;
   createdAt?: string;

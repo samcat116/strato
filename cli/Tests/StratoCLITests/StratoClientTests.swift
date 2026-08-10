@@ -17,7 +17,7 @@ struct StratoClientTests {
         """
     static let tokenJSON = """
         {"access_token": "st_new", "token_type": "Bearer", "expires_in": 3600,
-         "refresh_token": "rt_new", "scope": "read write"}
+         "refresh_token": "rt_new"}
         """
 
     private func makeClient(
