@@ -1,0 +1,49 @@
+SwiftFirecracker/Sources/SwiftFirecracker/Models/NetworkInterface.swift
+  s_51cfe4042c66cc::t_c591726dc23582 7,10,13,21,24
+SwiftFirecracker/Tests/SwiftFirecrackerTests/SwiftFirecrackerTests.swift
+  s_51cfe4042c66cc::t_e118aa9a807e87 121
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Jailer.swift
+  s_51cfe4042c66cc::t_d58d6be5e1a256 15,18,20,22,27,31,34,46,72,77,87,118
+docs/architecture/sandboxes.md
+  s_51cfe4042c66cc::t_e118aa9a807e87 477-479,1065-1068
+SwiftFirecracker/Sources/SwiftFirecracker/VsockConnection.swift
+  s_51cfe4042c66cc::t_bef84642951c62 33
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Vsock.swift
+  s_51cfe4042c66cc::t_c591726dc23582 13,18,25
+SwiftFirecracker/Sources/SwiftFirecracker/UnixSocketHTTPClient.swift
+  s_51cfe4042c66cc::t_eea693e439682e 19,42,52,72,89,184,213,384,392-395,397
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Snapshot.swift
+  s_51cfe4042c66cc::t_22ce78e69a1184 13,16,18-20,28,40-43,50,70,72,86,88,92,98,113-116
+  s_51cfe4042c66cc::t_0fb81cd7b2fcb3 68
+SwiftFirecracker/Sources/SwiftFirecracker/Models/BootSource.swift
+  s_51cfe4042c66cc::t_bef84642951c62 7,10,13
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerManager.swift
+  s_51cfe4042c66cc::t_80c0415a990d47 14,23,39,44,136-137,247
+  s_51cfe4042c66cc::t_498948f1731967 256
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Drive.swift
+  s_51cfe4042c66cc::t_c591726dc23582 7,10,13,16,25,29
+SwiftFirecracker/Sources/SwiftFirecracker/Models/InstanceInfo.swift
+  s_51cfe4042c66cc::t_bef84642951c62 7,10,19,44,46,52,58,71,73,75,81,87,89
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_51cfe4042c66cc::t_80c0415a990d47 103
+SwiftFirecracker/Sources/SwiftFirecracker/Models/MachineConfig.swift
+  s_51cfe4042c66cc::t_bef84642951c62 7,10,13
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_51cfe4042c66cc::t_e118aa9a807e87 2149,2161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "a068680a1035e0d5c1406cc90d7407582a5e99e5",
+  "prompts": {},
+  "sessions": {
+    "s_51cfe4042c66cc": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6c-b8d0-7040-8c23-113248fcf1bf",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
