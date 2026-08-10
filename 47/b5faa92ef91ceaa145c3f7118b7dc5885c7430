@@ -1,0 +1,185 @@
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_aac57046db4334::t_7ab4eb5134e72e 434,444,488-489,494,502,504,506-507,514
+  s_aac57046db4334::t_5858e36281ca86 6-7
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_aac57046db4334::t_ee6255b124c6cc 34,170,191,195-196,231,236-237
+control-plane/web/src/app/(dashboard)/projects/[projectId]/page.tsx
+  s_aac57046db4334::t_e06166d94a97ec 23-25,28
+control-plane/Tests/AppIAMTests/PolicyEndpointTests.swift
+  s_aac57046db4334::t_2b447d6d656268 599,633
+  s_aac57046db4334::t_fb3e4cfc44df9a 129,131-132,134-135,536-537,541,570-571,575
+docs/architecture/iam.md
+  s_aac57046db4334::t_5858e36281ca86 421,1135-1136,1389
+  s_aac57046db4334::t_e396c0b98b60e8 1114-1116,1128-1132,1142-1145,1155
+control-plane/Sources/App/Services/ProjectContainment.swift
+  s_aac57046db4334::t_568713078f7bc3 39
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_aac57046db4334::t_76253fa6f2b14c 50,53,59,61,71,73,597,682,699,838,948,1031,1212,1252
+  s_aac57046db4334::t_5c0e5caad5bd76 277,565
+control-plane/Sources/App/Extensions/Request+SandboxAuthorization.swift
+  s_aac57046db4334::t_4aff109e06c9d9 5,9,14-15,20
+control-plane/Sources/App/Controllers/DNSController.swift
+  s_aac57046db4334::t_ae63eeff401d90 70-71,142,149,202,238,248,262,318,333,371,383,453,493,500,510,528,544
+  s_aac57046db4334::t_7fef84b2fee583 492,502,530
+  s_aac57046db4334::t_e177b28ba12466 100
+control-plane/Sources/App/Controllers/SandboxExecWebSocketController.swift
+  s_aac57046db4334::t_5c0e5caad5bd76 235-236
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_aac57046db4334::t_ae63eeff401d90 46,255,271,427,637,988,1001
+  s_aac57046db4334::t_e177b28ba12466 136
+  s_aac57046db4334::t_7fef84b2fee583 985,1004
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_aac57046db4334::t_e177b28ba12466 347
+  s_aac57046db4334::t_ae63eeff401d90 314-315,402,412,428,436,547,688,695
+  s_aac57046db4334::t_76253fa6f2b14c 32,36,48
+  s_aac57046db4334::t_7fef84b2fee583 697
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_aac57046db4334::t_ee6255b124c6cc 41,144,165,169-170,194,199-200,263,267
+  s_aac57046db4334::t_b87ca25947aa59 262
+control-plane/Sources/App/Controllers/OIDCController.swift
+  s_aac57046db4334::t_5c0e5caad5bd76 628,637
+control-plane/Sources/App/Extensions/Request+VolumeAuthorization.swift
+  s_aac57046db4334::t_4aff109e06c9d9 5,9-10,15-16,21
+control-plane/Tests/AppIAMTests/CredentialRestrictionEnforcementTests.swift
+  s_aac57046db4334::t_f093e127a56526 223-224,226-227,233,235,237-238,244
+  s_aac57046db4334::t_fb3e4cfc44df9a 323-326,487,491-493
+docs/adr/0004-cedar-for-authorization.md
+  s_aac57046db4334::t_7778ee1bcffaea 122-124
+  s_aac57046db4334::t_872ddbc518166f 152-155
+control-plane/Sources/App/Controllers/VMController.swift
+  s_aac57046db4334::t_c47147b6b60a14 105,115,122,239,378,381,386,390,517,1038,1490,1565,1587,1606,1628,1675,1694
+  s_aac57046db4334::t_e177b28ba12466 526,532
+control-plane/Sources/App/configure.swift
+  s_aac57046db4334::t_c75e1c7da18cf4 830
+docs/architecture/authorization-edge-audit.md
+  s_aac57046db4334::t_a32c99f2023703 18,20-23,35-37
+  s_aac57046db4334::t_5858e36281ca86 78-81
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_aac57046db4334::t_e177b28ba12466 114
+  s_aac57046db4334::t_c47147b6b60a14 58,137-138,281,291,320,404,416,570,619,744,793,887,999,1021,1038-1039,1080-1081,1086
+control-plane/Sources/App/Services/OrganizationAccessService.swift
+  s_aac57046db4334::t_c99c7136d8fbc7 12-13,22,44,52,61,69-70
+control-plane/web/src/app/(dashboard)/settings/organization/page.tsx
+  s_aac57046db4334::t_e06166d94a97ec 51-53,58
+control-plane/Sources/App/Controllers/OperationController.swift
+  s_aac57046db4334::t_568713078f7bc3 65,70,75,82-85,92-94,101-104
+control-plane/Sources/App/Controllers/SecurityGroupController.swift
+  s_aac57046db4334::t_ae63eeff401d90 58-59,152,163,195,243,283,332,403,530,561,628,635-636
+  s_aac57046db4334::t_e177b28ba12466 95
+  s_aac57046db4334::t_7fef84b2fee583 638
+control-plane/Sources/App/Controllers/SCIMTokenController.swift
+  s_aac57046db4334::t_5c0e5caad5bd76 193
+control-plane/Sources/App/Controllers/RoleController.swift
+  s_aac57046db4334::t_b87ca25947aa59 453-454,456
+control-plane/web/src/lib/hooks/use-current-org-access.ts
+  s_aac57046db4334::t_e06166d94a97ec 17-19,27
+control-plane/Tests/AppIdentityTests/APIKeyAuthenticatorTests.swift
+  s_aac57046db4334::t_fb3e4cfc44df9a 547,554-556
+control-plane/web/src/types/api.ts
+  s_aac57046db4334::t_e06166d94a97ec 329-330,332-336,339
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_aac57046db4334::t_5858e36281ca86 116
+  s_aac57046db4334::t_5c0e5caad5bd76 51,93,485,619,720,782,842,942,1078
+control-plane/Sources/App/Extensions/Request+VMAuthorization.swift
+  s_aac57046db4334::t_4aff109e06c9d9 5,13-14,19,26,28,40,64,66
+control-plane/Sources/App/Controllers/LogsController.swift
+  s_aac57046db4334::t_568713078f7bc3 32,82
+control-plane/web/src/lib/api/authorization.ts
+  s_aac57046db4334::t_e06166d94a97ec 5-6,11,14-15
+control-plane/Sources/App/IAM/IAMDecisionEngine.swift
+  s_aac57046db4334::t_5858e36281ca86 31-32,104-105
+control-plane/Sources/App/Models/OrganizationScope.swift
+  s_aac57046db4334::t_c99c7136d8fbc7 13-14
+control-plane/Sources/App/IAM/IAMDecisionRecorder.swift
+  s_aac57046db4334::t_1cd79c52c7c81f 11-12,386,400,406
+  s_aac57046db4334::t_a6da0c7b8a156c 290,380
+control-plane/Sources/App/Controllers/SandboxSnapshotTransferController.swift
+  s_aac57046db4334::t_ee6255b124c6cc 42,51-52
+control-plane/Tests/AppIAMTests/IAMWhoCanTests.swift
+  s_aac57046db4334::t_2b447d6d656268 416-417,543-544,556-557,568,593-594,615-616,645-646,648-649
+  s_aac57046db4334::t_77142966f5f71d 549
+control-plane/Tests/AppPlatformTests/DNSZoneTests.swift
+  s_aac57046db4334::t_df4ccad5baf404 1234
+control-plane/Tests/AppIAMTests/IAMDecisionLogEndpointTests.swift
+  s_aac57046db4334::t_32bd062b230502 61-62,68-71,123-124,135-138,143-144,146,148-149,152,159-165,177-178,193,220,223-224,226,239,241,243,254-255,267
+control-plane/Tests/AppIAMTests/RestrictedCredentialListTests.swift
+  s_aac57046db4334::t_fb3e4cfc44df9a 295,298,301
+control-plane/Tests/AppIAMTests/IAMAuthorizerTests.swift
+  s_aac57046db4334::t_5858e36281ca86 653-664,679-690
+  s_aac57046db4334::t_14ba03db1aacbd 665,671-678
+  s_aac57046db4334::t_834e271bdbc68f 349-350,352,356,362-373,383-384,483,492,582,606-607,609-610,617-618,624-626,631-636,639-642,647-648,651
+  s_aac57046db4334::t_99f1d62e9a74d2 616,622,630
+  s_aac57046db4334::t_fac47b07bf3683 10-12,52,56-57,62,64-65,71,93-94,98-101,120-121,125-126,148-149,153,174,176,178,185,207,209,211,250-251,255,272-273,285-286,297,301-302
+  s_aac57046db4334::t_84d48fc63bbfe6 666-670
+  s_aac57046db4334::t_ececc294852cc3 652
+control-plane/Tests/AppIAMTests/AuthorizationCheckTests.swift
+  s_aac57046db4334::t_880959d3844cea 49-50,67-68,70-71,84-85,96-97,99-100,102-103,124-125,127-128,148-149,162-163
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_aac57046db4334::t_b87ca25947aa59 114-135
+control-plane/Tests/AppIAMTests/VMAttachTargetDisclosureTests.swift
+  s_aac57046db4334::t_7aa94eef7e6e5b 22
+control-plane/Sources/App/Controllers/AuthorizationController.swift
+  s_aac57046db4334::t_f6660e953ddea3 20,24-25,35,41,53,64,105-107,131,139-141,143-144,172,202,214-215,217,219,235-244
+  s_aac57046db4334::t_7fef84b2fee583 68
+  s_aac57046db4334::t_77142966f5f71d 177,223
+  s_aac57046db4334::t_6d53d1e330603b 245
+control-plane/Sources/App/Controllers/ConsoleWebSocketController.swift
+  s_aac57046db4334::t_5c0e5caad5bd76 170-171
+control-plane/web/src/types/openapi.ts
+  s_aac57046db4334::t_b409dea7567031 3950-3951,3953,4273-4274,8046-8047,8050-8052,8054-8056,8059,8068,8463,8472-8473,8498,8500-8501,16220,16229,16239
+  s_aac57046db4334::t_a05b1b25922c5d 8486-8487
+  s_aac57046db4334::t_420dd566dfd493 8108
+control-plane/Sources/App/Extensions/Request+ProjectResolution.swift
+  s_aac57046db4334::t_e177b28ba12466 91-92,108,121,149,173,178
+control-plane/Sources/App/Models/IAMDecisionLog.swift
+  s_aac57046db4334::t_db899809c175a2 6-7,35-38,47,51-55
+control-plane/Sources/App/openapi.yaml
+  s_aac57046db4334::t_5858e36281ca86 15300-15302
+  s_aac57046db4334::t_0547fff1e60767 15255-15257,15263,15278,15280,15298,15324-15325,15327,15329
+  s_aac57046db4334::t_e9e6cd354099b9 206,5715,5717,5719-5723,5730,5737
+  s_aac57046db4334::t_8e7b117aec19ed 5714
+  s_aac57046db4334::t_93ad40859d3d55 6260,6262
+  s_aac57046db4334::t_9e7554f0fd0960 14389-14390
+  s_aac57046db4334::t_fe7f2651d2f580 14361,14363-14364,14369,14371-14373,14375,14383,14392,14404,14409-14410
+  s_aac57046db4334::t_77142966f5f71d 14507,14511-14512
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_aac57046db4334::t_e177b28ba12466 421
+  s_aac57046db4334::t_c47147b6b60a14 122,127,159,165,174,305-306,764,797,817,837,892,954
+control-plane/Sources/App/Controllers/SiteController.swift
+  s_aac57046db4334::t_76253fa6f2b14c 27,30,36,38-39,41,51,201,259,316,346
+control-plane/Sources/App/Controllers/VNCWebSocketController.swift
+  s_aac57046db4334::t_5c0e5caad5bd76 81,164-166
+control-plane/web/src/lib/hooks/use-permissions.ts
+  s_aac57046db4334::t_cf663d2da4b66f 11
+  s_aac57046db4334::t_e06166d94a97ec 3,13,16,23
+control-plane/web/src/components/project-members/members-section.tsx
+  s_aac57046db4334::t_e06166d94a97ec 26-28,31
+control-plane/Sources/App/Controllers/IAMDecisionLogController.swift
+  s_aac57046db4334::t_ca931ca09d2eb2 6,25,29,47,51,63,65-66,73,93-94,112-113,120,123,131
+control-plane/Tests/AppIAMTests/IAMBatchDecisionTests.swift
+  s_aac57046db4334::t_187b43a9a3b364 319,324-325,329-331,337,339,347,349
+control-plane/Sources/App/Migrations/CanonicalizeIAMDecisionLog.swift
+  s_aac57046db4334::t_c75e1c7da18cf4 1-7,10,12-28,30-67
+  s_aac57046db4334::t_abb65d6d98fd32 8-9,11,29
+control-plane/Sources/App/Middleware/AuthorizationMiddleware.swift
+  s_aac57046db4334::t_a6da0c7b8a156c 444-445
+  s_aac57046db4334::t_84d94543467212 20-21,44-46,49-55,61-66,75-79,83-92,111,328-329,334,362,379,383,385,387,390,392,403,446,448,453,455-467,470,472-473,482
+  s_aac57046db4334::t_5858e36281ca86 72,331,339,370,407-415
+  s_aac57046db4334::t_1d23c638e2cc80 416
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "47b5faa92ef91ceaa145c3f7118b7dc5885c7430",
+  "prompts": {},
+  "sessions": {
+    "s_aac57046db4334": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe9b1-15bc-7242-b609-5b0ffc8d6e06",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
