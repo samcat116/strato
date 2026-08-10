@@ -1663,12 +1663,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             do {
                 try await managed.manager.pause()
             } catch {
-                // A pause that reports failure is not the same as a pause that
-                // did not happen: Firecracker waits on its vCPUs for its own
-                // `RECV_TIMEOUT_SEC` before answering, so the request can be
-                // abandoned host-side while the guest goes on to stop. Ask the
-                // VMM what actually happened instead of assuming (STR-194),
-                // then put the drained log follow back and surface the failure.
+                // Firecracker sends Pause to every vCPU before it waits for
+                // their acknowledgements, but only changes GET / to Paused
+                // after *all* replies arrive. A failed request can therefore
+                // leave a subset paused while the VMM still reports Running.
+                // Unconditionally send the idempotent Resumed transition to
+                // every vCPU before surfacing the checkpoint failure (STR-205).
                 await resumeAfterFailedPause(managed: managed, sandboxId: sandboxId)
                 startLogFollow(sandboxId: sandboxId)
                 throw error
@@ -2087,7 +2087,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             logger: logger)
     }
 
-    /// Undo a pause whose request failed but whose effect landed anyway.
+    /// Undo a pause whose request failed after reaching any of the vCPUs.
     ///
     /// Entirely best effort, and deliberately silent about everything except
     /// the case it exists for: the caller is already throwing the error that
@@ -2095,32 +2095,21 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// will report on. What it must not do is leave a workload the operator
     /// never asked to stop wedged at a pause nothing will lift.
     ///
-    /// The `getInstanceInfo()` below is load-bearing twice over, and the second
-    /// way is invisible here: besides answering the question, it refreshes the
-    /// manager's cached `vmState` as a side effect. A failed `pause()` leaves
-    /// that cache reading `.running`, and `resume()` guards on
-    /// `requireState(.paused)` — so without the read having happened first, the
-    /// resume would refuse itself rather than act.
-    ///
-    /// This is a fast path, not the only safety net, and deliberately does not
-    /// retry. A timeout means the request was abandoned host-side, so the pause
-    /// can still land at an arbitrary later moment — after this samples
-    /// `.running` and returns. The backstop is reconciliation: `mappedStatus`
-    /// folds a paused instance into `stopped`, a `mode: resume` checkpoint
-    /// leaves `desiredStatus == .running`, and the next observed report
-    /// re-drives a boot, which resumes a paused microVM.
+    /// Firecracker's instance-level state cannot answer whether this is needed:
+    /// it remains `Running` when one vCPU fails to acknowledge even though the
+    /// others may already be paused. `recoverFromFailedPause()` consequently
+    /// bypasses the manager's ordinary `.paused` guard and broadcasts the
+    /// idempotent `Resumed` transition. The call is best effort because the
+    /// original checkpoint error remains the operation's result.
     private func resumeAfterFailedPause(managed: Managed, sandboxId: String) async {
-        guard let info = try? await managed.manager.getInstanceInfo(), info.state == .paused else {
-            return
-        }
         logger.warning(
-            "Sandbox pause reported failure but the guest is paused; resuming it",
+            "Sandbox pause reported failure; resuming every vCPU defensively",
             metadata: ["sandboxId": .string(sandboxId)])
         do {
-            try await managed.manager.resume()
+            try await managed.manager.recoverFromFailedPause()
         } catch {
             logger.error(
-                "Could not resume a sandbox left paused by a failed checkpoint",
+                "Could not confirm recovery from a failed sandbox pause",
                 metadata: [
                     "sandboxId": .string(sandboxId),
                     "error": .string(error.localizedDescription),
@@ -2146,8 +2135,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.createSnapshot(
                 SnapshotCreateConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
-                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    snapshotType: .full))
+                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail))
             try moveReplacingItem(
                 from: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
                 to: memoryTarget)
@@ -2159,8 +2147,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.createSnapshot(
                 SnapshotCreateConfig(
                     snapshotPath: vmstateTarget,
-                    memFilePath: memoryTarget,
-                    snapshotType: .full))
+                    memFilePath: memoryTarget))
         }
     }
 

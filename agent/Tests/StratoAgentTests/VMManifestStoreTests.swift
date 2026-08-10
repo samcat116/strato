@@ -42,7 +42,6 @@ struct VMManifestStoreTests {
     private func makeStore(dir: String) -> VMManifestStore {
         VMManifestStore(
             path: dir + "/vm-manifest.json",
-            legacyQEMUManifestPath: dir + "/qemu-manifest.json",
             logger: Logger(label: "test")
         )
     }
@@ -292,8 +291,8 @@ struct VMManifestStoreTests {
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
         // The first-boot path, and the one case that may be read as "nothing
-        // is running here": no manifest, no legacy manifest, nothing to
-        // salvage. It must stay distinguishable from an unreadable file.
+        // is running here": no manifest, nothing to salvage. It must stay
+        // distinguishable from an unreadable file.
         let load = makeStore(dir: dir).load()
         #expect(load.isFresh)
         #expect(load.readFailure == nil)
@@ -311,102 +310,6 @@ struct VMManifestStoreTests {
         #expect(load.readFailure == nil)
         #expect(load.loadedEntries.isEmpty)
         #expect(!load.isFresh)
-    }
-
-    @Test("Legacy QEMU manifest (VMSpec map) migrates as QEMU entries and is removed")
-    func migratesLegacySpecManifest() throws {
-        let dir = try makeTempDir()
-        defer { try? FileManager.default.removeItem(atPath: dir) }
-        let legacyPath = dir + "/qemu-manifest.json"
-
-        let legacy = ["vm-legacy": makeSpec(cpus: 3, memoryBytes: 512_000_000)]
-        try JSONEncoder().encode(legacy).write(to: URL(fileURLWithPath: legacyPath))
-
-        let store = makeStore(dir: dir)
-        let loaded = store.load().loadedEntries
-        #expect(loaded.count == 1)
-        #expect(loaded["vm-legacy"]?.hypervisorType == .qemu)
-        #expect(loaded["vm-legacy"]?.spec.cpus == 3)
-        #expect(loaded["vm-legacy"]?.spec.memoryBytes == 512_000_000)
-
-        // The migration is persisted in the unified format and the legacy file removed,
-        // so a second load (e.g. after another restart) sees the same entries.
-        #expect(!FileManager.default.fileExists(atPath: legacyPath))
-        #expect(FileManager.default.fileExists(atPath: store.path))
-        #expect(store.load().loadedEntries["vm-legacy"]?.hypervisorType == .qemu)
-    }
-
-    @Test("Pre-VMSpec legacy manifest (VmConfig) salvages resource reservations")
-    func migratesPreVMSpecManifest() throws {
-        let dir = try makeTempDir()
-        defer { try? FileManager.default.removeItem(atPath: dir) }
-        let legacyPath = dir + "/qemu-manifest.json"
-
-        let legacyJSON = """
-            {"vm-old": {"cpus": {"boot_vcpus": 6, "max_vcpus": 8}, "memory": {"size": 4294967296}}}
-            """
-        try Data(legacyJSON.utf8).write(to: URL(fileURLWithPath: legacyPath))
-
-        let loaded = makeStore(dir: dir).load().loadedEntries
-        #expect(loaded["vm-old"]?.hypervisorType == .qemu)
-        #expect(loaded["vm-old"]?.spec.cpus == 6)
-        #expect(loaded["vm-old"]?.spec.maxCpus == 8)
-        #expect(loaded["vm-old"]?.spec.memoryBytes == 4_294_967_296)
-        #expect(!FileManager.default.fileExists(atPath: legacyPath))
-    }
-
-    @Test("An unreadable legacy manifest is not an empty host either")
-    func unreadableLegacyManifestIsNotEmpty() throws {
-        let dir = try makeTempDir()
-        defer { try? FileManager.default.removeItem(atPath: dir) }
-        let legacyPath = dir + "/qemu-manifest.json"
-        try Data("{\"vm-a\": ".utf8).write(to: URL(fileURLWithPath: legacyPath))
-
-        let load = makeStore(dir: dir).load()
-        #expect(load.readFailure?.path == legacyPath)
-        #expect(!load.isFresh)
-        // Nothing writes to the legacy path, so the evidence stays put.
-        #expect(FileManager.default.fileExists(atPath: legacyPath))
-    }
-
-    @Test("Unified manifest wins over a lingering legacy file")
-    func unifiedManifestWins() throws {
-        let dir = try makeTempDir()
-        defer { try? FileManager.default.removeItem(atPath: dir) }
-        let store = makeStore(dir: dir)
-
-        store.save(["vm-new": VMManifestEntry(hypervisorType: .firecracker, spec: makeSpec())])
-        let legacy = ["vm-stale": makeSpec()]
-        try JSONEncoder().encode(legacy).write(to: URL(fileURLWithPath: dir + "/qemu-manifest.json"))
-
-        let loaded = store.load().loadedEntries
-        #expect(loaded.count == 1)
-        #expect(loaded["vm-new"]?.hypervisorType == .firecracker)
-    }
-
-    @Test("Legacy manifest survives when the unified rewrite fails")
-    func legacySurvivesFailedRewrite() throws {
-        let dir = try makeTempDir()
-        defer { try? FileManager.default.removeItem(atPath: dir) }
-        let legacyPath = dir + "/qemu-manifest.json"
-        try JSONEncoder().encode(["vm-a": makeSpec()]).write(to: URL(fileURLWithPath: legacyPath))
-
-        // A regular file where the unified manifest's parent directory should be
-        // makes createDirectory (and therefore save) fail.
-        let blocker = dir + "/blocker"
-        FileManager.default.createFile(atPath: blocker, contents: Data())
-        let store = VMManifestStore(
-            path: blocker + "/vm-manifest.json",
-            legacyQEMUManifestPath: legacyPath,
-            logger: Logger(label: "test")
-        )
-
-        // The entries are still returned for this process's orphan tracking, and
-        // the legacy file is retained so the next start can retry the migration.
-        let loaded = store.load().loadedEntries
-        #expect(loaded["vm-a"]?.hypervisorType == .qemu)
-        #expect(FileManager.default.fileExists(atPath: legacyPath))
-        #expect(store.load().loadedEntries["vm-a"]?.hypervisorType == .qemu)
     }
 
     // MARK: - Unreadable manifests (STR-138)
@@ -645,25 +548,26 @@ struct VMManifestStoreTests {
         #expect(loaded["sb-a"]?.spec.memoryBytes == 536_870_912)
     }
 
-    @Test("Manifest entries without a kind (pre-sandbox agents) decode as VMs")
-    func kindlessEntryDecodesAsVM() throws {
+    @Test("An entry missing its required kind is quarantined instead of accepted")
+    func kindlessEntryIsQuarantined() throws {
         let dir = try makeTempDir()
         defer { try? FileManager.default.removeItem(atPath: dir) }
         let store = makeStore(dir: dir)
 
-        // Exactly what a pre-#417 agent persisted: hypervisorType + spec only.
-        struct LegacyEntry: Encodable {
+        struct KindlessEntry: Encodable {
             let hypervisorType: HypervisorType
             let spec: VMSpec
         }
-        let legacy = ["vm-old": LegacyEntry(hypervisorType: .firecracker, spec: makeSpec(cpus: 5))]
-        try JSONEncoder().encode(legacy).write(to: URL(fileURLWithPath: store.path))
+        let kindless = ["vm-old": KindlessEntry(hypervisorType: .firecracker, spec: makeSpec(cpus: 5))]
+        try JSONEncoder().encode(kindless).write(to: URL(fileURLWithPath: store.path))
 
-        let loaded = store.load().loadedEntries
-        #expect(loaded["vm-old"]?.kind == .vm)
-        #expect(loaded["vm-old"]?.hypervisorType == .firecracker)
-        #expect(loaded["vm-old"]?.spec.cpus == 5)
-        #expect(loaded["vm-old"]?.sandboxSpec == nil)
+        let load = store.load()
+        #expect(load.loadedEntries.isEmpty)
+        let quarantined = try #require(load.loadedQuarantined["vm-old"])
+        #expect(quarantined.kind == nil)
+        #expect(quarantined.hypervisorTypeRawValue == HypervisorType.firecracker.rawValue)
+        #expect(quarantined.cpus == 5)
+        #expect(quarantined.effectiveKind == .vm)
     }
 
     @Test("Save creates intermediate directories")

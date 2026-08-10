@@ -474,9 +474,9 @@ host CPU, and device topology they were taken with (#426). A Strato sandbox
 checkpoint is therefore three artifacts taken as one consistent point in
 time, plus recorded compatibility constraints:
 
-- `memory.snap` + `vmstate.snap` — written by `PUT /snapshot/create` (full
-  snapshots; `track_dirty_pages`/diff snapshots are wrapped in
-  SwiftFirecracker but unused — see [Open threads](#open-threads)).
+- `memory.snap` + `vmstate.snap` — written by `PUT /snapshot/create` as a full
+  snapshot. Differential snapshots are not exposed until an end-to-end
+  checkpoint policy needs them — see [Open threads](#open-threads).
 - `rootfs.ext4` — a copy of the writable rootfs made **while the guest is
   paused**, via `cp --reflink=auto` (a free clone on reflink filesystems —
   btrfs/XFS today, the ZFS pool backend (#350) later — and a full copy
@@ -1062,10 +1062,10 @@ v4) are all landed — see [Guest networking](#guest-networking).
 
 - The warm-vs-cold boot-latency measurement on strato-dev (the
   `bootPath=warm|cold` / `bootMillis` boot logs are the measurement hook).
-- Diff snapshots via `track_dirty_pages` (wrapped in SwiftFirecracker, still
-  unused) plus a periodic auto-checkpoint policy; uffd lazy-load restore for
-  fork latency; snapshot retention policies beyond delete-time cleanup
-  (#428).
+- Diff snapshots via `track_dirty_pages` plus a periodic auto-checkpoint
+  policy; uffd lazy-load restore for fork latency; snapshot retention policies
+  beyond delete-time cleanup (#428). SwiftFirecracker should regain either API
+  only when this end-to-end policy has a consumer for it.
 - **Guest identity** (#496, design in [guest-identity](./guest-identity.md)):
   a SPIFFE Workload API socket inside the sandbox, served by strato-agent
   over a new control-protocol identity port (the design was written against a

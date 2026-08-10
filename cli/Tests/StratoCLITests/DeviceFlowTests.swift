@@ -32,7 +32,7 @@ struct DeviceFlowTests {
         ])
         let flow = DeviceFlow(serverURL: serverURL, transport: transport, sleeper: { _ in })
 
-        let response = try await flow.start(clientName: "test host", scopes: "read write")
+        let response = try await flow.start(clientName: "test host")
         #expect(response.deviceCode == "dc_abc")
         #expect(response.userCode == "BCDF-GHJK")
         #expect(response.interval == 5)
@@ -42,8 +42,7 @@ struct DeviceFlowTests {
         #expect(request.request.headerFields[.contentType] == "application/x-www-form-urlencoded")
         // Asserted whole: form encoding moved out of hand-written code and into
         // the generated client, so this is the assertion that still covers it.
-        // The generator spells a space as `+`.
-        #expect(request.bodyText == "client_name=test+host&scope=read+write")
+        #expect(request.bodyText == "client_name=test+host")
     }
 
     @Test("poll rides out pending and slow_down, then succeeds")
@@ -52,7 +51,7 @@ struct DeviceFlowTests {
         let slowDownBody = #"{"error": "slow_down"}"#
         let tokenBody = """
             {"access_token": "st_abc", "token_type": "Bearer", "expires_in": 3600,
-             "refresh_token": "rt_abc", "scope": "read write"}
+             "refresh_token": "rt_abc"}
             """
         let transport = MockTransport(responses: [
             .init(statusCode: 400, json: pendingBody),

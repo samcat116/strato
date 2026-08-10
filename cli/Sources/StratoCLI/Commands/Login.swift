@@ -14,9 +14,6 @@ struct Login: AsyncParsableCommand {
     @Option(name: .long, help: "Context name to store the login under.")
     var context: String?
 
-    @Option(name: .long, help: "Requested scopes, space-separated (read, write, admin). Deprecated; use --actions.")
-    var scopes: String = "read write"
-
     @Option(
         name: .long,
         help: "Limit this session to these actions, comma-separated (e.g. 'vm:*,volume:read'). Default: no limit.")
@@ -57,7 +54,7 @@ struct Login: AsyncParsableCommand {
             let clientName = "strato CLI on \(hostname())"
             let flow = DeviceFlow(serverURL: serverURL)
             let authorization = try await flow.start(
-                clientName: clientName, scopes: scopes, restriction: try requestedRestriction())
+                clientName: clientName, restriction: try requestedRestriction())
 
             print("To sign in, visit:\n")
             print("    \(authorization.verificationUriComplete)\n")

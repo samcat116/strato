@@ -43,13 +43,12 @@ public struct DeviceFlow: Sendable {
     ///   accepts both and the form shape is what RFC 8628 clients expect.
     public func start(
         clientName: String,
-        scopes: String,
         restriction: Components.Schemas.CredentialRestriction? = nil
     ) async throws -> Components.Schemas.DeviceAuthorizationResponse {
         let body: Operations.OauthDeviceAuthorization.Input.Body =
             restriction == nil
-            ? .urlEncodedForm(.init(clientName: clientName, scope: scopes))
-            : .json(.init(clientName: clientName, scope: scopes, restriction: restriction))
+            ? .urlEncodedForm(.init(clientName: clientName))
+            : .json(.init(clientName: clientName, restriction: restriction))
         let output = try await client.oauthDeviceAuthorization(body: body)
         switch output {
         case .ok(let ok):

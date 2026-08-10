@@ -343,7 +343,7 @@ final class VolumeIOLimitsTests {
                 iopsTotal: 500, bpsTotal: nil)
 
             var message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            var entry = try #require(message.volumes?.first)
+            var entry = try #require(message.volumes.first)
             #expect(entry.ioLimits?.iopsTotal == 500)
             #expect(entry.ioLimits?.bpsTotal == nil)
 
@@ -355,7 +355,7 @@ final class VolumeIOLimitsTests {
             try await volume.save(on: app.db)
 
             message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            entry = try #require(message.volumes?.first)
+            entry = try #require(message.volumes.first)
             #expect(entry.ioLimits == nil)
         }
     }

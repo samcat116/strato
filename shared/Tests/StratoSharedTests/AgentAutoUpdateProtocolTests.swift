@@ -27,15 +27,14 @@ struct AgentAutoUpdateProtocolTests {
         #expect(update.tarballMember == "strato-agent")
     }
 
-    @Test("DesiredStateMessage from an older control plane decodes the update to nil")
-    func desiredAgentUpdateBackwardCompatible() throws {
-        // A pre-v7 control plane emits no `desiredAgentUpdate` key at all.
-        // Nil means "no opinion" — never an instruction to downgrade — so
-        // absence needs no version gating on the agent side.
-        let legacy = """
-            {"requestId":"r","timestamp":0,"syncId":"s","vms":[]}
+    @Test("DesiredStateMessage without an update opinion decodes the update to nil")
+    func desiredAgentUpdateSemanticAbsence() throws {
+        // Nil means "no opinion" — never an instruction to downgrade.
+        let noOpinion = """
+            {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
+             "networks":[],"networksAuthoritative":true,"tombstones":[],"volumes":[],"snapshots":[]}
             """
-        let decoded = try decodeJSON(DesiredStateMessage.self, from: legacy)
+        let decoded = try decodeJSON(DesiredStateMessage.self, from: noOpinion)
         #expect(decoded.desiredAgentUpdate == nil)
         #expect(decoded.syncId == "s")
     }
@@ -66,14 +65,14 @@ struct AgentAutoUpdateProtocolTests {
         #expect(status.reason.contains("in flight"))
     }
 
-    @Test("ObservedStateReport from an older agent decodes the update status to nil")
-    func observedUpdateStatusBackwardCompatible() throws {
-        let legacy = """
-            {"requestId":"r","timestamp":0,"agentId":"agent-1","vms":[],
+    @Test("ObservedStateReport without an update blocker decodes the status to nil")
+    func observedUpdateStatusSemanticAbsence() throws {
+        let noBlocker = """
+            {"requestId":"r","timestamp":0,"agentId":"agent-1","vms":[],"sandboxes":[],
              "resources":{"totalCPU":8,"availableCPU":4,"totalMemory":16,"availableMemory":8,
-                          "totalDisk":100,"availableDisk":50}}
+                          "totalDisk":100,"availableDisk":50},"unrecognized":[]}
             """
-        let decoded = try decodeJSON(ObservedStateReport.self, from: legacy)
+        let decoded = try decodeJSON(ObservedStateReport.self, from: noBlocker)
         #expect(decoded.agentUpdateStatus == nil)
     }
 

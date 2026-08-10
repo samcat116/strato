@@ -266,6 +266,31 @@ struct HTTPConcurrencyTests {
             _ = try await client.request(method: .GET, path: "/after-disconnect")
         }
     }
+
+    /// Firecracker broadcasts Pause before collecting per-vCPU replies, but
+    /// keeps its instance state at Running unless every reply arrives. Recovery
+    /// must therefore send Resumed even when the manager's mirror is not
+    /// Paused; the ordinary `resume()` state guard would reject this call
+    /// before it reached the VMM (STR-205).
+    @Test("failed-pause recovery bypasses the coarse VM state guard")
+    func failedPauseRecoveryAlwaysSendsResume() async throws {
+        let dir = try makeSocketDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let socketPath = "\(dir)/api.sock"
+
+        let server = try EchoingAPIServer(socketPath: socketPath)
+        server.start()
+        defer { server.stop() }
+
+        let manager = FirecrackerManager(socketPath: socketPath, logger: Logger(label: "test"))
+        try await manager.connect()
+        // A fresh manager is NotStarted, an even stricter proof than the
+        // Running state Firecracker exposes after a partial pause.
+        #expect(await manager.vmState == .notStarted)
+        try await manager.recoverFromFailedPause()
+        #expect(await manager.vmState == .running)
+        await manager.disconnect()
+    }
 }
 
 /// Stand-in Firecracker API server that echoes each request's path, so

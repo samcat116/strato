@@ -125,11 +125,6 @@ export function acceptedSnapshotMutation(
   };
 }
 
-// `acceptedOperation` — the adapter for a verb that answered with an operation
-// record rather than its resource — went with the last such verb: VM restart and
-// the two restores became generation-backed in backend STR-151. Every mutation
-// now answers with `{resource, targetGeneration, mutationId}`.
-
 /** The watched in-flight mutation targeting a resource (VM or sandbox), if any. */
 export function usePendingMutation(
   resourceId: string | undefined

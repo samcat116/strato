@@ -16,7 +16,7 @@ import NIOPosix
 ///
 /// Response framing (`Content-Length`, chunked encoding, pipelined boundaries)
 /// is `NIOHTTP1`'s job now rather than hand-rolled string splitting.
-public actor UnixSocketHTTPClient {
+actor UnixSocketHTTPClient {
     /// Ceiling on a single response body. Firecracker's API returns small JSON
     /// documents; this only exists so a bogus `Content-Length` cannot make the
     /// client buffer without bound.
@@ -39,7 +39,7 @@ public actor UnixSocketHTTPClient {
     /// channel instead of the fault message Firecracker was about to send
     /// (STR-194). Anything comfortably past 30s makes the VMM's own answer the
     /// one that arrives first.
-    public static let defaultRequestTimeout: TimeInterval = 60
+    static let defaultRequestTimeout: TimeInterval = 60
 
     /// Ceiling for a read that only asks the VMM what it already knows.
     ///
@@ -49,7 +49,7 @@ public actor UnixSocketHTTPClient {
     /// job is to find out quickly that the VMM has stopped answering, and they
     /// are the ones that run *before* an action in the same convergence step,
     /// where the two budgets add up against the mutation's deadline.
-    public static let defaultReadTimeout: TimeInterval = 15
+    static let defaultReadTimeout: TimeInterval = 15
 
     private let socketPath: String
     private let logger: Logger
@@ -69,7 +69,7 @@ public actor UnixSocketHTTPClient {
     /// only way it can tell that its result is no longer wanted.
     private var teardownEpoch: UInt64 = 0
 
-    public init(
+    init(
         socketPath: String,
         logger: Logger = Logger(label: "SwiftFirecracker.HTTPClient"),
         group: EventLoopGroup? = nil,
@@ -86,7 +86,7 @@ public actor UnixSocketHTTPClient {
     /// Calling this on an already-connected client closes the previous channel
     /// first, so a reconnect cannot silently orphan a live socket (and its
     /// pending round trips) by overwriting the reference.
-    public func connect() async throws {
+    func connect() async throws {
         logger.debug("Connecting to socket", metadata: ["path": "\(socketPath)"])
 
         guard FileManager.default.fileExists(atPath: socketPath) else {
@@ -181,7 +181,7 @@ public actor UnixSocketHTTPClient {
     /// the epoch bump rather than cancelling the redial task — `connect()`
     /// suspends inside NIO futures that do not observe cancellation, so the only
     /// reliable point to refuse its result is after it has produced one.
-    public func disconnect() async {
+    func disconnect() async {
         teardownEpoch += 1
         await closeChannel()
         everConnected = false
@@ -210,7 +210,7 @@ public actor UnixSocketHTTPClient {
     /// - Parameter timeout: Overrides this client's default ceiling for one
     ///   request. Use it to give a call a budget matched to what it actually
     ///   waits on — see ``defaultReadTimeout``.
-    public func request(
+    func request(
         method: HTTPMethod,
         path: String,
         body: Data? = nil,
@@ -381,7 +381,7 @@ private final class HTTPRoundTripHandler: ChannelInboundHandler, @unchecked Send
 }
 
 /// HTTP methods supported by Firecracker API
-public enum HTTPMethod: String, Sendable {
+enum HTTPMethod: String, Sendable {
     case GET
     case PUT
     case PATCH
@@ -389,12 +389,12 @@ public enum HTTPMethod: String, Sendable {
 }
 
 /// HTTP response from Firecracker
-public struct HTTPResponse: Sendable {
-    public let statusCode: Int
-    public let headers: [String: String]
-    public let body: Data?
+struct HTTPResponse: Sendable {
+    let statusCode: Int
+    let headers: [String: String]
+    let body: Data?
 
-    public var isSuccess: Bool {
+    var isSuccess: Bool {
         statusCode >= 200 && statusCode < 300
     }
 }

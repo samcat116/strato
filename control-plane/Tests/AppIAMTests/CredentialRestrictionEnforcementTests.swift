@@ -379,10 +379,9 @@ final class CredentialRestrictionEnforcementTests {
             let builder = TestDataBuilder(db: app.db)
             let admin = try await builder.createUser(
                 username: "helper-admin", email: "helper-admin@example.com", isSystemAdmin: true)
-            let readOnly = CredentialRestriction(legacyScopes: ["read"])
+            let readOnly = CredentialRestriction.readOnly
 
-            // Exactly today's behaviour for a legacy `read` key held by an
-            // admin: the admin GET surfaces still work.
+            // A read-only key held by an admin can still use admin GET surfaces.
             _ = try await request(app, method: .GET, user: admin, restriction: readOnly)
                 .requireSystemAdmin()
 
@@ -416,11 +415,10 @@ final class CredentialRestrictionEnforcementTests {
             let admin = try await builder.createUser(
                 username: "row-admin", email: "row-admin@example.com", isSystemAdmin: true)
 
-            // A legacy `read` credential keeps seeing exactly the rows it sees
-            // today — this is the compatibility claim for every list endpoint
-            // with scopeless rows in it.
+            // A read-only credential can see a scopeless row when its action
+            // restriction covers the row's read action.
             #expect(
-                request(app, method: .GET, user: admin, restriction: CredentialRestriction(legacyScopes: ["read"]))
+                request(app, method: .GET, user: admin, restriction: .readOnly)
                     .allowsScopelessPlatformRow(action: "agent:read"))
 
             #expect(
@@ -477,7 +475,7 @@ final class CredentialRestrictionEnforcementTests {
                 username: "row-user", email: "row-user@example.com")
 
             let request = self.request(
-                app, method: .POST, user: user, restriction: CredentialRestriction(legacyScopes: ["read"]))
+                app, method: .POST, user: user, restriction: .readOnly)
             var thrown: (any Error)?
             do { try await request.markRowScopedAuthorization() } catch { thrown = error }
             #expect((thrown as? any AbortError)?.status == .forbidden)

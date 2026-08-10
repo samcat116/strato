@@ -302,6 +302,138 @@ struct MigrationRoundTripTests {
         }
     }
 
+    @Test("Credential scope cutover backfills every historical shape and drops the legacy columns")
+    func credentialScopeCutover() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+            let user = try await TestDataBuilder(db: app.db).createUser(
+                username: "credential-cutover", email: "credential-cutover@example.com")
+            let userID = try user.requireID()
+
+            // Recreate the immediately pre-STR-227 schema. The live models can
+            // no longer express null canonical restrictions, so seed the exact
+            // historical rows through SQL.
+            try await RemoveLegacyCredentialScopes().revert(on: app.db)
+
+            let readID = UUID()
+            let writeID = UUID()
+            let adminID = UUID()
+            let mixedReadID = UUID()
+            let malformedID = UUID()
+            let emptyID = UUID()
+            let canonicalID = UUID()
+            try await sql.raw(
+                """
+                INSERT INTO api_keys
+                    (id, user_id, name, key_hash, key_prefix, scopes,
+                     restriction_actions, restriction_node_type, restriction_node_id, is_active)
+                VALUES
+                    (\(bind: readID), \(bind: userID), 'read', 'hash-read', 'read',
+                     ARRAY['read']::text[], NULL, NULL, NULL, true),
+                    (\(bind: writeID), \(bind: userID), 'write', 'hash-write', 'write',
+                     ARRAY['write']::text[], NULL, NULL, NULL, true),
+                    (\(bind: adminID), \(bind: userID), 'admin', 'hash-admin', 'admin',
+                     ARRAY['admin']::text[], NULL, NULL, NULL, true),
+                    (\(bind: mixedReadID), \(bind: userID), 'mixed', 'hash-mixed', 'mixed',
+                     ARRAY['bogus', 'read']::text[], NULL, NULL, NULL, true),
+                    (\(bind: malformedID), \(bind: userID), 'malformed', 'hash-malformed', 'malformed',
+                     ARRAY['bogus', '']::text[], NULL, NULL, NULL, true),
+                    (\(bind: emptyID), \(bind: userID), 'empty', 'hash-empty', 'empty',
+                     ARRAY[]::text[], NULL, NULL, NULL, true),
+                    (\(bind: canonicalID), \(bind: userID), 'canonical', 'hash-canonical', 'canonical',
+                     ARRAY[]::text[], ARRAY['vm:read']::text[], NULL, NULL, true)
+                """
+            ).run()
+
+            let cliID = UUID()
+            try await sql.raw(
+                """
+                INSERT INTO cli_sessions
+                    (id, user_id, client_name, scopes, restriction_actions,
+                     access_token_hash, access_token_prefix, access_token_expires_at,
+                     refresh_token_hash, refresh_token_expires_at)
+                VALUES
+                    (\(bind: cliID), \(bind: userID), 'legacy-cli', ARRAY['write']::text[], NULL,
+                     'access-hash', 'st_legacy...', now() + interval '1 hour',
+                     'refresh-hash', now() + interval '1 day')
+                """
+            ).run()
+
+            let deviceID = UUID()
+            try await sql.raw(
+                """
+                INSERT INTO oauth_device_authorizations
+                    (id, device_code_hash, user_code, client_name, scopes,
+                     restriction_actions, status, expires_at, poll_interval)
+                VALUES
+                    (\(bind: deviceID), 'device-hash', 'BCDF-GHJK', 'legacy-device',
+                     ARRAY['read']::text[], NULL, 'pending', now() + interval '15 minutes', 5)
+                """
+            ).run()
+
+            try await RemoveLegacyCredentialScopes().prepare(on: app.db)
+
+            struct RestrictionRow: Decodable {
+                let id: UUID
+                let restrictionActions: [String]
+
+                enum CodingKeys: String, CodingKey {
+                    case id
+                    case restrictionActions = "restriction_actions"
+                }
+            }
+            let apiRows = try await sql.raw(
+                "SELECT id, restriction_actions FROM api_keys WHERE user_id = \(bind: userID)"
+            ).all(decoding: RestrictionRow.self)
+            let actionsByID = Dictionary(uniqueKeysWithValues: apiRows.map { ($0.id, $0.restrictionActions) })
+            #expect(actionsByID[readID] == ["read"])
+            #expect(actionsByID[writeID] == ["*"])
+            #expect(actionsByID[adminID] == ["*"])
+            #expect(actionsByID[mixedReadID] == ["read"])
+            #expect(actionsByID[malformedID] == [])
+            #expect(actionsByID[emptyID] == [])
+            #expect(actionsByID[canonicalID] == ["vm:read"])
+
+            let cli = try #require(
+                try await sql.raw(
+                    "SELECT id, restriction_actions FROM cli_sessions WHERE id = \(bind: cliID)"
+                ).first(decoding: RestrictionRow.self))
+            #expect(cli.restrictionActions == ["*"])
+            let device = try #require(
+                try await sql.raw(
+                    "SELECT id, restriction_actions FROM oauth_device_authorizations WHERE id = \(bind: deviceID)"
+                ).first(decoding: RestrictionRow.self))
+            #expect(device.restrictionActions == ["read"])
+
+            for table in [APIKey.schema, CLISession.schema, DeviceAuthorization.schema] {
+                await #expect(throws: (any Error).self) {
+                    _ = try await sql.raw("SELECT scopes FROM \(ident: table)").all()
+                }
+            }
+
+            struct Column: Decodable {
+                let tableName: String
+                let isNullable: String
+
+                enum CodingKeys: String, CodingKey {
+                    case tableName = "table_name"
+                    case isNullable = "is_nullable"
+                }
+            }
+            let columns = try await sql.raw(
+                """
+                SELECT table_name, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name IN ('api_keys', 'cli_sessions', 'oauth_device_authorizations')
+                  AND column_name = 'restriction_actions'
+                """
+            ).all(decoding: Column.self)
+            #expect(columns.count == 3)
+            #expect(columns.allSatisfy { $0.isNullable == "NO" })
+        }
+    }
+
     @Test("Workload convergence observability columns are nullable")
     func workloadConvergenceObservabilityColumnsAreNullable() async throws {
         try await withTestApp { app in

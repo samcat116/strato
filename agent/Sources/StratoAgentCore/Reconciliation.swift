@@ -1021,15 +1021,12 @@ public actor Reconciler {
     /// Diff a desired-state sync against reality and enqueue the work. Returns
     /// quickly — long convergence actions run on the per-workload lanes.
     ///
-    /// The volume and snapshot halves key on their fields' own nil: nil means
-    /// the sender said nothing about that family and the half is skipped
-    /// (STR-148/STR-150) — planning against an empty desired list instead
-    /// would report every volume or checkpoint on the host as unaccounted for
-    /// and invite a future reading of that silence as teardown, of data or a
-    /// point in time that cannot be recreated. (The per-family version gates
-    /// that used to guard these halves went with the skew window at v38.)
+    /// Volume and snapshot desired lists are authoritative in the current wire
+    /// schema. Local observations remain optional: a backend that cannot
+    /// enumerate its store must skip that family rather than treating unknown
+    /// presence as empty.
     public func apply(_ message: DesiredStateMessage) async {
-        let tombstones = message.tombstones ?? []
+        let tombstones = message.tombstones
 
         // Instance metadata is recorded before anything else this sync does,
         // and deliberately outside the presence guard below: the store is a
@@ -1076,10 +1073,8 @@ public actor Reconciler {
             return
         }
 
-        if let desiredVolumes = message.volumes {
-            await actuator.prepareManagedVolumeInventory(
-                from: message.vms, desiredVolumes: desiredVolumes)
-        }
+        await actuator.prepareManagedVolumeInventory(
+            from: message.vms, desiredVolumes: message.volumes)
 
         let presentVMs = await actuator.observedPresence()
         // The durable half of the reconciler's memory (STR-151). `lastApplied`
@@ -1097,53 +1092,46 @@ public actor Reconciler {
 
         var volumePlan = ReconcilePlan()
         var presentVolumeCount = 0
-        if let desiredVolumes = message.volumes {
-            // Nil is the storage backend saying it cannot enumerate the store —
-            // not that the store is empty. Planning against `[:]` would create
-            // every desired volume afresh, over (or under) bytes that are
-            // probably still there, so an unanswerable inventory skips the
-            // volume half exactly like a nil `volumes` field does.
-            if let presentVolumes = await actuator.observedVolumePresence() {
-                presentVolumeCount = presentVolumes.count
-                volumePlan = Self.planVolumes(
-                    desired: desiredVolumes, present: presentVolumes,
-                    lastApplied: appliedGenerations(kind: .volume), tombstones: tombstones)
-                plan.unrecognized += volumePlan.unrecognized
-            } else {
-                logger.error(
-                    "Skipping the volume half of this sync: this host cannot enumerate its volume store",
-                    metadata: [
-                        "syncId": .string(message.syncId),
-                        "desiredVolumes": .stringConvertible(desiredVolumes.count),
-                    ])
-            }
+        // Nil is the storage backend saying it cannot enumerate the store —
+        // not that the store is empty. Planning against `[:]` would create
+        // every desired volume afresh over bytes that are probably still there.
+        if let presentVolumes = await actuator.observedVolumePresence() {
+            presentVolumeCount = presentVolumes.count
+            volumePlan = Self.planVolumes(
+                desired: message.volumes, present: presentVolumes,
+                lastApplied: appliedGenerations(kind: .volume), tombstones: tombstones)
+            plan.unrecognized += volumePlan.unrecognized
+        } else {
+            logger.error(
+                "Skipping the volume half of this sync: this host cannot enumerate its volume store",
+                metadata: [
+                    "syncId": .string(message.syncId),
+                    "desiredVolumes": .stringConvertible(message.volumes.count),
+                ])
         }
 
         var snapshotPlan = ReconcilePlan()
         var presentSnapshotCounts: [WorkloadKind: Int] = [:]
-        if let desiredSnapshots = message.snapshots {
-            // Nil is the record store saying it cannot enumerate what this host
-            // holds — not that it holds nothing. Planning against `[:]` would
-            // re-capture every desired artifact, checkpointing live guests over
-            // the ones already there, so an unanswerable inventory skips the
-            // snapshot half exactly like a nil `snapshots` field does.
-            if let presentSnapshots = await actuator.observedSnapshotPresence() {
-                for presence in presentSnapshots.values {
-                    guard case .managed(let artifact) = presence else { continue }
-                    presentSnapshotCounts[artifact.kind.workloadKind, default: 0] += 1
-                }
-                snapshotPlan = Self.planSnapshots(
-                    desired: desiredSnapshots, present: presentSnapshots,
-                    lastApplied: appliedSnapshotGenerations(), tombstones: tombstones)
-                plan.unrecognized += snapshotPlan.unrecognized
-            } else {
-                logger.error(
-                    "Skipping the snapshot half of this sync: this host cannot enumerate the artifacts it holds",
-                    metadata: [
-                        "syncId": .string(message.syncId),
-                        "desiredSnapshots": .stringConvertible(desiredSnapshots.count),
-                    ])
+        // Nil is the record store saying it cannot enumerate what this host
+        // holds — not that it holds nothing. Planning against `[:]` would
+        // re-capture every desired artifact over bytes that are probably still
+        // there.
+        if let presentSnapshots = await actuator.observedSnapshotPresence() {
+            for presence in presentSnapshots.values {
+                guard case .managed(let artifact) = presence else { continue }
+                presentSnapshotCounts[artifact.kind.workloadKind, default: 0] += 1
             }
+            snapshotPlan = Self.planSnapshots(
+                desired: message.snapshots, present: presentSnapshots,
+                lastApplied: appliedSnapshotGenerations(), tombstones: tombstones)
+            plan.unrecognized += snapshotPlan.unrecognized
+        } else {
+            logger.error(
+                "Skipping the snapshot half of this sync: this host cannot enumerate the artifacts it holds",
+                metadata: [
+                    "syncId": .string(message.syncId),
+                    "desiredSnapshots": .stringConvertible(message.snapshots.count),
+                ])
         }
 
         var presentSandboxCount = 0
@@ -1161,7 +1149,10 @@ public actor Reconciler {
         // Enqueue order matters even though multi-lane items already give
         // mutual exclusion: holding two lanes guarantees isolation, not
         // sequence. Volume data-plane work goes first so a volume exists before
-        // a VM that references it is built, and volume *attachment* work goes
+        // a VM that references it is built. A newly created attached volume is
+        // one item (`create`, then `attach`) that already holds the VM lane, so
+        // it must join that first group too; otherwise its VM runs first and
+        // cannot resolve the volume's local path. Remaining attachment work goes
         // after the VM items so it queues behind that VM's create/boot on the
         // VM's own lane instead of racing it and burning a dependency wait.
         //
@@ -1170,7 +1161,9 @@ public actor Reconciler {
         // own items is what makes it queue *behind* that parent's create/boot
         // instead of racing it — and a checkpoint of a guest that is still
         // being built is not a checkpoint of anything.
-        let (volumeData, volumeAttachment) = volumePlan.items.partitioned { $0.laneKeys.count == 1 }
+        let (volumeData, volumeAttachment) = volumePlan.items.partitioned {
+            $0.laneKeys.count == 1 || $0.steps.contains(.create)
+        }
         plan.items =
             volumeData + vmPlan.items + volumeAttachment + sandboxPlan.items + snapshotPlan.items
 
@@ -1197,9 +1190,9 @@ public actor Reconciler {
                 "presentVMs": .stringConvertible(presentVMs.count),
                 "desiredSandboxes": .stringConvertible(message.sandboxes.count),
                 "presentSandboxes": .stringConvertible(presentSandboxCount),
-                "desiredVolumes": .stringConvertible(message.volumes?.count ?? 0),
+                "desiredVolumes": .stringConvertible(message.volumes.count),
                 "presentVolumes": .stringConvertible(presentVolumeCount),
-                "desiredSnapshots": .stringConvertible(message.snapshots?.count ?? 0),
+                "desiredSnapshots": .stringConvertible(message.snapshots.count),
                 "presentSnapshots": .stringConvertible(presentSnapshotCounts.values.reduce(0, +)),
                 "unrecognized": .stringConvertible(plan.unrecognized.count),
                 "workItems": .stringConvertible(items.count),
@@ -1331,11 +1324,10 @@ public actor Reconciler {
     /// Project this sync's per-VM metadata onto the store the guest-facing
     /// metadata service reads (STR-52).
     ///
-    /// Two rules, because the two writes answer to different senders:
+    /// Two rules cover explicit absence and the current desired payload:
     ///
-    /// * An entry that wants the VM **absent** withdraws its metadata whatever
-    ///   the sender's version is. `desiredStatus` is a field every control
-    ///   plane sends, and having nothing to serve is the safe state for a VM
+    /// * An entry that wants the VM **absent** withdraws its metadata.
+    ///   Having nothing to serve is the safe state for a VM
     ///   leaving this host: the IMDS identifies its caller by source address,
     ///   and an address outlives the VM it was allocated to. This also covers
     ///   the VM that was already gone when the sync arrived, for which the
@@ -1345,9 +1337,8 @@ public actor Reconciler {
     ///   delete keeps failing is still running with its metadata already gone,
     ///   which is the safe end of a trade whose other end serves a released
     ///   VM's SSH keys and user data to whoever next holds its address.
-    /// * Otherwise the payload is written only when the sender speaks the
-    ///   field, so that an older control plane's silence leaves what this host
-    ///   serves alone.
+    /// * Otherwise the payload is applied as-is. Nil authoritatively withdraws
+    ///   metadata for a VM that should remain present.
     ///
     /// Staleness is the store's own guard rather than `lastApplied`, which
     /// tracks convergence and so lags behind: a VM whose create keeps failing

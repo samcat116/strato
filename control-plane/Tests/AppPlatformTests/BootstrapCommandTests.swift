@@ -71,7 +71,7 @@ struct BootstrapCommandTests {
             #expect(printedKey.hasPrefix("sk_"))
             let apiKey = try #require(try await APIKey.query(on: app.db).first())
             #expect(apiKey.keyHash == APIKey.hashAPIKey(printedKey))
-            #expect(apiKey.scopes == [APIKeyScope.admin.rawValue])
+            #expect(apiKey.restriction.isUnrestricted)
             #expect(apiKey.isActive)
             #expect(apiKey.expiresAt == nil)
         }

@@ -468,7 +468,6 @@ actor Agent {
         self.desiredStateFullRefetchInterval = desiredStateFullRefetchInterval
         self.manifestStore = VMManifestStore(
             path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
-            legacyQEMUManifestPath: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
             logger: logger
         )
         self.snapshotRecordStore = SnapshotRecordStore(

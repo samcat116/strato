@@ -1,9 +1,11 @@
 # End-to-end testing on a single host
 
-Unit tests (`swift test`) need no running services. This page covers the other
-kind of check: standing up a real control plane, attaching a real hypervisor
-agent, and booting a real VM — the only way to catch bugs that live in the
-seams between the control plane, the proxy, SPIRE, OVN, and QEMU.
+Most Swift package tests need no running services. Control-plane tests are the
+exception: they require PostgreSQL and clone a migrated template database per
+test, as described in [local development](./local-development.md). This page
+covers the full-system check: standing up a real control plane, attaching a
+real hypervisor agent, and booting a real VM — the only way to catch bugs that
+live in the seams between the control plane, the proxy, SPIRE, OVN, and QEMU.
 
 Two scripts do the work:
 
@@ -150,7 +152,7 @@ Cirros does not ship one.
 ### Serial console
 
 ```
-GET /api/vms/{ID}/console      (WebSocket, needs an API key with `write` scope)
+GET /api/vms/{ID}/console      (WebSocket, needs `vm:viewConsole` in the key restriction)
 ```
 
 The VM id in that path must be **uppercase** — the agent's `managedVMs` map is

@@ -53,32 +53,31 @@ struct SnapshotReconciliationTests {
         }
     }
 
-    /// A sync from a pre-v33 control plane says nothing about snapshots. It
-    /// must decode to nil, not `[]`: the agent skips its whole snapshot half on
-    /// nil, and would plan against an empty desired list otherwise — reporting
-    /// every artifact on the host as unaccounted for.
-    @Test("A pre-v33 sync decodes snapshots to nil, not an empty list")
-    func desiredSnapshotsAbsenceIsNotEmptiness() throws {
-        let legacy = #"{"requestId":"r","timestamp":0,"syncId":"s","vms":[]}"#
-        let decoded = try decodeJSON(DesiredStateMessage.self, from: legacy)
-        #expect(decoded.snapshots == nil)
+    @Test("The current desired schema requires an authoritative snapshot list")
+    func desiredSnapshotsAreRequired() throws {
+        let malformed = """
+            {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
+             "networks":[],"networksAuthoritative":true,"tombstones":[],"volumes":[]}
+            """
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(DesiredStateMessage.self, from: malformed)
+        }
 
-        // An explicit empty list is a *different* statement — "this host should
-        // hold no artifacts" — and must survive the round trip as one.
         let empty = DesiredStateMessage(syncId: "s", vms: [], snapshots: [])
-        #expect(try roundTrip(empty).snapshots?.isEmpty == true)
+        #expect(try roundTrip(empty).snapshots.isEmpty)
     }
 
-    /// The other direction, with sharper stakes: an empty list the control
-    /// plane believed would reap every checkpoint row it holds for the agent.
-    @Test("A pre-v33 report decodes snapshots to nil, not an empty list")
+    /// Unlike desired state, a current observation may omit snapshots when the
+    /// local artifact store cannot be enumerated. Nil means unknown; `[]` is an
+    /// authoritative empty inventory that can confirm deletion.
+    @Test("An unavailable observed snapshot inventory remains semantically optional")
     func observedSnapshotsAbsenceIsNotEmptiness() throws {
-        let legacy = """
-            {"requestId":"r","timestamp":0,"agentId":"a","vms":[],
+        let unavailable = """
+            {"requestId":"r","timestamp":0,"agentId":"a","vms":[],"sandboxes":[],
              "resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,
-             "totalDisk":1,"availableDisk":1}}
+             "totalDisk":1,"availableDisk":1},"unrecognized":[]}
             """
-        let decoded = try decodeJSON(ObservedStateReport.self, from: legacy)
+        let decoded = try decodeJSON(ObservedStateReport.self, from: unavailable)
         #expect(decoded.snapshots == nil)
 
         let empty = ObservedStateReport(

@@ -21,15 +21,8 @@ final class APIKey: Model, @unchecked Sendable {
     @Field(key: "key_prefix")
     var keyPrefix: String  // First 8 characters for identification
 
-    /// The legacy `read`/`write`/`admin` scopes. Superseded by the restriction
-    /// columns below (STR-115) and kept as the compatibility shim for keys
-    /// minted before them; `restriction` reads these only when
-    /// `restrictionActions` is nil.
-    @Field(key: "scopes")
-    var scopes: [String]
-
-    @OptionalField(key: "restriction_actions")
-    var restrictionActions: [String]?
+    @Field(key: "restriction_actions")
+    var restrictionActions: [String]
 
     @OptionalField(key: "restriction_node_type")
     var restrictionNodeType: String?
@@ -63,7 +56,7 @@ final class APIKey: Model, @unchecked Sendable {
         name: String,
         keyHash: String,
         keyPrefix: String,
-        scopes: [String] = ["read", "write"],
+        restriction: CredentialRestriction = .unrestricted,
         isActive: Bool = true,
         expiresAt: Date? = nil
     ) {
@@ -72,7 +65,9 @@ final class APIKey: Model, @unchecked Sendable {
         self.name = name
         self.keyHash = keyHash
         self.keyPrefix = keyPrefix
-        self.scopes = scopes
+        self.restrictionActions = restriction.actions
+        self.restrictionNodeType = restriction.node?.type.rawValue
+        self.restrictionNodeID = restriction.node?.id
         self.isActive = isActive
         self.expiresAt = expiresAt
     }
@@ -114,34 +109,6 @@ extension APIKey: Content {}
 
 extension APIKey: CredentialRestrictionStoring {}
 
-/// Permission scopes attachable to an API key. Ordered least-to-most
-/// privileged: `admin` implies `write` implies `read`.
-///
-/// These no longer gate anything on their own (STR-115): a credential's power
-/// is its `CredentialRestriction`, and these survive as the wire spelling
-/// existing clients send and as the shim `CredentialRestriction(legacyScopes:)`
-/// reads. `write` and `admin` both mean unrestricted, which is what they always
-/// meant — nothing ever *required* `admin`.
-enum APIKeyScope: String, CaseIterable, Comparable {
-    case read
-    case write
-    case admin
-
-    static let validValues = Set(APIKeyScope.allCases.map(\.rawValue))
-
-    private var rank: Int {
-        switch self {
-        case .read: return 0
-        case .write: return 1
-        case .admin: return 2
-        }
-    }
-
-    static func < (lhs: APIKeyScope, rhs: APIKeyScope) -> Bool {
-        lhs.rank < rhs.rank
-    }
-}
-
 // MARK: - String Extension for Random Generation
 
 extension String {
@@ -155,14 +122,31 @@ extension String {
 
 struct CreateAPIKeyRequest: Content {
     let name: String
-    /// Deprecated (STR-115): the legacy scope array. Ignored when
-    /// `restriction` is present.
-    let scopes: [String]?
     /// What the key may do, in the IAM action and node vocabulary. Absent means
-    /// "everything its owner can" — the honest spelling of what `read write`
-    /// always meant.
+    /// "everything its owner can".
     let restriction: CredentialRestrictionPayload?
     let expiresInDays: Int?  // Optional expiration in days
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case restriction
+        case expiresInDays
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case scopes
+    }
+
+    init(from decoder: any Decoder) throws {
+        if try decoder.container(keyedBy: LegacyCodingKeys.self).contains(.scopes) {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "API key scopes are no longer supported"))
+        }
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        name = try values.decode(String.self, forKey: .name)
+        restriction = try values.decodeIfPresent(CredentialRestrictionPayload.self, forKey: .restriction)
+        expiresInDays = try values.decodeIfPresent(Int.self, forKey: .expiresInDays)
+    }
 }
 
 struct CreateAPIKeyResponse: Content {
@@ -170,7 +154,6 @@ struct CreateAPIKeyResponse: Content {
     let name: String
     let key: String  // Full key - only shown once
     let keyPrefix: String
-    let scopes: [String]
     let restriction: CredentialRestrictionPayload
     let expiresAt: Date?
     let createdAt: Date?
@@ -180,7 +163,6 @@ struct CreateAPIKeyResponse: Content {
         self.name = apiKey.name
         self.key = fullKey
         self.keyPrefix = apiKey.keyPrefix
-        self.scopes = apiKey.scopes
         self.restriction = CredentialRestrictionPayload(apiKey.restriction)
         self.expiresAt = apiKey.expiresAt
         self.createdAt = apiKey.createdAt
@@ -191,10 +173,6 @@ struct APIKeyResponse: Content {
     let id: UUID?
     let name: String
     let keyPrefix: String
-    let scopes: [String]
-    /// The effective restriction, whether stored outright or derived from the
-    /// legacy scopes — so a client never has to know which of the two a row
-    /// carries.
     let restriction: CredentialRestrictionPayload
     let isActive: Bool
     let expiresAt: Date?
@@ -205,7 +183,6 @@ struct APIKeyResponse: Content {
         self.id = apiKey.id
         self.name = apiKey.name
         self.keyPrefix = apiKey.keyPrefix
-        self.scopes = apiKey.scopes
         self.restriction = CredentialRestrictionPayload(apiKey.restriction)
         self.isActive = apiKey.isActive
         self.expiresAt = apiKey.expiresAt
@@ -216,8 +193,27 @@ struct APIKeyResponse: Content {
 
 struct UpdateAPIKeyRequest: Content {
     let name: String?
-    /// Deprecated (STR-115); see `CreateAPIKeyRequest.scopes`.
-    let scopes: [String]?
     let restriction: CredentialRestrictionPayload?
     let isActive: Bool?
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case restriction
+        case isActive
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey {
+        case scopes
+    }
+
+    init(from decoder: any Decoder) throws {
+        if try decoder.container(keyedBy: LegacyCodingKeys.self).contains(.scopes) {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath, debugDescription: "API key scopes are no longer supported"))
+        }
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        name = try values.decodeIfPresent(String.self, forKey: .name)
+        restriction = try values.decodeIfPresent(CredentialRestrictionPayload.self, forKey: .restriction)
+        isActive = try values.decodeIfPresent(Bool.self, forKey: .isActive)
+    }
 }

@@ -156,9 +156,9 @@ jobs:
         working-directory: control-plane/web
         run: bun install --frozen-lockfile
 
-      - name: Build and deploy frontend
+      - name: Build frontend
         working-directory: control-plane/web
-        run: bun run build:deploy
+        run: bun run build
 
       - name: Build Control Plane Release Binary
         working-directory: control-plane

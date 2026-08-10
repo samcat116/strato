@@ -61,19 +61,6 @@ struct SwiftFirecrackerTests {
         #expect(json.contains("\"guest_mac\":\"AA:BB:CC:DD:EE:FF\""))
     }
 
-    @Test("BootSource.withRootFS creates correct boot args")
-    func testBootSourceWithRootFS() {
-        let bootSource = BootSource.withRootFS(
-            kernelImagePath: "/vmlinux",
-            rootDevice: "/dev/vda",
-            consoleDevice: "ttyS0"
-        )
-
-        #expect(bootSource.bootArgs?.contains("console=ttyS0") == true)
-        #expect(bootSource.bootArgs?.contains("root=/dev/vda") == true)
-        #expect(bootSource.bootArgs?.contains("panic=1") == true)
-    }
-
     @Test("VsockConfig encodes correctly")
     func testVsockConfigEncoding() throws {
         let vsock = VsockConfig(guestCid: 3, udsPath: "/run/fc/vm.vsock")
@@ -84,19 +71,7 @@ struct SwiftFirecrackerTests {
         #expect(json.contains("\"guest_cid\":3"))
         #expect(json.contains("uds_path"))
         #expect(json.contains("vm.vsock"))
-        // vsock_id is omitted when nil rather than encoded as null.
         #expect(!json.contains("vsock_id"))
-    }
-
-    @Test("VsockConfig includes vsock_id when provided")
-    func testVsockConfigWithId() throws {
-        let vsock = VsockConfig(guestCid: 42, udsPath: "/run/fc/vm.vsock", vsockId: "vsock0")
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(vsock)
-        let json = String(data: data, encoding: .utf8)!
-
-        #expect(json.contains("\"vsock_id\":\"vsock0\""))
-        #expect(json.contains("\"guest_cid\":42"))
     }
 
     @Test("MMDSConfig encodes version, interfaces and address")
@@ -143,8 +118,7 @@ struct SwiftFirecrackerTests {
     func testSnapshotCreateConfigEncoding() throws {
         let config = SnapshotCreateConfig(
             snapshotPath: "/snapshots/vmstate.snap",
-            memFilePath: "/snapshots/memory.snap",
-            snapshotType: .full
+            memFilePath: "/snapshots/memory.snap"
         )
         let encoder = JSONEncoder()
         let data = try encoder.encode(config)
@@ -193,28 +167,6 @@ struct SwiftFirecrackerTests {
         #expect(json.contains("\"network_overrides\""))
         #expect(json.contains("\"iface_id\":\"eth0\""))
         #expect(json.contains("\"host_dev_name\":\"tapb2c3d4e5f601\""))
-    }
-
-    @Test("MachineConfigUpdate encodes only the provided fields")
-    func testMachineConfigUpdateEncoding() throws {
-        let update = MachineConfigUpdate(trackDirtyPages: true)
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(update)
-        let json = String(data: data, encoding: .utf8)!
-
-        #expect(json.contains("\"track_dirty_pages\":true"))
-        #expect(!json.contains("vcpu_count"))
-        #expect(!json.contains("mem_size_mib"))
-    }
-
-    @Test("EntropyDevice encodes an empty body by default")
-    func testEntropyDeviceEncoding() throws {
-        let device = EntropyDevice()
-        let encoder = JSONEncoder()
-        let data = try encoder.encode(device)
-        let json = String(data: data, encoding: .utf8)!
-
-        #expect(json == "{}")
     }
 
     @Test("FirecrackerError provides descriptions")

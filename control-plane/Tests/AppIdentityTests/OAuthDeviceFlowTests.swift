@@ -37,7 +37,6 @@ struct OAuthDeviceFlowTests {
 
     func startDeviceFlow(
         _ app: Application,
-        scope: String? = nil,
         clientName: String? = "test-cli",
         restriction: CredentialRestrictionPayload? = nil
     ) async throws -> DeviceAuthorizationResponse {
@@ -47,7 +46,7 @@ struct OAuthDeviceFlowTests {
             beforeRequest: { req in
                 try req.content.encode(
                     OAuthController.DeviceAuthorizationRequest(
-                        clientName: clientName, scope: scope, restriction: restriction),
+                        clientName: clientName, restriction: restriction),
                     as: .json
                 )
             }
@@ -174,7 +173,7 @@ struct OAuthDeviceFlowTests {
                 #expect(res.status == .ok)
                 let pending = try res.content.decode(PendingDeviceAuthorizationResponse.self)
                 #expect(pending.clientName == "test-cli")
-                #expect(pending.scopes == ["read", "write"])
+                #expect(pending.restriction == CredentialRestrictionPayload(.unrestricted))
             }
 
             #expect(try await approve(app, userCode: start.userCode, apiKey: apiKey) == .ok)
@@ -186,7 +185,6 @@ struct OAuthDeviceFlowTests {
             #expect(issued.accessToken.hasPrefix("st_"))
             #expect(issued.refreshToken.hasPrefix("rt_"))
             #expect(issued.tokenType == "Bearer")
-            #expect(issued.scope == "read write")
 
             // The access token authenticates against the real API surface.
             try await app.test(
@@ -293,22 +291,19 @@ struct OAuthDeviceFlowTests {
         }
     }
 
-    @Test("Invalid scopes are rejected at authorization time")
-    func testInvalidScope() async throws {
+    @Test("Legacy scopes are rejected at authorization time")
+    func testLegacyScopeRejected() async throws {
         try await withTestApp { app in
             try await app.test(
                 .POST, "/oauth/device_authorization",
                 beforeRequest: { req in
-                    try req.content.encode(
-                        OAuthController.DeviceAuthorizationRequest(
-                            clientName: "x", scope: "read superuser", restriction: nil),
-                        as: .json
-                    )
+                    req.headers.contentType = .json
+                    req.body = ByteBuffer(string: #"{"client_name":"x","scope":"read"}"#)
                 }
             ) { res async in
                 #expect(res.status == .badRequest)
                 let error = try? res.content.decode(OAuthErrorResponse.self)
-                #expect(error?.error == "invalid_scope")
+                #expect(error?.error == "invalid_request")
             }
         }
     }
@@ -477,14 +472,15 @@ struct OAuthDeviceFlowTests {
         }
     }
 
-    // MARK: - Scope enforcement
+    // MARK: - Restriction enforcement
 
-    @Test("Read-scoped CLI tokens are forbidden from writes")
-    func testCLITokenScopeEnforcement() async throws {
+    @Test("Read-only CLI tokens are forbidden from writes")
+    func testCLITokenRestrictionEnforcement() async throws {
         try await withTestApp { app in
             let user = try await createTestUser(on: app.db)
             let apiKey = try await user.generateAPIKey(on: app.db)
-            let start = try await startDeviceFlow(app, scope: "read")
+            let start = try await startDeviceFlow(
+                app, restriction: CredentialRestrictionPayload(.readOnly))
             _ = try await approve(app, userCode: start.userCode, apiKey: apiKey)
             try await resetPollTimer(deviceCode: start.deviceCode, on: app.db)
             let (_, issuedToken, _) = try await pollToken(app, deviceCode: start.deviceCode)
