@@ -368,43 +368,6 @@ final class ResourceFinalizerTests {
         }
     }
 
-    // MARK: - Migration
-
-    @Test("The migration backfills agent.absent onto deletions already in flight")
-    func migrationBackfillsInFlightDeletions() async throws {
-        try await withFinalizerApp { app, _, project, placedAndTerminating, _ in
-            let builder = TestDataBuilder(db: app.db)
-            let unplacedAndTerminating = try await builder.createVM(name: "unplaced", project: project)
-            let placedAndLive = try await builder.createVM(name: "live", project: project)
-
-            placedAndTerminating.hypervisorId = UUID().uuidString
-            placedAndTerminating.setFixtureDesiredStatus(.absent)
-            try await placedAndTerminating.save(on: app.db)
-            unplacedAndTerminating.setFixtureDesiredStatus(.absent)
-            try await unplacedAndTerminating.save(on: app.db)
-            placedAndLive.hypervisorId = UUID().uuidString
-            try await placedAndLive.save(on: app.db)
-
-            // Drop the column and re-add it, so the rows above are exactly what
-            // an upgrade finds: deletions in flight, written before finalizers
-            // existed. This is the one piece that fails *silently* if the
-            // desired-status raw value ever drifts from the predicate.
-            let migration = AddFinalizersToWorkloads()
-            try await migration.revert(on: app.db)
-            try await migration.prepare(on: app.db)
-
-            let placed = try #require(try await VM.find(placedAndTerminating.id, on: app.db))
-            #expect(placed.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
-
-            // Nothing has to confirm a teardown that never reached an agent.
-            let unplaced = try #require(try await VM.find(unplacedAndTerminating.id, on: app.db))
-            #expect(unplaced.finalizers.isEmpty)
-
-            let live = try #require(try await VM.find(placedAndLive.id, on: app.db))
-            #expect(live.finalizers.isEmpty)
-        }
-    }
-
     // MARK: - Sandboxes
 
     @Test("Sandboxes take the same path: stamped on DELETE, reaped on confirmation")

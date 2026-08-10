@@ -10,13 +10,8 @@ import AppTestSupport
 /// `agent_workload_claims.resource_kind` is a third `CHECK` on a third install
 /// mechanism, and it is the one that gets missed.
 ///
-/// `EnforcePersistedEnumValues` does not own it (the table postdates that
-/// migration and installs its own guard inline in `CreateAgentWorkloadClaim`),
-/// and neither does `CreateResourceEvent` — so `PersistedEnumConstraintTests`
-/// and `ResourceEventEnumConstraintTests`, which between them pin every other
-/// `resource_kind` column, both look straight past it. STR-148 added
-/// `WorkloadKind.volume` without widening it and nothing caught that; STR-150
-/// added three more kinds and this suite is what makes the gap visible.
+/// The current-schema baseline installs the guard, and this suite keeps the SQL
+/// definition aligned with the Swift enum as new workload kinds are added.
 ///
 /// The cost of the gap is not one rejected row. `applyUnrecognizedWorkloads`
 /// runs inside observed-report handling, so a constraint violation throws and
@@ -81,7 +76,7 @@ struct AgentWorkloadClaimEnumConstraintTests {
                 try await sql.raw(
                     """
                     SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint
-                    WHERE conname = \(bind: AddSnapshotOperationKinds.claimConstraint.name)
+                    WHERE conname = \(bind: AgentWorkloadClaim.resourceKindConstraintName)
                     """
                 ).first()
             )

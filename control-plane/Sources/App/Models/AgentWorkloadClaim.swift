@@ -28,6 +28,7 @@ enum WorkloadClaimDisposition: String, Codable, CaseIterable, Sendable {
 /// whose row does not exist, which is precisely what an FK would forbid.
 final class AgentWorkloadClaim: Model, @unchecked Sendable {
     static let schema = "agent_workload_claims"
+    static let resourceKindConstraintName = "ck_agent_workload_claims_resource_kind_enum"
 
     @ID(key: .id)
     var id: UUID?

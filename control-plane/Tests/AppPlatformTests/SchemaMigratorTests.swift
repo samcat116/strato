@@ -40,7 +40,7 @@ struct SchemaMigratorTests {
 
             // Sanity: the schema really was built, not just left empty.
             let applied = try await MigrationLog.query(on: second.db).count()
-            #expect(applied > 100)
+            #expect(applied == 1)
             #expect(try await User.query(on: second.db).count() == 0)
         } catch {
             try? await first.asyncShutdown()
@@ -240,7 +240,7 @@ struct SchemaMigratorTests {
         }
     }
 
-    @Test("A migration whose log row was lost is reported as a schema/log disagreement")
+    @Test("A lost baseline log row fails closed instead of replaying over the schema")
     func missingLogRowIsDiagnosed() async throws {
         let databaseName = try await PostgresTestDatabases.shared.createBareDatabaseForTest()
         let first = try await Application.makeForTesting(database: databaseName, owningDatabase: false)
@@ -252,7 +252,7 @@ struct SchemaMigratorTests {
 
             // Exactly failure mode 2's aftermath: the schema change is present,
             // the row that records it is not.
-            let lostMigration = CreateUser().name
+            let lostMigration = CurrentSchemaBaseline().name
             let sql = try #require(first.db as? any SQLDatabase)
             try await sql.raw("DELETE FROM _fluent_migrations WHERE name = \(bind: lostMigration)").run()
 
@@ -264,8 +264,8 @@ struct SchemaMigratorTests {
 
             let error = try #require(thrown as? SchemaMigrationError)
             #expect(error.description.contains(lostMigration))
-            #expect(error.description.contains("_fluent_migrations"))
-            #expect(error.description.contains("INSERT INTO _fluent_migrations"))
+            #expect(error.description.contains("requires a fresh database"))
+            #expect(!error.description.contains("INSERT INTO _fluent_migrations"))
         } catch {
             try? await first.asyncShutdown()
             try? await second.shutdownForTesting()

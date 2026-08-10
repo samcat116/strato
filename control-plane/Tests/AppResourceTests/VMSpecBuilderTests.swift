@@ -424,7 +424,7 @@ struct VMSpecBuilderTests {
 
     @Test("An attached volume with no legal device name fails assembly")
     func testVolumeWithoutALegalNameFails() throws {
-        // Unrepresentable since `NormalizeVolumeAttachments`, but the fallback
+        // Unrepresentable under the current schema, but the fallback
         // it replaced synthesized `disk<count>` — a name that could collide with
         // an explicit one on the same VM, and a duplicate device id is what
         // stops the VM booting at all.

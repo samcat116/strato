@@ -1168,53 +1168,6 @@ final class DNSZoneTests {
         }
     }
 
-    /// The `CreateDNSZone` backfill reimplements `DNSName.slugify` in SQL, so
-    /// the two can drift with nothing failing. They only run against each
-    /// other once per deployment, and a divergence would surface as a handful
-    /// of VMs carrying hostnames the API would never have produced — long
-    /// after the change that caused it. This pins them together.
-    @Test("The migration's SQL slug expression agrees with DNSName.slugify")
-    func migrationSlugMatchesSwiftSlugify() async throws {
-        let names = [
-            "Web Server",
-            "My VM (prod)",
-            "  spaced  out  ",
-            "---leading-and-trailing---",
-            "UPPER_snake.Case",
-            "日本語",
-            "",
-            "a",
-            String(repeating: "a", count: 100),
-            // Truncation landing on a hyphen: the second trim has to run after
-            // the cut, on both sides.
-            String(repeating: "ab", count: 31) + " tail",
-            "9-lives",
-        ]
-
-        try await withTestApp { app in
-            let sql = try #require(app.db as? any SQLDatabase)
-            for name in names {
-                // Kept in sync with the UPDATE in `CreateDNSZone.prepare`.
-                let row = try await sql.raw(
-                    """
-                    SELECT COALESCE(
-                        NULLIF(
-                            TRIM(BOTH '-' FROM LEFT(TRIM(BOTH '-' FROM REGEXP_REPLACE(
-                                LOWER(\(bind: name)), '[^a-z0-9]+', '-', 'g')), 63)),
-                            ''
-                        ),
-                        'vm'
-                    ) AS slug
-                    """
-                ).first()
-                let fromSQL = try #require(row).decode(column: "slug", as: String.self)
-                #expect(
-                    fromSQL == DNSName.slugify(name),
-                    "slug mismatch for \(String(reflecting: name)): SQL gave '\(fromSQL)'")
-            }
-        }
-    }
-
     @Test("dns_zone and dns_record are wired into the Cedar vocabulary")
     func cedarVocabulary() {
         #expect(IAMNodeType(rawValue: "dns_zone") == .dnsZone)

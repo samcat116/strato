@@ -731,8 +731,7 @@ struct NetworkController: RouteCollection {
     }
 
     /// Validates a subnet/gateway pair, defaulting a missing gateway to the
-    /// subnet's first host address. Mirrors the seeding validation in the
-    /// `CreateLogicalNetwork` migration.
+    /// subnet's first host address.
     static func validateAddressing(subnet: String, gateway: String?) throws -> (subnet: String, gateway: String) {
         let trimmedSubnet = subnet.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let (base, prefix) = IPAMService.parseCIDR(trimmedSubnet),

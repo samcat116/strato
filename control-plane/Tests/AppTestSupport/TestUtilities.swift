@@ -761,7 +761,7 @@ package func withConditionedRoleBindingsAllowed<T>(
     _ body: () async throws -> T
 ) async throws -> T {
     let sql = try sqlDatabaseForTest(db)
-    let constraint = RejectConditionedRoleBindings.constraintName
+    let constraint = RoleBinding.conditionConstraintName
     try await sql.raw(
         "ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(unsafeRaw: constraint)"
     ).run()
@@ -786,7 +786,7 @@ package func withConditionedRoleBindingsAllowed<T>(
 }
 
 /// Write a `role_bindings` row carrying a `condition` — which the schema
-/// otherwise refuses (`RejectConditionedRoleBindings`, STR-108) — leaving the
+/// otherwise refuses (STR-108) — leaving the
 /// boundary in place for everything after it. See
 /// `withConditionedRoleBindingsAllowed`.
 package func insertConditionedRoleBinding(
@@ -831,7 +831,7 @@ package func conditionedRoleBindingConstraint(
         """
         SELECT convalidated FROM pg_constraint
         WHERE conrelid = 'role_bindings'::regclass
-          AND conname = \(bind: RejectConditionedRoleBindings.constraintName)
+          AND conname = \(bind: RoleBinding.conditionConstraintName)
         """
     ).all()
     guard let row = rows.first else { return .absent }
