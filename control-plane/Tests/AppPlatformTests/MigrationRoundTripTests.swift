@@ -331,10 +331,42 @@ struct MigrationRoundTripTests {
                 // snapshot tables got theirs in their create migrations for the
                 // quota aggregate, and volume snapshots joined that aggregate.
                 + AddVolumeQuotaAccounting.indexes
+                // Replica placement replaced the old `volumes.hypervisor_id`
+                // lookup, so both reconciliation directions need the new
+                // agent-leading index on a fully migrated schema.
+                + [AddVolumeReplicaAgentIndex.index]
             for index in expected {
                 let exists = present.contains(index.name)
                 #expect(exists, "missing index \(index.name)")
             }
+        }
+    }
+
+    @Test("The volume replica agent lookup index round-trips")
+    func volumeReplicaAgentIndexRoundTrips() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+            let migration = AddVolumeReplicaAgentIndex()
+
+            // Idempotent on an already-migrated database.
+            try await migration.prepare(on: app.db)
+            var row = try await sql.raw(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                    + "AND indexname = \(bind: AddVolumeReplicaAgentIndex.index.name)"
+            ).first()
+            let definition = try #require(try row?.decode(column: "indexdef", as: String.self))
+            #expect(definition.contains("(agent_id, state)"))
+
+            try await migration.revert(on: app.db)
+            row = try await sql.raw(
+                "SELECT indexdef FROM pg_indexes WHERE schemaname = current_schema() "
+                    + "AND indexname = \(bind: AddVolumeReplicaAgentIndex.index.name)"
+            ).first()
+            #expect(row == nil)
+
+            // Restore it so the migrated schema remains representative for
+            // any later assertions in this serialized suite.
+            try await migration.prepare(on: app.db)
         }
     }
 
