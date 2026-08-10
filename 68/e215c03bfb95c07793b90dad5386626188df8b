@@ -1,0 +1,287 @@
+control-plane/Sources/App/Controllers/NetworkController.swift
+  s_5bad541345f252::t_4953c2340a1236 613,616-617
+docs/deployment/health-checks.md
+  s_5bad541345f252::t_4953c2340a1236 66-67
+agent/Tests/StratoAgentTests/SandboxConfigDriveTests.swift
+  s_5bad541345f252::t_4953c2340a1236 40,116,246-247,255,260-264,275-296
+  s_5bad541345f252::t_b50dceec3ac2c4 297
+helm/strato-control-plane/README.md
+  s_5bad541345f252::t_4953c2340a1236 126-130,150,152
+docs/operations/vm-boot-volume-cutover.md
+  s_5bad541345f252::t_4953c2340a1236 1-110
+docs/deployment/kubernetes.md
+  s_5bad541345f252::t_4953c2340a1236 18-20,29
+control-plane/Sources/App/Controllers/AgentController.swift
+  s_5bad541345f252::t_4953c2340a1236 1171-1172
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_5bad541345f252::t_4953c2340a1236 156,681,683,685,691-705,719-722,725-731,774
+agent/Sources/StratoAgentCore/SandboxRuntimeProtocol.swift
+  s_5bad541345f252::t_4953c2340a1236 146-148,165
+helm/strato-control-plane/TESTING.md
+  s_5bad541345f252::t_4953c2340a1236 3-4,6,8-10,12-20,22-24,26,28-29,37-38,40-44,46-60,63,66,69,71-78,80-81,83,85-87,89,92-96,99-101,104-108,111-113,115-117,120-123,126,129-130,133-134
+shared/Package.resolved
+  s_5bad541345f252::t_4953c2340a1236 2,54-55
+helm/strato-control-plane/templates/deployment.yaml
+  s_5bad541345f252::t_4953c2340a1236 177-179,211-212
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_5bad541345f252::t_4953c2340a1236 67-69,102-118,120,122,155,188-193
+agent/Sources/StratoAgentCore/MockStorageBackend.swift
+  s_5bad541345f252::t_4953c2340a1236 133-135,138,145,168-174
+  s_5bad541345f252::t_cdcd69f81349c8 175-177
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_5bad541345f252::t_4953c2340a1236 158-161
+docs/architecture/control-plane.md
+  s_5bad541345f252::t_4953c2340a1236 203-207,623-624
+control-plane/Sources/App/Services/AgentService.swift
+  s_5bad541345f252::t_4953c2340a1236 1861-1862,1871,1898-1899,1917-1920,2259,2295-2311,2325,2347-2364,2382,2392,2429-2430,2433-2436,2565
+control-plane/web/src/components/quotas/quota-dialog.tsx
+  s_5bad541345f252::t_4645cfa2d5d728 125-130
+control-plane/web/src/components/sandboxes/sandbox-log-viewer.tsx
+  s_5bad541345f252::t_4953c2340a1236 3,5-6,23-46,52,55-71
+control-plane/Sources/App/Controllers/SandboxController.swift
+  s_5bad541345f252::t_4953c2340a1236 345-346,351-354
+control-plane/Tests/AppPlatformTests/AgentWebSocketIntegrationTests.swift
+  s_5bad541345f252::t_4953c2340a1236 398
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_5bad541345f252::t_4953c2340a1236 56-57,79
+helm/strato-control-plane/templates/NOTES.txt
+  s_5bad541345f252::t_4953c2340a1236 48-51,109
+agent/Sources/StratoAgentCore/DesiredStatePoller.swift
+  s_5bad541345f252::t_4953c2340a1236 24-25,28,47-48,70-73,126-132,136,146-154,175,182,186,194
+control-plane/Sources/App/Controllers/VolumeController.swift
+  s_5bad541345f252::t_4953c2340a1236 124-128,434-439,599-604,820-835,855,940-945,952,969-971
+control-plane/Tests/AppPlatformTests/TelemetrySupportTests.swift
+  s_5bad541345f252::t_4953c2340a1236 55-72
+shared/Tests/StratoSharedTests/VolumeDeviceNameTests.swift
+  s_5bad541345f252::t_4953c2340a1236 67,79,83
+control-plane/Tests/AppResourceTests/StoragePoolTests.swift
+  s_5bad541345f252::t_4953c2340a1236 84-87
+docs/architecture/sandboxes.md
+  s_5bad541345f252::t_4953c2340a1236 236,239-241,254-256,264-267,680-684,839-842,880-882
+.github/workflows/helm-test.yml
+  s_5bad541345f252::t_4953c2340a1236 88-96,109-112,219-221,239,335
+docs/development/code-review.md
+  s_5bad541345f252::t_4953c2340a1236 326-327,329
+control-plane/Sources/App/Controllers/HealthController.swift
+  s_5bad541345f252::t_4953c2340a1236 55-56
+agent/Sources/StratoAgentCore/DomainXMLBuilder.swift
+  s_5bad541345f252::t_4953c2340a1236 164
+docs/debugging/webauthn.md
+  s_5bad541345f252::t_4953c2340a1236 63-66
+control-plane/Tests/AppResourceTests/VMOperationTests.swift
+  s_5bad541345f252::t_4953c2340a1236 134-137,178-181,202-205
+agent/Sources/StratoAgent/HypervisorProtocol.swift
+  s_5bad541345f252::t_4953c2340a1236 394-395
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_5bad541345f252::t_4953c2340a1236 202,205-210,221,681-707
+  s_5bad541345f252::t_004c4f7e8c305d 708-710
+control-plane/Sources/App/Models/Volume.swift
+  s_5bad541345f252::t_4953c2340a1236 341-342,346-350,375
+shared/Sources/StratoShared/VMSpec.swift
+  s_5bad541345f252::t_4953c2340a1236 54-55,236-237,259
+control-plane/Sources/App/Services/ResourceFinalizerService.swift
+  s_5bad541345f252::t_4953c2340a1236 148-169,235,241-242,257-259,272,349,351,361-378,385-391
+agent/Sources/StratoAgentCore/SandboxGuestImage.swift
+  s_5bad541345f252::t_4953c2340a1236 14-16,40,55,72,74-75,94,107,109,114-121,159,169,183-185,200-202,216-219
+  s_5bad541345f252::t_7f5722c1fe00e0 220-221
+agent/Tests/StratoAgentTests/SandboxGuestImageTests.swift
+  s_5bad541345f252::t_4953c2340a1236 29,32,88,99-105,108-112,117,125-141,147,161
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_5bad541345f252::t_4953c2340a1236 958
+helm/strato-control-plane/values.yaml
+  s_5bad541345f252::t_4953c2340a1236 64,94,251-253,353,357-358,377-379,403
+control-plane/web/src/components/ui/log-viewer-shell.tsx
+  s_5bad541345f252::t_4953c2340a1236 1-200
+docs/adr/0001-declarative-agent-protocol.md
+  s_5bad541345f252::t_4953c2340a1236 37-38
+docs/deployment/sandbox-guest-cutover.md
+  s_5bad541345f252::t_4953c2340a1236 1-145
+docs/architecture/guest-identity.md
+  s_5bad541345f252::t_4953c2340a1236 308,310-312
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_5bad541345f252::t_4953c2340a1236 166-187,383-384,610-611
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_5bad541345f252::t_4953c2340a1236 156-158,1193-1196,1239-1250,1413,1415-1434,1513-1516,1525-1534,1613,1615-1616,1619-1622,1624-1626,1628-1635,1773-1781,2279-2285,3134,3148,3152-3161
+control-plane/Package.resolved
+  s_5bad541345f252::t_4953c2340a1236 2,9-10,72-73,162-163,306-307,324-325,396-397,405-406
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_5bad541345f252::t_4953c2340a1236 247-251,311-319,421-425,482-486
+  s_5bad541345f252::t_30e4773a08042d 487-488
+control-plane/Tests/AppResourceTests/SandboxTests.swift
+  s_5bad541345f252::t_4953c2340a1236 530,547,560-561
+agent/Tests/StratoAgentTests/GuestControlProtocolHardeningTests.swift
+  s_5bad541345f252::t_4953c2340a1236 2,90-96,98,379-380,404
+control-plane/Sources/App/Services/CoordinationService.swift
+  s_5bad541345f252::t_4953c2340a1236 285-286,467,469-473,502,636,789-790
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_5bad541345f252::t_4953c2340a1236 311-313
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_5bad541345f252::t_4953c2340a1236 162-164,167,170,178-179,191,198,202-216,218-227,245,273,290-291,302-306,309,311
+control-plane/Tests/AppIAMTests/ProjectTests.swift
+  s_5bad541345f252::t_4645cfa2d5d728 616-655
+control-plane/Sources/App/Models/ResourceFinalizer.swift
+  s_5bad541345f252::t_4953c2340a1236 35-39
+control-plane/Sources/App/SchemaMigrator.swift
+  s_5bad541345f252::t_4953c2340a1236 184-185,510-511
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_5bad541345f252::t_4953c2340a1236 97-100,157-159,174,273-312,321-334,347-364
+  s_5bad541345f252::t_0a3e179a17bf1c 365
+docs/architecture/multi-replica.md
+  s_5bad541345f252::t_4953c2340a1236 67,69,155-156
+helm/strato-control-plane/templates/_helpers.tpl
+  s_5bad541345f252::t_4953c2340a1236 230-232
+control-plane/Sources/App/Controllers/FloatingIPController.swift
+  s_5bad541345f252::t_4953c2340a1236 529-530
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_5bad541345f252::t_4953c2340a1236 20,22-24
+agent/Tests/StratoAgentTests/DesiredStatePollerTests.swift
+  s_5bad541345f252::t_4953c2340a1236 92,173-190,204,233,248,272,275,279-294
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_5bad541345f252::t_4953c2340a1236 49-62
+control-plane/Sources/App/Models/SandboxSnapshot.swift
+  s_5bad541345f252::t_4953c2340a1236 80
+control-plane/Sources/App/Services/ReplicaMessageBridge.swift
+  s_5bad541345f252::t_4953c2340a1236 15-18,24-28,43-44,48,50-51,109-110
+agent/Tests/StratoAgentTests/SandboxRuntimeProbeTests.swift
+  s_5bad541345f252::t_4953c2340a1236 29,33-34,36,54-56,58,64-67,69,179-180,185,187,190-191,198,200,242-244,246
+control-plane/Sources/App/Migrations/SeedDefaultNetworkDNS.swift
+  s_5bad541345f252::t_4953c2340a1236 22
+agent/Sources/StratoAgentCore/CoalescingTrigger.swift
+  s_5bad541345f252::t_4953c2340a1236 26-27
+agent/Sources/StratoAgentCore/GuestControlProtocol.swift
+  s_5bad541345f252::t_4953c2340a1236 216,477-478,504,531-532,539-540,630-636,708-713,718-720,746-749,776-783
+control-plane/Sources/App/Services/RegistryClientService.swift
+  s_5bad541345f252::t_4953c2340a1236 90
+agent/Sources/StratoAgentCore/SandboxRuntimeProbe.swift
+  s_5bad541345f252::t_4953c2340a1236 13-15,89-91,136-144,148-149,154-156,159,161
+control-plane/Tests/AppResourceTests/SandboxExecAttachIntegrationTests.swift
+  s_5bad541345f252::t_4953c2340a1236 283
+control-plane/Tests/AppResourceTests/VolumeStatusTests.swift
+  s_5bad541345f252::t_4953c2340a1236 76-80,89
+agent/Package.resolved
+  s_5bad541345f252::t_4953c2340a1236 2,27-28,54-55,117-118,162-163
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_5bad541345f252::t_4953c2340a1236 249-252,257-261,270,272,277,279,283-284,287-292,525-527
+agent/Sources/StratoAgent/Agent.swift
+  s_5bad541345f252::t_4953c2340a1236 353-356,1505,1529-1531,2202-2207,2217,2220,2222,3708-3772,3782-3784,4105-4112,4349-4352,4372-4385,4389-4393,4396,4540,4580,4621-4645,4653,4661,4694,4702,4706,4726
+agent/Sources/StratoAgentCore/MockSandboxRuntime.swift
+  s_5bad541345f252::t_4953c2340a1236 288
+agent/Tests/StratoAgentTests/GuestControlProtocolTests.swift
+  s_5bad541345f252::t_4953c2340a1236 2,295,297-298,301,304,306-307,325-339
+  s_5bad541345f252::t_9d08db008f4b72 340-341
+agent/Tests/StratoAgentTests/MockStorageBackendTests.swift
+  s_5bad541345f252::t_4953c2340a1236 40-41,63-64,144-146,202-203
+agent/Sources/StratoAgentCore/StorageBackend.swift
+  s_5bad541345f252::t_4953c2340a1236 95-97,100-103,108-115,146-151
+  s_5bad541345f252::t_065017351ae5ea 152-153
+docs/architecture/storage.md
+  s_5bad541345f252::t_4953c2340a1236 44-45
+helm/strato-control-plane/ci/session-valkey-values.yaml
+  s_5bad541345f252::t_4953c2340a1236 6-7
+agent/scripts/sandbox-guest-cutover-preflight.sh
+  s_5bad541345f252::t_4953c2340a1236 1-163
+sandbox-guest/README.md
+  s_5bad541345f252::t_4953c2340a1236 22-23,25-28,95-100
+SwiftFirecracker/Package.resolved
+  s_5bad541345f252::t_4953c2340a1236 2,27-28
+agent/Sources/StratoAgent/HostResources.swift
+  s_5bad541345f252::t_4953c2340a1236 22
+shared/Sources/StratoShared/SnapshotReconciliation.swift
+  s_5bad541345f252::t_4953c2340a1236 252-253
+control-plane/Sources/App/Services/VolumeAttachmentService.swift
+  s_5bad541345f252::t_4953c2340a1236 170,179,182
+control-plane/Sources/App/Controllers/VMController.swift
+  s_5bad541345f252::t_4953c2340a1236 719-729,731-732,832,835-871,1567-1568,1597-1626
+control-plane/Sources/App/configure.swift
+  s_5bad541345f252::t_4953c2340a1236 109-110,959-961
+  s_5bad541345f252::t_1ff6dfcd1982fe 962
+shared/Sources/StratoShared/SandboxGuestControlProtocol.swift
+  s_5bad541345f252::t_4953c2340a1236 1-4
+control-plane/Sources/App/Services/QuotaEnforcementService.swift
+  s_5bad541345f252::t_4645cfa2d5d728 45-61,458-459,466-475
+  s_5bad541345f252::t_4953c2340a1236 107-111,138-144,519-520
+control-plane/Tests/AppResourceTests/VolumeSnapshotGuardTests.swift
+  s_5bad541345f252::t_4953c2340a1236 75,97-98,100-107,113
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_5bad541345f252::t_4953c2340a1236 319,497,535,2153-2156,2158-2160,2162,2164-2166,2174,2183-2184,2187,2189
+agent/Sources/StratoAgentCore/SandboxConfigDrive.swift
+  s_5bad541345f252::t_4953c2340a1236 14-16,81,360-362,378-386,406-420
+  s_5bad541345f252::t_97589e9edc744f 421-422
+helm/strato-control-plane/templates/spire-db-init-job.yaml
+  s_5bad541345f252::t_4953c2340a1236 22
+control-plane/Sources/App/Models/vm.swift
+  s_5bad541345f252::t_4953c2340a1236 208
+control-plane/Sources/App/Services/QuotaUsageAggregator.swift
+  s_5bad541345f252::t_1ff6dfcd1982fe 171
+  s_5bad541345f252::t_4953c2340a1236 42-45,261-263,294,297
+sandbox-guest/init/src/config.rs
+  s_5bad541345f252::t_4953c2340a1236 31-33,214-215,229-237,275-288,304,617,619-630,662-677
+control-plane/Tests/AppResourceTests/QuotaEnforcementTests.swift
+  s_5bad541345f252::t_4953c2340a1236 562,584-588
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_5bad541345f252::t_4953c2340a1236 354,418,497,524,554-583,601,953
+docs/architecture/agent.md
+  s_5bad541345f252::t_4953c2340a1236 75,88-89
+docs/deployment/docker-compose.md
+  s_5bad541345f252::t_4953c2340a1236 211-213
+control-plane/Sources/App/Migrations/MakeVMBootVolumesAuthoritative.swift
+  s_5bad541345f252::t_4953c2340a1236 1-361
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_5bad541345f252::t_4953c2340a1236 395-398,410-422,596-603,646-651,693-697,1090-1092,1166-1169,1178-1180,1643-1644
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_5bad541345f252::t_4953c2340a1236 62,1433,1650,1703-1704,1837-1838
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_5bad541345f252::t_4953c2340a1236 210-261
+docs/deployment/observability.md
+  s_5bad541345f252::t_4953c2340a1236 190-191,248-249,330-331,354-357,377-409,463-467
+control-plane/Sources/App/Services/ResourceMutation.swift
+  s_5bad541345f252::t_4953c2340a1236 7-8,14-16
+control-plane/Tests/AppResourceTests/VMSpecBuilderTests.swift
+  s_5bad541345f252::t_4953c2340a1236 6-55,174-175,239,331,334,339,342,345,348,352,390,393,416,420,425-426,437-440,443-444,446,450-451,588,594,648,654,669,687,716,733
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_5bad541345f252::t_4953c2340a1236 227-272
+control-plane/Tests/AppResourceTests/ResourceEventTests.swift
+  s_5bad541345f252::t_4953c2340a1236 132-143,154-159
+control-plane/Sources/App/Controllers/AgentDesiredStateController.swift
+  s_5bad541345f252::t_4953c2340a1236 22-24,35-39,97,123-127,136,140,148,164
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_5bad541345f252::t_4953c2340a1236 1,16-35,290,292-294,301-316
+shared/Tests/StratoSharedTests/VolumeIOLimitsTests.swift
+  s_5bad541345f252::t_4953c2340a1236 131,142-144
+docs/architecture/scheduler.md
+  s_5bad541345f252::t_4953c2340a1236 55,61-63
+control-plane/Sources/App/OpenAPI/ProjectsAPIService.swift
+  s_5bad541345f252::t_4645cfa2d5d728 190-197,223-224
+control-plane/Tests/AppPlatformTests/MigrationEnumSafetyTests.swift
+  s_5bad541345f252::t_4953c2340a1236 2,11-85,90-93,100-103
+sandbox-guest/init/src/linux/mod.rs
+  s_5bad541345f252::t_4953c2340a1236 55-62
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_5bad541345f252::t_4953c2340a1236 424-485
+control-plane/web/src/components/vms/log-viewer.tsx
+  s_5bad541345f252::t_4953c2340a1236 3,6,10-13,56-58,60-62,64-71,74-87,89-95,97-99,101-114
+cli/Package.resolved
+  s_5bad541345f252::t_4953c2340a1236 45-46
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_5bad541345f252::t_4953c2340a1236 141-142,146-147,352,374-382,404-406,417-418
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_5bad541345f252::t_4953c2340a1236 207-208,211,214,221-223,225,229-232,235-236
+shared/Sources/StratoShared/WireProtocol.swift
+  s_5bad541345f252::t_4953c2340a1236 14-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "68e215c03bfb95c07793b90dad5386626188df8b",
+  "prompts": {},
+  "sessions": {
+    "s_5bad541345f252": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed8c-f5ab-7932-af6a-3f893ac9fb7f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
