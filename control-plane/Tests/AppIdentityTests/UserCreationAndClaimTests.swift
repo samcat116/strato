@@ -133,7 +133,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 try req.content.encode(
                     AdminCreateUserRequest(
                         username: "neo", email: "neo@example.com", displayName: "Neo",
-                        isSystemAdmin: false, organizationId: orgID, role: "admin"))
+                        isSystemAdmin: false, organizationId: orgID, role: IAMRole.admin.seededID))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let body = try res.content.decode(AdminCreateUserResponse.self)
@@ -145,7 +145,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 .filter(\.$user.$id == #require(createdUserID))
                 .filter(\.$organization.$id == orgID)
                 .first()
-            #expect(membership?.role == "admin")
+            #expect(membership?.roleID == IAMRole.admin.seededID)
         }
     }
 
@@ -160,7 +160,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 try req.content.encode(
                     AdminCreateUserRequest(
                         username: "neo", email: "neo@example.com", displayName: "Neo",
-                        isSystemAdmin: false, organizationId: UUID(), role: "member"))
+                        isSystemAdmin: false, organizationId: UUID(), role: nil))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -210,7 +210,7 @@ final class UserCreationAndClaimTests: BaseTestCase {
                 try req.content.encode(
                     AdminCreateUserRequest(
                         username: "neo", email: "neo@example.com", displayName: "Neo",
-                        isSystemAdmin: false, organizationId: orgID, role: "superuser"))
+                        isSystemAdmin: false, organizationId: orgID, role: UUID()))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }

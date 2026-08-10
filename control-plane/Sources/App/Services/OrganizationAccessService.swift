@@ -5,9 +5,8 @@ import Fluent
 /// Centralized organization- and project-scoped access checks shared by controllers.
 ///
 /// The Cedar evaluator is the single source of truth for authorization: these helpers
-/// delegate to `Request.can` rather than reading the relational
-/// `UserOrganization.role`. The relational role survives only as a display mirror
-/// written alongside the authoritative role binding.
+/// delegate to `Request.can` rather than reading organization membership metadata.
+/// Role bindings are the authoritative grant representation.
 ///
 /// Org-scoped checks map to the `organization` object's `view_organization` /
 /// `manage_members` permissions; project-scoped checks map to the `project` object's

@@ -1,12 +1,142 @@
 import Fluent
 import Foundation
+import SQLKit
 import Vapor
 
-/// Writes and reads `role_bindings` rows — the grants the Cedar evaluator
-/// answers from. Call sites pass the transaction `Database` of the mutation
-/// they accompany so binding rows never diverge from the relational rows they
-/// mirror.
+/// The authoritative write and read path for grants. `role_bindings` is the
+/// only policy representation changed by a grant mutation.
 enum RoleBindingService {
+    /// Insert the only active membership grant a principal may hold on one
+    /// organization, folder, or project. The node row lock serializes grants
+    /// of different roles, which the role-inclusive binding uniqueness key
+    /// alone cannot do.
+    static func insertExclusiveGrant(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        roleID: UUID,
+        node: IAMNode,
+        createdBy: UUID?,
+        on db: Database
+    ) async throws {
+        try await withMembershipNodeLocked(node, on: db) { transaction in
+            let existing = try await activeBindings(
+                principalType: principalType, principalID: principalID,
+                nodeType: node.type, nodeID: node.id, on: transaction)
+            guard existing.isEmpty else {
+                throw Abort(.conflict, reason: "Principal already has a role on this \(nodeLabel(node.type))")
+            }
+            try await grant(
+                principalType: principalType, principalID: principalID, roleID: roleID,
+                nodeType: node.type, nodeID: node.id, createdBy: createdBy, on: transaction)
+        }
+    }
+
+    /// Replace all of a principal's bindings on a membership node with one
+    /// canonical role binding.
+    static func replaceExclusiveGrant(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        roleID: UUID,
+        node: IAMNode,
+        createdBy: UUID?,
+        on db: Database
+    ) async throws {
+        try await withMembershipNodeLocked(node, on: db) { transaction in
+            let existing = try await activeBindings(
+                principalType: principalType, principalID: principalID,
+                nodeType: node.type, nodeID: node.id, on: transaction)
+            guard !existing.isEmpty else {
+                throw Abort(.notFound, reason: "Principal has no role on this \(nodeLabel(node.type))")
+            }
+            try await revoke(
+                principalType: principalType, principalID: principalID, roleID: nil,
+                nodeType: node.type, nodeID: node.id, on: transaction)
+            try await grant(
+                principalType: principalType, principalID: principalID, roleID: roleID,
+                nodeType: node.type, nodeID: node.id, createdBy: createdBy, on: transaction)
+        }
+    }
+
+    /// Set a membership node to exactly one role, or to bare membership when
+    /// `roleID` is nil. Unlike `replaceExclusiveGrant`, this accepts either a
+    /// bound or bare current state and is used by organization membership.
+    static func setExclusiveGrant(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        roleID: UUID?,
+        node: IAMNode,
+        createdBy: UUID?,
+        on db: Database
+    ) async throws {
+        try await withMembershipNodeLocked(node, on: db) { transaction in
+            try await revoke(
+                principalType: principalType, principalID: principalID, roleID: nil,
+                nodeType: node.type, nodeID: node.id, on: transaction)
+            if let roleID {
+                try await grant(
+                    principalType: principalType, principalID: principalID, roleID: roleID,
+                    nodeType: node.type, nodeID: node.id, createdBy: createdBy, on: transaction)
+            }
+        }
+    }
+
+    /// Revoke every binding a principal holds directly on a membership node,
+    /// returning the active roles removed for audit rendering.
+    @discardableResult
+    static func revokeExclusiveGrant(
+        principalType: IAMPrincipalType,
+        principalID: UUID,
+        node: IAMNode,
+        on db: Database
+    ) async throws -> [UUID] {
+        try await withMembershipNodeLocked(node, on: db) { transaction in
+            let existing = try await activeBindings(
+                principalType: principalType, principalID: principalID,
+                nodeType: node.type, nodeID: node.id, on: transaction)
+            guard !existing.isEmpty else {
+                throw Abort(.notFound, reason: "Principal has no role on this \(nodeLabel(node.type))")
+            }
+            try await revoke(
+                principalType: principalType, principalID: principalID, roleID: nil,
+                nodeType: node.type, nodeID: node.id, on: transaction)
+            return existing.map(\.roleID)
+        }
+    }
+
+    /// Serialize a membership mutation on its organization, folder, or project
+    /// row. Organization callers also use this boundary to make last-admin
+    /// checks atomic with the membership and binding writes.
+    static func withMembershipNodeLocked<T: Sendable>(
+        _ node: IAMNode,
+        on db: Database,
+        _ body: @Sendable @escaping (any Database) async throws -> T
+    ) async throws -> T {
+        let table: String
+        switch node.type {
+        case .organization: table = "organizations"
+        case .organizationalUnit: table = "organizational_units"
+        case .project: table = "projects"
+        default:
+            throw Abort(
+                .internalServerError,
+                reason: "Exclusive membership grants are unsupported on \(node.type.rawValue)")
+        }
+        return try await db.transaction { transaction in
+            guard let sql = transaction as? any SQLDatabase else {
+                throw Abort(.internalServerError, reason: "Membership grant writes require a SQL database")
+            }
+            let rows = try await sql.raw(
+                "SELECT id FROM \(ident: table) WHERE id = \(bind: node.id) FOR UPDATE"
+            ).all()
+            guard !rows.isEmpty else { throw Abort(.notFound, reason: "Grant target not found") }
+            return try await body(transaction)
+        }
+    }
+
+    private static func nodeLabel(_ type: IAMNodeType) -> String {
+        type == .organizationalUnit ? "folder" : type.rawValue
+    }
+
     /// Idempotently grant the seeded role `role` to a principal on a node —
     /// the form nearly every code path uses.
     static func grant(
@@ -53,7 +183,7 @@ enum RoleBindingService {
             try await RoleBinding.query(on: db)
                 .filter(\.$principalType == principalType.rawValue)
                 .filter(\.$principalID == principalID)
-                .filter(\.$role == roleID.uuidString)
+                .filter(\.$roleID == roleID)
                 .filter(\.$nodeType == nodeType.rawValue)
                 .filter(\.$nodeID == nodeID)
                 .first()
@@ -81,8 +211,7 @@ enum RoleBindingService {
             ).save(on: db)
         } catch {
             guard let dbError = error as? any DatabaseError, dbError.isConstraintFailure else { throw error }
-            // A concurrent writer (another request, or another replica's boot
-            // backfill) won the insert race on the uniqueness key. Outside a
+            // A concurrent writer won the insert race on the uniqueness key. Outside a
             // transaction this is recoverable: adopt the winner's row and
             // apply our expiry. Inside an already-aborted Postgres transaction
             // the re-read below fails and propagates, which is the correct
@@ -129,7 +258,7 @@ enum RoleBindingService {
             .filter(\.$nodeType == nodeType.rawValue)
             .filter(\.$nodeID == nodeID)
         if let roleID {
-            query.filter(\.$role == roleID.uuidString)
+            query.filter(\.$roleID == roleID)
         }
         try await query.delete()
     }

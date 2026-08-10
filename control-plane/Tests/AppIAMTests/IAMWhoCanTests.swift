@@ -95,7 +95,7 @@ final class IAMWhoCanTests {
 
             let match = entries.first { $0.principal.id == user.id! }
             #expect(match?.source == .binding)
-            #expect(match?.role == IAMRole.operator.rawValue)
+            #expect(match?.role == IAMRole.operator.seededID)
             #expect(match?.grantedOn == IAMNode(type: .organizationalUnit, id: tree.ou.id!))
             #expect(match?.via == nil)
         }
@@ -115,7 +115,7 @@ final class IAMWhoCanTests {
             // vm:read is a viewer action; admin ⊃ editor ⊃ operator ⊃ viewer.
             let entries = try await WhoCanService.whoCan(action: "vm:read", node: tree.vmNode, app: app, on: app.db)
                 .principals
-            #expect(entries.contains { $0.principal.id == user.id! && $0.role == IAMRole.admin.rawValue })
+            #expect(entries.contains { $0.principal.id == user.id! && $0.role == IAMRole.admin.seededID })
         }
     }
 
@@ -184,7 +184,7 @@ final class IAMWhoCanTests {
             // ...and the human it reaches, attributed to the group.
             let userEntry = entries.first { $0.principal == WhoCanPrincipalRef(type: .user, id: member.id!) }
             #expect(userEntry?.via == WhoCanPrincipalRef(type: .group, id: group.id!))
-            #expect(userEntry?.role == IAMRole.editor.rawValue)
+            #expect(userEntry?.role == IAMRole.editor.seededID)
         }
     }
 
@@ -384,7 +384,7 @@ final class IAMWhoCanTests {
             // audit — but is marked so it isn't read as live access.
             let goneEntry = entries.first { $0.principal.id == disabled.id! }
             #expect(goneEntry?.principalDisabled == true)
-            #expect(goneEntry?.role == IAMRole.editor.rawValue)
+            #expect(goneEntry?.role == IAMRole.editor.seededID)
             let hereEntry = entries.first { $0.principal.id == active.id! }
             #expect(hereEntry?.principalDisabled == false)
         }

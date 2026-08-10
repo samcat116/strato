@@ -4337,7 +4337,7 @@ export interface paths {
         };
         /**
          * List an organization's OIDC providers
-         * @description Members see the provider list; claim-mapping fields (`groupsClaim`, `groupMappings`, `adminClaimValues`, `roleMappings`, `defaultRole`) are redacted for non-admins. Client secrets are never returned.
+         * @description Members see the provider list; claim-mapping fields (`groupsClaim`, `groupMappings`, `adminClaimValues`, `roleMappings`, `defaultRoleID`) are redacted for non-admins. Client secrets are never returned.
          */
         get: operations["listOIDCProviders"];
         put?: never;
@@ -6449,11 +6449,10 @@ export interface components {
              */
             organizationId?: string;
             /**
-             * @description Organization role for `organizationId`.
-             * @default member
-             * @enum {string}
+             * Format: uuid
+             * @description Canonical organization role id for `organizationId`. Omit or use null to create bare organization membership without a role grant.
              */
-            role: "admin" | "member";
+            role?: string | null;
         };
         /** @description The created account plus its one-time claim invitation. The token is shown exactly once so the admin can hand the link to the invitee. */
         AdminCreateUserResponse: {
@@ -6738,7 +6737,10 @@ export interface components {
             description: string;
             /** Format: date-time */
             createdAt?: string;
-            /** @description The caller's role in this organization, or null when the caller is not a member. */
+            /**
+             * Format: uuid
+             * @description The caller's canonical role id in this organization, or null for bare membership or when the caller is not a member.
+             */
             userRole?: string | null;
         };
         CreateOrganizationRequest: {
@@ -6758,7 +6760,13 @@ export interface components {
             username: string;
             displayName: string;
             email: string;
-            role: string;
+            /**
+             * Format: uuid
+             * @description The canonical role id, or null for bare membership.
+             */
+            role?: string | null;
+            /** @description The role's display name, or null for bare membership. */
+            roleDisplayName?: string | null;
             /** Format: date-time */
             joinedAt?: string;
         };
@@ -6767,8 +6775,11 @@ export interface components {
             userEmail: string;
             role: components["schemas"]["OrganizationMemberRole"];
         };
-        /** @description The organization role to grant: `member` (bare membership) or `admin` (an admin role binding), a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), or a role bindable at the org named by id or by name — every name `GET /api/iam/roles/bindable` lists for the org is accepted. The fixed names above win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. */
-        OrganizationMemberRole: string;
+        /**
+         * Format: uuid
+         * @description The canonical id of a role returned by `GET /api/iam/roles/bindable` for the organization, or null for bare membership without a role grant.
+         */
+        OrganizationMemberRole: string | null;
         UpdateOrganizationMemberRoleRequest: {
             role: components["schemas"]["OrganizationMemberRole"];
         };
@@ -6869,7 +6880,10 @@ export interface components {
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /** @description The role to grant on the folder: a role id, a seeded role name (`viewer`/`operator`/`editor`/`admin`), or the name of a custom role bindable here — every name `GET /api/iam/roles/bindable` lists for this folder is accepted. Either form must name a role owned at or above the folder. A seeded name always wins over a custom role of the same name, and a name two bindable roles share is a `400` naming both ids. The legacy project vocabulary carries no meaning here: `member` is a valid folder grant only if a role bindable on the folder is named that. */
+        /**
+         * Format: uuid
+         * @description The canonical id of a role returned by `GET /api/iam/roles/bindable` for the folder. The role must be owned at or above the folder.
+         */
         FolderRole: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantFolderMemberRequest: {
@@ -7315,8 +7329,13 @@ export interface components {
             username: string;
             displayName: string;
             email: string;
-            /** @description The role's `iam_roles` id; legacy rows storing a relational name are normalized to their seeded id. `roleDisplayName` carries the name to show. */
+            /**
+             * Format: uuid
+             * @description The role's canonical `iam_roles` id.
+             */
             role: string;
+            /** @description The role's display name. */
+            roleDisplayName: string;
             /** Format: date-time */
             joinedAt?: string;
             /** @description The user is not a member of the project's organization — a cross-org grant, which UIs should render prominently. */
@@ -7326,14 +7345,22 @@ export interface components {
             /** Format: uuid */
             groupId?: string;
             name: string;
-            /** @description The role's `iam_roles` id, as on `ProjectMember`. */
+            /**
+             * Format: uuid
+             * @description The role's canonical `iam_roles` id.
+             */
             role: string;
+            /** @description The role's display name. */
+            roleDisplayName: string;
             /** Format: date-time */
             grantedAt?: string;
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /** @description The role to grant on a project: a role id, a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), a legacy project role (`admin`/`member`/`viewer`), or the name of a custom role bindable on the project — every name `GET /api/iam/roles/bindable` lists for it is accepted. The fixed names above win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. */
+        /**
+         * Format: uuid
+         * @description The canonical id of a role returned by `GET /api/iam/roles/bindable` for the project.
+         */
         ProjectMemberRoleInput: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantProjectMemberRequest: {
@@ -8081,7 +8108,10 @@ export interface components {
         IAMWhoCanEntry: {
             principal: components["schemas"]["IAMPrincipalRef"];
             source: components["schemas"]["IAMWhoCanSource"];
-            /** @description The role that carries the action; absent for non-binding sources. */
+            /**
+             * Format: uuid
+             * @description The canonical role id that carries the action; absent for non-binding sources.
+             */
             role?: string;
             /** @description The node the binding is attached to — the resource itself when the grant is direct, an ancestor when it is inherited. */
             grantedOn?: components["schemas"]["IAMNode"];
@@ -8720,8 +8750,11 @@ export interface components {
             adminClaimValues?: string[];
             /** @description Admin-only. Claim values mapped to org-scoped roles bound on login. */
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description Admin-only. Organization role for newly provisioned users when no claim matches: `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
-            defaultRole?: string;
+            /**
+             * Format: uuid
+             * @description Admin-only. Canonical organization role id for newly provisioned users when no claim matches. Null or omission creates bare membership.
+             */
+            defaultRoleID?: string | null;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -8750,8 +8783,11 @@ export interface components {
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
-            defaultRole?: string;
+            /**
+             * Format: uuid
+             * @description Canonical role id returned by `GET /api/iam/roles/bindable` for the organization. Null or omission creates bare membership.
+             */
+            defaultRoleID?: string | null;
         };
         /** @description Every field is optional. Omitted URL fields keep their stored value; an empty string clears them. */
         UpdateOIDCProviderRequest: {
@@ -8771,8 +8807,11 @@ export interface components {
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
-            defaultRole?: string;
+            /**
+             * Format: uuid
+             * @description Canonical role id returned by `GET /api/iam/roles/bindable` for the organization. Null selects bare membership.
+             */
+            defaultRoleID?: string | null;
         };
         /** @description The outcome of a provider configuration test. */
         OIDCProviderTestResult: {

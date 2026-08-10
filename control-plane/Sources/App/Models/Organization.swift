@@ -80,8 +80,10 @@ final class UserOrganization: Model, @unchecked Sendable {
     @Parent(key: "organization_id")
     var organization: Organization
 
-    @Field(key: "role")
-    var role: String  // "admin" or "member"
+    /// The canonical role mirrored for this membership, or nil for bare
+    /// membership. Authorization always reads the corresponding RoleBinding.
+    @OptionalField(key: "role_id")
+    var roleID: UUID?
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
@@ -92,12 +94,12 @@ final class UserOrganization: Model, @unchecked Sendable {
         id: UUID? = nil,
         userID: UUID,
         organizationID: UUID,
-        role: String = "member"
+        roleID: UUID? = nil
     ) {
         self.id = id
         self.$user.id = userID
         self.$organization.id = organizationID
-        self.role = role
+        self.roleID = roleID
     }
 }
 
@@ -132,9 +134,9 @@ struct OrganizationResponse: Content {
     let name: String
     let description: String
     let createdAt: Date?
-    let userRole: String?
+    let userRole: UUID?
 
-    init(from organization: Organization, userRole: String? = nil) {
+    init(from organization: Organization, userRole: UUID? = nil) {
         self.id = organization.id
         self.name = organization.name
         self.description = organization.description
@@ -148,12 +150,10 @@ struct OrganizationMemberResponse: Content {
     let username: String
     let displayName: String
     let email: String
-    /// The stored membership role: a legacy literal (`admin`/`member`) or, for
-    /// a role granted by IAM name or id, the role's `iam_roles` id (issue #608).
-    let role: String
-    /// The role's human-readable name — the literal for legacy values, the row
-    /// name for a UUID, "(deleted role)" for a dangling id (issue #608).
-    let roleDisplayName: String
+    /// The canonical `iam_roles` id, or nil for bare membership.
+    let role: UUID?
+    /// The role's human-readable name, or nil for bare membership.
+    let roleDisplayName: String?
     let joinedAt: Date?
 }
 

@@ -366,24 +366,3 @@ enum IAMRoleRegistry {
         return result
     }
 }
-
-// MARK: - Mapping today's roles onto the global roles
-
-extension IAMRole {
-    /// The binding role for a `UserOrganization.role` value. Bare org
-    /// membership ("member") maps to *no* binding: under the new model it
-    /// grants only `org:read` + `project:create`, derived from membership
-    /// itself rather than a role binding.
-    static func fromOrganizationRole(_ role: String) -> IAMRole? {
-        role == "admin" ? .admin : nil
-    }
-
-    /// The binding role for a project role (user or group grants).
-    static func fromProjectRole(_ role: ProjectRole) -> IAMRole {
-        switch role {
-        case .admin: return .admin
-        case .member: return .editor
-        case .viewer: return .viewer
-        }
-    }
-}

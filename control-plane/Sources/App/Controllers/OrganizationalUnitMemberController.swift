@@ -1,6 +1,5 @@
 import Fluent
 import Foundation
-import SQLKit
 import Vapor
 
 /// Manages folder-level role grants for users and groups (STR-109) — the write
@@ -15,22 +14,14 @@ import Vapor
 /// org-wide grant (too broad) or one grant per project (drifts, and records the
 /// wrong scope).
 ///
-/// Two things differ from `ProjectMemberController`, which this otherwise
-/// mirrors:
-///
-///  - **No mirror table.** Projects keep `ProjectMember`/`ProjectGroupGrant`
-///    rows so the members list renders from a relational query; folders have no
-///    such table and none is added — `role_bindings` is read directly, which is
-///    the source of truth anyway. Nothing here has to decode legacy stored role
-///    names, because no folder binding predates this surface: the `role` column
-///    is always a role id.
-///  - **Gated on `iam:setPolicy` / `iam:readPolicy`** at the folder rather than
+/// Like project grants, this surface reads and writes `role_bindings` directly.
+/// It is gated on `iam:setPolicy` / `iam:readPolicy` at the folder rather than
 ///    a `manage_*` permission. A grant is policy, so it sits with roles,
 ///    authored policies, and guardrails — and, unlike `folder:update`, it can be
 ///    withheld from a custom role or ceilinged on its own.
 ///
 /// The rest carries over unchanged: `MemberRoleResolver` for the role
-/// vocabulary, `CrossOrgBindingGate` for external principals, and
+/// id validator, `CrossOrgBindingGate` for external principals, and
 /// `GuardrailWriteReport` for the write-time ceiling report.
 struct OrganizationalUnitMemberController: RouteCollection {
     func boot(routes: RoutesBuilder) throws {
@@ -54,8 +45,8 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let username: String
         let displayName: String
         let email: String
-        /// The granted role's `iam_roles` id, as a string.
-        let role: String
+        /// The granted role's `iam_roles` id.
+        let role: UUID
         /// The role's human-readable name, batch-loaded; a UUID naming no
         /// surviving row renders as "(deleted role)".
         let roleDisplayName: String
@@ -73,7 +64,7 @@ struct OrganizationalUnitMemberController: RouteCollection {
     struct FolderGroupGrantResponse: Content {
         let groupId: UUID?
         let name: String
-        let role: String
+        let role: UUID
         let roleDisplayName: String
         let grantedAt: Date?
         let expiresAt: Date?
@@ -89,16 +80,16 @@ struct OrganizationalUnitMemberController: RouteCollection {
     struct GrantMemberRequest: Content {
         let userEmail: String?
         let userID: UUID?
-        let role: String
+        let role: UUID
     }
 
     struct UpdateMemberRoleRequest: Content {
-        let role: String
+        let role: UUID
     }
 
     struct GrantGroupRequest: Content {
         let groupID: UUID
-        let role: String
+        let role: UUID
     }
 
     // MARK: - Handlers
@@ -155,38 +146,33 @@ struct OrganizationalUnitMemberController: RouteCollection {
             )
         }
 
-        let displayNames = try await RoleDisplayNames.forRoleIDs(
-            bindings.compactMap { UUID(uuidString: $0.role) }, on: req.db)
+        let displayNames = try await RoleDisplayNames.forRoleIDs(bindings.map(\.roleID), on: req.db)
 
-        // A binding whose principal row is gone, or whose role is unparseable,
-        // is dropped rather than rendered blank: both are already ignored by
-        // every evaluation path, so listing them would report access nobody has.
+        // A binding whose principal row is gone is dropped rather than rendered
+        // blank: evaluation ignores it too, so listing it would report access
+        // nobody has.
         return FolderMembersResponse(
             users: userBindings.compactMap { binding in
-                guard let user = users[binding.principalID], let roleID = UUID(uuidString: binding.role) else {
-                    return nil
-                }
+                guard let user = users[binding.principalID] else { return nil }
                 return FolderMemberResponse(
                     userId: user.id,
                     username: user.username,
                     displayName: user.displayName,
                     email: user.email,
-                    role: roleID.uuidString,
-                    roleDisplayName: displayNames.displayName(forRoleID: roleID),
+                    role: binding.roleID,
+                    roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
                     grantedAt: binding.createdAt,
                     expiresAt: binding.expiresAt,
                     external: rootOrgID != nil && !internalUserIDs.contains(binding.principalID)
                 )
             },
             groups: groupBindings.compactMap { binding in
-                guard let group = groups[binding.principalID], let roleID = UUID(uuidString: binding.role) else {
-                    return nil
-                }
+                guard let group = groups[binding.principalID] else { return nil }
                 return FolderGroupGrantResponse(
                     groupId: group.id,
                     name: group.name,
-                    role: roleID.uuidString,
-                    roleDisplayName: displayNames.displayName(forRoleID: roleID),
+                    role: binding.roleID,
+                    roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
                     grantedAt: binding.createdAt,
                     expiresAt: binding.expiresAt,
                     external: rootOrgID != nil && group.$organization.id != rootOrgID
@@ -203,13 +189,12 @@ struct OrganizationalUnitMemberController: RouteCollection {
         try await requireGrantAdmin(on: node, write: true, req: req)
 
         let body = try req.content.decode(GrantMemberRequest.self)
-        let role = try await MemberRoleResolver.resolve(
-            body.role, scopeNode: node, acceptsLegacyProjectRoles: false, on: req.db)
+        let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, on: req.db)
         let targetUser = try await resolveUser(body, on: req)
         let userID = try targetUser.requireID()
 
         // Optimistic: refuse a doomed grant before taking the folder lock.
-        // `insertGrant` re-checks under it, which is the check that actually
+        // `insertExclusiveGrant` re-checks under it, which is the check that actually
         // holds.
         try await requireNoExistingGrant(principalType: .user, principalID: userID, node: node, on: req.db)
 
@@ -231,8 +216,9 @@ struct OrganizationalUnitMemberController: RouteCollection {
             node: node
         )
 
-        try await insertGrant(
-            principalType: .user, principalID: userID, roleID: role.id, node: node, req: req)
+        try await RoleBindingService.insertExclusiveGrant(
+            principalType: .user, principalID: userID, roleID: role.id, node: node,
+            createdBy: req.auth.get(User.self)?.id, on: req.db)
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .user, principalID: userID,
@@ -253,11 +239,10 @@ struct OrganizationalUnitMemberController: RouteCollection {
             throw Abort(.badRequest, reason: "Invalid user ID")
         }
         let body = try req.content.decode(UpdateMemberRoleRequest.self)
-        let role = try await MemberRoleResolver.resolve(
-            body.role, scopeNode: node, acceptsLegacyProjectRoles: false, on: req.db)
+        let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, on: req.db)
 
         // Optimistic 404, so a PATCH for a user who holds nothing here does not
-        // take the folder lock first. `replaceGrant` re-checks under it.
+        // take the folder lock first. `replaceExclusiveGrant` re-checks under it.
         let holdsRole = try await RoleBindingService.activeBindings(
             principalType: .user, principalID: userID,
             nodeType: .organizationalUnit, nodeID: node.id, on: req.db)
@@ -281,8 +266,9 @@ struct OrganizationalUnitMemberController: RouteCollection {
             node: node
         )
 
-        try await replaceGrant(
-            principalType: .user, principalID: userID, roleID: role.id, node: node, req: req)
+        try await RoleBindingService.replaceExclusiveGrant(
+            principalType: .user, principalID: userID, roleID: role.id, node: node,
+            createdBy: req.auth.get(User.self)?.id, on: req.db)
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .user, principalID: userID,
@@ -314,13 +300,12 @@ struct OrganizationalUnitMemberController: RouteCollection {
         try await requireGrantAdmin(on: node, write: true, req: req)
 
         let body = try req.content.decode(GrantGroupRequest.self)
-        let role = try await MemberRoleResolver.resolve(
-            body.role, scopeNode: node, acceptsLegacyProjectRoles: false, on: req.db)
+        let role = try await MemberRoleResolver.resolve(body.role, scopeNode: node, on: req.db)
 
         guard try await Group.find(body.groupID, on: req.db) != nil else {
             throw Abort(.notFound, reason: "Group not found")
         }
-        // Optimistic; `insertGrant` re-checks under the folder lock.
+        // Optimistic; `insertExclusiveGrant` re-checks under the folder lock.
         try await requireNoExistingGrant(
             principalType: .group, principalID: body.groupID, node: node, on: req.db)
 
@@ -340,8 +325,9 @@ struct OrganizationalUnitMemberController: RouteCollection {
             node: node
         )
 
-        try await insertGrant(
-            principalType: .group, principalID: body.groupID, roleID: role.id, node: node, req: req)
+        try await RoleBindingService.insertExclusiveGrant(
+            principalType: .group, principalID: body.groupID, roleID: role.id, node: node,
+            createdBy: req.auth.get(User.self)?.id, on: req.db)
         if crossOrg {
             await CrossOrgBindingGate.recordCrossOrgEvent(
                 .crossOrgGrant, principalType: .group, principalID: body.groupID,
@@ -367,109 +353,6 @@ struct OrganizationalUnitMemberController: RouteCollection {
 
     // MARK: - Shared grant mechanics
 
-    /// Run `body` in a transaction holding an exclusive row lock on the folder,
-    /// serializing this folder's grant writes against each other.
-    ///
-    /// This is what makes "one role per principal per folder" true by
-    /// construction rather than by convention. Projects get the same invariant
-    /// from the database — `project_members` is `unique(project_id, user_id)`,
-    /// and the mirror insert shares the binding's transaction, so the loser of a
-    /// race rolls back. Dropping the mirror table for folders removed that, and
-    /// `role_bindings`' own uniqueness key includes `role`: two concurrent
-    /// grants of *different* roles to one principal never collide, so an
-    /// unguarded check-then-act lets both land and the principal ends up holding
-    /// the union, inherited down the whole subtree.
-    ///
-    /// Locking the folder row rather than adding a partial unique index keeps
-    /// the property that this feature needs no migration; grants are rare, so
-    /// serializing them per folder costs nothing. The lock is taken before any
-    /// binding read inside `body`, so every re-check below sees a settled state.
-    private func withFolderLocked<T: Sendable>(
-        _ node: IAMNode, req: Request, _ body: @Sendable @escaping (any Database) async throws -> T
-    ) async throws -> T {
-        try await req.db.transaction { db in
-            guard let sql = db as? any SQLDatabase else {
-                // Postgres is the only supported backend. Continuing without the
-                // lock would silently restore the race this exists to close, so
-                // it fails loudly instead.
-                throw Abort(
-                    .internalServerError,
-                    reason: "Folder grant writes require a SQL database that can lock the folder row")
-            }
-            try await sql.raw("SELECT id FROM organizational_units WHERE id = \(bind: node.id) FOR UPDATE").run()
-            return try await body(db)
-        }
-    }
-
-    /// Replace whatever the principal holds on the folder with exactly one
-    /// binding for `roleID`.
-    ///
-    /// Revoke-then-grant rather than revoking the previously held role by name:
-    /// with `role_bindings` as the only store there is no mirror row to read the
-    /// old role from, and clearing the node outright is what makes "one role per
-    /// principal per folder" true after the write rather than merely intended.
-    ///
-    /// The membership re-check happens under the lock, so the 404 cannot race a
-    /// concurrent revoke into a grant that resurrects it.
-    private func replaceGrant(
-        principalType: IAMPrincipalType, principalID: UUID, roleID: UUID, node: IAMNode, req: Request
-    ) async throws {
-        let actorID = req.auth.get(User.self)?.id
-        try await withFolderLocked(node, req: req) { db in
-            let existing = try await RoleBindingService.activeBindings(
-                principalType: principalType, principalID: principalID,
-                nodeType: .organizationalUnit, nodeID: node.id, on: db)
-            guard !existing.isEmpty else {
-                throw Abort(
-                    .notFound,
-                    reason: principalType == .group
-                        ? "Group has no role on this folder" : "User has no role on this folder")
-            }
-            try await RoleBindingService.revoke(
-                principalType: principalType,
-                principalID: principalID,
-                roleID: nil,
-                nodeType: .organizationalUnit,
-                nodeID: node.id,
-                on: db
-            )
-            try await RoleBindingService.grant(
-                principalType: principalType,
-                principalID: principalID,
-                roleID: roleID,
-                nodeType: .organizationalUnit,
-                nodeID: node.id,
-                createdBy: actorID,
-                on: db
-            )
-        }
-    }
-
-    /// Write the one binding a fresh grant creates, refusing under the lock if
-    /// the principal already holds a live role here.
-    ///
-    /// The caller has already made the same check optimistically, outside the
-    /// lock, so an obviously-doomed request is refused before the guardrail
-    /// solver runs. This one is the authoritative one.
-    private func insertGrant(
-        principalType: IAMPrincipalType, principalID: UUID, roleID: UUID, node: IAMNode, req: Request
-    ) async throws {
-        let actorID = req.auth.get(User.self)?.id
-        try await withFolderLocked(node, req: req) { db in
-            try await requireNoExistingGrant(
-                principalType: principalType, principalID: principalID, node: node, on: db)
-            try await RoleBindingService.grant(
-                principalType: principalType,
-                principalID: principalID,
-                roleID: roleID,
-                nodeType: .organizationalUnit,
-                nodeID: node.id,
-                createdBy: actorID,
-                on: db
-            )
-        }
-    }
-
     /// Revoke everything the principal holds on the folder, 404-ing when it
     /// holds nothing, and keeping the cross-org revoke loud (issue #485).
     private func revokeGrant(
@@ -478,31 +361,10 @@ struct OrganizationalUnitMemberController: RouteCollection {
         let crossOrg = try await CrossOrgBindingGate.isCrossOrg(
             principalType: principalType, principalID: principalID, node: node, on: req.db)
 
-        // Read and delete under the folder lock, so the 404 reflects the state
-        // the delete then acts on.
-        let revokedRole = try await withFolderLocked(node, req: req) { db -> String in
-            let bindings = try await RoleBindingService.activeBindings(
-                principalType: principalType, principalID: principalID,
-                nodeType: .organizationalUnit, nodeID: node.id, on: db)
-            guard let binding = bindings.first else {
-                throw Abort(
-                    .notFound,
-                    reason: principalType == .group
-                        ? "Group has no role on this folder" : "User has no role on this folder")
-            }
-            // `roleID: nil` also sweeps any expired row for this principal here,
-            // which the active-only conflict check in `requireNoExistingGrant`
-            // deliberately allows to be granted around.
-            try await RoleBindingService.revoke(
-                principalType: principalType,
-                principalID: principalID,
-                roleID: nil,
-                nodeType: .organizationalUnit,
-                nodeID: node.id,
-                on: db
-            )
-            return binding.role
-        }
+        let revokedRole =
+            try await RoleBindingService.revokeExclusiveGrant(
+                principalType: principalType, principalID: principalID, node: node, on: req.db
+            ).first?.uuidString ?? "unknown"
         if crossOrg {
             // Revokes need no gate — taking cross-org access away is always
             // allowed — but they stay loud, so external access has a visible end

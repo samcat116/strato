@@ -188,7 +188,7 @@ struct SCIMTokenController: RouteCollection {
     /// Managing SCIM tokens is org administration, gated through the
     /// evaluator like the rest of the org-admin surface (the issue #482
     /// pre-cutover audit's conversion pattern — previously an inline
-    /// `UserOrganization.role` read invisible to the decision log).
+    /// organization-membership field read invisible to the decision log).
     private func requireOrganizationAdmin(organizationID: UUID, on req: Request) async throws {
         guard try await req.can("manage_members", on: "organization", id: organizationID.uuidString) else {
             throw Abort(.forbidden, reason: "Only organization admins can manage SCIM tokens")

@@ -44,7 +44,7 @@ export interface AdminCreateUserRequest {
   isSystemAdmin?: boolean;
   /** Optional org to provision the invitee into up front. */
   organizationId?: string;
-  /** Org role for `organizationId` — "admin" or "member". */
+  /** Canonical org role UUID for `organizationId`; omit for bare membership. */
   role?: string;
 }
 
@@ -257,10 +257,10 @@ export interface OrganizationMember {
   username: string;
   displayName: string;
   email: string;
-  /** Stored membership role: a legacy literal, or an `iam_roles` id. */
-  role: string;
-  /** Human-readable role name for display (issue #608). */
-  roleDisplayName: string;
+  /** Canonical `iam_roles` id, or null for bare membership. */
+  role: string | null;
+  /** Human-readable role name, or null for bare membership. */
+  roleDisplayName: string | null;
   joinedAt: string;
 }
 
@@ -291,9 +291,8 @@ export interface GrantWriteResponse {
   analysisUnavailable?: string;
 }
 
-// Legacy project-role names still accepted on writes; the unified vocabulary
-// also accepts IAM role names and role ids (issue #608).
-export type ProjectRole = "admin" | "member" | "viewer";
+/** Canonical `iam_roles` UUID used by project grant endpoints. */
+export type ProjectRole = string;
 
 export interface ProjectMember {
   userId: string;

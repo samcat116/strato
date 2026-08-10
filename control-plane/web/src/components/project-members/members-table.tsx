@@ -23,13 +23,12 @@ import {
 import {
   useRevokeProjectMember,
   useUpdateProjectMemberRole,
+  useBindableRoles,
   projectMemberErrorMessage,
 } from "@/lib/hooks";
 import { toast } from "sonner";
 import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
 import type { ProjectMember, ProjectRole } from "@/types/api";
-
-const ROLES: ProjectRole[] = ["admin", "member", "viewer"];
 
 interface MembersTableProps {
   projectId: string;
@@ -46,6 +45,10 @@ export function MembersTable({
 }: MembersTableProps) {
   const revoke = useRevokeProjectMember(projectId);
   const updateRole = useUpdateProjectMemberRole(projectId);
+  const { data: roles = [], isLoading: rolesLoading } = useBindableRoles(
+    "project",
+    projectId
+  );
   const [pendingId, setPendingId] = useState<string | null>(null);
 
   const handleRevoke = async (member: ProjectMember) => {
@@ -70,12 +73,13 @@ export function MembersTable({
   const handleRoleChange = async (member: ProjectMember, role: ProjectRole) => {
     if (role === member.role) return;
     setPendingId(member.userId);
+    const roleName = roles.find((candidate) => candidate.id === role)?.name ?? role;
     try {
       const result = await updateRole.mutateAsync({ userId: member.userId, role });
-      toast.success(`Updated ${member.displayName || member.username} to ${role}`);
+      toast.success(`Updated ${member.displayName || member.username} to ${roleName}`);
       warnAboutGrantCeilings(
         result,
-        `${member.displayName || member.username}'s ${role} role`
+        `${member.displayName || member.username}'s ${roleName} role`
       );
     } catch (error) {
       toast.error(projectMemberErrorMessage(error, "Failed to update role"));
@@ -148,19 +152,19 @@ export function MembersTable({
                     onValueChange={(role) =>
                       handleRoleChange(member, role as ProjectRole)
                     }
-                    disabled={isPending}
+                    disabled={isPending || rolesLoading}
                   >
                     <SelectTrigger className="w-32 bg-background border-border text-foreground capitalize">
                       <SelectValue placeholder={member.roleDisplayName} />
                     </SelectTrigger>
                     <SelectContent className="bg-card border-border">
-                      {ROLES.map((role) => (
+                      {roles.map((role) => (
                         <SelectItem
-                          key={role}
-                          value={role}
-                          className="text-foreground capitalize focus:bg-accent focus:text-accent-foreground"
+                          key={role.id}
+                          value={role.id}
+                          className="text-foreground focus:bg-accent focus:text-accent-foreground"
                         >
-                          {role}
+                          {role.name}
                         </SelectItem>
                       ))}
                     </SelectContent>

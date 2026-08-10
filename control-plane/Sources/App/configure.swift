@@ -926,6 +926,10 @@ public func configure(_ app: Application) async throws {
     // reports are the only source of agent capability truth.
     app.migrations.add(DropLegacyAgentCapabilities())
 
+    // STR-229: canonical UUID role identity, one-time binding completeness
+    // proof, and removal of the project/group grant mirrors.
+    app.migrations.add(CanonicalizeMembershipRoleStorage())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a
@@ -986,14 +990,6 @@ public func configure(_ app: Application) async throws {
     // so a key added after upgrade still picks up rows written before it
     // existed. No-op without a key.
     try await secretsEncryption.encryptStoredSecrets(on: app.db, logger: app.logger)
-
-    // IAM phase 1: populate role_bindings from the relational mirrors
-    // (user_organizations, project_members, project_group_grants). Idempotent,
-    // so re-running every boot also repairs any grant a crashed request
-    // missed.
-    if app.environment != .testing {
-        try await RoleBindingBackfill.backfillFromMirrors(app)
-    }
 
     // Initialize the WebAuthn decoy credential key (generates if not exists),
     // so the first login begin doesn't pay the generate-and-store round trip.

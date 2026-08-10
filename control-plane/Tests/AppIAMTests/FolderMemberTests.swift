@@ -114,14 +114,14 @@ struct FolderMemberTests {
     /// The role ids bound to `principal` on the engineering folder.
     private func folderRoles(
         _ fixture: Fixture, principalType: IAMPrincipalType, principalID: UUID, on db: any Database
-    ) async throws -> [String] {
+    ) async throws -> [UUID] {
         try await RoleBinding.query(on: db)
             .filter(\.$principalType == principalType.rawValue)
             .filter(\.$principalID == principalID)
             .filter(\.$nodeType == IAMNodeType.organizationalUnit.rawValue)
             .filter(\.$nodeID == fixture.engineering.requireID())
             .all()
-            .map(\.role)
+            .map(\.roleID)
     }
 
     // MARK: - Grants
@@ -134,14 +134,14 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "admin"))
+                        userEmail: fixture.target.email, userID: nil, role: IAMRole.admin.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
 
             let roles = try await folderRoles(
                 fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
-            #expect(roles == [IAMRole.admin.seededID.uuidString])
+            #expect(roles == [IAMRole.admin.seededID])
         }
     }
 
@@ -153,7 +153,7 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "viewer"))
+                        userEmail: fixture.target.email, userID: nil, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
@@ -190,7 +190,7 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "editor"))
+                        userEmail: fixture.target.email, userID: nil, role: IAMRole.editor.seededID))
             } afterResponse: { res in
                 #expect(res.status == .conflict)
             }
@@ -210,14 +210,15 @@ struct FolderMemberTests {
             try await app.test(.PATCH, "\(path)/\(targetID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
-                    OrganizationalUnitMemberController.UpdateMemberRoleRequest(role: "admin"))
+                    OrganizationalUnitMemberController.UpdateMemberRoleRequest(
+                        role: IAMRole.admin.seededID))
             } afterResponse: { res in
                 #expect(res.status == .ok)
             }
 
             let roles = try await folderRoles(
                 fixture, principalType: .user, principalID: targetID, on: app.db)
-            #expect(roles == [IAMRole.admin.seededID.uuidString])
+            #expect(roles == [IAMRole.admin.seededID])
         }
     }
 
@@ -228,7 +229,8 @@ struct FolderMemberTests {
             try await app.test(.PATCH, "\(path)/\(try fixture.target.requireID())") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
-                    OrganizationalUnitMemberController.UpdateMemberRoleRequest(role: "admin"))
+                    OrganizationalUnitMemberController.UpdateMemberRoleRequest(
+                        role: IAMRole.admin.seededID))
             } afterResponse: { res in
                 #expect(res.status == .notFound)
             }
@@ -266,14 +268,15 @@ struct FolderMemberTests {
             try await app.test(.POST, path) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
-                    OrganizationalUnitMemberController.GrantGroupRequest(groupID: groupID, role: "editor"))
+                    OrganizationalUnitMemberController.GrantGroupRequest(
+                        groupID: groupID, role: IAMRole.editor.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
 
             let granted = try await folderRoles(
                 fixture, principalType: .group, principalID: groupID, on: app.db)
-            #expect(granted == [IAMRole.editor.seededID.uuidString])
+            #expect(granted == [IAMRole.editor.seededID])
 
             try await app.test(.DELETE, "\(path)/\(groupID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
@@ -318,7 +321,7 @@ struct FolderMemberTests {
                 let body = try res.content.decode(
                     OrganizationalUnitMemberController.FolderMembersResponse.self)
                 let member = try #require(body.users.first { $0.userId == targetID })
-                #expect(member.role == IAMRole.admin.seededID.uuidString)
+                #expect(member.role == IAMRole.admin.seededID)
                 #expect(member.roleDisplayName == "admin")
                 #expect(member.external == false)
 
@@ -326,7 +329,7 @@ struct FolderMemberTests {
                 #expect(external.external == true)
 
                 let grant = try #require(body.groups.first { $0.groupId == groupID })
-                #expect(grant.role == IAMRole.viewer.seededID.uuidString)
+                #expect(grant.role == IAMRole.viewer.seededID)
                 #expect(grant.roleDisplayName == "viewer")
                 #expect(grant.external == false)
             }
@@ -352,7 +355,7 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: editorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "viewer"))
+                        userEmail: fixture.target.email, userID: nil, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -411,7 +414,7 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: outsider.email, userID: nil, role: "viewer"))
+                        userEmail: outsider.email, userID: nil, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.contains("iam:grantExternal"), "body: \(res.body.string)")
@@ -428,7 +431,7 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "viewer"))
+                        userEmail: fixture.target.email, userID: nil, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
@@ -448,7 +451,7 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantGroupRequest(
-                        groupID: groupID, role: "viewer"))
+                        groupID: groupID, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
                 #expect(res.body.string.contains("iam:grantExternal"), "body: \(res.body.string)")
@@ -484,7 +487,7 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "editor"))
+                        userEmail: fixture.target.email, userID: nil, role: IAMRole.editor.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
                 let body = try res.content.decode(GrantWriteResponse.self)
@@ -510,13 +513,13 @@ struct FolderMemberTests {
             let path = try membersPath(fixture)
             let email = fixture.target.email
             let token = fixture.actorToken
-            let roles = ["viewer", "operator", "editor", "admin"]
+            let roles = IAMRole.allCases.map(\.seededID)
 
             let statuses = await withTaskGroup(of: HTTPStatus?.self) { group in
                 for role in roles {
                     group.addTask {
                         var status: HTTPStatus?
-                        try? await app.test(.POST, path) { req in
+                        _ = try? await app.test(.POST, path) { req in
                             req.headers.bearerAuthorization = BearerAuthorization(token: token)
                             try req.content.encode(
                                 OrganizationalUnitMemberController.GrantMemberRequest(
@@ -577,7 +580,7 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: roleID.uuidString))
+                        userEmail: fixture.target.email, userID: nil, role: roleID))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
                 #expect(res.body.string.contains("not in the hierarchy"))
@@ -589,8 +592,8 @@ struct FolderMemberTests {
         }
     }
 
-    @Test("An org-owned role's name is grantable on a folder beneath it (STR-111)")
-    func grantByOrgOwnedRoleName() async throws {
+    @Test("An org-owned role UUID is grantable on a folder beneath it")
+    func grantByOrgOwnedRoleUUID() async throws {
         try await withFixture { app, fixture in
             let roleID = UUID()
             let role = IAMRoleDefinition(
@@ -608,88 +611,14 @@ struct FolderMemberTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
                 try req.content.encode(
                     OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "vm-restarter"))
+                        userEmail: fixture.target.email, userID: nil, role: roleID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
 
             let roles = try await folderRoles(
                 fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
-            #expect(roles == [roleID.uuidString])
-        }
-    }
-
-    @Test("A name owned outside the folder's hierarchy resolves to nothing")
-    func grantByOutOfScopeRoleName() async throws {
-        try await withFixture { app, fixture in
-            let otherOrg = try await fixture.builder.createOrganization(name: "Name Owner Org")
-            let roleID = UUID()
-            let role = IAMRoleDefinition(
-                id: roleID,
-                name: "foreign",
-                ownerType: .organization,
-                ownerID: try otherOrg.requireID(),
-                cedarText: RoleDescriptor.canonicalPermitText(id: roleID, actions: ["vm:read"]),
-                actions: ["vm:read"],
-                managed: false
-            )
-            try await role.save(on: app.db)
-
-            try await app.test(.POST, try membersPath(fixture)) { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
-                try req.content.encode(
-                    OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "foreign"))
-            } afterResponse: { res in
-                #expect(res.status == .badRequest)
-                #expect(res.body.string.contains("Invalid role 'foreign'"))
-            }
-
-            let roles = try await folderRoles(
-                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
-            #expect(roles.isEmpty)
-        }
-    }
-
-    @Test("'member' means nothing on a folder unless a bindable role is named that")
-    func legacyMemberOnlyResolvesAsARoleName() async throws {
-        try await withFixture { app, fixture in
-            // Folders never took the legacy project vocabulary, so `member` is
-            // only ever a role name here.
-            try await app.test(.POST, try membersPath(fixture)) { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
-                try req.content.encode(
-                    OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "member"))
-            } afterResponse: { res in
-                #expect(res.status == .badRequest)
-                #expect(res.body.string.contains("Invalid role 'member'"))
-            }
-
-            let roleID = UUID()
-            let role = IAMRoleDefinition(
-                id: roleID,
-                name: "member",
-                ownerType: .organization,
-                ownerID: try fixture.org.requireID(),
-                cedarText: RoleDescriptor.canonicalPermitText(id: roleID, actions: ["vm:read"]),
-                actions: ["vm:read"],
-                managed: false
-            )
-            try await role.save(on: app.db)
-
-            try await app.test(.POST, try membersPath(fixture)) { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: fixture.actorToken)
-                try req.content.encode(
-                    OrganizationalUnitMemberController.GrantMemberRequest(
-                        userEmail: fixture.target.email, userID: nil, role: "member"))
-            } afterResponse: { res in
-                #expect(res.status == .created)
-            }
-
-            let roles = try await folderRoles(
-                fixture, principalType: .user, principalID: try fixture.target.requireID(), on: app.db)
-            #expect(roles == [roleID.uuidString])
+            #expect(roles == [roleID])
         }
     }
 

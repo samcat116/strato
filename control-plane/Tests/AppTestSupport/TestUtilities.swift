@@ -439,22 +439,33 @@ package struct TestDataBuilder {
         organization: Organization,
         role: String = "member"
     ) async throws {
+        let roleID: UUID?
+        switch role {
+        case "member": roleID = nil
+        case "viewer": roleID = IAMRole.viewer.seededID
+        case "operator": roleID = IAMRole.operator.seededID
+        case "editor": roleID = IAMRole.editor.seededID
+        case "admin": roleID = IAMRole.admin.seededID
+        default:
+            guard let customRoleID = UUID(uuidString: role) else {
+                throw TestSetupError.message("Unknown organization role fixture '\(role)'")
+            }
+            roleID = customRoleID
+        }
         let userOrg = UserOrganization(
             userID: user.id!,
             organizationID: organization.id!,
-            role: role
+            roleID: roleID
         )
         try await userOrg.save(on: db)
 
-        // Mirror the dual-write the API performs: an org admin carries an
-        // `admin` role binding (a bare member carries none — membership itself
-        // grants only org:read + project:create). Without this the Cedar
-        // evaluator, which answers from `role_bindings`, sees no grant.
-        if let bindingRole = IAMRole.fromOrganizationRole(role) {
+        // Organization membership remains relational, while any role grant is
+        // represented only by its authoritative binding.
+        if let roleID {
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: user.id!,
-                role: bindingRole,
+                roleID: roleID,
                 nodeType: .organization,
                 nodeID: organization.id!,
                 createdBy: nil,

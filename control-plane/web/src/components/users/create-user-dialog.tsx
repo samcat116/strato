@@ -28,7 +28,12 @@ import type { AdminCreateUserRequest, AdminCreateUserResponse } from "@/types/ap
 
 // Sentinel because a Radix Select item can't have an empty-string value.
 const NO_ORG = "__none__";
-const ORG_ROLES = ["member", "admin"] as const;
+const BARE_MEMBERSHIP = "__bare__";
+const ADMIN_ROLE_ID = "00000000-0000-0000-0000-000000000004";
+const ORG_ROLES = [
+  { value: BARE_MEMBERSHIP, label: "Member" },
+  { value: ADMIN_ROLE_ID, label: "Admin" },
+] as const;
 
 interface CreateUserDialogProps {
   open: boolean;
@@ -60,7 +65,7 @@ function CreateUserForm({ onClose }: { onClose: () => void }) {
   const [displayName, setDisplayName] = useState("");
   const [isSystemAdmin, setIsSystemAdmin] = useState(false);
   const [organizationId, setOrganizationId] = useState(NO_ORG);
-  const [role, setRole] = useState<(typeof ORG_ROLES)[number]>("member");
+  const [role, setRole] = useState(BARE_MEMBERSHIP);
   const [created, setCreated] = useState<AdminCreateUserResponse | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -74,7 +79,7 @@ function CreateUserForm({ onClose }: { onClose: () => void }) {
     };
     if (organizationId !== NO_ORG) {
       payload.organizationId = organizationId;
-      payload.role = role;
+      if (role !== BARE_MEMBERSHIP) payload.role = role;
     }
     if (!payload.username || !payload.email || !payload.displayName) {
       toast.error("Username, email and display name are required");
@@ -209,7 +214,7 @@ function CreateUserForm({ onClose }: { onClose: () => void }) {
               </Label>
               <Select
                 value={role}
-                onValueChange={(v) => setRole(v as (typeof ORG_ROLES)[number])}
+                onValueChange={setRole}
                 disabled={createUser.isPending}
               >
                 <SelectTrigger
@@ -219,13 +224,13 @@ function CreateUserForm({ onClose }: { onClose: () => void }) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-card border-border">
-                  {ORG_ROLES.map((r) => (
+                  {ORG_ROLES.map((candidate) => (
                     <SelectItem
-                      key={r}
-                      value={r}
+                      key={candidate.value}
+                      value={candidate.value}
                       className="text-foreground capitalize focus:bg-accent focus:text-accent-foreground"
                     >
-                      {r}
+                      {candidate.label}
                     </SelectItem>
                   ))}
                 </SelectContent>

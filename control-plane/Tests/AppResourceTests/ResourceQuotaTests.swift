@@ -47,7 +47,7 @@ final class ResourceQuotaTests {
             let userOrg = UserOrganization(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
-                role: "admin"
+                roleID: IAMRole.admin.seededID
             )
             try await userOrg.save(on: app.db)
 
@@ -352,7 +352,7 @@ final class ResourceQuotaTests {
                 displayName: "Bare Member", isSystemAdmin: false)
             try await member.save(on: app.db)
             try await UserOrganization(
-                userID: member.id!, organizationID: testOrganization.id!, role: "member"
+                userID: member.id!, organizationID: testOrganization.id!, roleID: nil
             ).save(on: app.db)
             let memberToken = try await member.generateAPIKey(on: app.db)
 

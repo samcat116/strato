@@ -6361,7 +6361,7 @@ paths:
       summary: List an organization's OIDC providers
       description: >-
         Members see the provider list; claim-mapping fields (`groupsClaim`,
-        `groupMappings`, `adminClaimValues`, `roleMappings`, `defaultRole`) are
+        `groupMappings`, `adminClaimValues`, `roleMappings`, `defaultRoleID`) are
         redacted for non-admins. Client secrets are never returned.
       tags: [OIDC]
       responses:
@@ -11135,9 +11135,11 @@ components:
           description: Optional organization to provision the invitee into up front.
         role:
           type: string
-          description: Organization role for `organizationId`.
-          enum: [admin, member]
-          default: member
+          format: uuid
+          nullable: true
+          description: >-
+            Canonical organization role id for `organizationId`. Omit or use
+            null to create bare organization membership without a role grant.
 
     AdminCreateUserResponse:
       type: object
@@ -11727,8 +11729,11 @@ components:
           format: date-time
         userRole:
           type: string
+          format: uuid
           nullable: true
-          description: The caller's role in this organization, or null when the caller is not a member.
+          description: >-
+            The caller's canonical role id in this organization, or null for
+            bare membership or when the caller is not a member.
 
     CreateOrganizationRequest:
       type: object
@@ -11752,7 +11757,7 @@ components:
 
     OrganizationMember:
       type: object
-      required: [username, displayName, email, role]
+      required: [username, displayName, email]
       properties:
         id:
           type: string
@@ -11765,6 +11770,13 @@ components:
           type: string
         role:
           type: string
+          format: uuid
+          nullable: true
+          description: The canonical role id, or null for bare membership.
+        roleDisplayName:
+          type: string
+          nullable: true
+          description: The role's display name, or null for bare membership.
         joinedAt:
           type: string
           format: date-time
@@ -11781,15 +11793,12 @@ components:
 
     OrganizationMemberRole:
       type: string
+      format: uuid
+      nullable: true
       description: >-
-        The organization role to grant: `member` (bare membership) or `admin`
-        (an admin role binding), a seeded IAM role name
-        (`viewer`/`operator`/`editor`/`admin`), or a role bindable at the org
-        named by id or by name — every name
-        `GET /api/iam/roles/bindable` lists for the org is accepted. The fixed
-        names above win over a custom role that shares one, which stays
-        grantable by id; a name two bindable roles share is a `400` naming
-        both ids.
+        The canonical id of a role returned by
+        `GET /api/iam/roles/bindable` for the organization, or null for bare
+        membership without a role grant.
 
     UpdateOrganizationMemberRoleRequest:
       type: object
@@ -11971,15 +11980,11 @@ components:
 
     FolderRole:
       type: string
+      format: uuid
       description: >-
-        The role to grant on the folder: a role id, a seeded role name
-        (`viewer`/`operator`/`editor`/`admin`), or the name of a custom role
-        bindable here — every name `GET /api/iam/roles/bindable` lists for this
-        folder is accepted. Either form must name a role owned at or above the
-        folder. A seeded name always wins over a custom role of the same name,
-        and a name two bindable roles share is a `400` naming both ids. The
-        legacy project vocabulary carries no meaning here: `member` is a valid
-        folder grant only if a role bindable on the folder is named that.
+        The canonical id of a role returned by
+        `GET /api/iam/roles/bindable` for the folder. The role must be owned at
+        or above the folder.
 
     GrantFolderMemberRequest:
       type: object
@@ -12878,7 +12883,7 @@ components:
 
     ProjectMember:
       type: object
-      required: [username, displayName, email, role, external]
+      required: [username, displayName, email, role, roleDisplayName, external]
       properties:
         userId:
           type: string
@@ -12891,10 +12896,11 @@ components:
           type: string
         role:
           type: string
-          description: >-
-            The role's `iam_roles` id; legacy rows storing a relational name
-            are normalized to their seeded id. `roleDisplayName` carries the
-            name to show.
+          format: uuid
+          description: The role's canonical `iam_roles` id.
+        roleDisplayName:
+          type: string
+          description: The role's display name.
         joinedAt:
           type: string
           format: date-time
@@ -12906,7 +12912,7 @@ components:
 
     ProjectGroupGrant:
       type: object
-      required: [name, role, external]
+      required: [name, role, roleDisplayName, external]
       properties:
         groupId:
           type: string
@@ -12915,7 +12921,11 @@ components:
           type: string
         role:
           type: string
-          description: The role's `iam_roles` id, as on `ProjectMember`.
+          format: uuid
+          description: The role's canonical `iam_roles` id.
+        roleDisplayName:
+          type: string
+          description: The role's display name.
         grantedAt:
           type: string
           format: date-time
@@ -12927,14 +12937,10 @@ components:
 
     ProjectMemberRoleInput:
       type: string
+      format: uuid
       description: >-
-        The role to grant on a project: a role id, a seeded IAM role name
-        (`viewer`/`operator`/`editor`/`admin`), a legacy project role
-        (`admin`/`member`/`viewer`), or the name of a custom role bindable on
-        the project — every name `GET /api/iam/roles/bindable` lists for it is
-        accepted. The fixed names above win over a custom role that shares one,
-        which stays grantable by id; a name two bindable roles share is a `400`
-        naming both ids.
+        The canonical id of a role returned by
+        `GET /api/iam/roles/bindable` for the project.
 
     GrantProjectMemberRequest:
       type: object
@@ -14455,7 +14461,8 @@ components:
           $ref: "#/components/schemas/IAMWhoCanSource"
         role:
           type: string
-          description: The role that carries the action; absent for non-binding sources.
+          format: uuid
+          description: The canonical role id that carries the action; absent for non-binding sources.
         grantedOn:
           allOf:
             - $ref: "#/components/schemas/IAMNode"
@@ -15797,12 +15804,13 @@ components:
             Admin-only. Claim values mapped to org-scoped roles bound on login.
           items:
             $ref: "#/components/schemas/OIDCRoleMapping"
-        defaultRole:
+        defaultRoleID:
           type: string
+          format: uuid
+          nullable: true
           description: >-
-            Admin-only. Organization role for newly provisioned users when no
-            claim matches: `member`, `admin`, an IAM role name, or a role
-            bindable at the org named by id or by name.
+            Admin-only. Canonical organization role id for newly provisioned
+            users when no claim matches. Null or omission creates bare membership.
         createdAt:
           type: string
           format: date-time
@@ -15862,11 +15870,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OIDCRoleMapping"
-        defaultRole:
+        defaultRoleID:
           type: string
+          format: uuid
+          nullable: true
           description: >-
-            `member`, `admin`, an IAM role name, or a role bindable at the org
-            named by id or by name.
+            Canonical role id returned by `GET /api/iam/roles/bindable` for the
+            organization. Null or omission creates bare membership.
 
     UpdateOIDCProviderRequest:
       type: object
@@ -15914,11 +15924,13 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/OIDCRoleMapping"
-        defaultRole:
+        defaultRoleID:
           type: string
+          format: uuid
+          nullable: true
           description: >-
-            `member`, `admin`, an IAM role name, or a role bindable at the org
-            named by id or by name.
+            Canonical role id returned by `GET /api/iam/roles/bindable` for the
+            organization. Null selects bare membership.
 
     OIDCProviderTestResult:
       type: object
