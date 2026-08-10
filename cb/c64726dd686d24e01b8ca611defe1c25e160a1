@@ -1,0 +1,19 @@
+agent/Tests/StratoAgentTests/AgentConfigTests.swift
+  s_c327d906dd3137::t_0da85be03fbc2d 379-384
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "cbc64726dd686d24e01b8ca611defe1c25e160a1",
+  "prompts": {},
+  "sessions": {
+    "s_c327d906dd3137": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe805-3d12-7b12-b80f-d9df8123bf23",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
