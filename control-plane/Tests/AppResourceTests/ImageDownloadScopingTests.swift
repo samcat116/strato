@@ -138,8 +138,8 @@ final class ImageDownloadScopingTests {
                 createdByID: user.id!,
                 sourceImageID: image.id
             )
-            volume.hypervisorId = agentId
             try await volume.save(on: app.db)
+            try await placeVolume(volume, on: agentId, using: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
             #expect(message.volumes?.first?.source?.kind == DesiredVolumeSource.image)
@@ -167,8 +167,8 @@ final class ImageDownloadScopingTests {
                 createdByID: user.id!,
                 sourceImageID: image.id
             )
-            volume.hypervisorId = owner
             try await volume.save(on: app.db)
+            try await placeVolume(volume, on: owner, using: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: other)
             #expect(message.volumes?.isEmpty == true)

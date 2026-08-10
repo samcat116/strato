@@ -923,6 +923,15 @@ public func configure(_ app: Application) async throws {
     // It must run after every migration that ever touched the table.
     app.migrations.add(DropResourceOperations())
 
+    // STR-232: replace the legacy placement index before the cutover drops it.
+    // Desired-state assembly and observed-state application both resolve
+    // replicas by agent and active state on every reconciliation cycle.
+    app.migrations.add(AddVolumeReplicaAgentIndex())
+
+    // After an inventory-and-repair preflight, replicas become the only volume
+    // placement/path authority and the legacy columns are dropped.
+    app.migrations.add(MakeVolumeReplicasAuthoritative())
+
     // STR-222: structured hypervisor, network, sandbox, TPM, and resolver
     // reports are the only source of agent capability truth.
     app.migrations.add(DropLegacyAgentCapabilities())

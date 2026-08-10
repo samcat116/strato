@@ -94,15 +94,16 @@ extension StoragePool {
     ///   replicas, so the agent must be one of them. A volume with no replicas
     ///   yet (never provisioned) is reachable from anywhere, matching the old
     ///   guard's "no hypervisor recorded" case.
-    /// - `replicated`: any member agent reaches the replica set over the
-    ///   network, so membership decides.
+    /// - `replicated`: fail closed. The schema value was reserved for a DRBD
+    ///   design that was never implemented; independent filesystem copies are
+    ///   not a coherent shared volume.
     ///
     /// `pool` is optional so callers can pass an unloaded/legacy state; no pool
     /// behaves like `local`.
     static func agentCanReach(agentId: String, pool: StoragePool?, replicaAgentIds: [String]) -> Bool {
         switch pool?.mode {
         case .replicated:
-            return pool!.memberAgentIds.isEmpty || pool!.memberAgentIds.contains(agentId)
+            return false
         case .local, nil:
             return replicaAgentIds.isEmpty || replicaAgentIds.contains(agentId)
         }

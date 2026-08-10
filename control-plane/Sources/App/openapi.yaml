@@ -10168,6 +10168,7 @@ components:
         - status
         - readonly
         - conditions
+        - replicas
       properties:
         id:
           type: string
@@ -10219,8 +10220,14 @@ components:
           format: uuid
         attachedAgentId:
           type: string
-        hypervisorId:
-          type: string
+        replicas:
+          type: array
+          description: >-
+            Every physical copy of the volume. Healthy and provisioning copies
+            authoritatively define placement and agent-owned storage paths;
+            other states remain visible for repair and observability.
+          items:
+            $ref: "#/components/schemas/VolumeReplica"
         vmId:
           type: string
           format: uuid
@@ -10268,6 +10275,27 @@ components:
         updatedAt:
           type: string
           format: date-time
+    VolumeReplica:
+      type: object
+      required: [agentId, state, generation]
+      properties:
+        id:
+          type: string
+          format: uuid
+        agentId:
+          type: string
+        datasetPath:
+          type: string
+          nullable: true
+          description: >-
+            The agent-owned location of this physical copy. Null while a
+            provisioning replica has not reported its location yet.
+        state:
+          type: string
+          enum: [provisioning, healthy, degraded, resyncing, faulted]
+        generation:
+          type: integer
+          format: int64
     VolumeSnapshot:
       type: object
       required: [name, description, environment, size, sizeFormatted, status]

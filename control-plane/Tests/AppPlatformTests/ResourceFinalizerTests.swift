@@ -167,7 +167,7 @@ final class ResourceFinalizerTests {
             try await ResourceFinalizerService.clear(.agentAbsent, from: vm, on: app.db, app: app)
 
             // Already terminating: the stamp is a no-op, not a fresh list.
-            ResourceFinalizerService.stampForDeletion(vm)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
             #expect(vm.finalizers == [Self.foreign.rawValue])
         }
     }

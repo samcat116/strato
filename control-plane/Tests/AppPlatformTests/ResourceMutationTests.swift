@@ -183,7 +183,7 @@ final class ResourceMutationTests {
 
             self.mutation(app, fake).dispatch(
                 .create, resourceType: VM.self, resourceID: vmID,
-                targetGeneration: vm.generation, hypervisorId: nil,
+                targetGeneration: vm.generation, agentIDs: [],
                 strategy: .placement { _ in
                     throw ResourceMutation.WorkError("no agent has capacity")
                 }, app: app)
@@ -208,7 +208,7 @@ final class ResourceMutationTests {
             // obsolete failure outcome.
             self.mutation(app, fake).dispatch(
                 .create, resourceType: VM.self, resourceID: vmID,
-                targetGeneration: vm.generation, hypervisorId: nil,
+                targetGeneration: vm.generation, agentIDs: [],
                 strategy: .placement { _ in
                     await gate.wait()
                     throw ResourceMutation.WorkError("obsolete placement failed")
@@ -243,14 +243,14 @@ final class ResourceMutationTests {
             _ = try await self.mutation(app, fake).accept(
                 .delete, on: vm, actor: .user(UUID()),
                 dispatch: .directResolution { db in
-                    ResourceFinalizerService.stampForDeletion(vm)
+                    try await ResourceFinalizerService.stampForDeletion(vm, on: db)
                     return try await ResourceFinalizerService.clear(
                         .agentAbsent, from: vm, on: db, app: app
                     ).isRemoved
                 },
                 on: app.db, app: app
-            ) { _ in
-                ResourceFinalizerService.stampForDeletion(vm)
+            ) { db in
+                try await ResourceFinalizerService.stampForDeletion(vm, on: db)
                 vm.setDesiredStatus(.absent)
             }
 
@@ -432,8 +432,8 @@ final class ResourceMutationTests {
                 .delete, on: deleteCopy, actor: .user(UUID()),
                 dispatch: .directResolution { _ in false },
                 on: app.db, app: app
-            ) { _ in
-                ResourceFinalizerService.stampForDeletion(deleteCopy)
+            ) { db in
+                try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
                 deleteCopy.setDesiredStatus(.absent)
             }
             #expect(acceptedDelete.targetGeneration == 11)
@@ -474,8 +474,8 @@ final class ResourceMutationTests {
                 .delete, on: deleteCopy, actor: .user(UUID()),
                 dispatch: .directResolution { _ in false },
                 on: app.db, app: app
-            ) { _ in
-                ResourceFinalizerService.stampForDeletion(deleteCopy)
+            ) { db in
+                try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
                 deleteCopy.setDesiredStatus(.absent)
             }
             #expect(acceptedDelete.targetGeneration == 11)

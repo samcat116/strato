@@ -534,8 +534,16 @@ extension Agent {
             try await VM.query(on: db).filter(\.$hypervisorId == agentIDString).all().map { $0.$project.id })
         projectIDs.formUnion(
             try await Sandbox.query(on: db).filter(\.$hypervisorId == agentIDString).all().map { $0.$project.id })
-        projectIDs.formUnion(
-            try await Volume.query(on: db).filter(\.$hypervisorId == agentIDString).all().map { $0.$project.id })
+        let volumeIDs = try await VolumeReplica.query(on: db)
+            .filter(\.$agentId == agentIDString)
+            .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
+            .all()
+            .map(\.$volume.id)
+        if !volumeIDs.isEmpty {
+            projectIDs.formUnion(
+                try await Volume.query(on: db).filter(\.$id ~~ Array(Set(volumeIDs))).all()
+                    .map { $0.$project.id })
+        }
 
         for projectID in projectIDs {
             guard let project = try await Project.find(projectID, on: db) else { continue }

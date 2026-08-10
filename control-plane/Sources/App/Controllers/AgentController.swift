@@ -754,34 +754,29 @@ struct AgentController: RouteCollection {
                 adoptedSandboxes += 1
             }
 
-            // Volumes are files on the host, so they move with it — but by
-            // *placement*, not by attachment. Three columns decide where a
-            // volume operation is dispatched and all three have to move
-            // together, or the endpoint reports a move it didn't finish:
-            //
-            // * `VolumeReplica.agentId` — what `VolumeService.placement(of:)`
-            //   consults *first*. Every volume created through `VolumeService`
-            //   has a replica row, so re-pointing `hypervisorId` alone would
-            //   leave every snapshot/resize/attach still dispatching to the
-            //   superseded record, hanging until the stuck-operation sweep.
-            // * `Volume.hypervisorId` — the fallback for rows with no replica.
-            // * `Volume.attachedAgentId` — set from the VM's placement at
-            //   attach time; left behind it would disagree with `hypervisorId`
-            //   on the same row.
+            // Volumes are files on the host, so their authoritative replica
+            // placement moves with it. `attachedAgentId` follows when the VM
+            // attachment moved too.
             //
             // Detached volumes move too: their files are on the adopting host
             // like everything else the source record owned, and leaving them
             // would point a later attach at a dead record. A volume attached to
             // a VM that stayed behind is the one case that must not move.
-            let sourceVolumes = try await Volume.query(on: db)
-                .filter(\.$hypervisorId == sourceId)
+            let sourceVolumeIDs = try await VolumeReplica.query(on: db)
+                .filter(\.$agentId == sourceId)
                 .all()
+                .map(\.$volume.id)
+            let sourceVolumes =
+                sourceVolumeIDs.isEmpty
+                ? []
+                : try await Volume.query(on: db)
+                    .filter(\.$id ~~ Array(Set(sourceVolumeIDs)))
+                    .all()
             for volume in sourceVolumes {
                 if let attachedVMID = volume.$vm.id, !claimedVMIDs.contains(attachedVMID) {
                     continue
                 }
                 guard let volumeID = volume.id else { continue }
-                volume.hypervisorId = targetId
                 if volume.attachedAgentId == sourceId {
                     volume.attachedAgentId = targetId
                 }

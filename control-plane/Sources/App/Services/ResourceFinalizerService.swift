@@ -9,13 +9,10 @@ import Vapor
 /// Divergence between the workload kinds lives in `reap` — what each one has
 /// to tear down alongside its row — rather than in the finalizer bookkeeping,
 /// which is identical for both.
-protocol FinalizableResource: Model where IDValue == UUID {
+protocol FinalizableResource: Model, AgentPlacedResource where IDValue == UUID {
     /// Cleanup tokens still outstanding for a terminating resource; empty for
     /// a live one. Persisted as a Postgres `text[]`.
     var finalizers: [String] { get set }
-
-    /// The agent this resource is placed on, or nil if it never reached one.
-    var hypervisorId: String? { get }
 
     /// Whether a `DELETE` has been accepted — desired state is `.absent`. Only
     /// a terminating resource reaps, so a stray `clear` on a live one is a
@@ -72,17 +69,21 @@ enum ResourceFinalizerService {
     /// The tokens a fresh deletion of `resource` stamps. A resource with no
     /// agent has nothing to confirm, so it stamps nothing and reaps on the
     /// first `clear` — which is how an unplaced VM still deletes immediately.
-    static func tokens<R: FinalizableResource>(forDeleting resource: R) -> [ResourceFinalizer] {
-        resource.hypervisorId == nil ? [] : [.agentAbsent]
+    static func tokens<R: FinalizableResource>(
+        forDeleting resource: R, on db: any Database
+    ) async throws -> [ResourceFinalizer] {
+        try await resource.placementAgentIDs(on: db).isEmpty ? [] : [.agentAbsent]
     }
 
     /// Stamps the finalizer list for a deletion. Call in the same write that
     /// marks desired state `.absent`, *before* the mark: a resource already
     /// terminating keeps the list it has, because re-stamping would resurrect
     /// tokens their participants have already cleared. Does not persist.
-    static func stampForDeletion<R: FinalizableResource>(_ resource: R) {
+    static func stampForDeletion<R: FinalizableResource>(
+        _ resource: R, on db: any Database
+    ) async throws {
         guard !resource.isTerminating else { return }
-        resource.finalizers = tokens(forDeleting: resource).map(\.rawValue)
+        resource.finalizers = try await tokens(forDeleting: resource, on: db).map(\.rawValue)
     }
 
     /// Idempotently clears `token` from a terminating resource, reaping the row

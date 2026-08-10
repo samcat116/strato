@@ -659,7 +659,7 @@ struct SandboxController: RouteCollection {
         // reports — not this request — decide whether it converged.
         req.resourceMutation.dispatch(
             .create, resourceType: Sandbox.self, resourceID: sandboxID,
-            targetGeneration: accepted.targetGeneration, hypervisorId: nil,
+            targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
                 try await app.agentService.createSandbox(sandbox: sandbox, db: db)
             }, app: req.application)
@@ -981,7 +981,7 @@ struct SandboxController: RouteCollection {
         ) { @Sendable db in
             try await Self.requireSnapshotLineageDeletable(for: sandboxID, on: db)
             // Stamp before the mark — see the VM delete path for why.
-            ResourceFinalizerService.stampForDeletion(sandbox)
+            try await ResourceFinalizerService.stampForDeletion(sandbox, on: db)
             sandbox.setDesiredStatus(.absent)
         }
         return try await Self.acceptedResponse(for: sandbox, accepted, on: req)

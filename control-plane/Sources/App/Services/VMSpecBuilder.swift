@@ -216,6 +216,7 @@ struct VMSpecBuilder {
     ///   - networkInterfaces: The VM's network interfaces
     static func buildVMSpecWithVolumes(
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
+        storagePathsByVolumeID: [UUID: String] = [:],
         networks: [UUID: LogicalNetwork] = [:],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
         sendsMetadataPort: Bool = true,
@@ -224,6 +225,7 @@ struct VMSpecBuilder {
     ) -> VMSpec {
         buildVMSpecWithVolumes(
             from: vm, image: image, volumes: volumes,
+            storagePathsByVolumeID: storagePathsByVolumeID,
             resolvedInterfaces: resolvedInterfaces(
                 from: networkInterfaces, networks: networks, logger: logger),
             securityGroupsByInterface: securityGroupsByInterface,
@@ -235,6 +237,7 @@ struct VMSpecBuilder {
     /// `networkSpecs(fromResolved:securityGroupsByInterface:sendsMetadataPort:)`).
     static func buildVMSpecWithVolumes(
         from vm: VM, image: Image?, volumes: [Volume],
+        storagePathsByVolumeID: [UUID: String] = [:],
         resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
         sendsMetadataPort: Bool = true,
@@ -243,7 +246,7 @@ struct VMSpecBuilder {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
 
-        var volumes = volumeSpecs(from: volumes)
+        var volumes = volumeSpecs(from: volumes, storagePathsByVolumeID: storagePathsByVolumeID)
         if volumes.isEmpty {
             volumes = legacyVolumeSpecs(from: vm)
         }
@@ -290,7 +293,9 @@ struct VMSpecBuilder {
     /// is a spurious diff on the agent and potentially a different boot disk
     /// after a restart. The NIC path already avoids this by sorting on
     /// `(orderIndex, deviceName)`.
-    static func volumeSpecs(from volumes: [Volume]) -> [VolumeSpec] {
+    static func volumeSpecs(
+        from volumes: [Volume], storagePathsByVolumeID: [UUID: String] = [:]
+    ) -> [VolumeSpec] {
         // Volumes with no explicit boot order sort after those that have one,
         // which `Int.max` expresses without a special case.
         func sortKey(_ volume: Volume) -> (Int, String, String) {
@@ -307,7 +312,9 @@ struct VMSpecBuilder {
         // The volume lane is authoritative for realizing an attachment; this
         // list is the boot-time convenience that rebuilds the same disk set.
         for volume in sortedVolumes where volume.$vm.id != nil && volume.desiredStatus == .present {
-            guard let storagePath = volume.storagePath else { continue }
+            guard let volumeID = volume.id, let storagePath = storagePathsByVolumeID[volumeID] else {
+                continue
+            }
             // An attached row without a legal device name cannot exist: the API
             // validates one on the way in, and `NormalizeVolumeAttachments`
             // added a `vm_id IS NULL OR device_name IS NOT NULL` check plus the

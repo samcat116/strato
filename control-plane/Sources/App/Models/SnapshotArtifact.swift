@@ -30,8 +30,7 @@ protocol SnapshotArtifactResource: ConvergingResource, FinalizableResource {
     /// report was lost.
     var parentID: UUID { get }
 
-    /// The agent holding the bytes. This is `ConvergingResource.hypervisorId`
-    /// under the name each table already uses.
+    /// The agent holding the bytes.
     var agentId: String? { get set }
 
     var desiredStatus: DesiredSnapshotStatus { get set }
@@ -95,7 +94,9 @@ protocol SnapshotArtifactResource: ConvergingResource, FinalizableResource {
 }
 
 extension SnapshotArtifactResource {
-    var hypervisorId: String? { agentId }
+    func placementAgentIDs(on db: any Database) async throws -> [String] {
+        agentId.map { [$0] } ?? []
+    }
     var isTerminating: Bool { desiredStatus == .absent }
 
     /// Nothing to export, so nothing outstanding. Overridden by the one family

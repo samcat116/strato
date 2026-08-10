@@ -54,9 +54,6 @@ struct AddHotPathIndexes: AsyncMigration {
         // it — wrong leftmost column.
         ("idx_organizational_units_parent_ou_id", "organizational_units (parent_ou_id)"),
 
-        // Agent delete/reassign guards ("does this agent still hold volumes?").
-        ("idx_volumes_hypervisor_id", "volumes (hypervisor_id)"),
-
         // OIDC login lookup and the SSF signal processor. Partial: local and
         // WebAuthn-only users carry no subject.
         ("idx_users_oidc_subject", "users (oidc_subject) WHERE oidc_subject IS NOT NULL"),

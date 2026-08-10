@@ -1,8 +1,10 @@
 import Fluent
 import Foundation
+import SQLKit
 import Testing
 import Vapor
 import VaporTesting
+import StratoShared
 
 import AppTestSupport
 @testable import App
@@ -43,21 +45,13 @@ struct StoragePoolTests {
         #expect(StoragePool.agentCanReach(agentId: "agent-b", pool: nil, replicaAgentIds: []))
     }
 
-    @Test("replicated pool: membership decides, independent of replica placement")
-    func replicatedPoolUsesMembership() {
+    @Test("replicated pools fail closed until a coherent backend exists")
+    func replicatedPoolIsUnreachable() {
         let pool = makePool(mode: .replicated, members: ["agent-a", "agent-b", "agent-c"])
 
-        // A member reaches the replica set over the network even when it
-        // holds no replica itself.
-        #expect(StoragePool.agentCanReach(agentId: "agent-c", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
+        #expect(!StoragePool.agentCanReach(agentId: "agent-a", pool: pool, replicaAgentIds: ["agent-a"]))
         #expect(!StoragePool.agentCanReach(agentId: "agent-d", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
-    }
-
-    @Test("replicated pool with no member restriction accepts any agent")
-    func replicatedPoolEmptyMembersIsUnrestricted() {
-        let pool = makePool(mode: .replicated)
-
-        #expect(StoragePool.agentCanReach(agentId: "anyone", pool: pool, replicaAgentIds: ["agent-a"]))
+        #expect(!StoragePool.agentCanReach(agentId: "agent-c", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
     }
 
     // MARK: - Default pool (migration-seeded)
@@ -76,6 +70,27 @@ struct StoragePoolTests {
     }
 
     // MARK: - Backfill
+
+    private func registerAgent(on app: Application, named name: String) async throws -> String {
+        let message = AgentRegisterMessage(
+            agentId: name,
+            hostname: "\(name).test",
+            version: "1.0.0",
+            capabilities: ["qemu"],
+            resources: AgentResources(
+                totalCPU: 16, availableCPU: 16,
+                totalMemory: 1 << 34, availableMemory: 1 << 34,
+                totalDisk: 1 << 40, availableDisk: 1 << 40
+            ),
+            protocolVersion: WireProtocol.currentVersion
+        )
+        let org = try await TestDataBuilder(db: app.db).createOrganization(
+            name: "Cutover Agent Org \(name)")
+        let id = try await app.agentService.registerAgent(
+            message, agentName: name,
+            organizationScope: .organization(try org.requireID()))
+        return id.uuidString
+    }
 
     /// A volume shaped like a pre-pool row: legacy placement columns set, no
     /// pool, no replicas.
@@ -99,8 +114,6 @@ struct StoragePoolTests {
             status: hypervisorId == nil ? .creating : .available,
             createdByID: user.id!
         )
-        volume.hypervisorId = hypervisorId
-        volume.storagePath = storagePath
         if let vm {
             volume.$vm.id = vm.id
             // An attached row names its device: `NormalizeVolumeAttachments`
@@ -109,6 +122,21 @@ struct StoragePoolTests {
             volume.status = .attached
         }
         try await volume.save(on: db)
+        let sql = try #require(db as? any SQLDatabase)
+        try await sql.raw(
+            "ALTER TABLE volumes ADD COLUMN IF NOT EXISTS hypervisor_id text"
+        ).run()
+        try await sql.raw(
+            "ALTER TABLE volumes ADD COLUMN IF NOT EXISTS storage_path text"
+        ).run()
+        try await sql.raw(
+            """
+            UPDATE volumes
+            SET hypervisor_id = \(bind: hypervisorId),
+                storage_path = \(bind: storagePath)
+            WHERE id = \(bind: try volume.requireID())
+            """
+        ).run()
         return volume
     }
 
@@ -211,6 +239,103 @@ struct StoragePoolTests {
                 .filter(\.$volume.$id == volume.id!)
                 .count()
             #expect(orphaned == 0)
+        }
+    }
+
+    // MARK: - Authoritative cutover
+
+    @Test("authoritative cutover backfills a valid live volume before dropping legacy columns")
+    func authoritativeCutoverBackfillsAndDropsLegacyColumns() async throws {
+        try await withTestApp { app in
+            let agentID = try await registerAgent(on: app, named: "cutover-agent")
+            let volume = try await createLegacyVolume(
+                on: app.db,
+                name: "cutover-valid",
+                hypervisorId: agentID,
+                storagePath: "/volumes/cutover-valid.qcow2")
+
+            try await MakeVolumeReplicasAuthoritative().prepare(on: app.db)
+
+            let replica = try #require(
+                try await VolumeReplica.query(on: app.db)
+                    .filter(\.$volume.$id == volume.id!)
+                    .first())
+            #expect(replica.agentId == agentID)
+            #expect(replica.datasetPath == "/volumes/cutover-valid.qcow2")
+
+            let sql = try #require(app.db as? any SQLDatabase)
+            struct ColumnCount: Decodable { let count: Int }
+            let remaining = try await sql.raw(
+                """
+                SELECT COUNT(*)::int AS count
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'volumes'
+                  AND column_name IN ('hypervisor_id', 'storage_path')
+                """
+            ).first(decoding: ColumnCount.self)
+            #expect(remaining?.count == 0)
+        }
+    }
+
+    @Test("authoritative cutover refuses to discard the only legacy placement")
+    func authoritativeCutoverRejectsMissingReplica() async throws {
+        try await withTestApp { app in
+            _ = try await createLegacyVolume(
+                on: app.db,
+                name: "cutover-invalid",
+                hypervisorId: nil,
+                storagePath: "/volumes/unplaced.qcow2")
+
+            await #expect(throws: MakeVolumeReplicasAuthoritative.InvalidReplicaInventory.self) {
+                try await MakeVolumeReplicasAuthoritative().prepare(on: app.db)
+            }
+
+            let sql = try #require(app.db as? any SQLDatabase)
+            struct ColumnCount: Decodable { let count: Int }
+            let remaining = try await sql.raw(
+                """
+                SELECT COUNT(*)::int AS count
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'volumes'
+                  AND column_name IN ('hypervisor_id', 'storage_path')
+                """
+            ).first(decoding: ColumnCount.self)
+            #expect(remaining?.count == 2)
+        }
+    }
+
+    @Test("authoritative cutover rejects the unimplemented replicated pool mode")
+    func authoritativeCutoverRejectsReplicatedPool() async throws {
+        try await withTestApp { app in
+            let agentID = try await registerAgent(on: app, named: "replicated-cutover-agent")
+            _ = try await createLegacyVolume(
+                on: app.db,
+                name: "replicated-cutover",
+                hypervisorId: agentID,
+                storagePath: "/volumes/replicated-cutover.qcow2")
+            let pool = try await StoragePool.defaultPool(on: app.db)
+            pool.mode = .replicated
+            pool.replicationFactor = 2
+            try await pool.save(on: app.db)
+
+            await #expect(throws: MakeVolumeReplicasAuthoritative.InvalidReplicaInventory.self) {
+                try await MakeVolumeReplicasAuthoritative().prepare(on: app.db)
+            }
+
+            let sql = try #require(app.db as? any SQLDatabase)
+            struct ColumnCount: Decodable { let count: Int }
+            let remaining = try await sql.raw(
+                """
+                SELECT COUNT(*)::int AS count
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'volumes'
+                  AND column_name IN ('hypervisor_id', 'storage_path')
+                """
+            ).first(decoding: ColumnCount.self)
+            #expect(remaining?.count == 2)
         }
     }
 }

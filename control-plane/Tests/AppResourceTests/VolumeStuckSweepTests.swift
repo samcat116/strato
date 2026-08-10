@@ -230,9 +230,9 @@ final class VolumeStuckSweepTests {
                 deadlineOverdueBy: nil, status: .available, desired: .absent,
                 generation: 2, observedGeneration: 2, on: app, user: user, project: project)
             let volumeID = try #require(volume.id)
-            volume.hypervisorId = UUID().uuidString
             volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
             try await volume.save(on: app.db)
+            try await placeVolume(volume, on: UUID().uuidString, using: app.db)
 
             let sql = try #require(app.db as? any SQLDatabase)
             let past = Date().addingTimeInterval(-3600)

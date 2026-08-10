@@ -51,14 +51,15 @@ struct ObservedStateApplier {
         try await db.transaction { tx in
             guard try await resource.lockAndRefresh(on: tx) else { return }
             let resourceID = try resource.requireID()
-            guard resource.hypervisorId == agentId else {
+            let placementAgentIDs = try await resource.placementAgentIDs(on: tx)
+            guard placementAgentIDs.contains(agentId) else {
                 app.logger.debug(
                     "Ignoring an observed-state entry after the resource moved to another agent",
                     metadata: [
                         "resourceKind": .string(R.operationResourceKind.rawValue),
                         "resourceId": .string(resourceID.uuidString),
                         "reportingAgentId": .string(agentId),
-                        "currentAgentId": .string(resource.hypervisorId ?? "unplaced"),
+                        "currentAgentId": .string(placementAgentIDs.joined(separator: ",")),
                     ])
                 return
             }
@@ -233,9 +234,7 @@ struct ObservedStateApplier {
                 reportedVolumeList.map { ($0.volumeId, $0) },
                 uniquingKeysWith: { first, _ in first }
             )
-            let dbVolumes = try await Volume.query(on: db)
-                .filter(\.$hypervisorId == report.agentId)
-                .all()
+            let dbVolumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
             for volume in dbVolumes {
                 guard let volumeID = volume.id else { continue }
                 if let observed = reportedVolumes[volumeID] {
@@ -410,9 +409,11 @@ struct ObservedStateApplier {
         let volumeIDs = report.unrecognized.filter { $0.kind == .volume }.map(\.workloadId)
         var volumePlacements: [UUID: WorkloadPlacement] = [:]
         if !volumeIDs.isEmpty {
-            for volume in try await Volume.query(on: db).filter(\.$id ~~ volumeIDs).all() {
-                guard let id = volume.id else { continue }
-                volumePlacements[id] = WorkloadPlacement(agentId: volume.hypervisorId)
+            let replicas = try await VolumeService.replicas(volumeIDs: volumeIDs, on: db)
+            for volumeID in volumeIDs {
+                guard let rows = replicas[volumeID] else { continue }
+                let placed = rows.first(where: { $0.agentId == report.agentId }) ?? rows.first
+                volumePlacements[volumeID] = WorkloadPlacement(agentId: placed?.agentId)
             }
         }
 
@@ -1200,20 +1201,47 @@ struct ObservedStateApplier {
         let wasConverged = volume.isConverged
         let failedBefore = volume.failedGeneration
 
-        var changed = volume.recordConvergence(
-            phase: observed.convergencePhase,
-            lastError: observed.lastError,
-            failedGeneration: observed.failedGeneration
-        )
-
-        // The agent owns path layout, so this is the only place a volume's
-        // storage path is ever written. Recorded before the converging
-        // early-return: a create reports its path as soon as the bytes land,
-        // and `VMSpecBuilder.volumeSpecs` needs it to project the attachment.
-        if observed.present, let path = observed.storagePath, volume.storagePath != path {
-            volume.storagePath = path
-            changed = true
+        try await recordReplicaObservation(
+            volumeID: volumeID, agentId: agentId, observed: observed,
+            desiredGeneration: volume.generation, on: db)
+        let requiredReplicas = try await VolumeReplica.query(on: db)
+            .filter(\.$volume.$id == volumeID)
+            .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
+            .all()
+        let allReplicasSettled =
+            !requiredReplicas.isEmpty
+            && requiredReplicas.allSatisfy {
+                $0.state == .healthy && $0.generation >= volume.generation
+            }
+        let generationBeforeTarget = max(0, volume.generation - 1)
+        let aggregateObservedGeneration =
+            requiredReplicas.map { replica in
+                replica.state == .healthy
+                    ? replica.generation : min(replica.generation, generationBeforeTarget)
+            }.min() ?? 0
+        let failedAtTarget =
+            observed.lastError != nil && observed.failedGeneration == volume.generation
+        let nextPhase: String?
+        let nextError: String?
+        let nextFailedGeneration: Int64?
+        if failedAtTarget {
+            nextPhase = observed.convergencePhase
+            nextError = observed.lastError
+            nextFailedGeneration = observed.failedGeneration
+        } else if allReplicasSettled {
+            nextPhase = nil
+            nextError = nil
+            nextFailedGeneration = nil
+        } else {
+            nextPhase = observed.convergencePhase ?? "waiting for replicas"
+            nextError = volume.errorMessage
+            nextFailedGeneration = volume.failedGeneration
         }
+        var changed = volume.recordConvergence(
+            phase: nextPhase,
+            lastError: nextError,
+            failedGeneration: nextFailedGeneration
+        )
 
         // The size the image actually has (STR-199) — recorded here for the same
         // reason the path is, and with the same asymmetry as the applied I/O
@@ -1227,11 +1255,6 @@ struct ObservedStateApplier {
             volume.observedSizeBytes = reported
             changed = true
         }
-        if observed.present {
-            try await recordReplica(
-                volumeID: volumeID, agentId: agentId, datasetPath: observed.storagePath, on: db)
-        }
-
         // The applied I/O ceilings (STR-19) — an echo, not a derivation, and
         // recorded before the converging early-return for the same reason the
         // storage path is: it is a fact about the volume, not a verdict on the
@@ -1254,6 +1277,11 @@ struct ObservedStateApplier {
             }
         }
 
+        if aggregateObservedGeneration > volume.observedGeneration {
+            volume.observedGeneration = aggregateObservedGeneration
+            changed = true
+        }
+
         // Still converging: progress only, never a settled status.
         if observed.convergencePhase != nil {
             if changed {
@@ -1262,8 +1290,16 @@ struct ObservedStateApplier {
             return
         }
 
-        if observed.observedGeneration > volume.observedGeneration {
-            volume.observedGeneration = observed.observedGeneration
+        // Where the realized attachment runs. A detached report may clear only
+        // this reporter's own attachment; a storage-only replica must not erase
+        // the VM host's observation.
+        if observed.attachedVMId != nil {
+            if volume.attachedAgentId != agentId {
+                volume.attachedAgentId = agentId
+                changed = true
+            }
+        } else if volume.attachedAgentId == agentId {
+            volume.attachedAgentId = nil
             changed = true
         }
 
@@ -1276,7 +1312,7 @@ struct ObservedStateApplier {
             // create that has not started from one that failed is the
             // `lastError` check below; `.creating` is the honest reading here.
             derived = observed.lastError == nil ? .creating : .error
-        } else if observed.attachedVMId != nil {
+        } else if volume.attachedAgentId != nil {
             derived = .attached
         } else {
             derived = .available
@@ -1288,28 +1324,6 @@ struct ObservedStateApplier {
             volume.status = derived
             changed = true
         }
-        // Where the realized attachment runs. Purely observed, and deliberately
-        // the *only* attachment column this path writes.
-        //
-        // `deviceName` is not written here even though the report carries it:
-        // the slot is the control plane's decision, read straight back out by
-        // `DesiredStateAssembler` as the desired attachment. Overwriting it
-        // from an observation would silently replace what the user asked for
-        // with what the agent happens to have — and, being a bare field write
-        // with no generation bump, would do it without the agent ever noticing
-        // the goalposts moved. When the two disagree the agent already plans
-        // `.detach` then `.attach` to correct the slot; that is the loop
-        // working, not a fact to absorb.
-        if observed.attachedVMId != nil {
-            if volume.attachedAgentId != agentId {
-                volume.attachedAgentId = agentId
-                changed = true
-            }
-        } else if volume.attachedAgentId != nil {
-            volume.attachedAgentId = nil
-            changed = true
-        }
-
         let settlesConvergence =
             volume.desiredStatus != .absent
             && ((!wasConverged && volume.isConverged)
@@ -1602,6 +1616,26 @@ struct ObservedStateApplier {
         let volumeID = try volume.requireID()
 
         if volume.desiredStatus == .absent {
+            // One report only confirms one physical copy is gone. Remove that
+            // replica and keep the shared finalizer until every physical copy,
+            // including degraded, resyncing, and faulted copies, has
+            // independently disappeared.
+            try await VolumeReplica.query(on: db)
+                .filter(\.$volume.$id == volumeID)
+                .filter(\.$agentId == agentId)
+                .delete()
+            let remainingAgentIDs = try await VolumeService.agentIDsWithPhysicalReplicas(
+                of: volume, on: db)
+            guard remainingAgentIDs.isEmpty else {
+                app.logger.debug(
+                    "Volume replica teardown confirmed; awaiting other replicas",
+                    metadata: [
+                        "volumeId": .string(volumeID.uuidString),
+                        "agentId": .string(agentId),
+                        "remainingAgentIds": .string(remainingAgentIDs.joined(separator: ",")),
+                    ])
+                return
+            }
             switch try await ResourceFinalizerService.clear(
                 .agentAbsent, from: volume, on: db, app: app)
             {
@@ -1651,31 +1685,55 @@ struct ObservedStateApplier {
             ])
     }
 
-    /// Record the physical copy an agent just confirmed it holds. Idempotent:
-    /// a replica already recorded for that agent is updated in place.
+    /// Record one copy's convergence independently from the logical volume.
+    /// The logical observed generation is the minimum across required copies,
+    /// so one fast replica cannot settle a mutation for a lagging peer.
     ///
     /// Moved here from `VolumeService` with STR-148: the replica row is a
     /// record of *observed* placement, so it belongs on the path that ingests
     /// observations rather than on one that used to await an RPC response.
-    private func recordReplica(
-        volumeID: UUID, agentId: String, datasetPath: String?, on db: Database
+    private func recordReplicaObservation(
+        volumeID: UUID,
+        agentId: String,
+        observed: ObservedVolumeState,
+        desiredGeneration: Int64,
+        on db: Database
     ) async throws {
+        let failedAtTarget =
+            observed.lastError != nil && observed.failedGeneration == desiredGeneration
+        let state: VolumeReplicaState =
+            observed.present && observed.convergencePhase == nil && !failedAtTarget
+            ? .healthy : .provisioning
         if let existing = try await VolumeReplica.query(on: db)
             .filter(\.$volume.$id == volumeID)
             .filter(\.$agentId == agentId)
             .first()
         {
-            guard existing.datasetPath != datasetPath || existing.state != .healthy else { return }
-            existing.datasetPath = datasetPath
-            existing.state = .healthy
-            try await existing.save(on: db)
+            var changed = false
+            if let datasetPath = observed.storagePath, existing.datasetPath != datasetPath {
+                existing.datasetPath = datasetPath
+                changed = true
+            }
+            if existing.state != state {
+                existing.state = state
+                changed = true
+            }
+            if observed.observedGeneration > existing.generation {
+                existing.generation = observed.observedGeneration
+                changed = true
+            }
+            if changed {
+                try await existing.save(on: db)
+            }
             return
         }
+        guard observed.present else { return }
         try await VolumeReplica(
             volumeID: volumeID,
             agentId: agentId,
-            datasetPath: datasetPath,
-            state: .healthy
+            datasetPath: observed.storagePath,
+            state: state,
+            generation: observed.observedGeneration
         ).create(on: db)
     }
 }

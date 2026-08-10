@@ -141,6 +141,8 @@ struct DesiredStateAssembler {
         // same reason: this runs for every agent on every sync, so a per-VM
         // lookup would be a fleet-wide load multiplier.
         let spiffeIDsByVM = try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
+        let volumeStoragePaths = try await VolumeService.storagePaths(
+            for: vms.flatMap(\.volumes), accessibleFrom: agentId, on: db)
 
         var entries: [DesiredVMState] = []
         for vm in vms {
@@ -156,6 +158,7 @@ struct DesiredStateAssembler {
                 from: vm,
                 image: image,
                 volumes: vm.volumes,
+                storagePathsByVolumeID: volumeStoragePaths,
                 resolvedInterfaces: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
                 sendsMetadataPort: true,
@@ -668,10 +671,27 @@ struct DesiredStateAssembler {
     /// *which agent's sync the entry appears in*, and a second encoding of the
     /// same fact is a thing that can drift.
     private func desiredVolumes(agentId: String, on db: any Database) async throws -> [DesiredVolumeState] {
+        let replicaScope = try await VolumeService.replicaScope(onAgent: agentId, on: db)
+        guard !replicaScope.allVolumeIDs.isEmpty else { return [] }
         let volumes = try await Volume.query(on: db)
-            .filter(\.$hypervisorId == agentId)
+            .filter(\.$id ~~ Array(replicaScope.allVolumeIDs))
             .with(\.$sourceImage) { $0.with(\.$artifacts) }
             .all()
+            .filter(replicaScope.includes)
+        let attachedVMIDs = Array(Set(volumes.compactMap(\.$vm.id)))
+        let attachmentAgentIDs: [UUID: String]
+        if attachedVMIDs.isEmpty {
+            attachmentAgentIDs = [:]
+        } else {
+            attachmentAgentIDs = Dictionary(
+                uniqueKeysWithValues: try await VM.query(on: db)
+                    .filter(\.$id ~~ attachedVMIDs)
+                    .all()
+                    .compactMap { vm in
+                        guard let vmID = vm.id, let vmAgentID = vm.hypervisorId else { return nil }
+                        return (vmID, vmAgentID)
+                    })
+        }
 
         var entries: [DesiredVolumeState] = []
         for volume in volumes {
@@ -708,10 +728,14 @@ struct DesiredStateAssembler {
                     metadata: ["volumeId": .string(volumeId.uuidString)])
             }
 
-            // The attachment is projected from the same columns
-            // `VMSpecBuilder.volumeSpecs` reads, so the two projections of one
-            // fact cannot disagree — which is what used to let a volume be
-            // `attached` in the VM's spec and detached in its own record.
+            // Storage realization follows replica placement, but attachment
+            // realization follows VM placement. Only the VM-hosting agent may
+            // receive the attachment: every other replica receives the same
+            // volume generation with `attachment: nil`, so it keeps its bytes
+            // realized without trying to plug them into a VM it cannot host.
+            // The attachment is otherwise projected from the same columns
+            // `VMSpecBuilder.volumeSpecs` reads, so the two projections cannot
+            // disagree.
             //
             // A name outside `VolumeDeviceName`'s charset cannot be stored (the
             // API validates it and the schema's check constraint plus unique
@@ -724,7 +748,10 @@ struct DesiredStateAssembler {
             // it is the one not sent — loudly, because a row that reached this
             // state is a broken invariant, not a routine skip.
             var attachment: DesiredVolumeAttachment?
-            if let vmID = volume.$vm.id, let raw = volume.deviceName {
+            if let vmID = volume.$vm.id,
+                attachmentAgentIDs[vmID] == agentId,
+                let raw = volume.deviceName
+            {
                 if let deviceName = VolumeDeviceName(raw) {
                     attachment = DesiredVolumeAttachment(
                         vmId: vmID, deviceName: deviceName, readonly: volume.readonly,

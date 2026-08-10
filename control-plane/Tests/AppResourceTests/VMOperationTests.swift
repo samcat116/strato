@@ -674,7 +674,7 @@ final class VMOperationTests {
     func facadeAnswersDeleteAfterTheRowIsGone() async throws {
         try await withVMTestApp { app, user, vm, token in
             let vmID = try vm.requireID()
-            ResourceFinalizerService.stampForDeletion(vm)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
             vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             let event = try await record(.delete, on: vm, by: user, on: app.db)
@@ -717,7 +717,7 @@ final class VMOperationTests {
     func facadeNeverReportsASlowDeleteAsFailed() async throws {
         try await withVMTestApp { app, user, vm, token in
             let vmID = try vm.requireID()
-            ResourceFinalizerService.stampForDeletion(vm)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
             vm.setFixtureDesiredStatus(.absent)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
             try await vm.save(on: app.db)
@@ -884,7 +884,7 @@ final class VMOperationTests {
     @Test("A stuck delete degrades without resurrecting the VM")
     func sweepDoesNotRevertATerminatingVM() async throws {
         try await withVMTestApp { app, user, vm, _ in
-            ResourceFinalizerService.stampForDeletion(vm)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
             vm.setFixtureDesiredStatus(.absent)
             vm.convergenceDeadline = Date().addingTimeInterval(-1)
             try await vm.save(on: app.db)

@@ -1852,7 +1852,7 @@ final class SandboxTests {
         try await withSandboxTestApp { app, user, _, sandbox, _ in
             let agentId = try await self.registerAgent(app: app, sandbox: sandbox)
 
-            ResourceFinalizerService.stampForDeletion(sandbox)
+            try await ResourceFinalizerService.stampForDeletion(sandbox, on: app.db)
             sandbox.setFixtureDesiredStatus(.absent)
             try await sandbox.save(on: app.db)
             let request = try await ResourceEvent.record(
