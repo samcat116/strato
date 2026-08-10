@@ -1663,7 +1663,7 @@ actor AgentService {
                 // Same stamp-then-mark order as the user-initiated delete: an
                 // expiry that races a user's DELETE must not re-stamp a token
                 // its participant already cleared.
-                ResourceFinalizerService.stampForDeletion(sandbox)
+                try await ResourceFinalizerService.stampForDeletion(sandbox, on: db)
                 sandbox.setDesiredStatus(.absent)
             }
 

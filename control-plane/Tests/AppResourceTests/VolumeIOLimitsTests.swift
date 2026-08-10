@@ -104,8 +104,6 @@ final class VolumeIOLimitsTests {
             createdByID: user.id!,
             poolID: pool.id
         )
-        volume.hypervisorId = agentId
-        volume.storagePath = "/var/lib/strato/volumes/v/volume.qcow2"
         volume.generation = generation
         volume.observedGeneration = observedGeneration
         volume.iopsTotal = iopsTotal
@@ -114,6 +112,7 @@ final class VolumeIOLimitsTests {
         volume.appliedBPSTotal = appliedBPSTotal
         try await app.db.transaction { db in
             try await volume.save(on: db)
+            try await placeVolume(volume, on: agentId, using: db)
             try await RoleBindingService.grant(
                 principalType: .user,
                 principalID: user.id!,

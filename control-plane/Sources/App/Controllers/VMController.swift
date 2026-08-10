@@ -1001,7 +1001,7 @@ struct VMController: RouteCollection {
         // reports — not this request — decide whether it converged.
         req.resourceMutation.dispatch(
             .create, resourceType: VM.self, resourceID: vmID,
-            targetGeneration: accepted.targetGeneration, hypervisorId: nil,
+            targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable [app = req.application] db in
                 try await app.agentService.createVM(vm: vm, db: db, image: image)
             }, app: req.application)
@@ -1553,11 +1553,11 @@ struct VMController: RouteCollection {
         let accepted = try await req.resourceMutation.accept(
             .delete, on: vm, actor: .user(userID), dispatch: strategy,
             on: req.db, app: app
-        ) { @Sendable _ in
+        ) { @Sendable db in
             // Stamp before the mark: `stampForDeletion` reads whether the VM
             // is already terminating, and re-stamping a second DELETE would
             // resurrect tokens their participants have already cleared.
-            ResourceFinalizerService.stampForDeletion(vm)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: db)
             vm.setDesiredStatus(.absent)
         }
         // The delete path skips the enforcement lookup: a client follows a

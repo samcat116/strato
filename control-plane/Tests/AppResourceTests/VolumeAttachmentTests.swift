@@ -65,7 +65,6 @@ struct VolumeAttachmentTests {
             size: 10 * 1024 * 1024 * 1024,
             status: vm == nil ? .available : .attached,
             createdByID: try user.requireID())
-        volume.storagePath = "/var/lib/strato/volumes/\(name).qcow2"
         if let vm {
             volume.$vm.id = try vm.requireID()
             volume.deviceName = deviceName ?? "disk0"

@@ -5992,7 +5992,8 @@ export interface components {
             /** Format: uuid */
             poolId?: string;
             attachedAgentId?: string;
-            hypervisorId?: string;
+            /** @description Every physical copy of the volume. Healthy and provisioning copies authoritatively define placement and agent-owned storage paths; other states remain visible for repair and observability. */
+            replicas: components["schemas"]["VolumeReplica"][];
             /** Format: uuid */
             vmId?: string;
             deviceName?: string;
@@ -6018,6 +6019,17 @@ export interface components {
             createdAt?: string;
             /** Format: date-time */
             updatedAt?: string;
+        };
+        VolumeReplica: {
+            /** Format: uuid */
+            id?: string;
+            agentId: string;
+            /** @description The agent-owned location of this physical copy. Null while a provisioning replica has not reported its location yet. */
+            datasetPath?: string | null;
+            /** @enum {string} */
+            state: "provisioning" | "healthy" | "degraded" | "resyncing" | "faulted";
+            /** Format: int64 */
+            generation: number;
         };
         VolumeSnapshot: {
             /** Format: uuid */

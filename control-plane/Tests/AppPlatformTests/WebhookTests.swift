@@ -437,7 +437,7 @@ struct WebhookOutboxTests {
             let vm = try await builder.createVM(name: "reaped-vm", project: fixture.project)
             let vmID = try vm.requireID()
 
-            ResourceFinalizerService.stampForDeletion(vm)
+            try await ResourceFinalizerService.stampForDeletion(vm, on: app.db)
             vm.setFixtureDesiredStatus(.absent)
             try await vm.save(on: app.db)
             // The request event is where the reap reads its delivery context —

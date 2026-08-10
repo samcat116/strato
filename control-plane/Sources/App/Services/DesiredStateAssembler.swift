@@ -143,6 +143,8 @@ struct DesiredStateAssembler {
         // same reason: this runs for every agent on every sync, so a per-VM
         // lookup would be a fleet-wide load multiplier.
         let spiffeIDsByVM = try await GuestIdentity.spiffeIDs(forVMs: vms.compactMap(\.id), on: db)
+        let volumeStoragePaths = try await VolumeService.storagePaths(
+            for: vms.flatMap(\.volumes), accessibleFrom: agentId, on: db)
 
         var entries: [DesiredVMState] = []
         for vm in vms {
@@ -158,6 +160,7 @@ struct DesiredStateAssembler {
                 from: vm,
                 image: image,
                 volumes: vm.volumes,
+                storagePathsByVolumeID: volumeStoragePaths,
                 resolvedInterfaces: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
                 sendsMetadataPort: true,
@@ -672,8 +675,14 @@ struct DesiredStateAssembler {
     /// *which agent's sync the entry appears in*, and a second encoding of the
     /// same fact is a thing that can drift.
     private func desiredVolumes(agentId: String, on db: any Database) async throws -> [DesiredVolumeState] {
+        let volumeIDs = try await VolumeReplica.query(on: db)
+            .filter(\.$agentId == agentId)
+            .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
+            .all()
+            .map(\.$volume.id)
+        guard !volumeIDs.isEmpty else { return [] }
         let volumes = try await Volume.query(on: db)
-            .filter(\.$hypervisorId == agentId)
+            .filter(\.$id ~~ Array(Set(volumeIDs)))
             .with(\.$sourceImage) { $0.with(\.$artifacts) }
             .all()
 

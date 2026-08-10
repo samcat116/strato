@@ -119,7 +119,7 @@ struct ResourceMutation {
         applying mutation: @escaping @Sendable (any Database) async throws -> Void = { _ in }
     ) async throws -> Accepted {
         let resourceID = try resource.requireID()
-        let accepted = try await db.transaction { db in
+        let (accepted, placementAgentIDs) = try await db.transaction { db in
             guard try await resource.lockAndRefresh(on: db) else {
                 throw Abort(
                     .notFound,
@@ -163,13 +163,16 @@ struct ResourceMutation {
                 actor: actor,
                 scope: scope,
                 on: db)
-            return Accepted(mutationID: try event.requireID(), targetGeneration: resource.generation)
+            return (
+                Accepted(mutationID: try event.requireID(), targetGeneration: resource.generation),
+                try await resource.placementAgentIDs(on: db)
+            )
         }
 
         dispatch(
             kind, resourceType: R.self, resourceID: resourceID,
             targetGeneration: accepted.targetGeneration,
-            hypervisorId: resource.hypervisorId, strategy: strategy, app: app)
+            agentIDs: placementAgentIDs, strategy: strategy, app: app)
         return accepted
     }
 
@@ -181,14 +184,14 @@ struct ResourceMutation {
         resourceType: R.Type,
         resourceID: UUID,
         targetGeneration: Int64,
-        hypervisorId: String?,
+        agentIDs: [String],
         strategy: Dispatch,
         app: Application
     ) {
         switch strategy {
         case .stateSync:
             app.backgroundTasks.spawn {
-                guard let agentId = hypervisorId else {
+                guard !agentIDs.isEmpty else {
                     await degrade(
                         R.self, id: resourceID, mutation: kind,
                         expectedGeneration: targetGeneration,
@@ -196,16 +199,18 @@ struct ResourceMutation {
                         app: app)
                     return
                 }
-                guard await agentDispatch.agentIsOnline(agentId: agentId) else {
-                    await degrade(
-                        R.self, id: resourceID, mutation: kind,
-                        expectedGeneration: targetGeneration,
-                        reason: "Agent \(agentId) is offline; the "
-                            + "\(R.operationResourceKind.displayName) cannot converge to the requested state",
-                        app: app)
-                    return
+                for agentId in agentIDs {
+                    guard await agentDispatch.agentIsOnline(agentId: agentId) else {
+                        await degrade(
+                            R.self, id: resourceID, mutation: kind,
+                            expectedGeneration: targetGeneration,
+                            reason: "Agent \(agentId) is offline; the "
+                                + "\(R.operationResourceKind.displayName) cannot converge to the requested state",
+                            app: app)
+                        continue
+                    }
+                    await agentDispatch.syncDesiredState(agentId: agentId)
                 }
-                await agentDispatch.syncDesiredState(agentId: agentId)
             }
 
         case .placement(let work):

@@ -321,7 +321,11 @@ struct QuotaUsageAggregator {
                 (
                     SELECT MAX(vms.disk)::bigint FROM vms
                     WHERE vms.project_id = volumes.project_id
-                      AND vms.disk_path = volumes.storage_path
+                      AND EXISTS (
+                          SELECT 1 FROM volume_replicas
+                          WHERE volume_replicas.volume_id = volumes.id
+                            AND volume_replicas.dataset_path = vms.disk_path
+                      )
                 ),
                 0
             ),
@@ -335,7 +339,11 @@ struct QuotaUsageAggregator {
         NOT EXISTS (
             SELECT 1 FROM vms
             WHERE vms.project_id = volumes.project_id
-              AND vms.disk_path = volumes.storage_path
+              AND EXISTS (
+                  SELECT 1 FROM volume_replicas
+                  WHERE volume_replicas.volume_id = volumes.id
+                    AND volume_replicas.dataset_path = vms.disk_path
+              )
         )
         """
 

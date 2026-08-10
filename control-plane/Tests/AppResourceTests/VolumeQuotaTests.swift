@@ -89,10 +89,14 @@ final class VolumeQuotaTests {
             name: name, description: "seeded", projectID: try project.requireID(),
             environment: environment, size: gb(sizeGB), status: .available,
             createdByID: try user.requireID(), poolID: pool.id)
-        volume.hypervisorId = agentId
-        volume.storagePath = agentId.map { _ in "/var/lib/strato/volumes/\(name).qcow2" }
         try await app.db.transaction { db in
             try await volume.save(on: db)
+            try await placeVolume(
+                volume,
+                on: agentId,
+                at: agentId.map { _ in "/var/lib/strato/volumes/\(name).qcow2" },
+                using: db
+            )
             try await RoleBindingService.grant(
                 principalType: .user, principalID: try user.requireID(), role: .admin,
                 nodeType: .volume, nodeID: try volume.requireID(),
@@ -214,8 +218,10 @@ final class VolumeQuotaTests {
             bootVolume.$vm.id = try vm.requireID()
             bootVolume.deviceName = "disk0"
             bootVolume.bootOrder = 0
-            bootVolume.storagePath = vm.diskPath
             try await bootVolume.save(on: app.db)
+            let replica = try #require(
+                try await placeVolume(
+                    bootVolume, on: "legacy-agent", at: vm.diskPath, using: app.db))
 
             let deduped = try await measure(quota, on: app.db)
             #expect(deduped.storageBytes == vmDisk, "the boot disk is charged once, via vms.disk")
@@ -241,8 +247,8 @@ final class VolumeQuotaTests {
             #expect(grown.volumeCount == 0)
 
             // A genuinely separate file is charged, attached or not.
-            bootVolume.storagePath = "/var/lib/strato/volumes/other.qcow2"
-            try await bootVolume.save(on: app.db)
+            replica.datasetPath = "/var/lib/strato/volumes/other.qcow2"
+            try await replica.save(on: app.db)
             let counted = try await measure(quota, on: app.db)
             #expect(counted.storageBytes == vmDisk + grownVolumeSize)
             #expect(counted.volumeCount == 1)

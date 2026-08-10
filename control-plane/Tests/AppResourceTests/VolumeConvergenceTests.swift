@@ -90,12 +90,17 @@ final class VolumeConvergenceTests {
             status: status,
             createdByID: user.id!
         )
-        volume.hypervisorId = agentId
-        volume.storagePath = storagePath
         volume.desiredStatus = desired
         volume.generation = generation
         volume.observedGeneration = observedGeneration
         try await volume.save(on: app.db)
+        try await placeVolume(
+            volume,
+            on: agentId,
+            at: storagePath,
+            state: storagePath == nil ? .provisioning : .healthy,
+            using: app.db
+        )
         return volume
     }
 
@@ -207,7 +212,6 @@ final class VolumeConvergenceTests {
 
             let settled = try await #require(try await Volume.find(volumeID, on: app.db))
             #expect(settled.status == .available)
-            #expect(settled.storagePath == "/agent/chosen/path.qcow2")
             #expect(settled.observedGeneration == 1)
             #expect(settled.conditions.converged)
 
@@ -288,8 +292,8 @@ final class VolumeConvergenceTests {
             let accepted = try await app.resourceMutation.accept(
                 .delete, on: deleteCopy, actor: .user(try user.requireID()),
                 dispatch: .directResolution { _ in false }, on: app.db, app: app
-            ) { _ in
-                ResourceFinalizerService.stampForDeletion(deleteCopy)
+            ) { db in
+                try await ResourceFinalizerService.stampForDeletion(deleteCopy, on: db)
                 deleteCopy.setDesiredStatus(.absent)
             }
             #expect(accepted.targetGeneration == 11)
@@ -401,6 +405,31 @@ final class VolumeConvergenceTests {
             let terminal = try await ResourceEvent.latest(
                 .completed, resourceKind: .volume, resourceID: volumeID, on: app.db)
             #expect(terminal != nil)
+        }
+    }
+
+    @Test("A replicated volume is reaped only after every copy confirms absence")
+    func replicatedOmissionWaitsForEveryReplica() async throws {
+        try await withVolumeApp { app, _, user, project in
+            let firstAgentID = try await registerAgent(app: app, named: "reap-replica-a")
+            let secondAgentID = try await registerAgent(app: app, named: "reap-replica-b")
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: firstAgentID,
+                desired: .absent, generation: 2, observedGeneration: 1)
+            try await placeVolume(
+                volume, on: secondAgentID, at: "/volumes/replica-b.qcow2", using: app.db)
+            volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
+            try await volume.save(on: app.db)
+            let volumeID = try volume.requireID()
+
+            _ = try await app.observedStateApplier.apply(
+                report(agentId: firstAgentID, volumes: []))
+            #expect(try await Volume.find(volumeID, on: app.db) != nil)
+            #expect(try await VolumeService.agentIDs(holding: volume, on: app.db) == [secondAgentID])
+
+            _ = try await app.observedStateApplier.apply(
+                report(agentId: secondAgentID, volumes: []))
+            #expect(try await Volume.find(volumeID, on: app.db) == nil)
         }
     }
 
@@ -519,8 +548,8 @@ final class VolumeConvergenceTests {
             _ = try await app.resourceMutation.accept(
                 .delete, on: volume, actor: .user(try user.requireID()), dispatch: .stateSync,
                 on: app.db, app: app
-            ) { @Sendable _ in
-                ResourceFinalizerService.stampForDeletion(volume)
+            ) { @Sendable db in
+                try await ResourceFinalizerService.stampForDeletion(volume, on: db)
                 volume.setDesiredStatus(.absent)
             }
 

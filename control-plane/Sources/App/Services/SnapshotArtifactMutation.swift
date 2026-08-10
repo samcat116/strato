@@ -44,7 +44,7 @@ enum SnapshotArtifactMutation {
             resourceType: A.self,
             resourceID: try artifact.requireID(),
             targetGeneration: artifact.generation,
-            hypervisorId: artifact.agentId,
+            agentIDs: artifact.agentId.map { [$0] } ?? [],
             strategy: .stateSync,
             app: app)
     }
@@ -97,11 +97,11 @@ enum SnapshotArtifactMutation {
 
         return try await app.resourceMutation.accept(
             .delete, on: artifact, actor: actor, dispatch: strategy, on: db, app: app
-        ) { @Sendable _ in
+        ) { @Sendable transaction in
             // Stamp before the mark: `stampForDeletion` reads whether the
             // artifact is already terminating, and re-stamping a second DELETE
             // would resurrect tokens their participants have already cleared.
-            ResourceFinalizerService.stampForDeletion(artifact)
+            try await ResourceFinalizerService.stampForDeletion(artifact, on: transaction)
             artifact.setDesiredStatus(.absent)
         }
     }

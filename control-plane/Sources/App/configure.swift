@@ -922,6 +922,10 @@ public func configure(_ app: Application) async throws {
     // ever touched the table, and nothing is left to order after it.
     app.migrations.add(DropResourceOperations())
 
+    // STR-232: after an inventory-and-repair preflight, replicas become the
+    // only volume placement/path authority and the legacy columns are dropped.
+    app.migrations.add(MakeVolumeReplicasAuthoritative())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

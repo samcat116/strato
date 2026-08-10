@@ -97,7 +97,7 @@ struct VolumeController: RouteCollection {
             volumes = try await visibility.readableRows(volumes, projectID: { $0.$project.id }, on: req)
         }
 
-        return volumes.map { VolumeResponse(from: $0) }
+        return try await VolumeService.responses(for: volumes, on: req.db)
     }
 
     // MARK: - Create Volume
@@ -192,6 +192,8 @@ struct VolumeController: RouteCollection {
         // Bind to a `let` so the `@Sendable` dispatch closure captures an
         // immutable copy rather than the mutable `sourceImage` var.
         let poolMemberIds = pool.memberAgentIds
+        let requiredReplicaCount =
+            pool.mode == .local ? 1 : pool.replicationFactor
 
         // How long the create has to converge before the stuck-convergence
         // sweep marks the volume degraded, stamped with the insert so a
@@ -231,30 +233,33 @@ struct VolumeController: RouteCollection {
 
         // Placement is a `.placement` dispatch rather than something resolved
         // in-band, and it has to *commit* before the sync can carry the volume:
-        // `DesiredStateAssembler` finds a volume by its `hypervisorId`, so an
-        // unplaced one is in nobody's desired state. On throw, `dispatch`
+        // `DesiredStateAssembler` finds volumes through active replica rows, so
+        // an unplaced one is in nobody's desired state. On throw, `dispatch`
         // degrades the volume with the reason.
         req.resourceMutation.dispatch(
             .create, resourceType: Volume.self, resourceID: volumeId,
-            targetGeneration: accepted.targetGeneration, hypervisorId: nil,
+            targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable db in
                 let agents = await app.agentService.getAgentList()
-                guard
-                    let agent = VolumeService.selectVolumeAgent(
-                        from: agents, memberAgentIds: poolMemberIds),
-                    let agentId = agent.id?.uuidString
-                else {
+                let selected = VolumeService.selectVolumeAgents(
+                    from: agents, count: requiredReplicaCount, memberAgentIds: poolMemberIds)
+                let agentIds = selected.compactMap { $0.id?.uuidString }
+                guard agentIds.count == requiredReplicaCount else {
                     throw ResourceMutation.WorkError(
-                        "No agent available to host this volume: it needs an online, "
-                            + "QEMU-capable agent in the volume's pool.")
+                        "Not enough agents are available to host this volume: it needs "
+                            + "\(requiredReplicaCount) distinct online, QEMU-capable agent(s) "
+                            + "in the volume's pool.")
                 }
-                guard let placed = try await Volume.find(volumeId, on: db) else { return }
-                placed.hypervisorId = agentId
-                try await placed.save(on: db)
-                try await VolumeReplica(
-                    volumeID: volumeId, agentId: agentId, state: .provisioning
-                ).create(on: db)
-                await app.agentService.syncDesiredState(agentId: agentId)
+                try await db.transaction { tx in
+                    for agentId in agentIds {
+                        try await VolumeReplica(
+                            volumeID: volumeId, agentId: agentId, state: .provisioning
+                        ).create(on: tx)
+                    }
+                }
+                for agentId in agentIds {
+                    await app.agentService.syncDesiredState(agentId: agentId)
+                }
             },
             app: app)
 
@@ -268,7 +273,9 @@ struct VolumeController: RouteCollection {
                 "sourceImageId": .string(sourceImage?.id?.uuidString ?? ""),
             ])
 
-        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
+        return try await AcceptedMutation(
+            VolumeService.response(for: volume, on: req.db), accepted
+        ).acceptedResponse()
     }
 
     // MARK: - Get Volume
@@ -278,7 +285,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func getVolume(req: Request) async throws -> VolumeResponse {
         let volume = try await fetchVolumeWithPermission(req: req, permission: "read")
-        return VolumeResponse(from: volume)
+        return try await VolumeService.response(for: volume, on: req.db)
     }
 
     // MARK: - Update Volume
@@ -306,7 +313,7 @@ struct VolumeController: RouteCollection {
                 "name": .string(volume.name),
             ])
 
-        return VolumeResponse(from: volume)
+        return try await VolumeService.response(for: volume, on: req.db)
     }
 
     // MARK: - Delete Volume
@@ -339,21 +346,29 @@ struct VolumeController: RouteCollection {
         let volumeID = try volume.requireID()
         let userID = try user.requireID()
         let app = req.application
-        // Unplaced, or placed on an agent that is offline or too old to speak
-        // volume sync: nothing will ever confirm the teardown, so clear the
-        // agent's finalizer here. Dead and un-upgraded agents must not make
-        // their volumes undeletable — and an agent below wire v31 is
-        // permanently in the second category until it is upgraded, which is the
-        // one place the hard cutover leaves a rough edge worth naming.
-        let agentCanConverge = try await Self.agentConvergesVolumes(volume.hypervisorId, app: app)
+        // Replicas on agents that cannot converge are explicitly abandoned in
+        // the mutation transaction: they cannot confirm teardown and must not
+        // hold the logical row forever. Any reachable replicas still receive
+        // the absent desired state and each removes its own row on confirmation.
+        let placementAgentIDs = try await VolumeService.agentIDs(holding: volume, on: req.db)
+        var convergingAgentIDs: [String] = []
+        for agentID in placementAgentIDs {
+            if try await Self.agentConvergesVolumes(agentID, app: app) {
+                convergingAgentIDs.append(agentID)
+            }
+        }
+        let abandonedAgentIDs = Array(Set(placementAgentIDs).subtracting(convergingAgentIDs))
         let strategy: ResourceMutation.Dispatch =
-            agentCanConverge
+            !convergingAgentIDs.isEmpty
             ? .stateSync
             : .directResolution { @Sendable db in
-                if volume.hypervisorId != nil {
+                if !placementAgentIDs.isEmpty {
                     app.logger.warning(
-                        "Deleting volume record without agent teardown; its agent cannot converge volumes",
-                        metadata: ["volumeId": .string(volumeID.uuidString)])
+                        "Deleting volume record without agent teardown; none of its replicas can converge",
+                        metadata: [
+                            "volumeId": .string(volumeID.uuidString),
+                            "agentIds": .string(placementAgentIDs.joined(separator: ",")),
+                        ])
                 }
                 let outcome: ResourceFinalizerService.ClearOutcome
                 do {
@@ -377,11 +392,17 @@ struct VolumeController: RouteCollection {
         let accepted = try await req.resourceMutation.accept(
             .delete, on: volume, actor: .user(userID), dispatch: strategy,
             on: req.db, app: app
-        ) { @Sendable _ in
+        ) { @Sendable db in
+            if !abandonedAgentIDs.isEmpty {
+                try await VolumeReplica.query(on: db)
+                    .filter(\.$volume.$id == volumeID)
+                    .filter(\.$agentId ~~ abandonedAgentIDs)
+                    .delete()
+            }
             // Stamp before the mark: `stampForDeletion` reads whether the
             // volume is already terminating, and re-stamping a second DELETE
             // would resurrect tokens their participants have already cleared.
-            ResourceFinalizerService.stampForDeletion(volume)
+            try await ResourceFinalizerService.stampForDeletion(volume, on: db)
             volume.setDesiredStatus(.absent)
         }
 
@@ -389,7 +410,9 @@ struct VolumeController: RouteCollection {
             "Volume deletion requested",
             metadata: ["volumeId": .string(volumeID.uuidString)])
 
-        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
+        return try await AcceptedMutation(
+            VolumeService.response(for: volume, on: req.db), accepted
+        ).acceptedResponse()
     }
 
     // MARK: - Attach Volume
@@ -456,15 +479,7 @@ struct VolumeController: RouteCollection {
         // a fact about the request, not about convergence.
         if let vmHypervisorId = vm.hypervisorId {
             let pool = try await volume.$pool.get(on: req.db)
-            var replicaAgentIds = try await VolumeReplica.query(on: req.db)
-                .filter(\.$volume.$id == volume.id!)
-                .all()
-                .map(\.agentId)
-            // Rows without a replica (mid-provisioning races) still carry the
-            // dual-written legacy column.
-            if replicaAgentIds.isEmpty, let legacyAgentId = volume.hypervisorId {
-                replicaAgentIds = [legacyAgentId]
-            }
+            let replicaAgentIds = try await VolumeService.agentIDs(holding: volume, on: req.db)
 
             guard
                 StoragePool.agentCanReach(
@@ -556,7 +571,9 @@ struct VolumeController: RouteCollection {
                 "deviceName": .string(volume.deviceName ?? ""),
             ])
 
-        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
+        return try await AcceptedMutation(
+            VolumeService.response(for: volume, on: req.db), accepted
+        ).acceptedResponse()
     }
 
     // MARK: - Detach Volume
@@ -604,7 +621,9 @@ struct VolumeController: RouteCollection {
                 "previousVmId": .string(vmId.uuidString),
             ])
 
-        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
+        return try await AcceptedMutation(
+            VolumeService.response(for: volume, on: req.db), accepted
+        ).acceptedResponse()
     }
 
     // MARK: - Resize Volume
@@ -652,7 +671,7 @@ struct VolumeController: RouteCollection {
                 reason: "New size (\(request.sizeGB) GB) must be larger than current size (\(volume.sizeGB) GB)")
         }
 
-        guard volume.hypervisorId != nil else {
+        guard try await VolumeService.agentHolding(volume, on: req.db) != nil else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
 
@@ -698,7 +717,9 @@ struct VolumeController: RouteCollection {
                 "newSizeGB": .stringConvertible(request.sizeGB),
             ])
 
-        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
+        return try await AcceptedMutation(
+            VolumeService.response(for: volume, on: req.db), accepted
+        ).acceptedResponse()
     }
 
     // MARK: - I/O Limits
@@ -749,7 +770,7 @@ struct VolumeController: RouteCollection {
 
         try Self.validateIOLimits(iopsTotal: request.iopsTotal, bpsTotal: request.bpsTotal)
 
-        guard volume.hypervisorId != nil else {
+        guard try await VolumeService.agentHolding(volume, on: req.db) != nil else {
             throw Abort(.conflict, reason: "Volume is not provisioned on any hypervisor")
         }
 
@@ -772,7 +793,9 @@ struct VolumeController: RouteCollection {
                 "bpsTotal": .string(request.bpsTotal.map(String.init) ?? "uncapped"),
             ])
 
-        return try AcceptedMutation(VolumeResponse(from: volume), accepted).acceptedResponse()
+        return try await AcceptedMutation(
+            VolumeService.response(for: volume, on: req.db), accepted
+        ).acceptedResponse()
     }
 
     // MARK: - Create Snapshot
@@ -904,7 +927,8 @@ struct VolumeController: RouteCollection {
             )
         }
 
-        guard let sourceAgentId = sourceVolume.hypervisorId else {
+        let sourceAgentIds = try await VolumeService.agentIDs(holding: sourceVolume, on: req.db)
+        guard !sourceAgentIds.isEmpty else {
             throw Abort(.conflict, reason: "Source volume is not provisioned on any hypervisor")
         }
 
@@ -924,7 +948,6 @@ struct VolumeController: RouteCollection {
             poolID: sourceVolume.$pool.id,
             sourceVolumeID: sourceVolume.id
         )
-        newVolume.hypervisorId = sourceAgentId
         newVolume.extendConvergenceDeadline(
             by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
         newVolume.setDesiredStatus(.present)
@@ -967,12 +990,18 @@ struct VolumeController: RouteCollection {
         let app = req.application
         req.resourceMutation.dispatch(
             .create, resourceType: Volume.self, resourceID: newVolumeID,
-            targetGeneration: accepted.targetGeneration, hypervisorId: sourceAgentId,
+            targetGeneration: accepted.targetGeneration, agentIDs: sourceAgentIds,
             strategy: .placement { @Sendable db in
-                try await VolumeReplica(
-                    volumeID: newVolumeID, agentId: sourceAgentId, state: .provisioning
-                ).create(on: db)
-                await app.agentService.syncDesiredState(agentId: sourceAgentId)
+                try await db.transaction { tx in
+                    for agentId in sourceAgentIds {
+                        try await VolumeReplica(
+                            volumeID: newVolumeID, agentId: agentId, state: .provisioning
+                        ).create(on: tx)
+                    }
+                }
+                for agentId in sourceAgentIds {
+                    await app.agentService.syncDesiredState(agentId: agentId)
+                }
             },
             app: app)
 
@@ -984,7 +1013,9 @@ struct VolumeController: RouteCollection {
                 "name": .string(newVolume.name),
             ])
 
-        return try AcceptedMutation(VolumeResponse(from: newVolume), accepted).acceptedResponse()
+        return try await AcceptedMutation(
+            VolumeService.response(for: newVolume, on: req.db), accepted
+        ).acceptedResponse()
     }
 
     // MARK: - List Snapshots

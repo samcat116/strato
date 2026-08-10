@@ -51,14 +51,15 @@ struct ObservedStateApplier {
         try await db.transaction { tx in
             guard try await resource.lockAndRefresh(on: tx) else { return }
             let resourceID = try resource.requireID()
-            guard resource.hypervisorId == agentId else {
+            let placementAgentIDs = try await resource.placementAgentIDs(on: tx)
+            guard placementAgentIDs.contains(agentId) else {
                 app.logger.debug(
                     "Ignoring an observed-state entry after the resource moved to another agent",
                     metadata: [
                         "resourceKind": .string(R.operationResourceKind.rawValue),
                         "resourceId": .string(resourceID.uuidString),
                         "reportingAgentId": .string(agentId),
-                        "currentAgentId": .string(resource.hypervisorId ?? "unplaced"),
+                        "currentAgentId": .string(placementAgentIDs.joined(separator: ",")),
                     ])
                 return
             }
@@ -233,9 +234,7 @@ struct ObservedStateApplier {
                 reportedVolumeList.map { ($0.volumeId, $0) },
                 uniquingKeysWith: { first, _ in first }
             )
-            let dbVolumes = try await Volume.query(on: db)
-                .filter(\.$hypervisorId == report.agentId)
-                .all()
+            let dbVolumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
             for volume in dbVolumes {
                 guard let volumeID = volume.id else { continue }
                 if let observed = reportedVolumes[volumeID] {
@@ -410,9 +409,11 @@ struct ObservedStateApplier {
         let volumeIDs = report.unrecognized.filter { $0.kind == .volume }.map(\.workloadId)
         var volumePlacements: [UUID: WorkloadPlacement] = [:]
         if !volumeIDs.isEmpty {
-            for volume in try await Volume.query(on: db).filter(\.$id ~~ volumeIDs).all() {
-                guard let id = volume.id else { continue }
-                volumePlacements[id] = WorkloadPlacement(agentId: volume.hypervisorId)
+            let replicas = try await VolumeService.replicas(volumeIDs: volumeIDs, on: db)
+            for volumeID in volumeIDs {
+                guard let rows = replicas[volumeID] else { continue }
+                let placed = rows.first(where: { $0.agentId == report.agentId }) ?? rows.first
+                volumePlacements[volumeID] = WorkloadPlacement(agentId: placed?.agentId)
             }
         }
 
@@ -1206,15 +1207,6 @@ struct ObservedStateApplier {
             failedGeneration: observed.failedGeneration
         )
 
-        // The agent owns path layout, so this is the only place a volume's
-        // storage path is ever written. Recorded before the converging
-        // early-return: a create reports its path as soon as the bytes land,
-        // and `VMSpecBuilder.volumeSpecs` needs it to project the attachment.
-        if observed.present, let path = observed.storagePath, volume.storagePath != path {
-            volume.storagePath = path
-            changed = true
-        }
-
         // The size the image actually has (STR-199) — recorded here for the same
         // reason the path is, and with the same asymmetry as the applied I/O
         // ceilings below: it is a fact about the volume rather than a verdict on
@@ -1602,6 +1594,25 @@ struct ObservedStateApplier {
         let volumeID = try volume.requireID()
 
         if volume.desiredStatus == .absent {
+            // One report only confirms one physical copy is gone. Remove that
+            // replica and keep the shared finalizer until every active copy
+            // has independently disappeared; the row's cascade then cleans
+            // up any non-active historical replica records.
+            try await VolumeReplica.query(on: db)
+                .filter(\.$volume.$id == volumeID)
+                .filter(\.$agentId == agentId)
+                .delete()
+            let remainingAgentIDs = try await VolumeService.agentIDs(holding: volume, on: db)
+            guard remainingAgentIDs.isEmpty else {
+                app.logger.debug(
+                    "Volume replica teardown confirmed; awaiting other replicas",
+                    metadata: [
+                        "volumeId": .string(volumeID.uuidString),
+                        "agentId": .string(agentId),
+                        "remainingAgentIds": .string(remainingAgentIDs.joined(separator: ",")),
+                    ])
+                return
+            }
             switch try await ResourceFinalizerService.clear(
                 .agentAbsent, from: volume, on: db, app: app)
             {

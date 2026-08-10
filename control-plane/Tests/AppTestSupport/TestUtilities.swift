@@ -801,6 +801,29 @@ package func conditionedRoleBindingsAreRefused(on db: any Database) async throws
     try await conditionedRoleBindingConstraint(on: db) != .absent
 }
 
+/// Give a saved test volume its authoritative physical placement. Passing no
+/// agent deliberately leaves the volume unplaced for tests that exercise that
+/// state.
+@discardableResult
+package func placeVolume(
+    _ volume: Volume,
+    on agentID: String?,
+    at datasetPath: String? = "/var/lib/strato/volumes/test/volume.qcow2",
+    state: VolumeReplicaState = .healthy,
+    using db: any Database
+) async throws -> VolumeReplica? {
+    guard let agentID else { return nil }
+    let replica = VolumeReplica(
+        volumeID: try volume.requireID(),
+        agentId: agentID,
+        datasetPath: datasetPath,
+        state: state,
+        generation: volume.generation
+    )
+    try await replica.create(on: db)
+    return replica
+}
+
 private func sqlDatabaseForTest(_ db: any Database) throws -> any SQLDatabase {
     guard let sql = db as? any SQLDatabase else {
         throw TestSetupError.message("conditioned binding fixtures need a SQL database")
