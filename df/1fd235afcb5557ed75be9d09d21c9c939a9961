@@ -1,0 +1,24 @@
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_b46c3107f6ba4b::t_5d942aa79676e5 9,1706-1716,1719-1723,1726-1769
+  s_b46c3107f6ba4b::t_155e2d1580c662 1717-1718,1724-1725
+  s_b46c3107f6ba4b::t_2374361a4b0168 1770-1772
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_b46c3107f6ba4b::t_5d942aa79676e5 439-461
+  s_b46c3107f6ba4b::t_43d8f5758bc671 363-368
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "df1fd235afcb5557ed75be9d09d21c9c939a9961",
+  "prompts": {},
+  "sessions": {
+    "s_b46c3107f6ba4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99d-01a5-7800-bc01-500acb3b32fa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
