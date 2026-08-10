@@ -1,0 +1,128 @@
+agent/Sources/StratoAgent/FirecrackerService.swift
+  s_b46c3107f6ba4b::t_d195a6ad9ad0cf 105-117,132-136,142-143,148
+shared/Tests/StratoSharedTests/InstanceMetadataTests.swift
+  s_b46c3107f6ba4b::t_794e856334d56d 83-85
+shared/Tests/StratoSharedTests/Support/WireTestSupport.swift
+  s_b46c3107f6ba4b::t_c52eb5ba61451b 62-68
+control-plane/Sources/App/Services/VMSpecBuilder.swift
+  s_b46c3107f6ba4b::t_b2750c54a20570 366
+  s_b46c3107f6ba4b::t_7ea6692a0296e3 376-379,385
+agent/Tests/StratoAgentTests/FileSystemStorageBackendTests.swift
+  s_b46c3107f6ba4b::t_c1f239029c27c7 89,96-102
+control-plane/Tests/AppResourceTests/ImageObjectStoreTests.swift
+  s_b46c3107f6ba4b::t_6c188d8b31adc7 39-40,44-46,48,72-74,263-265,286-291
+  s_b46c3107f6ba4b::t_a2890d7cf0cb28 255
+control-plane/Tests/AppResourceTests/ImageControllerTests.swift
+  s_b46c3107f6ba4b::t_6c188d8b31adc7 1027-1029
+  s_b46c3107f6ba4b::t_9f30e3098bf72e 1188,1201,1215
+  s_b46c3107f6ba4b::t_e533ca822c96a9 498-503,506,527-532
+  s_b46c3107f6ba4b::t_95d16dda1de2c5 1162-1177
+control-plane/Tests/AppResourceTests/VMSpecBuilderImageInfoTests.swift
+  s_b46c3107f6ba4b::t_442b63e9cd48a7 32,37,63,68-69,73-75
+  s_b46c3107f6ba4b::t_2c22e333bac69a 4
+  s_b46c3107f6ba4b::t_aec6a58d9c9531 42-43,64-65
+shared/Sources/StratoShared/WireProtocol.swift
+  s_b46c3107f6ba4b::t_9e1dff59327fba 16
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_b46c3107f6ba4b::t_9e1dff59327fba 20
+agent/Tests/StratoAgentTests/ImageCacheServiceTests.swift
+  s_b46c3107f6ba4b::t_6751794a9412fe 418-433
+  s_b46c3107f6ba4b::t_57e5f792f952c3 25
+  s_b46c3107f6ba4b::t_c1f239029c27c7 20-24,28-29,92,104-105,185-186,190-196,199,203,231-232,259-260,272,296,299-300,328,380-386,389,394,411,414-416
+  s_59e96616c802df::t_61e900666253e9 417
+agent/Sources/StratoAgentCore/MockStorageBackend.swift
+  s_b46c3107f6ba4b::t_bc28648e37d278 153-155
+  s_b46c3107f6ba4b::t_f80c42fa121c55 136-138,143
+control-plane/Sources/App/Controllers/VMController.swift
+  s_b46c3107f6ba4b::t_a2890d7cf0cb28 663-666
+agent/Tests/StratoAgentTests/MockStorageBackendTests.swift
+  s_b46c3107f6ba4b::t_c1f239029c27c7 21-23,25,27
+  s_b46c3107f6ba4b::t_16de4fdee74020 15-17,24,26,229,234-242
+  s_b46c3107f6ba4b::t_9fc42872886611 243
+control-plane/Sources/App/Models/Image.swift
+  s_b46c3107f6ba4b::t_d35b7f91a9e1d1 116,119-123,143,274-277,301-305,307,309-311,335-339
+  s_b46c3107f6ba4b::t_1b3ddd474cfc4c 161-184
+control-plane/Sources/App/Services/ImageFetchService.swift
+  s_b46c3107f6ba4b::t_7c47f89fc4327e 42,68,80-92,114,122,128,131
+control-plane/Sources/App/Services/ImageObjectStore.swift
+  s_b46c3107f6ba4b::t_c265a67bbd61a4 8-10
+control-plane/Tests/AppResourceTests/ImageCompatibilityTests.swift
+  s_b46c3107f6ba4b::t_3a9e2a1a9c7f01 31
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_b46c3107f6ba4b::t_c52eb5ba61451b 21-27,46
+control-plane/Tests/AppIAMTests/ResourceBindingCleanupTests.swift
+  s_b46c3107f6ba4b::t_d62832b5a3eb64 571
+cli/Sources/StratoCLI/Commands/ImageCommand.swift
+  s_b46c3107f6ba4b::t_2dc6236f769477 34-35,67,69
+control-plane/web/src/types/openapi.ts
+  s_b46c3107f6ba4b::t_4708096dddd976 810-812,5795-5796,5805-5811,5813-5814,10759-10761
+  s_b46c3107f6ba4b::t_f940e4af95d418 824,10774
+shared/Tests/StratoSharedTests/ImageInfoArtifactTests.swift
+  s_b46c3107f6ba4b::t_c52eb5ba61451b 7-18,20-22,24-31
+control-plane/Sources/App/Models/ImageArtifact.swift
+  s_b46c3107f6ba4b::t_d35b7f91a9e1d1 19-22,51-56,95-96,109,118-131
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_b46c3107f6ba4b::t_8610f22a7d69c1 709
+  s_b46c3107f6ba4b::t_0f1f17e6cba664 710
+  s_b46c3107f6ba4b::t_9e21088911479a 692,695-707,711-718
+  s_b46c3107f6ba4b::t_213d8b703876b5 686,690,708
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_b46c3107f6ba4b::t_7ea6692a0296e3 365-366,370,376-377
+agent/Sources/StratoAgent/LibvirtService.swift
+  s_b46c3107f6ba4b::t_bc28648e37d278 2179-2186
+  s_b46c3107f6ba4b::t_7ea6692a0296e3 2161-2165,2169-2177,2187-2188
+agent/Sources/StratoAgentCore/ImageCacheService.swift
+  s_b46c3107f6ba4b::t_7ea6692a0296e3 175
+control-plane/Sources/App/Controllers/ImageController.swift
+  s_b46c3107f6ba4b::t_c265a67bbd61a4 636,662-663,1064-1070
+  s_b46c3107f6ba4b::t_c22963e0009d6e 341-343
+  s_b46c3107f6ba4b::t_a9df82321ad01e 193-211,213-214,227,425,449,577,668,730,794,867-871,899,993,1011-1017,1019-1020,1052
+control-plane/Tests/AppResourceTests/MakeImageArtifactsAuthoritativeTests.swift
+  s_b46c3107f6ba4b::t_2aa7e699ef073a 19,31,37,39,66
+  s_b46c3107f6ba4b::t_1f36dc59ada8c2 2
+  s_b46c3107f6ba4b::t_9ddfa07f2223f1 4-5,9-18,20-30,32-36,38,40-49,51-63,65,67,73-75,77-79
+control-plane/Tests/AppResourceTests/ImageDownloadMTLSTests.swift
+  s_b46c3107f6ba4b::t_9f30e3098bf72e 87-90,143
+control-plane/Tests/AppPlatformTests/MigrationEnumSafetyTests.swift
+  s_b46c3107f6ba4b::t_1474a5dbc8b619 8
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_b46c3107f6ba4b::t_dc7cc767fde2c8 61-62
+control-plane/Sources/App/configure.swift
+  s_b46c3107f6ba4b::t_c75ad1a29820ae 654-657
+control-plane/web/src/lib/api/images.ts
+  s_b46c3107f6ba4b::t_9f30e3098bf72e 124-129
+control-plane/Sources/App/openapi.yaml
+  s_b46c3107f6ba4b::t_c265a67bbd61a4 1135-1136,9890-9892,9915,9919
+  s_b46c3107f6ba4b::t_a2890d7cf0cb28 1141,1148
+control-plane/Tests/AppResourceTests/ImageFetchRedirectTests.swift
+  s_b46c3107f6ba4b::t_6bacf38842a89e 4
+  s_b46c3107f6ba4b::t_704322b394824b 110,113,126,129-146,153,157-159,161,173,176-177,180-182,189,192-193,196,205,210-211,214,227,230,233-234,237,247,250-251,254-255,265,270-271,274
+control-plane/Sources/App/Migrations/MakeImageArtifactsAuthoritative.swift
+  s_b46c3107f6ba4b::t_c265a67bbd61a4 130,132
+  s_b46c3107f6ba4b::t_1474a5dbc8b619 42
+  s_b46c3107f6ba4b::t_c75ad1a29820ae 1-41,43-129,131,133-241
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "2d2479602aa90d4415b1eebbf2ea91e0870e1b40",
+  "prompts": {},
+  "sessions": {
+    "s_59e96616c802df": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99b-9431-7de1-b7b3-70443ae7a949",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_b46c3107f6ba4b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe99d-01a5-7800-bc01-500acb3b32fa",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
