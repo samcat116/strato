@@ -671,16 +671,13 @@ struct DesiredStateAssembler {
     /// *which agent's sync the entry appears in*, and a second encoding of the
     /// same fact is a thing that can drift.
     private func desiredVolumes(agentId: String, on db: any Database) async throws -> [DesiredVolumeState] {
-        let volumeIDs = try await VolumeReplica.query(on: db)
-            .filter(\.$agentId == agentId)
-            .filter(\.$state ~~ VolumeService.authoritativeReplicaStates)
-            .all()
-            .map(\.$volume.id)
-        guard !volumeIDs.isEmpty else { return [] }
+        let replicaScope = try await VolumeService.replicaScope(onAgent: agentId, on: db)
+        guard !replicaScope.allVolumeIDs.isEmpty else { return [] }
         let volumes = try await Volume.query(on: db)
-            .filter(\.$id ~~ Array(Set(volumeIDs)))
+            .filter(\.$id ~~ Array(replicaScope.allVolumeIDs))
             .with(\.$sourceImage) { $0.with(\.$artifacts) }
             .all()
+            .filter(replicaScope.includes)
         let attachedVMIDs = Array(Set(volumes.compactMap(\.$vm.id)))
         let attachmentAgentIDs: [UUID: String]
         if attachedVMIDs.isEmpty {

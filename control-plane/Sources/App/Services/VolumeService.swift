@@ -21,6 +21,18 @@ import StratoShared
 /// state to own.
 enum VolumeService {
 
+    struct AgentReplicaScope {
+        let allVolumeIDs: Set<UUID>
+        let authoritativeVolumeIDs: Set<UUID>
+
+        func includes(_ volume: Volume) -> Bool {
+            guard let volumeID = volume.id else { return false }
+            return volume.desiredStatus == .absent
+                ? allVolumeIDs.contains(volumeID)
+                : authoritativeVolumeIDs.contains(volumeID)
+        }
+    }
+
     /// Replica states that may participate in placement and path resolution.
     /// A faulted/degraded copy must never keep a volume pinned to an agent or
     /// leak a stale path into a VM specification.
@@ -62,20 +74,47 @@ enum VolumeService {
             .mapValues { $0.sorted(by: replicaPrecedes) }
     }
 
-    /// Every logical volume whose active replica set includes `agentId`.
-    static func volumes(onAgent agentId: String, on db: any Database) async throws -> [Volume] {
-        let volumeIDs = try await VolumeReplica.query(on: db)
+    /// Replica membership for one agent's desired/observed reconciliation.
+    /// Live volumes use only placement-authoritative copies, while terminating
+    /// volumes include every physical copy so degraded, resyncing, and faulted
+    /// data must also be torn down before the logical row can be reaped.
+    static func replicaScope(onAgent agentId: String, on db: any Database) async throws
+        -> AgentReplicaScope
+    {
+        let replicas = try await VolumeReplica.query(on: db)
             .filter(\.$agentId == agentId)
-            .filter(\.$state ~~ authoritativeReplicaStates)
             .all()
-            .map(\.$volume.id)
-        guard !volumeIDs.isEmpty else { return [] }
-        return try await Volume.query(on: db).filter(\.$id ~~ Array(Set(volumeIDs))).all()
+        return AgentReplicaScope(
+            allVolumeIDs: Set(replicas.map(\.$volume.id)),
+            authoritativeVolumeIDs: Set(
+                replicas.lazy
+                    .filter { authoritativeReplicaStates.contains($0.state) }
+                    .map(\.$volume.id)))
     }
 
-    /// Agent IDs whose desired-state sync must carry this volume.
+    /// Every logical volume this agent must reconcile. Inactive copies are
+    /// excluded from live placement, but remain visible while terminating.
+    static func volumes(onAgent agentId: String, on db: any Database) async throws -> [Volume] {
+        let scope = try await replicaScope(onAgent: agentId, on: db)
+        guard !scope.allVolumeIDs.isEmpty else { return [] }
+        return try await Volume.query(on: db)
+            .filter(\.$id ~~ Array(scope.allVolumeIDs))
+            .all()
+            .filter(scope.includes)
+    }
+
+    /// Agent IDs whose active replica authoritatively places this volume.
     static func agentIDs(holding volume: Volume, on db: any Database) async throws -> [String] {
         try await replicas(of: volume, on: db).map(\.agentId)
+    }
+
+    /// Every agent with a physical copy, regardless of replica health. This is
+    /// the teardown/finalizer scope and must not be used for placement or paths.
+    static func agentIDsWithPhysicalReplicas(
+        of volume: Volume, on db: any Database
+    ) async throws -> [String] {
+        guard let volumeID = volume.id else { return [] }
+        return try await allReplicas(volumeIDs: [volumeID], on: db)[volumeID]?.map(\.agentId) ?? []
     }
 
     /// The preferred agent holding a volume's data. Local pools have one active

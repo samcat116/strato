@@ -1617,14 +1617,15 @@ struct ObservedStateApplier {
 
         if volume.desiredStatus == .absent {
             // One report only confirms one physical copy is gone. Remove that
-            // replica and keep the shared finalizer until every active copy
-            // has independently disappeared; the row's cascade then cleans
-            // up any non-active historical replica records.
+            // replica and keep the shared finalizer until every physical copy,
+            // including degraded, resyncing, and faulted copies, has
+            // independently disappeared.
             try await VolumeReplica.query(on: db)
                 .filter(\.$volume.$id == volumeID)
                 .filter(\.$agentId == agentId)
                 .delete()
-            let remainingAgentIDs = try await VolumeService.agentIDs(holding: volume, on: db)
+            let remainingAgentIDs = try await VolumeService.agentIDsWithPhysicalReplicas(
+                of: volume, on: db)
             guard remainingAgentIDs.isEmpty else {
                 app.logger.debug(
                     "Volume replica teardown confirmed; awaiting other replicas",

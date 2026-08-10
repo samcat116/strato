@@ -504,8 +504,8 @@ final class VolumeConvergenceTests {
         }
     }
 
-    @Test("A replicated volume is reaped only after every copy confirms absence")
-    func replicatedOmissionWaitsForEveryReplica() async throws {
+    @Test("A terminating volume waits for inactive physical replicas")
+    func physicalReplicaOmissionWaitsForInactiveCopy() async throws {
         try await withVolumeApp { app, _, user, project in
             let firstAgentID = try await registerAgent(app: app, named: "reap-replica-a")
             let secondAgentID = try await registerAgent(app: app, named: "reap-replica-b")
@@ -513,15 +513,29 @@ final class VolumeConvergenceTests {
                 on: app, user: user, project: project, agentId: firstAgentID,
                 desired: .absent, generation: 2, observedGeneration: 1)
             try await placeVolume(
-                volume, on: secondAgentID, at: "/volumes/replica-b.qcow2", using: app.db)
+                volume, on: secondAgentID, at: "/volumes/replica-b.qcow2", state: .faulted,
+                using: app.db)
             volume.finalizers = [ResourceFinalizer.agentAbsent.rawValue]
             try await volume.save(on: app.db)
             let volumeID = try volume.requireID()
 
+            let secondDesiredState = try await app.desiredStateAssembler.assemble(
+                agentId: secondAgentID)
+            #expect(
+                secondDesiredState.volumes?.contains {
+                    $0.volumeId == volumeID && $0.desiredStatus == .absent
+                } == true)
+            #expect(
+                Set(try await volume.placementAgentIDs(on: app.db))
+                    == Set([firstAgentID, secondAgentID]))
+
             _ = try await app.observedStateApplier.apply(
                 report(agentId: firstAgentID, volumes: []))
             #expect(try await Volume.find(volumeID, on: app.db) != nil)
-            #expect(try await VolumeService.agentIDs(holding: volume, on: app.db) == [secondAgentID])
+            #expect(try await VolumeService.agentIDs(holding: volume, on: app.db).isEmpty)
+            #expect(
+                try await VolumeService.agentIDsWithPhysicalReplicas(of: volume, on: app.db)
+                    == [secondAgentID])
 
             _ = try await app.observedStateApplier.apply(
                 report(agentId: secondAgentID, volumes: []))

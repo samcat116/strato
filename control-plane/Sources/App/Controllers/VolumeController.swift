@@ -345,29 +345,25 @@ struct VolumeController: RouteCollection {
         let volumeID = try volume.requireID()
         let userID = try user.requireID()
         let app = req.application
-        // Replicas on agents that cannot converge are explicitly abandoned in
-        // the mutation transaction: they cannot confirm teardown and must not
-        // hold the logical row forever. Any reachable replicas still receive
-        // the absent desired state and each removes its own row on confirmation.
-        let placementAgentIDs = try await VolumeService.agentIDs(holding: volume, on: req.db)
-        var convergingAgentIDs: [String] = []
-        for agentID in placementAgentIDs {
-            if try await Self.agentConvergesVolumes(agentID, app: app) {
-                convergingAgentIDs.append(agentID)
-            }
-        }
-        let abandonedAgentIDs = Array(Set(placementAgentIDs).subtracting(convergingAgentIDs))
+        // Every physical copy owes teardown, regardless of replica health or
+        // current agent reachability. Offline agents leave the deletion
+        // pending rather than silently orphaning bytes.
+        let physicalAgentIDs = try await VolumeService.agentIDsWithPhysicalReplicas(
+            of: volume, on: req.db)
         let strategy: ResourceMutation.Dispatch =
-            !convergingAgentIDs.isEmpty
+            !physicalAgentIDs.isEmpty
             ? .stateSync
             : .directResolution { @Sendable db in
-                if !placementAgentIDs.isEmpty {
-                    app.logger.warning(
-                        "Deleting volume record without agent teardown; none of its replicas can converge",
-                        metadata: [
-                            "volumeId": .string(volumeID.uuidString),
-                            "agentIds": .string(placementAgentIDs.joined(separator: ",")),
-                        ])
+                // The initial lookup happens outside ResourceMutation's row
+                // lock. Refuse to reap if a placement raced with it, and drive
+                // the newly discovered copies through desired-state teardown.
+                let racedAgentIDs = try await VolumeService.agentIDsWithPhysicalReplicas(
+                    of: volume, on: db)
+                if !racedAgentIDs.isEmpty {
+                    for agentID in racedAgentIDs {
+                        await app.agentService.syncDesiredState(agentId: agentID)
+                    }
+                    return false
                 }
                 let outcome: ResourceFinalizerService.ClearOutcome
                 do {
@@ -392,16 +388,15 @@ struct VolumeController: RouteCollection {
             .delete, on: volume, actor: .user(userID), dispatch: strategy,
             on: req.db, app: app
         ) { @Sendable db in
-            if !abandonedAgentIDs.isEmpty {
-                try await VolumeReplica.query(on: db)
-                    .filter(\.$volume.$id == volumeID)
-                    .filter(\.$agentId ~~ abandonedAgentIDs)
-                    .delete()
+            // Volume teardown is scoped to every physical replica, not only
+            // the healthy/provisioning set used by generic placement. Stamp
+            // before the mark, and never re-stamp a terminating volume: doing
+            // so would resurrect a token its participants already cleared.
+            if !volume.isTerminating {
+                volume.finalizers =
+                    try await VolumeService.agentIDsWithPhysicalReplicas(of: volume, on: db).isEmpty
+                    ? [] : [ResourceFinalizer.agentAbsent.rawValue]
             }
-            // Stamp before the mark: `stampForDeletion` reads whether the
-            // volume is already terminating, and re-stamping a second DELETE
-            // would resurrect tokens their participants have already cleared.
-            try await ResourceFinalizerService.stampForDeletion(volume, on: db)
             volume.setDesiredStatus(.absent)
         }
 
@@ -1084,26 +1079,6 @@ struct VolumeController: RouteCollection {
     }
 
     // MARK: - Helper Methods
-
-    /// Whether the agent holding a volume can actually converge it: online, and
-    /// speaking wire v31 or later (STR-148).
-    ///
-    /// With the imperative volume frames gone there is no fallback path, so an
-    /// agent below v31 cannot hear about a volume at all. `selectVolumeAgent`
-    /// keeps new volumes off such agents; this answers the same question for
-    /// volumes that were already there when the control plane was upgraded.
-    /// Throws rather than swallowing a lookup failure. `try?` would read a
-    /// transient database error as "no such agent", and on the delete path that
-    /// answer sends the request down the force-clear branch — removing the row
-    /// without any agent confirming the data is gone. A genuinely missing agent
-    /// row is still false; only "we could not find out" is an error.
-    private static func agentConvergesVolumes(_ agentId: String?, app: Application) async throws -> Bool {
-        guard let agentId, await app.agentService.agentIsOnline(agentId: agentId) else { return false }
-        guard let agentUUID = UUID(uuidString: agentId),
-            try await Agent.find(agentUUID, on: app.db) != nil
-        else { return false }
-        return true
-    }
 
     /// Fetch a volume and check permission, mirroring
     /// `fetchVMWithAction`/`fetchSandboxWithAction`.

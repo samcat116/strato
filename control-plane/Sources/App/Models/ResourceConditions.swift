@@ -503,7 +503,10 @@ extension Volume: ConvergingResource {
     static var operationResourceKind: OperationResourceKind { .volume }
     var projectID: UUID { $project.id }
     func placementAgentIDs(on db: any Database) async throws -> [String] {
-        try await VolumeService.agentIDs(holding: self, on: db)
+        if desiredStatus == .absent {
+            return try await VolumeService.agentIDsWithPhysicalReplicas(of: self, on: db)
+        }
+        return try await VolumeService.agentIDs(holding: self, on: db)
     }
 
     /// A volume's convergence progress and its most recent failure share one
