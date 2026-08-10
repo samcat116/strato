@@ -2199,9 +2199,12 @@ actor Agent {
         // manifest carries each VM's `diskBytes` from both the vmCreate and
         // reconciliation paths, and orphans keep reserving across restarts
         // (issue #473). Sandboxes reserve no disk, matching the scheduler.
-        // Otherwise query the storage filesystem live — VM disks are created
-        // directly on it, so this naturally accounts for existing disks
-        // without tracking reservations.
+        // Otherwise query the managed-volume filesystem live. Every VM boot
+        // disk is a managed volume now, and the scheduler compares this value
+        // with `vm.disk`; measuring `vmStoragePath` would make placement wrong
+        // whenever the two directories are on different filesystems. A live
+        // filesystem probe naturally accounts for existing volumes without
+        // tracking reservations.
         let totalDisk: Int64
         let availableDisk: Int64
         if let simulation, simulation.enabled {
@@ -2211,12 +2214,12 @@ actor Agent {
                 + quarantinedWorkloads.values.reduce(0) { $0 + $1.diskBytes }
             availableDisk = inventoryUnknown ? 0 : max(0, totalDisk - reservedDisk)
         } else {
-            let disk = HostResources.diskCapacity(forPath: vmStoragePath)
+            let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
             if disk == nil {
                 logger.warning(
-                    "Unable to determine disk capacity for VM storage path",
+                    "Unable to determine disk capacity for managed volume storage path",
                     metadata: [
-                        "path": .string(vmStoragePath)
+                        "path": .string(volumeStoragePath)
                     ])
             }
             totalDisk = disk?.total ?? 0
