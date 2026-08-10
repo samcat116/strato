@@ -58,17 +58,15 @@
 {{- end }}
 
 6. To connect Strato Agents to this control plane:
-   - WebSocket URL: ws://{{ include "strato-control-plane.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}/agent/ws
    {{- if .Values.gateway.enabled }}
-   {{- if and .Values.spire.enabled .Values.spire.envoy.enabled }}
-   - SVID mTLS (SNI passthrough to the Envoy sidecar):
+   - Agent WebSocket (SVID mTLS via SNI passthrough):
      wss://{{ include "strato-control-plane.gateway.agentsHost" . }}/agent/ws
-   {{- end }}
-   {{- if .Values.spire.enabled }}
    - SPIRE node attestation (SNI passthrough): {{ include "strato-control-plane.gateway.spireHost" . }}:443
-   {{- end }}
-   {{- else if .Values.strato.externalHostname }}
-   - External WebSocket URL: ws://{{ .Values.strato.externalHostname }}:{{ .Values.service.port }}/agent/ws
+   {{- else }}
+   - Expose wss://agents.<host>/agent/ws with TLS passthrough to the
+     {{ include "strato-control-plane.fullname" . }} Service's agent-mtls port
+     ({{ .Values.spire.envoy.agentPort }}). Do not terminate TLS before the Envoy
+     sidecar; it must receive and verify the agent's SVID client certificate.
    {{- end }}
 
 7. Health Checks:
