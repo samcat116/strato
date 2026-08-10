@@ -3,8 +3,8 @@ import Vapor
 
 /// One authorization decision (IAM phase 4, issue #481) — the first-class
 /// decision log distinct from the mutation audit trail: `audit_events` records
-/// what HTTP happened; this records what was *decided* — the permission
-/// checked, both engines' verdicts, the deciding policy, the policy-set
+/// what HTTP happened; this records what was *decided* — the canonical action
+/// and node, the verdict, the deciding policy, the policy-set
 /// version, and the tier that produced the outcome. This is what makes
 /// guardrail denials debuggable and later feeds the policy simulator.
 ///
@@ -32,22 +32,10 @@ final class IAMDecisionLog: Model, @unchecked Sendable {
     @Field(key: "subject")
     var subject: String
 
-    /// The legacy-vocabulary permission as asked at the check site (the IAM
-    /// action for native-vocabulary checks). The column keeps its historical
-    /// name from the SpiceDB era.
-    @Field(key: "spicedb_permission")
-    var spicedbPermission: String
-
-    @Field(key: "resource_type")
-    var resourceType: String
-
-    @Field(key: "resource_id")
-    var resourceID: String
-
-    /// The translated IAM action (`vm:read`, …); nil when the check has no
-    /// faithful translation — those rows are the coverage gaps.
-    @OptionalField(key: "iam_action")
-    var iamAction: String?
+    /// The canonical IAM action (`vm:read`, …). Nil only for denials on
+    /// node-less platform and identity surfaces that never enter Cedar.
+    @OptionalField(key: "action")
+    var action: String?
 
     @OptionalField(key: "node_type")
     var nodeType: String?
@@ -56,28 +44,15 @@ final class IAMDecisionLog: Model, @unchecked Sendable {
     var nodeID: UUID?
 
     /// The organization containing the checked node, from the slice's
-    /// ancestor chain — nil when translation or slice loading failed.
+    /// ancestor chain.
     @OptionalField(key: "organization_id")
     var organizationID: UUID?
 
-    /// Always `none` since the shadow-comparison verdict retired with SpiceDB
-    /// (issue #483); historical rows carry `allow`/`deny`/`error`.
-    @Field(key: "spicedb_decision")
-    var spicedbDecision: String
-
-    /// `allow` / `deny` — what actually gated the request — or why there is no
-    /// verdict: `untranslated` (no IAM mapping), `skipped` (no compiled policy
-    /// set yet), `error` (evaluation failed), `credential_restricted` (a
-    /// restricted credential on a surface the evaluator does not gate;
-    /// `spicedb_permission` names which surface). Historical rows also carry
-    /// `scope_denied`, its pre-STR-115 spelling.
-    @Field(key: "cedar_decision")
-    var cedarDecision: String
-
-    /// Whether the shadow-era verdicts agreed; nil on every row since the
-    /// comparison retired (issue #483).
-    @OptionalField(key: "decisions_match")
-    var decisionsMatch: Bool?
+    /// `allow` / `deny` — what actually gated the request — or
+    /// `credential_restricted` for a restricted credential refused on a
+    /// node-less surface that the evaluator does not gate.
+    @Field(key: "decision")
+    var decision: String
 
     /// JSON array of the policy ids that determined Cedar's decision
     /// (`role-editor`, `guardrail-<id>`, `platform-system-admin`, …).

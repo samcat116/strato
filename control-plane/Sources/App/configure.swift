@@ -827,6 +827,7 @@ public func configure(_ app: Application) async throws {
     // instead of a scope enum a separate middleware did (STR-115).
     app.migrations.add(AddCredentialRestrictions())
     app.migrations.add(AddCredentialToIAMDecisionLog())
+    app.migrations.add(CanonicalizeIAMDecisionLog())
 
     // ADR 0001 stage 5 (STR-148): volumes become desired state. The columns
     // that make a volume a converging, finalizable resource, and the widened

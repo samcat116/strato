@@ -413,9 +413,8 @@ final class IAMWhoCanTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     AuthorizationController.WhoCanRequest(
-                        resourceType: "sandbox_snapshot",
-                        resourceId: snapshot.id!.uuidString,
-                        action: "sandbox:restore"
+                        action: "sandbox:restore",
+                        node: IAMNode(type: .sandboxSnapshot, id: snapshot.id!)
                     ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -541,21 +540,21 @@ final class IAMWhoCanTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     AuthorizationController.WhoCanRequest(
-                        resourceType: "virtual_machine",
-                        resourceId: tree.vm.id!.uuidString,
-                        action: "vm:create"
+                        action: "vm:create",
+                        node: IAMNode(type: .virtualMachine, id: tree.vm.id!)
                     ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
                 let decoded = try res.content.decode(AuthorizationController.WhoCanResponse.self)
+                #expect(decoded.node == IAMNode(type: .virtualMachine, id: tree.vm.id!))
                 #expect(decoded.ancestors.count == 5)
                 #expect(decoded.principals.contains { $0.principal.id == grantee.id! && $0.source == .binding })
             }
         }
     }
 
-    @Test("who-can rejects an unknown resource type as a bad request, not a denial")
-    func whoCanUnknownType() async throws {
+    @Test("who-can rejects an unknown action as a bad request, not a denial")
+    func whoCanUnknownAction() async throws {
         try await withApp { app in
             let builder = TestDataBuilder(db: app.db)
             let caller = try await builder.createUser(
@@ -566,7 +565,7 @@ final class IAMWhoCanTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     AuthorizationController.WhoCanRequest(
-                        resourceType: "toaster", resourceId: UUID().uuidString, action: "vm:read"))
+                        action: "toaster:read", node: IAMNode(type: .virtualMachine, id: UUID())))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }
@@ -591,9 +590,8 @@ final class IAMWhoCanTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     AuthorizationController.WhoCanRequest(
-                        resourceType: "virtual_machine",
-                        resourceId: tree.vm.id!.uuidString,
-                        action: "vm:create"
+                        action: "vm:create",
+                        node: IAMNode(type: .virtualMachine, id: tree.vm.id!)
                     ))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -614,9 +612,8 @@ final class IAMWhoCanTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     AuthorizationController.WhoCanRequest(
-                        resourceType: "virtual_machine",
-                        resourceId: tree.vm.id!.uuidString,
-                        action: "vm:create"
+                        action: "vm:create",
+                        node: IAMNode(type: .virtualMachine, id: tree.vm.id!)
                     ))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
@@ -645,11 +642,11 @@ final class IAMWhoCanTests {
                     AuthorizationController.CheckRequest(
                         checks: [
                             .init(
-                                key: "read", resourceType: "virtual_machine",
-                                resourceId: tree.vm.id!.uuidString, permission: "vm:read"),
+                                key: "read", action: "vm:read",
+                                node: IAMNode(type: .virtualMachine, id: tree.vm.id!)),
                             .init(
-                                key: "create", resourceType: "virtual_machine",
-                                resourceId: tree.vm.id!.uuidString, permission: "vm:create"),
+                                key: "create", action: "vm:create",
+                                node: IAMNode(type: .virtualMachine, id: tree.vm.id!)),
                         ],
                         principal: .init(type: .user, id: subject.id!)
                     ))

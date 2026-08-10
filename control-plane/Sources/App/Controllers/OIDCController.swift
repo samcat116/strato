@@ -625,7 +625,7 @@ struct OIDCController: RouteCollection {
         guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
-        guard try await req.can("view_organization", on: "organization", id: organizationID.uuidString) else {
+        guard try await req.can("org:read", on: IAMNode(type: .organization, id: organizationID)) else {
             throw Abort(.forbidden, reason: "Access denied to organization")
         }
     }
@@ -634,7 +634,7 @@ struct OIDCController: RouteCollection {
         guard req.auth.get(User.self) != nil else {
             throw Abort(.unauthorized)
         }
-        guard try await req.can("manage_members", on: "organization", id: organizationID.uuidString) else {
+        guard try await req.can("org:update", on: IAMNode(type: .organization, id: organizationID)) else {
             throw Abort(.forbidden, reason: "Admin access required")
         }
     }

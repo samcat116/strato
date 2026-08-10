@@ -15,12 +15,12 @@ per-row mechanism, so the edge is checkable against
 It is a companion to `iam.md`, not a replacement: `iam.md` documents how the
 engine decides; this documents whether the edge asks it the right thing.
 
-The two executable guards derived from this audit:
+The executable guards derived from this audit:
 
-- **Privilege-tier of every legacy gate** —
-  `IAMShadowTranslationTests.translationPrivilegeTiers` pins each legacy
-  permission name to the exact role set its action must sit at. A remap that
-  shifts a gate across tiers (the STR-107 shape) fails the suite.
+- **Canonical route actions** — every guarded route names a registry action
+  and IAM node directly. Middleware and privilege-tier tests pin those actions
+  to their intended role sets. STR-228 removed the legacy translation table
+  and its translation-specific tests.
 - **Every authorization denial is attributable** — credential refusals write a
   `credential_restricted` row to `iam_decision_logs`
   (`APIKeyAuthenticatorTests.testScopeDenialRecorded`); previously they were the
@@ -32,9 +32,9 @@ The two executable guards derived from this audit:
 
 ## 1. Gate → action → roles (the legacy vocabulary)
 
-`IAMActionTranslation` maps each legacy permission name onto a registry action.
-The audit confirmed every mapping resolves to an action at the privilege level
-its call sites intend, with the exceptions noted. "Roles" is
+This table records the vocabulary that existed when the STR-116 audit ran.
+STR-228 later converted every call site to the action in the "Resolves to"
+column and deleted `IAMActionTranslation`. "Roles" is
 `IAMRoleRegistry.roles(granting:)` for the resolved action — the set a binding
 must name to pass the gate.
 
@@ -75,11 +75,10 @@ site — `iam:setPolicy` for bindings, `quota:manage` for quotas,
 
 ### Benign edge cases the audit surfaced (no defect, worth recording)
 
-- **`update_project` gates image creation** (`ImageController.create`) while
-  every other resource create uses a `create_*` permission. Both are editor
-  tier, so image creation demands `project:update` rather than an
-  `image:create` — a stricter, not weaker, gate. Cosmetic inconsistency, not a
-  hole.
+- **`update_project` gated image creation** (`ImageController.create`) while
+  every other resource create used a service-specific create permission. Both
+  were editor tier, so this was not a privilege hole. STR-228 retired the
+  inconsistency: image creation now asks `image:create` on the project.
 - **`manage_ou` / `view_ou` are dead.** Folder-scoped authorization resolves to
   the *root organization's* `manage_members` / `view_organization` throughout
   (`ResourceQuotaController`, `OrganizationalUnitController`), so an org admin

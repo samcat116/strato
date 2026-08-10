@@ -119,9 +119,9 @@ Phases; each landed independently:
    run SpiceDB. The decision log keeps its own knobs
    (`IAM_DECISION_LOG_ENABLED` / `IAM_DECISION_LOG_RETENTION_DAYS` /
    `IAM_DECISION_LOG_MAX_QUEUE_DEPTH` / `IAM_DECISION_LOG_MAX_BATCH_SIZE`),
-   and the decision-log API keeps the historical
-   `spicedbPermission`/`spicedbDecision` field names for compatibility
-   (`spicedbDecision` is always `none` on new rows).
+   and initially kept historical `spicedbPermission`/`spicedbDecision` fields
+   for compatibility. STR-228 later removed that vocabulary; current rows and
+   APIs expose canonical `action`, node, and `decision` fields directly.
 
    **Upgrade constraint:** a deployment must pass through the phase-5
    cutover release — whose boot-time backfill exported the resource-level
@@ -149,13 +149,10 @@ rollback window, while SpiceDB remained deployed, each check with a
 SpiceDB-vocabulary equivalent also asked SpiceDB in a background task and
 recorded both verdicts, so the mismatch surface kept watching for
 regressions. That reverse shadow ended when #483 deleted SpiceDB (its kill
-switch, `IAM_SHADOW_EVAL_ENABLED`, went with it); the decision log stays,
-recording the Cedar verdict alone. The
-`spicedb_permission`/`spicedb_decision` columns — and the
-`spicedbPermission`/`spicedbDecision` API fields — keep their historical
-names for compatibility: the former carries the legacy-vocabulary question
-as asked at the check site, the latter is always `none` on rows written
-after the removal.
+switch, `IAM_SHADOW_EVAL_ENABLED`, went with it); the decision log stayed,
+recording the Cedar verdict alone. STR-228 later removed the historical
+translation/comparison columns and API fields, leaving the canonical action,
+node, and decision as the log contract.
 
 The burn-down ran on the decision-log summary
 (`GET /api/iam/decision-logs`, `/summary`, `?mismatchesOnly=true`); the

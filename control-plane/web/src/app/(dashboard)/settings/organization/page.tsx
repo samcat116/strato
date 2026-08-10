@@ -48,15 +48,14 @@ export default function OrganizationSettingsPage() {
     id
       ? [
           {
-            key: "manage_members",
-            resourceType: "organization",
-            resourceId: id,
-            permission: "manage_members",
+            key: "update_org",
+            action: "org:update",
+            node: { type: "organization", id },
           },
         ]
       : []
   );
-  const canManageMembers = permissions.manage_members;
+  const canManageMembers = permissions.update_org;
 
   // Set form data when org loads
   useEffect(() => {

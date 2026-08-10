@@ -29,7 +29,7 @@ struct LogsController: RouteCollection {
 
         // Verify the VM exists and enforce the per-VM read permission through
         // the evaluator (defense in depth alongside AuthorizationMiddleware).
-        _ = try await req.authorizedVM(vmId, permission: "read")
+        _ = try await req.authorizedVM(vmId, action: "vm:read")
 
         // Check if Loki is enabled
         guard req.application.lokiEnabled else {
@@ -79,7 +79,7 @@ struct LogsController: RouteCollection {
         // Verify the sandbox exists and enforce the per-sandbox read
         // permission through the evaluator (defense in depth alongside
         // AuthorizationMiddleware).
-        _ = try await req.authorizedSandbox(sandboxId, permission: "read")
+        _ = try await req.authorizedSandbox(sandboxId, action: "sandbox:read")
 
         // Check if Loki is enabled
         guard req.application.lokiEnabled else {

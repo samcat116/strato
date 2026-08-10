@@ -17,13 +17,12 @@ struct AuthorizationController: RouteCollection {
         authorization.post("who-can", use: whoCan)
     }
 
-    struct PermissionCheckItem: Content {
+    struct ActionCheckItem: Content {
         /// Opaque client-chosen id echoed back in the response, so the caller can
         /// correlate answers to the UI element they gate.
         let key: String
-        let resourceType: String
-        let resourceId: String
-        let permission: String
+        let action: String
+        let node: IAMNode
     }
 
     /// The subject of a check, when it is not the caller.
@@ -33,13 +32,13 @@ struct AuthorizationController: RouteCollection {
     }
 
     struct CheckRequest: Content {
-        let checks: [PermissionCheckItem]
+        let checks: [ActionCheckItem]
         /// When present, the checks are evaluated for this principal instead of
         /// the caller. Admin-gated, and answered from the bindings table — see
         /// `check`.
         let principal: PrincipalRequest?
 
-        init(checks: [PermissionCheckItem], principal: PrincipalRequest? = nil) {
+        init(checks: [ActionCheckItem], principal: PrincipalRequest? = nil) {
             self.checks = checks
             self.principal = principal
         }
@@ -51,7 +50,7 @@ struct AuthorizationController: RouteCollection {
 
     /// POST /api/authorization/check
     ///
-    /// Body: `{ "checks": [ { "key", "resourceType", "resourceId", "permission" } ],
+    /// Body: `{ "checks": [ { "key", "action", "node": { "type", "id" } } ],
     ///          "principal": { "type", "id" }? }`
     /// Returns: `{ "results": { "<key>": true/false, ... } }`
     ///
@@ -62,13 +61,11 @@ struct AuthorizationController: RouteCollection {
     ///
     /// - **No `principal`** (the caller asks about themselves): the
     ///   authoritative enforcement path (`req.can`), which records a decision
-    ///   log row. `permission` accepts an IAM action name (`vm:start`) or, for
-    ///   callers not yet migrated, a legacy permission name (`manage_project`),
-    ///   translated the same way `req.can` translates.
+    ///   log row.
     /// - **With `principal`**: admin-gated reporting (`WhoCanService.can`) —
     ///   same decision, no decision-log row, plus the reachability gates a
     ///   real request would have hit first (disabled or nonexistent principals
-    ///   answer false). `permission` is an IAM action name. A *group*
+    ///   answer false). A *group*
     ///   principal is answered from its bindings — a group never reaches the
     ///   evaluator itself.
     ///
@@ -102,53 +99,12 @@ struct AuthorizationController: RouteCollection {
         // endpoint exists to avoid.
         var asked: [(key: String, action: String, node: IAMNode)] = []
         var nodesByAction: [String: [IAMNode]] = [:]
-        // Keyed by action *and* node, because one batch may ask two legacy
-        // permissions about the same resource — `read` and `start` on one VM is
-        // exactly what a UI rendering per-resource action buttons sends. They
-        // translate to different actions, so a node-keyed map would let the
-        // second phrasing overwrite the first and log one of the two decisions
-        // under the wrong verb.
-        var legacyEquivalents: [String: [IAMNode: LegacyCheckEquivalent]] = [:]
         var results: [String: Bool] = [:]
 
         for item in payload.checks {
-            // Action names carry a `:`; anything else is the legacy
-            // vocabulary and goes through the same translation as `req.can`.
-            if item.permission.contains(":") {
-                let node = try IAMNode(resourceType: item.resourceType, resourceId: item.resourceId)
-                asked.append((item.key, item.permission, node))
-                nodesByAction[item.permission, default: []].append(node)
-                continue
-            }
-            guard
-                let translation = IAMActionTranslator.translate(
-                    permission: item.permission,
-                    resourceType: item.resourceType,
-                    resourceID: item.resourceId,
-                    path: req.url.path)
-            else {
-                // Untranslatable fails closed — denied, logged, and recorded as
-                // `untranslated`. Routed through the per-check path so there is
-                // one place that decides what an unmapped pair means.
-                results[item.key] = try await IAMAuthorizer.checkLegacyVocabulary(
-                    principal: actingPrincipal,
-                    permission: item.permission,
-                    resourceType: item.resourceType,
-                    resourceID: item.resourceId,
-                    context: context,
-                    state: req.iamAuthState,
-                    cache: req.iamCache,
-                    app: req.application,
-                    db: req.db
-                )
-                continue
-            }
-            asked.append((item.key, translation.action, translation.node))
-            nodesByAction[translation.action, default: []].append(translation.node)
-            // The decision log records what was literally asked at the check
-            // site, not a back-translation.
-            legacyEquivalents[translation.action, default: [:]][translation.node] = LegacyCheckEquivalent(
-                permission: item.permission, resourceType: item.resourceType, resourceID: item.resourceId)
+            try Self.validate(action: item.action, on: item.node)
+            asked.append((item.key, item.action, item.node))
+            nodesByAction[item.action, default: []].append(item.node)
         }
 
         var decisions: [String: [IAMNode: CedarCheckDecision]] = [:]
@@ -157,7 +113,6 @@ struct AuthorizationController: RouteCollection {
                 principal: actingPrincipal,
                 action: action,
                 nodes: nodes,
-                legacyEquivalents: legacyEquivalents[action] ?? [:],
                 context: context,
                 state: req.iamAuthState,
                 cache: req.iamCache,
@@ -173,7 +128,7 @@ struct AuthorizationController: RouteCollection {
 
     /// Evaluate checks on behalf of another principal, from the bindings table.
     private func checkForPrincipal(
-        _ principal: PrincipalRequest, _ checks: [PermissionCheckItem], req: Request
+        _ principal: PrincipalRequest, _ checks: [ActionCheckItem], req: Request
     ) async throws -> CheckResponse {
         // Gate each distinct resource once: a batch may ask fifty questions
         // about the same VM, and the gate is a tree walk plus evaluator calls.
@@ -181,12 +136,12 @@ struct AuthorizationController: RouteCollection {
         var asked: [(key: String, action: String, node: IAMNode)] = []
         var nodesByAction: [String: [IAMNode]] = [:]
         for item in checks {
-            let node = try IAMNode(resourceType: item.resourceType, resourceId: item.resourceId)
-            if gated.insert(node).inserted {
-                try await Self.requirePolicyRead(on: node, req: req)
+            try Self.validate(action: item.action, on: item.node)
+            if gated.insert(item.node).inserted {
+                try await Self.requirePolicyRead(on: item.node, req: req)
             }
-            asked.append((item.key, item.permission, node))
-            nodesByAction[item.permission, default: []].append(node)
+            asked.append((item.key, item.action, item.node))
+            nodesByAction[item.action, default: []].append(item.node)
         }
 
         // One batch per distinct action, as in `check`.
@@ -213,14 +168,13 @@ struct AuthorizationController: RouteCollection {
     // MARK: - who-can
 
     struct WhoCanRequest: Content {
-        let resourceType: String
-        let resourceId: String
         let action: String
+        let node: IAMNode
     }
 
     struct WhoCanResponse: Content {
-        let resource: IAMNode
         let action: String
+        let node: IAMNode
         /// The chain the answer was assembled from, resource first — makes an
         /// inherited grant explicable without a second round trip.
         let ancestors: [IAMNode]
@@ -245,7 +199,7 @@ struct AuthorizationController: RouteCollection {
 
     /// POST /api/authorization/who-can
     ///
-    /// Body: `{ "resourceType", "resourceId", "action" }`
+    /// Body: `{ "action", "node": { "type", "id" } }`
     /// Returns every principal that can perform the action, with the reason.
     ///
     /// Answers may include principals from other organizations: cross-org
@@ -257,16 +211,16 @@ struct AuthorizationController: RouteCollection {
         }
 
         let payload = try req.content.decode(WhoCanRequest.self)
-        let node = try IAMNode(resourceType: payload.resourceType, resourceId: payload.resourceId)
-        try await Self.requirePolicyRead(on: node, req: req)
+        try Self.validate(action: payload.action, on: payload.node)
+        try await Self.requirePolicyRead(on: payload.node, req: req)
 
-        let ancestors = try await IAMResourceTree.ancestors(of: node, on: req.db)
+        let ancestors = try await IAMResourceTree.ancestors(of: payload.node, on: req.db)
         let result = try await WhoCanService.whoCan(
-            action: payload.action, node: node, app: req.application, on: req.db)
+            action: payload.action, node: payload.node, app: req.application, on: req.db)
 
         return WhoCanResponse(
-            resource: node,
             action: payload.action,
+            node: payload.node,
             ancestors: ancestors,
             principals: result.principals,
             openToAllAuthenticatedUsers: result.openToAllAuthenticatedUsers,
@@ -277,6 +231,17 @@ struct AuthorizationController: RouteCollection {
     }
 
     // MARK: - Helpers
+
+    private static func validate(action: String, on node: IAMNode) throws {
+        guard IAMRoleRegistry.allActions.contains(action) else {
+            throw Abort(.badRequest, reason: "Unknown IAM action '\(action)'")
+        }
+        guard CedarSchemaBuilder.resourceTypes(for: action).contains(node.type.cedarEntityType) else {
+            throw Abort(
+                .badRequest,
+                reason: "IAM action '\(action)' does not apply to '\(node.type.rawValue)'")
+        }
+    }
 
     /// Reading who holds access is itself an administrative act — the answer
     /// lists other people's grants: `iam:readPolicy`, the same gate the

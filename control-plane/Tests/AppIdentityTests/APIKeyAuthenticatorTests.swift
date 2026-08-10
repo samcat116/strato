@@ -544,21 +544,19 @@ struct APIKeyAuthenticatorTests {
         // request doesn't turn this into a flake.
         await app.iamDecisionRecorder.flush()
         let entries = try await IAMDecisionLog.query(on: app.db)
-            .filter(\.$cedarDecision == "credential_restricted")
+            .filter(\.$decision == "credential_restricted")
             .all()
         #expect(entries.count == 1)
         let entry = try #require(entries.first)
         let userID = try user.requireID()
         let apiKeyID = try apiKey.requireID()
         #expect(entry.subject == userID.uuidString)
-        #expect(entry.spicedbPermission == "credential:login_only_mutation")
+        #expect(entry.action == nil)
+        #expect(entry.nodeType == nil)
+        #expect(entry.nodeID == nil)
         #expect(entry.tier == "credential")
         #expect(entry.credentialType == "api_key")
         #expect(entry.credentialID == apiKeyID)
-        // The route, not the credential: the credential has columns of its own
-        // now, so the resource says what was being reached.
-        #expect(entry.resourceType == "route")
-        #expect(entry.resourceID == "POST /resource")
         #expect(entry.path == "/resource")
         #expect(entry.method == "POST")
 

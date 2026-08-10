@@ -47,22 +47,18 @@ struct AgentController: RouteCollection {
         _ = try await req.requireSystemAdmin()
     }
 
-    /// The (resourceType, id) pair naming the scope's owning node for
-    /// permission checks against the IAM hierarchy.
-
-    /// `manage_agents` on the given org/OU scope (system admins pass through
+    /// `agent:manage` on the given org/OU scope (system admins pass through
     /// the evaluator's tier-1 policy).
     private func requireManageAgents(_ req: Request, scope: OrganizationScope) async throws {
-        let resource = scope.checkResource
-        let allowed = try await req.can("manage_agents", on: resource.type, id: resource.id.uuidString)
+        let allowed = try await req.can("agent:manage", on: scope.checkNode)
         guard allowed else {
             throw Abort(.forbidden, reason: "You don't have permission to manage agents for this organization")
         }
     }
 
-    /// The given permission on the agent itself (resolved through the
+    /// The given canonical action on the agent itself (resolved through the
     /// agent's parent scope in the IAM tree).
-    private func requireAgentPermission(_ req: Request, agent: Agent, permission: String) async throws {
+    private func requireAgentAction(_ req: Request, agent: Agent, action: String) async throws {
         // A pre-scoping agent belongs to no org: there is nothing to evaluate
         // against (the evaluator fails closed on its truncated ancestor
         // chain), so only system admins may touch it — the decision-marking
@@ -72,9 +68,9 @@ struct AgentController: RouteCollection {
             _ = try await req.requireSystemAdmin("This agent has no owning organization")
             return
         }
-        let allowed = try await req.can(permission, on: "agent", id: try agent.requireID().uuidString)
+        let allowed = try await req.can(action, on: IAMNode(type: .agent, id: try agent.requireID()))
         guard allowed else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this agent")
+            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this agent")
         }
     }
 
@@ -278,7 +274,7 @@ struct AgentController: RouteCollection {
                 .badRequest,
                 reason: "Site \(siteId)'s organization scope does not contain the enrollment's")
         }
-        let siteAllowed = try await req.can("manage", on: "site", id: siteId.uuidString)
+        let siteAllowed = try await req.can("site:manage", on: IAMNode(type: .site, id: siteId))
         guard siteAllowed else {
             throw Abort(.forbidden, reason: "You don't have 'manage' permission on site \(siteId)")
         }
@@ -566,7 +562,7 @@ struct AgentController: RouteCollection {
         // fleet-wide view comes from the tier-1 `platform-system-admin` policy
         // inside the evaluator, so it is logged and a guardrail can narrow it.
         // A pre-scoping agent has no ancestor chain to evaluate against and
-        // stays system-admin only, as in `requireAgentPermission`. An
+        // stays system-admin only, as in `requireAgentAction`. An
         // organization_id filter narrows the query first — see listSites.
         // The scoped rows are decided in one batch (#687); a scopeless row has
         // no node to batch and is answered without the evaluator.
@@ -598,7 +594,7 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
-        try await requireAgentPermission(req, agent: agent, permission: "view")
+        try await requireAgentAction(req, agent: agent, action: "agent:read")
 
         // Workloads this agent holds that the control plane refused to
         // authorize tearing down (STR-98). Only on the detail view: the list
@@ -683,7 +679,7 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireAgentAction(req, agent: agent, action: "agent:manage")
 
         let body = try req.content.decode(AdoptWorkloadsRequest.self)
         let targetId = agentId.uuidString
@@ -700,7 +696,7 @@ struct AgentController: RouteCollection {
         guard let sourceAgent = try await Agent.find(body.fromAgentId, on: req.db) else {
             throw Abort(.notFound, reason: "Source agent not found")
         }
-        try await requireAgentPermission(req, agent: sourceAgent, permission: "manage")
+        try await requireAgentAction(req, agent: sourceAgent, action: "agent:manage")
         // Compared at the root org, not the exact scope node: re-enrolling a
         // node into a different OU of the same organization is a legitimate
         // move, while landing one tenant's workload rows on another tenant's
@@ -839,7 +835,7 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
-        try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireAgentAction(req, agent: agent, action: "agent:manage")
 
         // Never delete a site's designated network controller while the site
         // still has other members: the controller reference deliberately has
@@ -949,7 +945,7 @@ struct AgentController: RouteCollection {
             throw Abort(.notFound, reason: "Agent not found")
         }
 
-        try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireAgentAction(req, agent: agent, action: "agent:manage")
 
         // Force agent offline in in-memory registry
         await req.agentService.forceUnregisterAgent(agent.identity)
@@ -1032,7 +1028,7 @@ struct AgentController: RouteCollection {
         // workload through re-adoption, so this falls under the same
         // `agent:manage` check — and the same tier-1 foreign-workload forbid —
         // as force-offline and deregister.
-        try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireAgentAction(req, agent: agent, action: "agent:manage")
 
         let request: AgentUpdateRequest
         if req.headers.contentType != nil {
@@ -1213,7 +1209,7 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireAgentAction(req, agent: agent, action: "agent:manage")
 
         guard let assigned = agent.updateDesiredVersion else {
             return try AgentResponse(from: agent)
@@ -1253,7 +1249,7 @@ struct AgentController: RouteCollection {
         guard let agent = try await Agent.find(agentId, on: req.db) else {
             throw Abort(.notFound, reason: "Agent not found")
         }
-        try await requireAgentPermission(req, agent: agent, permission: "manage")
+        try await requireAgentAction(req, agent: agent, action: "agent:manage")
 
         let patch = try req.content.decode(AgentPatchRequest.self)
 

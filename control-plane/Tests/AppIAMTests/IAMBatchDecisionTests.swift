@@ -316,32 +316,27 @@ final class IAMBatchDecisionTests {
             let writes = app.iamDecisionRecorder.writeCount.withLockedValue { $0 }
             #expect(writes == 1, "expected one insert for \(nodes.count) decisions, got \(writes)")
 
-            let actions = Set(try await IAMDecisionLog.query(on: app.db).all().compactMap(\.iamAction))
+            let actions = Set(try await IAMDecisionLog.query(on: app.db).all().compactMap(\.action))
             #expect(actions == ["vm:read"])
         }
     }
 
-    @Test("Two legacy permissions on one resource each log their own phrasing")
-    func batchedLegacyChecksKeepTheirOwnPhrasing() async throws {
+    @Test("Two canonical actions on one resource each log their own decision")
+    func batchedChecksKeepTheirOwnActions() async throws {
         try await withApp { app in
             let fixture = try await buildFixture(app, prefix: "phrase")
             let token = try await fixture.admin.generateAPIKey(on: app.db)
-            let vmID = fixture.vms[0].id!.uuidString
-
-            // `read` and `start` on the *same* VM — what a UI rendering
-            // per-resource action buttons sends. They translate to different
-            // actions on one node, so a node-keyed phrasing map would log one of
-            // them under the other's verb.
+            let node = IAMNode(type: .virtualMachine, id: fixture.vms[0].id!)
+            // `vm:read` and `vm:start` on the same node — what a UI rendering
+            // per-resource action buttons sends.
             try await app.test(.POST, "/api/authorization/check") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     AuthorizationController.CheckRequest(checks: [
                         .init(
-                            key: "read", resourceType: "virtual_machine",
-                            resourceId: vmID, permission: "read"),
+                            key: "read", action: "vm:read", node: node),
                         .init(
-                            key: "start", resourceType: "virtual_machine",
-                            resourceId: vmID, permission: "start"),
+                            key: "start", action: "vm:start", node: node),
                     ]))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -349,12 +344,9 @@ final class IAMBatchDecisionTests {
 
             await app.iamDecisionRecorder.flush()
             let rows = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$resourceID == vmID)
+                .filter(\.$nodeID == fixture.vms[0].id!)
                 .all()
-            // The IAM action each row was decided under, paired with the legacy
-            // verb the caller actually typed. They must line up.
-            let phrasing = Set(rows.compactMap { row in row.iamAction.map { "\($0)=\(row.spicedbPermission)" } })
-            #expect(phrasing == ["vm:read=read", "vm:start=start"])
+            #expect(Set(rows.compactMap(\.action)) == ["vm:read", "vm:start"])
         }
     }
 }

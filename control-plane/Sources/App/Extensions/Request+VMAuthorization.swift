@@ -2,7 +2,7 @@ import Fluent
 import Vapor
 
 extension Request {
-    /// Fetch a VM and enforce a permission on it in one call, through the
+    /// Fetch a VM and enforce a canonical action on it in one call, through the
     /// evaluator.
     ///
     /// This is the per-handler defense-in-depth complement to
@@ -10,22 +10,22 @@ extension Request {
     /// on the middleware's path-prefix guard for object-level authorization.
     ///
     /// - Throws: `.unauthorized` if unauthenticated, `.notFound` if the VM does not
-    ///   exist, `.forbidden` if the user lacks `permission` on this VM.
-    func authorizedVM(_ vmID: UUID, permission: String) async throws -> VM {
+    ///   exist, `.forbidden` if the user lacks `action` on this VM.
+    func authorizedVM(_ vmID: UUID, action: String) async throws -> VM {
         guard let vm = try await VM.find(vmID, on: db) else {
             throw Abort(.notFound)
         }
 
-        try await authorize(permission, on: "virtual_machine", id: vmID.uuidString)
+        try await authorize(action, on: IAMNode(type: .virtualMachine, id: vmID))
 
         return vm
     }
 
     /// Resolve a VM named in a *request body* — the attach/detach endpoints'
     /// second resource — answering `404` for both "no such VM" and "you may not
-    /// `permission` this VM", so the two are indistinguishable (issue #881).
+    /// perform `action` on this VM", so the two are indistinguishable (issue #881).
     ///
-    /// Use this, not `authorizedVM(_:permission:)`, whenever the id came from
+    /// Use this, not `authorizedVM(_:action:)`, whenever the id came from
     /// the body of a request addressed to some *other* resource (a volume, a
     /// security group, a floating IP). The distinction matters because of who
     /// is asking: a caller who reaches `/api/vms/{id}` has been handed that id
@@ -37,7 +37,7 @@ extension Request {
     ///
     /// The cost is deliberate and was weighed once for the whole API rather
     /// than per handler: an authenticated caller who can *see* a VM but lacks
-    /// `permission` on it now gets `404` from these endpoints instead of `403`,
+    /// `action` on it now gets `404` from these endpoints instead of `403`,
     /// which is less informative than it could be for them. `404` is the choice
     /// because it is the answer already given to a resource outside the
     /// caller's reach elsewhere — `LogicalNetworkService.resolveForWorkloadCreate`
@@ -61,9 +61,9 @@ extension Request {
     /// remain separable by timing. Closing that would mean evaluating against a
     /// VM that does not exist, and the severity does not justify it — ids are
     /// random UUIDv4, so latency alone is nothing cheap to sweep.
-    func reachableVM(_ vmID: UUID, permission: String) async throws -> VM {
+    func reachableVM(_ vmID: UUID, action: String) async throws -> VM {
         guard let vm = try await VM.find(vmID, on: db),
-            try await can(permission, on: "virtual_machine", id: vmID.uuidString)
+            try await can(action, on: IAMNode(type: .virtualMachine, id: vmID))
         else {
             throw Abort(.notFound, reason: "VM \(vmID) not found")
         }

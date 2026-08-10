@@ -20,13 +20,12 @@ export default function ProjectDetailPage() {
 
   const { permissions } = usePermissions([
     {
-      key: "manage_project",
-      resourceType: "project",
-      resourceId: projectId,
-      permission: "manage_project",
+      key: "set_policy",
+      action: "iam:setPolicy",
+      node: { type: "project", id: projectId },
     },
   ]);
-  const canManage = permissions.manage_project;
+  const canManage = permissions.set_policy;
 
   return (
     <div className="max-w-5xl mx-auto space-y-6">

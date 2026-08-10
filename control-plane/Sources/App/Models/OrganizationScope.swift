@@ -10,22 +10,8 @@ enum OrganizationScope: Equatable, Sendable {
     case organization(UUID)
     case organizationalUnit(UUID)
 
-    /// The (resourceType, id) pair naming this scope's node in an
-    /// authorization check — checks on scoped infrastructure evaluate against
-    /// the *immediate* owner so OU-scoped resources inherit access up the OU
-    /// chain.
-    var checkResource: (type: String, id: UUID) {
-        switch self {
-        case .organization(let id):
-            return ("organization", id)
-        case .organizationalUnit(let id):
-            return ("organizational_unit", id)
-        }
-    }
-
-    /// The same node as `checkResource`, in the tree vocabulary the batched
-    /// list-filtering path (`Request.canFilter`) speaks. The legacy pair above
-    /// is what the per-item `req.can(_:on:id:)` sites still take.
+    /// The typed IAM node naming this scope's immediate owner. Checks on
+    /// OU-scoped infrastructure inherit access up the OU chain.
     var checkNode: IAMNode {
         switch self {
         case .organization(let id):
