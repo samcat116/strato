@@ -155,8 +155,10 @@ final class VMNetworkSelectionTests {
             // Exercise the same create-derived rows through the wire spec the
             // agent consumes. This is the API-reachable source shape for the
             // existing two-interface domain XML golden.
-            let spec = VMSpecBuilder.buildVMSpec(
-                from: vm, image: image, networkInterfaces: nics,
+            let volumes = try await Volume.query(on: app.db)
+                .filter(\.$vm.$id == vm.id!).all()
+            let spec = try VMSpecBuilder.buildVMSpec(
+                from: vm, image: image, volumes: volumes, networkInterfaces: nics,
                 networks: [try network.requireID(): network])
             #expect(spec.networks.map(\.interfaceId) == nics.map(\.id))
             #expect(spec.networks.map(\.deviceName) == ["net0", "net1"])

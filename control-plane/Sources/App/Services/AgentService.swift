@@ -2330,6 +2330,23 @@ actor AgentService {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
 
+                let currentVMID = try currentVM.requireID()
+                let bootVolumes = try await Volume.query(on: tx)
+                    .filter(\.$vm.$id == currentVMID)
+                    .filter(\.$volumeType == .boot)
+                    .filter(\.$desiredStatus == .present)
+                    .with(\.$pool)
+                    .all()
+                guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
+                    throw Abort(
+                        .internalServerError,
+                        reason: "VM \(vmId) must have exactly one managed boot volume before placement")
+                }
+                let poolMembers = bootVolume.pool?.memberAgentIds ?? []
+                let storageEligibleAgents = schedulableAgents.filter { agent in
+                    poolMembers.isEmpty || poolMembers.contains(agent.id)
+                }
+
                 // A network pinned to a site exists only in that site's OVN
                 // deployment, so it pins the VM's placement (issue #343).
                 let requiredSiteID = try await pinnedSiteID(for: currentVM, on: tx)
@@ -2343,7 +2360,7 @@ actor AgentService {
                         requirements: SchedulerService.placementRequirements(
                             for: currentVM, architecture: imageArchitecture, siteID: requiredSiteID),
                         vmId: vmId,
-                        from: schedulableAgents,
+                        from: storageEligibleAgents,
                         coordination: app.coordination,
                         strategy: strategy,
                         vmName: currentVM.name
@@ -2365,6 +2382,24 @@ actor AgentService {
                 // of the agent's desired state and every sync path carries it.
                 currentVM.hypervisorId = selectedAgentId
                 try await currentVM.save(on: tx)
+
+                let bootVolumeID = try bootVolume.requireID()
+                let existingReplicas = try await VolumeReplica.query(on: tx)
+                    .filter(\.$volume.$id == bootVolumeID)
+                    .all()
+                guard existingReplicas.isEmpty else {
+                    throw Abort(
+                        .conflict,
+                        reason: "Boot volume \(bootVolumeID) was already placed before VM \(vmId)")
+                }
+                bootVolume.attachedAgentId = selectedAgentId
+                try await bootVolume.save(on: tx)
+                try await VolumeReplica(
+                    volumeID: bootVolumeID,
+                    agentId: selectedAgentId,
+                    state: .provisioning,
+                    generation: bootVolume.generation
+                ).save(on: tx)
                 return selectedAgentId
             }
         } catch {

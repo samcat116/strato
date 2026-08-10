@@ -64,10 +64,9 @@ actor FirecrackerService: HypervisorService {
     ) async throws {
         logger.info("Creating Firecracker VM", metadata: ["vmId": .string(vmId)])
 
-        // Boot parameters start from the spec's direct-kernel fields (legacy
-        // pre-provisioned host paths). When the image supplies kernel/rootfs
-        // artifacts, they take precedence and are resolved to agent-local cache
-        // paths below — the control plane can't know host paths.
+        // Boot parameters start from the spec's direct-kernel fields. When the
+        // image supplies kernel artifacts, they take precedence and are
+        // resolved to agent-local cache paths below.
         var kernelPath: String?
         var initramfsPath: String?
         var cmdline: String?
@@ -100,12 +99,27 @@ actor FirecrackerService: HypervisorService {
             throw HypervisorServiceError.hypervisorNotInstalled(firecrackerBinaryPath)
         }
 
-        // Realize kernel/rootfs from the image's artifact set when present.
-        var rootDrive: (id: String, path: String, readOnly: Bool)?
+        // The root filesystem is always the canonical managed boot volume. Its
+        // image bytes are materialized by the volume reconciler; this driver
+        // fetches only the direct-kernel artifacts it consumes itself.
+        guard let bootVolume = spec.volumes.first(where: { $0.bootOrder == 0 }),
+            let bootPath = bootVolume.storagePath
+        else {
+            throw HypervisorServiceError.invalidConfiguration(
+                "Firecracker VM \(vmId) has no realized managed boot volume")
+        }
+        guard FileManager.default.fileExists(atPath: bootPath) else {
+            throw HypervisorServiceError.diskError(
+                "boot volume \(bootVolume.volumeId) for VM \(vmId) has no file at \(bootPath) on this host")
+        }
+        let rootDrive = (
+            id: bootVolume.volumeId.uuidString, path: bootPath, readOnly: bootVolume.readonly
+        )
+
         if let imageInfo {
-            guard let storage, let imageSource else {
+            guard let imageSource else {
                 throw HypervisorServiceError.invalidConfiguration(
-                    "Firecracker cannot realize typed image artifacts without storage and image-source services")
+                    "Firecracker cannot realize typed kernel artifacts without an image-source service")
             }
             guard imageInfo.artifact(ofKind: .kernel) != nil else {
                 throw HypervisorServiceError.invalidConfiguration(
@@ -136,38 +150,15 @@ actor FirecrackerService: HypervisorService {
                     initramfsPath = nil
                 }
 
-                // Firecracker attaches drives as raw block devices. The storage
-                // layer converts the artifact (e.g. a qcow2 rootfs) to raw during
-                // materialization; a plain copy of a qcow2 file would hand the
-                // guest an unbootable rootfs. The typed rootfs is mandatory;
-                // a disk image is a different artifact role, never a fallback.
-                let attachment = try await storage.materializeDisk(
-                    at: "\(vmStoragePath)/\(vmId)/rootfs.raw",
-                    from: imageInfo,
-                    format: .raw,
-                    artifactKind: .rootfs
-                )
-                rootDrive = (id: "rootfs", path: attachment.path, readOnly: false)
             } catch {
-                // Realizing the image's boot artifacts is all-or-nothing: a
-                // fetched kernel without its matching rootfs would boot the guest
-                // against the wrong or no root filesystem. Fail the create rather
-                // than falling through to the legacy spec-volume path.
                 logger.error(
-                    "Failed to realize boot artifacts from image",
+                    "Failed to realize kernel artifacts from image",
                     metadata: [
                         "vmId": .string(vmId),
                         "error": .string(error.localizedDescription),
                     ])
                 throw error
             }
-        }
-
-        if rootDrive == nil,
-            let volume = spec.volumes.first,
-            let storagePath = volume.storagePath
-        {
-            rootDrive = (id: volume.deviceName.rawValue, path: storagePath, readOnly: volume.readonly)
         }
 
         // Firecracker cannot boot without a kernel — from the image or the spec.
@@ -194,15 +185,12 @@ actor FirecrackerService: HypervisorService {
         )
         try await manager.configureBootSource(bootSource)
 
-        // Configure root drive
-        if let rootDrive {
-            let drive = Drive.rootDrive(
-                id: rootDrive.id,
-                path: rootDrive.path,
-                readOnly: rootDrive.readOnly
-            )
-            try await manager.configureDrive(drive)
-        }
+        let drive = Drive.rootDrive(
+            id: rootDrive.id,
+            path: rootDrive.path,
+            readOnly: rootDrive.readOnly
+        )
+        try await manager.configureDrive(drive)
 
         // Configure networking: one interface per resolved attachment (validated
         // above to be .tap)

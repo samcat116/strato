@@ -672,6 +672,36 @@ final class VolumeConvergenceTests {
         }
     }
 
+    @Test("Reaping a boot volume clears its parent VM finalizer")
+    func bootVolumeReapAcknowledgesParent() async throws {
+        try await withVolumeApp { app, builder, user, project in
+            let vm = try await builder.createVM(name: "boot-owner", project: project)
+            let vmID = try vm.requireID()
+            vm.setDesiredStatus(.absent)
+            vm.finalizers = [
+                ResourceFinalizer.agentAbsent.rawValue,
+                ResourceFinalizer.bootVolumeAbsent.rawValue,
+            ]
+            try await vm.save(on: app.db)
+
+            let boot = Volume(
+                name: "boot", description: "", projectID: try project.requireID(),
+                environment: vm.environment, size: vm.disk, volumeType: .boot,
+                createdByID: try user.requireID())
+            boot.$vm.id = vmID
+            boot.deviceName = "disk0"
+            boot.bootOrder = 0
+            boot.setDesiredStatus(.absent)
+            try await boot.save(on: app.db)
+
+            #expect(try await Volume.reap(boot, on: app.db, app: app))
+            #expect(try await Volume.find(try boot.requireID(), on: app.db) == nil)
+
+            let parent = try #require(try await VM.find(vmID, on: app.db))
+            #expect(parent.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
+        }
+    }
+
     /// Reaping a volume must revoke its snapshots' bindings *before* the FK
     /// cascade takes those rows away — the same read-before-delete ordering the
     /// VM and sandbox reaps have.

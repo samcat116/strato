@@ -225,6 +225,52 @@ struct VMManifestStoreTests {
         #expect(quarantined.cpus == 8)
     }
 
+    @Test("A path-only manifest disk recovers only from a managed desired identity")
+    func recoversPathOnlyVolumeIdentity() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let store = makeStore(dir: dir)
+        let volumeId = UUID()
+        let legacyPath = "/var/lib/strato/vms/vm-a/disk.qcow2"
+        let managedPath = "/var/lib/strato/vms/vm-a/rootfs.raw"
+        let legacySpec = VMSpec(
+            cpus: 2, memoryBytes: 1_073_741_824, boot: .disk(firmware: nil),
+            volumes: [
+                VolumeSpec(
+                    volumeId: volumeId, deviceName: .disk(0), storagePath: legacyPath,
+                    bootOrder: nil)
+            ])
+        store.save([
+            "vm-a": VMManifestEntry(
+                hypervisorType: .firecracker, spec: legacySpec, vsockCID: 19)
+        ])
+
+        var raw = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: store.path)))
+                as? [String: Any])
+        var entry = try #require(raw["vm-a"] as? [String: Any])
+        var spec = try #require(entry["spec"] as? [String: Any])
+        var volumes = try #require(spec["volumes"] as? [[String: Any]])
+        volumes[0].removeValue(forKey: "volumeId")
+        spec["volumes"] = volumes
+        entry["spec"] = spec
+        raw["vm-a"] = entry
+        try JSONSerialization.data(withJSONObject: raw).write(to: URL(fileURLWithPath: store.path))
+
+        let quarantined = try #require(store.load().loadedQuarantined["vm-a"])
+        let desired = legacySpec.withVolumes([
+            VolumeSpec(
+                volumeId: volumeId, deviceName: .disk(0), storagePath: managedPath,
+                bootOrder: 0)
+        ])
+        let recovered = try #require(
+            quarantined.recoveringManagedVolumeIdentities(from: desired))
+        #expect(recovered.vsockCID == 19)
+        #expect(recovered.spec.volumes.count == 1)
+        #expect(recovered.spec.volumes[0].volumeId == volumeId)
+        #expect(recovered.spec.volumes[0].storagePath == managedPath)
+    }
+
     @Test("Reserved-disk total treats missing diskBytes and sandbox entries as zero")
     func totalReservedDiskTreatsMissingAsZero() {
         let withDisk = VMSpec(

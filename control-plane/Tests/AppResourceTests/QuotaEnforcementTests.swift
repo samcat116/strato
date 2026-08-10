@@ -559,6 +559,7 @@ final class QuotaEnforcementTests {
             #expect(afterCreate.reservedMemory == gb(4))
             #expect(afterCreate.reservedStorage == gb(20))
             #expect(afterCreate.vmCount == 1)
+            #expect(afterCreate.volumeCount == 1)
 
             // Let the background create dispatch (which fails — no agents run
             // in tests) settle before the DELETE, so the two are not racing to
@@ -580,6 +581,11 @@ final class QuotaEnforcementTests {
             #expect(afterDelete.reservedMemory == 0)
             #expect(afterDelete.reservedStorage == 0)
             #expect(afterDelete.vmCount == 0)
+            #expect(afterDelete.volumeCount == 0)
+            #expect(
+                try await Volume.query(on: app.db)
+                    .filter(\.$vm.$id == createdVMID!)
+                    .count() == 0)
         }
     }
 

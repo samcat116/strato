@@ -579,6 +579,14 @@ public protocol ReconcileActuator: Sendable {
     /// of the plan and makes the observed report carry `volumes: nil`, which
     /// the control plane already reads as "no opinion".
     func observedVolumePresence() async -> [String: VolumePresence]?
+    /// Before volume presence is sampled, adopt any historical VM-side path
+    /// that now arrives with a required managed volume identity. This is the
+    /// host-state half of the STR-231 database cutover: it must run before the
+    /// planner could mistake old bytes for an absent volume and materialize a
+    /// fresh image over the guest's history.
+    func prepareManagedVolumeInventory(
+        from desiredVMs: [DesiredVMState], desiredVolumes: [DesiredVolumeState]
+    ) async
     /// Snapshot of every snapshot artifact this host holds (STR-150), across
     /// all three families, or nil when the agent cannot enumerate them.
     ///
@@ -619,6 +627,12 @@ public protocol ReconcileActuator: Sendable {
     /// Called after every work item finishes (success or failure) so the agent
     /// can push a fresh `ObservedStateReport` to the control plane.
     func convergenceDidChange() async
+}
+
+extension ReconcileActuator {
+    public func prepareManagedVolumeInventory(
+        from _: [DesiredVMState], desiredVolumes _: [DesiredVolumeState]
+    ) async {}
 }
 
 /// Why a volume could not be converged (STR-148). Every case carries a
@@ -662,11 +676,11 @@ public enum VolumeConvergenceError: ClassifiableError, LocalizedError, Sendable 
 /// classifications as `VolumeConvergenceError`, and for the same reason: the
 /// difference decides whether an operator ever sees it.
 public enum SnapshotConvergenceError: ClassifiableError, LocalizedError, Sendable {
-    /// Something this host cannot do however many times it is asked: capture a
-    /// volume snapshot of an attached volume, export a family that has no
-    /// off-node representation, run a backend it does not have. Permanent, so
-    /// the retry policy suppresses it and the control plane degrades the
-    /// artifact with the reason instead of waiting out a completion budget.
+    /// Something this host cannot do however many times it is asked: export a
+    /// family that has no off-node representation, or run a backend it does
+    /// not have. Permanent, so the retry policy suppresses it and the control
+    /// plane degrades the artifact with the reason instead of waiting out a
+    /// completion budget.
     case unsupported(String)
     /// The artifact's *parent* has not converged yet — the volume or VM being
     /// captured may be mid-create in this very sync. A dependency wait: it
@@ -1060,6 +1074,11 @@ public actor Reconciler {
                 await actuator.convergenceDidChange()
             }
             return
+        }
+
+        if let desiredVolumes = message.volumes {
+            await actuator.prepareManagedVolumeInventory(
+                from: message.vms, desiredVolumes: desiredVolumes)
         }
 
         let presentVMs = await actuator.observedPresence()

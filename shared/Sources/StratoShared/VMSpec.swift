@@ -56,8 +56,8 @@ public struct VMSpec: Codable, Sendable {
     /// from callers that want today's behavior; consumers treat nil as
     /// `MachineProfile.default` (both off).
     public let machine: MachineProfile?
-    /// Volumes to attach, in boot order. May be empty when the boot volume is
-    /// materialized agent-side from an image (see `ImageInfo`).
+    /// Managed volumes to attach, in boot order. Every VM has exactly one boot
+    /// volume; image materialization belongs to that volume's desired state.
     public let volumes: [VolumeSpec]
     /// Network interfaces, each referencing a logical network by name.
     public let networks: [NetworkSpec]
@@ -275,8 +275,8 @@ public enum BootSource: Codable, Sendable {
 
 /// A volume to attach, referenced by identity rather than device realization.
 public struct VolumeSpec: Codable, Sendable {
-    /// The managed volume this refers to, when it is one (nil for legacy single-disk VMs).
-    public let volumeId: UUID?
+    /// Stable identity of the managed volume this attachment realizes.
+    public let volumeId: UUID
     /// Stable device identifier within the VM (e.g. "disk0", "vdb"). Validated
     /// by its type, so a spec cannot carry a name a hypervisor would refuse
     /// (STR-129); unique per VM, enforced by the control plane's
@@ -298,7 +298,7 @@ public struct VolumeSpec: Codable, Sendable {
     public let ioLimits: VolumeIOLimits?
 
     public init(
-        volumeId: UUID? = nil,
+        volumeId: UUID,
         deviceName: VolumeDeviceName,
         storagePath: String? = nil,
         readonly: Bool = false,

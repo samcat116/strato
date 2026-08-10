@@ -53,7 +53,8 @@ struct VMSpecTests {
                 VolumeSpec(
                     volumeId: Fixtures.uuidA, deviceName: .disk(0), storagePath: "/v/disk0.qcow2", readonly: false,
                     bootOrder: 0),
-                VolumeSpec(volumeId: nil, deviceName: .disk(1), storagePath: nil, readonly: true, bootOrder: 1),
+                VolumeSpec(
+                    volumeId: Fixtures.uuidB, deviceName: .disk(1), storagePath: nil, readonly: true, bootOrder: 1),
             ],
             networks: [
                 NetworkSpec(
@@ -75,7 +76,7 @@ struct VMSpecTests {
         #expect(decoded.volumes[0].deviceName.rawValue == "disk0")
         #expect(decoded.volumes[0].storagePath == "/v/disk0.qcow2")
         #expect(decoded.volumes[0].bootOrder == 0)
-        #expect(decoded.volumes[1].volumeId == nil)
+        #expect(decoded.volumes[1].volumeId == Fixtures.uuidB)
         #expect(decoded.volumes[1].readonly)
         #expect(decoded.volumes[1].storagePath == nil)
 

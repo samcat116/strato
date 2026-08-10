@@ -33,7 +33,6 @@ final class DesiredStateAssemblerTests {
             let project = try await builder.createProject(
                 name: "Metadata Project", description: "Project for metadata assembly tests",
                 organization: org)
-
             try await test(app, org, project)
         } catch {
             try await app.shutdownForTesting()
@@ -139,11 +138,13 @@ final class DesiredStateAssemblerTests {
             let front = LogicalNetwork(
                 name: "front", subnet: "10.40.0.0/24", gateway: "10.40.0.1",
                 subnet6: "fd40::/64", gateway6: "fd40::1", projectID: try project.requireID(),
-                dnsServers: ["10.40.0.53", "fd40::53"], domainName: "front.example")
+                dnsServers: ["10.40.0.53", "fd40::53"], domainName: "front.example",
+                siteID: try site.requireID())
             try await front.save(on: app.db)
             let back = LogicalNetwork(
                 name: "back", subnet: "10.41.0.0/24", gateway: "10.41.0.1",
-                projectID: try project.requireID(), dnsServers: ["10.41.0.53"])
+                projectID: try project.requireID(), dnsServers: ["10.41.0.53"],
+                siteID: try site.requireID())
             try await back.save(on: app.db)
 
             // Attached out of order, so ordering can only come from
@@ -348,7 +349,7 @@ final class DesiredStateAssemblerTests {
 
         let loadedNetwork = LogicalNetwork(
             id: UUID(), name: "loaded", subnet: "10.60.0.0/24", gateway: "10.60.0.1",
-            projectID: vm.$project.id)
+            projectID: vm.$project.id, siteID: UUID())
         let missingNetworkID = UUID()
 
         func nic(_ device: String, order: Int, network: UUID, mac: String) -> VMNetworkInterface {
@@ -370,8 +371,15 @@ final class DesiredStateAssemblerTests {
             from: interfaces, networks: [loadedNetwork.id!: loadedNetwork])
         #expect(resolved.map(\.interface.deviceName) == ["net0", "net2"])
 
-        let spec = VMSpecBuilder.buildVMSpecWithVolumes(
-            from: vm, image: nil, volumes: [], resolvedInterfaces: resolved)
+        let boot = Volume(
+            id: UUID(), name: "boot", description: "", projectID: vm.$project.id,
+            environment: vm.environment, size: vm.disk, volumeType: .boot,
+            status: .attached, createdByID: UUID())
+        boot.$vm.id = vm.id!
+        boot.deviceName = VolumeDeviceName.disk(0).rawValue
+        boot.bootOrder = 0
+        let spec = try VMSpecBuilder.buildVMSpec(
+            from: vm, image: nil, volumes: [boot], resolvedInterfaces: resolved)
         let metadata = InstanceMetadata.build(
             vm: vm, vmId: vm.id!, resolvedInterfaces: resolved,
             region: "dc-drop", availabilityZone: "drop-agent", instanceSPIFFEID: nil)
@@ -393,6 +401,9 @@ final class DesiredStateAssemblerTests {
         try await withAssemblerApp { app, org, _ in
             let agentId = try await self.registerAgent(app: app, named: "scale-agent")
             let builder = TestDataBuilder(db: app.db)
+            let site = Site(
+                name: "Scale Site", organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
 
             /// Places `count` VMs, each in its own project on its own network
             /// with two addressed NICs.
@@ -403,7 +414,8 @@ final class DesiredStateAssemblerTests {
                     let network = LogicalNetwork(
                         name: "scale-net-\(index)", subnet: "10.50.\(index % 250).0/24",
                         gateway: "10.50.\(index % 250).1", projectID: try project.requireID(),
-                        dnsServers: ["10.50.\(index % 250).53"], domainName: "s\(index).example")
+                        dnsServers: ["10.50.\(index % 250).53"], domainName: "s\(index).example",
+                        siteID: try site.requireID())
                     try await network.save(on: app.db)
                     let vm = try await self.placeVM(
                         app: app, project: project, named: "scale-vm-\(index)", onAgent: agentId)

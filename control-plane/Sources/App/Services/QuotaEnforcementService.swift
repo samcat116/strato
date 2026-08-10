@@ -63,7 +63,11 @@ struct QuotaEnforcementService {
             .all()
     }
 
-    /// Checks every applicable quota and reserves the VM's resources against each.
+    /// Checks every applicable quota and atomically reserves the VM plus its
+    /// canonical boot volume. CPU, memory and VM count belong to the VM row;
+    /// storage and volume count belong to the managed Volume row. Keeping both
+    /// checks in one resync/lock pass prevents the second reservation from
+    /// overwriting the first one's cached counters.
     ///
     /// Throws `Abort(.forbidden)` naming the offending quota if any *enabled* quota
     /// cannot accommodate the VM; disabled quotas never block but still track the
@@ -90,10 +94,13 @@ struct QuotaEnforcementService {
         on db: Database
     ) async throws {
         try await reserveWorkload(for: project, environment: environment, on: db) { quota in
-            let check = quota.canAccommodateVM(vcpus: vcpus, memory: memory, storage: storage)
-            guard check.allowed else { return check }
-            try quota.reserveResources(vcpus: vcpus, memory: memory, storage: storage)
-            return check
+            let vmCheck = quota.canAccommodateVM(vcpus: vcpus, memory: memory, storage: 0)
+            guard vmCheck.allowed else { return vmCheck }
+            let volumeCheck = quota.canAccommodateVolume(size: storage)
+            guard volumeCheck.allowed else { return volumeCheck }
+            try quota.reserveResources(vcpus: vcpus, memory: memory, storage: 0)
+            try quota.reserveVolumeResources(size: storage)
+            return vmCheck
         }
     }
 
@@ -423,9 +430,8 @@ struct QuotaEnforcementService {
         let usage = try await QuotaUsageAggregator.measure(scope, on: db)
         quota.reservedVCPUs = usage.vcpus
         quota.reservedMemory = usage.memoryBytes
-        // Storage: VM disks, sandbox snapshot artifacts (issue #426), full-VM
-        // checkpoint machine state (issue #564), and volumes plus their
-        // snapshots (STR-181).
+        // Storage: managed volumes (including every VM boot disk), their
+        // snapshots, sandbox snapshot artifacts, and full-VM checkpoint state.
         quota.reservedStorage = usage.storageBytes
         quota.vmCount = usage.vmCount
         quota.sandboxCount = usage.sandboxCount

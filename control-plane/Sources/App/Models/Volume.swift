@@ -338,7 +338,12 @@ extension Volume {
         return desiredStatus == .present
     }
 
-    /// Snapshots require a detached volume (issue #747). The filesystem
+    /// Snapshots require stable bytes. A detached volume always qualifies;
+    /// an attached volume qualifies only when its VM is confirmed stopped,
+    /// which the controller and agent both enforce because this model does not
+    /// carry the VM's observed state.
+    ///
+    /// The filesystem
     /// backend's snapshot is a qcow2 overlay whose backing file is the volume,
     /// and nothing redirects a running QEMU's active layer onto that overlay —
     /// the guest keeps writing to the same base the overlay points at, so the
@@ -348,7 +353,7 @@ extension Volume {
     /// real live-snapshot path (QMP `blockdev-snapshot-sync` plus the layer
     /// bookkeeping it implies) exists.
     var canSnapshot: Bool {
-        return $vm.id == nil && desiredStatus == .present && bytesAtRest
+        return desiredStatus == .present && bytesAtRest
     }
 
     /// Cloning is `qemu-img convert` of the volume's file, so it has the same
@@ -371,7 +376,7 @@ extension Volume {
     /// tear the bytes, and a copy of the pre-resize volume is a perfectly good
     /// point-in-time copy.
     var canClone: Bool {
-        return $vm.id == nil && desiredStatus == .present && bytesAtRest
+        return desiredStatus == .present && bytesAtRest
     }
 
     /// A volume is deletable unless it is attached to a VM (detach it first).
