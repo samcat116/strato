@@ -1,0 +1,30 @@
+agent/Tests/StratoAgentTests/NodeDependencyManagerTests.swift
+  s_1caa12ce689fe8::t_a7620e328dc5b5 237-252
+control-plane/Tests/AppPlatformTests/AgentDependencyHealthTests.swift
+  s_1caa12ce689fe8::t_a7620e328dc5b5 9-27
+control-plane/Sources/App/Services/AgentService.swift
+  s_1caa12ce689fe8::t_a7620e328dc5b5 298-299,341,386,792-798,801,834-845,851-877
+  s_1caa12ce689fe8::t_c4b4dd80a34ff4 846-850
+  s_1caa12ce689fe8::t_c60e646c609d22 878
+agent/Sources/StratoAgent/Agent.swift
+  s_1caa12ce689fe8::t_a7620e328dc5b5 1769
+  s_1caa12ce689fe8::t_c4b4dd80a34ff4 1785-1786
+agent/Sources/StratoAgentCore/InitialNodeDependencyModules.swift
+  s_1caa12ce689fe8::t_a7620e328dc5b5 9-13,43,50,56,63-69,99-109,113,120,126,133
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "4711cb0c8a46ca1455b5b39724e8b60eb8848505",
+  "prompts": {},
+  "sessions": {
+    "s_1caa12ce689fe8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6f-4fa5-7fd0-bf2a-063474d3e1e0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
