@@ -58,7 +58,6 @@ final class AgentManifestQuarantineTests {
             name: name,
             hostname: "\(name).example",
             version: "1.0.0",
-            capabilities: ["qemu"],
             status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,

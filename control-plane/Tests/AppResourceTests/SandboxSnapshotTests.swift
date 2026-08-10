@@ -56,12 +56,12 @@ final class SandboxSnapshotTests {
         try await app.shutdownForTesting()
     }
 
-    /// Registers an agent advertising the sandbox-snapshot message set and
+    /// Registers an agent with structured Firecracker snapshot support and
     /// maps the sandbox onto it as a running, agent-confirmed workload.
     private func placeOnCapableAgent(
         app: Application,
         sandbox: Sandbox,
-        capabilities: [String] = ["firecracker", SnapshotArtifactKind.sandboxSnapshot.agentCapability],
+        supportsSnapshots: Bool = true,
         status: SandboxStatus = .running,
         wireProtocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
@@ -69,12 +69,25 @@ final class SandboxSnapshotTests {
             agentId: "snapshot-agent",
             hostname: "test-host",
             version: "1.0.0",
-            capabilities: capabilities,
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
+            hypervisors: [
+                HypervisorSupport(
+                    type: .firecracker,
+                    available: true,
+                    accelerated: true,
+                    capabilities: HypervisorCapabilities(
+                        type: .firecracker,
+                        supportsPause: true,
+                        supportsLiveMigration: false,
+                        supportsSnapshots: supportsSnapshots,
+                        requiresDirectKernelBoot: true,
+                        maxVCPUs: 32,
+                        maxMemory: 32 * 1024 * 1024 * 1024))
+            ],
             protocolVersion: wireProtocolVersion,
             sandboxCapable: true
         )
@@ -120,17 +133,17 @@ final class SandboxSnapshotTests {
         }
     }
 
-    @Test("Snapshotting via an agent without the capability is refused")
+    @Test("Snapshotting via an agent without snapshot support is refused")
     func createRefusesIncapableAgent() async throws {
         try await withSnapshotTestApp { app, _, _, sandbox, token in
             _ = try await placeOnCapableAgent(
-                app: app, sandbox: sandbox, capabilities: ["firecracker"])
+                app: app, sandbox: sandbox, supportsSnapshots: false)
 
             try await app.test(.POST, "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-                #expect(res.body.string.contains(SnapshotArtifactKind.sandboxSnapshot.agentCapability))
+                #expect(res.body.string.contains("snapshot backend is unavailable"))
             }
         }
     }
@@ -534,15 +547,15 @@ final class SandboxSnapshotTests {
         }
     }
 
-    /// Version and capability are two different questions (issue #415): a v34
-    /// agent with no sandbox-snapshot backend reads the nonce and can do nothing
+    /// Wire compatibility and backend support are different questions (issue
+    /// #415): an agent with no sandbox-snapshot backend reads the nonce and can do nothing
     /// with it, which would surface as a `degraded` condition an hour later
     /// rather than a `409` naming the remedy.
     @Test("Restore is refused when the agent advertises no snapshot backend")
     func restoreRefusesAgentWithoutSnapshotCapability() async throws {
         try await withSnapshotTestApp { app, user, _, sandbox, token in
             let agentId = try await placeOnCapableAgent(
-                app: app, sandbox: sandbox, capabilities: ["firecracker"], status: .stopped)
+                app: app, sandbox: sandbox, supportsSnapshots: false, status: .stopped)
             let snapshot = SandboxSnapshot(
                 name: "checkpoint",
                 sandboxID: sandbox.id!,
@@ -560,7 +573,7 @@ final class SandboxSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-                #expect(res.body.string.contains("capability"))
+                #expect(res.body.string.contains("snapshot backend"))
             }
 
             #expect(try await Sandbox.find(sandbox.id, on: app.db)?.restoreGeneration == 0)
@@ -624,7 +637,6 @@ final class SandboxSnapshotTests {
             agentId: name,
             hostname: "\(name)-host",
             version: "1.0.0",
-            capabilities: ["firecracker", SnapshotArtifactKind.sandboxSnapshot.agentCapability],
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,

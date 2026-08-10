@@ -611,10 +611,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// Confirms `ovn-controller` has an active southbound connection, polling
     /// briefly to ride out a controller that is still dialing after the
     /// chassis was (re)configured. Throwing here keeps `connect()` failed, so
-    /// the agent does not advertise `ovn_networking` for a host whose ports
-    /// would never get flows; the background retry loop picks it up when the
-    /// controller comes up. A missing `ovn-appctl` only logs — we don't gate
-    /// the capability on a diagnostic tool (preflight reports it separately).
+    /// the agent reports no overlay support for a host whose ports would never
+    /// get flows; the background retry loop picks it up when the controller
+    /// comes up. A missing `ovn-appctl` only logs — we don't gate the typed
+    /// network report on a diagnostic tool (preflight reports it separately).
     private func verifyOVNControllerConnected() async throws {
         let attempts = 5
         var lastDetail = "unknown"

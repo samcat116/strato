@@ -36,6 +36,25 @@ export default function AgentDetailPage() {
     (sum, vm) => sum + (vm.guestMemoryUsedBytes ?? 0),
     0
   );
+  const capabilityLabels = [
+    ...agent?.hypervisors
+      .filter((hypervisor) => hypervisor.available)
+      .flatMap((hypervisor) => [
+        hypervisor.type === "qemu" ? "QEMU" : "Firecracker",
+        ...(hypervisor.capabilities.supportsSnapshots
+          ? [hypervisor.type === "qemu" ? "QEMU snapshots" : "Firecracker snapshots"]
+          : []),
+      ]) ?? [],
+    ...(agent?.networkCapability === "overlay"
+      ? ["Overlay networking"]
+      : agent?.networkCapability === "user_mode"
+        ? ["User-mode networking"]
+        : []),
+    ...(agent?.sandboxCapable ? ["Sandbox runtime"] : []),
+    ...(agent?.sandboxNetworkingCapable ? ["Sandbox networking"] : []),
+    ...(agent?.tpmCapable ? ["vTPM"] : []),
+    ...(agent?.resolverCapable ? ["DNS resolver"] : []),
+  ];
 
   if (!id) {
     return (
@@ -238,8 +257,8 @@ export default function AgentDetailPage() {
       {/* Auto-update (issue #434) */}
       <AgentAutoUpdateCard agent={agent} />
 
-      {/* Capabilities */}
-      {agent.capabilities && agent.capabilities.length > 0 && (
+      {/* Typed capabilities */}
+      {capabilityLabels.length > 0 && (
         <Card className="bg-card border-border">
           <CardHeader>
             <CardTitle className="text-lg font-semibold text-foreground flex items-center gap-2">
@@ -249,7 +268,7 @@ export default function AgentDetailPage() {
           </CardHeader>
           <CardContent>
             <div className="flex flex-wrap gap-2">
-              {agent.capabilities.map((capability) => (
+              {capabilityLabels.map((capability) => (
                 <Badge
                   key={capability}
                   variant="outline"

@@ -404,7 +404,6 @@ private func encodeSandboxAgentRegister(agentName: String) throws -> String {
             agentId: agentName,
             hostname: "test-host",
             version: "1.0.0",
-            capabilities: ["firecracker"],
             resources: AgentResources(
                 totalCPU: 16,
                 availableCPU: 16,

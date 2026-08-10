@@ -55,13 +55,12 @@ final class VMSnapshotTests {
         try await app.shutdownForTesting()
     }
 
-    /// Registers an agent advertising the checkpoint message set and maps the
-    /// VM onto it.
+    /// Registers an agent with structured QEMU checkpoint support and maps the VM onto it.
     @discardableResult
     private func placeOnCapableAgent(
         app: Application,
         vm: VM,
-        capabilities: [String] = ["qemu", SnapshotArtifactKind.vmCheckpoint.agentCapability],
+        supportsSnapshots: Bool = true,
         status: VMStatus = .running,
         wireProtocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
@@ -69,12 +68,25 @@ final class VMSnapshotTests {
             agentId: "checkpoint-agent",
             hostname: "test-host",
             version: "1.0.0",
-            capabilities: capabilities,
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
+            hypervisors: [
+                HypervisorSupport(
+                    type: .qemu,
+                    available: true,
+                    accelerated: true,
+                    capabilities: HypervisorCapabilities(
+                        type: .qemu,
+                        supportsPause: true,
+                        supportsLiveMigration: true,
+                        supportsSnapshots: supportsSnapshots,
+                        requiresDirectKernelBoot: false,
+                        maxVCPUs: 1024,
+                        maxMemory: 16 * 1024 * 1024 * 1024 * 1024))
+            ],
             protocolVersion: wireProtocolVersion
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
@@ -139,18 +151,18 @@ final class VMSnapshotTests {
         }
     }
 
-    @Test("Checkpointing via an agent without the capability is refused")
+    @Test("Checkpointing via an agent without snapshot support is refused")
     func createRefusesIncapableAgent() async throws {
         try await withCheckpointTestApp { app, _, _, vm, token in
             // A QEMU-less (or pre-v22) agent drops the frame undecoded, so the
             // request would burn its whole budget against silence.
-            try await placeOnCapableAgent(app: app, vm: vm, capabilities: ["qemu"])
+            try await placeOnCapableAgent(app: app, vm: vm, supportsSnapshots: false)
 
             try await app.test(.POST, "/api/vms/\(vm.id!.uuidString)/snapshots") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-                #expect(res.body.string.contains(SnapshotArtifactKind.vmCheckpoint.agentCapability))
+                #expect(res.body.string.contains("snapshot backend is unavailable"))
             }
         }
     }
@@ -479,7 +491,7 @@ final class VMSnapshotTests {
     @Test("Restore is refused when the agent advertises no checkpoint backend")
     func restoreRefusesAgentWithoutCheckpointCapability() async throws {
         try await withCheckpointTestApp { app, user, _, vm, token in
-            try await placeOnCapableAgent(app: app, vm: vm, capabilities: ["qemu"])
+            try await placeOnCapableAgent(app: app, vm: vm, supportsSnapshots: false)
             let snapshot = try await insertReadyCheckpoint(app: app, vm: vm, user: user)
 
             try await app.test(
@@ -488,7 +500,7 @@ final class VMSnapshotTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-                #expect(res.body.string.contains("capability"))
+                #expect(res.body.string.contains("snapshot backend"))
             }
 
             #expect(try await VM.find(vm.id, on: app.db)?.restoreGeneration == 0)

@@ -919,8 +919,12 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddWorkloadConvergenceObservability())
 
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
-    // It must run after every historical migration that touched the table.
+    // It must run after every migration that ever touched the table.
     app.migrations.add(DropResourceOperations())
+
+    // STR-222: structured hypervisor, network, sandbox, TPM, and resolver
+    // reports are the only source of agent capability truth.
+    app.migrations.add(DropLegacyAgentCapabilities())
 
     // STR-229: canonical UUID role identity, one-time binding completeness
     // proof, and removal of the project/group grant mirrors.

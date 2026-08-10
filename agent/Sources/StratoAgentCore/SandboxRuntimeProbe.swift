@@ -24,11 +24,6 @@ import StratoShared
 /// otherwise invisible state.
 public enum SandboxRuntimeProbe {
 
-    /// Well-known capability string advertised in the legacy `capabilities`
-    /// list alongside the typed `sandboxCapable` flag (for operator-facing
-    /// display; the scheduler reads only the typed flag).
-    public static let capabilityName = "sandbox_runtime"
-
     /// Whether this agent build actually contains the sandbox runtime driver
     /// (`SandboxRuntimeService`, issue #421). Now that the runtime ships
     /// (`FirecrackerSandboxRuntime`, registered by the Agent on Linux), the
@@ -36,13 +31,6 @@ public enum SandboxRuntimeProbe {
     /// usable Firecracker and the guest base image on disk — decide whether a
     /// given host actually advertises the capability.
     public static let runtimeBuilt = true
-
-    /// Well-known capability string for sandbox *networking* (STR-103),
-    /// advertised alongside `capabilityName` when a sandbox on this host can
-    /// have a NIC. Display-only, like its sibling: the scheduler and
-    /// desired-state assembly read the typed
-    /// `AgentRegisterMessage.sandboxNetworkingCapable` flag.
-    public static let networkingCapabilityName = "sandbox_networking"
 
     /// Result of probing the sandbox runtime's host prerequisites.
     public struct Report: Equatable, Sendable {

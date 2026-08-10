@@ -732,7 +732,6 @@ final class SPIRERegistrationFlowTests: BaseTestCase {
             name: name,
             hostname: "\(name).example.com",
             version: "1.0.0",
-            capabilities: [],
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
                 totalMemory: 16_000_000_000, availableMemory: 16_000_000_000,

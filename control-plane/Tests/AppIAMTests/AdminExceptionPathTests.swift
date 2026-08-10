@@ -49,7 +49,6 @@ final class AdminExceptionPathTests {
             name: name,
             hostname: "hv.example",
             version: "1.0.0",
-            capabilities: ["qemu"],
             status: .online,
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,

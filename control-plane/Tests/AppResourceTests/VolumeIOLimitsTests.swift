@@ -63,7 +63,6 @@ final class VolumeIOLimitsTests {
             agentId: name,
             hostname: "\(name).test",
             version: "1.0.0",
-            capabilities: ["qemu"],
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,

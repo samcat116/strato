@@ -53,13 +53,12 @@ struct WireProtocolTests {
             agentId: "a1",
             hostname: "host",
             version: "1.2.3",
-            capabilities: [],
             resources: Fixtures.resources
         )
         #expect(try throughEnvelope(register).protocolVersion == WireProtocol.currentVersion)
 
         let missing =
-            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","capabilities":[],"resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1},"hypervisorType":"qemu"}"#
+            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1}}"#
         #expect(throws: DecodingError.self) {
             try decodeJSON(AgentRegisterMessage.self, from: missing)
         }

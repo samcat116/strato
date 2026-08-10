@@ -282,16 +282,16 @@ actor Agent {
     // TLS material for an ssl: ovn_northbound endpoint (nil = tcp/unix).
     private let ovnNorthboundTLS: OVNNorthboundTLSConfig?
     // The networking backend actually selected at startup (config value plus
-    // platform fallbacks). Drives the networking capability advertised at
-    // registration: a Linux agent configured for user-mode networking must not
-    // claim OVN/VM-to-VM support.
+    // platform fallbacks). Drives the typed networking report at registration:
+    // a Linux agent configured for user-mode networking must not claim
+    // OVN/VM-to-VM support.
     private var effectiveNetworkMode: NetworkMode = .user
     // Whether the selected network service is currently connected. An OVN
-    // agent whose OVN/OVS connection failed must not advertise
-    // ovn_networking, or the scheduler would place VM-to-VM workloads on a
-    // backend that will throw notConnected. A failed connection is retried in
-    // the background (`networkConnectTask`) and again at each registration,
-    // so a fixed host recovers the capability without a restart.
+    // agent whose OVN/OVS connection failed must report no overlay networking,
+    // or the scheduler would place VM-to-VM workloads on a backend that will
+    // throw notConnected. A failed connection is retried in the background
+    // (`networkConnectTask`) and again at each registration, so a fixed host
+    // recovers eligibility without a restart.
     private var networkServiceConnected = false
     // Background retry loop for a network service that failed to connect.
     private var networkConnectTask: Task<Void, Never>?
@@ -651,8 +651,8 @@ actor Agent {
             //
             // Deliberately not gated on Linux, unlike the real drivers: a
             // simulated agent models a Linux fleet whatever host it runs on —
-            // it already advertises ovn_networking on macOS for the same reason
-            // — so a macOS dev box can scale-test Firecracker placement too.
+            // it reports overlay networking on macOS for the same reason — so
+            // a macOS dev box can scale-test Firecracker placement too.
             // Nothing here touches Firecracker itself.
             logger.info("Simulation mode: registering mock hypervisor backend(s)")
             for type in HypervisorType.allCases {
@@ -1242,17 +1242,13 @@ actor Agent {
         }
     }
 
-    /// Display-only capability string for a host that can back guest vTPMs.
-    /// The scheduler keys placement on `AgentRegisterMessage.tpmCapable`.
-    static let vtpmCapabilityName = "vtpm"
-
     private func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
 
         // A network service that failed to connect earlier may be fixable by
         // now (OVS installed, ovn-controller restarted); retry once before
-        // computing the networking capability so a fixed host re-advertises
-        // ovn_networking on reconnect instead of after a restart.
+        // computing the networking report so a fixed host reports overlay
+        // support on reconnect instead of only after a restart.
         if networkService != nil, !networkServiceConnected {
             networkServiceConnected = await connectNetworkService()
         }
@@ -1307,12 +1303,11 @@ actor Agent {
                 version: await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath))
         }
         let networkCapability = currentNetworkCapability()
-        var capabilities = getAgentCapabilities(hypervisors: hypervisors, networkCapability: networkCapability)
 
         // Sandbox runtime: probed on the same cadence, gated on Firecracker
         // (binary + KVM, folded into its probe) plus the guest base image
         // present on disk. The typed flag is what the scheduler keys sandbox
-        // placement on (issue #415); the capability string is display-only.
+        // placement and snapshot admission on (issue #415).
         //
         // Simulation mode bypasses the host probe, mirroring the hypervisor
         // bypass above: the host artifacts it checks for (a real Firecracker,
@@ -1323,8 +1318,8 @@ actor Agent {
         // the host probe alone is necessary but not sufficient.
         let sandboxProbe: SandboxRuntimeProbe.Report
         if isSimulationMode {
-            // Networking included, on the same terms as the faked
-            // `ovn_networking` above: a simulated agent exists to model a full
+            // Networking included, on the same terms as the simulated overlay
+            // report above: a simulated agent exists to model a full
             // Linux host to the *scheduler*, and withholding this would quietly
             // remove networked sandboxes from everything simulation covers
             // (placement, assembly, reconciliation). Nothing is realized —
@@ -1348,17 +1343,7 @@ actor Agent {
         // both answers — it places NIC-less sandboxes on a host with only the
         // first, and withholds `SandboxSpec.network` from it.
         let sandboxNetworkingCapable = sandboxCapable && sandboxProbe.networkingCapable
-        if sandboxCapable {
-            capabilities.append(SandboxRuntimeProbe.capabilityName)
-            // The sandbox-snapshot capture capability rides the same gate, and
-            // has to: `getAgentCapabilities` runs before the runtime probe, so
-            // advertising it there would claim a backend this host may not
-            // have. A capture admitted against a runtime-less agent lands in
-            // desired state, fails permanently, and leaves the client polling a
-            // `202` until the convergence deadline — the outcome capture
-            // admission exists to prevent (STR-150).
-            capabilities.append(SnapshotArtifactKind.sandboxSnapshot.agentCapability)
-        } else if !isSimulationMode {
+        if !sandboxCapable && !isSimulationMode {
             #if os(Linux)
             // Only worth a log where the runtime could ever exist.
             let reason = sandboxProbe.unavailabilityReason ?? "sandbox runtime was not initialized"
@@ -1376,9 +1361,9 @@ actor Agent {
         // placements, which is the kind of half-working state an operator
         // should be told about rather than have to infer from a scheduler
         // refusal elsewhere in the fleet.
-        if sandboxNetworkingCapable {
-            capabilities.append(SandboxRuntimeProbe.networkingCapabilityName)
-        } else if sandboxCapable, let reason = sandboxProbe.networkingUnavailabilityReason {
+        if !sandboxNetworkingCapable, sandboxCapable,
+            let reason = sandboxProbe.networkingUnavailabilityReason
+        {
             logger.warning(
                 "This host runs sandboxes but cannot give them a NIC; not advertising sandbox networking",
                 metadata: [
@@ -1386,17 +1371,10 @@ actor Agent {
                 ])
         }
 
-        // vTPM capability: the typed flag is what the scheduler gates on; the
-        // capability string is display-only, matching the sandbox pattern.
-        if tpmAvailable {
-            capabilities.append(Self.vtpmCapabilityName)
-        }
-
         let message = AgentRegisterMessage(
             agentId: initialAgentID,
             hostname: ProcessInfo.processInfo.hostName,
             version: BuildInfo.version,
-            capabilities: capabilities,
             resources: resources,
             architecture: CPUArchitecture.current,
             hypervisors: hypervisors,
@@ -1621,112 +1599,13 @@ actor Agent {
             // report no networking capability rather than claiming VM-to-VM
             // support the backend cannot currently provide (and user-mode
             // would be a lie — the agent is not running SLIRP either).
-            logger.warning("OVN network service not connected; not advertising ovn_networking capability")
+            logger.warning("OVN network service not connected; reporting no overlay networking support")
             return nil
         case (.user, _):
             // User-mode (SLIRP) networking is built into QEMU and needs no
             // external service, so it is not gated on connection state.
             return .userMode
         }
-    }
-
-    /// Legacy string capability list, derived from the same probes that back
-    /// the structured `hypervisors` report instead of hardcoded platform
-    /// lists. Advertised hypervisors are hard placement constraints, so each
-    /// one is gated on its probe (binary executable, and KVM for Firecracker)
-    /// — the scheduler must not route VMs here that create would reject.
-    private func getAgentCapabilities(hypervisors: [HypervisorSupport], networkCapability: NetworkCapability?)
-        -> [String]
-    {
-        var capabilities = ["vm_management"]
-
-        // Message-set capabilities: message types added after protocol
-        // version 1 are advertised here so the control plane skips agents
-        // that would silently drop the frame (an undecodable MessageType
-        // fails envelope decoding before any error response can be sent,
-        // leaving the control plane to time out).
-        // Snapshot-artifact capabilities (STR-150). Since wire v33 these name
-        // no message: a capture is desired state, and the version gate already
-        // says the sync's `snapshots` list will be understood. What a version
-        // cannot say is whether a *backend that can realize the capture* is
-        // usable on this host — the `sandboxCapable` rule — so each family is
-        // advertised separately and only when its backend is really there.
-        //
-        // The control plane reads these at capture admission: a checkpoint
-        // requested against a host with no QEMU would otherwise be accepted
-        // into a desired state that can only ever fail permanently.
-        //
-        // QEMU is the backend for two of the three: a VM checkpoint is a qcow2
-        // internal snapshot, and a volume snapshot is a qcow2 overlay the
-        // storage backend writes with `qemu-img`. The sandbox family's gate is
-        // the sandbox runtime probe, which is not resolved until after this
-        // returns — it is advertised beside `sandboxCapable` in
-        // `registerWithControlPlane` instead.
-        //
-        // "Has QEMU" implies "can checkpoint" for both QEMU drivers again
-        // (STR-134): `LibvirtService` realizes a capture as a libvirt system
-        // checkpoint, so the driver a node picked is once more invisible here.
-        // It matters that this stays true — since STR-150 an artifact inherits
-        // its parent VM's host and there is no re-placement and no imperative
-        // fallback, so a capture admitted against a backend that cannot take
-        // one degrades permanently on the only host it could ever run on.
-        if hypervisors.contains(where: { $0.type == .qemu && $0.available }) {
-            capabilities.append(SnapshotArtifactKind.vmCheckpoint.agentCapability)
-            capabilities.append(SnapshotArtifactKind.volumeSnapshot.agentCapability)
-        }
-
-        for hypervisor in hypervisors {
-            if hypervisor.available {
-                capabilities.append(hypervisor.type.rawValue)
-            } else if hypervisor.type == .qemu {
-                // Error, not warning: without QEMU the agent is unusable for
-                // most placements, and the scheduler will only report
-                // "unsupported hypervisor" — this log points at the cause.
-                logger.error(
-                    "QEMU unusable; not advertising qemu capability",
-                    metadata: [
-                        "reason": .string(hypervisor.unavailabilityReason ?? "unknown"),
-                        "libvirtURI": .string(LibvirtProbe.systemURI),
-                    ])
-            } else {
-                #if os(Linux)
-                // Not worth a log on platforms where the backend can never
-                // exist (e.g. Firecracker on macOS).
-                logger.warning(
-                    "\(hypervisor.type.displayName) unusable; not advertising \(hypervisor.type.rawValue) capability",
-                    metadata: [
-                        "reason": .string(hypervisor.unavailabilityReason ?? "unknown")
-                    ])
-                #endif
-            }
-        }
-
-        if hypervisors.contains(where: { $0.accelerated }) {
-            #if os(Linux)
-            capabilities.append("kvm")
-            #elseif os(macOS)
-            capabilities.append("hvf")
-            #endif
-        }
-
-        switch networkCapability {
-        case .overlay:
-            capabilities.append("ovn_networking")
-        case .userMode:
-            capabilities.append("user_networking")
-        case nil:
-            break  // backend selected but not connected; advertise nothing
-        }
-
-        if !HypervisorType.allCases.contains(where: { capabilities.contains($0.rawValue) }) {
-            logger.error(
-                "No usable hypervisor backend on this host; the agent will register but never be eligible for VM placement. Check that libvirtd is reachable at \(LibvirtProbe.systemURI) and new enough (and firecracker_binary_path on Linux).",
-                metadata: [
-                    "libvirtURI": .string(LibvirtProbe.systemURI)
-                ])
-        }
-
-        return capabilities
     }
 
     private func unregisterFromControlPlane() async throws {
