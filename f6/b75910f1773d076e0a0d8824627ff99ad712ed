@@ -1,0 +1,98 @@
+cli/Tests/StratoCLITests/StratoClientTests.swift
+  s_58c4057dd3a900::t_4e7045dac11acd 20
+control-plane/Tests/AppIAMTests/CredentialRestrictionRouteTests.swift
+  s_58c4057dd3a900::t_074f20003f9b0a 11-15,33-34,39,41-42,44,55-57,61-62,64-65,68-71,78,82-83,85,87-88,94-95,97-98,100-103,106-110,115-116,118,122-123,125,127-129,134-138,141-145,150-151,164-165,167-172,175-178
+docs/runbooks/credential-restriction-cutover.md
+  s_58c4057dd3a900::t_4e1286fa5f1e60 1-52
+control-plane/Tests/AppPlatformTests/BootstrapCommandTests.swift
+  s_58c4057dd3a900::t_d65cc7b575cdf6 74
+control-plane/Sources/App/configure.swift
+  s_58c4057dd3a900::t_4e1286fa5f1e60 930-933
+control-plane/Sources/App/Commands/BootstrapCommand.swift
+  s_58c4057dd3a900::t_a5a47e534f51a9 239
+  s_58c4057dd3a900::t_be772cb382a7ce 267
+control-plane/Sources/App/Models/CLISession.swift
+  s_58c4057dd3a900::t_fe842c67b2e269 30-31,81,91-93
+docs/guide/graphics-console.md
+  s_58c4057dd3a900::t_a5a47e534f51a9 84
+docs/architecture/iam.md
+  s_58c4057dd3a900::t_a5a47e534f51a9 652-653,694-698,700,708
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_58c4057dd3a900::t_b9df1b2a2fef4e 305-436
+docs/architecture/authorization-edge-audit.md
+  s_58c4057dd3a900::t_a5a47e534f51a9 216,220-221
+control-plane/web/src/components/api-keys/create-api-key-dialog.tsx
+  s_58c4057dd3a900::t_be772cb382a7ce 76-77
+control-plane/Sources/App/Models/APIKey.swift
+  s_58c4057dd3a900::t_fe842c67b2e269 24-25,59,68-70,126,129,136-149,204-218
+  s_58c4057dd3a900::t_66733f2956ab62 130-135,198-203
+control-plane/Tests/AppIdentityTests/APIKeyOwnershipTests.swift
+  s_58c4057dd3a900::t_42c244bf00d42e 88-113,117-124
+  s_58c4057dd3a900::t_5e8d70b738d672 114-116
+control-plane/web/src/components/credentials/credential-restriction-badges.tsx
+  s_58c4057dd3a900::t_be772cb382a7ce 13-14
+control-plane/Tests/AppIdentityTests/OAuthDeviceFlowTests.swift
+  s_58c4057dd3a900::t_4e7045dac11acd 49,176,294-295,300-301,306,475,477-478,482-483
+control-plane/Tests/AppIAMTests/CredentialRestrictionTests.swift
+  s_58c4057dd3a900::t_be772cb382a7ce 6
+  s_58c4057dd3a900::t_020816f7fb8a5a 145,149,171,247,250-251,257-258
+control-plane/web/src/types/api.ts
+  s_58c4057dd3a900::t_c9c71eb49cae4e 809
+control-plane/Sources/App/Migrations/RemoveLegacyCredentialScopes.swift
+  s_58c4057dd3a900::t_4e1286fa5f1e60 1-68
+docs/development/e2e-testing.md
+  s_58c4057dd3a900::t_a5a47e534f51a9 153
+control-plane/Tests/AppIAMTests/CredentialRestrictionEnforcementTests.swift
+  s_58c4057dd3a900::t_d65cc7b575cdf6 382,421,478
+  s_58c4057dd3a900::t_1e4a3723eb597a 384,418-419
+control-plane/Sources/App/Controllers/OAuthController.swift
+  s_58c4057dd3a900::t_aa02570dc05e57 69-90,94-101,103,110,118-119,145,252,286,308
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_58c4057dd3a900::t_d65cc7b575cdf6 379,391
+control-plane/Tests/AppPlatformTests/AuditLoggingTests.swift
+  s_58c4057dd3a900::t_d65cc7b575cdf6 154
+  s_58c4057dd3a900::t_1e4a3723eb597a 145-146
+control-plane/Sources/App/Models/DeviceAuthorization.swift
+  s_58c4057dd3a900::t_fe842c67b2e269 40-41,78,87-89
+control-plane/Sources/App/openapi.yaml
+  s_58c4057dd3a900::t_c9c71eb49cae4e 11391,11478,11501,11557,11611,11632
+  s_58c4057dd3a900::t_e492e6fe519d17 11427-11430
+control-plane/web/src/types/openapi.ts
+  s_58c4057dd3a900::t_3715f799279822 6635
+  s_58c4057dd3a900::t_0cd72c94805db8 6600
+control-plane/Tests/AppIdentityTests/APIKeyAuthenticatorTests.swift
+  s_58c4057dd3a900::t_be772cb382a7ce 469-472
+  s_58c4057dd3a900::t_d65cc7b575cdf6 29,40,431,454,482,523-524,564-565,571
+cli/Tests/StratoCLITests/DeviceFlowTests.swift
+  s_58c4057dd3a900::t_4e7045dac11acd 35,45,54
+control-plane/Sources/App/Migrations/AddCredentialRestrictions.swift
+  s_58c4057dd3a900::t_66733f2956ab62 6-9
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_58c4057dd3a900::t_be772cb382a7ce 327-328,334
+control-plane/Sources/App/Controllers/APIKeyController.swift
+  s_58c4057dd3a900::t_aa02570dc05e57 65,69-75,107
+control-plane/Sources/App/IAM/CredentialRestriction.swift
+  s_58c4057dd3a900::t_83918bddd6b0b5 55-56,59-61,64,105-119,276-277,279,290-293
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_58c4057dd3a900::t_be772cb382a7ce 534
+cli/Sources/StratoCLICore/Auth/DeviceFlow.swift
+  s_58c4057dd3a900::t_aa02570dc05e57 50-51
+cli/Sources/StratoCLI/Commands/Login.swift
+  s_58c4057dd3a900::t_aa02570dc05e57 57
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "f6b75910f1773d076e0a0d8824627ff99ad712ed",
+  "prompts": {},
+  "sessions": {
+    "s_58c4057dd3a900": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6b-85b0-7410-82a5-ad8aa805057e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
