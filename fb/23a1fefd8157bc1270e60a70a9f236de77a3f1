@@ -1,0 +1,31 @@
+agent/scripts/vm-manifest-preflight.sh
+  s_76ca1ebc5e1731::t_ebf8727e9cf32d 1-36,38-84
+  s_76ca1ebc5e1731::t_f2c8230d531d8e 37
+deploy/agent/tests/vm-manifest-preflight-test.sh
+  s_76ca1ebc5e1731::t_f2c8230d531d8e 1-72
+docs/deployment/vm-manifest-cutover.md
+  s_76ca1ebc5e1731::t_ebf8727e9cf32d 1-37,44-53,55-75
+  s_76ca1ebc5e1731::t_f2c8230d531d8e 38-43,54
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_76ca1ebc5e1731::t_ebf8727e9cf32d 11,163,207-208,237-238,288,293,302
+docs/.vitepress/config.mts
+  s_76ca1ebc5e1731::t_ebf8727e9cf32d 102
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_76ca1ebc5e1731::t_ebf8727e9cf32d 248-249,505-506,511,515-516,518-524
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "fb23a1fefd8157bc1270e60a70a9f236de77a3f1",
+  "prompts": {},
+  "sessions": {
+    "s_76ca1ebc5e1731": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6b-e027-7873-ac99-1469c9cf5650",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
