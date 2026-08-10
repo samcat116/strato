@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import type { NextConfig } from "next";
+import { controlPlaneRoutePrefixes } from "./src/lib/control-plane-routes";
 
 // Build identity, baked into the client bundle so the UI can show which build is
 // running. Mirrors the control plane's STRATO_VERSION/STRATO_GIT_SHA convention
@@ -93,16 +94,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     if (process.env.NODE_ENV === "development") {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-      return [
-        { source: "/api/:path*", destination: `${apiUrl}/api/:path*` },
-        { source: "/auth/:path*", destination: `${apiUrl}/auth/:path*` },
-        { source: "/agent/:path*", destination: `${apiUrl}/agent/:path*` },
-        { source: "/health/:path*", destination: `${apiUrl}/health/:path*` },
-        {
-          source: "/organizations/:path*",
-          destination: `${apiUrl}/organizations/:path*`,
-        },
-      ];
+      return controlPlaneRoutePrefixes.map((prefix) => ({
+        source: `${prefix}/:path*`,
+        destination: `${apiUrl}${prefix}/:path*`,
+      }));
     }
     return [];
   },

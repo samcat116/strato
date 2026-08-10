@@ -275,16 +275,21 @@ struct AgentWebSocketController: RouteCollection {
 
             switch envelope.type {
             case .agentRegister:
-                let message = try envelope.decode(as: AgentRegisterMessage.self)
-                let agentProtocolVersion = message.protocolVersion ?? 0
-                if agentProtocolVersion != WireProtocol.currentVersion {
-                    req.logger.warning(
-                        "Agent wire protocol version differs from control plane",
-                        metadata: [
-                            "agentName": .string(agentName),
-                            "agentProtocolVersion": .stringConvertible(agentProtocolVersion),
-                            "controlPlaneProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
-                        ])
+                let message: AgentRegisterMessage
+                do {
+                    message = try envelope.decode(as: AgentRegisterMessage.self)
+                } catch DecodingError.keyNotFound(let key, _)
+                    where key.stringValue == "protocolVersion"
+                {
+                    Telemetry.agentRegistrationFailed(reason: "unsupported_protocol")
+                    let reason =
+                        "Agent registration omitted the required wire protocol version; this control plane "
+                        + "requires exactly v\(WireProtocol.currentVersion). Deploy a matching agent build."
+                    req.logger.error("Failed to register agent: \(reason)")
+                    sendErrorResponse(
+                        ws: ws, requestId: "", error: reason,
+                        code: ErrorMessage.ErrorCode.unsupportedProtocolVersion, logger: req.logger)
+                    return
                 }
                 Task {
                     do {

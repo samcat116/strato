@@ -451,7 +451,7 @@ final class NetworkControllerTests {
         }
     }
 
-    @Test("An agent below the wire floor cannot register into a fleet that already has colliding names")
+    @Test("A non-current agent cannot register into a fleet that already has colliding names")
     func registrationRefusedWhenNamesAlreadyCollide() async throws {
         try await withNetworkTestApp { app, user, project, _ in
             let builder = TestDataBuilder(db: app.db)
@@ -485,7 +485,7 @@ final class NetworkControllerTests {
 
             await #expect(throws: AgentServiceError.self) {
                 _ = try await register(
-                    protocolVersion: WireProtocol.minimumSupportedVersion - 1,
+                    protocolVersion: WireProtocol.currentVersion - 1,
                     named: "rolled-back-agent")
             }
             // The refusal is total: no half-registered row survives it.

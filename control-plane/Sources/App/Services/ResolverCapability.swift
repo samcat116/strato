@@ -50,25 +50,14 @@ enum ResolverCapability {
     /// A fleet-wide snapshot of which sites are holding the resolver back.
     struct Index: Sendable {
         private let bySite: [UUID: [String]]
-        private let siteLess: [String]
-
         init(incapable: [Agent]) {
-            self.siteLess = incapable.filter { $0.$site.id == nil }.map(\.name).sorted()
-            self.bySite = Dictionary(grouping: incapable.filter { $0.$site.id != nil }) {
-                $0.$site.id!
-            }
-            .mapValues { $0.map(\.name).sorted() }
+            self.bySite = Dictionary(grouping: incapable) { $0.$site.id }
+                .mapValues { $0.map(\.name).sorted() }
         }
 
-        /// The agents that would withhold the resolver from a network pinned to
-        /// `siteID`, or the site-less agents for an unpinned network.
-        ///
-        /// The sync path asks a site-less receiving agent's own capability and
-        /// never consults agents assigned to unrelated sites. Restricting this
-        /// warning to the site-less complement keeps the API's explanation on
-        /// the same scope as that delivery decision.
-        func incapableAgentNames(forSite siteID: UUID?) -> [String] {
-            guard let siteID else { return siteLess }
+        /// The agents that would withhold the resolver from a network in
+        /// `siteID`.
+        func incapableAgentNames(forSite siteID: UUID) -> [String] {
             return bySite[siteID] ?? []
         }
     }

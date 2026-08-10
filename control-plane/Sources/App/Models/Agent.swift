@@ -80,11 +80,10 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "host_info")
     var hostInfo: HostInfo?
 
-    /// The site (availability zone) this agent belongs to. Nil means the
-    /// legacy single-node model: the agent owns a private local OVN NB and is
-    /// always its topology authority. Assigned via the registration token.
-    @OptionalParent(key: "site_id")
-    var site: Site?
+    /// The site (availability zone) this agent belongs to. Enrollment assigns
+    /// this immutable placement before the row is first persisted.
+    @Parent(key: "site_id")
+    var site: Site
 
     /// Wire protocol version the agent last registered with; nil for rows that
     /// predate this column. Sync assembly keys site topology authority on it:
@@ -573,7 +572,7 @@ struct AgentResponse: Content {
     /// Descriptive hardware/platform/OS details for operator display; nil for
     /// agents that registered before host-info reporting.
     let hostInfo: HostInfo?
-    let siteId: UUID?
+    let siteId: UUID
     let organizationId: UUID?
     let organizationalUnitId: UUID?
     let lastHeartbeat: Date?

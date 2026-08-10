@@ -1464,12 +1464,11 @@ actor Agent {
 
     /// Handle registration response from control plane
     func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
-        let controlPlaneProtocolVersion = response.protocolVersion ?? 0
-        guard controlPlaneProtocolVersion >= WireProtocol.minimumSupportedVersion else {
+        let controlPlaneProtocolVersion = response.protocolVersion
+        guard controlPlaneProtocolVersion == WireProtocol.currentVersion else {
             let reason =
-                "Control plane wire protocol version \(controlPlaneProtocolVersion) is below this agent's floor "
-                + "(\(WireProtocol.minimumSupportedVersion)); Strato deploys both sides in lockstep. "
-                + "Upgrade the control plane."
+                "Control plane wire protocol version \(controlPlaneProtocolVersion) does not equal this agent's "
+                + "required version \(WireProtocol.currentVersion). Deploy matching control-plane and agent builds."
             logger.error("Registration rejected: \(reason)")
             if let continuation = takeRegistrationContinuation() {
                 continuation.resume(throwing: AgentError.registrationRejected(reason))
@@ -1477,14 +1476,6 @@ actor Agent {
             return
         }
 
-        if controlPlaneProtocolVersion != WireProtocol.currentVersion {
-            logger.warning(
-                "Control plane wire protocol version differs from agent",
-                metadata: [
-                    "controlPlaneProtocolVersion": .stringConvertible(controlPlaneProtocolVersion),
-                    "agentProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
-                ])
-        }
         await startDesiredStatePoller()
 
         guard let continuation = takeRegistrationContinuation() else {
@@ -2323,7 +2314,22 @@ extension Agent {
         do {
             switch envelope.type {
             case .agentRegisterResponse:
-                let message = try envelope.decode(as: AgentRegisterResponseMessage.self)
+                let message: AgentRegisterResponseMessage
+                do {
+                    message = try envelope.decode(as: AgentRegisterResponseMessage.self)
+                } catch DecodingError.keyNotFound(let key, _)
+                    where key.stringValue == "protocolVersion"
+                {
+                    let reason =
+                        "Control plane registration response omitted the required wire protocol version; "
+                        + "this agent requires exactly v\(WireProtocol.currentVersion). Deploy a matching "
+                        + "control-plane build."
+                    logger.error("Registration rejected: \(reason)")
+                    if let continuation = takeRegistrationContinuation() {
+                        continuation.resume(throwing: AgentError.registrationRejected(reason))
+                    }
+                    return
+                }
                 await handleRegistrationResponse(message)
             // No VM frames remain: reboot and restore became edge-nonces on the
             // desired entry at wire v34 (STR-151), joining capture and delete,
@@ -3528,15 +3534,15 @@ extension Agent: ReconcileActuator {
     }
 
     func adoptVM(_ item: ReconcileWorkItem) async throws -> VMStatus {
-        guard let entry = orphanedVMs[item.vmId] else {
+        guard let entry = orphanedVMs[item.id] else {
             // A replayed sync may race re-adoption; if the VM is already
             // managed, adoption is satisfied.
-            if let managed = managedVMs[item.vmId],
+            if let managed = managedVMs[item.id],
                 let service = hypervisorServices[managed.hypervisorType]
             {
-                return try await service.getVMStatus(vmId: item.vmId)
+                return try await service.getVMStatus(vmId: item.id)
             }
-            throw HypervisorServiceError.vmNotFound(item.vmId)
+            throw HypervisorServiceError.vmNotFound(item.id)
         }
         guard let service = getHypervisorService(for: entry.hypervisorType) else {
             throw HypervisorServiceError.hypervisorNotInstalled(entry.hypervisorType.rawValue)
@@ -3547,7 +3553,7 @@ extension Agent: ReconcileActuator {
         let spec = item.desired?.spec ?? entry.spec
         let status: VMStatus
         do {
-            status = try await service.adoptVM(vmId: item.vmId, spec: entry.spec)
+            status = try await service.adoptVM(vmId: item.id, spec: entry.spec)
         } catch HypervisorServiceError.adoptionTargetGone(let reason) {
             // The orphan's hypervisor process is gone, so there is nothing to
             // re-attach — but its disks persist and materialization reuses an
@@ -3556,7 +3562,7 @@ extension Agent: ReconcileActuator {
             // power-state steps from `.created`.
             logger.warning(
                 "Orphaned VM has no live process; re-creating it from the manifest spec",
-                metadata: ["vmId": .string(item.vmId), "reason": .string(reason)])
+                metadata: ["vmId": .string(item.id), "reason": .string(reason)])
             try await reconcileCreate(item)
             return .created
         }
@@ -3564,18 +3570,18 @@ extension Agent: ReconcileActuator {
         // `with(spec:)`, not a fresh entry: re-adoption rewrites what the VM is
         // running, never the vsock CID it holds (STR-72) nor the record of what
         // has been applied to it (STR-151).
-        managedVMs[item.vmId] = entry.with(spec: spec)
-        orphanedVMs.removeValue(forKey: item.vmId)
+        managedVMs[item.id] = entry.with(spec: spec)
+        orphanedVMs.removeValue(forKey: item.id)
         persistManifest()
 
         logger.info(
             "Orphaned VM re-adopted and managed again",
             metadata: [
-                "vmId": .string(item.vmId),
+                "vmId": .string(item.id),
                 "status": .string(status.rawValue),
             ])
         await sendVMLog(
-            vmId: item.vmId, level: .info, eventType: .operation,
+            vmId: item.id, level: .info, eventType: .operation,
             message: "VM re-adopted after agent restart", operation: "adopt")
         return status
     }
@@ -3791,21 +3797,21 @@ extension Agent: ReconcileActuator {
             case .boot:
                 try await reconcileBoot(item)
             case .pause:
-                try await reconcileService(for: item.vmId).pauseVM(vmId: item.vmId)
+                try await reconcileService(for: item.id).pauseVM(vmId: item.id)
             case .resume:
-                try await reconcileService(for: item.vmId).resumeVM(vmId: item.vmId)
+                try await reconcileService(for: item.id).resumeVM(vmId: item.id)
             case .resize:
                 try await reconcileResize(item)
             case .reconfigureNetworks:
                 try await reconcileNetworks(item)
             case .shutdown:
-                try await reconcileService(for: item.vmId).shutdownVM(vmId: item.vmId)
+                try await reconcileService(for: item.id).shutdownVM(vmId: item.id)
             case .delete:
                 try await reconcileDelete(item)
             case .reboot:
-                try await reconcileService(for: item.vmId).rebootVM(vmId: item.vmId)
+                try await reconcileService(for: item.id).rebootVM(vmId: item.id)
                 await sendVMLog(
-                    vmId: item.vmId, level: .info, eventType: .operation,
+                    vmId: item.id, level: .info, eventType: .operation,
                     message: "VM restarted by reconciliation", operation: "reboot")
             case .restore:
                 try await reconcileRestore(item)
@@ -3816,7 +3822,7 @@ extension Agent: ReconcileActuator {
                     "step \(step) is not applicable to a \(item.kind.rawValue) workload")
             }
         } catch {
-            if let claim = bootCapacityClaims.removeValue(forKey: item.vmId) {
+            if let claim = bootCapacityClaims.removeValue(forKey: item.id) {
                 capacityAdmissionLedger.release(claim)
             }
             throw error
@@ -3849,9 +3855,9 @@ extension Agent: ReconcileActuator {
     /// already had is the status quo, while a VM that does not come up is a
     /// regression.
     private func reconcileBoot(_ item: ReconcileWorkItem) async throws {
-        let service = try reconcileService(for: item.vmId)
+        let service = try reconcileService(for: item.id)
         guard let desired = item.desired,
-            let current = managedVMs[item.vmId] ?? orphanedVMs[item.vmId]
+            let current = managedVMs[item.id] ?? orphanedVMs[item.id]
         else {
             throw HypervisorServiceError.invalidConfiguration("boot work item without a managed VM spec")
         }
@@ -3874,16 +3880,16 @@ extension Agent: ReconcileActuator {
 
         if !item.steps.contains(.create), !item.steps.contains(.restore), let spec = item.desired?.spec {
             do {
-                try await service.redefineVM(vmId: item.vmId, spec: spec)
+                try await service.redefineVM(vmId: item.id, spec: spec)
                 if current.hypervisorType == .qemu,
                     desiredReservation.memoryBytes > currentReservation.memoryBytes,
-                    let entry = managedVMs[item.vmId] ?? orphanedVMs[item.vmId]
+                    let entry = managedVMs[item.id] ?? orphanedVMs[item.id]
                 {
                     let widened = entry.reservingMemory(atLeast: desiredReservation.memoryBytes)
-                    if managedVMs[item.vmId] != nil {
-                        managedVMs[item.vmId] = widened
+                    if managedVMs[item.id] != nil {
+                        managedVMs[item.id] = widened
                     } else {
-                        orphanedVMs[item.vmId] = widened
+                        orphanedVMs[item.id] = widened
                     }
                     // The persistent domain may already be wider even if the
                     // boot below fails, so record the reservation immediately.
@@ -3896,28 +3902,28 @@ extension Agent: ReconcileActuator {
                     hot-plug slots and size ceilings it already had
                     """,
                     metadata: [
-                        "vmId": .string(item.vmId), "error": .string(error.localizedDescription),
+                        "vmId": .string(item.id), "error": .string(error.localizedDescription),
                     ])
             }
         }
         do {
-            try await service.ensureMemoryCeiling(vmId: item.vmId, spec: desired.spec)
-            try await service.bootVM(vmId: item.vmId)
+            try await service.ensureMemoryCeiling(vmId: item.id, spec: desired.spec)
+            try await service.bootVM(vmId: item.id)
         } catch {
             capacityAdmissionLedger.release(claim)
             throw error
         }
 
-        if let entry = managedVMs[item.vmId] ?? orphanedVMs[item.vmId] {
+        if let entry = managedVMs[item.id] ?? orphanedVMs[item.id] {
             var booted = entry.reservingPositiveSizingGrowth(toward: desired.spec)
             if entry.hypervisorType == .qemu {
                 booted = booted.reservingMemory(
                     atLeast: max(currentReservation.memoryBytes, desiredReservation.memoryBytes))
             }
-            if managedVMs[item.vmId] != nil {
-                managedVMs[item.vmId] = booted
+            if managedVMs[item.id] != nil {
+                managedVMs[item.id] = booted
             } else {
-                orphanedVMs[item.vmId] = booted
+                orphanedVMs[item.id] = booted
             }
             // The larger domain is running now. Make its reservation durable
             // before retiring the provisional claim; the separate drift
@@ -3926,7 +3932,7 @@ extension Agent: ReconcileActuator {
         }
 
         if let claim, item.steps.contains(.resize) {
-            bootCapacityClaims[item.vmId] = claim
+            bootCapacityClaims[item.id] = claim
         } else {
             capacityAdmissionLedger.release(claim)
         }
@@ -3943,10 +3949,10 @@ extension Agent: ReconcileActuator {
         guard let restore = item.desired?.restore else {
             throw HypervisorServiceError.invalidConfiguration("restore work item without a restore nonce")
         }
-        try await reconcileService(for: item.vmId).restoreVM(
-            vmId: item.vmId, snapshotId: restore.snapshotId.uuidString)
+        try await reconcileService(for: item.id).restoreVM(
+            vmId: item.id, snapshotId: restore.snapshotId.uuidString)
         await sendVMLog(
-            vmId: item.vmId, level: .info, eventType: .operation,
+            vmId: item.id, level: .info, eventType: .operation,
             message: "VM restored from checkpoint \(restore.snapshotId.uuidString)",
             operation: "restore")
     }
@@ -4522,7 +4528,7 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
         }
 
-        let currentEntry = managedVMs[item.vmId] ?? orphanedVMs[item.vmId]
+        let currentEntry = managedVMs[item.id] ?? orphanedVMs[item.id]
         let currentReservation =
             currentEntry.map {
                 VMHostReservation.forManifestEntry($0, architecture: .current)
@@ -4554,14 +4560,14 @@ extension Agent: ReconcileActuator {
         // later VM handed the orphaned CID fails to start instead of joining
         // the surviving guest's channel.
         let lease = try vsockCIDs.lease(
-            for: item.vmId, needsHostCID: desired.hypervisorType.usesHostVsockNamespace)
+            for: item.id, needsHostCID: desired.hypervisorType.usesHostVsockNamespace)
 
         // The orchestrator realizes the VM's NICs on this host before the
         // driver runs, and rolls them back if the driver never created the VM.
         let attachments: [ResolvedNetworkAttachment]
         do {
             attachments = try await networkOrchestrator.prepareAttachments(
-                vmId: item.vmId, networks: desired.spec.networks,
+                vmId: item.id, networks: desired.spec.networks,
                 metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
         } catch {
             vsockCIDs.rollBack(lease)
@@ -4569,11 +4575,11 @@ extension Agent: ReconcileActuator {
         }
         do {
             try await service.createVM(
-                vmId: item.vmId, spec: desired.spec, imageInfo: desired.imageInfo,
+                vmId: item.id, spec: desired.spec, imageInfo: desired.imageInfo,
                 networkAttachments: attachments, metadata: desired.metadata)
         } catch {
             await networkOrchestrator.teardownAttachments(
-                vmId: item.vmId, networks: desired.spec.networks)
+                vmId: item.id, networks: desired.spec.networks)
             vsockCIDs.rollBack(lease)
             throw error
         }
@@ -4591,17 +4597,17 @@ extension Agent: ReconcileActuator {
         // sandbox's placement is pinned today, so it is unreachable rather than
         // merely rare. It stops being unreachable the day a sandbox can move
         // with a restore outstanding.
-        let appliedEdges = (managedVMs[item.vmId] ?? orphanedVMs[item.vmId])?.appliedEdges
-        managedVMs[item.vmId] = VMManifestEntry(
+        let appliedEdges = (managedVMs[item.id] ?? orphanedVMs[item.id])?.appliedEdges
+        managedVMs[item.id] = VMManifestEntry(
             hypervisorType: desired.hypervisorType, spec: desired.spec,
             realizedMemoryReservationBytes: desired.hypervisorType == .qemu
                 ? desiredReservation.memoryBytes : nil,
             vsockCID: lease.cid,
             appliedEdges: appliedEdges)
-        orphanedVMs.removeValue(forKey: item.vmId)
+        orphanedVMs.removeValue(forKey: item.id)
         persistManifest()
         await sendVMLog(
-            vmId: item.vmId, level: .info, eventType: .statusChange,
+            vmId: item.id, level: .info, eventType: .statusChange,
             message: "VM created by reconciliation", operation: "create")
     }
 
@@ -4616,14 +4622,14 @@ extension Agent: ReconcileActuator {
         guard let desired = item.desired else {
             throw HypervisorServiceError.invalidConfiguration("resize work item without a desired entry")
         }
-        guard let entry = managedVMs[item.vmId] else {
-            throw HypervisorServiceError.vmNotFound(item.vmId)
+        guard let entry = managedVMs[item.id] else {
+            throw HypervisorServiceError.vmNotFound(item.id)
         }
         let currentReservation = VMHostReservation.forManifestEntry(
             entry, architecture: .current)
         let desiredReservation = VMHostReservation.forSpec(
             desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
-        let bootClaim = bootCapacityClaims.removeValue(forKey: item.vmId)
+        let bootClaim = bootCapacityClaims.removeValue(forKey: item.id)
         let claim: HostCapacityClaim?
         if let bootClaim {
             claim = bootClaim
@@ -4638,13 +4644,13 @@ extension Agent: ReconcileActuator {
             }
         }
         defer { capacityAdmissionLedger.release(claim) }
-        let service = try reconcileService(for: item.vmId)
-        try await service.resizeVM(vmId: item.vmId, spec: desired.spec)
+        let service = try reconcileService(for: item.id)
+        try await service.resizeVM(vmId: item.id, spec: desired.spec)
 
-        managedVMs[item.vmId] = entry.with(spec: entry.spec.withSizing(from: desired.spec))
+        managedVMs[item.id] = entry.with(spec: entry.spec.withSizing(from: desired.spec))
         persistManifest()
         await sendVMLog(
-            vmId: item.vmId, level: .info, eventType: .operation,
+            vmId: item.id, level: .info, eventType: .operation,
             message: "VM resized to \(desired.spec.cpus) vCPUs and \(desired.spec.memoryBytes) bytes of memory",
             operation: "resize")
     }
@@ -4658,15 +4664,15 @@ extension Agent: ReconcileActuator {
             throw HypervisorServiceError.invalidConfiguration(
                 "network work item without a desired entry")
         }
-        guard let entry = managedVMs[item.vmId] else {
-            throw HypervisorServiceError.vmNotFound(item.vmId)
+        guard let entry = managedVMs[item.id] else {
+            throw HypervisorServiceError.vmNotFound(item.id)
         }
         guard entry.hypervisorType == .qemu else {
             throw HypervisorServiceError.notSupported(
                 "VM network hot-plug is supported only for QEMU VMs")
         }
 
-        let service = try reconcileService(for: item.vmId)
+        let service = try reconcileService(for: item.id)
         let current = entry.spec.networks
         let target = desired.spec.networks
         let pairs = VMNetworkInterfaceDiff.between(current: current, desired: target)
@@ -4683,33 +4689,33 @@ extension Agent: ReconcileActuator {
                     + "or use a DHCP-enabled network")
         }
 
-        let status = try await service.getVMStatus(vmId: item.vmId)
+        let status = try await service.getVMStatus(vmId: item.id)
         if status != .running && status != .paused {
             // On an inactive domain, widen the stored PCIe root complex before
             // config-only device changes consume another slot.
-            try await service.redefineVM(vmId: item.vmId, spec: desired.spec)
+            try await service.redefineVM(vmId: item.id, spec: desired.spec)
         }
 
         for oldIndex in pairs.removed {
             let spec = current[oldIndex]
-            try await service.detachNetworkInterface(vmId: item.vmId, spec: spec)
+            try await service.detachNetworkInterface(vmId: item.id, spec: spec)
             try await networkOrchestrator.removeAttachment(
-                vmId: item.vmId, spec: spec, fallbackIndex: oldIndex)
+                vmId: item.id, spec: spec, fallbackIndex: oldIndex)
         }
 
         for newIndex in pairs.added {
             let spec = target[newIndex]
             let attachment = try await networkOrchestrator.prepareAttachment(
-                vmId: item.vmId,
+                vmId: item.id,
                 spec: spec,
                 fallbackIndex: newIndex,
                 metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
             do {
                 try await service.attachNetworkInterface(
-                    vmId: item.vmId, spec: spec, attachment: attachment)
+                    vmId: item.id, spec: spec, attachment: attachment)
             } catch {
                 await networkOrchestrator.teardownAttachments(
-                    vmId: item.vmId, networks: [spec])
+                    vmId: item.id, networks: [spec])
                 throw error
             }
         }
@@ -4717,10 +4723,10 @@ extension Agent: ReconcileActuator {
         // Identity hydration and every add/remove become durable only after
         // the complete operation succeeds. A replay then observes libvirt's
         // already-present/absent result and finishes any interrupted cleanup.
-        managedVMs[item.vmId] = entry.with(spec: entry.spec.withNetworks(target))
+        managedVMs[item.id] = entry.with(spec: entry.spec.withNetworks(target))
         persistManifest()
         await sendVMLog(
-            vmId: item.vmId, level: .info, eventType: .operation,
+            vmId: item.id, level: .info, eventType: .operation,
             message: "VM network interfaces reconciled", operation: "network-hotplug")
     }
 
@@ -4755,12 +4761,12 @@ extension Agent: ReconcileActuator {
         // hypervisor process is actually torn down instead of leaking. If the
         // session cannot be reattached, fall back to releasing the manifest
         // entry, reclaiming as much as the failure proves is safe to reclaim.
-        if managedVMs[item.vmId] == nil, let entry = orphanedVMs[item.vmId] {
+        if managedVMs[item.id] == nil, let entry = orphanedVMs[item.id] {
             let service = getHypervisorService(for: entry.hypervisorType)
-            let adoption = await adoptOrphanForDelete(vmId: item.vmId, entry: entry, service: service)
+            let adoption = await adoptOrphanForDelete(vmId: item.id, entry: entry, service: service)
             switch adoption {
             case .adopted:
-                managedVMs[item.vmId] = entry
+                managedVMs[item.id] = entry
 
             case .processGone, .indeterminate:
                 // Reclaim before releasing the manifest entry, not after: that
@@ -4773,54 +4779,54 @@ extension Agent: ReconcileActuator {
                 if adoption == .processGone, let service {
                     // Nothing is running from this VM's disks, so its whole
                     // directory — boot disk included — goes with it.
-                    await service.reclaimVMDirectory(vmId: item.vmId)
+                    await service.reclaimVMDirectory(vmId: item.id)
                 } else {
                     logger.warning(
                         "Deleting an orphaned VM this agent could not re-adopt; any surviving hypervisor process and the VM's files must be cleaned up manually",
-                        metadata: ["vmId": .string(item.vmId)])
+                        metadata: ["vmId": .string(item.id)])
                 }
 
-                orphanedVMs.removeValue(forKey: item.vmId)
-                releaseVsockCID(item.vmId)
+                orphanedVMs.removeValue(forKey: item.id)
+                releaseVsockCID(item.id)
                 persistManifest()
                 // Host-side network resources are derived from deterministic
                 // names, so they can be torn down even with no live session.
                 await networkOrchestrator.teardownAttachments(
-                    vmId: item.vmId, networks: entry.spec.networks)
+                    vmId: item.id, networks: entry.spec.networks)
                 return
             }
         }
 
-        guard let entry = managedVMs[item.vmId] else {
+        guard let entry = managedVMs[item.id] else {
             // Already absent — deletion is idempotent. The CID is still
             // released: no manifest entry refers to this VM, so anything the
             // allocator still holds for it (a create that failed after taking
             // one, an orphan reaped by the branch above) is a leak.
-            releaseVsockCID(item.vmId)
+            releaseVsockCID(item.id)
             return
         }
-        let service = try reconcileService(for: item.vmId)
+        let service = try reconcileService(for: item.id)
 
         // Stop gracefully first when the VM is actually running; deleting a
         // resting VM skips straight to teardown.
-        let status = (try? await service.getVMStatus(vmId: item.vmId)) ?? .unknown
+        let status = (try? await service.getVMStatus(vmId: item.id)) ?? .unknown
         if status == .running || status == .paused {
-            try await service.stopAndDeleteVM(vmId: item.vmId)
+            try await service.stopAndDeleteVM(vmId: item.id)
         } else {
-            try await service.deleteVM(vmId: item.vmId)
+            try await service.deleteVM(vmId: item.id)
         }
 
         // Tear down the VM's host-side network resources now that the
         // hypervisor session is gone (best-effort; never blocks deletion).
         await networkOrchestrator.teardownAttachments(
-            vmId: item.vmId, networks: entry.spec.networks)
+            vmId: item.id, networks: entry.spec.networks)
 
-        managedVMs.removeValue(forKey: item.vmId)
-        orphanedVMs.removeValue(forKey: item.vmId)
-        releaseVsockCID(item.vmId)
+        managedVMs.removeValue(forKey: item.id)
+        orphanedVMs.removeValue(forKey: item.id)
+        releaseVsockCID(item.id)
         persistManifest()
         await sendVMLog(
-            vmId: item.vmId, level: .info, eventType: .operation,
+            vmId: item.id, level: .info, eventType: .operation,
             message: "VM deleted by reconciliation", operation: "delete")
     }
 

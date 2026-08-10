@@ -636,7 +636,6 @@ final class SiteTests {
 
     private func makeSchedulable(
         id: String = UUID().uuidString, name: String, siteID: UUID? = nil,
-        wireProtocolVersion: Int = WireProtocol.currentVersion,
         supportsInterVMNetworking: Bool = true
     ) -> SchedulableAgent {
         SchedulableAgent(
@@ -647,8 +646,7 @@ final class SiteTests {
             status: .online, runningVMCount: 0,
             supportedHypervisors: [.qemu],
             supportsInterVMNetworking: supportsInterVMNetworking,
-            siteID: siteID,
-            wireProtocolVersion: wireProtocolVersion
+            siteID: siteID
         )
     }
 
@@ -1296,6 +1294,58 @@ final class SiteTests {
                 .filter(\.$organization.$id == bareOrg.id!)
                 .count()
             #expect(bareSitesAgain == 1)
+        }
+    }
+
+    @Test("Required placement creates a default alongside an existing custom site")
+    func requiredPlacementFallbackSite() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let org = try await builder.createOrganization(name: "Placement Fallback Org")
+            let custom = Site(
+                name: "placement-custom-dc", organizationScope: .organization(try org.requireID()))
+            try await custom.save(on: app.db)
+
+            try await RequireSitePlacement().prepare(on: app.db)
+
+            let sites = try await Site.query(on: app.db)
+                .filter(\.$organization.$id == org.id!)
+                .all()
+            #expect(sites.count == 2)
+            #expect(sites.contains { $0.id == custom.id })
+            #expect(
+                sites.contains {
+                    $0.name == Site.defaultName(forOrganizationNamed: "Placement Fallback Org")
+                })
+
+            // The fallback creation and the constraints are both idempotent.
+            try await RequireSitePlacement().prepare(on: app.db)
+            let count = try await Site.query(on: app.db)
+                .filter(\.$organization.$id == org.id!)
+                .count()
+            #expect(count == 2)
+        }
+    }
+
+    @Test("Required placement uses an owned fallback when the default name is taken")
+    func requiredPlacementFallbackNameCollision() async throws {
+        try await withSiteTestApp { app, _, _, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let owner = try await builder.createOrganization(name: "Fallback Collision Owner")
+            let target = try await builder.createOrganization(name: "Fallback Collision Target")
+            let collision = Site(
+                name: Site.defaultName(forOrganizationNamed: target.name),
+                organizationScope: .organization(try owner.requireID()))
+            try await collision.save(on: app.db)
+
+            try await RequireSitePlacement().prepare(on: app.db)
+
+            let fallback = try #require(
+                try await Site.query(on: app.db)
+                    .filter(\.$organization.$id == target.id!)
+                    .first())
+            #expect(fallback.name == "Default Site \(try target.requireID().uuidString)")
+            #expect(collision.$organization.id == owner.id)
         }
     }
 }

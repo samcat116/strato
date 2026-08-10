@@ -69,7 +69,7 @@ final class SandboxTests {
         named agentName: String = "sandbox-agent",
         sandboxCapable: Bool? = nil,
         sandboxNetworkingCapable: Bool? = nil,
-        protocolVersion: Int? = WireProtocol.currentVersion,
+        protocolVersion: Int = WireProtocol.currentVersion,
         architecture: CPUArchitecture? = nil,
         // Recent enough to remap a restored network device (STR-104), which is
         // what a networked fork places on. Tests probing that gate pass an

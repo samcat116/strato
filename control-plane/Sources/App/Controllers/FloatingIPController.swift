@@ -169,16 +169,15 @@ struct FloatingIPController: RouteCollection {
         }
         let (cidr, gateway) = try Self.validatePoolAddressing(cidr: create.cidr, gateway: create.gateway)
 
-        if let siteId = create.siteId {
-            guard let site = try await Site.find(siteId, on: req.db) else {
-                throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
-            }
-            try await requireSiteManage(req, site: site)
+        let siteId = create.siteId
+        guard let site = try await Site.find(siteId, on: req.db) else {
+            throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
         }
-        try await Self.assertNoPoolOverlap(cidr: cidr, siteId: create.siteId, excluding: nil, on: req.db)
+        try await requireSiteManage(req, site: site)
+        try await Self.assertNoPoolOverlap(cidr: cidr, siteId: siteId, excluding: nil, on: req.db)
 
         let pool = FloatingIPPool(
-            name: name, cidr: cidr, gateway: gateway, siteID: create.siteId, organizationScope: scope)
+            name: name, cidr: cidr, gateway: gateway, siteID: siteId, organizationScope: scope)
         do {
             try await pool.save(on: req.db)
         } catch let error as any DatabaseError where error.isConstraintFailure {
@@ -229,7 +228,8 @@ struct FloatingIPController: RouteCollection {
                     reason: "Gateway \(canonicalGateway!) is already allocated as a floating IP; release it first")
             }
         }
-        if let siteId = update.siteId, siteId != pool.$site.id {
+        let siteId = update.siteId
+        if siteId != pool.$site.id {
             guard let site = try await Site.find(siteId, on: req.db) else {
                 throw Abort(.badRequest, reason: "Site \(siteId) does not exist")
             }
@@ -240,7 +240,7 @@ struct FloatingIPController: RouteCollection {
         // strand live attachments: the site constraint is only enforced at
         // attach time, so a move would leave the old site advertising
         // addresses from a pool that now claims to answer elsewhere.
-        if update.siteId != pool.$site.id {
+        if siteId != pool.$site.id {
             let attached = try await FloatingIP.query(on: req.db)
                 .filter(\.$pool.$id == pool.requireID())
                 .all()
@@ -254,11 +254,11 @@ struct FloatingIPController: RouteCollection {
                 )
             }
             try await Self.assertNoPoolOverlap(
-                cidr: pool.cidr, siteId: update.siteId, excluding: pool.id, on: req.db)
+                cidr: pool.cidr, siteId: siteId, excluding: pool.id, on: req.db)
         }
 
         pool.gateway = canonicalGateway
-        pool.$site.id = update.siteId
+        pool.$site.id = siteId
         try await pool.save(on: req.db)
 
         let count = try await FloatingIP.query(on: req.db)
@@ -489,12 +489,10 @@ struct FloatingIPController: RouteCollection {
         }
         // A site-pinned pool only answers for its own site's OVN deployment.
         let pool = try await floatingIP.$pool.get(on: req.db)
-        if let poolSiteId = pool.$site.id {
-            guard network.$site.id == poolSiteId else {
-                throw Abort(
-                    .conflict,
-                    reason: "Pool '\(pool.name)' is pinned to a different site than network '\(network.name)'")
-            }
+        if network.$site.id != pool.$site.id {
+            throw Abort(
+                .conflict,
+                reason: "Pool '\(pool.name)' is pinned to a different site than network '\(network.name)'")
         }
         // Refuse *unplaced* VMs outright: an attach accepted now has no
         // realizing agent to carry the NAT rule, and the API would report an
@@ -620,7 +618,7 @@ struct FloatingIPController: RouteCollection {
     ) async throws {
         let others = try await FloatingIPPool.query(on: db).all()
         for other in others where other.id != poolId {
-            if let siteId, let otherSiteId = other.$site.id, siteId != otherSiteId { continue }
+            if let siteId, siteId != other.$site.id { continue }
             if NetworkController.subnetsOverlap(cidr, other.cidr) {
                 throw Abort(
                     .conflict,
@@ -649,16 +647,14 @@ struct FloatingIPController: RouteCollection {
         return (canonical, gatewayIP.description)
     }
 
-    /// The agent whose network reconciler would realize NAT for the VM: the
-    /// site's network controller for a sited host, the hosting agent itself
-    /// for the legacy site-less model. Throws 409 in every state where
+    /// The site's network controller whose reconciler would realize NAT for
+    /// the VM. Throws 409 in every state where
     /// *nothing* would realize the NAT rule, so an attach can never persist
     /// an address the sync path won't back:
     /// - the VM is unplaced (the scheduler has no floating-IP capability
     ///   requirement, so a later placement could land on a too-old agent);
-    /// - the host is sited but the site has no designated network controller
-    ///   (assembly then sends *no* agent the network state — unlike the
-    ///   site-less model, the hosting agent has no topology authority);
+    /// - the site has no designated network controller (assembly then sends
+    ///   *no* agent the network state);
     /// - the site's controller is offline past the grace window, or came back
     ///   unable to author topology (issue #833).
     static func requireNATRealizingAgent(for vm: VM, on db: Database) async throws -> Agent {
@@ -677,8 +673,6 @@ struct FloatingIPController: RouteCollection {
             throw refusal
         }
         switch authority {
-        case .selfAuthored(let host):
-            return host
         case .controller(let controller):
             return controller
         case .controllerUnavailable(_, let controller, _):

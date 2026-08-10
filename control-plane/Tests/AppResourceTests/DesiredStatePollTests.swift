@@ -73,9 +73,8 @@ struct DesiredStatePollTests {
 
     // MARK: Payload
 
-    /// The response is a full `MessageEnvelope`, not a bare payload: the agent
-    /// reads `senderVersion` off it to tell authoritative silence from an old
-    /// control plane, so both transports must carry it.
+    /// The response is a full `MessageEnvelope`, not a bare payload, so both
+    /// transports use the same routing and decoding path.
     @Test("An agent SVID identity is served its own desired state in an envelope")
     func servesDesiredState() async throws {
         try await withRunningPollApp { app, port in

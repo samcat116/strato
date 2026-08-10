@@ -43,8 +43,7 @@ struct SchedulerServiceTests {
         supportsInterVMNetworking: Bool = false,
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
-        supportsVTPM: Bool = false,
-        wireProtocolVersion: Int? = nil
+        supportsVTPM: Bool = false
     ) -> SchedulableAgent {
         return SchedulableAgent(
             id: id,
@@ -60,7 +59,6 @@ struct SchedulerServiceTests {
             supportedHypervisors: supportedHypervisors,
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
-            wireProtocolVersion: wireProtocolVersion,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
             supportsVTPM: supportsVTPM
@@ -817,69 +815,6 @@ struct SchedulerServiceTests {
         windows.secureBoot = true
         windows.tpmEnabled = true
         #expect(SchedulerService.placementRequirements(for: windows).requiresVTPM)
-    }
-
-    // MARK: - The per-instance metadata kill switch (STR-185)
-
-    private func metadataOptOutRequirements() -> VMPlacementRequirements {
-        VMPlacementRequirements(
-            cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu, requiresMetadataOptOut: true)
-    }
-
-    @Test("An agent too old to honour the metadata kill switch is not eligible")
-    func testMetadataOptOutRequiresNewEnoughAgent() throws {
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-        let agents = [
-            createTestAgent(
-                id: "old", name: "old",
-                wireProtocolVersion: WireProtocol.metadataOptOutMinimumVersion - 1)
-        ]
-
-        do {
-            _ = try scheduler.selectAgent(requirements: metadataOptOutRequirements(), from: agents)
-            Issue.record("Expected metadataOptOutUnsatisfied error")
-        } catch let error as SchedulerError {
-            guard case .metadataOptOutUnsatisfied(let eligibleAgents) = error else {
-                Issue.record("Expected metadataOptOutUnsatisfied, got \(error)")
-                return
-            }
-            #expect(eligibleAgents == 1)
-        }
-    }
-
-    @Test("A switched-off VM places on the one agent new enough to honour it")
-    func testMetadataOptOutPlacesOnCapableAgent() throws {
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-        let agents = [
-            createTestAgent(
-                id: "old", name: "old", availableCPU: 8,
-                wireProtocolVersion: WireProtocol.metadataOptOutMinimumVersion - 1),
-            createTestAgent(
-                id: "new", name: "new", availableCPU: 2,
-                wireProtocolVersion: WireProtocol.metadataOptOutMinimumVersion),
-        ]
-
-        #expect(try scheduler.selectAgent(requirements: metadataOptOutRequirements(), from: agents) == "new")
-    }
-
-    @Test("A VM with metadata left on places on an agent that predates the switch")
-    func testMetadataServedVMIgnoresTheGate() throws {
-        let scheduler = SchedulerService(logger: Logger(label: "test"))
-        let agents = [
-            createTestAgent(id: "old", name: "old", wireProtocolVersion: nil)
-        ]
-
-        #expect(try scheduler.selectAgent(for: createTestVM(cpu: 2), from: agents) == "old")
-    }
-
-    @Test("Placement requirements carry the VM's metadata kill switch")
-    func testPlacementRequirementsCarryMetadataOptOut() throws {
-        let served = createTestVM(cpu: 2)
-        #expect(!SchedulerService.placementRequirements(for: served).requiresMetadataOptOut)
-
-        let hardened = createTestVM(cpu: 2)
-        hardened.metadataEnabled = false
-        #expect(SchedulerService.placementRequirements(for: hardened).requiresMetadataOptOut)
     }
 
 }
