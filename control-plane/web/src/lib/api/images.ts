@@ -124,7 +124,7 @@ export const imagesApi = {
   getDownloadURL(
     projectId: string,
     imageId: string,
-    artifact: ArtifactKind = "disk-image"
+    artifact: ArtifactKind
   ): string {
     return `/api/projects/${projectId}/images/${imageId}/download?artifact=${encodeURIComponent(artifact)}`;
   },
