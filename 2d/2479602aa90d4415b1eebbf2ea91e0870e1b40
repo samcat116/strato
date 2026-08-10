@@ -81,6 +81,7 @@ control-plane/Tests/AppResourceTests/MakeImageArtifactsAuthoritativeTests.swift
   s_b46c3107f6ba4b::t_2aa7e699ef073a 19,31,37,39,66
   s_b46c3107f6ba4b::t_1f36dc59ada8c2 2
   s_b46c3107f6ba4b::t_9ddfa07f2223f1 4-5,9-18,20-30,32-36,38,40-49,51-63,65,67,73-75,77-79
+  s_4fdae838d0c2ea::t_1a67ae3060ddba 1,3,6-8,50,64,68-72,76,80-82
 control-plane/Tests/AppResourceTests/ImageDownloadMTLSTests.swift
   s_b46c3107f6ba4b::t_9f30e3098bf72e 87-90,143
 control-plane/Tests/AppPlatformTests/MigrationEnumSafetyTests.swift
@@ -108,6 +109,14 @@ control-plane/Sources/App/Migrations/MakeImageArtifactsAuthoritative.swift
   "base_commit_sha": "2d2479602aa90d4415b1eebbf2ea91e0870e1b40",
   "prompts": {},
   "sessions": {
+    "s_4fdae838d0c2ea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec77-c54c-7c61-a1d3-058bb12398f3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
     "s_59e96616c802df": {
       "agent_id": {
         "tool": "codex",
