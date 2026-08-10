@@ -89,6 +89,7 @@ struct DesiredStatePollerTests {
 
         #expect(await cp.validators == [nil])
         #expect(await log.envelopes.count == 1)
+        #expect(await poller.lastSuccessfulFullRefetchAt != nil)
     }
 
     @Test("Subsequent fetches echo the last ETag")
@@ -169,6 +170,24 @@ struct DesiredStatePollerTests {
         #expect(await poller.deliveredSyncs == 2)
     }
 
+    @Test("A conditional 200 does not advance the full-refetch clock")
+    func conditionalPayloadDoesNotAdvanceFullRefetchClock() async throws {
+        let cp = FakeControlPlane(
+            responses: [
+                .success(try Self.ok(etag: "\"first\"")),
+                .success(try Self.ok(etag: "\"second\"")),
+            ],
+            fallback: .success(Self.notModified(etag: "\"second\"")))
+        let poller = makePoller(controlPlane: cp, log: DeliveryLog())
+
+        await poller.runOnce()
+        let afterFullRefetch = await poller.lastSuccessfulFullRefetchAt
+        await poller.runOnce()
+
+        #expect(await cp.validators == [nil, "\"first\""])
+        #expect(await poller.lastSuccessfulFullRefetchAt == afterFullRefetch)
+    }
+
     /// Staying conditional after failing to apply a payload would mean never
     /// being told again: the control plane believes it has already delivered.
     @Test("An undecodable payload drops the ETag so the next fetch is not conditional")
@@ -182,6 +201,7 @@ struct DesiredStatePollerTests {
         let poller = makePoller(controlPlane: cp, log: log)
 
         await poller.runOnce()
+        #expect(await poller.lastSuccessfulFullRefetchAt == nil)
         await poller.runOnce()
 
         #expect(await cp.validators == [nil, nil])
@@ -210,6 +230,7 @@ struct DesiredStatePollerTests {
         await poller.runOnce()
 
         #expect(await log.envelopes.isEmpty)
+        #expect(await poller.lastSuccessfulFullRefetchAt == nil)
     }
 
     // MARK: Failures
@@ -224,6 +245,7 @@ struct DesiredStatePollerTests {
         let poller = makePoller(controlPlane: cp, log: log, fullRefetchInterval: .seconds(300))
 
         await poller.runOnce()  // throws, sleeps out the initial backoff
+        #expect(await poller.lastSuccessfulFullRefetchAt == nil)
         await poller.runOnce()
 
         // The retry is still unconditional: the first attempt never got an
@@ -247,11 +269,29 @@ struct DesiredStatePollerTests {
         let poller = makePoller(controlPlane: cp, log: log, fullRefetchInterval: .milliseconds(1))
 
         await poller.runOnce()  // unconditional 200 → adopts "a"
+        let afterSuccessfulResponse = await poller.lastSuccessfulFullRefetchAt
         try await Task.sleep(for: .milliseconds(5))
         await poller.runOnce()  // unconditional again, answered 304
+        let afterInvalidResponse = await poller.lastSuccessfulFullRefetchAt
         await poller.runOnce()
 
         #expect(await cp.validators == [nil, nil, nil])
+        #expect(afterInvalidResponse == afterSuccessfulResponse)
+        #expect(await poller.lastSuccessfulFullRefetchAt == afterSuccessfulResponse)
+    }
+
+    @Test("An unexpected unconditional status does not advance the full-refetch clock")
+    func unexpectedStatusDoesNotAdvanceFullRefetchClock() async throws {
+        let unexpected = DesiredStatePollResponse(status: 503, etag: nil, body: Data())
+        let cp = FakeControlPlane(
+            responses: [.success(unexpected)],
+            fallback: .success(try Self.ok(etag: "\"a\"")))
+        let poller = makePoller(controlPlane: cp, log: DeliveryLog())
+
+        await poller.runOnce()
+
+        #expect(await cp.validators == [nil])
+        #expect(await poller.lastSuccessfulFullRefetchAt == nil)
     }
 
     // MARK: Lifecycle

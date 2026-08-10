@@ -23,7 +23,8 @@ import Logging
 /// - **`signal()` never awaits the action.** Its caller is a pump draining a
 ///   bounded, drop-oldest event stream; blocking it turns back pressure into
 ///   silent event loss. A cheap signal keeps the loss where it was designed to
-///   be — in the hypervisor's own buffer, where the periodic sync covers it.
+///   be — in the hypervisor's own buffer, where the next full desired-state
+///   payload covers it.
 /// - **The first signal after a quiet period runs immediately.** Leading edge,
 ///   so the common case (one guest changed) pays no added latency at all; the
 ///   interval only bites during a burst.

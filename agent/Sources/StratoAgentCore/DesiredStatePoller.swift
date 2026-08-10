@@ -21,11 +21,11 @@ public struct DesiredStatePollResponse: Sendable {
 /// frame on the WebSocket.
 ///
 /// The loop is deliberately dumb. It fetches, hands whatever comes back to the
-/// same message path a pushed frame would have taken, and fetches again. There
-/// is no local model of what the control plane thinks it has sent, no
+/// ordinary inbound message path, and fetches again. There is no local model
+/// of what the control plane thinks it has sent, no
 /// reconstruction of missed updates, no ordering to preserve beyond the one the
 /// message queue already provides — every response is the complete, current,
-/// authoritative desired state, exactly as a push was.
+/// authoritative desired state.
 ///
 /// ## The conditional/unconditional split
 ///
@@ -44,10 +44,8 @@ public actor DesiredStatePoller {
     /// One long-poll attempt. Injected so tests drive the loop without a socket.
     public typealias Fetcher = @Sendable (_ ifNoneMatch: String?) async throws -> DesiredStatePollResponse
 
-    /// Where a received sync goes — in production, the same inbound-message
-    /// route a pushed frame takes, so both transports land on the agent's
-    /// `.desiredState` serialization lane and keep the ordering guarantees the
-    /// reconciler already relies on.
+    /// Where a received sync goes — in production, the ordinary inbound-message
+    /// route and its `.desiredState` serialization lane.
     public typealias Deliver = @Sendable (MessageEnvelope) async -> Void
 
     /// How long between forced unconditional fetches. See the type doc: this
@@ -69,7 +67,10 @@ public actor DesiredStatePoller {
     private static let maximumBackoff: Duration = .seconds(30)
 
     private var lastETag: String?
-    private var lastUnconditionalFetch: ContinuousClock.Instant?
+    /// Advances only after a request without a validator receives and decodes
+    /// a full desired-state payload. Internal visibility lets focused tests
+    /// assert the backstop clock directly.
+    private(set) var lastSuccessfulFullRefetchAt: ContinuousClock.Instant?
     private var backoff: Duration = DesiredStatePoller.initialBackoff
     private var task: Task<Void, Never>?
 
@@ -122,27 +123,35 @@ public actor DesiredStatePoller {
         // Nil on the very first pass: an agent that has just (re)registered has
         // no ETag worth trusting anyway, and starting from a full payload means
         // the loop's first act is always to establish ground truth.
-        let unconditional =
-            lastUnconditionalFetch.map { now - $0 >= fullRefetchInterval } ?? true
+        let fullRefetchDue =
+            lastSuccessfulFullRefetchAt.map { now - $0 >= fullRefetchInterval } ?? true
+        // A failed decode drops the ETag. Even before the interval elapses the
+        // next request is therefore unconditional, and a valid response to it
+        // must advance the full-refetch clock.
+        let ifNoneMatch = fullRefetchDue ? nil : lastETag
+        let unconditional = ifNoneMatch == nil
 
         let response: DesiredStatePollResponse
         do {
-            response = try await fetch(unconditional ? nil : lastETag)
+            response = try await fetch(ifNoneMatch)
         } catch {
             await backOff(after: error)
             return
         }
 
-        // Recorded on the response, not the request, so a fetch that fails
-        // does not consume the interval and let an ETag bug hide behind a
-        // stretch of connection errors.
-        if unconditional { lastUnconditionalFetch = clock.now }
         backoff = Self.initialBackoff
 
         switch response.status {
         case 200:
-            lastETag = response.etag
-            await handlePayload(response.body)
+            if await handlePayload(response.body) {
+                lastETag = response.etag
+                // Recorded only after validating the full payload, so a
+                // transport failure, unexpected status, malformed body, or
+                // wrong message type cannot consume the interval.
+                if unconditional { lastSuccessfulFullRefetchAt = clock.now }
+            } else {
+                lastETag = nil
+            }
         case 304:
             notModifiedResponses += 1
             // Nothing changed and the poll has already spent the server's hold
@@ -163,17 +172,18 @@ public actor DesiredStatePoller {
         }
     }
 
-    private func handlePayload(_ body: Data) async {
+    private func handlePayload(_ body: Data) async -> Bool {
         do {
             let envelope = try WireProtocol.makeDecoder().decode(MessageEnvelope.self, from: body)
             guard envelope.type == .desiredState else {
                 logger.warning(
                     "Desired-state poll returned an unexpected message type",
                     metadata: ["type": .string(envelope.type.rawValue)])
-                return
+                return false
             }
             deliveredSyncs += 1
             await deliver(envelope)
+            return true
         } catch {
             // A payload we cannot decode is not retryable by re-fetching the
             // same bytes, but the next change (or the next unconditional
@@ -181,10 +191,7 @@ public actor DesiredStatePoller {
             logger.error(
                 "Failed to decode a desired-state poll payload",
                 metadata: ["error": .string("\(error)")])
-            // Drop the ETag: the control plane believes it has told us
-            // something we did not manage to apply, and staying conditional
-            // would mean never being told again.
-            lastETag = nil
+            return false
         }
     }
 

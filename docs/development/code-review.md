@@ -323,9 +323,10 @@ High-frequency, high-cost mistakes in this codebase. Check these by name.
 
 **Multi-replica**
 - Valkey **fails open**. Any new use must degrade to correct-but-slower, never
-  to incorrect. Agents converge via the periodic sync even with Valkey down.
+  to incorrect. Agents converge via their unconditional desired-state refetch
+  even with Valkey down.
 - A mutation must ring the fleet-wide doorbell so whichever replica holds the
-  agent's parked poll (or socket) acts on it. Forgetting it works locally and
+  agent's parked poll acts on it. Forgetting it works locally and
   fails in production, where it silently waits for the agent's periodic
   re-fetch.
 - Singleton work (sweeps) needs a `lock:sweep:*` lock, or every replica runs it.

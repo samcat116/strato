@@ -955,7 +955,7 @@ struct ImageController: RouteCollection {
     /// Valkey, and a Valkey outage must degrade image pulls to the pre-#562
     /// trust model rather than stall every VM create in the fleet. A store
     /// that answers but has lost the grant (flush, restart) denies once; the
-    /// next periodic sync rewrites it and the agent's retry succeeds.
+    /// next full desired-state fetch rewrites it and the agent's retry succeeds.
     private func authorizeAgentImageFetch(req: Request, agent: AuthenticatedAgent, imageID: UUID) async throws {
         let agentName = agent.identity.key
         // Grants are keyed by the agent's row id — the same identifier VM

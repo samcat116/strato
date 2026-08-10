@@ -87,7 +87,7 @@ struct NoopRegistryClient: RegistryClientProtocol {
 ///    manifest bytes (the digest *is* the SHA-256 of those bytes).
 ///
 /// Minted tokens are cached per (registry, repository, username) until close
-/// to expiry so the periodic sync doesn't hammer token endpoints.
+/// to expiry so frequent desired-state polls do not hammer token endpoints.
 final class DistributionRegistryClient: RegistryClientProtocol {
     /// Held to resolve `app.guardedHTTPClient` per call, so a scripted client
     /// installed via `app.clients.use` — which the guarded client delegates to

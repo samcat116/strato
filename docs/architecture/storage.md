@@ -41,8 +41,8 @@ object through. Presigned bucket URLs would be one round trip cheaper, but:
   coordination grant (`imggrant:agent:{agentId}:image:{imageId}`, 30-minute
   TTL) as the URLs are produced, and the route serves an agent only images it
   holds a grant for. The TTL is the grace window: a placement revoked mid-pull
-  does not fail a download already in flight, and every periodic sync refreshes
-  the grant while the placement stands. Sandbox images are unaffected — those
+  does not fail a download already in flight, and each full desired-state fetch
+  refreshes the grant while the placement stands. Sandbox images are unaffected — those
   pull from a registry with credentials minted into the sync, never through
   this route. Grant reads fail *open* when the coordination store cannot
   answer, so a Valkey outage degrades to the previous trust model instead of

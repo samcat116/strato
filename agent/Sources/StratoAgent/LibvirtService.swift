@@ -316,7 +316,7 @@ actor LibvirtService: HypervisorService {
     /// depends on the number at all. `.dropNewest` inverts exactly that: a
     /// burst would fill the buffer and then discard the transition that just
     /// happened, leaving a guest's self-initiated power-off invisible until the
-    /// next periodic sync, which is the case this whole feature exists for.
+    /// next full desired-state payload, which is the case this feature exists for.
     private static let lifecycleEventBuffer: EventBufferPolicy = .dropOldest(256)
 
     /// Backoff bounds for re-establishing the subscription, matching
@@ -494,7 +494,7 @@ actor LibvirtService: HypervisorService {
     ) {
         if attempt == 1 {
             logger.warning(
-                "libvirt lifecycle subscription failed; VM state will fall back to the periodic sync",
+                "libvirt lifecycle subscription failed; VM state will fall back to full desired-state refetches",
                 metadata: ["error": .string("\(error)")])
         } else if !remindOfOutage(attempt: attempt, since: troubleStarted) {
             logger.debug(
@@ -532,7 +532,7 @@ actor LibvirtService: HypervisorService {
         guard attempt % Self.outageReminderEvery == 0 else { return false }
         let minutes = troubleStarted.map { (ContinuousClock.now - $0).components.seconds / 60 } ?? 0
         logger.warning(
-            "libvirtd is not delivering lifecycle events; observed VM state on this host is only as fresh as the periodic sync",
+            "libvirtd is not delivering lifecycle events; observed VM state on this host is only as fresh as full desired-state refetches",
             metadata: [
                 "minutes": .stringConvertible(minutes),
                 "attempts": .stringConvertible(attempt),

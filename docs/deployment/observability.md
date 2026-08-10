@@ -187,8 +187,8 @@ bounded; unmatched requests fall back to `unmatched`.
 |--------|------|--------|---------|
 | `strato_scheduler_placements_total` | counter | `strategy`, `outcome` = `success` \| `no_candidate` \| `error` | A placement decision resolved |
 | `strato_scheduler_placement_duration_seconds` | timer | `strategy` | Placement selection latency |
-| `strato_agent_sync_total` | counter | `outcome` = `sent` \| `failed` | A desired-state sync to a locally-socketed agent resolved |
-| `strato_agent_sync_duration_seconds` | timer | — | Assemble + send latency for a desired-state sync |
+| `strato_agent_poll_total` | counter | `mode` = `conditional` \| `unconditional`, `outcome` = `served` \| `not_modified` \| `assembly_budget_exhausted` \| `park_refused` | A desired-state poll resolved. `served` is a full `200` payload; the other outcomes are conditional polls that finish with `304` |
+| `strato_agent_desired_state_last_full_refetch_timestamp_seconds` | gauge | `agent` = agent name | Unix timestamp of the last full `200` payload served for a request without `If-None-Match`. Conditional requests and failed response assembly do not update it |
 
 ### Authorization (Cedar)
 
@@ -245,8 +245,8 @@ Note that enabling the pillar only gets spans as far as the collector — see
 - **`scheduler.select_agent`** — one span per placement, with `scheduler.strategy`,
   `scheduler.candidate_count`, `scheduler.selected_agent`, and (on failure)
   `scheduler.outcome`.
-- **`agent.desired_state_sync`** — a producer span per desired-state sync pushed
-  to a locally-socketed agent, with `agent.id`, `sync.id`, and `sync.vm_count`.
+- **Desired-state polls** — `GET /agent/desired-state` is covered by the normal
+  per-request server span, including its database assembly work.
 - **`fluent.query`** — one client span per database query, with
   `fluent.query.operation` (`read`/`update`/…), `fluent.query.collection` (the
   table), `fluent.query.namespace`, and a combined `fluent.query.summary`. No
@@ -327,9 +327,8 @@ valkey-swift's connection pool was involved: it resolves the parent from
 `ServiceContext.current` like everything else, and there was no parent to find.
 
 Spans genuinely started outside a request still appear as roots, and should:
-the periodic desired-state sync, the agent heartbeat monitor, the audit-retention
-sweep, webhook delivery, and SSF poll delivery are all timer-driven, with no
-enclosing span to attach to.
+the agent heartbeat monitor, the audit-retention sweep, webhook delivery, and
+SSF poll delivery are all timer-driven, with no enclosing span to attach to.
 
 ### Correlating traces with logs
 
@@ -352,11 +351,10 @@ before OTel bootstraps and every deployment running with tracing off.
 
 ### Not yet traced
 
-The agent side of the WebSocket is not instrumented: a desired-state sync's
-`agent.desired_state_sync` producer span ends at the send, and the agent does not
-continue the trace through reconciliation. Cross-replica RPC and nudges
-forwarded over Valkey pub/sub likewise do not propagate trace context, so a
-mutation handled by another replica starts a new trace there.
+The agent does not continue a desired-state poll's HTTP trace through local
+reconciliation. Doorbells forwarded over Valkey pub/sub likewise do not
+propagate trace context, so the replica that wakes and answers a poll has no
+trace link back to the mutation that rang it.
 
 ## Alert runbook
 
@@ -375,6 +373,39 @@ Thresholds are starting points; tune to your fleet size and SLOs.
   control plane? Look at `strato_agent_registration_failures_total` (an agent
   stuck in a reconnect loop that keeps being rejected shows rising
   registration failures with the `reason` naming why).
+
+### Desired-state full refetch is stale
+
+- **Condition:** an online agent has not completed its unconditional
+  desired-state correctness backstop for more than **600 seconds** (two default
+  300-second intervals):
+
+  ```promql
+  (
+    time()
+    - max by (agent) (
+        strato_agent_desired_state_last_full_refetch_timestamp_seconds
+      )
+  ) > 600
+  and on (agent)
+  max by (agent) (strato_agent_up) == 1
+  ```
+
+  The `max by (agent)` aggregation is intentional: different long polls can be
+  served by different control-plane replicas, so the newest exported timestamp
+  is authoritative. Gating on `strato_agent_up` suppresses the alert for a node
+  that is already known to be disconnected.
+- **Threshold:** when an agent overrides
+  `desired_state_full_refetch_seconds`, set the threshold to at least twice the
+  largest interval used by the agents covered by the rule (or split the rule
+  by fleets with different settings).
+- **Severity:** warning. Page if it persists past another interval or affects
+  multiple online agents.
+- **First checks:** compare
+  `strato_agent_poll_total{mode="unconditional",outcome="served"}` with
+  conditional poll traffic, then inspect the agent's poll/reconnect logs and
+  the control plane's `GET /agent/desired-state` errors. Conditional `200`s do
+  not prove this backstop is healthy.
 
 ### Any VM in `.error`
 
@@ -429,5 +460,10 @@ run the control plane with `OTEL_METRICS_ENABLED=true` and point
   there) and a `strato_agent_disconnections_total{reason="stale"}` (or
   `connection_closed`) increment. While it's still in the 60s grace window,
   `strato_agent_heartbeat_staleness_seconds` climbs before the sweep removes it.
+- With an online agent, query
+  `strato_agent_desired_state_last_full_refetch_timestamp_seconds`; it should
+  advance only on an unconditional poll roughly every 300 seconds by default.
+  `strato_agent_poll_total` should expose `mode="conditional"` and
+  `mode="unconditional"` without any ETag or agent-valued counter labels.
 - Trigger a VM failure → expect `strato_vm_errors_total` to increment with the
   matching `reason`.

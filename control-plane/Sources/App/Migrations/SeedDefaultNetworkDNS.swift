@@ -19,7 +19,7 @@ import Vapor
 /// No generation bump — `generation` tracks L3 realization (subnet, gateway,
 /// external access), and DHCP/DNS-only edits deliberately leave it alone (see
 /// `NetworkController.updateNetwork`). Agents pick the new options up on the
-/// next periodic desired-state sync, and guests on their next lease renew.
+/// next full desired-state fetch, and guests on their next lease renew.
 struct SeedDefaultNetworkDNS: AsyncMigration {
     /// Public resolvers used when the operator didn't configure any. Two
     /// providers rather than two addresses from one, so a single provider

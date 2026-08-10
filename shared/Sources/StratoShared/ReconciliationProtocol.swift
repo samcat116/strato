@@ -505,9 +505,9 @@ public struct DesiredAgentUpdate: Codable, Sendable {
 ///
 /// Full-list semantics make the message level-triggered and idempotent:
 /// identical syncs diff to nothing, and the message is safe to drop, replay, or
-/// reorder (per-VM `generation` guards handle reordering). Sent on agent
-/// registration, nudged on any desired-state change, and repeated on a timer as
-/// the correctness backstop.
+/// reorder (per-VM `generation` guards handle reordering). Fetched on agent
+/// registration, nudged on any desired-state change, and fetched
+/// unconditionally on an agent-owned interval as the correctness backstop.
 ///
 /// Omission is **not** teardown (STR-98). A workload the agent holds that this
 /// message does not list is held, untouched, and reported back as an
