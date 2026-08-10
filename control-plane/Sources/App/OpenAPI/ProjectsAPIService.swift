@@ -551,12 +551,32 @@ struct ProjectsAPIService: APIProtocol {
             on: req.db
         )
 
-        project.$organization.id = destinationOrganizationIDParam
-        project.$organizationalUnit.id = destinationOUID
-        project.path = try await project.buildPath(on: req.db)
+        try await req.db.transaction { db in
+            try await QuotaEnforcementService.lockProjectNetworkMutations(
+                for: project, on: db)
+            let sourceQuotas = try await QuotaEnforcementService.applicableProjectWideQuotas(
+                for: project, on: db)
+            let networkCount = try await LogicalNetwork.query(on: db)
+                .filter(\.$project.$id == projectID)
+                .count()
 
-        try project.validate()
-        try await project.save(on: req.db)
+            project.$organization.id = destinationOrganizationIDParam
+            project.$organizationalUnit.id = destinationOUID
+            project.path = try await project.buildPath(on: db)
+            try project.validate()
+
+            let destinationQuotas = try await QuotaEnforcementService.applicableProjectWideQuotas(
+                for: project, on: db)
+            let affectedQuotas = try await QuotaEnforcementService.validateNetworkTransfer(
+                networkCount: networkCount,
+                sourceQuotas: sourceQuotas,
+                destinationQuotas: destinationQuotas,
+                on: db)
+
+            try await project.save(on: db)
+            try await QuotaEnforcementService.resyncAndSaveReservations(
+                affectedQuotas, on: db)
+        }
 
         let vmCount = try await Self.vmCount(projectID, on: req.db)
         return .ok(.init(body: .json(try .init(project: project, vmCount: vmCount))))

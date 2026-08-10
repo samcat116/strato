@@ -35,7 +35,7 @@ struct QuotaEnforcementService {
     /// Quotas governing project-wide infrastructure such as logical networks.
     /// Environment-scoped quotas are excluded because a network can be consumed
     /// by workloads from every environment (STR-236).
-    private static func applicableProjectWideQuotas(
+    static func applicableProjectWideQuotas(
         for project: Project,
         on db: Database
     ) async throws -> [ResourceQuota] {
@@ -53,6 +53,7 @@ struct QuotaEnforcementService {
         for project: Project,
         on db: Database
     ) async throws -> [ResourceQuota] {
+        try await lockProjectNetworkMutations(for: project, on: db)
         let quotas = try await applicableProjectWideQuotas(for: project, on: db)
             .filter { $0.$project.id == nil }
         try await lockQuotas(quotas, on: db)
@@ -271,13 +272,55 @@ struct QuotaEnforcementService {
         for project: Project,
         on db: Database
     ) async throws {
+        try await lockProjectNetworkMutations(for: project, on: db)
         let quotas = try await applicableProjectWideQuotas(for: project, on: db)
         try await reserveResource(for: project, quotas: quotas, on: db) { quota in
-            let check = quota.canAccommodateNetwork()
+            let check = quota.canAccommodateNetworks()
             guard check.allowed else { return check }
             try quota.reserveNetworkResources()
             return check
         }
+    }
+
+    /// Validates the networks carried by a project moving between hierarchy
+    /// paths and returns every project-wide quota whose cached usage must be
+    /// refreshed after the move (STR-236).
+    ///
+    /// Quotas shared by both paths already count the project and require no new
+    /// capacity. Destination-only quotas are resynced while the project still
+    /// belongs to the source, then checked against the whole incoming network
+    /// count. The union is locked in stable order so network admissions in
+    /// either hierarchy cannot interleave with the transfer's check and recount.
+    static func validateNetworkTransfer(
+        networkCount: Int,
+        sourceQuotas: [ResourceQuota],
+        destinationQuotas: [ResourceQuota],
+        on db: Database
+    ) async throws -> [ResourceQuota] {
+        let sourceIDs = Set(sourceQuotas.compactMap(\.id))
+        let destinationOnly = destinationQuotas.filter { quota in
+            quota.id.map { !sourceIDs.contains($0) } ?? false
+        }
+
+        var affectedByID: [UUID: ResourceQuota] = [:]
+        for quota in sourceQuotas + destinationQuotas {
+            if let id = quota.id {
+                affectedByID[id] = quota
+            }
+        }
+        let affected = Array(affectedByID.values)
+        try await lockQuotas(affected, on: db)
+
+        for quota in destinationOnly {
+            try await resyncReservations(quota, on: db)
+            let check = quota.canAccommodateNetworks(networkCount)
+            guard check.allowed else {
+                throw Abort(
+                    .forbidden,
+                    reason: "Quota '\(quota.name)' exceeded: \(check.reason ?? "limit reached")")
+            }
+        }
+        return affected
     }
 
     /// Admission for growing a volume (STR-181): only the *delta* is checked and
@@ -454,9 +497,12 @@ struct QuotaEnforcementService {
         for network: LogicalNetwork,
         on db: Database
     ) async throws {
-        guard let project = try await Project.find(network.$project.id, on: db) else { return }
-        try await resyncAndSaveReservations(
-            try await applicableProjectWideQuotas(for: project, on: db), on: db)
+        let projectID = network.$project.id
+        try await lockProjectNetworkMutations(projectID: projectID, on: db)
+        guard let project = try await Project.find(projectID, on: db) else { return }
+        let quotas = try await applicableProjectWideQuotas(for: project, on: db)
+        try await lockQuotas(quotas, on: db)
+        try await resyncAndSaveReservations(quotas, on: db)
     }
 
     private static func releaseWorkload(projectID: UUID, environment: String, on db: Database) async throws {
@@ -479,6 +525,28 @@ struct QuotaEnforcementService {
         }
     }
 
+    /// Serializes network inserts/deletes with hierarchy moves and project deletion.
+    /// A quota lock alone is insufficient when the source hierarchy has no
+    /// quota: a concurrent insert could otherwise land after a transfer counts
+    /// the project's networks but before the project changes parent.
+    ///
+    /// Every path takes this project lock before quota locks, avoiding a lock
+    /// cycle between network creation, transfer, and deletion.
+    static func lockProjectNetworkMutations(
+        for project: Project,
+        on db: Database
+    ) async throws {
+        guard let projectID = project.id else { return }
+        try await lockProjectNetworkMutations(projectID: projectID, on: db)
+    }
+
+    static func lockProjectNetworkMutations(
+        projectID: UUID,
+        on db: Database
+    ) async throws {
+        try await lockAdvisoryKey("project-network:\(projectID.uuidString)", on: db)
+    }
+
     /// Takes a transaction-scoped advisory lock on each quota so concurrent
     /// creates that share a quota serialize their check-then-reserve sequence.
     ///
@@ -488,11 +556,15 @@ struct QuotaEnforcementService {
     /// (sorted) id order so two creates touching an overlapping set of quotas can't
     /// deadlock by acquiring them in opposite orders.
     private static func lockQuotas(_ quotas: [ResourceQuota], on db: Database) async throws {
-        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
         let keys = quotas.compactMap { $0.id?.uuidString }.sorted()
         for key in keys {
-            try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()
+            try await lockAdvisoryKey(key, on: db)
         }
+    }
+
+    private static func lockAdvisoryKey(_ key: String, on db: Database) async throws {
+        guard let sql = db as? SQLDatabase, sql.dialect.name == "postgresql" else { return }
+        try await sql.raw("SELECT pg_advisory_xact_lock(hashtext(\(bind: key)))").run()
     }
 
     /// Sets a quota's reservation counters to the exact usage of the VMs,

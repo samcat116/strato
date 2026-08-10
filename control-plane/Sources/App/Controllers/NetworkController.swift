@@ -649,6 +649,8 @@ struct NetworkController: RouteCollection {
         }
 
         try await req.db.transaction { db in
+            try await QuotaEnforcementService.lockProjectNetworkMutations(
+                projectID: network.$project.id, on: db)
             try await network.delete(on: db)
             try await QuotaEnforcementService.release(for: network, on: db)
             // Bindings have no FK to the resources they protect, so drop

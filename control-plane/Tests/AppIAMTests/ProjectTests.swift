@@ -474,6 +474,84 @@ final class ProjectTests {
         }
     }
 
+    @Test("Project transfer enforces destination network quotas and refreshes both paths")
+    func testTransferProjectEnforcesNetworkQuotas() async throws {
+        try await withProjectTestApp { app, _, testOrganization, sourceOU, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            let destinationOU = try await builder.createOU(
+                name: "Quota Destination",
+                description: "Destination hierarchy",
+                organization: testOrganization)
+            let sourceProject = try await builder.createProject(
+                name: "Transferred Network Project",
+                description: "Carries a network into the destination",
+                ou: sourceOU)
+            _ = try await builder.createNetwork(
+                name: "transferred-network", project: sourceProject)
+            let destinationProject = try await builder.createProject(
+                name: "Existing Destination Project",
+                description: "Already consumes the destination quota",
+                ou: destinationOU)
+            _ = try await builder.createNetwork(
+                name: "existing-destination-network", project: destinationProject)
+
+            let sourceQuota = try await builder.createResourceQuota(
+                name: "source-networks", maxNetworks: 10, ou: sourceOU)
+            let destinationQuota = try await builder.createResourceQuota(
+                name: "destination-networks", maxNetworks: 1, ou: destinationOU)
+            let sharedOrganizationQuota = try await builder.createResourceQuota(
+                name: "shared-organization-networks", maxNetworks: 2,
+                organization: testOrganization)
+            for quota in [sourceQuota, destinationQuota] {
+                try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+                try await quota.save(on: app.db)
+                #expect(quota.networkCount == 1)
+            }
+            try await QuotaEnforcementService.resyncReservations(
+                sharedOrganizationQuota, on: app.db)
+            try await sharedOrganizationQuota.save(on: app.db)
+            #expect(sharedOrganizationQuota.networkCount == 2)
+
+            func transfer() async throws -> HTTPResponseStatus {
+                var status = HTTPResponseStatus.internalServerError
+                try await app.test(.POST, "/api/projects/\(try sourceProject.requireID())/transfer") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                    try req.content.encode(
+                        TransferProjectRequest(
+                            organizationId: nil,
+                            organizationalUnitId: destinationOU.id))
+                } afterResponse: { response in
+                    status = response.status
+                    if response.status == .forbidden {
+                        #expect(response.body.string.contains("Quota 'destination-networks' exceeded"))
+                    }
+                }
+                return status
+            }
+
+            #expect(try await transfer() == .forbidden)
+            let refusedProject = try #require(
+                try await Project.find(sourceProject.id, on: app.db))
+            #expect(refusedProject.$organizationalUnit.id == sourceOU.id)
+            #expect(try await ResourceQuota.find(sourceQuota.id, on: app.db)?.networkCount == 1)
+            #expect(try await ResourceQuota.find(destinationQuota.id, on: app.db)?.networkCount == 1)
+            #expect(
+                try await ResourceQuota.find(sharedOrganizationQuota.id, on: app.db)?.networkCount == 2)
+
+            destinationQuota.maxNetworks = 2
+            try await destinationQuota.save(on: app.db)
+            #expect(try await transfer() == .ok)
+
+            let movedProject = try #require(
+                try await Project.find(sourceProject.id, on: app.db))
+            #expect(movedProject.$organizationalUnit.id == destinationOU.id)
+            #expect(try await ResourceQuota.find(sourceQuota.id, on: app.db)?.networkCount == 0)
+            #expect(try await ResourceQuota.find(destinationQuota.id, on: app.db)?.networkCount == 2)
+            #expect(
+                try await ResourceQuota.find(sharedOrganizationQuota.id, on: app.db)?.networkCount == 2)
+        }
+    }
+
     @Test("Transfer to another organization reparents the project")
     func testTransferAcrossOrganizationsReparents() async throws {
         try await withProjectTestApp { app, testUser, testOrganization, _, authToken in

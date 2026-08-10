@@ -419,12 +419,15 @@ extension ResourceQuota {
         return (true, nil)
     }
 
-    /// Whether one more project-wide logical network fits (STR-236).
-    func canAccommodateNetwork() -> (allowed: Bool, reason: String?) {
-        if !isEnabled {
+    /// Whether `count` more project-wide logical networks fit (STR-236).
+    /// A batch is used when a project moves into a new quota hierarchy; a
+    /// normal network create passes one.
+    func canAccommodateNetworks(_ count: Int = 1) -> (allowed: Bool, reason: String?) {
+        if !isEnabled || count <= 0 {
             return (true, nil)
         }
-        if networkCount >= maxNetworks {
+        let (newCount, overflowed) = networkCount.addingReportingOverflow(count)
+        if overflowed || newCount > maxNetworks {
             return (false, "Network limit reached: \(maxNetworks) networks allowed")
         }
         return (true, nil)
@@ -454,13 +457,14 @@ extension ResourceQuota {
         volumeCount += 1
     }
 
-    /// Reserve one project-wide logical-network slot (STR-236).
-    func reserveNetworkResources() throws {
-        let check = canAccommodateNetwork()
+    /// Reserve project-wide logical-network slots (STR-236).
+    func reserveNetworkResources(count: Int = 1) throws {
+        guard count > 0 else { return }
+        let check = canAccommodateNetworks(count)
         if !check.allowed {
             throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
         }
-        networkCount = Self.reserving(networkCount, 1)
+        networkCount = Self.reserving(networkCount, count)
     }
 }
 
