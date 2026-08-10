@@ -1,0 +1,23 @@
+control-plane/Tests/AppPlatformTests/CurrentSchemaBaselineTests.swift
+  s_060255e25a3ff5::t_c22bc4adc98121 86-129
+docs/adr/0009-current-schema-baseline.md
+  s_060255e25a3ff5::t_c22bc4adc98121 38-39,41-43,77-80
+control-plane/Sources/App/Migrations/CurrentSchemaBaseline.swift
+  s_060255e25a3ff5::t_c22bc4adc98121 8-11,30,172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "f5b19fe8b1b9e0a3e2b9df76eb52d197c059d914",
+  "prompts": {},
+  "sessions": {
+    "s_060255e25a3ff5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe806-52b1-76f2-b4a4-c6461ebde37a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
