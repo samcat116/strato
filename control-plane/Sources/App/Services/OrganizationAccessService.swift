@@ -5,13 +5,11 @@ import Fluent
 /// Centralized organization- and project-scoped access checks shared by controllers.
 ///
 /// The Cedar evaluator is the single source of truth for authorization: these helpers
-/// delegate to `Request.can` rather than reading the relational
-/// `UserOrganization.role`. The relational role survives only as a display mirror
-/// written alongside the authoritative role binding.
+/// delegate to `Request.can` rather than reading organization membership metadata.
+/// Role bindings are the authoritative grant representation.
 ///
-/// Org-scoped checks map to the `organization` object's `view_organization` /
-/// `manage_members` permissions; project-scoped checks map to the `project` object's
-/// `view_project` and explicit IAM actions, which resolve org/OU inheritance
+/// Org- and project-scoped checks name canonical actions and typed IAM nodes,
+/// which resolve org/OU inheritance
 /// (and, once granted, project-level roles) through the schema.
 ///
 /// - Note: `OIDCController` keeps its own request-based variants for their distinct
@@ -20,7 +18,7 @@ import Fluent
 struct OrganizationAccessService {
     /// Throws `.forbidden` unless the current user can view the organization.
     static func requireMember(organizationID: UUID, on req: Request) async throws {
-        guard try await req.can("view_organization", on: "organization", id: organizationID.uuidString) else {
+        guard try await req.can("org:read", on: IAMNode(type: .organization, id: organizationID)) else {
             throw Abort(.forbidden, reason: "Not a member of this organization")
         }
     }
@@ -42,7 +40,7 @@ struct OrganizationAccessService {
     static func requireMembershipForNarrowing(organizationID: UUID, on req: Request) async throws {
         guard
             try await req.canAsMembershipProbe(
-                "view_organization", on: "organization", id: organizationID.uuidString)
+                "org:read", on: IAMNode(type: .organization, id: organizationID))
         else {
             throw Abort(.forbidden, reason: "Not a member of this organization")
         }
@@ -50,7 +48,7 @@ struct OrganizationAccessService {
 
     /// Throws `.forbidden` unless the current user can manage the organization's members.
     static func requireAdmin(organizationID: UUID, on req: Request) async throws {
-        guard try await req.can("manage_members", on: "organization", id: organizationID.uuidString) else {
+        guard try await req.can("org:update", on: IAMNode(type: .organization, id: organizationID)) else {
             throw Abort(.forbidden, reason: "Admin access required")
         }
     }
@@ -59,7 +57,7 @@ struct OrganizationAccessService {
     /// project role, a group grant, or inherited org/OU membership).
     static func requireProjectMember(project: Project, on req: Request) async throws {
         let projectID = try project.requireID()
-        guard try await req.can("view_project", on: "project", id: projectID.uuidString) else {
+        guard try await req.can("project:read", on: IAMNode(type: .project, id: projectID)) else {
             throw Abort(.forbidden, reason: "Not a member of this organization")
         }
     }
@@ -67,9 +65,8 @@ struct OrganizationAccessService {
     /// Throws `.forbidden` unless the current user can change project IAM policy (via a
     /// direct project admin role, a group admin grant, or inherited org/OU admin).
     ///
-    /// This intentionally does not use the legacy `manage_project` permission. That
-    /// permission translates to `project:update`, which editors hold, and therefore
-    /// must only gate project metadata updates.
+    /// Project metadata updates use `project:update`, which editors hold; IAM
+    /// policy changes require the distinct administrative action below.
     static func requireProjectPolicyAdmin(project: Project, on req: Request) async throws {
         try await requireProjectAction("iam:setPolicy", project: project, on: req)
     }

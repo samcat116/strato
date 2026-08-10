@@ -85,7 +85,7 @@ struct CedarRoleGrants: Equatable, Sendable {
 /// one request makes.
 struct IAMBindingFact: Equatable, Sendable {
     let subject: IAMPrincipal
-    let role: String
+    let roleID: UUID
     let conditioned: Bool
 }
 
@@ -365,7 +365,7 @@ enum EntitySliceLoader {
             factsByNode[IAMNode(type: nodeType, id: row.nodeID), default: []].append(
                 IAMBindingFact(
                     subject: IAMPrincipal(type: principalType, id: row.principalID),
-                    role: row.role,
+                    roleID: row.roleID,
                     conditioned: row.condition != nil))
         }
         // The query over-fetched across principals (the union of every pending
@@ -431,17 +431,14 @@ enum EntitySliceLoader {
                     skippedConditionedBindings += 1
                     continue
                 }
-                // A role value that is no UUID is a row this build cannot
-                // interpret; skipping under-grants, never over-grants.
-                // (Whether the id names a *live* role is the compiled set's
+                // Whether the id names a *live* role is the compiled set's
                 // call — `contextValue(roleIDs:)` filters against it at
-                // context-build time.)
-                guard let roleID = UUID(uuidString: fact.role) else { continue }
+                // context-build time.
                 switch fact.subject.type {
-                case .user: grants.addUser(fact.subject.id, roleID: roleID)
-                case .group: grants.addGroup(fact.subject.id, roleID: roleID)
-                case .serviceAccount: grants.addServiceAccount(fact.subject.id, roleID: roleID)
-                case .workload: grants.addWorkload(fact.subject.id, roleID: roleID)
+                case .user: grants.addUser(fact.subject.id, roleID: fact.roleID)
+                case .group: grants.addGroup(fact.subject.id, roleID: fact.roleID)
+                case .serviceAccount: grants.addServiceAccount(fact.subject.id, roleID: fact.roleID)
+                case .workload: grants.addWorkload(fact.subject.id, roleID: fact.roleID)
                 }
             }
         }

@@ -277,7 +277,7 @@ free-form Cedar text. Of that vocabulary **only `expires_at` is implemented**;
 see "Conditions are not implemented yet" below.
 
 ```
-(principal_type, principal_id, role, node_type, node_id,
+(principal_type, principal_id, role_id, node_type, node_id,
  condition, expires_at, created_by, created_at)
 ```
 
@@ -288,6 +288,15 @@ see "Conditions are not implemented yet" below.
 - Nodes: any tree node — Org, Folder, Project, or an **individual resource**.
   Resource-level bindings exist from day one.
 - Many-to-many. The one-parent rule constrains *resources*, never principals.
+- **Role identity is always a UUID.** `role_id` is a Postgres UUID naming an
+  `iam_roles` row; request DTOs accept UUIDs only. Names and historical
+  membership literals are not decoded on reads or writes.
+- **`role_bindings` is the sole grant store.** Project user grants and group
+  grants have no relational mirror tables. `user_organizations` remains
+  because bare organization membership is an identity fact; its nullable
+  `role_id` is display metadata and never an authorization input. See the
+  [membership role cutover runbook](/deployment/membership-role-cutover) for
+  the preflight inventory and post-migration checks.
 - **Which nodes have a write surface.** Org grants go through the org members
   API, project grants through the project members/groups APIs, and folder
   grants through `/api/organizations/{orgID}/ous/{ouID}/members` and
@@ -418,7 +427,7 @@ to be executed in, and its whole lifetime is the blast radius. A VM is a
 durable machine holding durable data.
 
 **Both route shapes derive the verb.** `AuthorizationMiddleware` maps a
-method and path to a permission for the two resource-mapped prefixes, and its
+method and path to a canonical action for the two resource-mapped prefixes, and its
 defaults are weaker than in-guest execution: an unlisted POST subpath falls
 back to `update`, an unlisted GET to `read`. That matters because the two
 halves arrive in different shapes — the interactive attach is a WebSocket
@@ -487,22 +496,13 @@ live bindings cannot be deleted (`409` with the count) — dropping it would
 silently revoke whatever those bindings grant, with nothing in the bindings
 list to show it happened.
 
-**Granting names the role by id or by name** (`MemberRoleResolver`, STR-111).
+**Granting names the role only by UUID** (`MemberRoleResolver`, STR-229).
 `GET /api/iam/roles/bindable?nodeType=&nodeId=` lists what can be granted at a
 node — the platform defaults plus every role owned along the ancestor chain —
-and the member endpoints (project, folder, org) accept every name it hands
-back, resolved in that same scope, for the same reason the action catalogue
-exists: the picker must not offer something the write path would reject. Order
-matters twice:
-
-- the **fixed vocabulary wins**. `viewer`/`operator`/`editor`/`admin` and the
-  legacy project names (`admin`/`member`/`viewer`) are resolved first, so they
-  keep meaning what they have always meant even in a deployment that names a
-  role of its own `viewer`. That role stays grantable by id.
-- an **ambiguous name is a `400` naming both ids**, never a silent pick. Names
-  are unique per owner, not globally, so an org and a project beneath it can
-  each define `deployer`; choosing one for the caller would grant access nobody
-  asked for.
+and the member endpoints accept the selected row id. The write path verifies
+that the id still exists and is still bindable at the target node. Role names
+are display data only: they are returned beside the id in grant listings, but
+are never decoded as grant input or stored as policy identity.
 
 ### Authored policies (shipped with #606)
 
@@ -1111,8 +1111,9 @@ Both forms of `can-i` answer from the evaluator — exactly what gates
 requests, guardrails included, with no admin fast path (a forbid can deny an
 admin, so short-circuiting to "true" could lie). The caller-scoped form is
 the enforcement path itself (`req.can`, which records a decision-log row) and
-accepts IAM action names plus legacy (SpiceDB-era) permission names
-translated the same way `req.can` translates, until clients finish migrating.
+accepts only a canonical registry action and IAM node. Unknown actions and
+actions that do not apply to the submitted node type are rejected before
+evaluation.
 The arbitrary-principal form (`WhoCanService.can`) decides through
 `IAMDecisionEngine` without recording, plus the reachability gates a real
 request would have hit first: a disabled or nonexistent principal answers
@@ -1124,34 +1125,24 @@ answers from its bindings minus the matcher guardrails that can name one.
 **Cedar gates requests inline** — `IAMDecisionEngine` decides (the one
 evaluator, shared with `who-can`), `IAMAuthorizer` enforces and records — and
 every decision lands in `iam_decision_logs` with the deciding policy ids, the
-policy-set version, and the tier. The infrastructure was built during the
-migration's shadow-evaluation phase, and the shadow's residue is deliberate:
-the `spicedb_permission`/`spicedb_decision` columns — and the
-`spicedbPermission`/`spicedbDecision` API fields — keep their historical
-names for compatibility. The former carries the legacy-vocabulary question as
-asked at the check site; the latter is always `none` on rows written after
-SpiceDB's removal ([ADR 0004](../adr/0004-cedar-for-authorization.md)
-records the shadow evaluation and its retirement). The pieces that matter:
+policy-set version, and the tier. Each row stores the canonical `action`,
+`node_type`, `node_id`, and authoritative `decision` directly. STR-228 removed
+the translation and shadow-comparison fields left by the migration
+([ADR 0004](../adr/0004-cedar-for-authorization.md) records that history). The
+pieces that matter:
 
 - **Coverage is total by construction.** Every check `IAMAuthorizer`
-  evaluates — the middleware's route-mapped checks, `req.can`, and the
-  Cedar-native form — is recorded off the request path, queued for a batching
+  evaluates — the middleware's route-mapped checks and canonical `req.can`
+  calls — is recorded off the request path, queued for a batching
   drain.
   `IAM_DECISION_LOG_ENABLED` controls whether rows are written at all; it
   defaults on everywhere except `.testing`, where hundreds of unrelated
   controller tests would each pay a background insert per check for rows
   nothing reads (the IAM suites that assert on rows opt in).
-- **The vocabulary bridge is explicit, audited, and load-bearing.**
-  `IAMActionTranslator` maps each legacy-vocabulary check (`read` on
-  `virtual_machine`, `manage_project` on `project`, …) to the IAM action
-  naming the act being gated (`vm:read`, `project:update`). A check with no
-  faithful mapping **fails closed** — denied, logged, and recorded as
-  `untranslated` — because an unmapped pair is a check site nobody mapped,
-  not an allowance; a mapping is only emitted if the action exists in the
-  registry and is schema-applicable to the node. The legacy vocabulary
-  outlived SpiceDB itself: `req.can` still speaks it so the dozens of handler
-  call sites need not churn, and converting them to IAM action names is the
-  remaining cleanup.
+- **The authorization question is canonical at the edge.** Route metadata,
+  middleware, handlers, list filters, and the public check API all pass a
+  registry action and typed IAM node. Middleware validates that the action is
+  registered and schema-applicable before entering a guarded handler.
 - **Decision rows record why, not just what**: the determining policy ids
   (which is why the engine compiles policies under their assembler ids), the
   derived tier (`platform` / `guardrail` / `credential` / `grant` /
@@ -1161,7 +1152,7 @@ records the shadow evaluation and its retirement). The pieces that matter:
   their own (`skipped`, `error`) — a replica that never compiled its set shows
   up as a wall of `skipped` rows, not silence.
 - **`GET /api/iam/decision-logs`** (system-admin only) and `/summary`, which
-  buckets decisions by permission, action, verdict, and tier over a bounded
+  buckets decisions by canonical action, verdict, and tier over a bounded
   window (`?sinceHours`, default 24 — the log takes a row per check, so an
   unbounded `GROUP BY` would scan the whole retention window), are how the
   log is read. During the migration's rollback window this is where the
@@ -1395,7 +1386,7 @@ Two enforcement details worth naming:
   volume attach, security-group attach *and detach*, and floating-IP attach
   all take a `vmId` — is sweepable, and the lookup necessarily precedes the
   check, so `404` vs `403` would be an existence oracle over another project's
-  VMs. Those four sites go through `Request.reachableVM(_:permission:)`; the
+  VMs. Those four sites go through `Request.reachableVM(_:action:)`; the
   same reasoning already governs `LogicalNetworkService.resolveForWorkloadCreate`
   and VM create's `securityGroupIds`, which scope the lookup to the caller's
   project and report plain not-found. The cost is that a caller who can *see*

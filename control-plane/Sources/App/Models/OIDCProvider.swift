@@ -81,11 +81,10 @@ final class OIDCProvider: Model, @unchecked Sendable {
     @Field(key: "role_mappings")
     var roleMappings: String  // JSON array of OIDCRoleMapping (claim value → org role id)
 
-    // Org role for JIT-provisioned users when no claim matches, default
-    // "member". May also be an IAM role name, or an org-owned role by id or
-    // by name (#611, STR-111).
-    @Field(key: "default_role")
-    var defaultRole: String
+    /// Canonical org role for JIT-provisioned users when no claim matches.
+    /// Nil means bare organization membership.
+    @OptionalField(key: "default_role_id")
+    var defaultRoleID: UUID?
 
     @Timestamp(key: "created_at", on: .create)
     var createdAt: Date?
@@ -119,7 +118,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         groupMappings: [OIDCGroupMapping] = [],
         adminClaimValues: [String] = [],
         roleMappings: [OIDCRoleMapping] = [],
-        defaultRole: String = "member"
+        defaultRoleID: UUID? = nil
     ) {
         self.id = id
         self.$organization.id = organizationID
@@ -141,7 +140,7 @@ final class OIDCProvider: Model, @unchecked Sendable {
         self.groupMappings = Self.encodeJSON(groupMappings, fallback: "[]")
         self.adminClaimValues = Self.encodeJSON(adminClaimValues, fallback: "[]")
         self.roleMappings = Self.encodeJSON(roleMappings, fallback: "[]")
-        self.defaultRole = defaultRole
+        self.defaultRoleID = defaultRoleID
     }
 }
 
@@ -369,7 +368,7 @@ struct CreateOIDCProviderRequest: Content {
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
     let roleMappings: [OIDCRoleMapping]?
-    let defaultRole: String?
+    let defaultRoleID: UUID?
 
     init(
         name: String,
@@ -388,7 +387,7 @@ struct CreateOIDCProviderRequest: Content {
         groupMappings: [OIDCGroupMapping]? = nil,
         adminClaimValues: [String]? = nil,
         roleMappings: [OIDCRoleMapping]? = nil,
-        defaultRole: String? = nil
+        defaultRoleID: UUID? = nil
     ) {
         self.name = name
         self.clientID = clientID
@@ -406,7 +405,7 @@ struct CreateOIDCProviderRequest: Content {
         self.groupMappings = groupMappings
         self.adminClaimValues = adminClaimValues
         self.roleMappings = roleMappings
-        self.defaultRole = defaultRole
+        self.defaultRoleID = defaultRoleID
     }
 }
 
@@ -427,7 +426,17 @@ struct UpdateOIDCProviderRequest: Content {
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
     let roleMappings: [OIDCRoleMapping]?
-    let defaultRole: String?
+    let defaultRoleID: UUID?
+    /// `nil` is a meaningful update (bare membership), so decoding must retain
+    /// whether the key was omitted or explicitly sent as JSON null.
+    let updatesDefaultRoleID: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case name, clientID, clientSecret, discoveryURL, authorizationEndpoint
+        case tokenEndpoint, userinfoEndpoint, jwksURI, endSessionEndpoint
+        case scopes, enabled, useNonce, groupsClaim, groupMappings
+        case adminClaimValues, roleMappings, defaultRoleID
+    }
 
     init(
         name: String? = nil,
@@ -446,7 +455,8 @@ struct UpdateOIDCProviderRequest: Content {
         groupMappings: [OIDCGroupMapping]? = nil,
         adminClaimValues: [String]? = nil,
         roleMappings: [OIDCRoleMapping]? = nil,
-        defaultRole: String? = nil
+        defaultRoleID: UUID? = nil,
+        clearDefaultRoleID: Bool = false
     ) {
         self.name = name
         self.clientID = clientID
@@ -464,7 +474,53 @@ struct UpdateOIDCProviderRequest: Content {
         self.groupMappings = groupMappings
         self.adminClaimValues = adminClaimValues
         self.roleMappings = roleMappings
-        self.defaultRole = defaultRole
+        self.defaultRoleID = defaultRoleID
+        self.updatesDefaultRoleID = defaultRoleID != nil || clearDefaultRoleID
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        name = try values.decodeIfPresent(String.self, forKey: .name)
+        clientID = try values.decodeIfPresent(String.self, forKey: .clientID)
+        clientSecret = try values.decodeIfPresent(String.self, forKey: .clientSecret)
+        discoveryURL = try values.decodeIfPresent(String.self, forKey: .discoveryURL)
+        authorizationEndpoint = try values.decodeIfPresent(String.self, forKey: .authorizationEndpoint)
+        tokenEndpoint = try values.decodeIfPresent(String.self, forKey: .tokenEndpoint)
+        userinfoEndpoint = try values.decodeIfPresent(String.self, forKey: .userinfoEndpoint)
+        jwksURI = try values.decodeIfPresent(String.self, forKey: .jwksURI)
+        endSessionEndpoint = try values.decodeIfPresent(String.self, forKey: .endSessionEndpoint)
+        scopes = try values.decodeIfPresent([String].self, forKey: .scopes)
+        enabled = try values.decodeIfPresent(Bool.self, forKey: .enabled)
+        useNonce = try values.decodeIfPresent(Bool.self, forKey: .useNonce)
+        groupsClaim = try values.decodeIfPresent(String.self, forKey: .groupsClaim)
+        groupMappings = try values.decodeIfPresent([OIDCGroupMapping].self, forKey: .groupMappings)
+        adminClaimValues = try values.decodeIfPresent([String].self, forKey: .adminClaimValues)
+        roleMappings = try values.decodeIfPresent([OIDCRoleMapping].self, forKey: .roleMappings)
+        defaultRoleID = try values.decodeIfPresent(UUID.self, forKey: .defaultRoleID)
+        updatesDefaultRoleID = values.contains(.defaultRoleID)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encodeIfPresent(name, forKey: .name)
+        try values.encodeIfPresent(clientID, forKey: .clientID)
+        try values.encodeIfPresent(clientSecret, forKey: .clientSecret)
+        try values.encodeIfPresent(discoveryURL, forKey: .discoveryURL)
+        try values.encodeIfPresent(authorizationEndpoint, forKey: .authorizationEndpoint)
+        try values.encodeIfPresent(tokenEndpoint, forKey: .tokenEndpoint)
+        try values.encodeIfPresent(userinfoEndpoint, forKey: .userinfoEndpoint)
+        try values.encodeIfPresent(jwksURI, forKey: .jwksURI)
+        try values.encodeIfPresent(endSessionEndpoint, forKey: .endSessionEndpoint)
+        try values.encodeIfPresent(scopes, forKey: .scopes)
+        try values.encodeIfPresent(enabled, forKey: .enabled)
+        try values.encodeIfPresent(useNonce, forKey: .useNonce)
+        try values.encodeIfPresent(groupsClaim, forKey: .groupsClaim)
+        try values.encodeIfPresent(groupMappings, forKey: .groupMappings)
+        try values.encodeIfPresent(adminClaimValues, forKey: .adminClaimValues)
+        try values.encodeIfPresent(roleMappings, forKey: .roleMappings)
+        if updatesDefaultRoleID {
+            try values.encode(defaultRoleID, forKey: .defaultRoleID)
+        }
     }
 }
 
@@ -486,7 +542,7 @@ struct OIDCProviderResponse: Content {
     let groupMappings: [OIDCGroupMapping]?
     let adminClaimValues: [String]?
     let roleMappings: [OIDCRoleMapping]?
-    let defaultRole: String?
+    let defaultRoleID: UUID?
     let createdAt: Date?
     let updatedAt: Date?
 
@@ -513,7 +569,7 @@ struct OIDCProviderResponse: Content {
         self.groupMappings = includeClaimMappings ? provider.groupMappingsArray : nil
         self.adminClaimValues = includeClaimMappings ? provider.adminClaimValuesArray : nil
         self.roleMappings = includeClaimMappings ? provider.roleMappingsArray : nil
-        self.defaultRole = includeClaimMappings ? provider.defaultRole : nil
+        self.defaultRoleID = includeClaimMappings ? provider.defaultRoleID : nil
         self.createdAt = provider.createdAt
         self.updatedAt = provider.updatedAt
     }

@@ -88,8 +88,8 @@ extension Request {
     /// - Parameters:
     ///   - requestedProjectId: The project named by the request body. Required;
     ///     `nil` is refused, since there is no default project to fall back to.
-    ///   - action: The create permission to check on the resolved project
-    ///     (e.g. `"create_volume"`).
+    ///   - action: The canonical create action to check on the resolved project
+    ///     (e.g. `"volume:create"`).
     ///   - resourceKind: Plural noun for the resource being created
     ///     (e.g. `"volumes"`), used in the permission and missing-project
     ///     messages.
@@ -105,7 +105,7 @@ extension Request {
             throw Self.projectIsRequired(verb: verb, resourceKind)
         }
 
-        let allowed = try await can(action, on: "project", id: projectId.uuidString)
+        let allowed = try await can(action, on: IAMNode(type: .project, id: projectId))
         guard allowed else {
             throw Abort(
                 .forbidden, reason: "You don't have permission to \(verb) \(resourceKind) in this project")
@@ -118,7 +118,7 @@ extension Request {
     }
 
     /// Resolve the target project and environment for a VM or sandbox create,
-    /// enforcing the `create_resources` permission, the caller's current
+    /// enforcing the resource's canonical create action, the caller's current
     /// organization, and environment validity.
     ///
     /// This is the shared spine behind VM and sandbox creation (issue #675):
@@ -146,7 +146,7 @@ extension Request {
     ///
     /// **The current-organization check is kept, and kept here.** It could have
     /// been dropped to make the seven identical, but that would be a *widening*:
-    /// a principal holding `create_resources` on a project in organization B
+    /// a principal holding the resource's create action on a project in organization B
     /// could create there while their current organization is A — and the
     /// middleware, which gates the `/api/vms` and `/api/sandboxes` collections
     /// against the current organization, would have admitted the request on
@@ -170,11 +170,12 @@ extension Request {
         requestedProjectId: UUID?,
         requestedEnvironment: String?,
         user: User,
+        action: String,
         resourceKind: String
     ) async throws -> (project: Project, environment: String) {
         let project = try await authorizedProjectForCreate(
             requested: requestedProjectId,
-            action: "create_resources",
+            action: action,
             resourceKind: resourceKind)
 
         // Current-organization scope, deliberately *after* the permission

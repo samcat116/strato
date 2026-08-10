@@ -28,8 +28,8 @@ enum IAMDecisionEngine {
         /// have applied (see `CedarEntitySlice.chainComplete`).
         case truncatedChain
         /// The schema does not apply this action to the resource's type, so
-        /// no real request can ever pose the question (the middleware and
-        /// translator only emit schema-applicable pairs) and the engine would
+        /// no real request can ever pose the question (route metadata and
+        /// public query validation only admit schema-applicable pairs) and the engine would
         /// refuse it as invalid. Query surfaces can still ask — the answer is
         /// the fail-closed "no", not a 500.
         case inapplicableAction
@@ -101,8 +101,8 @@ enum IAMDecisionEngine {
     /// Two questions are denied without evaluation (`structuralDenial`):
     ///
     /// - An action the schema does not apply to the node's resource type. No
-    ///   real request can pose it (the middleware and translator only emit
-    ///   schema-applicable pairs), and evaluating it would be a
+    ///   real request can pose it (route metadata and public query validation
+    ///   only admit schema-applicable pairs), and evaluating it would be a
     ///   request-validation error — but the query surfaces (who-can, the
     ///   arbitrary-principal check) accept caller-supplied pairs, and their
     ///   answer is the fail-closed "no", not a 500.

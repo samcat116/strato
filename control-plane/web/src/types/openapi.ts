@@ -3947,10 +3947,10 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Check a batch of permissions
-         * @description Answers up to 50 permission questions in one call, keyed by an opaque client-chosen `key` so the caller can correlate each answer with the UI element it gates. Two forms: without `principal` the caller asks about themselves and the answer comes from the same Cedar evaluation that gates requests (`permission` is a legacy permission name such as `manage_project`); with `principal` the answer comes from the IAM role-bindings table plus the resource tree, so it agrees with `who-can` (`permission` is an IAM action name such as `vm:start`). System administrators always receive `true` for the self-check form. The `principal` form additionally requires admin on each named resource or a container above it.
+         * Check a batch of canonical actions
+         * @description Answers up to 50 action/node questions in one call, keyed by an opaque client-chosen `key` so the caller can correlate each answer with the UI element it gates. Every item names a registry action such as `vm:start` and an IAM node. Without `principal` the caller asks about themselves; with `principal` the same evaluator checks that principal. The latter form additionally requires admin on each named node or a container above it. Guardrails still apply to system administrators.
          */
-        post: operations["checkPermissions"];
+        post: operations["checkActions"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4270,8 +4270,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Summarize decision-log entries into burn-down buckets
-         * @description Groups decision rows by permission, IAM action, verdict, and tier, largest buckets first, so one glance says how each check class is deciding. Time-bounded on purpose (`sinceHours`): the log takes a row per authorization check, so an unbounded aggregate would scan the whole retention window. System administrators only.
+         * Summarize decision-log entries by canonical decision
+         * @description Groups decision rows by canonical action, verdict, and tier, largest buckets first, so one glance says how each check class is deciding. Time-bounded on purpose (`sinceHours`): the log takes a row per authorization check, so an unbounded aggregate would scan the whole retention window. System administrators only.
          */
         get: operations["getIAMDecisionLogSummary"];
         put?: never;
@@ -4337,7 +4337,7 @@ export interface paths {
         };
         /**
          * List an organization's OIDC providers
-         * @description Members see the provider list; claim-mapping fields (`groupsClaim`, `groupMappings`, `adminClaimValues`, `roleMappings`, `defaultRole`) are redacted for non-admins. Client secrets are never returned.
+         * @description Members see the provider list; claim-mapping fields (`groupsClaim`, `groupMappings`, `adminClaimValues`, `roleMappings`, `defaultRoleID`) are redacted for non-admins. Client secrets are never returned.
          */
         get: operations["listOIDCProviders"];
         put?: never;
@@ -6461,11 +6461,10 @@ export interface components {
              */
             organizationId?: string;
             /**
-             * @description Organization role for `organizationId`.
-             * @default member
-             * @enum {string}
+             * Format: uuid
+             * @description Canonical organization role id for `organizationId`. Omit or use null to create bare organization membership without a role grant.
              */
-            role: "admin" | "member";
+            role?: string | null;
         };
         /** @description The created account plus its one-time claim invitation. The token is shown exactly once so the admin can hand the link to the invitee. */
         AdminCreateUserResponse: {
@@ -6750,7 +6749,10 @@ export interface components {
             description: string;
             /** Format: date-time */
             createdAt?: string;
-            /** @description The caller's role in this organization, or null when the caller is not a member. */
+            /**
+             * Format: uuid
+             * @description The caller's canonical role id in this organization, or null for bare membership or when the caller is not a member.
+             */
             userRole?: string | null;
         };
         CreateOrganizationRequest: {
@@ -6770,7 +6772,13 @@ export interface components {
             username: string;
             displayName: string;
             email: string;
-            role: string;
+            /**
+             * Format: uuid
+             * @description The canonical role id, or null for bare membership.
+             */
+            role?: string | null;
+            /** @description The role's display name, or null for bare membership. */
+            roleDisplayName?: string | null;
             /** Format: date-time */
             joinedAt?: string;
         };
@@ -6779,8 +6787,11 @@ export interface components {
             userEmail: string;
             role: components["schemas"]["OrganizationMemberRole"];
         };
-        /** @description The organization role to grant: `member` (bare membership) or `admin` (an admin role binding), a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), or a role bindable at the org named by id or by name — every name `GET /api/iam/roles/bindable` lists for the org is accepted. The fixed names above win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. */
-        OrganizationMemberRole: string;
+        /**
+         * Format: uuid
+         * @description The canonical id of a role returned by `GET /api/iam/roles/bindable` for the organization, or null for bare membership without a role grant.
+         */
+        OrganizationMemberRole: string | null;
         UpdateOrganizationMemberRoleRequest: {
             role: components["schemas"]["OrganizationMemberRole"];
         };
@@ -6881,7 +6892,10 @@ export interface components {
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /** @description The role to grant on the folder: a role id, a seeded role name (`viewer`/`operator`/`editor`/`admin`), or the name of a custom role bindable here — every name `GET /api/iam/roles/bindable` lists for this folder is accepted. Either form must name a role owned at or above the folder. A seeded name always wins over a custom role of the same name, and a name two bindable roles share is a `400` naming both ids. The legacy project vocabulary carries no meaning here: `member` is a valid folder grant only if a role bindable on the folder is named that. */
+        /**
+         * Format: uuid
+         * @description The canonical id of a role returned by `GET /api/iam/roles/bindable` for the folder. The role must be owned at or above the folder.
+         */
         FolderRole: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantFolderMemberRequest: {
@@ -7327,8 +7341,13 @@ export interface components {
             username: string;
             displayName: string;
             email: string;
-            /** @description The role's `iam_roles` id; legacy rows storing a relational name are normalized to their seeded id. `roleDisplayName` carries the name to show. */
+            /**
+             * Format: uuid
+             * @description The role's canonical `iam_roles` id.
+             */
             role: string;
+            /** @description The role's display name. */
+            roleDisplayName: string;
             /** Format: date-time */
             joinedAt?: string;
             /** @description The user is not a member of the project's organization — a cross-org grant, which UIs should render prominently. */
@@ -7338,14 +7357,22 @@ export interface components {
             /** Format: uuid */
             groupId?: string;
             name: string;
-            /** @description The role's `iam_roles` id, as on `ProjectMember`. */
+            /**
+             * Format: uuid
+             * @description The role's canonical `iam_roles` id.
+             */
             role: string;
+            /** @description The role's display name. */
+            roleDisplayName: string;
             /** Format: date-time */
             grantedAt?: string;
             /** @description The group belongs to another organization — a cross-org grant, which UIs should render prominently. */
             external: boolean;
         };
-        /** @description The role to grant on a project: a role id, a seeded IAM role name (`viewer`/`operator`/`editor`/`admin`), a legacy project role (`admin`/`member`/`viewer`), or the name of a custom role bindable on the project — every name `GET /api/iam/roles/bindable` lists for it is accepted. The fixed names above win over a custom role that shares one, which stays grantable by id; a name two bindable roles share is a `400` naming both ids. */
+        /**
+         * Format: uuid
+         * @description The canonical id of a role returned by `GET /api/iam/roles/bindable` for the project.
+         */
         ProjectMemberRoleInput: string;
         /** @description Identify the user by `userID` or `userEmail`; supply exactly one. */
         GrantProjectMemberRequest: {
@@ -8056,33 +8083,29 @@ export interface components {
             /** Format: uuid */
             id: string;
         };
-        /** @description One permission question in a batch check. */
-        IAMPermissionCheckItem: {
+        /** @description One canonical action/node question in a batch check. */
+        IAMActionCheckItem: {
             /** @description Opaque client-chosen id echoed back in the response. */
             key: string;
-            resourceType: components["schemas"]["IAMNodeType"];
-            /** Format: uuid */
-            resourceId: string;
-            /** @description A legacy permission name (`manage_project`) for a self-check, or an IAM action name (`vm:start`) when `principal` is set. */
-            permission: string;
+            /** @description A registered IAM action, e.g. `vm:start`. */
+            action: string;
+            node: components["schemas"]["IAMNode"];
         };
-        IAMPermissionCheckRequest: {
-            checks: components["schemas"]["IAMPermissionCheckItem"][];
-            /** @description When present, the checks are evaluated for this principal instead of the caller, and answered from the role-bindings table. Requires admin on each named resource or a container above it. */
+        IAMActionCheckRequest: {
+            checks: components["schemas"]["IAMActionCheckItem"][];
+            /** @description When present, the checks are evaluated for this principal instead of the caller. Requires admin on each named node or a container above it. */
             principal?: components["schemas"]["IAMPrincipalRef"];
         };
-        IAMPermissionCheckResponse: {
+        IAMActionCheckResponse: {
             /** @description One boolean per submitted check, keyed by its `key`. */
             results: {
                 [key: string]: boolean;
             };
         };
         IAMWhoCanRequest: {
-            resourceType: components["schemas"]["IAMNodeType"];
-            /** Format: uuid */
-            resourceId: string;
             /** @description An IAM action name, e.g. `vm:start`. */
             action: string;
+            node: components["schemas"]["IAMNode"];
         };
         /**
          * @description Why a principal can perform the action. `binding` is a row in `role_bindings`; `orgMembership` is bare membership, which grants a small set of actions with no binding behind it; `systemAdmin` bypasses authorization entirely (re-expressed as a platform policy at cutover).
@@ -8093,7 +8116,10 @@ export interface components {
         IAMWhoCanEntry: {
             principal: components["schemas"]["IAMPrincipalRef"];
             source: components["schemas"]["IAMWhoCanSource"];
-            /** @description The role that carries the action; absent for non-binding sources. */
+            /**
+             * Format: uuid
+             * @description The canonical role id that carries the action; absent for non-binding sources.
+             */
             role?: string;
             /** @description The node the binding is attached to — the resource itself when the grant is direct, an ancestor when it is inherited. */
             grantedOn?: components["schemas"]["IAMNode"];
@@ -8121,8 +8147,8 @@ export interface components {
             node: components["schemas"]["IAMNode"];
         };
         IAMWhoCanResponse: {
-            resource: components["schemas"]["IAMNode"];
             action: string;
+            node: components["schemas"]["IAMNode"];
             /** @description The chain the answer was assembled from, resource first. */
             ancestors: components["schemas"]["IAMNode"][];
             principals: components["schemas"]["IAMWhoCanEntry"][];
@@ -8477,7 +8503,7 @@ export interface components {
             /** @description The newest version-log entry, absent when the log is empty. */
             latest?: components["schemas"]["IAMPolicySetVersion"];
         };
-        /** @description One authorization decision record. The `spicedb*` field names are historical (kept for API compatibility): `spicedbPermission` carries the permission as asked at the check site, and `spicedbDecision` is always `none` on rows written after the SpiceDB removal (#483). `credentialType`/`credentialID` name the API key or CLI session the request arrived on, on allows as well as denies (STR-115). */
+        /** @description One canonical authorization decision record. `action`, `nodeType`, and `nodeID` identify the exact question Cedar evaluated. A node-less credential refusal has no action or node. `credentialType`/`credentialID` name the API key or CLI session the request arrived on, on allows as well as denies (STR-115). */
         IAMDecisionLogEntry: {
             /** Format: uuid */
             id: string;
@@ -8486,11 +8512,8 @@ export interface components {
             method?: string;
             /** @description The principal the check was made for. */
             subject: string;
-            spicedbPermission: string;
-            resourceType: string;
-            resourceID: string;
-            /** @description The IAM action the legacy permission was mapped to, when one exists. */
-            iamAction?: string;
+            /** @description The canonical action Cedar evaluated. */
+            action?: string;
             nodeType?: string;
             /** Format: uuid */
             nodeID?: string;
@@ -8503,9 +8526,8 @@ export interface components {
             credentialID?: string;
             /** Format: uuid */
             organizationID?: string;
-            spicedbDecision: string;
-            cedarDecision: string;
-            decisionsMatch?: boolean;
+            /** @description `allow`, `deny`, or `credential_restricted` for current rows. Older retained rows can contain a historical decision value. */
+            decision: string;
             determiningPolicies: string[];
             /** @description Which policy tier decided — platform policy, guardrail, or binding. */
             tier?: string;
@@ -8516,12 +8538,10 @@ export interface components {
             /** Format: date-time */
             createdAt?: string;
         };
-        /** @description One burn-down bucket: a distinct way a (permission, action) pair has decided, with how often. */
+        /** @description One decision bucket grouped by canonical action, verdict, and tier. */
         IAMDecisionSummaryBucket: {
-            spicedbPermission: string;
-            iamAction?: string;
-            spicedbDecision: string;
-            cedarDecision: string;
+            action?: string;
+            decision: string;
             tier?: string;
             count: number;
         };
@@ -8732,8 +8752,11 @@ export interface components {
             adminClaimValues?: string[];
             /** @description Admin-only. Claim values mapped to org-scoped roles bound on login. */
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description Admin-only. Organization role for newly provisioned users when no claim matches: `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
-            defaultRole?: string;
+            /**
+             * Format: uuid
+             * @description Admin-only. Canonical organization role id for newly provisioned users when no claim matches. Null or omission creates bare membership.
+             */
+            defaultRoleID?: string | null;
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
@@ -8762,8 +8785,11 @@ export interface components {
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
-            defaultRole?: string;
+            /**
+             * Format: uuid
+             * @description Canonical role id returned by `GET /api/iam/roles/bindable` for the organization. Null or omission creates bare membership.
+             */
+            defaultRoleID?: string | null;
         };
         /** @description Every field is optional. Omitted URL fields keep their stored value; an empty string clears them. */
         UpdateOIDCProviderRequest: {
@@ -8783,8 +8809,11 @@ export interface components {
             groupMappings?: components["schemas"]["OIDCGroupMapping"][];
             adminClaimValues?: string[];
             roleMappings?: components["schemas"]["OIDCRoleMapping"][];
-            /** @description `member`, `admin`, an IAM role name, or a role bindable at the org named by id or by name. */
-            defaultRole?: string;
+            /**
+             * Format: uuid
+             * @description Canonical role id returned by `GET /api/iam/roles/bindable` for the organization. Null selects bare membership.
+             */
+            defaultRoleID?: string | null;
         };
         /** @description The outcome of a provider configuration test. */
         OIDCProviderTestResult: {
@@ -9454,8 +9483,6 @@ export interface components {
         RoleBindableNodeTypeQuery: components["schemas"]["IAMNodeType"];
         /** @description The id of the tree node a role would be bound on. */
         RoleBindableNodeIdQuery: string;
-        /** @description Return only entries where the two engines disagreed. */
-        DecisionLogMismatchesOnlyQuery: boolean;
         /** @description Maximum number of decision-log entries to return (1–500). */
         DecisionLogLimitQuery: number;
         /** @description Cursor: return only entries created strictly before this ISO8601 timestamp. Pass back the `createdAt` of the oldest row of the previous page. */
@@ -16242,7 +16269,7 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
-    checkPermissions: {
+    checkActions: {
         parameters: {
             query?: never;
             header?: never;
@@ -16251,7 +16278,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["IAMPermissionCheckRequest"];
+                "application/json": components["schemas"]["IAMActionCheckRequest"];
             };
         };
         responses: {
@@ -16261,7 +16288,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IAMPermissionCheckResponse"];
+                    "application/json": components["schemas"]["IAMActionCheckResponse"];
                 };
             };
             400: components["responses"]["BadRequest"];
@@ -16827,8 +16854,6 @@ export interface operations {
     listIAMDecisionLogs: {
         parameters: {
             query?: {
-                /** @description Return only entries where the two engines disagreed. */
-                mismatchesOnly?: components["parameters"]["DecisionLogMismatchesOnlyQuery"];
                 /** @description Maximum number of decision-log entries to return (1–500). */
                 limit?: components["parameters"]["DecisionLogLimitQuery"];
                 /** @description Cursor: return only entries created strictly before this ISO8601 timestamp. Pass back the `createdAt` of the oldest row of the previous page. */

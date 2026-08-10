@@ -96,7 +96,7 @@ final class CrossOrgBindingTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.actorToken)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
-                        userEmail: fx.externalUser.email, userID: nil, role: "viewer"))
+                        userEmail: fx.externalUser.email, userID: nil, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
@@ -138,7 +138,7 @@ final class CrossOrgBindingTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.actorToken)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
-                        userEmail: fx.internalUser.email, userID: nil, role: "member"))
+                        userEmail: fx.internalUser.email, userID: nil, role: IAMRole.editor.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
@@ -171,7 +171,7 @@ final class CrossOrgBindingTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.actorToken)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
-                        userEmail: fx.externalUser.email, userID: nil, role: "viewer"))
+                        userEmail: fx.externalUser.email, userID: nil, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .forbidden)
             }
@@ -181,16 +181,12 @@ final class CrossOrgBindingTests {
                 .filter(\.$nodeID == fx.project.id!)
                 .count()
             #expect(bindings == 0)
-            let mirrors = try await ProjectMember.query(on: app.db)
-                .filter(\.$user.$id == fx.externalUser.id!)
-                .count()
-            #expect(mirrors == 0)
             // The internal grant is untouched by the ceiling.
             try await app.test(.POST, "/api/projects/\(fx.project.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.actorToken)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
-                        userEmail: fx.internalUser.email, userID: nil, role: "viewer"))
+                        userEmail: fx.internalUser.email, userID: nil, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
@@ -204,7 +200,7 @@ final class CrossOrgBindingTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.actorToken)
                 try req.content.encode(
                     ProjectMemberController.GrantGroupRequest(
-                        groupID: fx.externalGroup.id!, role: "viewer"))
+                        groupID: fx.externalGroup.id!, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
@@ -237,7 +233,7 @@ final class CrossOrgBindingTests {
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.actorToken)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
-                        userEmail: fx.externalUser.email, userID: nil, role: "viewer"))
+                        userEmail: fx.externalUser.email, userID: nil, role: IAMRole.viewer.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
@@ -287,13 +283,13 @@ final class CrossOrgBindingTests {
             let builder = TestDataBuilder(db: app.db)
             let user = fx.internalUser
 
-            // Inside the home org: a project role (mirror row + binding) and a
+            // Inside the home org: an authoritative project binding and a
             // group membership.
             try await app.test(.POST, "/api/projects/\(fx.project.id!)/members") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: fx.actorToken)
                 try req.content.encode(
                     ProjectMemberController.GrantMemberRequest(
-                        userEmail: user.email, userID: nil, role: "member"))
+                        userEmail: user.email, userID: nil, role: IAMRole.editor.seededID))
             } afterResponse: { res in
                 #expect(res.status == .created)
             }
@@ -322,10 +318,6 @@ final class CrossOrgBindingTests {
                 .filter(\.$nodeID == fx.project.id!)
                 .count()
             #expect(homeBindings == 0)
-            let mirrors = try await ProjectMember.query(on: app.db)
-                .filter(\.$user.$id == user.id!)
-                .count()
-            #expect(mirrors == 0)
             let groupMemberships = try await UserGroup.query(on: app.db)
                 .filter(\.$user.$id == user.id!)
                 .count()

@@ -9,6 +9,16 @@ import AppTestSupport
 @Suite("OIDC Controller Tests", .serialized)
 final class OIDCControllerTests: BaseTestCase {
 
+    private struct InvalidDefaultRoleRequest: Content {
+        let name: String
+        let clientID: String
+        let clientSecret: String
+        let authorizationEndpoint: String
+        let tokenEndpoint: String
+        let jwksURI: String
+        let defaultRoleID: String
+    }
+
     /// Insert a provider directly, bypassing the create endpoint's validation.
     @discardableResult
     private func makeProvider(
@@ -72,19 +82,19 @@ final class OIDCControllerTests: BaseTestCase {
                         jwksURI: "https://idp.example.com/.well-known/jwks.json",
                         groupsClaim: "groups",
                         roleMappings: [OIDCRoleMapping(claimValue: "idp-auditors", roleID: role.id!)],
-                        defaultRole: role.id!.uuidString
+                        defaultRoleID: role.id!
                     ))
             } afterResponse: { res in
                 #expect(res.status == .ok || res.status == .created)
                 let provider = try res.content.decode(OIDCProviderResponse.self)
                 #expect(provider.roleMappings?.first?.roleID == role.id!)
-                #expect(provider.defaultRole == role.id!.uuidString)
+                #expect(provider.defaultRoleID == role.id!)
             }
         }
     }
 
-    @Test("Create provider accepts a default role named by an org-owned role's name (STR-111)")
-    func testCreateProviderAcceptsDefaultRoleByName() async throws {
+    @Test("Create provider rejects a default role name instead of a canonical UUID")
+    func testCreateProviderRejectsDefaultRoleByName() async throws {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
             try await makeOrgRole(name: "auditor", organizationID: testOrganization.id!, on: app.db)
@@ -92,22 +102,17 @@ final class OIDCControllerTests: BaseTestCase {
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
                 try req.content.encode(
-                    CreateOIDCProviderRequest(
+                    InvalidDefaultRoleRequest(
                         name: "Okta",
                         clientID: "client-123",
                         clientSecret: "secret-456",
                         authorizationEndpoint: "https://idp.example.com/authorize",
                         tokenEndpoint: "https://idp.example.com/token",
                         jwksURI: "https://idp.example.com/.well-known/jwks.json",
-                        groupsClaim: "groups",
-                        defaultRole: "auditor"
+                        defaultRoleID: "auditor"
                     ))
             } afterResponse: { res in
-                #expect(res.status == .ok || res.status == .created)
-                // Stored verbatim: the login path resolves it the same way this
-                // write-time validation just did.
-                let provider = try res.content.decode(OIDCProviderResponse.self)
-                #expect(provider.defaultRole == "auditor")
+                #expect(res.status == .badRequest)
             }
         }
     }
@@ -117,7 +122,8 @@ final class OIDCControllerTests: BaseTestCase {
         try await withApp { app in
             try await setupCommonTestData(on: app.db)
             let otherOrg = try await TestDataBuilder(db: app.db).createOrganization(name: "Name Owner Org")
-            try await makeOrgRole(name: "foreign", organizationID: otherOrg.id!, on: app.db)
+            let foreignRole = try await makeOrgRole(
+                name: "foreign", organizationID: otherOrg.id!, on: app.db)
 
             try await app.test(.POST, "/api/organizations/\(testOrganization.id!)/oidc-providers") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
@@ -130,7 +136,7 @@ final class OIDCControllerTests: BaseTestCase {
                         tokenEndpoint: "https://idp.example.com/token",
                         jwksURI: "https://idp.example.com/.well-known/jwks.json",
                         groupsClaim: "groups",
-                        defaultRole: "foreign"
+                        defaultRoleID: foreignRole.id!
                     ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -180,7 +186,7 @@ final class OIDCControllerTests: BaseTestCase {
                         authorizationEndpoint: "https://idp.example.com/authorize",
                         tokenEndpoint: "https://idp.example.com/token",
                         jwksURI: "https://idp.example.com/.well-known/jwks.json",
-                        defaultRole: UUID().uuidString
+                        defaultRoleID: UUID()
                     ))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -267,7 +273,7 @@ final class OIDCControllerTests: BaseTestCase {
             let memberOrg = UserOrganization(
                 userID: memberUser.id!,
                 organizationID: testOrganization.id!,
-                role: "member"
+                roleID: nil
             )
             try await memberOrg.save(on: app.db)
             let memberToken = try await memberUser.generateAPIKey(on: app.db)
@@ -304,7 +310,7 @@ final class OIDCControllerTests: BaseTestCase {
                 on: app.db, organizationID: testOrganization.id!, name: "Okta")
             provider.groupsClaim = "groups"
             provider.setAdminClaimValuesArray(["strato-admins"])
-            provider.defaultRole = "member"
+            provider.defaultRoleID = nil
             try await provider.save(on: app.db)
 
             let memberUser = User(
@@ -316,7 +322,7 @@ final class OIDCControllerTests: BaseTestCase {
             let memberOrg = UserOrganization(
                 userID: memberUser.id!,
                 organizationID: testOrganization.id!,
-                role: "member"
+                roleID: nil
             )
             try await memberOrg.save(on: app.db)
             let memberToken = try await memberUser.generateAPIKey(on: app.db)
@@ -333,7 +339,7 @@ final class OIDCControllerTests: BaseTestCase {
                 #expect(providers.first?.groupsClaim == nil)
                 #expect(providers.first?.adminClaimValues == nil)
                 #expect(providers.first?.groupMappings == nil)
-                #expect(providers.first?.defaultRole == nil)
+                #expect(providers.first?.defaultRoleID == nil)
             }
 
             // Admins see the full configuration.
@@ -424,6 +430,36 @@ final class OIDCControllerTests: BaseTestCase {
                 let response = try res.content.decode(OIDCProviderResponse.self)
                 #expect(response.name == "Okta Prod")
                 #expect(response.enabled == false)
+            }
+        }
+    }
+
+    @Test("Update provider distinguishes an omitted default role from explicit bare membership")
+    func testUpdateProviderCanClearDefaultRole() async throws {
+        try await withApp { app in
+            try await setupCommonTestData(on: app.db)
+            let provider = try await makeProvider(
+                on: app.db, organizationID: testOrganization.id!, name: "Role Defaults")
+            provider.defaultRoleID = IAMRole.admin.seededID
+            try await provider.save(on: app.db)
+
+            let path = "/api/organizations/\(testOrganization.id!)/oidc-providers/\(provider.id!)"
+            try await app.test(.PUT, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(UpdateOIDCProviderRequest(name: "Role Defaults Renamed"))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try? res.content.decode(OIDCProviderResponse.self)
+                #expect(response?.defaultRoleID == IAMRole.admin.seededID)
+            }
+
+            try await app.test(.PUT, path) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(UpdateOIDCProviderRequest(clearDefaultRoleID: true))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try? res.content.decode(OIDCProviderResponse.self)
+                #expect(response?.defaultRoleID == nil)
             }
         }
     }
@@ -899,7 +935,7 @@ final class OIDCControllerTests: BaseTestCase {
                 .filter(\.$user.$id == user.id!)
                 .filter(\.$organization.$id == testOrganization.id!)
                 .first()
-            #expect(membership?.role == "member")
+            #expect(membership?.roleID == nil)
 
             // A bare "member" membership carries its own access (org:read +
             // project:create); only org admins get a role binding, so none may

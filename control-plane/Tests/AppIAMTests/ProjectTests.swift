@@ -49,7 +49,7 @@ final class ProjectTests {
             let userOrg = UserOrganization(
                 userID: testUser.id!,
                 organizationID: testOrganization.id!,
-                role: "admin"
+                roleID: IAMRole.admin.seededID
             )
             try await userOrg.save(on: app.db)
 
@@ -154,7 +154,7 @@ final class ProjectTests {
             let bindingCount = try await RoleBinding.query(on: app.db)
                 .filter(\.$principalType == IAMPrincipalType.user.rawValue)
                 .filter(\.$principalID == testUser.id!)
-                .filter(\.$role == IAMRole.admin.seededID.uuidString)
+                .filter(\.$roleID == IAMRole.admin.seededID)
                 .filter(\.$nodeType == IAMNodeType.project.rawValue)
                 .filter(\.$nodeID == projectId)
                 .count()
@@ -383,7 +383,7 @@ final class ProjectTests {
                 organizationalUnitID: testOU.id, path: "")
             try await hiddenFolderProject.save(on: app.db)
 
-            // A bare org member: a membership mirror row and nothing else —
+            // A bare org member: a membership row and nothing else —
             // under the redesign that grants `org:read` + `project:create`, no
             // project visibility (docs/architecture/iam.md).
             let member = User(
@@ -391,7 +391,7 @@ final class ProjectTests {
                 displayName: "Bare Member", isSystemAdmin: false)
             try await member.save(on: app.db)
             try await UserOrganization(
-                userID: member.id!, organizationID: testOrganization.id!, role: "member"
+                userID: member.id!, organizationID: testOrganization.id!, roleID: nil
             ).save(on: app.db)
             // One explicit project binding — the only project they may read.
             try await RoleBindingService.grant(
@@ -483,7 +483,7 @@ final class ProjectTests {
             try await UserOrganization(
                 userID: testUser.id!,
                 organizationID: destinationOrg.id!,
-                role: "admin"
+                roleID: IAMRole.admin.seededID
             ).save(on: app.db)
             try await RoleBindingService.grant(
                 principalType: .user, principalID: testUser.id!, role: .admin,
@@ -528,11 +528,11 @@ final class ProjectTests {
             try await UserOrganization(
                 userID: testUser.id!,
                 organizationID: destinationOrg.id!,
-                role: "member"
+                roleID: nil
             ).save(on: app.db)
 
             // The user holds no admin binding on the destination org (only a
-            // "member" mirror row), so the destination-org admin check fails;
+            // bare membership row), so the destination-org admin check fails;
             // the project-scoped check on the source still passes.
 
             let project = Project(

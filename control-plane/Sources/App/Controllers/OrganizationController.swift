@@ -47,14 +47,16 @@ struct OrganizationController: RouteCollection {
         // The roles come from the same pivot rows the load above walked, so
         // read them once for the whole list rather than once per organization.
         let organizationIDs = user.organizations.compactMap { $0.id }
-        var roles: [UUID: String] = [:]
+        var roles: [UUID: UUID] = [:]
         if !organizationIDs.isEmpty {
             let memberships = try await UserOrganization.query(on: req.db)
                 .filter(\.$user.$id == user.id!)
                 .filter(\.$organization.$id ~~ organizationIDs)
                 .all()
             for membership in memberships {
-                roles[membership.$organization.id] = membership.role
+                if let roleID = membership.roleID {
+                    roles[membership.$organization.id] = roleID
+                }
             }
         }
 
@@ -89,7 +91,7 @@ struct OrganizationController: RouteCollection {
             .filter(\.$organization.$id == organizationID)
             .first()
 
-        return OrganizationResponse(from: organization, userRole: userOrg?.role)
+        return OrganizationResponse(from: organization, userRole: userOrg?.roleID)
     }
 
     func create(req: Request) async throws -> OrganizationResponse {
@@ -119,12 +121,12 @@ struct OrganizationController: RouteCollection {
 
         try await organization.save(on: req.db)
 
-        // Add creator as admin: the admin role binding lands in the same
-        // transaction as the mirror row.
+        // Add creator as admin: the authoritative role binding lands in the
+        // same transaction as the retained membership relation.
         let userOrganization = UserOrganization(
             userID: user.id!,
             organizationID: organization.id!,
-            role: "admin"
+            roleID: IAMRole.admin.seededID
         )
         try await req.db.transaction { db in
             try await userOrganization.save(on: db)
@@ -190,7 +192,7 @@ struct OrganizationController: RouteCollection {
         try await Site.createDefault(
             forOrganization: organization.id!, named: organization.name, on: req.db)
 
-        return OrganizationResponse(from: organization, userRole: "admin")
+        return OrganizationResponse(from: organization, userRole: IAMRole.admin.seededID)
     }
 
     func update(req: Request) async throws -> OrganizationResponse {
@@ -231,7 +233,7 @@ struct OrganizationController: RouteCollection {
 
         try await organization.save(on: req.db)
 
-        return OrganizationResponse(from: organization, userRole: "admin")
+        return OrganizationResponse(from: organization, userRole: IAMRole.admin.seededID)
     }
 
     /// Refuse a delete that would cascade over live workloads, naming the
@@ -414,9 +416,7 @@ struct OrganizationController: RouteCollection {
             .with(\.$user)
             .all()
 
-        // Legacy literals (`admin`/`member`) display verbatim; a role granted
-        // by id resolves to its row name, batch-loaded once (issue #608).
-        let displayNames = try await RoleDisplayNames.forOrganizationRoles(members.map(\.role), on: req.db)
+        let displayNames = try await RoleDisplayNames.forRoleIDs(members.compactMap(\.roleID), on: req.db)
 
         return members.map { userOrg in
             OrganizationMemberResponse(
@@ -424,8 +424,8 @@ struct OrganizationController: RouteCollection {
                 username: userOrg.user.username,
                 displayName: userOrg.user.displayName,
                 email: userOrg.user.email,
-                role: userOrg.role,
-                roleDisplayName: displayNames.organizationDisplayName(forStored: userOrg.role),
+                role: userOrg.roleID,
+                roleDisplayName: userOrg.roleID.map(displayNames.displayName(forRoleID:)),
                 joinedAt: userOrg.createdAt
             )
         }
@@ -445,7 +445,7 @@ struct OrganizationController: RouteCollection {
 
         struct AddMemberRequest: Content {
             let userEmail: String
-            let role: String
+            let role: UUID?
         }
 
         let addRequest = try req.content.decode(AddMemberRequest.self)
@@ -468,27 +468,28 @@ struct OrganizationController: RouteCollection {
             throw Abort(.conflict, reason: "User is already a member of this organization")
         }
 
-        // Legacy `admin`/`member` keep their literal membership semantics;
-        // IAM names and org-owned role ids are additionally accepted, scoped to
-        // the org (issue #608).
-        let resolved = try await Self.resolveOrgRole(
-            addRequest.role, organizationID: organizationID, on: req.db)
         let node = IAMNode(type: .organization, id: organizationID)
+        let resolved: MemberRoleResolver.Resolved?
+        if let roleID = addRequest.role {
+            resolved = try await MemberRoleResolver.resolve(roleID, scopeNode: node, on: req.db)
+        } else {
+            resolved = nil
+        }
 
         let membership = UserOrganization(
             userID: targetUser.id!,
             organizationID: organizationID,
-            role: resolved.storedRole
+            roleID: resolved?.id
         )
-        // Org admins (and any role granted by id/name) get a binding on the org
+        // Org admins (and any role granted by UUID) get a binding on the org
         // node; bare membership maps to no binding — and with no binding there
         // is nothing for a ceiling to narrow (#484).
-        let proposed = resolved.bindingRoleID.map { _ in
+        let proposed = resolved.map { resolved in
             ProposedBinding(
                 principalType: .user,
                 principalID: targetUser.id!,
                 roleActions: resolved.actions,
-                roleLabel: resolved.label,
+                roleLabel: resolved.displayName,
                 node: node
             )
         }
@@ -496,16 +497,10 @@ struct OrganizationController: RouteCollection {
         let actorID = currentUser.id
         try await req.db.transaction { db in
             try await membership.save(on: db)
-            if let bindingRoleID = resolved.bindingRoleID {
-                try await RoleBindingService.grant(
-                    principalType: .user,
-                    principalID: targetUser.id!,
-                    roleID: bindingRoleID,
-                    nodeType: .organization,
-                    nodeID: organizationID,
-                    createdBy: actorID,
-                    on: db
-                )
+            if let resolved {
+                try await RoleBindingService.insertExclusiveGrant(
+                    principalType: .user, principalID: targetUser.id!, roleID: resolved.id,
+                    node: node, createdBy: actorID, on: db)
             }
         }
 
@@ -536,30 +531,32 @@ struct OrganizationController: RouteCollection {
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         guard
-            let membership = try await UserOrganization.query(on: req.db)
+            try await UserOrganization.query(on: req.db)
                 .filter(\.$user.$id == userID)
                 .filter(\.$organization.$id == organizationID)
-                .first()
+                .first() != nil
         else {
             throw Abort(.notFound, reason: "User is not a member of this organization")
         }
 
-        // Prevent removing the last admin
-        if membership.role == "admin" {
-            let adminCount = try await UserOrganization.query(on: req.db)
-                .filter(\.$organization.$id == organizationID)
-                .filter(\.$role == "admin")
-                .count()
-
-            if adminCount <= 1 {
+        let node = IAMNode(type: .organization, id: organizationID)
+        try await RoleBindingService.withMembershipNodeLocked(node, on: req.db) { db in
+            guard
+                let membership = try await UserOrganization.query(on: db)
+                    .filter(\.$user.$id == userID)
+                    .filter(\.$organization.$id == organizationID)
+                    .first()
+            else {
+                throw Abort(.notFound, reason: "User is not a member of this organization")
+            }
+            if try await Self.hasAdminBinding(userID: userID, organizationID: organizationID, on: db),
+                try await Self.adminBindingCount(organizationID: organizationID, on: db) <= 1
+            {
                 throw Abort(.badRequest, reason: "Cannot remove the last admin from organization")
             }
-        }
-
-        try await req.db.transaction { db in
             try await membership.delete(on: db)
             // Everything held inside the org goes with the membership — group
-            // memberships, project mirror rows, and bindings across the whole
+            // memberships and bindings across the whole
             // subtree, not just the org node (issue #485). Grants in other
             // orgs stay: those are the other orgs' to revoke.
             try await OffboardingSweep.userLeftOrganization(
@@ -586,102 +583,92 @@ struct OrganizationController: RouteCollection {
         try await OrganizationAccessService.requireAdmin(organizationID: organizationID, on: req)
 
         struct UpdateRoleRequest: Content {
-            let role: String
+            let role: UUID?
         }
 
         let updateRequest = try req.content.decode(UpdateRoleRequest.self)
 
         guard
-            let membership = try await UserOrganization.query(on: req.db)
+            try await UserOrganization.query(on: req.db)
                 .filter(\.$user.$id == userID)
                 .filter(\.$organization.$id == organizationID)
-                .first()
+                .first() != nil
         else {
             throw Abort(.notFound, reason: "User is not a member of this organization")
         }
 
-        // Legacy `admin`/`member` keep their literal membership semantics; IAM
-        // names and org-owned role ids are additionally accepted (issue #608).
-        let resolved = try await Self.resolveOrgRole(
-            updateRequest.role, organizationID: organizationID, on: req.db)
         let node = IAMNode(type: .organization, id: organizationID)
-
-        // Prevent changing role if this would remove the last admin. The guard
-        // stays keyed on the literal "admin" membership: moving the last admin
-        // to anything else — a bare member, or a role named by id — is what it
-        // stops (issue #608).
-        if membership.role == "admin" && resolved.storedRole != "admin" {
-            let adminCount = try await UserOrganization.query(on: req.db)
-                .filter(\.$organization.$id == organizationID)
-                .filter(\.$role == "admin")
-                .count()
-
-            if adminCount <= 1 {
-                throw Abort(.badRequest, reason: "Cannot change role of the last admin")
-            }
+        let resolved: MemberRoleResolver.Resolved?
+        if let roleID = updateRequest.role {
+            resolved = try await MemberRoleResolver.resolve(roleID, scopeNode: node, on: req.db)
+        } else {
+            resolved = nil
         }
 
         // Only the direction that *adds* a binding has anything to report;
         // dropping to bare membership takes access away, which no ceiling
         // bears on.
-        let proposed = resolved.bindingRoleID.map { _ in
+        let proposed = resolved.map { resolved in
             ProposedBinding(
                 principalType: .user,
                 principalID: userID,
                 roleActions: resolved.actions,
-                roleLabel: resolved.label,
+                roleLabel: resolved.displayName,
                 node: node
             )
         }
 
-        let previousRole = membership.role
-        membership.role = resolved.storedRole
         let actorID = currentUser.id
-        try await req.db.transaction { db in
+        try await RoleBindingService.withMembershipNodeLocked(node, on: req.db) { db in
+            guard
+                let membership = try await UserOrganization.query(on: db)
+                    .filter(\.$user.$id == userID)
+                    .filter(\.$organization.$id == organizationID)
+                    .first()
+            else {
+                throw Abort(.notFound, reason: "User is not a member of this organization")
+            }
+            // Prevent changing role if this would remove the last admin. The
+            // organization-row lock makes the count and write one invariant
+            // across concurrent demotions and removals.
+            if try await Self.hasAdminBinding(userID: userID, organizationID: organizationID, on: db),
+                resolved?.id != IAMRole.admin.seededID,
+                try await Self.adminBindingCount(organizationID: organizationID, on: db) <= 1
+            {
+                throw Abort(.badRequest, reason: "Cannot change role of the last admin")
+            }
+            membership.roleID = resolved?.id
             try await membership.save(on: db)
-            // Swap the role's binding atomically with the mirror-row update. The
-            // previously stored value may be a legacy literal or a role id.
-            if let oldBindingID = Self.orgStoredRoleID(previousRole) {
-                try await RoleBindingService.revoke(
-                    principalType: .user,
-                    principalID: userID,
-                    roleID: oldBindingID,
-                    nodeType: .organization,
-                    nodeID: organizationID,
-                    on: db
-                )
-            }
-            if let newBindingID = resolved.bindingRoleID {
-                try await RoleBindingService.grant(
-                    principalType: .user,
-                    principalID: userID,
-                    roleID: newBindingID,
-                    nodeType: .organization,
-                    nodeID: organizationID,
-                    createdBy: actorID,
-                    on: db
-                )
-            }
+            try await RoleBindingService.setExclusiveGrant(
+                principalType: .user, principalID: userID, roleID: resolved?.id,
+                node: node, createdBy: actorID, on: db)
         }
 
         return try await report(for: proposed, req: req).encodeResponse(status: .ok, for: req)
     }
 
-    // MARK: - Org role resolution (issue #608)
-
-    /// Resolve a requested org membership role across the unified vocabulary.
-    /// Thin wrapper over the shared `MemberRoleResolver.resolveOrganizationRole`
-    /// (issue #611 lifted this out so the OIDC provisioning flow shares it).
-    private static func resolveOrgRole(
-        _ raw: String, organizationID: UUID, on db: any Database
-    ) async throws -> MemberRoleResolver.ResolvedOrgRole {
-        try await MemberRoleResolver.resolveOrganizationRole(raw, organizationID: organizationID, on: db)
+    private static func hasAdminBinding(
+        userID: UUID, organizationID: UUID, on db: any Database
+    ) async throws -> Bool {
+        try await RoleBinding.query(on: db)
+            .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+            .filter(\.$principalID == userID)
+            .filter(\.$roleID == IAMRole.admin.seededID)
+            .filter(\.$nodeType == IAMNodeType.organization.rawValue)
+            .filter(\.$nodeID == organizationID)
+            .active()
+            .first() != nil
     }
 
-    /// The role id a stored membership value names, for revoking its binding:
-    /// a UUID directly, or a legacy literal via `fromOrganizationRole`
-    /// (`member` names none).
-    private static func orgStoredRoleID(_ stored: String) -> UUID? {
-        MemberRoleResolver.organizationStoredRoleID(stored)
+    private static func adminBindingCount(
+        organizationID: UUID, on db: any Database
+    ) async throws -> Int {
+        try await RoleBinding.query(on: db)
+            .filter(\.$principalType == IAMPrincipalType.user.rawValue)
+            .filter(\.$roleID == IAMRole.admin.seededID)
+            .filter(\.$nodeType == IAMNodeType.organization.rawValue)
+            .filter(\.$nodeID == organizationID)
+            .active()
+            .count()
     }
 }

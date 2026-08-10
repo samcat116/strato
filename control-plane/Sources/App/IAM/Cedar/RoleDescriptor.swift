@@ -28,8 +28,7 @@ struct RoleDescriptor: Equatable, Sendable {
     var grantsWorkloadsField: String { Self.grantsWorkloadsField(id) }
 
     /// Cedar-side names use lowercased UUIDs, matching `CedarEntityUID`'s
-    /// convention. (The `role_bindings.role` column stores `UUID.uuidString`
-    /// uppercase — a database concern, normalized the moment a row is parsed.)
+    /// convention.
     static func policyID(_ id: UUID) -> String { "role-\(id.uuidString.lowercased())" }
     static func grantsUsersField(_ id: UUID) -> String { "\(id.uuidString.lowercased())Users" }
     static func grantsGroupsField(_ id: UUID) -> String { "\(id.uuidString.lowercased())Groups" }

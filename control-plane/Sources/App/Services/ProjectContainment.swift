@@ -36,7 +36,7 @@ import Vapor
 /// project" apart from "that isn't visible to you". Authorizing first means
 /// the containment message only ever reaches a caller who could already see
 /// both sides. At the three attach sites the check in front of this one is
-/// `Request.reachableVM(_:permission:)`, which answers a VM the caller cannot
+/// `Request.reachableVM(_:action:)`, which answers a VM the caller cannot
 /// reach as not-found whether or not it exists (issue #881) — so neither this
 /// refusal nor the one before it distinguishes anything.
 enum ProjectContainment {

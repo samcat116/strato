@@ -268,13 +268,10 @@ enum GuardrailWriteReport {
         // not covered.
         var shadowed: [ShadowedBinding] = []
         for candidate in try await RoleBinding.query(on: db).active().all() {
-            // `role_bindings.role` holds the `iam_roles` row id since issue
-            // #604, not the role name. A row naming a custom role maps to no
-            // `IAMRole` and is skipped, the same as any unparseable row —
+            // A row naming a custom role maps to no `IAMRole` and is skipped —
             // shadow reporting over custom roles needs this whole check to
             // stop being enum-shaped, which is its own piece of work.
-            guard let roleID = UUID(uuidString: candidate.role),
-                let role = IAMRole(seededID: roleID),
+            guard let role = IAMRole(seededID: candidate.roleID),
                 let nodeType = IAMNodeType(rawValue: candidate.nodeType),
                 let principalType = IAMPrincipalType(rawValue: candidate.principalType)
             else { continue }

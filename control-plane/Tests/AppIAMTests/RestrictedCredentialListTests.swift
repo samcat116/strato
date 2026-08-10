@@ -292,13 +292,13 @@ final class RestrictedCredentialListTests {
 
             await app.iamDecisionRecorder.flush()
             let creates = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$iamAction == "vm:create")
+                .filter(\.$action == "vm:create")
                 .all()
             #expect(
-                creates.contains { $0.nodeID == f.projectA.id && $0.cedarDecision == "allow" },
+                creates.contains { $0.nodeID == f.projectA.id && $0.decision == "allow" },
                 "the create in the credential's own project was allowed on the project node")
             #expect(
-                creates.contains { $0.nodeID == f.projectB.id && $0.cedarDecision != "allow" },
+                creates.contains { $0.nodeID == f.projectB.id && $0.decision != "allow" },
                 "the create outside it was denied on the project node")
         }
     }

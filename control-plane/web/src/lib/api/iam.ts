@@ -3,6 +3,8 @@
 import { api } from "./client";
 import type {
   IAMActionCatalogResponse,
+  IAMBindableRolesResponse,
+  IAMNodeType,
   IAMPolicy,
   IAMPolicyCreateRequest,
   IAMPolicyListResponse,
@@ -27,6 +29,16 @@ export const iamApi = {
     return api.get<IAMRoleListResponse>("/api/iam/roles", {
       ownerType,
       ownerId,
+    });
+  },
+
+  listBindableRoles(
+    nodeType: IAMNodeType,
+    nodeId: string
+  ): Promise<IAMBindableRolesResponse> {
+    return api.get<IAMBindableRolesResponse>("/api/iam/roles/bindable", {
+      nodeType,
+      nodeId,
     });
   },
 

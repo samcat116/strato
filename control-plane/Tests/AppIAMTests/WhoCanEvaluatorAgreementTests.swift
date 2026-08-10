@@ -62,7 +62,6 @@ final class WhoCanEvaluatorAgreementTests {
     ) async throws -> Bool {
         let decision = try await IAMAuthorizer.authorize(
             principal: principal, action: action, node: node,
-            legacyEquivalent: nil,
             context: IAMCheckContext(path: "/test", method: "GET", requestID: nil),
             state: .detached, app: app, db: app.db)
         return decision.allowed

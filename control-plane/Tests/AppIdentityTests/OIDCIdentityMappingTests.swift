@@ -12,7 +12,7 @@ import AppTestSupport
 /// group membership sync, org role reconciliation, and SCIM ↔ OIDC
 /// convergence. Drives `OIDCIdentityService` directly (no fake IdP needed —
 /// the service starts after ID-token validation) and asserts on the DB state:
-/// membership mirror rows, group pivot rows, and `role_bindings`.
+/// organization membership rows, group pivot rows, and `role_bindings`.
 @Suite("OIDC Identity Mapping Tests", .serialized)
 final class OIDCIdentityMappingTests {
 
@@ -70,7 +70,7 @@ final class OIDCIdentityMappingTests {
         groupMappings: (TestDataBuilder, Organization) async throws -> [OIDCGroupMapping] = { _, _ in [] },
         adminClaimValues: [String] = [],
         roleMappings: (TestDataBuilder, Organization) async throws -> [OIDCRoleMapping] = { _, _ in [] },
-        defaultRole: (TestDataBuilder, Organization) async throws -> String = { _, _ in "member" },
+        defaultRoleID: (TestDataBuilder, Organization) async throws -> UUID? = { _, _ in nil },
         _ test: (Application, Organization, OIDCProvider, OIDCIdentityService) async throws -> Void
     ) async throws {
         let app = try await Application.makeForTesting()
@@ -91,7 +91,7 @@ final class OIDCIdentityMappingTests {
                 groupMappings: try await groupMappings(builder, org),
                 adminClaimValues: adminClaimValues,
                 roleMappings: try await roleMappings(builder, org),
-                defaultRole: try await defaultRole(builder, org)
+                defaultRoleID: try await defaultRoleID(builder, org)
             )
             try await provider.save(on: app.db)
 
@@ -127,21 +127,22 @@ final class OIDCIdentityMappingTests {
         return role
     }
 
-    private func orgBindingRoles(_ userID: UUID, _ orgID: UUID, on db: Database) async throws -> [String] {
+    private func orgBindingRoles(_ userID: UUID, _ orgID: UUID, on db: Database) async throws -> [UUID] {
         try await RoleBinding.query(on: db)
             .filter(\.$principalType == IAMPrincipalType.user.rawValue)
             .filter(\.$principalID == userID)
             .filter(\.$nodeType == IAMNodeType.organization.rawValue)
             .filter(\.$nodeID == orgID)
             .all()
-            .map(\.role)
+            .map(\.roleID)
     }
 
     // MARK: - JIT provisioning
 
     @Test("JIT user gets the provider's default role and an org role binding")
     func jitUsesDefaultRole() async throws {
-        try await withIdentityTestApp(defaultRole: { _, _ in "admin" }) { app, org, provider, service in
+        try await withIdentityTestApp(defaultRoleID: { _, _ in IAMRole.admin.seededID }) {
+            app, org, provider, service in
             let user = try await service.resolveUser(
                 userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
 
@@ -149,7 +150,7 @@ final class OIDCIdentityMappingTests {
                 .filter(\.$user.$id == user.id!)
                 .filter(\.$organization.$id == org.id!)
                 .first()
-            #expect(membership?.role == "admin")
+            #expect(membership?.roleID == IAMRole.admin.seededID)
 
             // The admin role binding is written alongside the membership row —
             // without it the new user authenticates but every check denies.
@@ -159,7 +160,7 @@ final class OIDCIdentityMappingTests {
                 .filter(\.$nodeType == IAMNodeType.organization.rawValue)
                 .filter(\.$nodeID == org.id!)
                 .all()
-            #expect(bindings.map(\.role) == [IAMRole.admin.seededID.uuidString])
+            #expect(bindings.map(\.roleID) == [IAMRole.admin.seededID])
         }
     }
 
@@ -173,7 +174,7 @@ final class OIDCIdentityMappingTests {
             let adminMembership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == admin.id!)
                 .first()
-            #expect(adminMembership?.role == "admin")
+            #expect(adminMembership?.roleID == IAMRole.admin.seededID)
 
             let member = try await service.resolveUser(
                 userInfo: userInfo(subject: "sub-b", email: "b@example.com"),
@@ -181,7 +182,7 @@ final class OIDCIdentityMappingTests {
             let memberMembership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == member.id!)
                 .first()
-            #expect(memberMembership?.role == "member")
+            #expect(memberMembership?.roleID == nil)
         }
     }
 
@@ -397,7 +398,7 @@ final class OIDCIdentityMappingTests {
             #expect(stillMember)
             let membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == "admin")
+            #expect(membership?.roleID == IAMRole.admin.seededID)
         }
     }
 
@@ -458,7 +459,7 @@ final class OIDCIdentityMappingTests {
                 try await RoleBinding.query(on: app.db)
                     .filter(\.$principalType == IAMPrincipalType.user.rawValue)
                     .filter(\.$principalID == user.id!)
-                    .filter(\.$role == IAMRole.admin.seededID.uuidString)
+                    .filter(\.$roleID == IAMRole.admin.seededID)
                     .filter(\.$nodeType == IAMNodeType.organization.rawValue)
                     .filter(\.$nodeID == org.id!)
                     .count()
@@ -468,7 +469,7 @@ final class OIDCIdentityMappingTests {
                 user: user, provider: provider, organizationID: org.id!, groupValues: ["strato-admins"])
             let promoted = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(promoted?.role == "admin")
+            #expect(promoted?.roleID == IAMRole.admin.seededID)
 
             // The admin binding is written alongside the mirror-row update.
             let bindingsAfterPromotion = try await adminBindingCount()
@@ -478,7 +479,7 @@ final class OIDCIdentityMappingTests {
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
             let demoted = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(demoted?.role == "member")
+            #expect(demoted?.roleID == nil)
 
             // Demotion revokes the binding again (bare membership has none).
             let bindingsAfterDemotion = try await adminBindingCount()
@@ -498,7 +499,7 @@ final class OIDCIdentityMappingTests {
 
             let membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == "admin")
+            #expect(membership?.roleID == IAMRole.admin.seededID)
         }
     }
 
@@ -528,7 +529,7 @@ final class OIDCIdentityMappingTests {
 
             let membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == "admin")
+            #expect(membership?.roleID == IAMRole.admin.seededID)
 
             // With a usable second admin, the demotion proceeds.
             let usable = try await builder.createUser(username: "usableadmin", email: "usable@example.com")
@@ -537,7 +538,7 @@ final class OIDCIdentityMappingTests {
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
             let demoted = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(demoted?.role == "member")
+            #expect(demoted?.roleID == nil)
         }
     }
 
@@ -555,53 +556,31 @@ final class OIDCIdentityMappingTests {
                 userInfo: userInfo(), provider: provider, organization: org,
                 groupValues: ["idp-auditors", "unrelated"])
 
-            // The mirror row stores the role id; the binding names the same id.
+            // Membership metadata and the authoritative binding name the same role id.
             let membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == auditorID.uuidString)
+            #expect(membership?.roleID == auditorID)
             let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.db)
-            #expect(bindings == [auditorID.uuidString])
+            #expect(bindings == [auditorID])
         }
     }
 
     @Test("A custom-role default role provisions and binds that role when no claim matches")
     func jitDefaultRoleCustomRole() async throws {
         var auditorID: UUID!
-        try await withIdentityTestApp(defaultRole: { builder, org in
+        try await withIdentityTestApp(defaultRoleID: { builder, org in
             let auditor = try await self.makeOrgRole(name: "auditor", orgID: org.id!, on: builder.db)
             auditorID = auditor.id!
-            return auditor.id!.uuidString
+            return auditor.id!
         }) { app, org, provider, service in
             let user = try await service.resolveUser(
                 userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
 
             let membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == auditorID.uuidString)
+            #expect(membership?.roleID == auditorID)
             let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.db)
-            #expect(bindings == [auditorID.uuidString])
-        }
-    }
-
-    @Test("A default role named by an org-owned role's name provisions and binds it (STR-111)")
-    func jitDefaultRoleCustomRoleByName() async throws {
-        var auditorID: UUID!
-        try await withIdentityTestApp(defaultRole: { builder, org in
-            let auditor = try await self.makeOrgRole(name: "auditor", orgID: org.id!, on: builder.db)
-            auditorID = auditor.id!
-            return "auditor"
-        }) { app, org, provider, service in
-            let user = try await service.resolveUser(
-                userInfo: userInfo(), provider: provider, organization: org, groupValues: [])
-
-            // Login resolves the stored name to the role itself. The lenient
-            // fallback would have landed a bare "member" instead, which is the
-            // failure this pins.
-            let membership = try await UserOrganization.query(on: app.db)
-                .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == auditorID.uuidString)
-            let bindings = try await orgBindingRoles(user.id!, org.id!, on: app.db)
-            #expect(bindings == [auditorID.uuidString])
+            #expect(bindings == [auditorID])
         }
     }
 
@@ -622,15 +601,15 @@ final class OIDCIdentityMappingTests {
                 user: user, provider: provider, organizationID: org.id!, groupValues: ["idp-auditors"])
             var membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == auditorID.uuidString)
-            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db) == [auditorID.uuidString])
+            #expect(membership?.roleID == auditorID)
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db) == [auditorID])
 
             // Claim lost → reset to the provider default (bare "member"), binding revoked.
             try await service.reconcileOrganizationRole(
                 user: user, provider: provider, organizationID: org.id!, groupValues: [])
             membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == "member")
+            #expect(membership?.roleID == nil)
             #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db).isEmpty)
         }
     }
@@ -651,8 +630,8 @@ final class OIDCIdentityMappingTests {
 
             let membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == "admin")
-            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db) == [IAMRole.admin.seededID.uuidString])
+            #expect(membership?.roleID == IAMRole.admin.seededID)
+            #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db) == [IAMRole.admin.seededID])
         }
     }
 
@@ -667,7 +646,7 @@ final class OIDCIdentityMappingTests {
             // Fell back to bare membership; no binding, and no crash.
             let membership = try await UserOrganization.query(on: app.db)
                 .filter(\.$user.$id == user.id!).first()
-            #expect(membership?.role == "member")
+            #expect(membership?.roleID == nil)
             #expect(try await orgBindingRoles(user.id!, org.id!, on: app.db).isEmpty)
         }
     }

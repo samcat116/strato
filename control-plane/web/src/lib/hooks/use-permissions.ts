@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { authorizationApi } from "@/lib/api/authorization";
-import type { PermissionCheckItem } from "@/types/api";
+import type { ActionCheckItem } from "@/types/api";
 
 /**
  * Ask the backend which of `checks` the current user holds, returning a map keyed
@@ -8,19 +8,19 @@ import type { PermissionCheckItem } from "@/types/api";
  * of hardcoding role assumptions.
  *
  * Missing/loading keys resolve to `false` (fail-closed), so callers can read
- * `perms.manage_project` directly without guarding for undefined.
+ * `permissions.set_policy` directly without guarding for undefined.
  */
-export function usePermissions(checks: PermissionCheckItem[]) {
+export function usePermissions(checks: ActionCheckItem[]) {
   // A stable cache key derived from the checks themselves.
   const key = checks
-    .map((c) => `${c.key}:${c.resourceType}:${c.resourceId}:${c.permission}`)
+    .map((c) => `${c.key}:${c.action}:${c.node.type}:${c.node.id}`)
     .sort()
     .join("|");
 
   const query = useQuery({
     queryKey: ["permissions", key],
     queryFn: () => authorizationApi.check(checks),
-    enabled: checks.length > 0 && checks.every((c) => !!c.resourceId),
+    enabled: checks.length > 0 && checks.every((c) => !!c.node.id),
     staleTime: 30_000,
   });
 

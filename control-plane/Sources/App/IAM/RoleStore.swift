@@ -160,7 +160,7 @@ enum RoleStore {
     /// (`IAMRoleDefinition`).
     static func activeBindingCount(roleID: UUID, on db: any Database) async throws -> Int {
         try await RoleBinding.query(on: db)
-            .filter(\.$role == roleID.uuidString)
+            .filter(\.$roleID == roleID)
             .active()
             .count()
     }

@@ -43,7 +43,7 @@ struct NetworkController: RouteCollection {
         if let projectIdString = req.query[String.self, at: "project_id"],
             let projectId = UUID(uuidString: projectIdString)
         {
-            let hasAccess = try await req.can("view_project", on: "project", id: projectId.uuidString)
+            let hasAccess = try await req.can("project:read", on: IAMNode(type: .project, id: projectId))
 
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
@@ -133,7 +133,7 @@ struct NetworkController: RouteCollection {
 
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
-            action: "create_network", resourceKind: "networks")
+            action: "network:create", resourceKind: "networks")
         let projectId = try project.requireID()
 
         // Trimmed and bounded by `CreateNetworkRequest.validate()`.
@@ -252,7 +252,7 @@ struct NetworkController: RouteCollection {
     @Sendable
     func getNetwork(req: Request) async throws -> NetworkResponse {
         let user = try req.auth.require(User.self)
-        let network = try await fetchNetworkWithPermission(req: req, user: user, permission: "read")
+        let network = try await fetchNetworkWithAction(req: req, user: user, action: "network:read")
         let count = try await attachedInterfaceCount(for: network, on: req.db)
         return NetworkResponse(
             from: network, attachedInterfaceCount: count,
@@ -268,7 +268,7 @@ struct NetworkController: RouteCollection {
     @Sendable
     func updateNetwork(req: Request) async throws -> NetworkResponse {
         let user = try req.auth.require(User.self)
-        var network = try await fetchNetworkWithPermission(req: req, user: user, permission: "update")
+        var network = try await fetchNetworkWithAction(req: req, user: user, action: "network:update")
         let request = try req.content.decodeValidated(UpdateNetworkRequest.self)
 
         var interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
@@ -424,7 +424,7 @@ struct NetworkController: RouteCollection {
                     .conflict,
                     reason: "DNS zone '\(zone.name)' is not attached to this network; attach it first")
             }
-            let allowed = try await req.can("update", on: "dns_zone", id: zoneID.uuidString)
+            let allowed = try await req.can("dns:update", on: IAMNode(type: .dnsZone, id: zoneID))
             guard allowed else {
                 throw Abort(.forbidden, reason: "You don't have permission to modify this DNS zone")
             }
@@ -634,7 +634,7 @@ struct NetworkController: RouteCollection {
     @Sendable
     func deleteNetwork(req: Request) async throws -> HTTPStatus {
         let user = try req.auth.require(User.self)
-        let network = try await fetchNetworkWithPermission(req: req, user: user, permission: "delete")
+        let network = try await fetchNetworkWithAction(req: req, user: user, action: "network:delete")
 
         let interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
         guard interfaceCount == 0 else {
@@ -982,10 +982,10 @@ struct NetworkController: RouteCollection {
             incapableAgentNames: capability.incapableAgentNames(forSite: network.$site.id))
     }
 
-    /// Fetch a network and check permission. Access derives entirely from the
+    /// Fetch a network and check a canonical action. Access derives entirely from the
     /// owning project: every network has one (issue #765), so the evaluator
     /// resolves the network's parent scope and the bindings there decide.
-    private func fetchNetworkWithPermission(req: Request, user: User, permission: String) async throws
+    private func fetchNetworkWithAction(req: Request, user: User, action: String) async throws
         -> LogicalNetwork
     {
         guard let networkIdString = req.parameters.get("networkId"),
@@ -998,10 +998,10 @@ struct NetworkController: RouteCollection {
             throw Abort(.notFound, reason: "Network not found")
         }
 
-        let hasPermission = try await req.can(permission, on: "network", id: networkId.uuidString)
+        let hasPermission = try await req.can(action, on: IAMNode(type: .network, id: networkId))
 
         guard hasPermission else {
-            throw Abort(.forbidden, reason: "You don't have '\(permission)' permission on this network")
+            throw Abort(.forbidden, reason: "You don't have '\(action)' access on this network")
         }
 
         return network
