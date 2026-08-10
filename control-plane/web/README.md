@@ -1,36 +1,41 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Strato web frontend
 
-## Getting Started
+This directory contains Strato's Next.js dashboard. It is a separate API
+consumer: browser requests use same-origin `/api`, `/auth`, and WebSocket paths,
+which Next.js proxies to the control plane during development and the deployment
+proxy routes in production.
 
-First, run the development server:
+## Local development
+
+Install [Bun](https://bun.sh), start a control plane, then run:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install --frozen-lockfile
+NEXT_PUBLIC_API_URL=http://localhost:8080 bun run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The dashboard is served at `http://localhost:3000`. Authentication is not
+stubbed in development, so use an account from the control plane you started.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Commands
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Command | Purpose |
+| --- | --- |
+| `bun run dev` | Start the development server with API rewrites |
+| `bun run lint` | Run ESLint |
+| `bun run build` | Create the production standalone build |
+| `bun run start` | Serve a completed build on `${PORT:-3000}` |
+| `bun run generate:api-types` | Refresh `src/types/openapi.ts` from the control-plane OpenAPI document |
 
-## Learn More
+The generated OpenAPI types are committed. After changing
+`../Sources/App/openapi.yaml`, run `bun run generate:api-types` and include the
+result in the same change. Most endpoint modules still use the hand-maintained
+DTOs in `src/types/api.ts`; new migrations to generated types happen one API
+surface at a time.
 
-To learn more about Next.js, take a look at the following resources:
+## Architecture and deployment
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See [Frontend Architecture](../../docs/architecture/frontend.md) for the route,
+state, authentication, and mutation-convergence design. The production image is
+built by this directory's `Dockerfile` and runs Next.js standalone output as a
+non-root user.

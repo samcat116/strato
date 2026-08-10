@@ -10354,7 +10354,7 @@ components:
         - error
     VolumeSnapshotStatus:
       type: string
-      enum: [creating, available, restoring, deleting, error]
+      enum: [creating, available, deleting, error]
 
     CreateNetworkRequest:
       type: object

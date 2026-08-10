@@ -931,6 +931,11 @@ public func configure(_ app: Application) async throws {
     // proof, and removal of the project/group grant mirrors.
     app.migrations.add(CanonicalizeMembershipRoleStorage())
 
+    // STR-212: fail startup if an obsolete `restoring` volume-snapshot row
+    // exists, then tighten the persisted enum constraint to the observed states
+    // the agent can report today.
+    app.migrations.add(RemoveVolumeSnapshotRestoringStatus())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

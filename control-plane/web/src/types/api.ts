@@ -1740,7 +1740,6 @@ export interface Volume {
 export type SnapshotStatus =
   | "creating"
   | "available"
-  | "restoring"
   | "deleting"
   | "error";
 

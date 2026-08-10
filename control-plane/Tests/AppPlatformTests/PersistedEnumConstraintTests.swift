@@ -154,6 +154,56 @@ struct PersistedEnumConstraintTests {
         }
     }
 
+    @Test("Volume snapshot migration rejects restoring rows before tightening the constraint")
+    func volumeSnapshotMigrationPreflightsRestoringRows() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? any SQLDatabase)
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser(
+                username: "snapshot-enum", email: "snapshot-enum@example.com")
+            let organization = try await builder.createOrganization(name: "Snapshot Enum Org")
+            let project = try await builder.createProject(
+                name: "Snapshot Enum Project", description: "", organization: organization)
+            let volume = try await builder.createVolume(
+                name: "snapshot-enum-volume", project: project, createdBy: user)
+            let snapshot = VolumeSnapshot(
+                name: "snapshot-enum", description: "",
+                volumeID: try volume.requireID(), projectID: try project.requireID(),
+                environment: "development", size: 1 << 30,
+                createdByID: try user.requireID())
+            try await snapshot.save(on: app.db)
+            let snapshotID = try snapshot.requireID()
+
+            let migration = RemoveVolumeSnapshotRestoringStatus()
+            try await migration.revert(on: app.db)
+            try await sql.raw(
+                "UPDATE volume_snapshots SET status = 'restoring' WHERE id = \(bind: snapshotID)"
+            ).run()
+
+            do {
+                try await migration.prepare(on: app.db)
+                Issue.record("Expected the migration to reject a stored restoring status")
+            } catch let error as PersistedEnumConstraintMigrationError {
+                #expect(
+                    error.description
+                        == "Cannot enforce enum constraint on volume_snapshots.status; "
+                        + "unsupported stored value(s): restoring"
+                )
+            }
+
+            try await sql.raw(
+                "UPDATE volume_snapshots SET status = 'available' WHERE id = \(bind: snapshotID)"
+            ).run()
+            try await migration.prepare(on: app.db)
+
+            await #expect(throws: (any Error).self) {
+                try await sql.raw(
+                    "UPDATE volume_snapshots SET status = 'restoring' WHERE id = \(bind: snapshotID)"
+                ).run()
+            }
+        }
+    }
+
     private func rawValues<E>(_ type: E.Type) -> Set<String>
     where E: CaseIterable & RawRepresentable, E.RawValue == String {
         Set(E.allCases.map(\.rawValue))
