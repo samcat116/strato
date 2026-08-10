@@ -489,7 +489,6 @@ private func encodeRegister(
         agentId: agentName,
         hostname: "test-host",
         version: "1.0.0",
-        capabilities: ["qemu"],
         resources: AgentResources(
             totalCPU: 4,
             availableCPU: 4,

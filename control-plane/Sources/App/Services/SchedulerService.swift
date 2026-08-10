@@ -31,7 +31,7 @@ struct SchedulableAgent: Sendable {
     let availableDisk: Int64
     let status: AgentStatus
     let runningVMCount: Int
-    /// Hypervisor backends this agent can actually run (from its registered capabilities)
+    /// Hypervisor backends this agent can actually run, from its structured registration report.
     let supportedHypervisors: [HypervisorType]
     /// Host CPU architecture; nil for agents that predate architecture reporting
     let architecture: CPUArchitecture?

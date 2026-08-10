@@ -59,13 +59,20 @@ final class SnapshotConvergenceTests {
             agentId: name,
             hostname: "\(name).test",
             version: "1.0.0",
-            capabilities: ["qemu"] + SnapshotArtifactKind.allCases.map(\.agentCapability),
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: protocolVersion
+            hypervisors: [
+                HypervisorSupport(
+                    type: .qemu, available: true, accelerated: true, capabilities: .qemu),
+                HypervisorSupport(
+                    type: .firecracker, available: true, accelerated: true,
+                    capabilities: .firecracker),
+            ],
+            protocolVersion: protocolVersion,
+            sandboxCapable: true
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let uuid = try await app.agentService.registerAgent(

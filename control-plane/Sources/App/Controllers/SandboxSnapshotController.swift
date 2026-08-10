@@ -259,14 +259,12 @@ extension SandboxController {
         // proves a backend that can load a checkpoint is usable on that host.
         // A host without one fails later still, as a `degraded` condition an
         // hour after admission — refused here instead.
-        guard targetAgent.capabilities.contains(SnapshotArtifactKind.sandboxSnapshot.agentCapability)
-        else {
+        guard targetAgent.supportsSnapshotArtifact(.sandboxSnapshot) else {
             throw Abort(
                 .conflict,
                 reason:
-                    "Agent '\(agentId)' cannot restore sandbox snapshots (capability "
-                    + "'\(SnapshotArtifactKind.sandboxSnapshot.agentCapability)' not advertised); "
-                    + "upgrade the agent.")
+                    "Agent '\(agentId)' cannot restore sandbox snapshots "
+                    + "(the Firecracker snapshot backend is unavailable).")
         }
         // Cross-agent restore (issue #428): when the sandbox no longer lives
         // on the agent that took the snapshot, the restore rides the exported

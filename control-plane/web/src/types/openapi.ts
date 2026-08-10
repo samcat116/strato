@@ -7617,7 +7617,6 @@ export interface components {
             hostname: string;
             /** @description The agent build currently running on the node. */
             version: string;
-            capabilities: string[];
             status: components["schemas"]["AgentStatus"];
             resources: components["schemas"]["AgentResources"];
             architecture?: components["schemas"]["AgentCPUArchitecture"];
@@ -7629,6 +7628,8 @@ export interface components {
             sandboxNetworkingCapable: boolean;
             /** @description Whether this node can back a guest TPM 2.0 (it advertised a usable swtpm at its last registration). VMs requesting `tpm` only place on such nodes. */
             tpmCapable: boolean;
+            /** @description Whether this node can run the per-network DNS resolver. Resolver enablement requires every node in the site to report true. */
+            resolverCapable: boolean;
             hostInfo?: components["schemas"]["AgentHostInfo"];
             /**
              * Format: uuid

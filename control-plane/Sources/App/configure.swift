@@ -918,9 +918,12 @@ public func configure(_ app: Application) async throws {
     app.migrations.add(AddWorkloadConvergenceObservability())
 
     // Retire the async-operation side-table (ADR 0001 stage 11, STR-152).
-    // Deliberately last in the list: it must run after every migration that
-    // ever touched the table, and nothing is left to order after it.
+    // It must run after every migration that ever touched the table.
     app.migrations.add(DropResourceOperations())
+
+    // STR-222: structured hypervisor, network, sandbox, TPM, and resolver
+    // reports are the only source of agent capability truth.
+    app.migrations.add(DropLegacyAgentCapabilities())
 
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row

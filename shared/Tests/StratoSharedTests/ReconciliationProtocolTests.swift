@@ -481,7 +481,7 @@ struct ReconciliationProtocolTests {
         // Speaking v37 is not the same as having a CoreDNS; the two are folded
         // site-wide before the control plane enables any network's resolver.
         let message = AgentRegisterMessage(
-            agentId: "a", hostname: "h", version: "1", capabilities: [],
+            agentId: "a", hostname: "h", version: "1",
             resources: AgentResources(
                 totalCPU: 1, availableCPU: 1, totalMemory: 1, availableMemory: 1, totalDisk: 1,
                 availableDisk: 1),
@@ -491,7 +491,7 @@ struct ReconciliationProtocolTests {
 
         let legacy = """
             {"requestId":"r","timestamp":0,"agentId":"a","hostname":"h","version":"1",\
-            "capabilities":[],"resources":{"totalCPU":1,"totalMemory":1,"totalDisk":1,\
+            "resources":{"totalCPU":1,"totalMemory":1,"totalDisk":1,\
             "availableCPU":1,"availableMemory":1,"availableDisk":1},"hypervisorType":"qemu"}
             """
         let old = try WireProtocol.makeDecoder().decode(

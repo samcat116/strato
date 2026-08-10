@@ -67,14 +67,13 @@ struct WireProtocolTests {
             agentId: "a1",
             hostname: "host",
             version: "1.2.3",
-            capabilities: [],
             resources: Fixtures.resources
         )
         #expect(try throughEnvelope(register).protocolVersion == WireProtocol.currentVersion)
 
         // A registration from an agent that predates negotiation omits the field.
         let legacy =
-            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","capabilities":[],"resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1},"hypervisorType":"qemu"}"#
+            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1},"hypervisorType":"qemu"}"#
         let decoded = try decodeJSON(AgentRegisterMessage.self, from: legacy)
         #expect(decoded.protocolVersion == nil)
     }

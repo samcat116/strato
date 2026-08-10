@@ -228,8 +228,7 @@ extension VMController {
         // usable on that host (issue #415). The capture path checks the same
         // pair, so admission is symmetric.
         try await Self.requireEdgeNonceCapableAgent(
-            agentId, requiring: SnapshotArtifactKind.vmCheckpoint.agentCapability,
-            app: req.application)
+            agentId, requiring: .vmCheckpoint, app: req.application)
 
         let userID = try user.requireID()
         let accepted = try await req.resourceMutation.accept(

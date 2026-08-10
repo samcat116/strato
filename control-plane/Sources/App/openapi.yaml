@@ -13446,13 +13446,13 @@ components:
         - name
         - hostname
         - version
-        - capabilities
         - status
         - resources
         - hypervisors
         - sandboxCapable
         - sandboxNetworkingCapable
         - tpmCapable
+        - resolverCapable
         - isOnline
         - updateAvailable
         - autoUpdate
@@ -13468,10 +13468,6 @@ components:
         version:
           type: string
           description: The agent build currently running on the node.
-        capabilities:
-          type: array
-          items:
-            type: string
         status:
           $ref: "#/components/schemas/AgentStatus"
         resources:
@@ -13502,6 +13498,11 @@ components:
             Whether this node can back a guest TPM 2.0 (it advertised a usable
             swtpm at its last registration). VMs requesting `tpm` only place on
             such nodes.
+        resolverCapable:
+          type: boolean
+          description: >-
+            Whether this node can run the per-network DNS resolver. Resolver
+            enablement requires every node in the site to report true.
         hostInfo:
           $ref: "#/components/schemas/AgentHostInfo"
         siteId:

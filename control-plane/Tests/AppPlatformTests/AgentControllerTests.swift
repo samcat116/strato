@@ -96,7 +96,6 @@ struct AgentControllerTests {
             name: name,
             hostname: "\(name).example",
             version: "1.0.0",
-            capabilities: ["qemu"],
             status: status,
             resources: AgentResources(
                 totalCPU: 8,

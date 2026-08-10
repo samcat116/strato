@@ -178,16 +178,12 @@ export default function SitesPage() {
   const memberCount = (siteId: string) => agents.filter((a) => a.siteId === siteId).length;
 
   // Members that can actually author the site's OVN topology — the only ones
-  // the API accepts as a controller. Agents predating structured capability
-  // reporting are judged by their legacy capability strings, as the backend
-  // does.
+  // the API accepts as a controller.
   const eligibleControllers = (siteId: string) =>
     agents.filter(
       (a) =>
         a.siteId === siteId &&
-        (a.networkCapability
-          ? a.networkCapability === "overlay"
-          : a.capabilities.includes("ovn_networking"))
+        a.networkCapability === "overlay"
     );
 
   // The designate-a-controller picker, shared by the "none designated" and

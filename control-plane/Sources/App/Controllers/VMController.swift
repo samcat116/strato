@@ -1749,7 +1749,7 @@ struct VMController: RouteCollection {
     /// had nowhere to go; a nonce is desired state, so it converges when the
     /// agent comes back, exactly like start and stop.
     static func requireEdgeNonceCapableAgent(
-        _ agentId: String?, requiring capability: String? = nil, app: Application
+        _ agentId: String?, requiring snapshotKind: SnapshotArtifactKind? = nil, app: Application
     ) async throws {
         guard let agentId else {
             throw Abort(.conflict, reason: "VM is not placed on any agent")
@@ -1757,12 +1757,12 @@ struct VMController: RouteCollection {
         guard let agent = await app.agentService.getAgentInfo(agentId) else {
             throw Abort(.conflict, reason: "Agent '\(agentId)' is unknown")
         }
-        if let capability, !agent.capabilities.contains(capability) {
+        if let snapshotKind, !agent.supportsSnapshotArtifact(snapshotKind) {
             throw Abort(
                 .conflict,
                 reason:
-                    "Agent '\(agentId)' cannot realize this request (capability '\(capability)' not "
-                    + "advertised); upgrade the agent, or place the VM on a host with a backend that can.")
+                    "Agent '\(agentId)' cannot realize this request (the required snapshot backend "
+                    + "is unavailable); place the VM on a host with a capable backend.")
         }
     }
 

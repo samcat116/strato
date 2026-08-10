@@ -108,7 +108,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let agentId: String
     public let hostname: String
     public let version: String
-    public let capabilities: [String]
     public let resources: AgentResources
     /// Host CPU architecture. Optional so messages from agents that predate
     /// this field decode fine; absent means unknown, and the scheduler treats
@@ -198,7 +197,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
         agentId: String,
         hostname: String,
         version: String,
-        capabilities: [String],
         resources: AgentResources,
         architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport]? = nil,
@@ -216,7 +214,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.agentId = agentId
         self.hostname = hostname
         self.version = version
-        self.capabilities = capabilities
         self.resources = resources
         self.architecture = architecture
         self.hypervisors = hypervisors

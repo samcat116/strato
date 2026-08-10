@@ -123,10 +123,9 @@ public enum WireProtocol {
     /// load-bearing on the send side: a pre-v9 agent has no
     /// `sandbox_snapshot_create` case in its `MessageType` enum, so the
     /// envelope decode fails silently and the request would burn its full
-    /// timeout against silence. Belt and braces, agents that handle these
-    /// messages also advertise `sandbox_snapshot_create` in their registration
-    /// `capabilities` (the `volumeSnapshotDelete` pattern), and the control
-    /// plane checks the capability before sending.
+    /// timeout against silence. Snapshot capture later moved to desired state;
+    /// current admission uses the structured hypervisor and sandbox-runtime
+    /// reports rather than message-name capability strings.
     ///
     /// Version 10: removes the pre-state-sync imperative VM lifecycle message
     /// cases. This is intentionally breaking for version 0/1 peers: both sides

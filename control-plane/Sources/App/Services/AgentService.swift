@@ -324,7 +324,6 @@ actor AgentService {
             }
             agent.hostname = message.hostname
             agent.version = message.version
-            agent.capabilities = message.capabilities
             agent.architecture = message.architecture?.rawValue
             agent.operatingSystem = message.operatingSystem?.rawValue ?? agent.operatingSystem
             agent.hypervisors = message.effectiveHypervisors

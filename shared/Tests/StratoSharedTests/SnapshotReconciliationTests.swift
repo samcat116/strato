@@ -154,9 +154,4 @@ struct SnapshotReconciliationTests {
         #expect(SnapshotArtifactKind.sandboxSnapshot.parentKind == .sandbox)
     }
 
-    @Test("Capture capabilities are distinct per family")
-    func capabilitiesAreDistinct() {
-        let capabilities = SnapshotArtifactKind.allCases.map(\.agentCapability)
-        #expect(Set(capabilities).count == capabilities.count)
-    }
 }
