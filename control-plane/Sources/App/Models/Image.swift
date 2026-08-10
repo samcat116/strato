@@ -332,9 +332,19 @@ struct ImageStatusResponse: Content {
     init(from image: Image) {
         self.id = image.id ?? UUID()
         self.status = image.status
+        let artifacts = image.$artifacts.value ?? []
+        let lifecycleArtifact: ImageArtifact?
+        switch image.status {
+        case .downloading:
+            lifecycleArtifact = artifacts.first { $0.status == .downloading }
+        case .error:
+            lifecycleArtifact = artifacts.first { $0.status == .error }
+        default:
+            lifecycleArtifact = image.diskArtifact
+        }
         let diskArtifact = image.diskArtifact
-        self.downloadProgress = diskArtifact?.downloadProgress
-        self.errorMessage = diskArtifact?.errorMessage
+        self.downloadProgress = lifecycleArtifact?.downloadProgress
+        self.errorMessage = lifecycleArtifact?.errorMessage
         self.size = diskArtifact?.size
         self.checksum = diskArtifact?.checksum
     }

@@ -23,10 +23,6 @@ enum ImageArtifactCutoverError: Error, CustomStringConvertible, Sendable {
 /// that safety boundary passes are the duplicate image columns removed.
 struct MakeImageArtifactsAuthoritative: AsyncMigration {
     func prepare(on database: Database) async throws {
-        try await database.schema("image_artifacts")
-            .field("expected_checksum", .string)
-            .update()
-
         let images = try await AuthoritativeImageLegacyRow.query(on: database).all()
         var incompleteReadyImages: [UUID] = []
 
@@ -157,10 +153,6 @@ struct MakeImageArtifactsAuthoritative: AsyncMigration {
             image.errorMessage = disk.errorMessage
             try await image.save(on: database)
         }
-
-        try await database.schema("image_artifacts")
-            .deleteField("expected_checksum")
-            .update()
     }
 
     private static func isValid(

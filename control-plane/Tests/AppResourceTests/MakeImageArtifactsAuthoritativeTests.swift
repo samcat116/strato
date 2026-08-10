@@ -79,4 +79,44 @@ struct MakeImageArtifactsAuthoritativeTests {
             }
         }
     }
+
+    @Test("Cutover can be retried after an operator repairs an invalid ready image")
+    func retriesAfterRepair() async throws {
+        try await withTestApp { app in
+            let migration = MakeImageArtifactsAuthoritative()
+            try await migration.revert(on: app.db)
+
+            let builder = TestDataBuilder(db: app.db)
+            let user = try await builder.createUser()
+            let org = try await builder.createOrganization()
+            let project = try await builder.createProject(
+                name: "p", description: "d", organization: org)
+            let imageID = try await seedLegacyReadyImage(
+                on: app.db, projectID: try project.requireID(), userID: try user.requireID(),
+                filename: "", checksum: nil, storagePath: nil)
+
+            await #expect(throws: ImageArtifactCutoverError.self) {
+                try await migration.prepare(on: app.db)
+            }
+
+            let repaired = try #require(
+                try await AuthoritativeImageLegacyRow.find(imageID, on: app.db))
+            repaired.filename = "repaired.qcow2"
+            repaired.size = 512
+            repaired.format = ImageFormat.qcow2.rawValue
+            repaired.checksum = String(repeating: "b", count: 64)
+            repaired.storagePath = "images/repaired.qcow2"
+            try await repaired.save(on: app.db)
+
+            try await migration.prepare(on: app.db)
+
+            let artifact = try #require(
+                try await ImageArtifact.query(on: app.db)
+                    .filter(\.$image.$id == imageID)
+                    .filter(\.$kind == .diskImage)
+                    .first())
+            #expect(artifact.isUsable)
+            #expect(artifact.filename == "repaired.qcow2")
+        }
+    }
 }

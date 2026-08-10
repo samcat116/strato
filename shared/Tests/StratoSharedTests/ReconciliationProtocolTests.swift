@@ -36,7 +36,6 @@ struct ReconciliationProtocolTests {
         let message = makeDesiredState()
         let envelope = try MessageEnvelope(message: message)
         #expect(envelope.type == .desiredState)
-        #expect(envelope.senderVersion == WireProtocol.currentVersion)
 
         let decoded = try envelope.decode(as: DesiredStateMessage.self)
         #expect(decoded.syncId == message.syncId)
@@ -484,7 +483,7 @@ struct ReconciliationProtocolTests {
         // Speaking v37 is not the same as having a CoreDNS; the two are folded
         // site-wide before the control plane enables any network's resolver.
         let message = AgentRegisterMessage(
-            agentId: "a", hostname: "h", version: "1", capabilities: [],
+            agentId: "a", hostname: "h", version: "1",
             resources: AgentResources(
                 totalCPU: 1, availableCPU: 1, totalMemory: 1, availableMemory: 1, totalDisk: 1,
                 availableDisk: 1),
@@ -492,13 +491,14 @@ struct ReconciliationProtocolTests {
         let decoded = try MessageEnvelope(message: message).decode(as: AgentRegisterMessage.self)
         #expect(decoded.resolverCapable == true)
 
-        let legacy = """
+        let withoutCapability = """
             {"requestId":"r","timestamp":0,"agentId":"a","hostname":"h","version":"1",\
-            "capabilities":[],"resources":{"totalCPU":1,"totalMemory":1,"totalDisk":1,\
-            "availableCPU":1,"availableMemory":1,"availableDisk":1},"hypervisorType":"qemu"}
+            "resources":{"totalCPU":1,"totalMemory":1,"totalDisk":1,\
+            "availableCPU":1,"availableMemory":1,"availableDisk":1},\
+            "protocolVersion":\(WireProtocol.currentVersion)}
             """
         let old = try WireProtocol.makeDecoder().decode(
-            AgentRegisterMessage.self, from: Data(legacy.utf8))
+            AgentRegisterMessage.self, from: Data(withoutCapability.utf8))
         #expect(old.resolverCapable == nil)
     }
 

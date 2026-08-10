@@ -109,7 +109,6 @@ final class VMOperationTests {
             agentId: "reboot-agent",
             hostname: "test-host",
             version: "1.0.0",
-            capabilities: ["qemu"],
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
@@ -170,29 +169,6 @@ final class VMOperationTests {
                 let interfaces = try res.content.decode([NetworkInterfaceResponse].self)
                 #expect(interfaces.map(\.orderIndex) == [0, 1, 2])
             }
-        }
-    }
-
-    @Test("VM interface mutations reject pre-v40 agents")
-    func networkInterfaceMutationRejectsOldAgent() async throws {
-        try await withVMTestApp { app, user, vm, token in
-            try await placeOnAgent(
-                app: app, vm: vm,
-                wireProtocolVersion: WireProtocol.vmNetworkHotplugMinimumVersion - 1)
-            let network = LogicalNetwork(
-                name: "old-agent-net", subnet: "10.241.0.0/24", gateway: "10.241.0.1",
-                projectID: vm.$project.id, createdByID: user.id!)
-            try await network.save(on: app.db)
-
-            try await app.test(.POST, "/api/vms/\(vm.id!)/interfaces") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(AttachInterfaceBody(networkId: network.id!))
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-            }
-            #expect(
-                try await VMNetworkInterface.query(on: app.db)
-                    .filter(\.$vm.$id == vm.id!).count() == 0)
         }
     }
 

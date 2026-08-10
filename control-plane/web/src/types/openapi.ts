@@ -3621,29 +3621,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/agents/{agentId}/organization": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The agent's id. */
-                agentId: components["parameters"]["AgentID"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Reassign an agent's organization scope
-         * @description Moves the agent's dedicated capacity to another organization or folder (organizational unit). System-admin only. The agent must be drained first: no site membership, no hosted VMs or sandboxes, and no stored volumes.
-         */
-        patch: operations["reassignAgentOrganization"];
-        trace?: never;
-    };
     "/api/sites": {
         parameters: {
             query?: never;
@@ -3715,11 +3692,7 @@ export interface paths {
          * @description Membership for agents that already exist; new nodes join via their enrollment's `siteId` instead. Requires `manage` on both the site and the agent, and the agent must be owned by a scope the site's scope contains. Refused with `409` while the agent is another site's network controller, or (on a move between sites) while it hosts VMs or sandboxes.
          */
         post: operations["assignAgentToSite"];
-        /**
-         * Remove an agent from a site
-         * @description Refused with `409` while the agent is this site's network controller or still hosts VMs or sandboxes. Requires `manage` on both the site and the agent.
-         */
-        delete: operations["removeAgentFromSite"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -6096,7 +6069,7 @@ export interface components {
             /** @description The addresses this network's guests resolve through, IPv4 first. Distinct per network, and absent until the resolver is first enabled. */
             resolverAddresses?: string[];
             /** Format: uuid */
-            siteId?: string;
+            siteId: string;
         };
         UpdateNetworkRequest: {
             name?: string;
@@ -6148,7 +6121,7 @@ export interface components {
             /** @description Whether the network gives its guests a DNS resolver at its own link-local address, serving the zones attached to the network in full — including the CNAME, TXT and SRV records the datapath cannot express — and forwarding everything else to `dnsServers` through the hypervisor's own egress. Defaults true. Enabling it allocates the network a resolver address pair, which is kept if it is later disabled. */
             resolverEnabled: boolean;
             /** Format: uuid */
-            siteId?: string;
+            siteId: string;
             /**
              * Format: uuid
              * @description The DNS zone this network's VMs auto-register into, if any.
@@ -6167,7 +6140,7 @@ export interface components {
             cidr: string;
             gateway?: string;
             /** Format: uuid */
-            siteId?: string;
+            siteId: string;
             /** Format: uuid */
             organizationId?: string;
             /** Format: uuid */
@@ -6176,7 +6149,7 @@ export interface components {
         UpdateFloatingIPPoolRequest: {
             gateway?: string;
             /** Format: uuid */
-            siteId?: string;
+            siteId: string;
         };
         FloatingIPPool: {
             /** Format: uuid */
@@ -6185,7 +6158,7 @@ export interface components {
             cidr: string;
             gateway?: string;
             /** Format: uuid */
-            siteId?: string;
+            siteId: string;
             /** Format: uuid */
             organizationId?: string;
             /** Format: uuid */
@@ -7623,7 +7596,6 @@ export interface components {
             hostname: string;
             /** @description The agent build currently running on the node. */
             version: string;
-            capabilities: string[];
             status: components["schemas"]["AgentStatus"];
             resources: components["schemas"]["AgentResources"];
             architecture?: components["schemas"]["AgentCPUArchitecture"];
@@ -7635,12 +7607,14 @@ export interface components {
             sandboxNetworkingCapable: boolean;
             /** @description Whether this node can back a guest TPM 2.0 (it advertised a usable swtpm at its last registration). VMs requesting `tpm` only place on such nodes. */
             tpmCapable: boolean;
+            /** @description Whether this node can run the per-network DNS resolver. Resolver enablement requires every node in the site to report true. */
+            resolverCapable: boolean;
             hostInfo?: components["schemas"]["AgentHostInfo"];
             /**
              * Format: uuid
-             * @description The site (OVN deployment) this agent belongs to, if any.
+             * @description The site (OVN deployment) this agent belongs to.
              */
-            siteId?: string | null;
+            siteId: string;
             /** Format: uuid */
             organizationId?: string | null;
             /**
@@ -7805,13 +7779,6 @@ export interface components {
         UpdateAgentRequest: {
             /** @description Enroll in (or withdraw from) declarative auto-update. */
             autoUpdate?: boolean;
-        };
-        /** @description The agent's new owning scope. Exactly one of `organizationId` or `organizationalUnitId` is required. */
-        ReassignAgentOrganizationRequest: {
-            /** Format: uuid */
-            organizationId?: string | null;
-            /** Format: uuid */
-            organizationalUnitId?: string | null;
         };
         /** @description Optional overrides for an operator-triggered agent self-update. With no body at all, the agent updates to the configured target version along the release path. */
         AgentUpdateRequest: {
@@ -15680,38 +15647,6 @@ export interface operations {
             };
         };
     };
-    reassignAgentOrganization: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The agent's id. */
-                agentId: components["parameters"]["AgentID"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ReassignAgentOrganizationRequest"];
-            };
-        };
-        responses: {
-            /** @description The reassigned agent. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDetail"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-        };
-    };
     listSites: {
         parameters: {
             query?: {
@@ -15862,36 +15797,6 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The agent, now a member of the site. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AgentDetail"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
-            401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-        };
-    };
-    removeAgentFromSite: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The site's id. */
-                siteId: components["parameters"]["SiteID"];
-                /** @description The agent's id. */
-                agentId: components["parameters"]["AgentID"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The agent, no longer a member of any site. */
             200: {
                 headers: {
                     [name: string]: unknown;

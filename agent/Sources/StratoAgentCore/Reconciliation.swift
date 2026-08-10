@@ -353,11 +353,6 @@ public struct ReconcileWorkItem: Sendable {
     /// no entry left to record against).
     public let appliedEdges: AppliedEdgeNonces?
 
-    /// The workload id under its historical name from the VM-only reconciler.
-    /// VM actuation and the existing tests read this; new kind-aware code
-    /// should prefer `id`.
-    public var vmId: String { id }
-
     /// The VM desired entry, when this is a VM-kind item driven by one.
     public var desired: DesiredVMState? {
         if case .vm(let entry) = target { return entry }
@@ -392,7 +387,7 @@ public struct ReconcileWorkItem: Sendable {
     }
 
     /// Every serial lane this item must hold while it runs. VM items key on
-    /// the bare vmId, so two items can never interleave operations on one VM;
+    /// the bare VM id, so two items can never interleave operations on one VM;
     /// sandbox and volume items get their own namespaces ("sandbox/" and
     /// "volume/" cannot collide with a UUID string).
     ///
@@ -429,10 +424,6 @@ public struct ReconcileWorkItem: Sendable {
         case .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot: return "snapshot/" + id
         }
     }
-
-    /// The item's primary lane. Retained for call sites and tests that predate
-    /// multi-lane items; scheduling reads `laneKeys`.
-    public var laneKey: String { laneKeys[0] }
 
     public init(
         kind: WorkloadKind,
@@ -630,10 +621,6 @@ public protocol ReconcileActuator: Sendable {
     func convergenceDidChange() async
 }
 
-/// Thrown by the default sandbox hooks when an actuator without sandbox
-/// support receives sandbox work. Should be unreachable: such agents never
-/// advertise the sandbox capability, so the control plane never places
-/// sandboxes on them — permanent, because retrying cannot grow a runtime.
 /// Why a volume could not be converged (STR-148). Every case carries a
 /// classification rather than being plain errors, because the difference
 /// decides whether an operator ever sees them — and, for `blocked`, whether
@@ -698,55 +685,6 @@ public enum SnapshotConvergenceError: ClassifiableError, LocalizedError, Sendabl
         switch self {
         case .unsupported(let reason), .sourceNotReady(let reason): return reason
         }
-    }
-}
-
-public struct SandboxActuationUnsupportedError: ClassifiableError, LocalizedError {
-    public var failureClassification: FailureClassification { .permanent }
-    public var errorDescription: String? { "this actuator does not support sandbox workloads" }
-
-    public init() {}
-}
-
-/// Sandbox defaults so VM-only actuators (including the pre-#417
-/// conformances) stay source-compatible; the reconciler only calls these when
-/// a sync plans sandbox work.
-extension ReconcileActuator {
-    /// Actuators that don't model an unreadable inventory always know what
-    /// they hold — the test mocks and the pre-STR-138 conformances.
-    public func presenceIsComplete() async -> Bool { true }
-
-    public func observedSandboxPresence() async -> [String: SandboxPresence] { [:] }
-
-    /// Actuators without a storage backend hold no volumes; the reconciler
-    /// then plans creates for anything the sync desires and the actuator's
-    /// `perform` decides what to do about it. `[:]` rather than nil, because
-    /// "this actuator has no volumes" is an answer — nil is reserved for "I
-    /// cannot answer".
-    public func observedVolumePresence() async -> [String: VolumePresence]? { [:] }
-
-    /// Actuators without a snapshot record store hold no artifacts. `[:]`
-    /// rather than nil for `observedVolumePresence`'s reason: "this actuator
-    /// has none" is an answer; nil is reserved for "I cannot answer".
-    public func observedSnapshotPresence() async -> [String: SnapshotPresence]? { [:] }
-
-    /// Actuators that cannot report per-VM sizing simply never have a resize
-    /// planned for them; the change still lands at the VM's next boot.
-    public func observedSizing() async -> [String: VMSizing] { [:] }
-
-    public func observedNetworkSpecs() async -> [String: [NetworkSpec]] { [:] }
-
-    /// Actuators with no durable manifest keep no nonce records, so every
-    /// workload reads as "no record" and every edge is adopted rather than
-    /// performed. That is the safe default for exactly the reason the record
-    /// exists: an actuator that cannot remember what it applied must not guess.
-    public func observedEdgeNonces() async -> [String: AppliedEdgeNonces] { [:] }
-
-    /// Nothing to write when there is nowhere durable to write it.
-    public func recordAppliedEdges(_ item: ReconcileWorkItem, _ nonces: AppliedEdgeNonces) async {}
-
-    public func adoptSandbox(_ item: ReconcileWorkItem) async throws -> SandboxStatus {
-        throw SandboxActuationUnsupportedError()
     }
 }
 

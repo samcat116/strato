@@ -108,7 +108,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let agentId: String
     public let hostname: String
     public let version: String
-    public let capabilities: [String]
     public let resources: AgentResources
     /// Host CPU architecture. Optional so messages from agents that predate
     /// this field decode fine; absent means unknown, and the scheduler treats
@@ -119,12 +118,9 @@ public struct AgentRegisterMessage: WebSocketMessage {
     public let hypervisors: [HypervisorSupport]?
     /// Networking capability of this host. Optional for the same reason.
     public let networkCapability: NetworkCapability?
-    /// Wire/schema version the agent speaks (see `WireProtocol.currentVersion`).
-    /// Optional so registrations from agents that predate protocol versioning
-    /// decode fine; absent is treated as the legacy version 0. The control plane
-    /// echoes its own version in `AgentRegisterResponseMessage` so each side can
-    /// detect and log skew.
-    public let protocolVersion: Int?
+    /// Exact wire/schema version the agent speaks. Registration is the sole
+    /// protocol-version handshake; peers must equal `WireProtocol.currentVersion`.
+    public let protocolVersion: Int
     /// Whether this agent runs sandbox workloads (OCI-image Firecracker
     /// microVMs, issue #410): it reconciles `DesiredStateMessage.sandboxes`
     /// and reports them back in `ObservedStateReport.sandboxes`. Speaking
@@ -198,12 +194,11 @@ public struct AgentRegisterMessage: WebSocketMessage {
         agentId: String,
         hostname: String,
         version: String,
-        capabilities: [String],
         resources: AgentResources,
         architecture: CPUArchitecture? = nil,
         hypervisors: [HypervisorSupport]? = nil,
         networkCapability: NetworkCapability? = nil,
-        protocolVersion: Int? = WireProtocol.currentVersion,
+        protocolVersion: Int = WireProtocol.currentVersion,
         sandboxCapable: Bool? = nil,
         sandboxNetworkingCapable: Bool? = nil,
         tpmCapable: Bool? = nil,
@@ -216,7 +211,6 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.agentId = agentId
         self.hostname = hostname
         self.version = version
-        self.capabilities = capabilities
         self.resources = resources
         self.architecture = architecture
         self.hypervisors = hypervisors
@@ -291,19 +285,16 @@ public struct AgentRegisterResponseMessage: WebSocketMessage {
     public let agentId: String  // The database UUID assigned to this agent
     public let name: String  // The human-readable name
 
-    /// Wire/schema version the control plane speaks (see
-    /// `WireProtocol.currentVersion`). Optional so responses from control planes
-    /// that predate protocol versioning decode fine; absent is treated as the
-    /// legacy version 0. The agent compares this against its own version and
-    /// logs on mismatch.
-    public let protocolVersion: Int?
+    /// Exact wire/schema version the control plane speaks. The agent refuses a
+    /// response that does not equal `WireProtocol.currentVersion`.
+    public let protocolVersion: Int
 
     public init(
         requestId: String,
         timestamp: Date = Date(),
         agentId: String,
         name: String,
-        protocolVersion: Int? = WireProtocol.currentVersion
+        protocolVersion: Int = WireProtocol.currentVersion
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -720,27 +711,16 @@ public struct ConsoleDisconnectedMessage: WebSocketMessage {
 
 public struct MessageEnvelope: Codable, Sendable {
     public let type: MessageType
-    /// Wire/schema version of the sender (see `WireProtocol.currentVersion`).
-    /// Optional so envelopes from peers that predate versioning — which omit the
-    /// field entirely — still decode; a missing value is treated as the legacy
-    /// version 0 via `senderVersion`.
-    public let version: Int?
     public let payload: Data
 
     public init<T: WebSocketMessage>(message: T) throws {
         self.type = message.type
-        self.version = WireProtocol.currentVersion
         self.payload = try WireProtocol.makeEncoder().encode(message)
     }
 
     public func decode<T: WebSocketMessage>(as messageType: T.Type) throws -> T {
         return try WireProtocol.makeDecoder().decode(messageType, from: payload)
     }
-
-    /// The sender's wire version, mapping a pre-versioning envelope (no `version`
-    /// field) to 0 so callers can compare against `WireProtocol.currentVersion`
-    /// without special-casing `nil`.
-    public var senderVersion: Int { version ?? 0 }
 }
 
 // MARK: - VM Log Messages

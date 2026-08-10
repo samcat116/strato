@@ -1,0 +1,9 @@
+[
+  "/api",
+  "/auth",
+  "/oauth",
+  "/agent",
+  "/health",
+  "/organizations",
+  "/ssf"
+]

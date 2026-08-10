@@ -44,7 +44,8 @@ struct InstanceMetadataTests {
             spiffeId: "spiffe://strato/project/\(Fixtures.uuidB)/vm/\(Fixtures.uuidA)",
             audiences: ["strato", "vault"],
             ttlSeconds: 3600
-        )
+        ),
+        serviceEnabled: true
     )
 
     private func desiredState(metadata: InstanceMetadata?) -> DesiredVMState {
@@ -177,12 +178,12 @@ struct InstanceMetadataTests {
         #expect(try decodeJSON(DesiredVMState.self, from: withNull).metadata == nil)
     }
 
-    @Test("Metadata carrying only its identifying keys decodes to empty collections")
+    @Test("Metadata carrying its required keys decodes optional collections as empty")
     func metadataTolerantCollectionDecoding() throws {
         // Forward tolerance within the type: a sender that omits collections it
         // has nothing to put in must not fail the whole sync for that agent.
         let minimal = """
-            {"instanceId":"\(Fixtures.uuidA.uuidString)","projectId":"\(Fixtures.uuidB.uuidString)"}
+            {"instanceId":"\(Fixtures.uuidA.uuidString)","projectId":"\(Fixtures.uuidB.uuidString)","serviceEnabled":true}
             """
         let decoded = try decodeJSON(InstanceMetadata.self, from: minimal)
         #expect(decoded.nics.isEmpty)
@@ -200,11 +201,7 @@ struct InstanceMetadataTests {
         #expect(decoded.vendorData == nil)
         // No policy means no identity is vended — the conservative reading.
         #expect(decoded.identity == nil)
-        // The one field whose absence reads the *other* way (STR-185): a
-        // control plane that predates the kill switch has opted nobody out, and
-        // taking its silence for a denial would blackhole IMDS fleet-wide on
-        // upgrade. `isServiceEnabled` is the form callers use.
-        #expect(decoded.serviceEnabled == nil)
+        #expect(decoded.serviceEnabled)
         #expect(decoded.isServiceEnabled)
     }
 
@@ -230,15 +227,13 @@ struct InstanceMetadataTests {
         #expect(!round.isServiceEnabled)
     }
 
-    @Test("Metadata opt-out support is keyed on protocol version 39")
-    func metadataOptOutVersionGate() {
-        // An admission gate, unlike the two below: a pre-v39 agent ignores the
-        // field and serves a guest whose API record says the switch is thrown,
-        // so the control plane refuses to set it rather than reporting a kill
-        // switch that killed nothing.
-        #expect(!WireProtocol.supportsMetadataOptOut(38))
-        #expect(WireProtocol.supportsMetadataOptOut(39))
-        #expect(WireProtocol.supportsMetadataOptOut(WireProtocol.currentVersion))
+    @Test("Metadata requires an explicit service policy")
+    func metadataRequiresServiceEnabled() {
+        let missing =
+            #"{"instanceId":"\#(Fixtures.uuidA.uuidString)","projectId":"\#(Fixtures.uuidB.uuidString)"}"#
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(InstanceMetadata.self, from: missing)
+        }
     }
 
     @Test("Metadata without an identifying id fails rather than describing nothing")

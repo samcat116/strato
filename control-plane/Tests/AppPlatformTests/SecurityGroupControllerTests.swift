@@ -86,7 +86,6 @@ final class SecurityGroupControllerTests {
                 agentId: "sg-agent-\(UUID().uuidString.prefix(8))",
                 hostname: "sg-host",
                 version: "1.0.0",
-                capabilities: ["qemu"],
                 resources: AgentResources(
                     totalCPU: 8, availableCPU: 8,
                     totalMemory: 1 << 33, availableMemory: 1 << 33,
@@ -124,7 +123,6 @@ final class SecurityGroupControllerTests {
                 agentId: "sg-sbx-agent-\(UUID().uuidString.prefix(8))",
                 hostname: "sg-sbx-host",
                 version: "1.0.0",
-                capabilities: ["firecracker"],
                 resources: AgentResources(
                     totalCPU: 8, availableCPU: 8,
                     totalMemory: 1 << 33, availableMemory: 1 << 33,
@@ -507,7 +505,6 @@ final class SecurityGroupControllerTests {
             let controllerUUID = try await app.agentService.registerAgent(
                 AgentRegisterMessage(
                     agentId: "sg-offline-ctl", hostname: "sg-offline-ctl-host", version: "1.0.0",
-                    capabilities: ["qemu"],
                     resources: AgentResources(
                         totalCPU: 8, availableCPU: 8, totalMemory: 1 << 33, availableMemory: 1 << 33,
                         totalDisk: 1 << 39, availableDisk: 1 << 39),

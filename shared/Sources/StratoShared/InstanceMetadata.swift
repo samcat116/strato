@@ -130,13 +130,6 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
     /// per-instance kill switch, `VM.metadataEnabled`, and the equivalent of
     /// EC2's `MetadataOptions.HttpEndpoint` (STR-185).
     ///
-    /// **Nil is enabled**, not disabled, unlike every other conservative-by-
-    /// absence field here: a control plane that predates the switch has opted
-    /// nobody out, and reading its silence as a denial would take IMDS away
-    /// from every VM in the fleet on upgrade. Refusing to *apply* a kill switch
-    /// an agent is too old to hear is the control plane's job instead, which is
-    /// what `WireProtocol.supportsMetadataOptOut` is for.
-    ///
     /// Distinct from `NetworkSpec.metadataEnabled` / `DesiredNetworkState`'s,
     /// which is per **network** and decides whether the link-local endpoint is
     /// published on that switch at all. The two compose as an AND from the
@@ -162,12 +155,10 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
     ///
     /// It is never rendered into a document: a disabled service publishes
     /// nothing, so there is nothing for a guest to read this out of.
-    public let serviceEnabled: Bool?
+    public let serviceEnabled: Bool
 
-    /// Whether the service should answer this instance, reading an absent
-    /// `serviceEnabled` as enabled. The only form callers should use — nothing
-    /// should be comparing against `true` or `false` directly.
-    public var isServiceEnabled: Bool { serviceEnabled ?? true }
+    /// Whether the service should answer this instance.
+    public var isServiceEnabled: Bool { serviceEnabled }
 
     public init(
         instanceId: UUID,
@@ -182,7 +173,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         vendorData: String? = nil,
         tags: [String: String] = [:],
         identity: IdentityPolicy? = nil,
-        serviceEnabled: Bool? = nil
+        serviceEnabled: Bool
     ) {
         self.instanceId = instanceId
         self.hostname = hostname
@@ -204,13 +195,9 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
     // failing the whole sync for that agent. Everything else is `Optional` and
     // so tolerates absence already. `encode(to:)` stays synthesized.
     //
-    // Only the two ids are required, and that is deliberately as narrow as it
-    // can be: `DesiredVMState` decodes synthesized, so a `metadata` object
-    // missing a required key throws out of the *entire* `DesiredStateMessage`
-    // and the receiving agent stops converging on every VM it hosts — the
-    // blast radius `wire-protocol.md` calls out for strictly-decoded enums.
-    // Metadata that cannot say which instance and project it describes is not
-    // metadata; anything beyond that is not worth that failure mode.
+    // The identity fields and service policy are required current-contract
+    // invariants. A missing service policy must fail the sync instead of
+    // silently enabling metadata for a VM whose operator disabled it.
     public init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         instanceId = try c.decode(UUID.self, forKey: .instanceId)
@@ -225,7 +212,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         vendorData = try c.decodeIfPresent(String.self, forKey: .vendorData)
         tags = try c.decodeIfPresent([String: String].self, forKey: .tags) ?? [:]
         identity = try c.decodeIfPresent(IdentityPolicy.self, forKey: .identity)
-        serviceEnabled = try c.decodeIfPresent(Bool.self, forKey: .serviceEnabled)
+        serviceEnabled = try c.decode(Bool.self, forKey: .serviceEnabled)
     }
 }
 

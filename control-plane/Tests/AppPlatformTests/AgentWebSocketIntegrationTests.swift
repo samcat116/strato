@@ -135,12 +135,47 @@ struct AgentWebSocketIntegrationTests {
         }
     }
 
-    @Test("A register frame below the state-sync protocol floor is refused with an error frame")
-    func registrationRefusesUnsupportedProtocolVersion() async throws {
+    @Test("Registration refuses older and future wire contracts before state exchange")
+    func registrationRefusesSkewedProtocolVersions() async throws {
         try await withRunningApp { app, port in
             self.enableSPIRE(on: app)
 
-            let agentName = "agent-old"
+            let org = try await self.makeOrg(app: app)
+            for (agentName, version) in [
+                ("agent-v38", 38),
+                ("agent-future", WireProtocol.currentVersion + 1),
+            ] {
+                let enrollment = AgentEnrollment(
+                    agentName: agentName,
+                    spiffeID: "spiffe://strato.local/agent/\(agentName)",
+                    expirationHours: 1,
+                    organizationScope: .organization(try org.requireID()))
+                try await enrollment.save(on: app.db)
+
+                let client = try await AgentTestClient.connect(
+                    app: app, port: port, name: agentName,
+                    headers: self.xfccHeaders(agentName: agentName))
+                client.send(try encodeRegister(agentName: agentName, protocolVersion: version))
+
+                let envelope = try await client.nextEnvelope()
+                #expect(envelope.type == .error)
+
+                let error = try envelope.decode(as: ErrorMessage.self)
+                #expect(error.code == ErrorMessage.ErrorCode.unsupportedProtocolVersion)
+                #expect(error.error.contains("requires exactly v\(WireProtocol.currentVersion)"))
+
+                try await client.close()
+            }
+
+            #expect(try await Agent.query(on: app.db).count() == 0)
+        }
+    }
+
+    @Test("Registration refuses a missing wire version explicitly")
+    func registrationRefusesMissingProtocolVersion() async throws {
+        try await withRunningApp { app, port in
+            self.enableSPIRE(on: app)
+            let agentName = "agent-missing-version"
             let org = try await self.makeOrg(app: app)
             let enrollment = AgentEnrollment(
                 agentName: agentName,
@@ -150,20 +185,16 @@ struct AgentWebSocketIntegrationTests {
             try await enrollment.save(on: app.db)
 
             let client = try await AgentTestClient.connect(
-                app: app, port: port, name: agentName, headers: self.xfccHeaders(agentName: agentName))
-            // protocolVersion 0 is below `stateSyncMinimumVersion`: such an agent
-            // would register and then never converge anything, so it is refused.
-            let registerJSON = try encodeRegister(agentName: agentName, protocolVersion: 0)
-            client.send(registerJSON)
+                app: app, port: port, name: agentName,
+                headers: self.xfccHeaders(agentName: agentName))
+            client.send(try encodeRegisterOmittingProtocolVersion(agentName: agentName))
 
             let envelope = try await client.nextEnvelope()
-            #expect(envelope.type == .error)
-
             let error = try envelope.decode(as: ErrorMessage.self)
+            #expect(envelope.type == .error)
             #expect(error.code == ErrorMessage.ErrorCode.unsupportedProtocolVersion)
-
-            let agentCount = try await Agent.query(on: app.db).count()
-            #expect(agentCount == 0)
+            #expect(error.error.contains("omitted the required wire protocol version"))
+            #expect(try await Agent.query(on: app.db).count() == 0)
 
             try await client.close()
         }
@@ -489,7 +520,6 @@ private func encodeRegister(
         agentId: agentName,
         hostname: "test-host",
         version: "1.0.0",
-        capabilities: ["qemu"],
         resources: AgentResources(
             totalCPU: 4,
             availableCPU: 4,
@@ -503,4 +533,17 @@ private func encodeRegister(
     let envelope = try MessageEnvelope(message: message)
     let data = try WireProtocol.makeEncoder().encode(envelope)
     return String(decoding: data, as: UTF8.self)
+}
+
+private func encodeRegisterOmittingProtocolVersion(agentName: String) throws -> String {
+    let encoded = try encodeRegister(agentName: agentName)
+    let envelopeData = Data(encoded.utf8)
+    var envelope = try #require(JSONSerialization.jsonObject(with: envelopeData) as? [String: Any])
+    let encodedPayload = try #require(envelope["payload"] as? String)
+    let payload = try #require(Data(base64Encoded: encodedPayload))
+    var registration = try #require(JSONSerialization.jsonObject(with: payload) as? [String: Any])
+    registration.removeValue(forKey: "protocolVersion")
+    let missingVersionPayload = try JSONSerialization.data(withJSONObject: registration)
+    envelope["payload"] = missingVersionPayload.base64EncodedString()
+    return String(decoding: try JSONSerialization.data(withJSONObject: envelope), as: UTF8.self)
 }

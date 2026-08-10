@@ -31,9 +31,6 @@ enum SiteNetworkAuthority {
 
     /// Where topology for workloads placed on a given agent gets realized.
     enum Authority {
-        /// Site-less agent: the legacy single-node model, in which the agent
-        /// is always authoritative over its own private northbound DB.
-        case selfAuthored(Agent)
         /// The agent's site designates this controller — possibly the agent
         /// itself.
         case controller(Agent)
@@ -46,15 +43,6 @@ enum SiteNetworkAuthority {
         /// this node back, or designate a replacement), which is why this is
         /// its own case rather than folded into `.unassigned`.
         case controllerUnavailable(site: Site, controller: Agent, fault: ControllerFault)
-
-        /// Whether this answer is a property of the *agent* rather than of its
-        /// site. The three other cases are derived from the site alone, so a
-        /// caller resolving many agents may share them between peers of one
-        /// site; `.selfAuthored` must never be shared that way.
-        var isSelfAuthored: Bool {
-            if case .selfAuthored = self { return true }
-            return false
-        }
     }
 
     /// Why a standing designation cannot author topology.
@@ -101,25 +89,16 @@ enum SiteNetworkAuthority {
     static let controllerOfflineGrace: TimeInterval =
         Environment.get("SITE_CONTROLLER_OFFLINE_GRACE_SECONDS").flatMap(TimeInterval.init) ?? 300
 
-    /// Mirrors `DesiredStateAssembler.networkAssemblyScope`, including the
-    /// order of its two escapes: a site-less agent *and* a pre-v4 sited agent
-    /// both come back `.selfAuthored`, because assembly keeps the pre-v4 agent
-    /// on legacy per-node scoping (`authoritative: true`, its own networks,
-    /// its own floating IPs) whether or not the site has a controller — its
-    /// binary predates `ovn_northbound`, so it writes its own local NB. Its
-    /// workloads are realized and do boot in a controller-less site, and every
-    /// precondition built on this must agree, or it would reject placements
-    /// and boots that assembly would have carried through.
     static func resolve(forAgent agent: Agent, on db: any Database) async throws -> Authority {
-        guard let siteID = agent.$site.id, let site = try await Site.find(siteID, on: db) else {
-            return .selfAuthored(agent)
+        let siteID = agent.$site.id
+        guard let site = try await Site.find(siteID, on: db) else {
+            throw Abort(.internalServerError, reason: "Agent references missing site \(siteID)")
         }
         return try await resolve(forSite: site, on: db)
     }
 
     /// The authority for a site as such, for callers with no host agent in
-    /// hand (pinning a network to a site). Never returns `.selfAuthored` —
-    /// that case is a property of the *agent*, not the site.
+    /// hand (pinning a network to a site).
     static func resolve(forSite site: Site, on db: any Database) async throws -> Authority {
         guard let controllerID = site.$networkControllerAgent.id,
             let controller = try await Agent.find(controllerID, on: db)
@@ -222,7 +201,7 @@ enum SiteNetworkAuthority {
     /// healthy peer that can never get its switch — is unaffected.
     static func refusalReason(_ authority: Authority, host: Agent? = nil, consequence: String) -> String? {
         switch authority {
-        case .selfAuthored, .controller:
+        case .controller:
             return nil
         case .unassigned(let site):
             return missingControllerReason(site: site, consequence: consequence)

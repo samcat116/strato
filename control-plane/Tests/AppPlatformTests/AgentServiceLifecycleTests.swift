@@ -21,7 +21,6 @@ final class AgentServiceLifecycleTests {
                 name: "stale-agent",
                 hostname: "stale-agent.example",
                 version: "1.0.0",
-                capabilities: ["qemu"],
                 status: .online,
                 resources: AgentResources(
                     totalCPU: 8,

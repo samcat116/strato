@@ -284,12 +284,10 @@ actor AgentService {
         let agentKey = identity.key
         let trustDomain = identity.trustDomain
 
-        // Strato deploys the control plane and its agents in lockstep: an
-        // agent below the floor would decode syncs into silently wrong
-        // behavior, so it is refused up front with the real reason (the agent
-        // stops its reconnect loop and tells the operator to upgrade).
-        let protocolVersion = message.protocolVersion ?? 0
-        guard protocolVersion >= WireProtocol.minimumSupportedVersion else {
+        // Strato deploys the control plane and agents as one wire-contract
+        // unit. Refuse any skew before creating state or starting sync.
+        let protocolVersion = message.protocolVersion
+        guard protocolVersion == WireProtocol.currentVersion else {
             Telemetry.agentRegistrationFailed(reason: "unsupported_protocol")
             throw AgentServiceError.unsupportedProtocolVersion(agentName: agentName, version: protocolVersion)
         }
@@ -310,6 +308,7 @@ actor AgentService {
         {
             // Update existing agent
             agent = existingAgent
+            if siteID == nil { siteID = existingAgent.$site.id }
             if existingAgent.version != message.version {
                 // The visible confirmation that a self-update (issue #432)
                 // landed: the restarted binary re-registers under its name
@@ -324,7 +323,6 @@ actor AgentService {
             }
             agent.hostname = message.hostname
             agent.version = message.version
-            agent.capabilities = message.capabilities
             agent.architecture = message.architecture?.rawValue
             agent.operatingSystem = message.operatingSystem?.rawValue ?? agent.operatingSystem
             agent.hypervisors = message.effectiveHypervisors
@@ -377,8 +375,12 @@ actor AgentService {
                 Telemetry.agentRegistrationFailed(reason: "missing_organization_scope")
                 throw AgentServiceError.missingOrganizationScope(agentName: agentName)
             }
+            guard let siteID else {
+                throw Abort(.badRequest, reason: "Agent enrollment requires a site")
+            }
             // Create new agent
             agent = Agent.from(registration: message, name: agentName, trustDomain: trustDomain)
+            agent.$site.id = siteID
             agent.status = .online
             newAgentEnrollment = enrollment
         }
@@ -393,22 +395,8 @@ actor AgentService {
             // the site's whole OVN deployment belongs to one org. Refusals are
             // logged, not fatal; the agent registers with its previous scope.
             var refusalReason: String?
-            if let agentID = agent.id {
-                if agent.$site.id != nil {
-                    refusalReason = "agent belongs to a site; remove it from the site first"
-                } else {
-                    let hostedVMs = try await VM.query(on: db)
-                        .filter(\.$hypervisorId == agentID.uuidString)
-                        .count()
-                    let hostedSandboxes = try await Sandbox.query(on: db)
-                        .filter(\.$hypervisorId == agentID.uuidString)
-                        .count()
-                    if hostedVMs > 0 {
-                        refusalReason = "agent hosts \(hostedVMs) VM(s); drain it first"
-                    } else if hostedSandboxes > 0 {
-                        refusalReason = "agent hosts \(hostedSandboxes) sandbox(es); drain it first"
-                    }
-                }
+            if agent.id != nil {
+                refusalReason = "agent organization is fixed by its required site"
             }
             if let refusalReason {
                 app.logger.error(
@@ -498,12 +486,11 @@ actor AgentService {
         // back in user-mode or on a rolled-back binary would otherwise keep the
         // job while authoring nothing (issue #833). When it hands the job back,
         // an eligible peer claims it on its own next registration.
-        if let siteID = agent.$site.id {
-            await SiteNetworkAuthority.revalidateDesignation(
-                agent: agent, siteID: siteID, on: db, logger: app.logger)
-            await SiteNetworkAuthority.designateIfUnset(
-                agent: agent, siteID: siteID, on: db, logger: app.logger)
-        }
+        let persistedSiteID = agent.$site.id
+        await SiteNetworkAuthority.revalidateDesignation(
+            agent: agent, siteID: persistedSiteID, on: db, logger: app.logger)
+        await SiteNetworkAuthority.designateIfUnset(
+            agent: agent, siteID: persistedSiteID, on: db, logger: app.logger)
 
         // Record that the node completed its first registration. Informational
         // only — an enrollment is not consumed by being redeemed — so a failure
@@ -1944,15 +1931,14 @@ actor AgentService {
     }
 
     /// The agent id of the site network controller responsible for the given
-    /// agent's networks, or nil for site-less agents / unconfigured sites.
+    /// agent's networks, or nil for unconfigured sites.
     /// Best-effort: on lookup failure the periodic sync timer still converges
     /// the controller.
     private func siteNetworkControllerID(forAgentId agentId: String) async -> String? {
         guard let agentUUID = UUID(uuidString: agentId) else { return nil }
         do {
             guard let agent = try await Agent.find(agentUUID, on: app.db),
-                let siteID = agent.$site.id,
-                let site = try await Site.find(siteID, on: app.db)
+                let site = try await Site.find(agent.$site.id, on: app.db)
             else { return nil }
             return site.$networkControllerAgent.id?.uuidString
         } catch {
@@ -2719,7 +2705,6 @@ actor AgentService {
                     architecture: agent.cpuArchitecture,
                     supportsInterVMNetworking: agent.supportsInterVMNetworking,
                     siteID: agent.$site.id,
-                    wireProtocolVersion: agent.wireProtocolVersion,
                     supportsSandboxWorkloads: agent.sandboxCapable,
                     supportsSandboxNetworking: agent.sandboxNetworkingCapable,
                     supportsVTPM: agent.tpmCapable

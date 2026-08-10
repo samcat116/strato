@@ -22,7 +22,6 @@ Every WebSocket frame carries a `MessageEnvelope`
 ```swift
 struct MessageEnvelope {
     let type: MessageType   // discriminator for dispatch
-    let version: Int?       // sender's WireProtocol version
     let payload: Data       // inner message, JSON-encoded
 }
 ```
@@ -50,67 +49,53 @@ struct MessageEnvelope {
 
 ## Versioning
 
-`WireProtocol.swift` holds the protocol version (`currentVersion`, currently
-39), stamped on every envelope and exchanged at registration
-(`AgentRegisterMessage.protocolVersion` ↔
-`AgentRegisterResponseMessage.protocolVersion`). A peer that omits the version
-is treated as version 0.
+`WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
+currently 40). The required registration fields
+`AgentRegisterMessage.protocolVersion` and
+`AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
+Envelopes intentionally carry no duplicate version.
 
-**Strato normally deploys the control plane and its agents in lockstep.** Both
-sides refuse any peer below `WireProtocol.minimumSupportedVersion` at
-registration. Wire v39 deliberately keeps v38 as that floor for one rolling
-window: `InstanceMetadata.serviceEnabled` is optional and
-`supportsMetadataOptOut` gates the only behavior an older agent could silently
-ignore. Every legacy dual path removed at v38 stays removed.
+**Strato deploys the control plane and its agents as one coordinated wire-
+contract change.** Both sides require exact equality with `currentVersion` and
+refuse missing, older, and future versions before desired or observed state is
+exchanged. There is no rolling mixed-version window and no per-feature protocol
+gate.
 
 Two consequences worth knowing:
 
-- **Moving the floor is a deployment decision.** An agent below it cannot
-  connect, and the declarative self-update rides the sync it can no longer
-  receive — so raising the floor past deployed agents means updating those
-  agents by hand (re-run `install.sh`, or pull a new image).
+- **A rejected agent cannot self-update.** Declarative self-update rides the
+  desired-state sync, which starts only after registration. Update a rejected
+  agent manually by re-running `install.sh` or replacing its image with the
+  matching release, then restart it so it can register again.
 - **Capabilities still exist, and they are not versions.** A capability
   (`sandboxCapable`, `sandboxNetworkingCapable`, `tpmCapable`,
   `resolverCapable`) is evidence that a *host* can realize a feature — a
   runtime, a binary, a guest image — all installed independently of the agent
   binary. Version says "the peer understands the payload"; capability says
-  "the host can act on it". The floor answers the first question for the whole
-  fleet; capabilities keep answering the second per host, re-probed at every
+  "the host can act on it". The exact handshake answers the first question;
+  capabilities keep answering the second per host, re-probed at every
   registration.
 
-History: through wire v37 this protocol carried a per-feature gate
-(`supports*`) for every version since v2, each defending a specific silent
-failure across a skew window — an ignored field reported as converged, an
-absent list misread as an authoritative teardown. The v38 floor replaced all
-of them (see the `minimumSupportedVersion` doc comment in
-`WireProtocol.swift`); if a supported skew window is ever reintroduced,
-resurrect the gates from git history rather than re-deriving them.
-
-Version 39 adds the per-instance metadata kill switch (STR-185):
+The current contract includes the per-instance metadata kill switch (STR-185):
 `InstanceMetadata.serviceEnabled` is EC2's `MetadataOptions.HttpEndpoint`,
 the per-workload lever for denying one VM the link-local service. The listener
 refuses an identified caller and a drop ACL on `pg_strato_no_metadata` keeps
 the packet off the chassis; the two layers cover unmanaged NICs, authority
 skew, and probe resistance.
 
-Absence means enabled because a v38 control plane opted nobody out. During the
-v38→v39 rollout, `supportsMetadataOptOut` refuses to throw the switch on a VM
-placed on an older agent and keeps an already-hardened VM off one. Turning the
-service back on is never refused. Once v38 agents have left the fleet, the
-minimum version can move to 39 and this sole feature gate can be retired.
+`serviceEnabled` is required. Missing policy fails decoding rather than
+silently enabling metadata for a VM whose operator disabled it.
 
-Nil-tolerance conventions survive the gates, because they defend against
-*absence within one version*, not skew: a nil `volumes` or `snapshots` list
+Nil-tolerance conventions remain for semantic absence within one version: a
+nil `volumes` or `snapshots` list
 still means "the sender said nothing about that family" and is never planned
 against (STR-148/150), `dnsZones: nil` still means "not the topology
 authority", and a nil per-NIC `resolverEnabled` is still the control plane
 withholding an opinion about a host it cannot describe.
 
-The doc comment on `currentVersion` is a narrative changelog of every bump —
-read it before adding a version. Adding an enum case to a strictly-decoded
-wire type (see `DesiredVMStatus` below) requires a version bump and an
-explicit rollout decision: move the floor with both sides, or add one narrowly
-scoped compatibility gate like v39's.
+Adding an enum case to a strictly decoded wire type (see `DesiredVMStatus`
+below), or changing a field's representation or semantics, requires a version
+bump and a coordinated deployment of both sides.
 
 ## Message catalog
 

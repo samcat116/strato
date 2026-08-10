@@ -24,9 +24,6 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "version")
     var version: String
 
-    @Field(key: "capabilities")
-    var capabilities: [String]
-
     @Enum(key: "status")
     var status: AgentStatus
 
@@ -83,11 +80,10 @@ final class Agent: Model, Content, @unchecked Sendable {
     @OptionalField(key: "host_info")
     var hostInfo: HostInfo?
 
-    /// The site (availability zone) this agent belongs to. Nil means the
-    /// legacy single-node model: the agent owns a private local OVN NB and is
-    /// always its topology authority. Assigned via the registration token.
-    @OptionalParent(key: "site_id")
-    var site: Site?
+    /// The site (availability zone) this agent belongs to. Enrollment assigns
+    /// this immutable placement before the row is first persisted.
+    @Parent(key: "site_id")
+    var site: Site
 
     /// Wire protocol version the agent last registered with; nil for rows that
     /// predate this column. Sync assembly keys site topology authority on it:
@@ -261,7 +257,6 @@ final class Agent: Model, Content, @unchecked Sendable {
         trustDomain: String = PlatformTrustDomain.current,
         hostname: String,
         version: String,
-        capabilities: [String],
         status: AgentStatus = .offline,
         resources: AgentResources,
         architecture: CPUArchitecture? = nil,
@@ -278,7 +273,6 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.trustDomain = trustDomain
         self.hostname = hostname
         self.version = version
-        self.capabilities = capabilities
         self.status = status
         self.totalCPU = resources.totalCPU
         self.totalMemory = resources.totalMemory
@@ -408,7 +402,6 @@ extension Agent {
             trustDomain: trustDomain,
             hostname: registration.hostname,
             version: registration.version,
-            capabilities: registration.capabilities,
             status: .connecting,
             resources: registration.resources,
             architecture: registration.architecture,
@@ -459,13 +452,30 @@ extension Agent {
     }
 
     /// Only OVN-backed agents can provide VM-to-VM networking; user-mode
-    /// (SLIRP) agents cannot. Agents that predate structured network
-    /// capability reporting are judged by their legacy capability strings.
+    /// (SLIRP) agents cannot. Absence is not capability.
     var supportsInterVMNetworking: Bool {
-        if let capability = networkCapability.flatMap(NetworkCapability.init(rawValue:)) {
-            return capability == .overlay
+        networkCapability.flatMap(NetworkCapability.init(rawValue:)) == .overlay
+    }
+
+    /// Whether the structured registration report proves that this agent can
+    /// capture and restore one snapshot artifact family.
+    ///
+    /// QEMU owns VM checkpoints and volume overlays. Sandbox checkpoints need
+    /// both Firecracker snapshot support and the separately probed sandbox
+    /// runtime; a Firecracker binary alone cannot load Strato's guest image.
+    func supportsSnapshotArtifact(_ kind: SnapshotArtifactKind) -> Bool {
+        let backend: HypervisorType
+        switch kind {
+        case .volumeSnapshot, .vmCheckpoint:
+            backend = .qemu
+        case .sandboxSnapshot:
+            guard sandboxCapable else { return false }
+            backend = .firecracker
         }
-        return capabilities.contains("ovn_networking")
+
+        return hypervisors.contains {
+            $0.type == backend && $0.available && $0.capabilities.supportsSnapshots
+        }
     }
 
     /// The status clients should see after accounting for heartbeat age.
@@ -543,7 +553,6 @@ struct AgentResponse: Content {
     let name: String
     let hostname: String
     let version: String
-    let capabilities: [String]
     let status: AgentStatus
     let resources: AgentResources
     let architecture: CPUArchitecture?
@@ -558,10 +567,12 @@ struct AgentResponse: Content {
     /// Whether this host can back a guest TPM 2.0 (issue #565) — it advertised
     /// a usable swtpm at its last registration.
     let tpmCapable: Bool
+    /// Whether this host can run the per-network DNS resolver (STR-40).
+    let resolverCapable: Bool
     /// Descriptive hardware/platform/OS details for operator display; nil for
     /// agents that registered before host-info reporting.
     let hostInfo: HostInfo?
-    let siteId: UUID?
+    let siteId: UUID
     let organizationId: UUID?
     let organizationalUnitId: UUID?
     let lastHeartbeat: Date?
@@ -643,7 +654,6 @@ struct AgentResponse: Content {
         self.name = agent.name
         self.hostname = agent.hostname
         self.version = agent.version
-        self.capabilities = agent.capabilities
         self.status = agent.statusBasedOnHeartbeat
         self.resources = agent.resources
         self.architecture = agent.architecture.flatMap(CPUArchitecture.init(rawValue:))
@@ -653,6 +663,7 @@ struct AgentResponse: Content {
         self.sandboxCapable = agent.sandboxCapable
         self.sandboxNetworkingCapable = agent.sandboxNetworkingCapable
         self.tpmCapable = agent.tpmCapable
+        self.resolverCapable = agent.resolverCapable
         self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id
         self.organizationId = agent.$organization.id

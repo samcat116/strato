@@ -95,4 +95,35 @@ struct ImageCompatibilityTests {
 
         #expect(image.compatibleHypervisors().isEmpty)
     }
+
+    @Test("Status response reports progress from a downloading Firecracker artifact")
+    func statusReportsActiveDownload() {
+        let image = makeImage(architecture: .arm64)
+        image.status = .downloading
+        let kernel = artifact(.kernel, arch: .arm64)
+        let rootfs = artifact(.rootfs, arch: .arm64, format: .raw)
+        rootfs.status = .downloading
+        rootfs.downloadProgress = 37
+        image.$artifacts.value = [kernel, rootfs]
+
+        let response = ImageStatusResponse(from: image)
+
+        #expect(response.downloadProgress == 37)
+        #expect(response.errorMessage == nil)
+    }
+
+    @Test("Status response reports an error from a failed Firecracker artifact")
+    func statusReportsActiveError() {
+        let image = makeImage(architecture: .arm64)
+        image.status = .error
+        let kernel = artifact(.kernel, arch: .arm64)
+        kernel.status = .error
+        kernel.errorMessage = "kernel import failed"
+        image.$artifacts.value = [kernel]
+
+        let response = ImageStatusResponse(from: image)
+
+        #expect(response.errorMessage == "kernel import failed")
+        #expect(response.downloadProgress == nil)
+    }
 }

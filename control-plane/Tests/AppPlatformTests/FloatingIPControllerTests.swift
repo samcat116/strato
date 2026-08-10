@@ -493,7 +493,6 @@ final class FloatingIPControllerTests {
             agentId: named,
             hostname: "fip-host",
             version: "1.0.0",
-            capabilities: ["qemu"],
             resources: AgentResources(
                 totalCPU: 8, availableCPU: 8,
                 totalMemory: 1 << 33, availableMemory: 1 << 33,
@@ -610,7 +609,6 @@ final class FloatingIPControllerTests {
             let controllerUUID = try await app.agentService.registerAgent(
                 AgentRegisterMessage(
                     agentId: "fip-offline-ctl", hostname: "fip-offline-ctl-host", version: "1.0.0",
-                    capabilities: ["qemu"],
                     resources: AgentResources(
                         totalCPU: 8, availableCPU: 8, totalMemory: 1 << 33, availableMemory: 1 << 33,
                         totalDisk: 1 << 39, availableDisk: 1 << 39),

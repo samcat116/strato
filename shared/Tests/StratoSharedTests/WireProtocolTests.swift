@@ -4,34 +4,20 @@ import StratoShared
 
 @Suite("Wire protocol versioning and date strategy")
 struct WireProtocolTests {
-    // MARK: - Envelope versioning
+    // MARK: - Envelope schema
 
-    @Test("envelope stamps the current wire version")
-    func envelopeStampsVersion() throws {
+    @Test("envelope carries routing and payload without a duplicate version")
+    func envelopeHasNoVersion() throws {
         let envelope = try MessageEnvelope(message: Fixtures.consoleConnect(vmId: "vm-1"))
-        #expect(envelope.version == WireProtocol.currentVersion)
-        #expect(envelope.senderVersion == WireProtocol.currentVersion)
+        let data = try WireProtocol.makeEncoder().encode(envelope)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(object["version"] == nil)
+        #expect(Set(object.keys) == ["type", "payload"])
     }
 
-    @Test("an envelope without a version field decodes as legacy version 0")
-    func legacyEnvelopeDefaultsToZero() throws {
-        // A peer that predates versioning sends only `type` + `payload`.
-        let inner = try encodeJSON(Fixtures.consoleConnect(vmId: "vm-1"))
-        let json = #"{"type":"console_connect","payload":"\#(inner.base64EncodedString())"}"#
-        let envelope = try decodeJSON(MessageEnvelope.self, from: json)
-        #expect(envelope.version == nil)
-        #expect(envelope.senderVersion == 0)
-        // The payload still decodes normally.
-        #expect(try envelope.decode(as: ConsoleConnectMessage.self).vmId == "vm-1")
-    }
-
-    @Test("VM network hot-plug starts at wire protocol v40")
-    func vmNetworkHotplugGate() {
-        #expect(!WireProtocol.supportsVMNetworkHotplug(38))
-        #expect(!WireProtocol.supportsVMNetworkHotplug(39))
-        #expect(WireProtocol.supportsVMNetworkHotplug(40))
+    @Test("the current wire contract is exact")
+    func currentContractVersion() {
         #expect(WireProtocol.currentVersion == 41)
-        #expect(WireProtocol.minimumSupportedVersion == 41)
     }
     @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")
     func sandboxForkGuestGate() {
@@ -61,22 +47,21 @@ struct WireProtocolTests {
 
     // MARK: - Registration version negotiation
 
-    @Test("registration protocol version survives the wire, absent decodes as nil")
+    @Test("registration protocol version survives the wire and is required")
     func registrationVersionOnWire() throws {
         let register = AgentRegisterMessage(
             agentId: "a1",
             hostname: "host",
             version: "1.2.3",
-            capabilities: [],
             resources: Fixtures.resources
         )
         #expect(try throughEnvelope(register).protocolVersion == WireProtocol.currentVersion)
 
-        // A registration from an agent that predates negotiation omits the field.
-        let legacy =
-            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","capabilities":[],"resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1},"hypervisorType":"qemu"}"#
-        let decoded = try decodeJSON(AgentRegisterMessage.self, from: legacy)
-        #expect(decoded.protocolVersion == nil)
+        let missing =
+            #"{"requestId":"r","timestamp":"2023-11-14T22:13:20Z","agentId":"a1","hostname":"h","version":"0.9","resources":{"totalCPU":1,"availableCPU":1,"totalMemory":1,"availableMemory":1,"totalDisk":1,"availableDisk":1}}"#
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(AgentRegisterMessage.self, from: missing)
+        }
     }
 
     // MARK: - Date strategy
