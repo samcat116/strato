@@ -1486,12 +1486,11 @@ actor Agent {
 
     /// Handle registration response from control plane
     func handleRegistrationResponse(_ response: AgentRegisterResponseMessage) async {
-        let controlPlaneProtocolVersion = response.protocolVersion ?? 0
-        guard controlPlaneProtocolVersion >= WireProtocol.minimumSupportedVersion else {
+        let controlPlaneProtocolVersion = response.protocolVersion
+        guard controlPlaneProtocolVersion == WireProtocol.currentVersion else {
             let reason =
-                "Control plane wire protocol version \(controlPlaneProtocolVersion) is below this agent's floor "
-                + "(\(WireProtocol.minimumSupportedVersion)); Strato deploys both sides in lockstep. "
-                + "Upgrade the control plane."
+                "Control plane wire protocol version \(controlPlaneProtocolVersion) does not equal this agent's "
+                + "required version \(WireProtocol.currentVersion). Deploy matching control-plane and agent builds."
             logger.error("Registration rejected: \(reason)")
             if let continuation = takeRegistrationContinuation() {
                 continuation.resume(throwing: AgentError.registrationRejected(reason))
@@ -1499,14 +1498,6 @@ actor Agent {
             return
         }
 
-        if controlPlaneProtocolVersion != WireProtocol.currentVersion {
-            logger.warning(
-                "Control plane wire protocol version differs from agent",
-                metadata: [
-                    "controlPlaneProtocolVersion": .stringConvertible(controlPlaneProtocolVersion),
-                    "agentProtocolVersion": .stringConvertible(WireProtocol.currentVersion),
-                ])
-        }
         await startDesiredStatePoller()
 
         guard let continuation = takeRegistrationContinuation() else {
@@ -2444,7 +2435,22 @@ extension Agent {
         do {
             switch envelope.type {
             case .agentRegisterResponse:
-                let message = try envelope.decode(as: AgentRegisterResponseMessage.self)
+                let message: AgentRegisterResponseMessage
+                do {
+                    message = try envelope.decode(as: AgentRegisterResponseMessage.self)
+                } catch DecodingError.keyNotFound(let key, _)
+                    where key.stringValue == "protocolVersion"
+                {
+                    let reason =
+                        "Control plane registration response omitted the required wire protocol version; "
+                        + "this agent requires exactly v\(WireProtocol.currentVersion). Deploy a matching "
+                        + "control-plane build."
+                    logger.error("Registration rejected: \(reason)")
+                    if let continuation = takeRegistrationContinuation() {
+                        continuation.resume(throwing: AgentError.registrationRejected(reason))
+                    }
+                    return
+                }
                 await handleRegistrationResponse(message)
             // No VM frames remain: reboot and restore became edge-nonces on the
             // desired entry at wire v34 (STR-151), joining capture and delete,

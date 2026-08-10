@@ -82,7 +82,7 @@ final class DesiredStateReconciliationTests {
         app: Application,
         vm: VM,
         named agentName: String = "recon-agent",
-        protocolVersion: Int?
+        protocolVersion: Int
     ) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: agentName,
@@ -220,30 +220,30 @@ final class DesiredStateReconciliationTests {
         }
     }
 
-    @Test("Registration requires the minimum supported protocol version")
+    @Test("Registration requires the exact current protocol version")
     func protocolVersionGate() async throws {
         try await withVMTestApp { app, _, vm, _ in
-            // Control plane and agents deploy in lockstep: anything below the
-            // floor — including an agent too old to report a version at all —
-            // is refused at registration.
+            // Control plane and agents deploy in lockstep: older and future
+            // contracts are both refused before creating an agent row.
             await #expect(throws: AgentServiceError.self) {
                 _ = try await self.registerAgent(
                     app: app, vm: vm, named: "old-agent",
-                    protocolVersion: WireProtocol.minimumSupportedVersion - 1)
+                    protocolVersion: WireProtocol.currentVersion - 1)
             }
             await #expect(throws: AgentServiceError.self) {
                 _ = try await self.registerAgent(
-                    app: app, vm: vm, named: "legacy-agent", protocolVersion: nil)
+                    app: app, vm: vm, named: "future-agent",
+                    protocolVersion: WireProtocol.currentVersion + 1)
             }
 
             // Refused agents leave no registry row behind.
             let rows = try await Agent.query(on: app.db).all()
             #expect(rows.isEmpty)
 
-            // An agent at the floor registers fine.
+            // An exactly matching agent registers fine.
             let current = try await self.registerAgent(
                 app: app, vm: vm, named: "new-agent",
-                protocolVersion: WireProtocol.minimumSupportedVersion)
+                protocolVersion: WireProtocol.currentVersion)
             let registered = await app.agentService.getAgentInfo(current)
             #expect(registered?.name == "new-agent")
             #expect(registered?.status == .online)

@@ -637,7 +637,6 @@ final class SiteTests {
 
     private func makeSchedulable(
         id: String = UUID().uuidString, name: String, siteID: UUID? = nil,
-        wireProtocolVersion: Int = WireProtocol.currentVersion,
         supportsInterVMNetworking: Bool = true
     ) -> SchedulableAgent {
         SchedulableAgent(
@@ -648,8 +647,7 @@ final class SiteTests {
             status: .online, runningVMCount: 0,
             supportedHypervisors: [.qemu],
             supportsInterVMNetworking: supportsInterVMNetworking,
-            siteID: siteID,
-            wireProtocolVersion: wireProtocolVersion
+            siteID: siteID
         )
     }
 

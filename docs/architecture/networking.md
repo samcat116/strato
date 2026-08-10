@@ -829,14 +829,8 @@ able to reach what its operator switched off. An unmanaged NIC
 (`securityGroupIds` nil) is in no port group and so gets no deny; the listener
 covers it, which is why that layer is the one that decides.
 
-**The version gate points at the VM's own host.** A pre-v39 agent ignores
-`serviceEnabled` and keeps serving the guest, so `supportsMetadataOptOut`
-refuses to switch it off on a VM placed on one (`409`, naming the upgrade and
-the per-network alternative), and `VMPlacementRequirements.requiresMetadataOptOut`
-keeps a switched-off VM off such an agent in the first place. Turning the
-service back *on* is never refused — that is the behavior every agent already
-has. An older *authority* is not gated: it only means the deny ACL is missing,
-and the listener still refuses.
+`serviceEnabled` is required by the exact wire contract. Every registered agent
+therefore applies the switch; there is no placement or controller version gate.
 
 Two things the switch deliberately does **not** cover:
 

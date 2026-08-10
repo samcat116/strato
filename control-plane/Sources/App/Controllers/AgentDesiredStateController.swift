@@ -21,10 +21,7 @@ import Vapor
 ///
 /// The response body is a full `MessageEnvelope` wrapping the same
 /// `DesiredStateMessage` the WebSocket push sends, not a bare payload: the
-/// agent reads `envelope.senderVersion` to decide whether an absent `networks`
-/// or `sandboxes` list is authoritative silence or an old control plane, and
-/// reusing the envelope keeps the agent's decode and dispatch path identical
-/// across both transports.
+/// envelope keeps routing and decoding identical across both transports.
 struct AgentDesiredStateController: RouteCollection {
     /// How long a poll parks before answering `304`.
     ///
