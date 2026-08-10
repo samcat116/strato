@@ -360,7 +360,12 @@ struct ImageController: RouteCollection {
         guard let relativePath = upload.key, let uploadedFilename = upload.filename else {
             throw await failUpload(Abort(.badRequest, reason: "No file uploaded"))
         }
-        let filename = try ImageValidationService.validateFilename(uploadedFilename)
+        let filename: String
+        do {
+            filename = try ImageValidationService.validateFilename(uploadedFilename)
+        } catch {
+            throw await failUpload(error)
+        }
         let checksum = upload.checksum
         let size = upload.size
 
@@ -431,25 +436,29 @@ struct ImageController: RouteCollection {
         tempImage.defaultDisk = defaultDisk
         tempImage.defaultCmdline = defaultCmdline
 
-        try await tempImage.save(on: req.db)
+        do {
+            try await tempImage.save(on: req.db)
 
-        // Register the uploaded file as this image's disk-image artifact so the
-        // typed artifact set is the source of truth for what an agent fetches.
-        let diskArtifact = ImageArtifact(
-            imageID: imageID,
-            kind: .diskImage,
-            format: format,
-            architecture: architecture,
-            filename: filename,
-            size: size,
-            checksum: checksum,
-            storagePath: relativePath
-        )
-        try await diskArtifact.save(on: req.db)
-        try await tempImage.recomputeStatus(on: req.db)
+            // Register the uploaded file as this image's disk-image artifact so the
+            // typed artifact set is the source of truth for what an agent fetches.
+            let diskArtifact = ImageArtifact(
+                imageID: imageID,
+                kind: .diskImage,
+                format: format,
+                architecture: architecture,
+                filename: filename,
+                size: size,
+                checksum: checksum,
+                storagePath: relativePath
+            )
+            try await diskArtifact.save(on: req.db)
+            try await tempImage.recomputeStatus(on: req.db)
 
-        // Grant the creator's IAM binding.
-        try await grantImageCreatorBinding(req: req, imageID: imageID, userID: userID)
+            // Grant the creator's IAM binding.
+            try await grantImageCreatorBinding(req: req, imageID: imageID, userID: userID)
+        } catch {
+            throw await failUpload(error)
+        }
 
         req.logger.info(
             "Image uploaded successfully",

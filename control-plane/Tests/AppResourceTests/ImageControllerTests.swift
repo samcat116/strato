@@ -6,6 +6,7 @@ import NIOCore
 import NIOHTTP1
 import StratoShared
 import AppTestSupport
+import SQLKit
 @testable import App
 
 @Suite("Image Controller Tests", .serialized)
@@ -1699,6 +1700,73 @@ final class ImageControllerTests {
                     .filter { !$0.hasSuffix("/") }
                 #expect(leftovers.allSatisfy { $0.isEmpty || !$0.contains("disk.img") })
             }
+        }
+    }
+
+    @Test("A database failure after object publication cleans up the upload")
+    func testArtifactPersistenceFailureCleansUpUpload() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
+            let sql = try #require(app.db as? any SQLDatabase)
+            try await sql.raw(
+                """
+                CREATE FUNCTION fail_image_artifact_insert() RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'forced image artifact insert failure';
+                END;
+                $$ LANGUAGE plpgsql
+                """
+            ).run()
+            try await sql.raw(
+                """
+                CREATE TRIGGER fail_image_artifact_insert
+                BEFORE INSERT ON image_artifacts
+                FOR EACH ROW EXECUTE FUNCTION fail_image_artifact_insert()
+                """
+            ).run()
+
+            func removeFailureTrigger() async {
+                try? await sql.raw(
+                    "DROP TRIGGER IF EXISTS fail_image_artifact_insert ON image_artifacts"
+                ).run()
+                try? await sql.raw(
+                    "DROP FUNCTION IF EXISTS fail_image_artifact_insert()"
+                ).run()
+            }
+
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "Database failure",
+                description: nil,
+                filename: "failed.qcow2",
+                fileContent: Self.createQCOW2Buffer())
+
+            do {
+                try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                    req.headers.contentType = HTTPMediaType(
+                        type: "multipart", subType: "form-data",
+                        parameters: ["boundary": boundary])
+                    req.body = ByteBuffer(data: body)
+                } afterResponse: { res in
+                    #expect(res.status == .internalServerError)
+                }
+            } catch {
+                await removeFailureTrigger()
+                throw error
+            }
+            await removeFailureTrigger()
+
+            #expect(try await Image.query(on: app.db).count() == 0)
+
+            let projectDirectory = "\(tempStoragePath)/\(project.id!)"
+            let subpaths =
+                (try? FileManager.default.subpathsOfDirectory(atPath: projectDirectory)) ?? []
+            let files = subpaths.filter { subpath in
+                var isDirectory: ObjCBool = false
+                let exists = FileManager.default.fileExists(
+                    atPath: "\(projectDirectory)/\(subpath)", isDirectory: &isDirectory)
+                return exists && !isDirectory.boolValue
+            }
+            #expect(files.isEmpty)
         }
     }
 
