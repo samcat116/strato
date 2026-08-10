@@ -1,0 +1,82 @@
+control-plane/Tests/AppIdentityTests/JWTSVIDAuthenticationTests.swift
+  s_db3b200d030897::t_3d490aa6ac20d0 216-243
+control-plane/Sources/App/Services/DesiredStateDigest.swift
+  s_db3b200d030897::t_6dc380287c3a84 78,84-85,87,89,97,109,111-115,119-120
+  s_db3b200d030897::t_2a00ad4fad1152 88
+control-plane/Sources/App/Services/OIDCTokenVerification.swift
+  s_db3b200d030897::t_d746d323a9416f 3,15-18,44,52-53,55-56,61
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_db3b200d030897::t_0be4b1086132e9 355-356
+control-plane/Tests/AppIdentityTests/OIDCIdentityMappingTests.swift
+  s_db3b200d030897::t_f01ba3fe501e77 55-60
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_db3b200d030897::t_de2db268989e44 203-223,586,612-624
+  s_de632632a48892::t_7856b4579ffb6c 625
+agent/Sources/StratoAgentCore/MetadataService/MetadataHTTPServer.swift
+  s_db3b200d030897::t_e0e39d1e634924 273
+agent/Sources/StratoAgentSPIFFE/DelegatedIdentityProbe.swift
+  s_db3b200d030897::t_2a00ad4fad1152 303
+  s_db3b200d030897::t_cdae0e0d003b46 14-33,285-302,304
+control-plane/Sources/App/Services/SPIFFE/JWTSVIDVerification.swift
+  s_db3b200d030897::t_37de739cf897e0 3,80-82,125,132-133,139,141,143,149
+control-plane/Sources/App/IAM/Cedar/CedarPolicyInspector.swift
+  s_db3b200d030897::t_b5d27281d24817 278
+  s_db3b200d030897::t_0518c722d0df36 3,94,97-98,114-117,128,155-156,161,165,168-169,180-182,223,239,241-242,254,257-258,262,267-270,274,279
+  s_db3b200d030897::t_a5e69f1add5118 225,247-248
+agent/Sources/StratoAgentCore/OVNChassisBootstrap.swift
+  s_db3b200d030897::t_4e5a4fa2b8abf8 45-47,199-200
+agent/Tests/StratoAgentTests/OVNChassisBootstrapTests.swift
+  s_db3b200d030897::t_0f32c782ba9b49 52-53
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_db3b200d030897::t_5795581fcb177c 36,38
+  s_db3b200d030897::t_d746d323a9416f 3,32,37
+control-plane/Tests/AppIdentityTests/OIDCTokenVerificationTests.swift
+  s_db3b200d030897::t_f01ba3fe501e77 72,221-222,263-266
+  s_db3b200d030897::t_07a256df3f326b 267
+agent/Tests/StratoAgentTests/DelegatedIdentityClientTests.swift
+  s_db3b200d030897::t_1a06af52bbbdce 486
+  s_db3b200d030897::t_3d490aa6ac20d0 480-485,487
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_db3b200d030897::t_0be4b1086132e9 561-564
+  s_db3b200d030897::t_b5d27281d24817 488-491,496-497,513,515,519,546-560,567-569
+  s_d3c90e184e731d::t_49ea907ff390fb 570
+control-plane/Sources/App/IAM/Cedar/CedarAuthoredPolicyInspector.swift
+  s_db3b200d030897::t_77d0aac36fe62c 3,101,120-121,134-135,145-146,152-155,166,187-188,197,208-210,212,222-223,233-235,263-264,267-271
+control-plane/Tests/AppIdentityTests/SPIREServiceTests.swift
+  s_db3b200d030897::t_3d490aa6ac20d0 246-249,252-268
+  s_db3b200d030897::t_dca6cf2b140cbc 250-251
+shared/Tests/StratoSharedTests/JSONValueTests.swift
+  s_db3b200d030897::t_2d843856ae5c67 1-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "575132d594420602827994ca103e59fb6cbbe8b2",
+  "prompts": {},
+  "sessions": {
+    "s_d3c90e184e731d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fede4-bec2-7343-aad5-ce620399e429",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_db3b200d030897": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fede4-97e8-7a00-aaa8-1285d43fdb51",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_de632632a48892": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fede5-e9fa-7750-a286-6df000f1bed3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
