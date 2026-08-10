@@ -30,7 +30,7 @@ public actor VsockConnection {
     /// The host-side port Firecracker assigned to this connection, parsed from
     /// the `OK <host_port>` handshake reply. Immutable, so readable without
     /// awaiting the actor.
-    public nonisolated let assignedHostPort: UInt32
+    nonisolated let assignedHostPort: UInt32
 
     private init(channel: Channel, inbound: VsockInboundBridge, assignedHostPort: UInt32, logger: Logger) {
         self.channel = channel

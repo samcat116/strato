@@ -11,12 +11,6 @@ public enum FirecrackerError: Error, Sendable {
     /// The VM is already running
     case vmAlreadyRunning(String)
 
-    /// The VM is not running
-    case vmNotRunning(String)
-
-    /// Invalid configuration provided
-    case invalidConfiguration(String)
-
     /// HTTP request failed
     case httpError(statusCode: Int, message: String)
 
@@ -44,8 +38,6 @@ public enum FirecrackerError: Error, Sendable {
     /// VM is in an invalid state for the requested operation
     case invalidState(current: String, expected: String)
 
-    /// Generic API error from Firecracker
-    case apiError(String)
 }
 
 extension FirecrackerError: LocalizedError {
@@ -57,10 +49,6 @@ extension FirecrackerError: LocalizedError {
             return "VM not found: \(id)"
         case .vmAlreadyRunning(let id):
             return "VM is already running: \(id)"
-        case .vmNotRunning(let id):
-            return "VM is not running: \(id)"
-        case .invalidConfiguration(let message):
-            return "Invalid configuration: \(message)"
         case .httpError(let statusCode, let message):
             return "HTTP error \(statusCode): \(message)"
         case .connectionFailed(let message):
@@ -79,8 +67,6 @@ extension FirecrackerError: LocalizedError {
             return "Failed to spawn Firecracker process: \(message)"
         case .invalidState(let current, let expected):
             return "Invalid VM state: current=\(current), expected=\(expected)"
-        case .apiError(let message):
-            return "Firecracker API error: \(message)"
         }
     }
 }

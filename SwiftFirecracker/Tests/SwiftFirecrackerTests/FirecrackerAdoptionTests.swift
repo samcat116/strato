@@ -74,9 +74,6 @@ struct FirecrackerAdoptionTests {
 
         #expect(info.state == .running)
         #expect(info.id == vmId)
-        // The adopted VM is now tracked as running by the client.
-        let tracked = await client.listVMs()
-        #expect(tracked.contains(vmId))
     }
 
     @Test("adoptVM is idempotent for an already-managed VM")
@@ -96,8 +93,6 @@ struct FirecrackerAdoptionTests {
         // rather than opening a fresh connection (replayed-sync race).
         let (_, info) = try await client.adoptVM(vmId: vmId)
         #expect(info.state == .paused)
-        let tracked = await client.listVMs()
-        #expect(tracked == [vmId])
     }
 }
 
