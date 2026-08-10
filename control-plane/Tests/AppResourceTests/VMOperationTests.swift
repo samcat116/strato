@@ -173,29 +173,6 @@ final class VMOperationTests {
         }
     }
 
-    @Test("VM interface mutations reject pre-v40 agents")
-    func networkInterfaceMutationRejectsOldAgent() async throws {
-        try await withVMTestApp { app, user, vm, token in
-            try await placeOnAgent(
-                app: app, vm: vm,
-                wireProtocolVersion: WireProtocol.vmNetworkHotplugMinimumVersion - 1)
-            let network = LogicalNetwork(
-                name: "old-agent-net", subnet: "10.241.0.0/24", gateway: "10.241.0.1",
-                projectID: vm.$project.id, createdByID: user.id!)
-            try await network.save(on: app.db)
-
-            try await app.test(.POST, "/api/vms/\(vm.id!)/interfaces") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode(AttachInterfaceBody(networkId: network.id!))
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-            }
-            #expect(
-                try await VMNetworkInterface.query(on: app.db)
-                    .filter(\.$vm.$id == vm.id!).count() == 0)
-        }
-    }
-
     @Test("VM interface attach rejects networks that need static guest configuration")
     func networkInterfaceAttachRejectsStaticNetwork() async throws {
         try await withVMTestApp { app, user, vm, token in

@@ -17,7 +17,7 @@ struct MetadataCallerIndexTests {
     }
 
     private static func instance(_ vmId: UUID, nics: [MetadataNIC]) -> InstanceMetadata {
-        InstanceMetadata(instanceId: vmId, projectId: UUID(), nics: nics)
+        InstanceMetadata(instanceId: vmId, projectId: UUID(), nics: nics, serviceEnabled: true)
     }
 
     private static func address(_ text: String) -> MetadataCallerAddress {

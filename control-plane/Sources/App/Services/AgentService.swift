@@ -284,12 +284,10 @@ actor AgentService {
         let agentKey = identity.key
         let trustDomain = identity.trustDomain
 
-        // Strato deploys the control plane and its agents in lockstep: an
-        // agent below the floor would decode syncs into silently wrong
-        // behavior, so it is refused up front with the real reason (the agent
-        // stops its reconnect loop and tells the operator to upgrade).
-        let protocolVersion = message.protocolVersion ?? 0
-        guard protocolVersion >= WireProtocol.minimumSupportedVersion else {
+        // Strato deploys the control plane and agents as one wire-contract
+        // unit. Refuse any skew before creating state or starting sync.
+        let protocolVersion = message.protocolVersion
+        guard protocolVersion == WireProtocol.currentVersion else {
             Telemetry.agentRegistrationFailed(reason: "unsupported_protocol")
             throw AgentServiceError.unsupportedProtocolVersion(agentName: agentName, version: protocolVersion)
         }
@@ -2708,7 +2706,6 @@ actor AgentService {
                     architecture: agent.cpuArchitecture,
                     supportsInterVMNetworking: agent.supportsInterVMNetworking,
                     siteID: agent.$site.id,
-                    wireProtocolVersion: agent.wireProtocolVersion,
                     supportsSandboxWorkloads: agent.sandboxCapable,
                     supportsSandboxNetworking: agent.sandboxNetworkingCapable,
                     supportsVTPM: agent.tpmCapable

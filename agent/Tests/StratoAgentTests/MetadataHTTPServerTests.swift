@@ -33,7 +33,8 @@ struct MetadataHTTPServerTests {
                     networkName: "tenant",
                     ipAddress: isV6 ? nil : address, prefixLength: isV6 ? nil : 24,
                     ipv6Address: isV6 ? address : nil, ipv6PrefixLength: isV6 ? 128 : nil)
-            ])
+            ],
+            serviceEnabled: true)
     }
 
     /// Stands a listener up on `host`, port 0, serving one instance at that

@@ -18,7 +18,8 @@ struct MetadataPersistenceTests {
 
     private static func metadata(_ vmId: UUID, hostname: String? = nil) -> InstanceMetadata {
         InstanceMetadata(
-            instanceId: vmId, hostname: hostname, projectId: UUID(), sshAuthorizedKeys: ["ssh-ed25519 AAA"])
+            instanceId: vmId, hostname: hostname, projectId: UUID(),
+            sshAuthorizedKeys: ["ssh-ed25519 AAA"], serviceEnabled: true)
     }
 
     // MARK: - The durable copy

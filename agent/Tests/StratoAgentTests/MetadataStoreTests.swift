@@ -11,7 +11,8 @@ struct MetadataStoreTests {
     // MARK: - Fixtures
 
     private static func metadata(_ vmId: UUID, hostname: String, projectId: UUID = UUID()) -> InstanceMetadata {
-        InstanceMetadata(instanceId: vmId, hostname: hostname, projectId: projectId)
+        InstanceMetadata(
+            instanceId: vmId, hostname: hostname, projectId: projectId, serviceEnabled: true)
     }
 
     private static func spec() -> VMSpec {
