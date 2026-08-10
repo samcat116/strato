@@ -1,0 +1,85 @@
+control-plane/Sources/App/configure.swift
+  s_a62f693497b15c::t_fd58f8988e34a2 921,924-926
+  s_32f3c42ee7034c::t_9d455797c4b133 927
+control-plane/web/src/app/(dashboard)/sites/page.tsx
+  s_a62f693497b15c::t_fd58f8988e34a2 181,186
+control-plane/Tests/AppPlatformTests/ResourceConditionsTests.swift
+  s_a62f693497b15c::t_cc8c787e5110e8 57,68-72,74
+  s_a62f693497b15c::t_d61339b8727522 400,430,465,496,523,571,617,662,729
+control-plane/Sources/App/Services/SnapshotArtifactMutation.swift
+  s_a62f693497b15c::t_cf1f66c34ebf6e 167,171-172
+control-plane/web/src/types/api.ts
+  s_a62f693497b15c::t_eeb4de8fb79f06 610
+  s_a62f693497b15c::t_fd58f8988e34a2 604-607,611-612
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_a62f693497b15c::t_cc8c787e5110e8 76
+control-plane/Sources/App/Controllers/VMSnapshotController.swift
+  s_a62f693497b15c::t_cf1f66c34ebf6e 231
+control-plane/Tests/AppResourceTests/VolumeQuotaTests.swift
+  s_a62f693497b15c::t_cc8c787e5110e8 71-74
+control-plane/Tests/AppPlatformTests/NetworkControllerTests.swift
+  s_a62f693497b15c::t_d9f905dbb3551b 898
+control-plane/web/src/types/openapi.ts
+  s_a62f693497b15c::t_1d87159e08e32a 7631-7632
+shared/Sources/StratoShared/WireProtocol.swift
+  s_a62f693497b15c::t_0f094e48a2ab0a 126-128
+control-plane/Tests/AppResourceTests/SandboxSnapshotTests.swift
+  s_a62f693497b15c::t_831f102542068c 59,136,550-551,576
+  s_a62f693497b15c::t_cc8c787e5110e8 64,77-90,140,146,558
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_a62f693497b15c::t_0f094e48a2ab0a 34
+control-plane/Sources/App/Migrations/ReplaceAgentHypervisorTypeWithHypervisors.swift
+  s_a62f693497b15c::t_0f094e48a2ab0a 18
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_a62f693497b15c::t_eeb4de8fb79f06 165-182
+control-plane/Sources/App/openapi.yaml
+  s_a62f693497b15c::t_fd58f8988e34a2 13455,13501-13505
+control-plane/Sources/App/Controllers/VMController.swift
+  s_a62f693497b15c::t_cf1f66c34ebf6e 1752,1760,1764-1765
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_a62f693497b15c::t_cc8c787e5110e8 494
+  s_a62f693497b15c::t_d9f905dbb3551b 484
+agent/Sources/StratoAgent/Agent.swift
+  s_a62f693497b15c::t_cf29e8cba7ae98 285-287,290-294,654-655,1250-1251,1321-1322
+  s_a62f693497b15c::t_cf1f66c34ebf6e 1310,1346,1364-1366
+  s_a62f693497b15c::t_0f094e48a2ab0a 1611
+control-plane/web/src/app/(dashboard)/agents/detail/page.tsx
+  s_a62f693497b15c::t_fd58f8988e34a2 39-57,260-261,271
+control-plane/Tests/AppResourceTests/VMSnapshotTests.swift
+  s_a62f693497b15c::t_831f102542068c 58,154
+  s_a62f693497b15c::t_cc8c787e5110e8 63,76-89,159,165,494,503
+control-plane/Sources/App/Controllers/SandboxSnapshotController.swift
+  s_a62f693497b15c::t_cf1f66c34ebf6e 262,266-267
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_a62f693497b15c::t_cc8c787e5110e8 67-75
+control-plane/Sources/App/Migrations/DropLegacyAgentCapabilities.swift
+  s_a62f693497b15c::t_fd58f8988e34a2 1-27
+agent/Sources/StratoAgent/NetworkServiceLinux.swift
+  s_a62f693497b15c::t_cf29e8cba7ae98 614-617
+control-plane/Sources/App/Models/Agent.swift
+  s_a62f693497b15c::t_cf1f66c34ebf6e 456,458-478,571-572,667
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "e837b9c4d0cd185d9651e654d05673b78b8fdc6a",
+  "prompts": {},
+  "sessions": {
+    "s_32f3c42ee7034c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe804-9ec2-7111-b6ff-cdeb9ace565d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    },
+    "s_a62f693497b15c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fe806-94bf-7e50-aa25-b906961e6563",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
