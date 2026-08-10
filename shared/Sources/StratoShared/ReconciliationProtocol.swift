@@ -254,6 +254,11 @@ public struct DesiredVolumeSource: Codable, Sendable {
     /// source lives on this same agent, and the agent derives the source path
     /// from its own layout — no path travels on the wire (STR-180).
     public let sourceVolumeId: UUID?
+    /// The VM that currently owns an attached clone source. The agent holds
+    /// this VM's reconciliation lane for the complete copy, so a later desired
+    /// state cannot start the source guest while its bytes are being read. Nil
+    /// for a detached clone source.
+    public let sourceVMId: UUID?
     /// The source volume's format, when known, so the agent can pick a copy
     /// strategy without probing. Advisory: the backend detects rather than
     /// assumes.
@@ -264,12 +269,14 @@ public struct DesiredVolumeSource: Codable, Sendable {
         imageInfo: ImageInfo? = nil,
         artifactKind: ArtifactKind? = nil,
         sourceVolumeId: UUID? = nil,
+        sourceVMId: UUID? = nil,
         sourceFormat: String? = nil
     ) {
         self.kind = kind
         self.imageInfo = imageInfo
         self.artifactKind = artifactKind
         self.sourceVolumeId = sourceVolumeId
+        self.sourceVMId = sourceVMId
         self.sourceFormat = sourceFormat
     }
 
@@ -277,8 +284,12 @@ public struct DesiredVolumeSource: Codable, Sendable {
         DesiredVolumeSource(kind: Self.image, imageInfo: info, artifactKind: artifactKind)
     }
 
-    public static func clone(from volumeId: UUID, format: String? = nil) -> DesiredVolumeSource {
-        DesiredVolumeSource(kind: Self.clone, sourceVolumeId: volumeId, sourceFormat: format)
+    public static func clone(
+        from volumeId: UUID, sourceVMId: UUID? = nil, format: String? = nil
+    ) -> DesiredVolumeSource {
+        DesiredVolumeSource(
+            kind: Self.clone, sourceVolumeId: volumeId, sourceVMId: sourceVMId,
+            sourceFormat: format)
     }
 }
 

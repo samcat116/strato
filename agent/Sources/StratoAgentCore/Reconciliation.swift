@@ -392,7 +392,10 @@ public struct ReconcileWorkItem: Sendable {
     /// "volume/" cannot collide with a UUID string).
     ///
     /// A volume item that carries an attachment also holds the *VM's* lane,
-    /// because realizing it drives that VM's hypervisor session.
+    /// because realizing it drives that VM's hypervisor session. A clone create
+    /// additionally holds its source volume lane and, when the source is
+    /// attached, its source VM lane. That prevents source mutation or a later
+    /// VM start from interleaving with the copy.
     ///
     /// A snapshot item holds its own lane plus its **parent's**, for the same
     /// reason (STR-150): capturing a checkpoint pauses the guest and drives the
@@ -404,8 +407,19 @@ public struct ReconcileWorkItem: Sendable {
         case .vm: return [id]
         case .sandbox: return ["sandbox/" + id]
         case .volume:
-            guard let vmId = desiredVolume?.attachment?.vmId.uuidString else { return ["volume/" + id] }
-            return ["volume/" + id, vmId]
+            var keys = ["volume/" + id]
+            if let sourceVolumeId = desiredVolume?.source?.sourceVolumeId?.uuidString {
+                keys.append(Self.lane(kind: .volume, id: sourceVolumeId))
+            }
+            if let sourceVMId = desiredVolume?.source?.sourceVMId?.uuidString {
+                keys.append(sourceVMId)
+            }
+            if let attachedVMId = desiredVolume?.attachment?.vmId.uuidString {
+                keys.append(attachedVMId)
+            }
+            var unique: [String] = []
+            for key in keys where !unique.contains(key) { unique.append(key) }
+            return unique
         case .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot:
             let own = "snapshot/" + id
             guard let entry = desiredSnapshot else { return [own] }

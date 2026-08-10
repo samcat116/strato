@@ -817,10 +817,11 @@ struct VolumeController: RouteCollection {
 
     // MARK: - Create Snapshot
 
-    /// Attached storage can be read safely only while the owning VM is both
-    /// observed and desired stopped. Checking both closes the start/stop
-    /// convergence window; the agent repeats the observed check at execution.
-    private func requireReadableAttachment(_ volume: Volume, on db: any Database) async throws {
+    /// An attached clone source can be read safely only while the owning VM is
+    /// both observed and desired stopped. Checking both closes the start/stop
+    /// convergence window; desired state also carries the VM id so the agent
+    /// holds that VM's reconciliation lane for the entire copy.
+    private func requireReadableCloneSource(_ volume: Volume, on db: any Database) async throws {
         guard let vmID = volume.$vm.id else { return }
         guard let vm = try await VM.find(vmID, on: db) else {
             throw Abort(.conflict, reason: "The volume's attached VM no longer exists")
@@ -828,7 +829,7 @@ struct VolumeController: RouteCollection {
         guard vm.desiredStatus == .shutdown, vm.status == .shutdown || vm.status == .created else {
             throw Abort(
                 .conflict,
-                reason: "An attached volume can be snapshotted or cloned only while its VM is shut down")
+                reason: "An attached volume can be cloned only while its VM is shut down")
         }
     }
 
@@ -848,12 +849,16 @@ struct VolumeController: RouteCollection {
         let request = try req.content.decodeValidated(CreateSnapshotRequest.self)
 
         guard volume.canSnapshot else {
+            if volume.$vm.id != nil {
+                throw Abort(
+                    .conflict,
+                    reason: "Attached volumes cannot be snapshotted; detach the volume first")
+            }
             throw Abort(
                 .conflict,
                 reason: "Volume cannot be snapshotted in status '\(volume.status.rawValue)'. Must be 'available'"
             )
         }
-        try await requireReadableAttachment(volume, on: req.db)
 
         // The agent is *recorded* on the snapshot rather than re-derived per
         // request: a desired entry has to appear in exactly one agent's sync,
@@ -932,17 +937,19 @@ struct VolumeController: RouteCollection {
         let sourceVolume = try await fetchVolumeWithAction(req: req, action: "volume:clone")
         let request = try req.content.decodeValidated(CloneVolumeRequest.self)
 
-        // Cloning reads the source's bytes, which is why it keeps a
-        // converged-and-detached requirement the other verbs dropped: copying a
-        // volume whose own create is still writing it yields a torn image, and
-        // unlike a resize that cannot be re-driven into correctness.
+        // Cloning reads the source's bytes, which is why it keeps a converged
+        // requirement the other verbs dropped: copying a volume whose own
+        // create is still writing it yields a torn image, and unlike a resize
+        // that cannot be re-driven into correctness. An attached source is
+        // additionally required to be stopped and is serialized with that VM
+        // by the desired-state create strategy.
         guard sourceVolume.canClone else {
             throw Abort(
                 .conflict,
                 reason: "Volume is not ready to be cloned; wait for it to finish converging."
             )
         }
-        try await requireReadableAttachment(sourceVolume, on: req.db)
+        try await requireReadableCloneSource(sourceVolume, on: req.db)
 
         let sourceAgentIds = try await VolumeService.agentIDs(holding: sourceVolume, on: req.db)
         guard !sourceAgentIds.isEmpty else {

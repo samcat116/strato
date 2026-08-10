@@ -12,8 +12,9 @@ import Foundation
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
     /// The only wire/schema version this build accepts. Version 42 requires a
-    /// managed volume identity for every VM disk and identifies the typed image
-    /// artifact used to materialize each volume (STR-231).
+    /// managed volume identity for every VM disk, identifies the typed image
+    /// artifact used to materialize each volume, and carries clone-source lanes
+    /// needed to serialize copies with an attached source VM (STR-231).
     public static let currentVersion = 42
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to

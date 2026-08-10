@@ -4367,6 +4367,11 @@ extension Agent: ReconcileActuator {
                     "source volume \(sourceId) is not present on this agent yet")
             }
             if let holder = recordedVolumeAttachments()[sourceId] {
+                guard desired.source?.sourceVMId?.uuidString == holder.vmId else {
+                    throw VolumeConvergenceError.sourceNotReady(
+                        "source volume \(sourceId) is attached to VM \(holder.vmId), but its declared source VM lane has not converged"
+                    )
+                }
                 guard let service = getHypervisorServiceForVM(vmId: holder.vmId),
                     let status = try? await service.getVMStatus(vmId: holder.vmId),
                     status == .shutdown || status == .created

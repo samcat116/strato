@@ -199,10 +199,15 @@ final class VolumeConvergenceTests {
 
     @Test("A clone's source rides the entry as a create strategy")
     func cloneSourceIsACreateStrategy() async throws {
-        try await withVolumeApp { app, _, user, project in
+        try await withVolumeApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "clone-agent")
             let source = try await makeVolume(
-                on: app, user: user, project: project, agentId: agentId, name: "clone-source")
+                on: app, user: user, project: project, agentId: agentId, name: "clone-source",
+                status: .attached)
+            let sourceVM = try await builder.createVM(name: "clone-source-vm", project: project)
+            source.$vm.id = sourceVM.id
+            source.deviceName = "disk1"
+            try await source.save(on: app.db)
             let clone = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId, name: "clone-target",
                 status: .creating, observedGeneration: 0)
@@ -213,6 +218,7 @@ final class VolumeConvergenceTests {
             let entry = try #require(message.volumes.first { $0.volumeId == clone.id })
             #expect(entry.source?.kind == DesiredVolumeSource.clone)
             #expect(entry.source?.sourceVolumeId == source.id)
+            #expect(entry.source?.sourceVMId == sourceVM.id)
         }
     }
 

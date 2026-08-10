@@ -691,6 +691,20 @@ struct DesiredStateAssembler {
                         return (vmID, (vmAgentID, vm.hypervisorType))
                     })
         }
+        let cloneSourceIDs = Array(Set(volumes.compactMap(\.$sourceVolume.id)))
+        let cloneSourceVMIDs: [UUID: UUID]
+        if cloneSourceIDs.isEmpty {
+            cloneSourceVMIDs = [:]
+        } else {
+            cloneSourceVMIDs = Dictionary(
+                uniqueKeysWithValues: try await Volume.query(on: db)
+                    .filter(\.$id ~~ cloneSourceIDs)
+                    .all()
+                    .compactMap { source in
+                        guard let sourceID = source.id, let sourceVMID = source.$vm.id else { return nil }
+                        return (sourceID, sourceVMID)
+                    })
+        }
 
         var entries: [DesiredVolumeState] = []
         for volume in volumes {
@@ -702,7 +716,10 @@ struct DesiredStateAssembler {
             // and its image lineage is only provenance.
             var source: DesiredVolumeSource?
             if let sourceVolumeID = volume.$sourceVolume.id {
-                source = .clone(from: sourceVolumeID, format: volume.format.rawValue)
+                source = .clone(
+                    from: sourceVolumeID,
+                    sourceVMId: cloneSourceVMIDs[sourceVolumeID],
+                    format: volume.format.rawValue)
             } else if let image = volume.sourceImage, image.status == .ready, let imageId = image.id {
                 do {
                     let artifactKind: ArtifactKind =

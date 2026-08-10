@@ -421,6 +421,28 @@ struct VolumeReconciliationTests {
         #expect(item.laneKeys == ["volume/" + id.uuidString])
     }
 
+    /// A clone's stopped-source check is only useful if no later VM item can
+    /// start that guest before the copy finishes. The source volume lane also
+    /// keeps its attachment, resize, and deletion work out of the copy window.
+    @Test("A clone item holds its target, source volume, and source VM lanes")
+    func cloneItemHoldsSourceLanes() {
+        let id = UUID()
+        let sourceId = UUID()
+        let sourceVMId = UUID()
+        let item = ReconcileWorkItem(
+            kind: .volume, id: id.uuidString, generation: 1, steps: [.create],
+            target: .volume(
+                Self.desired(
+                    id,
+                    source: .clone(from: sourceId, sourceVMId: sourceVMId))))
+        #expect(
+            item.laneKeys == [
+                "volume/" + id.uuidString,
+                "volume/" + sourceId.uuidString,
+                sourceVMId.uuidString,
+            ])
+    }
+
     /// A new boot volume carries both `.create` and `.attach` in one item. It
     /// therefore holds the VM lane even though its first step is data-plane
     /// materialization. Queueing solely by lane count would put that item after
