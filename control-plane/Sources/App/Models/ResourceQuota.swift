@@ -72,7 +72,12 @@ final class ResourceQuota: Model, @unchecked Sendable {
     @Field(key: "volume_count")
     var volumeCount: Int
 
-    // Network limits
+    /// Project-wide network count limit (STR-236).
+    ///
+    /// Logical networks have no environment: workloads from every environment
+    /// can attach to the same switch. This limit therefore applies only when
+    /// `environment` is nil. The API rejects an explicitly supplied network
+    /// limit for an environment-scoped quota instead of storing an inert policy.
     @Field(key: "max_networks")
     var maxNetworks: Int
 
@@ -414,6 +419,17 @@ extension ResourceQuota {
         return (true, nil)
     }
 
+    /// Whether one more project-wide logical network fits (STR-236).
+    func canAccommodateNetwork() -> (allowed: Bool, reason: String?) {
+        if !isEnabled {
+            return (true, nil)
+        }
+        if networkCount >= maxNetworks {
+            return (false, "Network limit reached: \(maxNetworks) networks allowed")
+        }
+        return (true, nil)
+    }
+
     /// Reserve storage for a snapshot artifact or a volume resize (issues #426,
     /// #564, STR-181). The add cannot trap; see ``reserving(_:_:)``. `bytes` is
     /// not certain to be positive here — the export path passes an
@@ -436,6 +452,15 @@ extension ResourceQuota {
         }
         reservedStorage = Self.reserving(reservedStorage, size)
         volumeCount += 1
+    }
+
+    /// Reserve one project-wide logical-network slot (STR-236).
+    func reserveNetworkResources() throws {
+        let check = canAccommodateNetwork()
+        if !check.allowed {
+            throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
+        }
+        networkCount = Self.reserving(networkCount, 1)
     }
 }
 
@@ -467,7 +492,9 @@ extension ResourceQuota {
         }
 
         // Validate limits are positive
-        if maxVCPUs <= 0 || maxMemory <= 0 || maxStorage <= 0 || maxVMs <= 0 || maxSandboxes <= 0 {
+        if maxVCPUs <= 0 || maxMemory <= 0 || maxStorage <= 0 || maxVMs <= 0 || maxSandboxes <= 0
+            || maxNetworks <= 0
+        {
             throw Abort(.badRequest, reason: "All resource limits must be positive")
         }
 
@@ -496,6 +523,7 @@ struct CreateResourceQuotaRequest: Content, ValidatedRequestBody {
     /// Volume count limit; omitted means **no** count limit, not a default
     /// borrowed from `maxVMs` (STR-181).
     let maxVolumes: Int?
+    /// Project-wide network limit. Must be omitted when `environment` is set.
     let maxNetworks: Int?
     var environment: String?
     let isEnabled: Bool?
@@ -522,6 +550,7 @@ struct UpdateResourceQuotaRequest: Content, ValidatedRequestBody {
     /// is free to mean this: a limit of zero would admit no volume at all, so
     /// `validate()` refuses it on the model and nothing can want it.
     let maxVolumes: Int?
+    /// Project-wide network limit. Environment-scoped quotas reject this field.
     let maxNetworks: Int?
     let isEnabled: Bool?
 

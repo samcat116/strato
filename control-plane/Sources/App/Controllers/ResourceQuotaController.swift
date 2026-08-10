@@ -198,6 +198,12 @@ struct ResourceQuotaController: RouteCollection {
         // Verify user has admin access to quota
         try await verifyQuotaAdminAccess(quota: quota, on: req)
 
+        if quota.environment != nil, updateRequest.maxNetworks != nil {
+            throw Abort(
+                .badRequest,
+                reason: "Environment-scoped quotas cannot set a network limit because networks are project-wide")
+        }
+
         // Measure the scope before evaluating the "not below current usage" guards
         // below. The stored counters are only a cache of the last resync — zero for
         // any quota row nothing has resynced yet — so reading them let an admin set
@@ -285,6 +291,12 @@ struct ResourceQuotaController: RouteCollection {
         }
 
         if let maxNetworks = updateRequest.maxNetworks {
+            if maxNetworks < quota.networkCount {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "New network limit (\(maxNetworks)) cannot be below current count (\(quota.networkCount))")
+            }
             quota.maxNetworks = maxNetworks
         }
 
@@ -330,7 +342,7 @@ struct ResourceQuotaController: RouteCollection {
         // so there is nothing here for a healed cache to be read by.
         let usage = try await QuotaUsageAggregator.measure(quota: quota, on: req.db)
         if usage.vcpus > 0 || usage.memoryBytes > 0 || usage.storageBytes > 0 || usage.vmCount > 0
-            || usage.sandboxCount > 0 || usage.volumeCount > 0
+            || usage.sandboxCount > 0 || usage.volumeCount > 0 || usage.networkCount > 0
         {
             throw Abort(.conflict, reason: "Cannot delete quota with active resource reservations")
         }
@@ -664,6 +676,12 @@ struct ResourceQuotaController: RouteCollection {
         projectID: UUID?,
         on db: Database
     ) async throws -> ResourceQuota {
+        if createRequest.environment != nil, createRequest.maxNetworks != nil {
+            throw Abort(
+                .badRequest,
+                reason: "Environment-scoped quotas cannot set a network limit because networks are project-wide")
+        }
+
         let maxMemoryBytes = createRequest.maxMemoryGB.gbToBytes
         let maxStorageBytes = createRequest.maxStorageGB.gbToBytes
 

@@ -7035,6 +7035,7 @@ export interface components {
                 maxVMs: number;
                 maxSandboxes: number;
                 maxVolumes?: number | null;
+                /** @description Project-wide network count limit. It is not applied when this quota has an environment. */
                 maxNetworks: number;
             };
             usage: {
@@ -7514,6 +7515,7 @@ export interface components {
             maxSandboxes: number;
             /** @description Volume count limit. Null means no count limit — unlike the VM and sandbox limits, this one is optional, because `maxStorageGB` is the ceiling that protects the host. */
             maxVolumes?: number | null;
+            /** @description Project-wide network count limit. It is not applied when this quota has an environment. */
             maxNetworks: number;
         };
         /** @description Reservations the control plane holds against the quota. */
@@ -7526,6 +7528,7 @@ export interface components {
             vmCount: number;
             sandboxCount: number;
             volumeCount?: number;
+            /** @description Project-wide logical networks in scope. Always zero for an environment-scoped quota. */
             networkCount: number;
         };
         /** @description Reserved amounts as a percentage of each limit. */
@@ -7558,7 +7561,7 @@ export interface components {
             maxSandboxes?: number;
             /** @description Volume count limit. Omitted means **no** count limit, not a default borrowed from `maxVMs`. */
             maxVolumes?: number;
-            /** @description Defaults to 10. */
+            /** @description Defaults to 10. Must be omitted when `environment` is set because logical networks are project-wide. */
             maxNetworks?: number;
             /** @description Project quotas only — narrows the quota to one of the project's deployment environments. */
             environment?: string;
@@ -7577,6 +7580,7 @@ export interface components {
             maxSandboxes?: number;
             /** @description The volume count limit. Omit to leave it as it is; send `0` to remove it. */
             maxVolumes?: number;
+            /** @description Project-wide network count limit. Environment-scoped quotas reject this field. */
             maxNetworks?: number;
             isEnabled?: boolean;
         };

@@ -210,6 +210,10 @@ struct NetworkController: RouteCollection {
             // same transaction as the row (issue #477).
             let creatorID = user.id!
             try await req.db.transaction { db in
+                // Admission precedes resolver allocation: resolver addresses are
+                // fleet-wide, while the quota is what stops one project from
+                // draining them (STR-236).
+                try await QuotaEnforcementService.reserveNetwork(for: project, on: db)
                 // Inside the same transaction as the row: the allocator's
                 // advisory lock is transaction-scoped, so allocating outside it
                 // would release the lock before the index it chose was durable.
@@ -646,6 +650,7 @@ struct NetworkController: RouteCollection {
 
         try await req.db.transaction { db in
             try await network.delete(on: db)
+            try await QuotaEnforcementService.release(for: network, on: db)
             // Bindings have no FK to the resources they protect, so drop
             // them with the node.
             try await RoleBindingService.revokeAll(

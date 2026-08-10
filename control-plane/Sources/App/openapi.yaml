@@ -12272,6 +12272,9 @@ components:
               nullable: true
             maxNetworks:
               type: integer
+              description: >-
+                Project-wide network count limit. It is not applied when this
+                quota has an environment.
         usage:
           type: object
           required:
@@ -13195,6 +13198,9 @@ components:
             ceiling that protects the host.
         maxNetworks:
           type: integer
+          description: >-
+            Project-wide network count limit. It is not applied when this quota
+            has an environment.
 
     ResourceQuotaUsage:
       type: object
@@ -13217,6 +13223,9 @@ components:
           type: integer
         networkCount:
           type: integer
+          description: >-
+            Project-wide logical networks in scope. Always zero for an
+            environment-scoped quota.
 
     ResourceQuotaUtilization:
       type: object
@@ -13270,7 +13279,9 @@ components:
             borrowed from `maxVMs`.
         maxNetworks:
           type: integer
-          description: Defaults to 10.
+          description: >-
+            Defaults to 10. Must be omitted when `environment` is set because
+            logical networks are project-wide.
         environment:
           type: string
           description: >-
@@ -13307,6 +13318,9 @@ components:
             remove it.
         maxNetworks:
           type: integer
+          description: >-
+            Project-wide network count limit. Environment-scoped quotas reject
+            this field.
         isEnabled:
           type: boolean
 

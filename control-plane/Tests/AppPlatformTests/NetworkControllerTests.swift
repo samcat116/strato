@@ -118,6 +118,97 @@ final class NetworkControllerTests {
 
     // MARK: - Create
 
+    @Test("A project quota bounds its use of the fleet-wide resolver pool")
+    func projectQuotaProtectsFleetResolverPool() async throws {
+        try await withNetworkTestApp { app, user, project, token in
+            let builder = TestDataBuilder(db: app.db)
+            let organization = try #require(
+                try await Organization.find(user.currentOrganizationId, on: app.db))
+            let site = Site(
+                name: "Quota Resolver Site",
+                organizationScope: .organization(try organization.requireID()))
+            try await site.save(on: app.db)
+            let siteID = try site.requireID()
+            let quota = try await builder.createResourceQuota(
+                name: "one-network", maxNetworks: 1, project: project)
+
+            var admitted: NetworkResponse?
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "admitted", subnet: "10.201.0.0/24", projectId: project.id!,
+                        siteId: siteID))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                admitted = try res.content.decode(NetworkResponse.self)
+            }
+            let admittedID = try #require(admitted?.id)
+            let admittedIndex = try #require(
+                await LogicalNetwork.find(admittedID, on: app.db)?.resolverIndex)
+
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "refused", subnet: "10.202.0.0/24", projectId: project.id!,
+                        siteId: siteID))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.contains("Quota 'one-network' exceeded"))
+            }
+            #expect(
+                try await LogicalNetwork.query(on: app.db).filter(\.$name == "refused").first() == nil,
+                "a refused create must persist neither a network nor a resolver index")
+
+            let otherProject = try await builder.createProject(
+                name: "Other resolver tenant", description: "cross-tenant check",
+                organization: organization)
+            var other: NetworkResponse?
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "other-tenant", subnet: "10.203.0.0/24",
+                        projectId: try otherProject.requireID(), siteId: siteID))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                other = try res.content.decode(NetworkResponse.self)
+            }
+            let otherID = try #require(other?.id)
+            let otherIndex = try #require(
+                await LogicalNetwork.find(otherID, on: app.db)?.resolverIndex)
+            #expect(otherIndex == admittedIndex + 1, "the refusal did not consume a fleet-wide index")
+
+            try await app.test(.GET, "/api/quotas/\(try quota.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(ResourceQuotaResponse.self)
+                #expect(response.usage.networkCount == 1)
+            }
+
+            try await app.test(.GET, "/api/quotas/\(try quota.requireID())/usage") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let usage = try res.content.decode(QuotaUsageResponse.self)
+                #expect(usage.reserved.networks == 1)
+                #expect(usage.actual.networks == 1)
+            }
+
+            try await app.test(.DELETE, "/api/networks/\(admittedID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+            let afterDelete = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(afterDelete.networkCount == 0)
+            try await QuotaEnforcementService.resyncReservations(afterDelete, on: app.db)
+            #expect(afterDelete.networkCount == 0, "the released count survives a canonical resync")
+        }
+    }
+
     @Test("POST /api/networks persists a valid network (200)")
     func createValidNetwork() async throws {
         try await withNetworkTestApp { app, _, project, token in

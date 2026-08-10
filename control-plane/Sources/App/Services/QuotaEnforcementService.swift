@@ -3,7 +3,7 @@ import Vapor
 import Fluent
 import SQLKit
 
-/// Enforces resource quotas across the VM, sandbox and volume lifecycle.
+/// Enforces resource quotas across the VM, sandbox, volume and network lifecycle.
 /// Resolves the project/OU/org quotas that govern a workload (matching its
 /// environment), rejects creations that would exceed an enabled quota, and keeps
 /// each quota's reservation counters in step as workloads are created and
@@ -29,6 +29,26 @@ struct QuotaEnforcementService {
         environment: String,
         on db: Database
     ) async throws -> [ResourceQuota] {
+        try await applicableQuotas(for: project, environmentScope: environment, on: db)
+    }
+
+    /// Quotas governing project-wide infrastructure such as logical networks.
+    /// Environment-scoped quotas are excluded because a network can be consumed
+    /// by workloads from every environment (STR-236).
+    private static func applicableProjectWideQuotas(
+        for project: Project,
+        on db: Database
+    ) async throws -> [ResourceQuota] {
+        try await applicableQuotas(for: project, environmentScope: nil, on: db)
+    }
+
+    /// `environmentScope == nil` means project-wide and selects only global
+    /// quotas. A concrete environment selects both global and matching quotas.
+    private static func applicableQuotas(
+        for project: Project,
+        environmentScope: String?,
+        on db: Database
+    ) async throws -> [ResourceQuota] {
         guard let projectID = project.id else { return [] }
         let ouID = project.$organizationalUnit.id
         let orgID = try await project.getRootOrganizationId(on: db)
@@ -46,7 +66,7 @@ struct QuotaEnforcementService {
             }
         }
 
-        return try await ResourceQuota.query(on: db)
+        let query = ResourceQuota.query(on: db)
             .group(.or) { scope in
                 scope.filter(\.$project.$id == projectID)
                 if !ouIDs.isEmpty {
@@ -56,11 +76,15 @@ struct QuotaEnforcementService {
                     scope.filter(\.$organization.$id == orgID)
                 }
             }
-            .group(.or) { env in
+        if let environmentScope {
+            query.group(.or) { env in
                 env.filter(\.$environment == nil)
-                env.filter(\.$environment == environment)
+                env.filter(\.$environment == environmentScope)
             }
-            .all()
+        } else {
+            query.filter(\.$environment == nil)
+        }
+        return try await query.all()
     }
 
     /// Checks every applicable quota and reserves the VM's resources against each.
@@ -216,6 +240,22 @@ struct QuotaEnforcementService {
         }
     }
 
+    /// Admission for a logical network (STR-236). Only quotas spanning every
+    /// environment apply. Call before resolver-index allocation and inside the
+    /// network insert transaction so a refusal consumes no fleet-wide address.
+    static func reserveNetwork(
+        for project: Project,
+        on db: Database
+    ) async throws {
+        let quotas = try await applicableProjectWideQuotas(for: project, on: db)
+        try await reserveResource(for: project, quotas: quotas, on: db) { quota in
+            let check = quota.canAccommodateNetwork()
+            guard check.allowed else { return check }
+            try quota.reserveNetworkResources()
+            return check
+        }
+    }
+
     /// Admission for growing a volume (STR-181): only the *delta* is checked and
     /// reserved, since the volume's current size is already counted, and the
     /// count limit is untouched because no volume is being added. Call inside the
@@ -301,7 +341,15 @@ struct QuotaEnforcementService {
         apply: (ResourceQuota) throws -> (allowed: Bool, reason: String?)
     ) async throws {
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
+        try await reserveResource(for: project, quotas: quotas, on: db, apply: apply)
+    }
 
+    private static func reserveResource(
+        for project: Project,
+        quotas: [ResourceQuota],
+        on db: Database,
+        apply: (ResourceQuota) throws -> (allowed: Bool, reason: String?)
+    ) async throws {
         // Serialize concurrent reservations that touch any of these quotas before
         // reading the baseline, so the check-then-reserve sequence is atomic per quota.
         try await lockQuotas(quotas, on: db)
@@ -376,6 +424,19 @@ struct QuotaEnforcementService {
         try await releaseWorkload(projectID: volume.$project.id, environment: volume.environment, on: db)
     }
 
+    /// Logical-network counterpart: call after the network row is deleted so
+    /// the canonical project-wide recount observes the released slot (STR-236).
+    static func release(
+        for network: LogicalNetwork,
+        on db: Database
+    ) async throws {
+        guard let project = try await Project.find(network.$project.id, on: db) else { return }
+        for quota in try await applicableProjectWideQuotas(for: project, on: db) {
+            try await resyncReservations(quota, on: db)
+            try await quota.save(on: db)
+        }
+    }
+
     private static func releaseWorkload(projectID: UUID, environment: String, on db: Database) async throws {
         guard let project = try await Project.find(projectID, on: db) else { return }
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
@@ -414,10 +475,10 @@ struct QuotaEnforcementService {
     /// in use — including the controller's update and delete integrity guards
     /// (issue #742) — must resync first rather than read the stored fields.
     ///
-    /// Three aggregate queries over an already-resolved scope: on the admission
-    /// path this runs under the per-quota advisory lock, so every row it doesn't
-    /// load is lock time every other create in the organization doesn't wait for
-    /// (issue #692).
+    /// A fixed set of aggregate queries over an already-resolved scope: on the
+    /// admission path this runs under the per-quota advisory lock, so every row
+    /// it doesn't load is lock time every other create in the organization
+    /// doesn't wait for (issue #692).
     static func resyncReservations(_ quota: ResourceQuota, on db: Database) async throws {
         let scope = try await QuotaUsageAggregator.scope(of: quota, on: db)
         let usage = try await QuotaUsageAggregator.measure(scope, on: db)
@@ -430,5 +491,6 @@ struct QuotaEnforcementService {
         quota.vmCount = usage.vmCount
         quota.sandboxCount = usage.sandboxCount
         quota.volumeCount = usage.volumeCount
+        quota.networkCount = usage.networkCount
     }
 }

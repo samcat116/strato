@@ -161,6 +161,59 @@ final class ResourceQuotaTests {
         }
     }
 
+    @Test("Environment-scoped quotas reject a project-wide network limit")
+    func testEnvironmentQuotaRejectsNetworkLimit() async throws {
+        try await withQuotaTestApp { app, _, _, testProject, authToken in
+            try await app.test(.POST, "/api/projects/\(testProject.id!)/quotas") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateResourceQuotaRequest(
+                        name: "Invalid Environment Network Quota",
+                        maxVCPUs: 20,
+                        maxMemoryGB: 40,
+                        maxStorageGB: 200,
+                        maxVMs: 10,
+                        maxSandboxes: nil,
+                        maxVolumes: nil,
+                        maxNetworks: 2,
+                        environment: "production",
+                        isEnabled: nil
+                    ))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("networks are project-wide"))
+            }
+
+            let quota = ResourceQuota(
+                name: "Existing Environment Quota",
+                projectID: testProject.id,
+                maxVCPUs: 20,
+                maxMemory: 40 * 1024 * 1024 * 1024,
+                maxStorage: 200 * 1024 * 1024 * 1024,
+                maxVMs: 10,
+                environment: "production")
+            try await quota.save(on: app.db)
+
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: nil,
+                        maxVCPUs: nil,
+                        maxMemoryGB: nil,
+                        maxStorageGB: nil,
+                        maxVMs: nil,
+                        maxSandboxes: nil,
+                        maxVolumes: nil,
+                        maxNetworks: 2,
+                        isEnabled: nil))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("networks are project-wide"))
+            }
+        }
+    }
+
     // MARK: - Usage Tracking Tests
 
     @Test("Track quota usage")
@@ -526,6 +579,92 @@ final class ResourceQuotaTests {
             let reloaded = try await ResourceQuota.find(quota.id, on: app.db)
             #expect(reloaded?.reservedVCPUs == 6)
             #expect(reloaded?.vmCount == 3)
+        }
+    }
+
+    @Test("Network backfill leaves an over-limit quota editable and floors touched limits")
+    func testNetworkBackfillPreservesOverLimitRecovery() async throws {
+        try await withQuotaTestApp { app, _, testOrganization, testProject, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            _ = try await builder.createNetwork(
+                name: "existing-a", project: testProject,
+                subnet: "10.220.0.0/24", gateway: "10.220.0.1")
+            _ = try await builder.createNetwork(
+                name: "existing-b", project: testProject,
+                subnet: "10.221.0.0/24", gateway: "10.221.0.1")
+
+            let quota = ResourceQuota(
+                name: "Legacy Network Quota",
+                organizationID: testOrganization.id,
+                maxVCPUs: 20,
+                maxMemory: 40 * 1024 * 1024 * 1024,
+                maxStorage: 200 * 1024 * 1024 * 1024,
+                maxVMs: 10,
+                maxNetworks: 1)
+            try await quota.save(on: app.db)
+            #expect(quota.networkCount == 0, "the legacy counter starts stale")
+
+            try await BackfillNetworkQuotaAccounting().backfillQuotaCounters(on: app.db)
+            let backfilled = try #require(try await ResourceQuota.find(quota.id, on: app.db))
+            #expect(backfilled.networkCount == 2)
+
+            // An untouched overage cannot make the row unsaveable: renaming is
+            // one of the recovery operations an operator must retain.
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: "Legacy Network Quota (observed)",
+                        maxVCPUs: nil,
+                        maxMemoryGB: nil,
+                        maxStorageGB: nil,
+                        maxVMs: nil,
+                        maxSandboxes: nil,
+                        maxVolumes: nil,
+                        maxNetworks: nil,
+                        isEnabled: nil))
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let response = try res.content.decode(ResourceQuotaResponse.self)
+                #expect(response.usage.networkCount == 2)
+            }
+
+            let siteID = try #require(
+                try await LogicalNetwork.query(on: app.db).first()?.$site.id)
+            try await app.test(.POST, "/api/networks") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    CreateNetworkRequest(
+                        name: "blocked-after-backfill", subnet: "10.222.0.0/24",
+                        projectId: try testProject.requireID(), siteId: siteID))
+            } afterResponse: { res in
+                #expect(res.status == .forbidden)
+                #expect(res.body.string.contains("Quota 'Legacy Network Quota (observed)' exceeded"))
+            }
+
+            try await app.test(.PUT, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                try req.content.encode(
+                    UpdateResourceQuotaRequest(
+                        name: nil,
+                        maxVCPUs: nil,
+                        maxMemoryGB: nil,
+                        maxStorageGB: nil,
+                        maxVMs: nil,
+                        maxSandboxes: nil,
+                        maxVolumes: nil,
+                        maxNetworks: 1,
+                        isEnabled: nil))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("cannot be below current count (2)"))
+            }
+
+            try await app.test(.DELETE, "/api/quotas/\(quota.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
         }
     }
 

@@ -98,6 +98,9 @@ export function QuotaDialog({
   const isProjectScope = target?.scope === "project";
   const showEnvironment =
     !isEdit && isProjectScope && (environments?.length ?? 0) > 0;
+  const isEnvironmentScoped = isEdit
+    ? quota?.environment != null
+    : showEnvironment && form.environment !== "";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,13 +115,18 @@ export function QuotaDialog({
       maxMemoryGB: parseFloat(form.maxMemoryGB),
       maxStorageGB: parseFloat(form.maxStorageGB),
       maxVMs: parseInt(form.maxVMs, 10),
-      maxNetworks: parseInt(form.maxNetworks, 10),
     };
 
+    const maxNetworks = isEnvironmentScoped
+      ? undefined
+      : parseInt(form.maxNetworks, 10);
+
     if (
-      Object.values(numbers).some((n) => Number.isNaN(n) || n < 0)
+      Object.values(numbers).some((n) => Number.isNaN(n) || n < 1) ||
+      (maxNetworks !== undefined &&
+        (Number.isNaN(maxNetworks) || maxNetworks < 1))
     ) {
-      toast.error("All limits must be non-negative numbers");
+      toast.error("All limits must be positive numbers");
       return;
     }
 
@@ -141,6 +149,7 @@ export function QuotaDialog({
           data: {
             name: form.name.trim(),
             ...numbers,
+            ...(maxNetworks === undefined ? {} : { maxNetworks }),
             maxVolumes: maxVolumes ?? 0,
             isEnabled: form.isEnabled,
           },
@@ -152,6 +161,7 @@ export function QuotaDialog({
           data: {
             name: form.name.trim(),
             ...numbers,
+            ...(maxNetworks === undefined ? {} : { maxNetworks }),
             maxVolumes,
             environment:
               showEnvironment && form.environment
@@ -253,7 +263,8 @@ export function QuotaDialog({
               {numberField("maxMemoryGB", "Max Memory (GiB)", "0.5")}
               {numberField("maxStorageGB", "Max Storage (GiB)", "0.5")}
               {numberField("maxVolumes", "Max Volumes (blank = no limit)")}
-              {numberField("maxNetworks", "Max Networks")}
+              {!isEnvironmentScoped &&
+                numberField("maxNetworks", "Max Networks")}
             </div>
 
             <label className="flex items-center gap-2 text-sm text-foreground">
