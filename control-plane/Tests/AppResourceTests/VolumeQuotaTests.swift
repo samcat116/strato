@@ -65,10 +65,13 @@ final class VolumeQuotaTests {
     private func registerAgent(app: Application, named name: String) async throws -> String {
         let message = AgentRegisterMessage(
             agentId: name, hostname: "\(name).test", version: "1.0.0",
-            capabilities: ["qemu", SnapshotArtifactKind.volumeSnapshot.agentCapability],
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16, totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40),
+            hypervisors: [
+                HypervisorSupport(
+                    type: .qemu, available: true, accelerated: true, capabilities: .qemu)
+            ],
             protocolVersion: WireProtocol.currentVersion)
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let uuid = try await app.agentService.registerAgent(

@@ -11,7 +11,6 @@ struct AgentMessageTests {
             agentId: "agent-1",
             hostname: "hv-01.example",
             version: "1.2.3",
-            capabilities: ["kvm", "ovn"],
             resources: Fixtures.resources,
             hypervisors: [
                 HypervisorSupport(
@@ -26,7 +25,6 @@ struct AgentMessageTests {
         #expect(decoded.agentId == "agent-1")
         #expect(decoded.hostname == "hv-01.example")
         #expect(decoded.version == "1.2.3")
-        #expect(decoded.capabilities == ["kvm", "ovn"])
         #expect(decoded.effectiveHypervisors.map(\.type) == [.firecracker])
         #expect(decoded.resources.totalCPU == Fixtures.resources.totalCPU)
         #expect(decoded.resources.availableCPU == Fixtures.resources.availableCPU)
@@ -45,7 +43,6 @@ struct AgentMessageTests {
             agentId: "agent-1",
             hostname: "hv-01.example",
             version: "1.2.3",
-            capabilities: ["kvm"],
             resources: Fixtures.resources
         )
         let decodedImplicit = try throughEnvelope(implicit)
@@ -55,7 +52,6 @@ struct AgentMessageTests {
             agentId: "agent-2",
             hostname: "hv-02.example",
             version: "1.2.3",
-            capabilities: ["kvm"],
             resources: Fixtures.resources,
             sandboxCapable: true
         )
@@ -73,7 +69,6 @@ struct AgentMessageTests {
             agentId: "agent-1",
             hostname: "hv-01.example",
             version: "1.2.3",
-            capabilities: ["kvm"],
             resources: Fixtures.resources,
             sandboxCapable: true
         )
@@ -87,7 +82,6 @@ struct AgentMessageTests {
             agentId: "agent-2",
             hostname: "hv-02.example",
             version: "1.2.3",
-            capabilities: ["kvm"],
             resources: Fixtures.resources,
             sandboxCapable: true,
             sandboxNetworkingCapable: true
@@ -105,7 +99,6 @@ struct AgentMessageTests {
             agentId: "agent-1",
             hostname: "hv-01.example",
             version: "1.2.3",
-            capabilities: ["kvm"],
             resources: Fixtures.resources
         )
         #expect(try throughEnvelope(implicit).tpmCapable == nil)
@@ -114,7 +107,6 @@ struct AgentMessageTests {
             agentId: "agent-2",
             hostname: "hv-02.example",
             version: "1.2.3",
-            capabilities: ["kvm", "vtpm"],
             resources: Fixtures.resources,
             tpmCapable: true
         )
@@ -127,7 +119,6 @@ struct AgentMessageTests {
             agentId: "agent-1",
             hostname: "hv-01.example",
             version: "1.2.3",
-            capabilities: ["kvm"],
             resources: Fixtures.resources
         )
         let decodedImplicit = try throughEnvelope(implicit)
@@ -137,7 +128,6 @@ struct AgentMessageTests {
             agentId: "agent-2",
             hostname: "hv-02.example",
             version: "1.2.3",
-            capabilities: ["kvm"],
             resources: Fixtures.resources,
             operatingSystem: .linux
         )
@@ -151,7 +141,6 @@ struct AgentMessageTests {
             agentId: "agent-1",
             hostname: "hv-01.example",
             version: "1.2.3",
-            capabilities: ["kvm"],
             resources: Fixtures.resources
         )
         let decodedImplicit = try throughEnvelope(implicit)
@@ -173,7 +162,6 @@ struct AgentMessageTests {
             agentId: "agent-2",
             hostname: "hv-02.example",
             version: "1.2.3",
-            capabilities: ["kvm"],
             resources: Fixtures.resources,
             hostInfo: hostInfo
         )

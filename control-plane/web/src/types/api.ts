@@ -594,7 +594,6 @@ export interface Agent {
   name: string;
   hostname: string;
   version: string;
-  capabilities: string[];
   status: AgentStatus;
   resources: AgentResources;
   architecture?: CPUArchitecture;
@@ -602,10 +601,15 @@ export interface Agent {
   // with a build that reports it.
   operatingSystem?: string;
   hypervisors: HypervisorSupport[];
+  // Whether this node can run sandbox workloads, and the stronger guarantee
+  // that it can attach sandbox NICs.
+  sandboxCapable: boolean;
+  sandboxNetworkingCapable: boolean;
   // Whether this node can back a VM's TPM 2.0 device, i.e. it has a usable
   // `swtpm` binary. A VM requesting a TPM only places on a capable node.
-  // Absent for agents that haven't re-registered with a build that reports it.
-  tpmCapable?: boolean;
+  tpmCapable: boolean;
+  // Whether this node can run the per-network DNS resolver.
+  resolverCapable: boolean;
   networkCapability?: NetworkCapability;
   // Descriptive hardware/platform/OS details for display; absent for agents
   // that haven't re-registered with a build that reports it.

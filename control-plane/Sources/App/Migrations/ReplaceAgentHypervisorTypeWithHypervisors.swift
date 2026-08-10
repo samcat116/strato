@@ -15,8 +15,7 @@ struct ReplaceAgentHypervisorTypeWithHypervisors: AsyncMigration {
 
         // `Agent.hypervisors` is `[HypervisorSupport]`, and Fluent binds a Swift
         // array as a native SQL array — so on Postgres the value arrives as
-        // `jsonb[]`. The column must match (mirroring `capabilities: [String]` →
-        // `.array(of: .string)`); declaring it a scalar `.json` made writes fail
+        // `jsonb[]`. The column must match; declaring it a scalar `.json` made writes fail
         // with "column is of type jsonb but expression is of type jsonb[]".
         //
         // Postgres spells an empty array `'{}'`.

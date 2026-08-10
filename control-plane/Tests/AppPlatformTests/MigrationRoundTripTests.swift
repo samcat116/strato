@@ -162,6 +162,24 @@ struct MigrationRoundTripTests {
         }
     }
 
+    @Test("The legacy agent capability bag is absent from the migrated schema")
+    func legacyAgentCapabilitiesAreDropped() async throws {
+        try await withTestApp { app in
+            let sql = try #require(app.db as? SQLDatabase)
+
+            await #expect(throws: (any Error).self) {
+                _ = try await sql.raw("SELECT capabilities FROM agents").all()
+            }
+
+            // Its typed replacement remains queryable after the drop.
+            let rows = try await sql.raw(
+                "SELECT hypervisors, network_capability, sandbox_capable, "
+                    + "sandbox_networking_capable, tpm_capable, resolver_capable FROM agents"
+            ).all()
+            #expect(rows.isEmpty)
+        }
+    }
+
     @Test("Workload convergence observability columns are nullable")
     func workloadConvergenceObservabilityColumnsAreNullable() async throws {
         try await withTestApp { app in

@@ -472,7 +472,6 @@ final class NetworkControllerTests {
                     agentId: name,
                     hostname: "rollback-host",
                     version: "1.0.0",
-                    capabilities: ["qemu"],
                     resources: AgentResources(
                         totalCPU: 8, availableCPU: 8,
                         totalMemory: 1 << 33, availableMemory: 1 << 33,
@@ -896,7 +895,7 @@ final class NetworkControllerTests {
         let siteB = UUID()
         func incapableAgent(named name: String, site: UUID?) -> Agent {
             let agent = Agent(
-                name: name, hostname: name, version: "1.0", capabilities: [],
+                name: name, hostname: name, version: "1.0",
                 resources: AgentResources(
                     totalCPU: 1, availableCPU: 1, totalMemory: 1, availableMemory: 1,
                     totalDisk: 1, availableDisk: 1))
