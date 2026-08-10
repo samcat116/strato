@@ -72,7 +72,6 @@ final class CredentialRestrictionEnforcementTests {
             userID: try user.requireID(),
             action: action,
             node: node,
-            legacyEquivalent: nil,
             context: IAMCheckContext(path: "/api/vms", method: "POST", requestID: nil),
             state: IAMRequestAuthState(restriction: restriction, credential: credential),
             app: app,
@@ -221,29 +220,28 @@ final class CredentialRestrictionEnforcementTests {
             let cache = IAMRequestCache()
             let context = IAMCheckContext(path: "/api/vms", method: "GET", requestID: nil)
 
-            let probed = try await IAMAuthorizer.checkLegacyVocabulary(
+            let orgNode = IAMNode(type: .organization, id: try tree.org.requireID())
+            let probed = try await IAMAuthorizer.authorize(
                 principal: .user(try tree.user.requireID()),
-                permission: "view_organization",
-                resourceType: "organization",
-                resourceID: try tree.org.requireID().uuidString,
+                action: "org:read",
+                node: orgNode,
                 context: context,
                 state: state.membershipProbe(),
                 cache: cache,
                 app: app,
                 db: app.db)
-            #expect(probed, "the probe asks about the principal, and this one is a member")
+            #expect(probed.allowed, "the probe asks about the principal, and this one is a member")
 
-            let underTheCeiling = try await IAMAuthorizer.checkLegacyVocabulary(
+            let underTheCeiling = try await IAMAuthorizer.authorize(
                 principal: .user(try tree.user.requireID()),
-                permission: "view_organization",
-                resourceType: "organization",
-                resourceID: try tree.org.requireID().uuidString,
+                action: "org:read",
+                node: orgNode,
                 context: context,
                 state: state,
                 cache: cache,
                 app: app,
                 db: app.db)
-            #expect(!underTheCeiling, "the probe's answer must not be reused for the real question")
+            #expect(!underTheCeiling.allowed, "the probe's answer must not be reused for the real question")
         }
     }
 
@@ -322,10 +320,10 @@ final class CredentialRestrictionEnforcementTests {
             #expect(rows.count == 2)
             #expect(rows.allSatisfy { $0.credentialType == "cli_session" })
 
-            let allow = try #require(rows.first { $0.iamAction == "vm:read" })
-            #expect(allow.cedarDecision == "allow")
-            let deny = try #require(rows.first { $0.iamAction == "vm:delete" })
-            #expect(deny.cedarDecision == "deny")
+            let allow = try #require(rows.first { $0.action == "vm:read" })
+            #expect(allow.decision == "allow")
+            let deny = try #require(rows.first { $0.action == "vm:delete" })
+            #expect(deny.decision == "deny")
             #expect(deny.tier == CedarCheckDecision.credentialTier)
             #expect(deny.determiningPolicies.contains(CedarCheckDecision.credentialRestrictionPolicyID))
         }
@@ -486,11 +484,13 @@ final class CredentialRestrictionEnforcementTests {
 
             await app.iamDecisionRecorder.flush()
             let rows = try await IAMDecisionLog.query(on: app.db)
-                .filter(\.$cedarDecision == "credential_restricted")
+                .filter(\.$decision == "credential_restricted")
                 .all()
             #expect(rows.count == 1)
             let row = try #require(rows.first)
-            #expect(row.spicedbPermission == "credential:row_scoped_mutation")
+            #expect(row.action == nil)
+            #expect(row.nodeType == nil)
+            #expect(row.nodeID == nil)
             #expect(row.tier == CedarCheckDecision.credentialTier)
             #expect(row.credentialType == "api_key")
         }

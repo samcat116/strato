@@ -232,7 +232,8 @@ struct SandboxExecWebSocketController: RouteCollection {
 
             // Authorize before loading the sandbox, so unauthorized users
             // cannot probe arbitrary sandbox UUIDs via distinct errors.
-            let hasPermission = try await req.can("exec", on: "sandbox", id: sandboxId.uuidString)
+            let hasPermission = try await req.can(
+                "sandbox:exec", on: IAMNode(type: .sandbox, id: sandboxId))
 
             guard hasPermission else {
                 req.logger.warning(

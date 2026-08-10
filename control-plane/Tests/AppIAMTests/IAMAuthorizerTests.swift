@@ -7,11 +7,9 @@ import VaporTesting
 import AppTestSupport
 @testable import App
 
-/// IAM phase 5 (issue #482): the authoritative Cedar evaluator and the
-/// decision log it writes. These drive `IAMAuthorizer.checkLegacyVocabulary`
-/// (the boundary every legacy-vocabulary check site funnels through) against
-/// real trees, bindings, and the real engine, then assert on both the
-/// enforced verdict and the recorded row.
+/// The authoritative Cedar evaluator and the canonical decision log it writes.
+/// These checks exercise real trees, bindings, and the real engine, then
+/// assert on both the enforced verdict and the recorded row.
 @Suite("IAM Authorizer Tests", .serialized)
 final class IAMAuthorizerTests {
 
@@ -51,28 +49,26 @@ final class IAMAuthorizerTests {
         return Tree(org: org, project: project, vm: vm, user: user)
     }
 
-    /// Run one legacy-vocabulary check exactly as `req.can` would.
+    /// Run one canonical action/node check exactly as `req.can` would.
     private func check(
         _ app: Application,
         user: User,
-        permission: String,
-        resourceType: String,
-        resourceID: String,
+        action: String,
+        node: IAMNode,
         path: String = "/api/vms",
         state: IAMRequestAuthState = .detached,
         cache: IAMRequestCache? = nil
     ) async throws -> Bool {
-        try await IAMAuthorizer.checkLegacyVocabulary(
+        try await IAMAuthorizer.authorize(
             principal: .user(user.id!),
-            permission: permission,
-            resourceType: resourceType,
-            resourceID: resourceID,
+            action: action,
+            node: node,
             context: IAMCheckContext(path: path, method: "GET", requestID: "test-request"),
             state: state,
             cache: cache,
             app: app,
             db: app.db
-        )
+        ).allowed
     }
 
     /// The decision row is written by the batching drain; flush it out first.
@@ -94,15 +90,15 @@ final class IAMAuthorizerTests {
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
             let allowed = try await check(
-                app, user: tree.user, permission: "read", resourceType: "virtual_machine",
-                resourceID: tree.vm.id!.uuidString)
+                app, user: tree.user, action: "vm:read",
+                node: IAMNode(type: .virtualMachine, id: tree.vm.id!))
             #expect(allowed)
 
             let entry = try await onlyEntry(app)
-            #expect(entry.cedarDecision == "allow")
-            #expect(entry.spicedbDecision == IAMDecisionRecorder.noComparison)
-            #expect(entry.decisionsMatch == nil)
-            #expect(entry.iamAction == "vm:read")
+            #expect(entry.decision == "allow")
+            #expect(entry.action == "vm:read")
+            #expect(entry.nodeType == IAMNodeType.virtualMachine.rawValue)
+            #expect(entry.nodeID == tree.vm.id)
             #expect(entry.tier == "grant")
             #expect(entry.determiningPolicies == [RoleDescriptor.policyID(IAMRole.viewer.seededID)])
             #expect(entry.policyVersion == version)
@@ -121,15 +117,13 @@ final class IAMAuthorizerTests {
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
             let allowed = try await check(
-                app, user: tree.user, permission: "view_project", resourceType: "project",
-                resourceID: tree.project.id!.uuidString)
+                app, user: tree.user, action: "project:read",
+                node: IAMNode(type: .project, id: tree.project.id!))
             #expect(!allowed)
 
             let entry = try await onlyEntry(app)
-            #expect(entry.cedarDecision == "deny")
-            #expect(entry.spicedbDecision == IAMDecisionRecorder.noComparison)
-            #expect(entry.decisionsMatch == nil)
-            #expect(entry.iamAction == "project:read")
+            #expect(entry.decision == "deny")
+            #expect(entry.action == "project:read")
             #expect(entry.tier == "default-deny")
             #expect(entry.determiningPolicies.isEmpty)
         }
@@ -151,12 +145,12 @@ final class IAMAuthorizerTests {
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
             let allowed = try await check(
-                app, user: tree.user, permission: "start", resourceType: "virtual_machine",
-                resourceID: tree.vm.id!.uuidString)
+                app, user: tree.user, action: "vm:start",
+                node: IAMNode(type: .virtualMachine, id: tree.vm.id!))
             #expect(!allowed)
 
             let entry = try await onlyEntry(app)
-            #expect(entry.cedarDecision == "deny")
+            #expect(entry.decision == "deny")
             #expect(entry.tier == "guardrail")
             #expect(entry.determiningPolicies == ["guardrail-\(guardrail.id!.uuidString.lowercased())"])
         }
@@ -177,19 +171,18 @@ final class IAMAuthorizerTests {
             // `Request.authorizedVM`.
             let cache = IAMRequestCache()
             let state = IAMRequestAuthState()
+            let node = IAMNode(type: .virtualMachine, id: tree.vm.id!)
             let middleware = try await check(
-                app, user: tree.user, permission: "read", resourceType: "virtual_machine",
-                resourceID: tree.vm.id!.uuidString, state: state, cache: cache)
+                app, user: tree.user, action: "vm:read", node: node, state: state, cache: cache)
             let handler = try await check(
-                app, user: tree.user, permission: "read", resourceType: "virtual_machine",
-                resourceID: tree.vm.id!.uuidString, state: state, cache: cache)
+                app, user: tree.user, action: "vm:read", node: node, state: state, cache: cache)
             #expect(middleware)
             #expect(handler)
             // The memoized answer still counts as a decision this request made.
             #expect(state.decisionEvaluated.withLockedValue { $0 })
 
             let entry = try await onlyEntry(app)
-            #expect(entry.iamAction == "vm:read")
+            #expect(entry.action == "vm:read")
             // The row count is the point: one question, one decision, one row.
             try await Task.sleep(for: .milliseconds(250))
             let rows = try await IAMDecisionLog.query(on: app.db).count()
@@ -211,38 +204,13 @@ final class IAMAuthorizerTests {
             // but not start it, so a memo keyed on the resource alone would
             // hand back the wrong verdict.
             let cache = IAMRequestCache()
+            let node = IAMNode(type: .virtualMachine, id: tree.vm.id!)
             let read = try await check(
-                app, user: tree.user, permission: "read", resourceType: "virtual_machine",
-                resourceID: tree.vm.id!.uuidString, cache: cache)
+                app, user: tree.user, action: "vm:read", node: node, cache: cache)
             let start = try await check(
-                app, user: tree.user, permission: "start", resourceType: "virtual_machine",
-                resourceID: tree.vm.id!.uuidString, cache: cache)
+                app, user: tree.user, action: "vm:start", node: node, cache: cache)
             #expect(read)
             #expect(!start)
-        }
-    }
-
-    @Test("An untranslatable check fails closed and is recorded as a coverage gap")
-    func untranslatedDeniedAndRecorded() async throws {
-        try await withApp { app in
-            let tree = try await buildTree(app, prefix: "gap")
-            let version = try await PolicySetVersionService.current(on: app.db)
-            await app.cedarPolicySet.rebuild(version: version, on: app.db)
-
-            let state = IAMRequestAuthState()
-            let allowed = try await check(
-                app, user: tree.user, permission: "frobnicate", resourceType: "virtual_machine",
-                resourceID: tree.vm.id!.uuidString, state: state)
-            #expect(!allowed)
-            // Denial by translation gap still counts as a decision for the
-            // middleware's handler assertion.
-            #expect(state.decisionEvaluated.withLockedValue { $0 })
-
-            let entry = try await onlyEntry(app)
-            #expect(entry.cedarDecision == "untranslated")
-            #expect(entry.decisionsMatch == nil)
-            #expect(entry.iamAction == nil)
-            #expect(entry.spicedbDecision == IAMDecisionRecorder.noComparison)
         }
     }
 
@@ -259,7 +227,6 @@ final class IAMAuthorizerTests {
                 userID: UUID(),
                 action: "vm:read",
                 node: IAMNode(type: .virtualMachine, id: UUID()),
-                legacyEquivalent: nil,
                 context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: nil),
                 state: .detached,
                 app: app,
@@ -280,12 +247,12 @@ final class IAMAuthorizerTests {
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
             let allowed = try await check(
-                app, user: tree.user, permission: "view_organization", resourceType: "organization",
-                resourceID: tree.org.id!.uuidString)
+                app, user: tree.user, action: "org:read",
+                node: IAMNode(type: .organization, id: tree.org.id!))
             #expect(allowed)
 
             let entry = try await onlyEntry(app)
-            #expect(entry.cedarDecision == "allow")
+            #expect(entry.decision == "allow")
             #expect(entry.tier == "platform")
             #expect(entry.determiningPolicies == ["org-membership"])
         }
@@ -302,8 +269,8 @@ final class IAMAuthorizerTests {
 
             let state = IAMRequestAuthState()
             let allowed = try await check(
-                app, user: admin, permission: "read", resourceType: "virtual_machine",
-                resourceID: tree.vm.id!.uuidString, state: state)
+                app, user: admin, action: "vm:read",
+                node: IAMNode(type: .virtualMachine, id: tree.vm.id!), state: state)
             #expect(allowed)
             // The bypass flag now derives from the determining policy — this
             // is what AuditMiddleware records as an admin audit event.
@@ -315,8 +282,8 @@ final class IAMAuthorizerTests {
         }
     }
 
-    @Test("Request.can in the legacy vocabulary evaluates through Cedar and records the row")
-    func legacyRequestCanIsCedar() async throws {
+    @Test("Request.can evaluates a canonical action and node and records the row")
+    func canonicalRequestCanIsCedar() async throws {
         try await withApp { app in
             let tree = try await buildTree(app, prefix: "e2e")
             let version = try await PolicySetVersionService.current(on: app.db)
@@ -327,13 +294,12 @@ final class IAMAuthorizerTests {
 
             // No binding on the VM's project: Cedar denies.
             let allowed = try await request.can(
-                "read", on: "virtual_machine", id: tree.vm.id!.uuidString)
+                "vm:read", on: IAMNode(type: .virtualMachine, id: tree.vm.id!))
             #expect(!allowed)
 
             let entry = try await onlyEntry(app)
-            #expect(entry.cedarDecision == "deny")
-            #expect(entry.spicedbPermission == "read")
-            #expect(entry.spicedbDecision == IAMDecisionRecorder.noComparison)
+            #expect(entry.decision == "deny")
+            #expect(entry.action == "vm:read")
             #expect(entry.path == "/api/vms")
         }
     }
@@ -380,24 +346,31 @@ final class IAMAuthorizerTests {
             let version = try await PolicySetVersionService.current(on: app.db)
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
-            for permission in ["read", "update", "delete"] {
+            let node = IAMNode(type: .virtualMachine, id: tree.vm.id!)
+            for action in ["vm:read", "vm:update", "vm:delete"] {
                 _ = try await check(
-                    app, user: tree.user, permission: permission, resourceType: "virtual_machine",
-                    resourceID: tree.vm.id!.uuidString)
+                    app, user: tree.user, action: action, node: node)
             }
             await app.iamDecisionRecorder.flush()
 
-            let actions = try await IAMDecisionLog.query(on: app.db).all().compactMap(\.iamAction)
+            let actions = try await IAMDecisionLog.query(on: app.db).all().compactMap(\.action)
             #expect(Set(actions) == ["vm:read", "vm:update", "vm:delete"])
         }
     }
 
     private func sample(path: String) -> PendingIAMDecision {
-        .untranslated(
-            subject: UUID().uuidString,
-            equivalent: LegacyCheckEquivalent(
-                permission: "read", resourceType: "virtual_machine", resourceID: UUID().uuidString),
-            context: IAMCheckContext(path: path, method: "GET", requestID: "test-request"))
+        .evaluated(
+            IAMDecisionRecord(
+                subject: UUID().uuidString,
+                action: "vm:read",
+                node: IAMNode(type: .virtualMachine, id: UUID()),
+                organizationID: nil,
+                skippedConditionedBindings: 0,
+                decision: CedarCheckDecision(
+                    allowed: true, determiningPolicyIDs: ["role-viewer"], evaluationErrors: []),
+                policyVersion: 1,
+                credential: nil,
+                context: IAMCheckContext(path: path, method: "GET", requestID: "test-request")))
     }
 
     @Test("The retention sweep prunes rows older than the window")
@@ -407,8 +380,8 @@ final class IAMAuthorizerTests {
             let version = try await PolicySetVersionService.current(on: app.db)
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
             _ = try await check(
-                app, user: tree.user, permission: "view_organization", resourceType: "organization",
-                resourceID: tree.org.id!.uuidString)
+                app, user: tree.user, action: "org:read",
+                node: IAMNode(type: .organization, id: tree.org.id!))
             let entry = try await onlyEntry(app)
 
             // Age the row past the window, then sweep.
@@ -474,7 +447,6 @@ final class IAMAuthorizerBackstopTests {
                 userID: user.id!,
                 action: "network:read",
                 node: IAMNode(type: .network, id: network.id!),
-                legacyEquivalent: nil,
                 context: IAMCheckContext(path: "/api/networks", method: "GET", requestID: nil),
                 state: state,
                 app: app,
@@ -508,7 +480,7 @@ final class IAMAuthorizerBackstopTests {
             // project-less networks open to every authenticated user went away
             // with global networks themselves (issue #765).
             let ungranted = try await IAMAuthorizer.authorize(
-                userID: user.id!, action: "network:read", node: node, legacyEquivalent: nil,
+                userID: user.id!, action: "network:read", node: node,
                 context: context, state: .detached, app: app, db: app.db)
             #expect(!ungranted.allowed)
 
@@ -517,7 +489,7 @@ final class IAMAuthorizerBackstopTests {
                 nodeType: .project, nodeID: project.id!, createdBy: nil, on: app.db)
 
             let granted = try await IAMAuthorizer.authorize(
-                userID: user.id!, action: "network:read", node: node, legacyEquivalent: nil,
+                userID: user.id!, action: "network:read", node: node,
                 context: context, state: .detached, app: app, db: app.db)
             #expect(granted.allowed)
         }
@@ -607,7 +579,7 @@ final class IAMAuthorizerBackstopTests {
         #expect(M.classify(path: "/api/authorization/check") == .loginOnly)
         // Middleware-mapped resources.
         if case .resource(let guarded)? = M.classify(path: "/api/vms/\(id)/start") {
-            #expect(guarded.resourceType == "virtual_machine")
+            #expect(guarded.nodeType == .virtualMachine)
         } else {
             Issue.record("expected /api/vms to be resource-mapped")
         }
@@ -631,60 +603,90 @@ final class IAMAuthorizerBackstopTests {
             return
         }
 
-        func permission(_ path: String, _ method: HTTPMethod = .POST) -> String? {
-            M.permission(method: method, pathComponents: path.split(separator: "/"), resource: vms)
+        func action(_ path: String, _ method: HTTPMethod = .POST) -> String? {
+            M.action(method: method, pathComponents: path.split(separator: "/"), resource: vms)
         }
-        func sandboxPermission(_ path: String, _ method: HTTPMethod = .POST) -> String? {
-            M.permission(
+        func sandboxAction(_ path: String, _ method: HTTPMethod = .POST) -> String? {
+            M.action(
                 method: method, pathComponents: path.split(separator: "/"), resource: sandboxes)
         }
 
         // The two shapes the guest-agent exec endpoints will serve. The
         // failure this guards is silent: an unlisted POST subpath falls back
-        // to `update`, which translates to `vm:update` — an *editor*
-        // permission gating a root shell.
-        #expect(permission("/api/vms/\(id)/exec") == "exec")
-        #expect(permission("/api/vms/\(id)/actions/run") == "run")
-        let execAction = IAMActionTranslator.translate(
-            permission: "exec", resourceType: "virtual_machine", resourceID: id,
-            path: "/api/vms/\(id)/exec")
-        #expect(execAction?.action == "vm:exec")
-        let runAction = IAMActionTranslator.translate(
-            permission: "run", resourceType: "virtual_machine", resourceID: id,
-            path: "/api/vms/\(id)/actions/run")
-        #expect(runAction?.action == "vm:runCommand")
+        // to `vm:update` — an *editor* action gating a root shell.
+        #expect(action("/api/vms/\(id)/exec") == "vm:exec")
+        #expect(action("/api/vms/\(id)/actions/run") == "vm:runCommand")
 
         // An interactive session is a WebSocket upgrade — a GET — so the verb
         // has to win over the `read` default there too, or the shell is gated
-        // on a *viewer* permission. This is the live shape of the sandbox exec
+        // on a *viewer* action. This is the live shape of the sandbox exec
         // attach route, generalized to VMs by the guest-agent work.
-        #expect(permission("/api/vms/\(id)/exec", .GET) == "exec")
-        #expect(permission("/api/vms/\(id)/exec/\(id)/attach", .GET) == "exec")
-        #expect(sandboxPermission("/api/sandboxes/\(id)/exec/\(id)/attach", .GET) == "exec")
+        #expect(action("/api/vms/\(id)/exec", .GET) == "vm:exec")
+        #expect(action("/api/vms/\(id)/exec/\(id)/attach", .GET) == "vm:exec")
+        #expect(sandboxAction("/api/sandboxes/\(id)/exec/\(id)/attach", .GET) == "sandbox:exec")
 
         // The `/actions/` hop and the GET rule read the verb list and nothing
         // else: an unrecognized verb still falls back, and every existing
-        // shape keeps the permission it had.
-        #expect(permission("/api/vms/\(id)/actions/frobnicate") == "update")
-        #expect(permission("/api/vms/\(id)/actions") == "update")
-        #expect(permission("/api/vms/\(id)/start") == "start")
-        #expect(permission("/api/vms/\(id)/snapshots") == "snapshot")
-        #expect(permission("/api/vms/\(id)", .DELETE) == "delete")
-        #expect(permission("/api/vms", .GET) == "read")
+        // shape keeps the action it had.
+        #expect(action("/api/vms/\(id)/actions/frobnicate") == "vm:update")
+        #expect(action("/api/vms/\(id)/actions") == "vm:update")
+        #expect(action("/api/vms/\(id)/start") == "vm:start")
+        #expect(action("/api/vms/\(id)/snapshots") == "vm:snapshot")
+        #expect(action("/api/vms/\(id)", .DELETE) == "vm:delete")
+        #expect(action("/api/vms", .GET) == "vm:read")
         // GETs whose subpath is not a verb still read — including the VM
         // console, whose own `view_console` check is what gates it.
-        #expect(permission("/api/vms/\(id)/console", .GET) == "read")
-        #expect(permission("/api/vms/\(id)/snapshots", .GET) == "read")
-        #expect(sandboxPermission("/api/sandboxes/\(id)/status", .GET) == "read")
-        #expect(sandboxPermission("/api/sandboxes/\(id)/operations", .GET) == "read")
+        #expect(action("/api/vms/\(id)/console", .GET) == "vm:read")
+        #expect(action("/api/vms/\(id)/snapshots", .GET) == "vm:read")
+        #expect(sandboxAction("/api/sandboxes/\(id)/status", .GET) == "sandbox:read")
+        #expect(sandboxAction("/api/sandboxes/\(id)/operations", .GET) == "sandbox:read")
 
         // The hop is generic across guarded resources, not a VM special case:
         // pinned so a future `/actions/`-shaped sandbox route can't move its
         // gate without this failing first.
-        #expect(sandboxPermission("/api/sandboxes/\(id)/actions/exec") == "exec")
-        #expect(sandboxPermission("/api/sandboxes/\(id)/actions/frobnicate") == "update")
+        #expect(sandboxAction("/api/sandboxes/\(id)/actions/exec") == "sandbox:exec")
+        #expect(sandboxAction("/api/sandboxes/\(id)/actions/frobnicate") == "sandbox:update")
         // Sandboxes have no `run` verb — one resource gaining a verb must not
         // hand it to the other.
-        #expect(sandboxPermission("/api/sandboxes/\(id)/actions/run") == "update")
+        #expect(sandboxAction("/api/sandboxes/\(id)/actions/run") == "sandbox:update")
+    }
+
+    @Test("Guarded resource metadata preserves create and snapshot actions")
+    func guardedResourceCanonicalActionDistinctions() {
+        let id = UUID().uuidString
+        typealias M = AuthorizationMiddleware
+        guard case .resource(let vms)? = M.classify(path: "/api/vms"),
+            case .resource(let sandboxes)? = M.classify(path: "/api/sandboxes")
+        else {
+            Issue.record("expected VM and sandbox collections to be resource-mapped")
+            return
+        }
+
+        for resource in [vms, sandboxes] {
+            let actions =
+                [
+                    resource.readAction, resource.createAction, resource.updateAction,
+                    resource.deleteAction, resource.snapshotAction,
+                ] + Array(resource.actionVerbs.values)
+            for action in actions {
+                #expect(IAMRoleRegistry.allActions.contains(action))
+                #expect(
+                    CedarSchemaBuilder.resourceTypes(for: action).contains(
+                        resource.nodeType.cedarEntityType))
+            }
+        }
+
+        func action(_ path: String, _ method: HTTPMethod, _ resource: M.GuardedResource) -> String? {
+            M.action(method: method, pathComponents: path.split(separator: "/"), resource: resource)
+        }
+
+        #expect(action("/api/vms", .POST, vms) == "vm:create")
+        #expect(action("/api/sandboxes", .POST, sandboxes) == "sandbox:create")
+        #expect(action("/api/vms/\(id)/snapshots/\(id)", .DELETE, vms) == "vm:snapshot")
+        #expect(
+            action("/api/sandboxes/\(id)/snapshots/\(id)", .DELETE, sandboxes)
+                == "sandbox:snapshot")
+        #expect(action("/api/vms/\(id)", .DELETE, vms) == "vm:delete")
+        #expect(action("/api/sandboxes/\(id)", .DELETE, sandboxes) == "sandbox:delete")
     }
 }

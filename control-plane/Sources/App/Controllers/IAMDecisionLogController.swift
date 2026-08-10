@@ -3,10 +3,7 @@ import Foundation
 import SQLKit
 import Vapor
 
-/// The decision-log read API (IAM phase 4, issue #481). Originally what the
-/// SpiceDB/Cedar mismatch burn-down worked from; that comparison ended when
-/// #483 removed SpiceDB — the spicedb-named DTO fields survive for API
-/// compatibility, and new rows always carry a spicedbDecision of "none".
+/// The decision-log read API (IAM phase 4, issue #481).
 /// System-admin only: decision rows span organizations (a check names
 /// whatever the caller touched), and this is an operator tool, not a
 /// customer surface.
@@ -25,16 +22,11 @@ struct IAMDecisionLogController: RouteCollection {
         let path: String?
         let method: String?
         let subject: String
-        let spicedbPermission: String
-        let resourceType: String
-        let resourceID: String
-        let iamAction: String?
+        let action: String?
         let nodeType: String?
         let nodeID: UUID?
         let organizationID: UUID?
-        let spicedbDecision: String
-        let cedarDecision: String
-        let decisionsMatch: Bool?
+        let decision: String
         let determiningPolicies: [String]
         let tier: String?
         let cedarErrors: String?
@@ -52,16 +44,11 @@ struct IAMDecisionLogController: RouteCollection {
             self.path = entry.path
             self.method = entry.method
             self.subject = entry.subject
-            self.spicedbPermission = entry.spicedbPermission
-            self.resourceType = entry.resourceType
-            self.resourceID = entry.resourceID
-            self.iamAction = entry.iamAction
+            self.action = entry.action
             self.nodeType = entry.nodeType
             self.nodeID = entry.nodeID
             self.organizationID = entry.organizationID
-            self.spicedbDecision = entry.spicedbDecision
-            self.cedarDecision = entry.cedarDecision
-            self.decisionsMatch = entry.decisionsMatch
+            self.decision = entry.decision
             self.determiningPolicies = entry.determiningPolicies
             self.tier = entry.tier
             self.cedarErrors = entry.cedarErrors
@@ -73,20 +60,17 @@ struct IAMDecisionLogController: RouteCollection {
         }
     }
 
-    /// One burn-down bucket: every distinct way a (permission, action) pair
-    /// has decided, with how often.
+    /// One decision bucket, grouped by canonical action, verdict, and tier.
     struct DecisionSummaryDTO: Content {
-        let spicedbPermission: String
-        let iamAction: String?
-        let spicedbDecision: String
-        let cedarDecision: String
+        let action: String?
+        let decision: String
         let tier: String?
         let count: Int
     }
 
     // MARK: - Handlers
 
-    /// `GET /api/iam/decision-logs?mismatchesOnly=true&limit=100&before=<iso8601>`
+    /// `GET /api/iam/decision-logs?limit=100&before=<iso8601>`
     /// — newest first. `before` is the `createdAt` of the oldest row of the
     /// previous page, verbatim: responses encode dates as ISO8601, so the
     /// cursor a caller reads back is the cursor it can pass in.
@@ -94,14 +78,10 @@ struct IAMDecisionLogController: RouteCollection {
         try await requireSystemAdmin(req)
 
         let limit = try req.intQuery("limit", default: 100, in: 1...500)
-        let mismatchesOnly = (try? req.query.get(Bool.self, at: "mismatchesOnly")) ?? false
 
         let query = IAMDecisionLog.query(on: req.db)
             .sort(\.$createdAt, .descending)
             .limit(limit)
-        if mismatchesOnly {
-            query.filter(\.$decisionsMatch == false)
-        }
         if let before = try timestampQuery(req, "before") {
             query.filter(\.$createdAt < before)
         }
@@ -110,9 +90,8 @@ struct IAMDecisionLogController: RouteCollection {
     }
 
     /// `GET /api/iam/decision-logs/summary?sinceHours=24&limit=200` — the
-    /// burn-down view: decision counts bucketed by permission, action, both
-    /// verdicts, and tier, largest buckets first. One glance says which
-    /// mismatch classes remain and how big each is.
+    /// decision counts bucketed by canonical action, verdict, and tier,
+    /// largest buckets first.
     ///
     /// Time-bounded on purpose. The log takes a row per authorization check,
     /// so an unbounded `GROUP BY` is a sequential scan over the whole retention
@@ -130,21 +109,18 @@ struct IAMDecisionLogController: RouteCollection {
         let since = Date().addingTimeInterval(-Double(sinceHours) * 3600)
 
         struct Row: Decodable {
-            let spicedb_permission: String
-            let iam_action: String?
-            let spicedb_decision: String
-            let cedar_decision: String
+            let action: String?
+            let decision: String
             let tier: String?
             let count: Int
         }
 
         let rows = try await sql.raw(
             """
-            SELECT spicedb_permission, iam_action, spicedb_decision, cedar_decision, tier,
-                   COUNT(*) AS count
+            SELECT action, decision, tier, COUNT(*) AS count
             FROM iam_decision_logs
             WHERE created_at >= \(bind: since)
-            GROUP BY spicedb_permission, iam_action, spicedb_decision, cedar_decision, tier
+            GROUP BY action, decision, tier
             ORDER BY count DESC
             LIMIT \(bind: limit)
             """
@@ -152,12 +128,7 @@ struct IAMDecisionLogController: RouteCollection {
 
         return rows.map {
             DecisionSummaryDTO(
-                spicedbPermission: $0.spicedb_permission,
-                iamAction: $0.iam_action,
-                spicedbDecision: $0.spicedb_decision,
-                cedarDecision: $0.cedar_decision,
-                tier: $0.tier,
-                count: $0.count
+                action: $0.action, decision: $0.decision, tier: $0.tier, count: $0.count
             )
         }
     }

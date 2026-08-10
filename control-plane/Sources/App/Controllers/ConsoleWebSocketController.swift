@@ -167,7 +167,8 @@ struct ConsoleWebSocketController: RouteCollection {
             // A read-only credential is refused by the evaluator, with a
             // decision row — and CLI sessions, which the old carve-out never
             // looked at, are covered by the same path.
-            let hasPermission = try await req.can("view_console", on: "virtual_machine", id: vmId.uuidString)
+            let hasPermission = try await req.can(
+                "vm:viewConsole", on: IAMNode(type: .virtualMachine, id: vmId))
 
             guard hasPermission else {
                 req.logger.warning(

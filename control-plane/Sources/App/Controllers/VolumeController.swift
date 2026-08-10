@@ -55,7 +55,7 @@ struct VolumeController: RouteCollection {
             let projectId = UUID(uuidString: projectIdString)
         {
             // Verify user has access to the project
-            let hasAccess = try await req.can("view_project", on: "project", id: projectId.uuidString)
+            let hasAccess = try await req.can("project:read", on: IAMNode(type: .project, id: projectId))
 
             guard hasAccess else {
                 throw Abort(.forbidden, reason: "You don't have access to this project")
@@ -111,7 +111,7 @@ struct VolumeController: RouteCollection {
 
         let project = try await req.authorizedProjectForCreate(
             requested: request.projectId,
-            action: "create_volume", resourceKind: "volumes")
+            action: "volume:create", resourceKind: "volumes")
         let projectId = try project.requireID()
         // Which of the project's environments the bytes are charged to
         // (STR-181). Volumes have never carried one, which is the structural
@@ -134,7 +134,8 @@ struct VolumeController: RouteCollection {
             // volume source: provisioning hands the agent a signed download URL
             // for it, so accepting an unauthorized image ID would let a user
             // materialize another project's image into their own volume.
-            let hasImagePermission = try await req.can("read", on: "image", id: sourceImageId.uuidString)
+            let hasImagePermission = try await req.can(
+                "image:read", on: IAMNode(type: .image, id: sourceImageId))
 
             guard hasImagePermission else {
                 throw Abort(.forbidden, reason: "Access denied to image")
@@ -277,7 +278,7 @@ struct VolumeController: RouteCollection {
     /// GET /api/volumes/:volumeId
     @Sendable
     func getVolume(req: Request) async throws -> VolumeResponse {
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "read")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:read")
         return VolumeResponse(from: volume)
     }
 
@@ -287,7 +288,7 @@ struct VolumeController: RouteCollection {
     /// PUT /api/volumes/:volumeId
     @Sendable
     func updateVolume(req: Request) async throws -> VolumeResponse {
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "update")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:update")
         let request = try req.content.decodeValidated(UpdateVolumeRequest.self)
 
         if let name = request.name {
@@ -316,7 +317,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func deleteVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "delete")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:delete")
 
         // Only an attached volume is undeletable. Every other state is fair
         // game: deletion is level-triggered now and the agent's teardown is
@@ -400,7 +401,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func attachVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "attach")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:attach")
         let request = try req.content.decode(AttachVolumeRequest.self)
 
         guard volume.canAttach else {
@@ -412,7 +413,7 @@ struct VolumeController: RouteCollection {
         // Attaching changes the VM, so the caller needs update on it too. An
         // unreachable VM is answered as absent whether it is missing or merely
         // forbidden — see `reachableVM` (issue #881).
-        let vm = try await req.reachableVM(request.vmId, permission: "update")
+        let vm = try await req.reachableVM(request.vmId, action: "vm:update")
 
         // Permission on both sides isn't enough: a caller holding rights in two
         // projects could otherwise move a volume's data across the project
@@ -566,7 +567,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func detachVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "detach")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:detach")
 
         guard volume.canDetach, let vmId = volume.$vm.id else {
             throw Abort(.conflict, reason: "Volume is not attached to any VM")
@@ -615,7 +616,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func resizeVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "resize")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:update")
         let request = try req.content.decode(ResizeVolumeRequest.self)
 
         // Grow-only, but no longer detach-only (STR-19). Whether an attached
@@ -740,7 +741,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func setIOLimits(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "update")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:update")
         let request = try req.content.decode(SetVolumeIOLimitsRequest.self)
 
         guard volume.desiredStatus == .present else {
@@ -789,7 +790,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func createSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "snapshot")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:snapshot")
         let request = try req.content.decodeValidated(CreateSnapshotRequest.self)
 
         // Validate volume can be snapshotted. An attached volume gets its own
@@ -883,7 +884,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func cloneVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let sourceVolume = try await fetchVolumeWithPermission(req: req, permission: "clone")
+        let sourceVolume = try await fetchVolumeWithAction(req: req, action: "volume:clone")
         let request = try req.content.decodeValidated(CloneVolumeRequest.self)
 
         // Cloning reads the source's bytes, which is why it keeps a
@@ -995,7 +996,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func listSnapshots(req: Request) async throws -> PagedResponse<SnapshotResponse> {
         let paging = try ListPaging.decode(from: req)
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "read")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:read")
 
         let snapshots = try await VolumeSnapshot.query(on: req.db)
             .filter(\.$volume.$id == volume.id!)
@@ -1017,7 +1018,7 @@ struct VolumeController: RouteCollection {
     @Sendable
     func deleteSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let volume = try await fetchVolumeWithPermission(req: req, permission: "read")
+        let volume = try await fetchVolumeWithAction(req: req, action: "volume:read")
 
         guard let snapshotIdString = req.parameters.get("snapshotId"),
             let snapshotId = UUID(uuidString: snapshotIdString)
@@ -1034,7 +1035,8 @@ struct VolumeController: RouteCollection {
             throw Abort(.notFound, reason: "Snapshot not found")
         }
 
-        let hasPermission = try await req.can("delete", on: "volume_snapshot", id: snapshotId.uuidString)
+        let hasPermission = try await req.can(
+            "volume:snapshot", on: IAMNode(type: .volumeSnapshot, id: snapshotId))
         guard hasPermission else {
             throw Abort(.forbidden, reason: "You don't have permission to delete this snapshot")
         }
@@ -1075,12 +1077,12 @@ struct VolumeController: RouteCollection {
     }
 
     /// Fetch a volume and check permission, mirroring
-    /// `fetchVMWithPermission`/`fetchSandboxWithPermission`.
-    private func fetchVolumeWithPermission(req: Request, permission: String) async throws -> Volume {
+    /// `fetchVMWithAction`/`fetchSandboxWithAction`.
+    private func fetchVolumeWithAction(req: Request, action: String) async throws -> Volume {
         guard let volumeId = req.parameters.get("volumeId", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid volume ID")
         }
 
-        return try await req.authorizedVolume(volumeId, permission: permission)
+        return try await req.authorizedVolume(volumeId, action: action)
     }
 }

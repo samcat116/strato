@@ -54,28 +54,21 @@ final class IAMDecisionLogEndpointTests {
 
     /// Insert one row, optionally backdated. `@Timestamp(on: .create)` stamps
     /// `createdAt` on insert, so an explicit age is a second save.
-    /// The `spicedb*`-named fields are historical column names kept on the
-    /// model; the API filters on them regardless of who wrote the row.
     @discardableResult
     private func insert(
         _ app: Application,
-        permission: String = "read",
         action: String? = "vm:read",
-        spicedb: String = "allow",
-        cedar: String = "allow",
-        match: Bool? = true,
+        nodeType: IAMNodeType? = .virtualMachine,
+        decision: String = "allow",
         tier: String? = "grant",
         age: TimeInterval = 0
     ) async throws -> IAMDecisionLog {
         let entry = IAMDecisionLog()
         entry.subject = UUID().uuidString
-        entry.spicedbPermission = permission
-        entry.resourceType = "virtual_machine"
-        entry.resourceID = UUID().uuidString
-        entry.iamAction = action
-        entry.spicedbDecision = spicedb
-        entry.cedarDecision = cedar
-        entry.decisionsMatch = match
+        entry.action = action
+        entry.nodeType = nodeType?.rawValue
+        entry.nodeID = nodeType == nil ? nil : UUID()
+        entry.decision = decision
         entry.tier = tier
         entry.path = "/api/vms"
         entry.method = "GET"
@@ -127,8 +120,8 @@ final class IAMDecisionLogEndpointTests {
     @Test("A system admin lists decision rows newest first")
     func listsNewestFirst() async throws {
         try await withApp { app, fixture in
-            try await insert(app, permission: "old", age: 3600)
-            try await insert(app, permission: "new")
+            try await insert(app, action: "vm:read", age: 3600)
+            try await insert(app, action: "vm:update")
 
             try await app.test(
                 .GET, "/api/iam/decision-logs",
@@ -139,35 +132,37 @@ final class IAMDecisionLogEndpointTests {
                     #expect(res.status == .ok)
                     let rows = try res.content.decode([IAMDecisionLogController.DecisionLogDTO].self)
                     #expect(rows.count == 2)
-                    #expect(rows.first?.spicedbPermission == "new")
-                    #expect(rows.last?.spicedbPermission == "old")
+                    #expect(rows.first?.action == "vm:update")
+                    #expect(rows.last?.action == "vm:read")
+                    #expect(rows.first?.nodeType == IAMNodeType.virtualMachine.rawValue)
+                    #expect(rows.first?.decision == "allow")
                 })
         }
     }
 
-    @Test("mismatchesOnly returns disagreements and excludes verdict-less rows")
-    func mismatchesOnlyFilters() async throws {
+    @Test("The API returns canonical decisions, including node-less credential refusals")
+    func canonicalDecisionShapes() async throws {
         try await withApp { app, fixture in
-            try await insert(app, permission: "agreed", match: true)
+            try await insert(app, action: "vm:delete", decision: "deny", tier: "default-deny")
             try await insert(
-                app, permission: "disagreed", spicedb: "allow", cedar: "deny", match: false,
-                tier: "default-deny")
-            // No Cedar verdict at all: decisions_match is NULL, which must not
-            // read as a mismatch.
-            try await insert(
-                app, permission: "untranslated", action: nil, cedar: "untranslated", match: nil,
-                tier: nil)
+                app, action: nil, nodeType: nil, decision: "credential_restricted",
+                tier: "credential")
 
             try await app.test(
-                .GET, "/api/iam/decision-logs?mismatchesOnly=true",
+                .GET, "/api/iam/decision-logs",
                 beforeRequest: { req in
                     req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
                 },
                 afterResponse: { res in
                     #expect(res.status == .ok)
                     let rows = try res.content.decode([IAMDecisionLogController.DecisionLogDTO].self)
-                    #expect(rows.count == 1)
-                    #expect(rows.first?.spicedbPermission == "disagreed")
+                    #expect(rows.count == 2)
+                    let denied = try #require(rows.first { $0.action == "vm:delete" })
+                    #expect(denied.decision == "deny")
+                    #expect(denied.nodeType == IAMNodeType.virtualMachine.rawValue)
+                    let restricted = try #require(rows.first { $0.decision == "credential_restricted" })
+                    #expect(restricted.action == nil)
+                    #expect(restricted.nodeType == nil)
                 })
         }
     }
@@ -179,8 +174,8 @@ final class IAMDecisionLogEndpointTests {
     @Test("An ISO8601 before-cursor actually pages")
     func beforeCursorPages() async throws {
         try await withApp { app, fixture in
-            try await insert(app, permission: "older", age: 7200)
-            try await insert(app, permission: "newer")
+            try await insert(app, action: "vm:read", age: 7200)
+            try await insert(app, action: "vm:update")
 
             let cursor = iso8601(Date().addingTimeInterval(-3600))
             let encoded =
@@ -195,7 +190,7 @@ final class IAMDecisionLogEndpointTests {
                     #expect(res.status == .ok)
                     let rows = try res.content.decode([IAMDecisionLogController.DecisionLogDTO].self)
                     #expect(rows.count == 1)
-                    #expect(rows.first?.spicedbPermission == "older")
+                    #expect(rows.first?.action == "vm:read")
                 })
         }
     }
@@ -222,14 +217,13 @@ final class IAMDecisionLogEndpointTests {
 
     // MARK: - Summary
 
-    @Test("The summary buckets decisions by permission, verdicts, and tier")
+    @Test("The summary buckets decisions by canonical action, verdict, and tier")
     func summaryBuckets() async throws {
         try await withApp { app, fixture in
-            try await insert(app, permission: "read", match: true)
-            try await insert(app, permission: "read", match: true)
+            try await insert(app, action: "vm:read")
+            try await insert(app, action: "vm:read")
             try await insert(
-                app, permission: "start", spicedb: "allow", cedar: "deny", match: false,
-                tier: "guardrail")
+                app, action: "vm:start", decision: "deny", tier: "guardrail")
 
             try await app.test(
                 .GET, "/api/iam/decision-logs/summary",
@@ -242,11 +236,11 @@ final class IAMDecisionLogEndpointTests {
                         [IAMDecisionLogController.DecisionSummaryDTO].self)
                     #expect(buckets.count == 2)
                     // Largest bucket first.
-                    #expect(buckets.first?.spicedbPermission == "read")
+                    #expect(buckets.first?.action == "vm:read")
                     #expect(buckets.first?.count == 2)
-                    let guardrail = buckets.first { $0.spicedbPermission == "start" }
+                    let guardrail = buckets.first { $0.action == "vm:start" }
                     #expect(guardrail?.count == 1)
-                    #expect(guardrail?.cedarDecision == "deny")
+                    #expect(guardrail?.decision == "deny")
                     #expect(guardrail?.tier == "guardrail")
                 })
         }
@@ -257,8 +251,8 @@ final class IAMDecisionLogEndpointTests {
     @Test("The summary window excludes rows older than sinceHours")
     func summaryRespectsWindow() async throws {
         try await withApp { app, fixture in
-            try await insert(app, permission: "recent")
-            try await insert(app, permission: "ancient", age: 60 * 60 * 72)
+            try await insert(app, action: "vm:read")
+            try await insert(app, action: "vm:update", age: 60 * 60 * 72)
 
             try await app.test(
                 .GET, "/api/iam/decision-logs/summary?sinceHours=24",
@@ -270,7 +264,7 @@ final class IAMDecisionLogEndpointTests {
                     let buckets = try res.content.decode(
                         [IAMDecisionLogController.DecisionSummaryDTO].self)
                     #expect(buckets.count == 1)
-                    #expect(buckets.first?.spicedbPermission == "recent")
+                    #expect(buckets.first?.action == "vm:read")
                 })
 
             // Widen the window and the old row comes back — proving the

@@ -38,7 +38,7 @@ extension VMController {
     /// changes here.
     func createSnapshot(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Checkpointing a VM")
-        let vm = try await authorizedVM(req: req, permission: "snapshot")
+        let vm = try await authorizedVM(req: req, action: "vm:snapshot")
         let vmID = try vm.requireID()
 
         // The body is optional, but a body that *is* sent must decode: masking
@@ -141,7 +141,7 @@ extension VMController {
     /// Query params: limit/offset (optional) — select the page.
     func listSnapshots(req: Request) async throws -> PagedResponse<VMSnapshotResponse> {
         let paging = try ListPaging.decode(from: req)
-        let vm = try await authorizedVM(req: req, permission: "read")
+        let vm = try await authorizedVM(req: req, action: "vm:read")
         let vmID = try vm.requireID()
 
         let snapshots = try await VMSnapshot.query(on: req.db)
@@ -162,11 +162,12 @@ extension VMController {
     /// durable across a control-plane restart.
     func deleteSnapshot(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Deleting a VM checkpoint")
-        let vm = try await authorizedVM(req: req, permission: "read")
+        let vm = try await authorizedVM(req: req, action: "vm:read")
         let snapshot = try await fetchSnapshot(req: req, vm: vm)
         let snapshotID = try snapshot.requireID()
 
-        let canDelete = try await req.can("delete", on: "vm_snapshot", id: snapshotID.uuidString)
+        let canDelete = try await req.can(
+            "vm:snapshot", on: IAMNode(type: .vmSnapshot, id: snapshotID))
         guard canDelete else {
             throw Abort(.forbidden, reason: "You don't have permission to delete this checkpoint")
         }
@@ -190,12 +191,13 @@ extension VMController {
     /// checkpoint, because the machine state lives inside disks on that host.
     func restoreSnapshot(req: Request) async throws -> Response {
         let user = try req.requireActingUser("Restoring a VM checkpoint")
-        let vm = try await authorizedVM(req: req, permission: "read")
+        let vm = try await authorizedVM(req: req, action: "vm:read")
         let snapshot = try await fetchSnapshot(req: req, vm: vm)
         let snapshotID = try snapshot.requireID()
         let vmID = try vm.requireID()
 
-        let canRestore = try await req.can("restore", on: "vm_snapshot", id: snapshotID.uuidString)
+        let canRestore = try await req.can(
+            "vm:restore", on: IAMNode(type: .vmSnapshot, id: snapshotID))
         guard canRestore else {
             throw Abort(.forbidden, reason: "You don't have permission to restore this checkpoint")
         }
@@ -257,12 +259,12 @@ extension VMController {
     // MARK: - Shared
 
     /// Fetch the :vmID VM and enforce a permission on it. Mirrors
-    /// `VMController.fetchVMWithPermission`, which is private to that file.
-    private func authorizedVM(req: Request, permission: String) async throws -> VM {
+    /// `VMController.fetchVMWithAction`, which is private to that file.
+    private func authorizedVM(req: Request, action: String) async throws -> VM {
         guard let vmID = req.parameters.get("vmID", as: UUID.self) else {
             throw Abort(.badRequest, reason: "Invalid VM ID")
         }
-        return try await req.authorizedVM(vmID, permission: permission)
+        return try await req.authorizedVM(vmID, action: action)
     }
 
     /// Fetch the :snapshotID checkpoint and confirm it belongs to `vm` (the

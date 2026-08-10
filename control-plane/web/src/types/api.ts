@@ -326,15 +326,17 @@ export interface ProjectMembers {
   groups: ProjectGroupGrant[];
 }
 
-// Batch permission check ("can I?")
-export interface PermissionCheckItem {
+// Batch canonical action check ("can I?")
+export interface ActionCheckItem {
   key: string;
-  resourceType: string;
-  resourceId: string;
-  permission: string;
+  action: string;
+  node: {
+    type: string;
+    id: string;
+  };
 }
 
-export interface PermissionCheckResponse {
+export interface ActionCheckResponse {
   results: Record<string, boolean>;
 }
 

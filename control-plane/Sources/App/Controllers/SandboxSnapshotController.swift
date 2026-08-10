@@ -31,7 +31,7 @@ extension SandboxController {
     /// resumes — or stays stopped when `stop` is true (checkpoint-and-stop).
     func createSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "snapshot")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:snapshot")
         let sandboxID = try sandbox.requireID()
         // The body is optional, but a body that *is* sent must decode:
         // masking a malformed `stop` behind defaults would silently run the
@@ -167,7 +167,7 @@ extension SandboxController {
     func listSnapshots(req: Request) async throws -> PagedResponse<SandboxSnapshotResponse> {
         let paging = try ListPaging.decode(from: req)
         _ = try req.auth.require(User.self)
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
         let sandboxID = try sandbox.requireID()
 
         let snapshots = try await SandboxSnapshot.query(on: req.db)
@@ -188,11 +188,12 @@ extension SandboxController {
     /// removes the exported copy and the role bindings at that point.
     func deleteSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
         let snapshot = try await fetchSnapshot(req: req, sandbox: sandbox)
         let snapshotID = try snapshot.requireID()
 
-        let canDelete = try await req.can("delete", on: "sandbox_snapshot", id: snapshotID.uuidString)
+        let canDelete = try await req.can(
+            "sandbox:snapshot", on: IAMNode(type: .sandboxSnapshot, id: snapshotID))
         guard canDelete else {
             throw Abort(.forbidden, reason: "You don't have permission to delete this snapshot")
         }
@@ -227,12 +228,13 @@ extension SandboxController {
     /// IPAM allocations were never released, so its addresses still hold).
     func restoreSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
         let snapshot = try await fetchSnapshot(req: req, sandbox: sandbox)
         let snapshotID = try snapshot.requireID()
         let sandboxID = try sandbox.requireID()
 
-        let canRestore = try await req.can("restore", on: "sandbox_snapshot", id: snapshotID.uuidString)
+        let canRestore = try await req.can(
+            "sandbox:restore", on: IAMNode(type: .sandboxSnapshot, id: snapshotID))
         guard canRestore else {
             throw Abort(.forbidden, reason: "You don't have permission to restore this snapshot")
         }

@@ -203,9 +203,7 @@ tags:
       workload registry mapping SPIFFE identities to registered principals.
   - name: IAM
     description: >-
-      Permission checks, guardrails, and decision logs. Some field names
-      (`spicedbPermission`, `spicedbDecision`) are historical, kept from the
-      pre-Cedar migration for API compatibility.
+      Canonical action checks, guardrails, and decision logs.
   - name: Audit
     description: Audit event history.
   - name: OIDC
@@ -5713,33 +5711,30 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
   /api/authorization/check:
     post:
-      operationId: checkPermissions
-      summary: Check a batch of permissions
+      operationId: checkActions
+      summary: Check a batch of canonical actions
       description: >-
-        Answers up to 50 permission questions in one call, keyed by an opaque
+        Answers up to 50 action/node questions in one call, keyed by an opaque
         client-chosen `key` so the caller can correlate each answer with the UI
-        element it gates. Two forms: without `principal` the caller asks about
-        themselves and the answer comes from the same Cedar evaluation that
-        gates requests (`permission` is a legacy permission name such as
-        `manage_project`); with `principal` the answer comes from the IAM
-        role-bindings table plus the resource tree, so it agrees with
-        `who-can` (`permission` is an IAM action name such as `vm:start`). System administrators always receive `true` for the
-        self-check form. The `principal` form additionally requires admin on
-        each named resource or a container above it.
+        element it gates. Every item names a registry action such as `vm:start`
+        and an IAM node. Without `principal` the caller asks about themselves;
+        with `principal` the same evaluator checks that principal. The latter
+        form additionally requires admin on each named node or a container
+        above it. Guardrails still apply to system administrators.
       tags: [IAM]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/IAMPermissionCheckRequest"
+              $ref: "#/components/schemas/IAMActionCheckRequest"
       responses:
         "200":
           description: One boolean per submitted check, keyed by its `key`.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IAMPermissionCheckResponse"
+                $ref: "#/components/schemas/IAMActionCheckResponse"
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -6245,7 +6240,6 @@ paths:
         customer surface.
       tags: [IAM]
       parameters:
-        - $ref: "#/components/parameters/DecisionLogMismatchesOnlyQuery"
         - $ref: "#/components/parameters/DecisionLogLimitQuery"
         - $ref: "#/components/parameters/DecisionLogBeforeQuery"
       responses:
@@ -6263,9 +6257,9 @@ paths:
   /api/iam/decision-logs/summary:
     get:
       operationId: getIAMDecisionLogSummary
-      summary: Summarize decision-log entries into burn-down buckets
+      summary: Summarize decision-log entries by canonical decision
       description: >-
-        Groups decision rows by permission, IAM action, verdict, and tier,
+        Groups decision rows by canonical action, verdict, and tier,
         largest buckets first, so one glance says how each check class is
         deciding. Time-bounded on purpose (`sinceHours`): the log takes a row
         per authorization check, so an unbounded aggregate would scan the
@@ -8336,14 +8330,6 @@ components:
       schema:
         type: string
         format: uuid
-    DecisionLogMismatchesOnlyQuery:
-      name: mismatchesOnly
-      in: query
-      required: false
-      description: Return only entries where the two engines disagreed.
-      schema:
-        type: boolean
-        default: false
     DecisionLogLimitQuery:
       name: limit
       in: query
@@ -14372,26 +14358,21 @@ components:
           type: string
           format: uuid
 
-    IAMPermissionCheckItem:
+    IAMActionCheckItem:
       type: object
-      description: One permission question in a batch check.
-      required: [key, resourceType, resourceId, permission]
+      description: One canonical action/node question in a batch check.
+      required: [key, action, node]
       properties:
         key:
           type: string
           description: Opaque client-chosen id echoed back in the response.
-        resourceType:
-          $ref: "#/components/schemas/IAMNodeType"
-        resourceId:
+        action:
           type: string
-          format: uuid
-        permission:
-          type: string
-          description: >-
-            A legacy permission name (`manage_project`) for a self-check, or
-            an IAM action name (`vm:start`) when `principal` is set.
+          description: A registered IAM action, e.g. `vm:start`.
+        node:
+          $ref: "#/components/schemas/IAMNode"
 
-    IAMPermissionCheckRequest:
+    IAMActionCheckRequest:
       type: object
       required: [checks]
       properties:
@@ -14399,16 +14380,16 @@ components:
           type: array
           maxItems: 50
           items:
-            $ref: "#/components/schemas/IAMPermissionCheckItem"
+            $ref: "#/components/schemas/IAMActionCheckItem"
         principal:
           allOf:
             - $ref: "#/components/schemas/IAMPrincipalRef"
           description: >-
             When present, the checks are evaluated for this principal instead
-            of the caller, and answered from the role-bindings table. Requires
-            admin on each named resource or a container above it.
+            of the caller. Requires admin on each named node or a container
+            above it.
 
-    IAMPermissionCheckResponse:
+    IAMActionCheckResponse:
       type: object
       required: [results]
       properties:
@@ -14420,16 +14401,13 @@ components:
 
     IAMWhoCanRequest:
       type: object
-      required: [resourceType, resourceId, action]
+      required: [action, node]
       properties:
-        resourceType:
-          $ref: "#/components/schemas/IAMNodeType"
-        resourceId:
-          type: string
-          format: uuid
         action:
           type: string
           description: An IAM action name, e.g. `vm:start`.
+        node:
+          $ref: "#/components/schemas/IAMNode"
 
     IAMWhoCanSource:
       type: string
@@ -14526,12 +14504,12 @@ components:
     IAMWhoCanResponse:
       type: object
       required:
-        [resource, action, ancestors, principals, openToAllAuthenticatedUsers, authoredPolicies, authoredPolicyCaveat, ceilings]
+        [action, node, ancestors, principals, openToAllAuthenticatedUsers, authoredPolicies, authoredPolicyCaveat, ceilings]
       properties:
-        resource:
-          $ref: "#/components/schemas/IAMNode"
         action:
           type: string
+        node:
+          $ref: "#/components/schemas/IAMNode"
         ancestors:
           type: array
           description: The chain the answer was assembled from, resource first.
@@ -15274,20 +15252,15 @@ components:
     IAMDecisionLogEntry:
       type: object
       description: >-
-        One authorization decision record. The `spicedb*` field names are
-        historical (kept for API compatibility): `spicedbPermission` carries
-        the permission as asked at the check site, and `spicedbDecision` is
-        always `none` on rows written after the SpiceDB removal (#483).
+        One canonical authorization decision record. `action`, `nodeType`,
+        and `nodeID` identify the exact question Cedar evaluated. A node-less
+        credential refusal has no action or node.
         `credentialType`/`credentialID` name the API key or CLI session the
         request arrived on, on allows as well as denies (STR-115).
       required:
         - id
         - subject
-        - spicedbPermission
-        - resourceType
-        - resourceID
-        - spicedbDecision
-        - cedarDecision
+        - decision
         - determiningPolicies
       properties:
         id:
@@ -15302,15 +15275,9 @@ components:
         subject:
           type: string
           description: The principal the check was made for.
-        spicedbPermission:
+        action:
           type: string
-        resourceType:
-          type: string
-        resourceID:
-          type: string
-        iamAction:
-          type: string
-          description: The IAM action the legacy permission was mapped to, when one exists.
+          description: The canonical action Cedar evaluated.
         nodeType:
           type: string
         nodeID:
@@ -15328,12 +15295,11 @@ components:
         organizationID:
           type: string
           format: uuid
-        spicedbDecision:
+        decision:
           type: string
-        cedarDecision:
-          type: string
-        decisionsMatch:
-          type: boolean
+          description: >-
+            `allow`, `deny`, or `credential_restricted` for current rows.
+            Older retained rows can contain a historical decision value.
         determiningPolicies:
           type: array
           items:
@@ -15355,17 +15321,12 @@ components:
     IAMDecisionSummaryBucket:
       type: object
       description: >-
-        One burn-down bucket: a distinct way a (permission, action) pair has
-        decided, with how often.
-      required: [spicedbPermission, spicedbDecision, cedarDecision, count]
+        One decision bucket grouped by canonical action, verdict, and tier.
+      required: [decision, count]
       properties:
-        spicedbPermission:
+        action:
           type: string
-        iamAction:
-          type: string
-        spicedbDecision:
-          type: string
-        cedarDecision:
+        decision:
           type: string
         tier:
           type: string

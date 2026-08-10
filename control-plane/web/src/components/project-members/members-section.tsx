@@ -23,13 +23,12 @@ export function ProjectMembersSection({
   const { data, isLoading } = useProjectMembers(projectId);
   const { permissions } = usePermissions([
     {
-      key: "manage_project",
-      resourceType: "project",
-      resourceId: projectId,
-      permission: "manage_project",
+      key: "set_policy",
+      action: "iam:setPolicy",
+      node: { type: "project", id: projectId },
     },
   ]);
-  const canManage = permissions.manage_project;
+  const canManage = permissions.set_policy;
 
   const [addUserOpen, setAddUserOpen] = useState(false);
   const [addGroupOpen, setAddGroupOpen] = useState(false);

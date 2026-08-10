@@ -62,38 +62,46 @@ struct OperationController: RouteCollection {
         switch resourceKind {
         case .virtualMachine:
             if try await VM.find(resourceID, on: req.db) != nil {
-                _ = try await req.authorizedVM(resourceID, permission: "read")
+                _ = try await req.authorizedVM(resourceID, action: "vm:read")
                 return
             }
         case .sandbox:
             if try await Sandbox.find(resourceID, on: req.db) != nil {
-                _ = try await req.authorizedSandbox(resourceID, permission: "read")
+                _ = try await req.authorizedSandbox(resourceID, action: "sandbox:read")
                 return
             }
         case .volume:
             if try await Volume.find(resourceID, on: req.db) != nil {
-                _ = try await req.authorizedVolume(resourceID, permission: "read")
+                _ = try await req.authorizedVolume(resourceID, action: "volume:read")
                 return
             }
         // Snapshot artifacts (STR-150) authorize against their own Cedar node,
         // exactly as their `GET`/`DELETE` handlers do.
         case .volumeSnapshot:
             if try await VolumeSnapshot.find(resourceID, on: req.db) != nil {
-                guard try await req.can("read", on: "volume_snapshot", id: resourceID.uuidString) else {
+                guard
+                    try await req.can(
+                        "volume:read", on: IAMNode(type: .volumeSnapshot, id: resourceID))
+                else {
                     throw Abort(.notFound)
                 }
                 return
             }
         case .vmCheckpoint:
             if try await VMSnapshot.find(resourceID, on: req.db) != nil {
-                guard try await req.can("read", on: "vm_snapshot", id: resourceID.uuidString) else {
+                guard
+                    try await req.can("vm:read", on: IAMNode(type: .vmSnapshot, id: resourceID))
+                else {
                     throw Abort(.notFound)
                 }
                 return
             }
         case .sandboxSnapshot:
             if try await SandboxSnapshot.find(resourceID, on: req.db) != nil {
-                guard try await req.can("read", on: "sandbox_snapshot", id: resourceID.uuidString) else {
+                guard
+                    try await req.can(
+                        "sandbox:read", on: IAMNode(type: .sandboxSnapshot, id: resourceID))
+                else {
                     throw Abort(.notFound)
                 }
                 return

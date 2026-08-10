@@ -39,7 +39,7 @@ extension SandboxController {
     /// deterministic keys.
     func exportSnapshot(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
-        let sandbox = try await fetchSandboxWithPermission(req: req, permission: "read")
+        let sandbox = try await fetchSandboxWithAction(req: req, action: "sandbox:read")
         let snapshot = try await fetchSnapshot(req: req, sandbox: sandbox)
         let snapshotID = try snapshot.requireID()
         let sandboxID = try sandbox.requireID()
@@ -48,7 +48,8 @@ extension SandboxController {
         // storage and occupies the snapshot's agent for the duration, so it
         // is a mutation, not a view. Gating it on `read` let any project
         // viewer trigger unbounded writes (issue #428 review).
-        let canExport = try await req.can("export", on: "sandbox_snapshot", id: snapshotID.uuidString)
+        let canExport = try await req.can(
+            "sandbox:export", on: IAMNode(type: .sandboxSnapshot, id: snapshotID))
         guard canExport else {
             throw Abort(.forbidden, reason: "You don't have permission to export this snapshot")
         }

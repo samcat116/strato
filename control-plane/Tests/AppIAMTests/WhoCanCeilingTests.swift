@@ -165,7 +165,6 @@ final class WhoCanCeilingTests {
 
             let decision = try await IAMAuthorizer.authorize(
                 userID: tree.user.id!, action: "vm:delete", node: tree.vmNode,
-                legacyEquivalent: nil,
                 context: IAMCheckContext(path: "/test", method: "GET", requestID: nil),
                 state: .detached, app: app, db: app.db)
             #expect(!decision.allowed)
@@ -189,7 +188,6 @@ final class WhoCanCeilingTests {
                     node: tree.vmNode, app: app, on: app.db)
                 let decision = try await IAMAuthorizer.authorize(
                     userID: tree.user.id!, action: action, node: tree.vmNode,
-                    legacyEquivalent: nil,
                     context: IAMCheckContext(path: "/test", method: "GET", requestID: nil),
                     state: .detached, app: app, db: app.db)
                 #expect(can == decision.allowed, "disagreement on \(action)")

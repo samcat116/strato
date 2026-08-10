@@ -17,8 +17,8 @@ import Vapor
 //    construction (my API keys, my user record, my OAuth sessions, the
 //    operation-initiator fallback, the can-i/who-can query endpoints which
 //    gate per resource internally).
-//  - **resource-mapped**: the middleware itself evaluates a Cedar check
-//    derived from the method and path (VMs and sandboxes, as before —
+//  - **resource-mapped**: the middleware itself evaluates an explicit
+//    canonical action and IAM node derived from the route metadata (VMs and sandboxes —
 //    handlers keep their finer checks as defense in depth).
 //  - **handlerChecked**: authenticated here, authorized in the handler
 //    through the evaluator. The middleware asserts after the fact that a
@@ -41,34 +41,55 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         case handlerChecked
     }
 
-    /// A route-prefix-guarded resource API: `/api/vms` → `virtual_machine`,
-    /// `/api/sandboxes` → `sandbox`. `actionVerbs` are the POST subpaths that
-    /// map to a same-named permission (sandboxes have no pause/resume, for
-    /// example).
+    /// A route-prefix-guarded resource API. Every field is already in the
+    /// canonical IAM vocabulary; the middleware never translates a legacy
+    /// permission or resource-type string.
     struct GuardedResource: Equatable {
         let prefix: String
-        let resourceType: String
-        let actionVerbs: Set<String>
+        let nodeType: IAMNodeType
+        let readAction: String
+        let createAction: String
+        let updateAction: String
+        let deleteAction: String
+        let snapshotAction: String
+        let actionVerbs: [String: String]
     }
 
     private static let guardedResources: [GuardedResource] = [
         GuardedResource(
             prefix: "/api/vms",
-            resourceType: "virtual_machine",
+            nodeType: .virtualMachine,
+            readAction: "vm:read",
+            createAction: "vm:create",
+            updateAction: "vm:update",
+            deleteAction: "vm:delete",
+            snapshotAction: "vm:snapshot",
             // `exec` and `run` are listed ahead of the routes that will serve
             // them (issue #804). Both fallbacks are weaker than the act they
             // would gate: an unlisted POST subpath falls back to `update` and
             // an unlisted GET to `read`, so leaving these out would hand
             // in-guest execution an editor — or, for the WebSocket attach, a
-            // *viewer* — permission the moment the route appeared, with
+            // *viewer* — action the moment the route appeared, with
             // nothing to announce it. A verb with no route behind it costs
             // nothing: the path 404s either way.
-            actionVerbs: ["start", "stop", "restart", "pause", "resume", "exec", "run"]
+            actionVerbs: [
+                "start": "vm:start", "stop": "vm:stop", "restart": "vm:restart",
+                "pause": "vm:pause", "resume": "vm:resume", "exec": "vm:exec",
+                "run": "vm:runCommand",
+            ]
         ),
         GuardedResource(
             prefix: "/api/sandboxes",
-            resourceType: "sandbox",
-            actionVerbs: ["start", "stop", "restart", "exec"]
+            nodeType: .sandbox,
+            readAction: "sandbox:read",
+            createAction: "sandbox:create",
+            updateAction: "sandbox:update",
+            deleteAction: "sandbox:delete",
+            snapshotAction: "sandbox:snapshot",
+            actionVerbs: [
+                "start": "sandbox:start", "stop": "sandbox:stop", "restart": "sandbox:restart",
+                "exec": "sandbox:exec",
+            ]
         ),
     ]
 
@@ -87,7 +108,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     ]
 
     /// Route prefixes whose handlers authorize through the evaluator
-    /// (`req.can` / `req.authorize` in either vocabulary, or
+    /// (`req.can` / `req.authorize` with a canonical action and IAM node, or
     /// `req.requireSystemAdmin()` for the deliberately admin-only surfaces).
     private static let handlerCheckedPrefixes = [
         // Identity plane. A user record is a Cedar resource (`IAMNodeType.user`),
@@ -304,19 +325,18 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         }
     }
 
-    /// The legacy-vocabulary permission a method and path demand on a guarded
-    /// resource — the mapping `IAMActionTranslator` then turns into an IAM
-    /// action. Lifted out of `checkResourcePermissions` so it can be asserted
+    /// The canonical IAM action a method and path demand on a guarded
+    /// resource. Lifted out of `checkResourcePermissions` so it can be asserted
     /// directly: this is where a mis-derived verb becomes a route gated on a
-    /// weaker permission than it needs, which no integration test would notice
+    /// weaker action than it needs, which no integration test would notice
     /// as long as the request still succeeds. Returns nil for a method the
     /// mapping does not cover (the caller answers 405).
-    static func permission(
+    static func action(
         method: HTTPMethod, pathComponents: [Substring], resource: GuardedResource
     ) -> String? {
         // Snapshot subresource (issue #426, and full-VM checkpoints in #564):
         // creating, deleting, or restoring a snapshot is guarded by the parent
-        // resource's `snapshot` permission (finer per-snapshot checks live in
+        // resource's `snapshot` action (finer per-snapshot checks live in
         // the handlers); listing follows plain `read`. Without this carve-out
         // the generic mapping below would demand `delete` on the *VM or
         // sandbox* to delete one of its snapshots. Both guarded prefixes nest
@@ -339,7 +359,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             guard !isSnapshotSubresource, pathComponents.count >= 4 else { return nil }
             let isActionsSubpath = pathComponents[3] == "actions" && pathComponents.count >= 5
             let candidate = String(pathComponents[isActionsSubpath ? 4 : 3])
-            return resource.actionVerbs.contains(candidate) ? candidate : nil
+            return resource.actionVerbs[candidate]
         }()
 
         switch method {
@@ -347,7 +367,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             // A named verb wins over the `read` default, because an
             // interactive session is a WebSocket *upgrade* — a GET — and
             // deriving `read` for it would gate a root shell on a **viewer**
-            // permission, which is worse than the `update` fallback the POST
+            // action, which is worse than the `update` fallback the POST
             // branch already had to guard against. Both of this middleware's
             // backstops are blind to that shape: the verb list below never
             // fires on a GET, and `assertHandlerEvaluated` returns early for
@@ -356,20 +376,20 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             // else changes — a GET whose subpath is not a registered verb
             // (`/status`, `/operations`, `/console`, snapshot listing) still
             // reads.
-            return subpathVerb ?? "read"
+            return subpathVerb ?? resource.readAction
         case .POST:
             // Special handling for lifecycle actions
             if isSnapshotSubresource {
-                return "snapshot"
+                return resource.snapshotAction
             } else if pathComponents.count >= 4 {
-                return subpathVerb ?? "update"
+                return subpathVerb ?? resource.updateAction
             } else {
-                return "create"
+                return resource.createAction
             }
         case .PUT, .PATCH:
-            return "update"
+            return resource.updateAction
         case .DELETE:
-            return isSnapshotSubresource ? "snapshot" : "delete"
+            return isSnapshotSubresource ? resource.snapshotAction : resource.deleteAction
         default:
             return nil
         }
@@ -380,9 +400,19 @@ struct AuthorizationMiddleware: AsyncMiddleware {
     ) async throws {
         let pathComponents = request.url.path.split(separator: "/")
         guard
-            let permission = Self.permission(
+            let routeAction = Self.action(
                 method: request.method, pathComponents: pathComponents, resource: resource)
         else { throw Abort(.methodNotAllowed) }
+
+        // Validate the route's own metadata before a collection request swaps
+        // the concrete action for its organization-membership probe. Otherwise
+        // a misspelled `createAction` could still enter the handler because the
+        // substituted `org:read` check is valid.
+        guard IAMRoleRegistry.allActions.contains(routeAction),
+            CedarSchemaBuilder.resourceTypes(for: routeAction).contains(resource.nodeType.cedarEntityType)
+        else {
+            throw Abort(.internalServerError, reason: "Route names an invalid IAM action and node")
+        }
 
         // For object-level operations, extract the resource ID
         var resourceId = "*"  // Default for collection operations
@@ -411,27 +441,36 @@ struct AuthorizationMiddleware: AsyncMiddleware {
         // neither half of that can be true of `org:read` on an organization, so
         // intersecting it here 403'd the list while every item route beneath it
         // succeeded. The ceiling applies in full where there is an act to apply
-        // it to — `canFilter("vm:read")` in the handler, `create_resources` on
-        // the resolved project for a create.
-        let check: (permission: String, resourceType: String, resourceID: String)
+        // it to — `canFilter("vm:read")` in the handler, `vm:create` on the
+        // resolved project for a create.
+        let check: (action: String, node: IAMNode)
         let isMembershipProbe =
-            resourceId == "*" && (permission == "read" || permission == "create")
+            resourceId == "*" && (routeAction == resource.readAction || routeAction == resource.createAction)
         if isMembershipProbe {
             guard let currentOrgId = try await request.actingOrganizationID() else {
                 throw Abort(.forbidden, reason: "No current organization set")
             }
-            check = ("view_organization", "organization", currentOrgId.uuidString)
+            check = ("org:read", IAMNode(type: .organization, id: currentOrgId))
         } else {
-            // Object-level: the method/path-derived permission on the resource
-            // itself.
-            check = (permission, resource.resourceType, resourceId)
+            guard let id = UUID(uuidString: resourceId) else {
+                throw Abort(.badRequest, reason: "Invalid resource ID")
+            }
+            check = (routeAction, IAMNode(type: resource.nodeType, id: id))
         }
 
-        let allowed = try await IAMAuthorizer.checkLegacyVocabulary(
+        // Route metadata must resolve to a registry action applicable to the
+        // typed node before the handler runs. A bad constant is a server bug,
+        // never a request-shaped deny.
+        guard IAMRoleRegistry.allActions.contains(check.action),
+            CedarSchemaBuilder.resourceTypes(for: check.action).contains(check.node.type.cedarEntityType)
+        else {
+            throw Abort(.internalServerError, reason: "Route names an invalid IAM action and node")
+        }
+
+        let decision = try await IAMAuthorizer.authorize(
             principal: principal,
-            permission: check.permission,
-            resourceType: check.resourceType,
-            resourceID: check.resourceID,
+            action: check.action,
+            node: check.node,
             context: IAMCheckContext(
                 path: request.url.path, method: request.method.rawValue, requestID: request.id),
             state: isMembershipProbe
@@ -440,7 +479,7 @@ struct AuthorizationMiddleware: AsyncMiddleware {
             app: request.application,
             db: request.db
         )
-        guard allowed else {
+        guard decision.allowed else {
             throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
         }
     }

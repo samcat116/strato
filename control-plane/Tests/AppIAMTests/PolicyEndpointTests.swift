@@ -126,13 +126,13 @@ final class PolicyEndpointTests {
     }
 
     private func check(
-        _ app: Application, user: User, permission: String, resourceType: String, resourceID: String
+        _ app: Application, user: User, action: String, node: IAMNode
     ) async throws -> Bool {
-        try await IAMAuthorizer.checkLegacyVocabulary(
-            principal: .user(user.id!), permission: permission, resourceType: resourceType,
-            resourceID: resourceID,
+        try await IAMAuthorizer.authorize(
+            principal: .user(user.id!), action: action, node: node,
             context: IAMCheckContext(path: "/api/vms", method: "GET", requestID: "policy-test"),
-            state: .detached, app: app, db: app.db)
+            state: .detached, app: app, db: app.db
+        ).allowed
     }
 
     private func onlyDecision(_ app: Application) async throws -> IAMDecisionLog {
@@ -533,12 +533,12 @@ final class PolicyEndpointTests {
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
             let allowed = try await check(
-                app, user: subject, permission: "read", resourceType: "virtual_machine",
-                resourceID: vm.id!.uuidString)
+                app, user: subject, action: "vm:read",
+                node: IAMNode(type: .virtualMachine, id: vm.id!))
             #expect(allowed)
 
             let entry = try await onlyDecision(app)
-            #expect(entry.cedarDecision == "allow")
+            #expect(entry.decision == "allow")
             #expect(entry.tier == "policy")
             #expect(entry.determiningPolicies.allSatisfy { $0.hasPrefix("policy-") })
             #expect(entry.policyVersion == version)
@@ -567,12 +567,12 @@ final class PolicyEndpointTests {
             await app.cedarPolicySet.rebuild(version: version, on: app.db)
 
             let allowed = try await check(
-                app, user: subject, permission: "read", resourceType: "virtual_machine",
-                resourceID: vm.id!.uuidString)
+                app, user: subject, action: "vm:read",
+                node: IAMNode(type: .virtualMachine, id: vm.id!))
             #expect(!allowed)
 
             let entry = try await onlyDecision(app)
-            #expect(entry.cedarDecision == "deny")
+            #expect(entry.decision == "deny")
             #expect(entry.tier == "policy")
             #expect(entry.determiningPolicies.allSatisfy { $0.hasPrefix("policy-") })
         }
@@ -596,7 +596,7 @@ final class PolicyEndpointTests {
                     req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
                     try req.content.encode(
                         AuthorizationController.WhoCanRequest(
-                            resourceType: "virtual_machine", resourceId: vm.id!.uuidString, action: "vm:read"))
+                            action: "vm:read", node: IAMNode(type: .virtualMachine, id: vm.id!)))
                 },
                 afterResponse: { res in
                     #expect(res.status == .ok)
@@ -630,7 +630,7 @@ final class PolicyEndpointTests {
                     req.headers.bearerAuthorization = BearerAuthorization(token: fixture.token)
                     try req.content.encode(
                         AuthorizationController.WhoCanRequest(
-                            resourceType: "virtual_machine", resourceId: vm.id!.uuidString, action: "vm:read"))
+                            action: "vm:read", node: IAMNode(type: .virtualMachine, id: vm.id!)))
                 },
                 afterResponse: { res in
                     #expect(res.status == .ok)

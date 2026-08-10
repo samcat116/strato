@@ -190,7 +190,7 @@ struct SCIMTokenController: RouteCollection {
     /// pre-cutover audit's conversion pattern — previously an inline
     /// `UserOrganization.role` read invisible to the decision log).
     private func requireOrganizationAdmin(organizationID: UUID, on req: Request) async throws {
-        guard try await req.can("manage_members", on: "organization", id: organizationID.uuidString) else {
+        guard try await req.can("org:update", on: IAMNode(type: .organization, id: organizationID)) else {
             throw Abort(.forbidden, reason: "Only organization admins can manage SCIM tokens")
         }
     }

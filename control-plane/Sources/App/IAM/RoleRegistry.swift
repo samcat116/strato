@@ -111,6 +111,28 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     /// `isSystemAdmin` read.
     case user
 
+    /// The canonical action that reads this node. Snapshot and DNS record
+    /// nodes intentionally share their parent service's action vocabulary.
+    var readAction: String {
+        switch self {
+        case .organization: return "org:read"
+        case .organizationalUnit: return "folder:read"
+        case .project: return "project:read"
+        case .virtualMachine, .vmSnapshot: return "vm:read"
+        case .sandbox, .sandboxSnapshot: return "sandbox:read"
+        case .image: return "image:read"
+        case .network: return "network:read"
+        case .floatingIP: return "floatingip:read"
+        case .securityGroup: return "securitygroup:read"
+        case .dnsZone, .dnsRecord: return "dns:read"
+        case .volume, .volumeSnapshot: return "volume:read"
+        case .site: return "site:read"
+        case .agent: return "agent:read"
+        case .serviceAccount: return "serviceaccount:read"
+        case .user: return "user:read"
+        }
+    }
+
     /// The table whose rows this node type names — the model's own `schema`,
     /// never a guess from the case name (`virtual_machine` → `vms`).
     ///

@@ -3,28 +3,13 @@ import NIOConcurrencyHelpers
 import Tracing
 import Vapor
 
-// IAM phase 5 (issue #482): the authoritative evaluator. SpiceDB itself is
-// gone (issue #483); the legacy permission vocabulary survives only as the
-// `req.can(_:on:id:)` spelling that `IAMActionTranslator` maps into IAM
-// actions.
-//
-// Cedar gates requests. Every check — middleware, `req.can` in either
-// vocabulary — funnels into `IAMAuthorizer.authorize`: decide through
+// Cedar gates requests. Every check — middleware or `req.can` — funnels into
+// `IAMAuthorizer.authorize`: decide through
 // `IAMDecisionEngine` (the one evaluator, shared with `WhoCanService`), record
 // the decision. The system-admin bypass is gone from code: admins are allowed
 // by the `platform-system-admin` tier-1 policy, which means their decisions
 // appear in the decision log and tier-2 guardrail forbids bind them like
 // everyone else.
-
-/// The legacy-vocabulary question a check was phrased in, when it has one —
-/// carried into the decision log so rows record what was literally asked at
-/// the check site, not a back-translation. Checks born in the IAM action
-/// vocabulary (the middleware's, or `iam:readPolicy`) have none.
-struct LegacyCheckEquivalent: Sendable {
-    let permission: String
-    let resourceType: String
-    let resourceID: String
-}
 
 /// Request coordinates for the decision log.
 struct IAMCheckContext: Sendable {
@@ -177,7 +162,6 @@ enum IAMAuthorizer {
         userID: UUID,
         action: String,
         node: IAMNode,
-        legacyEquivalent: LegacyCheckEquivalent?,
         context: IAMCheckContext,
         state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
@@ -188,7 +172,6 @@ enum IAMAuthorizer {
             principal: .user(userID),
             action: action,
             node: node,
-            legacyEquivalent: legacyEquivalent,
             context: context,
             state: state,
             cache: cache,
@@ -220,7 +203,6 @@ enum IAMAuthorizer {
         principal: IAMPrincipal,
         action: String,
         node: IAMNode,
-        legacyEquivalent: LegacyCheckEquivalent?,
         context: IAMCheckContext,
         state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
@@ -245,7 +227,6 @@ enum IAMAuthorizer {
                 principal: principal,
                 action: action,
                 nodes: [node],
-                legacyEquivalents: legacyEquivalent.map { [node: $0] } ?? [:],
                 context: context,
                 state: state,
                 cache: cache,
@@ -278,16 +259,10 @@ enum IAMAuthorizer {
     /// with the object route it links to. Nodes already decided this request
     /// are answered from `cache` and not re-recorded.
     ///
-    /// - Parameter legacyEquivalents: the legacy-vocabulary question each node
-    ///   was asked in, for the callers that still speak it (the batch check
-    ///   endpoint). The decision log records what was literally asked at the
-    ///   check site, so a batched legacy check must carry its phrasing exactly
-    ///   as the per-check path does.
     static func authorize(
         principal: IAMPrincipal,
         action: String,
         nodes: [IAMNode],
-        legacyEquivalents: [IAMNode: LegacyCheckEquivalent] = [:],
         context: IAMCheckContext,
         state: IAMRequestAuthState,
         cache: IAMRequestCache? = nil,
@@ -321,7 +296,6 @@ enum IAMAuthorizer {
                 principal: principal,
                 action: action,
                 nodes: pending,
-                legacyEquivalents: legacyEquivalents,
                 context: context,
                 state: state,
                 cache: cache,
@@ -363,7 +337,6 @@ enum IAMAuthorizer {
         principal: IAMPrincipal,
         action: String,
         nodes: [IAMNode],
-        legacyEquivalents: [IAMNode: LegacyCheckEquivalent],
         context: IAMCheckContext,
         state: IAMRequestAuthState,
         cache: IAMRequestCache?,
@@ -437,7 +410,6 @@ enum IAMAuthorizer {
                     skippedConditionedBindings: outcome.slice.skippedConditionedBindings,
                     decision: outcome.verdict,
                     policyVersion: built.version,
-                    legacyEquivalent: legacyEquivalents[node],
                     credential: state.credential,
                     context: context
                 ))
@@ -456,62 +428,10 @@ enum IAMAuthorizer {
         return "\(first.type.rawValue):\(first.id.uuidString)"
     }
 
-    /// Evaluate a check still phrased in the legacy (pre-Cedar) permission
-    /// vocabulary: the per-handler `req.can`/`req.authorize` form and the
-    /// middleware's method/path-derived checks. Translation failures fail
-    /// closed — denied, logged, recorded — because an unmapped pair is a check
-    /// site nobody mapped, not an allowance.
-    static func checkLegacyVocabulary(
-        principal: IAMPrincipal,
-        permission: String,
-        resourceType: String,
-        resourceID: String,
-        context: IAMCheckContext,
-        state: IAMRequestAuthState,
-        cache: IAMRequestCache? = nil,
-        app: Application,
-        db: any Database
-    ) async throws -> Bool {
-        let equivalent = LegacyCheckEquivalent(
-            permission: permission, resourceType: resourceType, resourceID: resourceID)
-        guard
-            let translation = IAMActionTranslator.translate(
-                permission: permission,
-                resourceType: resourceType,
-                resourceID: resourceID,
-                path: context.path)
-        else {
-            app.logger.error(
-                "Untranslatable authorization check denied (no IAM action mapping)",
-                metadata: [
-                    "permission": .string(permission),
-                    "resource": .string("\(resourceType):\(resourceID)"),
-                    "path": .string(context.path),
-                ])
-            state.decisionEvaluated.withLockedValue { $0 = true }
-            await app.iamDecisionRecorder.recordUntranslatedDenial(
-                subject: principal.subject, equivalent: equivalent, context: context)
-            return false
-        }
-        let decision = try await authorize(
-            principal: principal,
-            action: translation.action,
-            node: translation.node,
-            legacyEquivalent: equivalent,
-            context: context,
-            state: state,
-            cache: cache,
-            app: app,
-            db: db
-        )
-        return decision.allowed
-    }
 }
 
 extension Request {
-    /// The authoritative check in the IAM action vocabulary — the primitive
-    /// everything else (the legacy-vocabulary `can`, the middleware, the
-    /// controllers' policy-admin gates) resolves to.
+    /// The authoritative check in the IAM action vocabulary.
     ///
     /// Asks about the request's *acting principal*: the authenticated user, or
     /// the service account / workload a JWT-SVID resolved to (issue #495). The
@@ -521,17 +441,12 @@ extension Request {
     /// - Throws: `.unauthorized` if unauthenticated; `.serviceUnavailable` /
     ///   `.internalServerError` when the evaluator cannot answer (fail
     ///   closed).
-    func can(
-        _ action: String,
-        on node: IAMNode,
-        legacyEquivalent: LegacyCheckEquivalent? = nil
-    ) async throws -> Bool {
+    func can(_ action: String, on node: IAMNode) async throws -> Bool {
         let principal = try requireActingPrincipal()
         let decision = try await IAMAuthorizer.authorize(
             principal: principal,
             action: action,
             node: node,
-            legacyEquivalent: legacyEquivalent,
             context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: id),
             state: iamAuthState,
             cache: iamCache,
@@ -570,49 +485,13 @@ extension Request {
     }
 
     /// Enforce `action` on `node`, throwing `.forbidden` when denied.
-    func authorize(
-        _ action: String,
-        on node: IAMNode,
-        legacyEquivalent: LegacyCheckEquivalent? = nil
-    ) async throws {
-        guard try await can(action, on: node, legacyEquivalent: legacyEquivalent) else {
+    func authorize(_ action: String, on node: IAMNode) async throws {
+        guard try await can(action, on: node) else {
             throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
         }
     }
 
-    /// Whether the current user holds `permission` on the given resource, in
-    /// the legacy (pre-Cedar) permission vocabulary. This spelling survives so
-    /// the ~55 handler sites need not churn: it translates the
-    /// (permission, resourceType) pair to the IAM action naming the act being
-    /// gated — the same mapping shadow evaluation validated — and evaluates it
-    /// through `checkLegacyVocabulary`. New code should prefer the
-    /// action-vocabulary form above.
-    ///
-    /// There is no system-admin short-circuit anymore: admins are allowed by
-    /// the `platform-system-admin` tier-1 policy, which lands their decisions
-    /// in the decision log and lets guardrail forbids bind them.
-    ///
-    /// A pair the translator cannot map fails closed — denied, logged, and
-    /// recorded as `untranslated` in the decision log — because an
-    /// untranslatable check is a check site nobody mapped, not an allowance.
-    ///
-    /// - Throws: `.unauthorized` if the request is unauthenticated.
-    func can(_ permission: String, on resourceType: String, id: String) async throws -> Bool {
-        let principal = try requireActingPrincipal()
-        return try await IAMAuthorizer.checkLegacyVocabulary(
-            principal: principal,
-            permission: permission,
-            resourceType: resourceType,
-            resourceID: id,
-            context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: self.id),
-            state: iamAuthState,
-            cache: iamCache,
-            app: application,
-            db: db
-        )
-    }
-
-    /// `can(_:on:id:)` for a **membership probe** — a check that stands in for
+    /// `can(_:on:)` for a **membership probe** — a check that stands in for
     /// the question actually being gated, decided with this request's
     /// credential ceiling suspended (STR-203).
     ///
@@ -620,34 +499,19 @@ extension Request {
     /// the ceiling cannot both be applied, and for when this is emphatically
     /// the wrong spelling: it belongs only where a per-resource decision on the
     /// same request stands behind it.
-    func canAsMembershipProbe(_ permission: String, on resourceType: String, id: String) async throws -> Bool {
+    func canAsMembershipProbe(_ action: String, on node: IAMNode) async throws -> Bool {
         let principal = try requireActingPrincipal()
-        return try await IAMAuthorizer.checkLegacyVocabulary(
+        let decision = try await IAMAuthorizer.authorize(
             principal: principal,
-            permission: permission,
-            resourceType: resourceType,
-            resourceID: id,
+            action: action,
+            node: node,
             context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: self.id),
             state: iamAuthState.membershipProbe(),
             cache: iamCache,
             app: application,
             db: db
         )
-    }
-
-    /// Enforce `permission` on the given resource, throwing `.forbidden` when
-    /// the current user lacks it.
-    ///
-    /// - Throws: `.unauthorized` if unauthenticated, `.forbidden` if the check fails.
-    func authorize(_ permission: String, on resourceType: String, id: String) async throws {
-        guard try await can(permission, on: resourceType, id: id) else {
-            throw Abort(.forbidden, reason: "Insufficient permissions for this operation")
-        }
-    }
-
-    /// Convenience overload taking a `UUID` resource id.
-    func authorize(_ permission: String, on resourceType: String, id: UUID) async throws {
-        try await authorize(permission, on: resourceType, id: id.uuidString)
+        return decision.allowed
     }
 
     /// Gate a deliberately admin-only surface (hierarchy repair, audit-event
@@ -772,7 +636,6 @@ extension Request {
         await application.iamDecisionRecorder.recordCredentialRestriction(
             subject: actingPrincipal?.subject ?? "",
             credential: credential,
-            reason: reason,
             context: IAMCheckContext(path: url.path, method: method.rawValue, requestID: id))
     }
 }

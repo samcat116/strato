@@ -2,17 +2,17 @@
 
 import { api } from "./client";
 import type {
-  PermissionCheckItem,
-  PermissionCheckResponse,
+  ActionCheckItem,
+  ActionCheckResponse,
 } from "@/types/api";
 
 export const authorizationApi = {
   /**
-   * Ask the backend which of the given permissions the current user holds.
+   * Ask the backend which of the canonical action/node checks the caller passes.
    * Returns a map keyed by each check's `key`.
    */
-  check(checks: PermissionCheckItem[]): Promise<PermissionCheckResponse> {
-    return api.post<PermissionCheckResponse>("/api/authorization/check", {
+  check(checks: ActionCheckItem[]): Promise<ActionCheckResponse> {
+    return api.post<ActionCheckResponse>("/api/authorization/check", {
       checks,
     });
   },

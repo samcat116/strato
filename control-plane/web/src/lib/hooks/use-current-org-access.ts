@@ -14,10 +14,9 @@ export function useCurrentOrgAccess() {
     orgId
       ? [
           {
-            key: "manage_members",
-            resourceType: "organization",
-            resourceId: orgId,
-            permission: "manage_members",
+            key: "update_org",
+            action: "org:update",
+            node: { type: "organization", id: orgId },
           },
         ]
       : []
@@ -25,7 +24,7 @@ export function useCurrentOrgAccess() {
 
   return {
     orgId,
-    canManage: permissions.manage_members ?? false,
+    canManage: permissions.update_org ?? false,
     isLoading: isOrgLoading || (!!orgId && isPermissionsLoading),
   };
 }

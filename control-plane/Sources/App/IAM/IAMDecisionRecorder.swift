@@ -8,12 +8,8 @@ import Vapor
 // Cedar verdicts.
 //
 // Every check `IAMAuthorizer` evaluates is recorded in `iam_decision_logs` —
-// off the request path, in a background task — with the deciding policy, the
-// tier, and the policy-set version. The reverse-shadow comparison that watched
-// SpiceDB for disagreement during the cutover rollback window went with
-// SpiceDB itself (issue #483); the `spicedb_*` columns keep their historical
-// names and now carry the legacy-vocabulary question ("none" for the retired
-// comparison verdict).
+// off the request path, in a background task — with its canonical action and
+// node, the deciding policy, the tier, and the policy-set version.
 
 /// Decision-log configuration, from the environment.
 struct IAMDecisionLogConfig: Sendable {
@@ -53,9 +49,6 @@ struct IAMDecisionLogConfig: Sendable {
 enum PendingIAMDecision: Sendable {
     /// A decision the evaluator reached.
     case evaluated(IAMDecisionRecord)
-    /// A check the legacy-vocabulary boundary could not translate, denied
-    /// closed at the boundary before any evaluation happened.
-    case untranslated(subject: String, equivalent: LegacyCheckEquivalent, context: IAMCheckContext)
     /// A request refused because a restricted credential reached a surface the
     /// evaluator does not gate — the only credential denial left without a
     /// Cedar verdict behind it, recorded so every authorization refusal is
@@ -63,7 +56,6 @@ enum PendingIAMDecision: Sendable {
     case credentialRestricted(
         subject: String,
         credential: CredentialReference?,
-        reason: CredentialDenialReason,
         context: IAMCheckContext)
 }
 
@@ -230,9 +222,6 @@ struct IAMDecisionRecord: Sendable {
     let skippedConditionedBindings: Int
     let decision: CedarCheckDecision
     let policyVersion: Int
-    /// The legacy-vocabulary question the check was phrased in, when it has
-    /// one. Checks born in the IAM action vocabulary have none.
-    let legacyEquivalent: LegacyCheckEquivalent?
     /// The API key or CLI session the request arrived on, when it arrived on
     /// one. Recorded for allows as well as denies: "what has this token been
     /// doing" is the question an audit asks first.
@@ -242,11 +231,6 @@ struct IAMDecisionRecord: Sendable {
 
 /// Writes the decision log.
 final class IAMDecisionRecorder: Sendable {
-    /// `spicedb_decision` value for every row since the reverse-shadow
-    /// comparison retired with SpiceDB (#483); the column keeps its historical
-    /// name so existing rows and API consumers stay readable.
-    static let noComparison = "none"
-
     private let app: Application
     let config: IAMDecisionLogConfig
     private let logger: Logger
@@ -292,16 +276,6 @@ final class IAMDecisionRecorder: Sendable {
         await enqueue(records.map(PendingIAMDecision.evaluated))
     }
 
-    /// Record a check the legacy-vocabulary boundary could not translate.
-    /// Enforcement failed closed (the request was denied); the row keeps the
-    /// gap visible and countable, exactly as untranslated checks were during
-    /// the forward-shadow phase.
-    func recordUntranslatedDenial(
-        subject: String, equivalent: LegacyCheckEquivalent, context: IAMCheckContext
-    ) async {
-        await enqueue([.untranslated(subject: subject, equivalent: equivalent, context: context)])
-    }
-
     /// Record a restricted credential refused on a surface the evaluator does
     /// not gate. Every other restriction denial is an ordinary Cedar deny row
     /// carrying the `credential-restriction` policy id; these few have no
@@ -310,11 +284,10 @@ final class IAMDecisionRecorder: Sendable {
     func recordCredentialRestriction(
         subject: String,
         credential: CredentialReference?,
-        reason: CredentialDenialReason,
         context: IAMCheckContext
     ) async {
         await enqueue(
-            [.credentialRestricted(subject: subject, credential: credential, reason: reason, context: context)])
+            [.credentialRestricted(subject: subject, credential: credential, context: context)])
     }
 
     private func enqueue(_ decisions: [PendingIAMDecision]) async {
@@ -404,35 +377,13 @@ final class IAMDecisionRecorder: Sendable {
         switch decision {
         case .evaluated(let record):
             return entry(for: record)
-        case .untranslated(let subject, let equivalent, let context):
+        case .credentialRestricted(let subject, let credential, let context):
             let entry = IAMDecisionLog()
             entry.requestID = context.requestID
             entry.path = context.path
             entry.method = context.method
             entry.subject = subject
-            entry.spicedbPermission = equivalent.permission
-            entry.resourceType = equivalent.resourceType
-            entry.resourceID = equivalent.resourceID
-            entry.spicedbDecision = Self.noComparison
-            entry.cedarDecision = "untranslated"
-            return entry
-        case .credentialRestricted(let subject, let credential, let reason, let context):
-            let entry = IAMDecisionLog()
-            entry.requestID = context.requestID
-            entry.path = context.path
-            entry.method = context.method
-            entry.subject = subject
-            // No IAM action was resolved — that is precisely why this row
-            // exists — so the "permission" names the refusal itself. The prefix
-            // keeps it from being mistaken for an action.
-            entry.spicedbPermission = "credential:\(reason.rawValue)"
-            // The route, not the credential: the credential has its own columns
-            // now, and overwriting the resource with it (as the old scope rows
-            // did) lost what was actually being reached.
-            entry.resourceType = "route"
-            entry.resourceID = "\(context.method) \(context.path)"
-            entry.spicedbDecision = Self.noComparison
-            entry.cedarDecision = "credential_restricted"
+            entry.decision = "credential_restricted"
             entry.tier = CedarCheckDecision.credentialTier
             entry.credentialType = credential?.kind.rawValue
             entry.credentialID = credential?.id
@@ -446,13 +397,13 @@ final class IAMDecisionRecorder: Sendable {
         entry.path = record.context.path
         entry.method = record.context.method
         entry.subject = record.subject
-        entry.iamAction = record.action
+        entry.action = record.action
         entry.nodeType = record.node.type.rawValue
         entry.nodeID = record.node.id
         entry.organizationID = record.organizationID
         entry.skippedConditionedBindings = record.skippedConditionedBindings
         entry.policyVersion = record.policyVersion
-        entry.cedarDecision = record.decision.allowed ? "allow" : "deny"
+        entry.decision = record.decision.allowed ? "allow" : "deny"
         entry.tier = record.decision.tier
         do {
             entry.determiningPoliciesJSON = try CedarText.json(record.decision.determiningPolicyIDs)
@@ -469,14 +420,6 @@ final class IAMDecisionRecorder: Sendable {
         if !record.decision.evaluationErrors.isEmpty {
             entry.cedarErrors = record.decision.evaluationErrors.joined(separator: "; ")
         }
-
-        // The historically named spicedb_* columns carry the legacy-vocabulary
-        // question when there was one; for native-vocabulary checks they
-        // mirror the tree coordinates so the row is still self-describing.
-        entry.spicedbPermission = record.legacyEquivalent?.permission ?? record.action
-        entry.resourceType = record.legacyEquivalent?.resourceType ?? record.node.type.rawValue
-        entry.resourceID = record.legacyEquivalent?.resourceID ?? record.node.id.uuidString
-        entry.spicedbDecision = Self.noComparison
 
         entry.credentialType = record.credential?.kind.rawValue
         entry.credentialID = record.credential?.id
