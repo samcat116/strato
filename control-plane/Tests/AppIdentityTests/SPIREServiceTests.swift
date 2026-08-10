@@ -243,6 +243,29 @@ struct SPIREServiceTests {
             _ = try await service.validateCertificate(leafPEM)
         }
     }
+
+    @Test("Trust bundle parsing selects X.509 keys and tolerates unknown key fields")
+    func parsesPartialTrustBundleDTO() throws {
+        let data = Data(
+            #"{"version":2,"keys":[{"use":"jwt-svid","x5c":["ignored"]},{"use":"x509-svid","x5c":["cert-one","cert-two"],"future":null},{"use":null,"x5c":[42]}]}"#
+                .utf8)
+
+        let certificates = try SPIREService.parseTrustBundleCertificates(data)
+        #expect(
+            certificates == [
+                "-----BEGIN CERTIFICATE-----\ncert-one\n-----END CERTIFICATE-----",
+                "-----BEGIN CERTIFICATE-----\ncert-two\n-----END CERTIFICATE-----",
+            ])
+    }
+
+    @Test("Trust bundle parsing rejects malformed envelopes")
+    func rejectsMalformedTrustBundleEnvelopes() {
+        for json in ["not json", #"{}"#, #"{"keys":null}"#, #"{"keys":[null]}"#] {
+            #expect(throws: SPIREServiceError.self) {
+                try SPIREService.parseTrustBundleCertificates(Data(json.utf8))
+            }
+        }
+    }
 }
 
 // MARK: - Test PKI
