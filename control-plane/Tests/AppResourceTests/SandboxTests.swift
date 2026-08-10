@@ -527,7 +527,7 @@ final class SandboxTests {
         }
     }
 
-    @Test("Fork refuses a checkpoint whose guest predates re-identification")
+    @Test("Fork refuses a checkpoint whose guest is not on the exact current protocol")
     func createFromSnapshotRejectsLegacyGuest() async throws {
         try await withSandboxTestApp { app, user, project, source, token in
             let agentId = try await registerAgent(
@@ -544,7 +544,7 @@ final class SandboxTests {
                 createdByID: user.id!)
             snapshot.status = .ready
             snapshot.guestControlProtocolVersion =
-                SandboxGuestControlProtocol.reidentifyMinimumVersion - 1
+                SandboxGuestControlProtocol.currentVersion - 1
             snapshot.forkLayoutVersion = SandboxSnapshotForkLayout.currentVersion
             try await snapshot.save(on: app.db)
 
@@ -557,7 +557,8 @@ final class SandboxTests {
                 ])
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-                #expect(res.body.string.contains("checkpointed guest is too old"))
+                #expect(res.body.string.contains("unsupported guest control protocol"))
+                #expect(res.body.string.contains("Delete this snapshot and recapture"))
             }
         }
     }
@@ -637,45 +638,6 @@ final class SandboxTests {
                     .first())
             #expect(forkNIC.logicalNetworkID == (try network.requireID()))
             #expect(forkNIC.macAddress != sourceNIC.macAddress)
-        }
-    }
-
-    /// A v3 guest rotates its identity but drops `reidentify`'s `network`
-    /// block, so it would come up holding the *source* sandbox's address —
-    /// which generally still belongs to a live sandbox. A network-free fork of
-    /// the same guest stays perfectly legal, which is why this gate is
-    /// separate from the fork gate rather than a bump of it.
-    @Test("Fork refuses a networked checkpoint whose guest cannot re-address its NIC")
-    func createFromSnapshotRejectsNetworkedForkOnPreV4Guest() async throws {
-        try await withSandboxTestApp { app, user, project, source, token in
-            let agentId = try await registerAgent(
-                app: app, sandbox: source, named: "pre-v4-guest-agent",
-                sandboxCapable: true, sandboxNetworkingCapable: true)
-            let network = try await self.projectNetwork(project: project, on: app.db)
-            try await SandboxNetworkInterface(
-                sandboxID: source.id!,
-                logicalNetworkID: try network.requireID(),
-                macAddress: "52:54:00:00:00:12"
-            ).save(on: app.db)
-            let snapshot = try await self.readySnapshot(
-                named: "pre-v4-guest-checkpoint", source: source, project: project, user: user,
-                agentId: agentId, on: app.db)
-            snapshot.guestControlProtocolVersion =
-                SandboxGuestControlProtocol.networkReconfigureMinimumVersion - 1
-            try await snapshot.save(on: app.db)
-
-            try await app.test(.POST, "/api/sandboxes") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-                try req.content.encode([
-                    "name": "stale-address-fork",
-                    "restoreFrom": snapshot.id!.uuidString,
-                    "projectId": project.id!.uuidString,
-                    "networkId": try network.requireID().uuidString,
-                ])
-            } afterResponse: { res in
-                #expect(res.status == .conflict)
-                #expect(res.body.string.contains("cannot re-address its NIC"))
-            }
         }
     }
 

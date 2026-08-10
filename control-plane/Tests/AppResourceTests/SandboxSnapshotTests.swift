@@ -351,6 +351,7 @@ final class SandboxSnapshotTests {
                 agentId: nil,
                 createdByID: user.id!)
             snapshot.status = .ready
+            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(
@@ -414,6 +415,7 @@ final class SandboxSnapshotTests {
                 agentId: nil,
                 createdByID: user.id!)
             snapshot.status = .ready
+            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
             try await snapshot.save(on: app.db)
 
             let fork = Sandbox(
@@ -492,6 +494,7 @@ final class SandboxSnapshotTests {
                 agentId: "some-other-agent",
                 createdByID: user.id!)
             snapshot.status = .ready
+            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(
@@ -518,6 +521,7 @@ final class SandboxSnapshotTests {
                 agentId: agentId,
                 createdByID: user.id!)
             snapshot.status = .ready
+            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
             try await snapshot.save(on: app.db)
 
             var accepted: AcceptedMutation<SandboxDetailResponse>?
@@ -547,6 +551,36 @@ final class SandboxSnapshotTests {
         }
     }
 
+    @Test("Restore refuses a legacy checkpoint with a purge and recapture path")
+    func restoreRefusesLegacyGuestProtocol() async throws {
+        try await withSnapshotTestApp { app, user, _, sandbox, token in
+            let agentId = try await placeOnCapableAgent(
+                app: app, sandbox: sandbox, status: .stopped)
+            let snapshot = SandboxSnapshot(
+                name: "legacy-checkpoint",
+                sandboxID: sandbox.id!,
+                projectID: sandbox.$project.id,
+                environment: sandbox.environment,
+                agentId: agentId,
+                createdByID: user.id!)
+            snapshot.status = .ready
+            snapshot.guestControlProtocolVersion =
+                SandboxGuestControlProtocol.currentVersion - 1
+            try await snapshot.save(on: app.db)
+
+            try await app.test(
+                .POST,
+                "/api/sandboxes/\(sandbox.id!.uuidString)/snapshots/\(snapshot.id!.uuidString)/restore"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+                #expect(res.body.string.contains("unsupported guest control protocol"))
+                #expect(res.body.string.contains("Delete this snapshot and recapture"))
+            }
+        }
+    }
+
     /// Wire compatibility and backend support are different questions (issue
     /// #415): an agent with no sandbox-snapshot backend reads the nonce and can do nothing
     /// with it, which would surface as a `degraded` condition an hour later
@@ -564,6 +598,7 @@ final class SandboxSnapshotTests {
                 agentId: agentId,
                 createdByID: user.id!)
             snapshot.status = .ready
+            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(
@@ -915,6 +950,7 @@ final class SandboxSnapshotTests {
                 agentId: "some-other-agent",
                 createdByID: user.id!)
             snapshot.status = .ready
+            snapshot.guestControlProtocolVersion = SandboxGuestControlProtocol.currentVersion
             try await snapshot.save(on: app.db)
 
             try await app.test(

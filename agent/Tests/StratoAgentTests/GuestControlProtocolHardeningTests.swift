@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 import Testing
 
 @testable import StratoAgentCore
@@ -86,18 +87,15 @@ struct GuestControlProtocolHardeningTests {
         }
     }
 
-    @Test("a response with no identity fields decodes to empty ones, not a rejection")
-    func missingIdentityIsLegacyNotMalformed() throws {
-        // A compatibility contract, not an oversight: guests predating identity
-        // echo send neither field, and the host's identity check reads "" as
-        // "nothing to match" and falls back to id-only. Capping these fields
-        // must not turn their absence into a throw.
-        #expect(
-            try GuestControlProtocol.Response.decode(line: #"{"type":"pong"}"#)
-                == .pong(sandboxId: "", nonce: "", controlProtocolVersion: nil))
-        #expect(
+    @Test("responses without identity fields are rejected")
+    func missingIdentityIsRejected() {
+        #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(
+                line: #"{"type":"pong","control_protocol_version":4}"#)
+        }
+        #expect(throws: GuestControlError.self) {
             try GuestControlProtocol.Response.decode(line: #"{"type":"status","state":"running"}"#)
-                == .status(sandboxId: "", nonce: "", state: .running, exitCode: nil))
+        }
     }
 
     @Test("multi-byte characters count against a cap as bytes, not as characters")
@@ -378,7 +376,8 @@ struct GuestControlProtocolHardeningTests {
         switch response {
         case .pong(let id, let nonce, let version):
             if let violation = checkIdentity(id, "sandbox_id") ?? checkIdentity(nonce, "nonce") { return violation }
-            if let version, version < 0 || version > Int(UInt32.max) { return "protocol version \(version)" }
+            if id.isEmpty || nonce.isEmpty { return "empty identity" }
+            if version != SandboxGuestControlProtocol.currentVersion { return "protocol version \(version)" }
             return nil
         case .status(let id, let nonce, _, let exitCode):
             return checkIdentity(id, "sandbox_id") ?? checkIdentity(nonce, "nonce") ?? checkExitCode(exitCode)
@@ -402,7 +401,7 @@ struct GuestControlProtocolHardeningTests {
     /// mutation lands in a code path that would otherwise be hard to reach by
     /// chance.
     private static let corpus: [String] = [
-        #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1","control_protocol_version":3}"#,
+        #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1","control_protocol_version":4}"#,
         #"{"type":"status","sandbox_id":"sb-1","nonce":"n-1","state":"exited","exit_code":137}"#,
         #"{"type":"status","sandbox_id":"sb-1","nonce":"n-1","state":"held"}"#,
         #"{"type":"error","message":"spawn failed"}"#,

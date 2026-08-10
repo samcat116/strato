@@ -2429,25 +2429,14 @@ actor AgentService {
                     "the restore snapshot is unavailable or not ready")
             }
             guard
-                SandboxGuestControlProtocol.supportsReidentify(
-                    snapshot.guestControlProtocolVersion)
+                snapshot.guestControlProtocolVersion
+                    == SandboxGuestControlProtocol.currentVersion
             else {
                 throw AgentServiceError.schedulingFailed(
-                    "snapshot guest is too old for sandbox forks (need guest control protocol >= \(SandboxGuestControlProtocol.reidentifyMinimumVersion))"
-                )
-            }
-            // A *networked* fork needs one version more: the checkpointed
-            // guest holds the source sandbox's MAC and address, and only a v4
-            // guest acts on the `network` block `reidentify` carries to
-            // replace them (STR-104). Re-checked here as well as at admission
-            // because placement is where a stale row would otherwise send the
-            // fork to an agent that can only fail it.
-            if !nic.isEmpty,
-                !SandboxGuestControlProtocol.supportsNetworkReconfigure(
-                    snapshot.guestControlProtocolVersion)
-            {
-                throw AgentServiceError.schedulingFailed(
-                    "snapshot guest cannot re-address its NIC, so it can only be forked without one (need guest control protocol >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))"
+                    "snapshot uses unsupported guest control protocol "
+                        + "\(snapshot.guestControlProtocolVersion.map(String.init) ?? "missing"); "
+                        + "version \(SandboxGuestControlProtocol.currentVersion) is required, so delete "
+                        + "and recapture it after upgrading the sandbox guest image"
                 )
             }
 

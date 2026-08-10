@@ -25,23 +25,12 @@ use serde::{Deserialize, Serialize};
 /// * v2 — adds the optional [`NetworkConfig`] block (STR-101).
 pub const SCHEMA_VERSION: u32 = 2;
 
-/// The oldest schema version this init still understands. Every version in
-/// `MINIMUM_SCHEMA_VERSION..=SCHEMA_VERSION` is accepted.
-pub const MINIMUM_SCHEMA_VERSION: u32 = 1;
-
 /// Top-level config-drive document.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuestConfig {
-    /// The **minimum** schema version needed to act on this document, which the
-    /// host stamps from what the document actually carries — not simply the
-    /// newest version the host knows.
-    ///
-    /// So a network-free document is stamped v1 even by a host that can write
-    /// v2, and keeps booting on an older guest image; a document carrying a
-    /// [`NetworkConfig`] is stamped v2, and a guest that predates the block
-    /// refuses it rather than booting a sandbox whose NIC it would silently
-    /// ignore. A version this init understands but did not write is fine; one
-    /// newer than [`SCHEMA_VERSION`] is not.
+    /// Exact schema version of this document. The host and guest ship one
+    /// current contract; accepting an older additive subset would let stale
+    /// config drives survive after their guest image/checkpoint was retired.
     pub schema_version: u32,
     /// The sandbox's control-plane id, echoed back over vsock for identity.
     pub sandbox_id: String,
@@ -222,6 +211,8 @@ pub struct ResolvedProcess {
 pub enum ConfigError {
     /// The config drive's schema version is not understood by this init.
     UnsupportedSchema(u32),
+    /// The host did not bind the config drive to a sandbox generation.
+    MissingIdentity,
     /// Neither the image nor the overrides supplied a command to run.
     EmptyCommand,
     /// The `User` field could not be parsed as a numeric `uid[:gid]`.
@@ -235,8 +226,15 @@ impl std::fmt::Display for ConfigError {
                 write!(
                     f,
                     "unsupported config-drive schema version {v} \
-                     (this init understands {MINIMUM_SCHEMA_VERSION}...{SCHEMA_VERSION}); \
-                     the guest image is older than the agent that wrote this drive"
+                     (this init requires exactly {SCHEMA_VERSION}); \
+                     recreate the sandbox or purge and recapture its checkpoint"
+                )
+            }
+            ConfigError::MissingIdentity => {
+                write!(
+                    f,
+                    "config drive is missing its sandbox identity or identity nonce; \
+                     recreate the sandbox or purge and recapture its checkpoint"
                 )
             }
             ConfigError::EmptyCommand => {
@@ -274,6 +272,20 @@ impl GuestConfig {
         Self::from_slice(&bytes[..end])
     }
 
+    /// Validate the document-level contract before acting on any config-drive
+    /// mode. Warm-hold templates do not resolve a workload at boot, but they
+    /// must reject retired schemas and identity-less drives just like a cold
+    /// sandbox does.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        if self.schema_version != SCHEMA_VERSION {
+            return Err(ConfigError::UnsupportedSchema(self.schema_version));
+        }
+        if self.sandbox_id.is_empty() || self.identity_nonce.is_empty() {
+            return Err(ConfigError::MissingIdentity);
+        }
+        Ok(())
+    }
+
     /// Merge the image config with the overrides into the concrete process to
     /// exec.
     ///
@@ -289,15 +301,7 @@ impl GuestConfig {
     ///   * **cwd**: `overrides.workdir` ?? image `WorkingDir` ?? `/`.
     ///   * **user**: `overrides.user` ?? image `User` ?? `0:0`, numeric only.
     pub fn resolve_process(&self) -> Result<ResolvedProcess, ConfigError> {
-        // A version *older* than this build's is fully understood — the schema
-        // is additive, and the host stamps the minimum a document needs — so
-        // only a newer one is a refusal. That is what lets an agent that can
-        // write v2 keep booting network-free sandboxes on a guest image that
-        // predates the network block, while still refusing a document whose
-        // NIC this init would silently ignore.
-        if !(MINIMUM_SCHEMA_VERSION..=SCHEMA_VERSION).contains(&self.schema_version) {
-            return Err(ConfigError::UnsupportedSchema(self.schema_version));
-        }
+        self.validate()?;
         resolve_process(&self.image_config, &self.overrides)
     }
 }
@@ -609,15 +613,21 @@ mod tests {
         assert_eq!(c.resolve_process(), Err(ConfigError::UnsupportedSchema(99)));
     }
 
-    /// The host stamps the *minimum* version a document needs, so a v1 stamp
-    /// from a newer agent means "this drive carries nothing past v1" — fully
-    /// understood, and refusing it would strand every network-free sandbox on
-    /// a node whose guest image lags the agent.
     #[test]
-    fn an_older_schema_is_understood_rather_than_refused() {
+    fn an_older_schema_is_refused() {
         let mut c = base_config();
-        c.schema_version = MINIMUM_SCHEMA_VERSION;
-        assert!(c.resolve_process().is_ok());
+        c.schema_version = SCHEMA_VERSION - 1;
+        assert_eq!(
+            c.resolve_process(),
+            Err(ConfigError::UnsupportedSchema(SCHEMA_VERSION - 1))
+        );
+    }
+
+    #[test]
+    fn a_missing_identity_is_refused() {
+        let mut c = base_config();
+        c.identity_nonce.clear();
+        assert_eq!(c.resolve_process(), Err(ConfigError::MissingIdentity));
     }
 
     /// A version past this build's is the one that must fail: it can only mean
@@ -649,6 +659,22 @@ mod tests {
         let json = br#"{"schema_version":2,"sandbox_id":"s","identity_nonce":"n","rootfs":{"device":"/dev/vda"},"warm_hold":true}"#;
         let cfg = GuestConfig::from_slice(json).expect("parse");
         assert!(cfg.warm_hold);
+        assert_eq!(cfg.validate(), Ok(()));
+    }
+
+    #[test]
+    fn warm_hold_still_rejects_legacy_schema_and_missing_identity() {
+        let mut c = base_config();
+        c.warm_hold = true;
+        c.schema_version = SCHEMA_VERSION - 1;
+        assert_eq!(
+            c.validate(),
+            Err(ConfigError::UnsupportedSchema(SCHEMA_VERSION - 1))
+        );
+
+        c.schema_version = SCHEMA_VERSION;
+        c.identity_nonce.clear();
+        assert_eq!(c.validate(), Err(ConfigError::MissingIdentity));
     }
 
     #[test]

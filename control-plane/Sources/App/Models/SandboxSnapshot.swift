@@ -77,7 +77,7 @@ final class SandboxSnapshot: Model, @unchecked Sendable {
     var architecture: String?
 
     /// Guest init version frozen into memory. Nil means legacy/unknown and is
-    /// intentionally ineligible for fork re-identification.
+    /// retained only for inventory/deletion; restore and fork reject it.
     @OptionalField(key: "guest_control_protocol_version")
     var guestControlProtocolVersion: Int?
 

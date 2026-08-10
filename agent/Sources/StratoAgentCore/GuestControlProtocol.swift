@@ -213,7 +213,7 @@ public enum GuestControlProtocol {
         /// silently dropped it would run with an unaddressed interface while
         /// reporting healthy, so a networked launch is only ever sent to a
         /// guest that advertised control protocol
-        /// ``SandboxGuestControlProtocol/networkReconfigureMinimumVersion``.
+        /// ``SandboxGuestControlProtocol/currentVersion``.
         public let network: SandboxConfigDrive.NetworkConfig?
 
         public init(
@@ -474,10 +474,8 @@ public enum GuestControlProtocol {
 
     /// A control response sent guest → host.
     public enum Response: Equatable, Sendable {
-        /// `controlProtocolVersion` is nil for guests predating explicit
-        /// capability advertisement. Callers must treat nil as legacy rather
-        /// than inferring support from the host agent's version.
-        case pong(sandboxId: String, nonce: String, controlProtocolVersion: Int?)
+        /// Every supported guest advertises the exact current protocol version.
+        case pong(sandboxId: String, nonce: String, controlProtocolVersion: Int)
         case status(sandboxId: String, nonce: String, state: WorkloadState, exitCode: Int?)
         case error(message: String)
         /// The exec process spawned; output may follow on this connection.
@@ -503,8 +501,7 @@ public enum GuestControlProtocol {
         /// The guest completed fork identity rotation (issue #427).
         case reidentified
 
-        /// Explicitly advertised only by versioned `pong` replies. A missing
-        /// value means the checkpointed guest predates capability discovery.
+        /// Explicitly advertised by every supported `pong` reply.
         public var controlProtocolVersion: Int? {
             guard case .pong(_, _, let version) = self else { return nil }
             return version
@@ -531,16 +528,16 @@ public enum GuestControlProtocol {
             switch raw.type {
             case "pong":
                 return .pong(
-                    sandboxId: try raw.identity(\.sandboxId, field: "sandbox_id"),
-                    nonce: try raw.identity(\.nonce, field: "nonce"),
+                    sandboxId: try raw.requiredIdentity(\.sandboxId, field: "sandbox_id"),
+                    nonce: try raw.requiredIdentity(\.nonce, field: "nonce"),
                     controlProtocolVersion: try raw.protocolVersion())
             case "status":
                 guard let stateString = raw.state, let state = WorkloadState(rawValue: stateString) else {
                     throw GuestControlError.malformed(line)
                 }
                 return .status(
-                    sandboxId: try raw.identity(\.sandboxId, field: "sandbox_id"),
-                    nonce: try raw.identity(\.nonce, field: "nonce"),
+                    sandboxId: try raw.requiredIdentity(\.sandboxId, field: "sandbox_id"),
+                    nonce: try raw.requiredIdentity(\.nonce, field: "nonce"),
                     state: state,
                     exitCode: try raw.boundedExitCode())
             case "error":
@@ -630,11 +627,13 @@ public enum GuestControlProtocol {
             case controlProtocolVersion = "control_protocol_version"
         }
 
-        /// An echoed identity field, capped. A missing one stays `""` — the
-        /// host's identity check reads that as "no identity to match", which is
-        /// how guests predating identity echo have always been handled.
-        func identity(_ key: KeyPath<RawResponse, String?>, field: String) throws -> String {
-            guard let value = self[keyPath: key] else { return "" }
+        /// An echoed identity field, required and capped. Identity-less replies
+        /// came only from retired guests and are never allowed to advance host
+        /// lifecycle state.
+        func requiredIdentity(_ key: KeyPath<RawResponse, String?>, field: String) throws -> String {
+            guard let value = self[keyPath: key], !value.isEmpty else {
+                throw GuestControlError.missingRequiredField(field)
+            }
             return try Self.capped(value, field: field, limit: Limits.maxIdentifierBytes)
         }
 
@@ -706,13 +705,18 @@ public enum GuestControlProtocol {
         }
 
         /// The advertised control protocol version, declared `u32` guest-side.
-        /// Callers gate capabilities on it, so a negative or absurd value is a
-        /// rejection rather than something to compare against.
-        func protocolVersion() throws -> Int? {
-            guard let controlProtocolVersion else { return nil }
+        /// There is one supported contract: missing, older, and future versions
+        /// are all explicit upgrade/rebuild failures rather than feature gates.
+        func protocolVersion() throws -> Int {
+            guard let controlProtocolVersion else {
+                throw GuestControlError.unsupportedProtocolVersion(nil)
+            }
             guard controlProtocolVersion >= 0, controlProtocolVersion <= Int(UInt32.max) else {
                 throw GuestControlError.fieldOutOfRange(
                     field: "control_protocol_version", value: String(controlProtocolVersion))
+            }
+            guard controlProtocolVersion == SandboxGuestControlProtocol.currentVersion else {
+                throw GuestControlError.unsupportedProtocolVersion(controlProtocolVersion)
             }
             return controlProtocolVersion
         }
@@ -739,6 +743,10 @@ public enum GuestControlError: Error, LocalizedError, Equatable, Sendable {
     case fieldTooLarge(field: String, bytes: Int, limit: Int)
     /// A numeric field fell outside the range the protocol allows for it.
     case fieldOutOfRange(field: String, value: String)
+    /// A required identity field is absent or empty.
+    case missingRequiredField(String)
+    /// The guest omitted or does not speak the one supported protocol version.
+    case unsupportedProtocolVersion(Int?)
     /// The guest returned an `error` response.
     case guestError(String)
     /// No response arrived before the deadline.
@@ -765,6 +773,14 @@ public enum GuestControlError: Error, LocalizedError, Equatable, Sendable {
             return "guest control response field '\(field)' of \(bytes) bytes exceeds the \(limit) byte limit"
         case .fieldOutOfRange(let field, let value):
             return "guest control response field '\(field)' is out of range: \(value)"
+        case .missingRequiredField(let field):
+            return "guest control response is missing required field '\(field)'; "
+                + "replace the guest image and recreate the sandbox or checkpoint"
+        case .unsupportedProtocolVersion(let version):
+            return "unsupported sandbox guest control protocol "
+                + "\(version.map(String.init) ?? "missing"); version "
+                + "\(SandboxGuestControlProtocol.currentVersion) is required, so replace the guest image "
+                + "and recreate the sandbox or purge and recapture its checkpoint"
         case .guestError(let message):
             return "guest control agent error: \(message)"
         case .timeout:
