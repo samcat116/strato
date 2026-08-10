@@ -100,7 +100,7 @@ public actor FirecrackerClient {
 
     /// The deterministic API socket path for a VM under this client, jailed or
     /// not — the single derivation both spawn and re-adoption (#433) use.
-    public func socketPath(vmId: String, jail: JailerOptions?) -> String {
+    func socketPath(vmId: String, jail: JailerOptions?) -> String {
         if let jail {
             return JailerOptions.socketPath(
                 chrootBaseDir: jail.chrootBaseDir,
@@ -425,14 +425,6 @@ public actor FirecrackerClient {
         return (manager, info)
     }
 
-    /// Gets the manager for an existing VM
-    public func getManager(vmId: String) async throws -> FirecrackerManager {
-        guard let vm = runningVMs[vmId] else {
-            throw FirecrackerError.vmNotFound(vmId)
-        }
-        return vm.manager
-    }
-
     /// Destroys a VM and cleans up resources
     public func destroyVM(vmId: String) async throws {
         guard let vm = runningVMs[vmId] else {
@@ -529,27 +521,6 @@ public actor FirecrackerClient {
         runningVMs.removeValue(forKey: vmId)
 
         logger.info("VM destroyed", metadata: ["vm_id": "\(vmId)"])
-    }
-
-    /// Lists all running VMs
-    public func listVMs() -> [String] {
-        return Array(runningVMs.keys)
-    }
-
-    /// Checks if a VM is running
-    public func isRunning(vmId: String) -> Bool {
-        guard let vm = runningVMs[vmId] else {
-            return false
-        }
-        if let process = vm.process {
-            return process.isRunning
-        }
-        // Identity check rather than `kill(pid, 0)`: a recycled pid would
-        // otherwise report a long-dead VM as still running.
-        if let pid = vm.adoptedPID, let identity = vm.pidIdentity {
-            return identity.matches(pid: pid)
-        }
-        return false
     }
 
     // MARK: - Adopted-process helpers
@@ -691,23 +662,4 @@ public actor FirecrackerClient {
                 + (lastError.map { ": \($0.localizedDescription)" } ?? ""))
     }
 
-    /// Cleans up all VMs (called on shutdown)
-    ///
-    /// Destroys concurrently: each teardown can spend seconds waiting for a
-    /// VMM to exit and its cgroup to empty, so doing them in series makes agent
-    /// shutdown scale with the number of VMs on the host.
-    public func cleanup() async {
-        let vmIds = Array(runningVMs.keys)
-        logger.info("Cleaning up all VMs", metadata: ["count": "\(vmIds.count)"])
-        await withTaskGroup(of: Void.self) { group in
-            for vmId in vmIds {
-                // Strong `self`: the group is awaited inside this actor, so
-                // there is no retain cycle to break — and a `weak` capture that
-                // lost the race would silently skip teardown entirely.
-                group.addTask {
-                    try? await self.destroyVM(vmId: vmId)
-                }
-            }
-        }
-    }
 }

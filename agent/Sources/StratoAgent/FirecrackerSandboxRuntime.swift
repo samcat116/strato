@@ -2146,8 +2146,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.createSnapshot(
                 SnapshotCreateConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
-                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    snapshotType: .full))
+                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail))
             try moveReplacingItem(
                 from: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
                 to: memoryTarget)
@@ -2159,8 +2158,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.createSnapshot(
                 SnapshotCreateConfig(
                     snapshotPath: vmstateTarget,
-                    memFilePath: memoryTarget,
-                    snapshotType: .full))
+                    memFilePath: memoryTarget))
         }
     }
 

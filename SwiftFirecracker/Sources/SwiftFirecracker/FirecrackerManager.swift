@@ -11,7 +11,7 @@ public actor FirecrackerManager {
     private let decoder: JSONDecoder
 
     /// Current state of the VM
-    private(set) public var vmState: InstanceState = .notStarted
+    private var vmState: InstanceState = .notStarted
 
     /// Creates a new FirecrackerManager
     /// - Parameters:
@@ -20,7 +20,7 @@ public actor FirecrackerManager {
     ///   - requestTimeout: Ceiling on one API round trip. The default is sized
     ///     for the calls that wait on the vCPUs; reads that do not take
     ///     ``UnixSocketHTTPClient/defaultReadTimeout`` per call instead.
-    public init(
+    init(
         socketPath: String,
         logger: Logger = Logger(label: "SwiftFirecracker.Manager"),
         requestTimeout: TimeInterval = UnixSocketHTTPClient.defaultRequestTimeout
@@ -36,12 +36,12 @@ public actor FirecrackerManager {
     // MARK: - Connection Management
 
     /// Connects to the Firecracker API socket
-    public func connect() async throws {
+    func connect() async throws {
         try await httpClient.connect()
     }
 
     /// Disconnects from the Firecracker API socket
-    public func disconnect() async {
+    func disconnect() async {
         await httpClient.disconnect()
     }
 
@@ -59,26 +59,6 @@ public actor FirecrackerManager {
                 "vcpus": "\(config.vcpuCount)",
                 "memory_mib": "\(config.memSizeMib)",
             ])
-    }
-
-    /// Partially updates the machine configuration (`PATCH /machine-config`).
-    /// Only valid before the VM starts; the primary use is enabling
-    /// `track_dirty_pages` for diff snapshots.
-    public func updateMachineConfig(_ update: MachineConfigUpdate) async throws {
-        let body = try encoder.encode(update)
-        let response = try await httpClient.request(method: .PATCH, path: "/machine-config", body: body)
-        try handleResponse(response)
-        logger.info("Machine configuration updated")
-    }
-
-    /// Gets the current machine configuration
-    public func getMachineConfig() async throws -> MachineConfigResponse {
-        let response = try await httpClient.request(method: .GET, path: "/machine-config")
-        try handleResponse(response)
-        guard let body = response.body else {
-            throw FirecrackerError.deserializationError("Empty response body")
-        }
-        return try decoder.decode(MachineConfigResponse.self, from: body)
     }
 
     // MARK: - Boot Configuration
@@ -153,8 +133,8 @@ public actor FirecrackerManager {
     /// reseed its RNG — required for clone safety when a snapshot is restored
     /// more than once. Must be called before starting the VM; requires
     /// Firecracker >= 1.3.
-    public func configureEntropy(_ device: EntropyDevice = EntropyDevice()) async throws {
-        let body = try encoder.encode(device)
+    public func configureEntropy() async throws {
+        let body = Data("{}".utf8)
         let response = try await httpClient.request(method: .PUT, path: "/entropy", body: body)
         try handleResponse(response)
         logger.info("Entropy device configured")
@@ -264,7 +244,7 @@ public actor FirecrackerManager {
             metadata: [
                 "vmstate": "\(config.snapshotPath)",
                 "memory": "\(config.memFilePath)",
-                "type": "\(config.snapshotType?.rawValue ?? SnapshotCreateConfig.SnapshotType.full.rawValue)",
+                "type": "Full",
             ])
     }
 
@@ -273,7 +253,7 @@ public actor FirecrackerManager {
     /// so none of the usual configuration calls precede this; drive files must
     /// exist at the paths recorded in the vmstate. Leaves the VM paused unless
     /// `config.resumeVM` is true.
-    public func loadSnapshot(_ config: SnapshotLoadConfig) async throws {
+    func loadSnapshot(_ config: SnapshotLoadConfig) async throws {
         try await requireState(.notStarted)
 
         let body = try encoder.encode(config)
@@ -356,41 +336,5 @@ public actor FirecrackerManager {
             }
             throw FirecrackerError.httpError(statusCode: response.statusCode, message: message)
         }
-    }
-}
-
-// MARK: - Convenience Methods
-
-extension FirecrackerManager {
-    /// Creates and starts a VM with the given configuration
-    /// This is a convenience method that combines all configuration steps
-    public func createAndStart(
-        machineConfig: MachineConfig,
-        bootSource: BootSource,
-        rootDrive: Drive,
-        networkInterface: NetworkInterface? = nil,
-        vsock: VsockConfig? = nil
-    ) async throws {
-        // Configure machine
-        try await configureMachine(machineConfig)
-
-        // Configure boot source
-        try await configureBootSource(bootSource)
-
-        // Configure root drive
-        try await configureDrive(rootDrive)
-
-        // Configure network if provided
-        if let network = networkInterface {
-            try await configureNetwork(network)
-        }
-
-        // Configure vsock if provided (host↔guest control channel)
-        if let vsock {
-            try await configureVsock(vsock)
-        }
-
-        // Start the VM
-        try await start()
     }
 }
