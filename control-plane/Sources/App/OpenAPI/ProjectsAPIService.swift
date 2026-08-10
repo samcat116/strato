@@ -187,6 +187,14 @@ struct ProjectsAPIService: APIProtocol {
         // nowhere while still shaping the Cedar schema. Removing roles is a
         // policy-set change and bumps the version.
         let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+            // Global organization/OU quotas survive this project and must be
+            // refreshed after its networks cascade away. Resolve and lock them
+            // while the project still exists; project-scoped quotas are part of
+            // the cascade and deliberately absent from this set (STR-236).
+            let projectWideAncestorQuotas =
+                try await QuotaEnforcementService.lockedProjectWideAncestorQuotas(
+                    for: project, on: db)
+
             // The project node's bindings, and those of every resource that
             // cascades away with it — service accounts (in both directions),
             // images, networks, security groups, floating IPs, DNS zones and
@@ -212,6 +220,8 @@ struct ProjectsAPIService: APIProtocol {
                     reason: "Cannot delete project: a VM or sandbox was created in it. "
                         + "Delete or move its workloads first.")
             }
+            try await QuotaEnforcementService.resyncAndSaveReservations(
+                projectWideAncestorQuotas, on: db)
             let removedRoles = try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             let removedPolicies = try await PolicyStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             let removed = removedRoles + removedPolicies
@@ -541,12 +551,32 @@ struct ProjectsAPIService: APIProtocol {
             on: req.db
         )
 
-        project.$organization.id = destinationOrganizationIDParam
-        project.$organizationalUnit.id = destinationOUID
-        project.path = try await project.buildPath(on: req.db)
+        try await req.db.transaction { db in
+            try await QuotaEnforcementService.lockProjectNetworkMutations(
+                for: project, on: db)
+            let sourceQuotas = try await QuotaEnforcementService.applicableProjectWideQuotas(
+                for: project, on: db)
+            let networkCount = try await LogicalNetwork.query(on: db)
+                .filter(\.$project.$id == projectID)
+                .count()
 
-        try project.validate()
-        try await project.save(on: req.db)
+            project.$organization.id = destinationOrganizationIDParam
+            project.$organizationalUnit.id = destinationOUID
+            project.path = try await project.buildPath(on: db)
+            try project.validate()
+
+            let destinationQuotas = try await QuotaEnforcementService.applicableProjectWideQuotas(
+                for: project, on: db)
+            let affectedQuotas = try await QuotaEnforcementService.validateNetworkTransfer(
+                networkCount: networkCount,
+                sourceQuotas: sourceQuotas,
+                destinationQuotas: destinationQuotas,
+                on: db)
+
+            try await project.save(on: db)
+            try await QuotaEnforcementService.resyncAndSaveReservations(
+                affectedQuotas, on: db)
+        }
 
         let vmCount = try await Self.vmCount(projectID, on: req.db)
         return .ok(.init(body: .json(try .init(project: project, vmCount: vmCount))))

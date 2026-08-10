@@ -112,12 +112,15 @@ export function QuotaCard({
         )}
       </div>
 
-      <div className="text-xs text-muted-foreground">
-        Networks: {usage.networkCount} / {limits.maxNetworks}
-        {maxVolumes === null && (
-          <> &middot; Volumes: {usage.volumeCount} (no limit)</>
-        )}
-      </div>
+      {(!quota.environment || maxVolumes === null) && (
+        <div className="text-xs text-muted-foreground">
+          {!quota.environment && (
+            <>Networks: {usage.networkCount} / {limits.maxNetworks}</>
+          )}
+          {!quota.environment && maxVolumes === null && <> &middot; </>}
+          {maxVolumes === null && <>Volumes: {usage.volumeCount} (no limit)</>}
+        </div>
+      )}
     </div>
   );
 }

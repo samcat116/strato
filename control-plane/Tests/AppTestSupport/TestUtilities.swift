@@ -586,6 +586,7 @@ package struct TestDataBuilder {
         maxMemoryGB: Double = 20.0,
         maxStorageGB: Double = 100.0,
         maxVMs: Int = 5,
+        maxNetworks: Int = 10,
         organization: Organization? = nil,
         ou: OrganizationalUnit? = nil,
         project: Project? = nil,
@@ -600,6 +601,7 @@ package struct TestDataBuilder {
             maxMemory: Int64(maxMemoryGB * 1024 * 1024 * 1024),
             maxStorage: Int64(maxStorageGB * 1024 * 1024 * 1024),
             maxVMs: maxVMs,
+            maxNetworks: maxNetworks,
             environment: environment
         )
         try await quota.save(on: db)

@@ -380,6 +380,10 @@ public func configure(_ app: Application) async throws {
     // fresh database; see ADR 0009 for the cutover decision.
     app.migrations.add(CurrentSchemaBaseline())
 
+    // STR-236: initialize the previously inert network counter from the
+    // project-wide logical networks each global quota actually governs.
+    app.migrations.add(BackfillNetworkQuotaAccounting())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a
