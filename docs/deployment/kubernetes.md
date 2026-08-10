@@ -15,7 +15,9 @@ helm dependency build
 helm install strato .
 ```
 
-Database migrations run automatically as a Helm hook.
+Every control-plane pod applies pending database migrations before it starts
+serving. PostgreSQL advisory locking serializes concurrent replicas; a migration
+failure leaves the new pod unready and is reported in its logs.
 
 ## Generated credentials
 
@@ -24,7 +26,7 @@ with:
 
 | Key | Used by |
 |---|---|
-| `db-password` | PostgreSQL, control plane, migration job |
+| `db-password` | PostgreSQL and the control plane |
 | `postgres-admin-password` | PostgreSQL superuser |
 
 The same values are reused on every upgrade, and the secret is kept on
@@ -108,16 +110,6 @@ WebAuthn requires the origin to exactly match the URL users visit (and HTTPS
 for anything other than localhost). With `gateway.enabled` the chart derives
 sensible WebAuthn defaults from the gateway web host, but setting them
 explicitly is recommended.
-
-::: warning The legacy `ingress:` block is not a standalone path
-The Gateway superseded the chart's `ingress:` block for external exposure
-(issue #508). Setting `ingress.enabled` without `gateway.enabled` fails at
-render time: the legacy Ingress routes `/agent` to the plain HTTP service
-port, terminating TLS at the edge, so no client certificate ever reaches the
-Envoy mTLS sidecar and the control plane rejects every agent. Keep the
-Ingress only for a web-host route alongside the Gateway during a migration;
-new installs should use the Gateway alone.
-:::
 
 To provision users yourself rather than letting anyone sign up, add
 `strato.selfRegistrationEnabled: false`. The first account is still creatable,
