@@ -481,7 +481,15 @@ fingerprints (`/.dockerenv`, container cgroups) when the marker is absent.
 Most settings have platform defaults; see
 [`config.toml.example`](https://github.com/samcat116/strato/blob/main/config.toml.example)
 for the full list (storage directories, network mode, SPIFFE/mTLS).
-Command-line flags override the config file.
+Configuration precedence is command-line flags, then process environment
+variables, then the TOML file. Environment names use the uppercased key path
+joined with underscores: `control_plane_url` becomes `CONTROL_PLANE_URL`, and
+`trust_domain` under `[spiffe]` becomes `SPIFFE_TRUST_DOMAIN`. Set array values
+as comma-separated strings, such as
+`OVN_DYNAMIC_ROUTING_ROUTING_PROTOCOLS=BGP,BFD`. Invalid known environment
+values stop startup instead of falling back to TOML. Environment variables are
+read from the process at startup; the agent does not load `.env` files or
+reload configuration while running.
 
 `qemu_memory_overhead_mb` controls the QEMU process allowance above current
 guest RAM. It defaults to 512 MiB and accepts 128–4096 MiB. On a host with the
