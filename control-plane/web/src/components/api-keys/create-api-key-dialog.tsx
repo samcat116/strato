@@ -73,9 +73,8 @@ export function CreateAPIKeyDialog({
     }
 
     // `read` is a pattern the server resolves on every check, not a list
-    // expanded here: a key minted read-only today must pick up an action added
-    // next release exactly as a legacy `read`-scoped key does, rather than
-    // freezing today's set into its row.
+    // expanded here: a key minted read-only today must pick up matching actions
+    // added next release rather than freezing today's set into its row.
     const actions =
       accessMode === "full"
         ? ["*"]

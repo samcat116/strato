@@ -18,10 +18,13 @@ struct ReconciliationProtocolTests {
                     imageInfo: ImageInfo(
                         imageId: UUID(),
                         projectId: UUID(),
-                        filename: "debian.qcow2",
-                        checksum: "abc",
-                        size: 1024,
-                        downloadURL: "https://example.test/dl"
+                        architecture: .x86_64,
+                        artifacts: [
+                            ArtifactInfo(
+                                kind: .diskImage, filename: "debian.qcow2",
+                                checksum: String(repeating: "a", count: 64), size: 1024,
+                                downloadURL: "https://example.test/dl?artifact=disk-image")
+                        ]
                     )
                 )
             ]
@@ -40,7 +43,21 @@ struct ReconciliationProtocolTests {
         #expect(decoded.vms[0].vmId == message.vms[0].vmId)
         #expect(decoded.vms[0].desiredStatus == .running)
         #expect(decoded.vms[0].generation == 7)
-        #expect(decoded.vms[0].imageInfo?.filename == "debian.qcow2")
+        #expect(decoded.vms[0].imageInfo?.artifact(ofKind: .diskImage)?.filename == "debian.qcow2")
+    }
+
+    @Test("A clone source carries the source VM serialization lane")
+    func cloneSourceVMLaneRoundTrip() throws {
+        let sourceVolumeId = UUID()
+        let sourceVMId = UUID()
+        let source = DesiredVolumeSource.clone(
+            from: sourceVolumeId, sourceVMId: sourceVMId, format: "qcow2")
+        let decoded = try roundTrip(source)
+
+        #expect(decoded.kind == DesiredVolumeSource.clone)
+        #expect(decoded.sourceVolumeId == sourceVolumeId)
+        #expect(decoded.sourceVMId == sourceVMId)
+        #expect(decoded.sourceFormat == "qcow2")
     }
 
     @Test("DesiredStateMessage carries networks through the envelope")
@@ -138,20 +155,22 @@ struct ReconciliationProtocolTests {
         #expect(decodedSolo.networksAuthoritative)
     }
 
-    @Test("DesiredStateMessage from an older control plane decodes networks to []")
-    func desiredStateNetworksBackwardCompatible() throws {
-        // A pre-v3 control plane emits no `networks` key at all; the agent must
-        // tolerate its absence rather than fail the whole sync.
-        let legacy = """
-            {"requestId":"r","timestamp":0,"syncId":"s","vms":[]}
-            """
-        let decoded = try WireProtocol.makeDecoder().decode(
-            DesiredStateMessage.self, from: Data(legacy.utf8))
-        #expect(decoded.networks.isEmpty)
-        #expect(decoded.syncId == "s")
-        // Every control plane predating the site/shared-NB protocol implies the
-        // agent owns its local NB, so absence must decode to authoritative.
-        #expect(decoded.networksAuthoritative)
+    @Test("The current desired schema requires every authoritative collection")
+    func desiredStateRequiresCurrentCollections() throws {
+        let encoded = try WireProtocol.makeEncoder().encode(DesiredStateMessage(syncId: "s", vms: []))
+        let object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        for key in [
+            "sandboxes", "networks", "networksAuthoritative", "tombstones", "volumes", "snapshots",
+        ] {
+            var malformed = object
+            malformed.removeValue(forKey: key)
+            let data = try JSONSerialization.data(withJSONObject: malformed)
+            #expect(throws: DecodingError.self, "missing required key: \(key)") {
+                try WireProtocol.makeDecoder().decode(DesiredStateMessage.self, from: data)
+            }
+        }
     }
 
     @Test("ObservedStateReport round-trips through the envelope")
@@ -193,6 +212,24 @@ struct ReconciliationProtocolTests {
         #expect(decoded.vms[1].failedGeneration == 3)
         // No qga probe: guestInfo stays nil rather than a fabricated empty.
         #expect(decoded.vms[0].guestInfo == nil)
+    }
+
+    @Test("The current observed schema requires sandbox and unrecognized inventories")
+    func observedStateRequiresCurrentCollections() throws {
+        let report = ObservedStateReport(
+            agentId: "agent-1", vms: [], resources: Fixtures.resources)
+        let encoded = try WireProtocol.makeEncoder().encode(report)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+
+        for key in ["sandboxes", "unrecognized"] {
+            var malformed = object
+            malformed.removeValue(forKey: key)
+            let data = try JSONSerialization.data(withJSONObject: malformed)
+            #expect(throws: DecodingError.self, "missing required key: \(key)") {
+                try WireProtocol.makeDecoder().decode(ObservedStateReport.self, from: data)
+            }
+        }
     }
 
     @Test("ObservedVMState carries qga guestInfo through the envelope (issue #563)")
@@ -371,16 +408,16 @@ struct ReconciliationProtocolTests {
         #expect(zone.records[0].values == ["10.0.0.5", "10.0.0.6"])
     }
 
-    @Test("A sync without DNS zones decodes to nil, never an empty opinion")
-    func desiredDNSZonesBackwardCompatible() throws {
-        // A pre-v36 control plane emits no `dnsZones` key. Nil is what makes
-        // the agent leave every managed DNS row alone; `[]` would have it sweep
-        // the site's rows on the first sync after a control-plane rollback.
-        let legacy = """
-            {"requestId":"r","timestamp":0,"syncId":"s","vms":[]}
+    @Test("A non-authoritative sync without DNS zones decodes to nil")
+    func desiredDNSZonesSemanticAbsence() throws {
+        // Nil is what makes the agent leave every managed DNS row alone; `[]`
+        // would have it sweep the site's rows.
+        let nonAuthoritative = """
+            {"requestId":"r","timestamp":0,"syncId":"s","vms":[],"sandboxes":[],
+             "networks":[],"networksAuthoritative":false,"tombstones":[],"volumes":[],"snapshots":[]}
             """
         let decoded = try WireProtocol.makeDecoder().decode(
-            DesiredStateMessage.self, from: Data(legacy.utf8))
+            DesiredStateMessage.self, from: Data(nonAuthoritative.utf8))
         #expect(decoded.dnsZones == nil)
 
         let empty = DesiredStateMessage(vms: [], dnsZones: [])
@@ -446,12 +483,13 @@ struct ReconciliationProtocolTests {
         #expect(decoded.domainName == "corp.example.com")
     }
 
-    @Test("A NetworkSpec from an older control plane decodes with a nil resolver flag")
-    func networkSpecResolverBackwardCompatible() throws {
-        let legacy = """
-            {"network":"default","networkId":"\(UUID().uuidString)"}
+    @Test("A NetworkSpec with no resolver opinion decodes with a nil flag")
+    func networkSpecResolverSemanticAbsence() throws {
+        let noOpinion = """
+            {"network":"default","networkId":"\(UUID().uuidString)",
+             "dhcpEnabled":false,"dnsServers":[]}
             """
-        let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: Data(legacy.utf8))
+        let decoded = try WireProtocol.makeDecoder().decode(NetworkSpec.self, from: Data(noOpinion.utf8))
         #expect(decoded.resolverEnabled == nil)
     }
 

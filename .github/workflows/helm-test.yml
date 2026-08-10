@@ -24,8 +24,6 @@ on:
 
 env:
   HELM_VERSION: v3.12.3
-  KIND_VERSION: v0.20.0
-  KUBERNETES_VERSION: v1.27.3
 
 # Supersede in-progress runs on new pushes to the same ref.
 concurrency:
@@ -87,6 +85,15 @@ jobs:
           helm template strato-test helm/strato-control-plane/ > /tmp/default-template.yaml
           echo "Default template generated successfully"
 
+      - name: Template every checked-in values scenario
+        run: |
+          for values in helm/strato-control-plane/ci/*.yaml; do
+            scenario=$(basename "$values" .yaml)
+            helm template "strato-$scenario" helm/strato-control-plane/ \
+              -f "$values" > "/tmp/$scenario-template.yaml"
+          done
+          echo "All checked-in values scenarios generated successfully"
+
       - name: Assert control-plane route parity
         run: |
           helm template strato-routes helm/strato-control-plane/ \
@@ -99,7 +106,10 @@ jobs:
       - name: Assert Helm notes only recommend supported agent URLs
         run: |
           notes=helm/strato-control-plane/templates/NOTES.txt
-          ! grep -q 'ws://' "$notes"
+          if grep -q 'ws://' "$notes"; then
+            echo "❌ Helm notes contain an unsupported plaintext agent URL"
+            exit 1
+          fi
           grep -q 'wss://{{ include "strato-control-plane.gateway.agentsHost" . }}/agent/ws' "$notes"
           grep -q 'wss://agents.<host>/agent/ws' "$notes"
           grep -q 'TLS passthrough' "$notes"
@@ -206,12 +216,9 @@ jobs:
           expected = {'SESSION_VALKEY_HOST', 'SESSION_VALKEY_PORT',
                       'SESSION_VALKEY_DATABASE', 'SESSION_VALKEY_PASSWORD'}
 
-          # 1/2. Both workloads. The migration Job boots the full application, so
-          # it needs the session endpoint too — and its env block is a verbatim
-          # copy of the Deployment's, which is exactly how the two drift.
-          for kind in ('Deployment', 'Job'):
-              missing = expected - env_of(kind)
-              assert not missing, "%s is missing %s" % (kind, sorted(missing))
+          # 1. The serving workload receives the distinct session endpoint.
+          missing = expected - env_of('Deployment')
+          assert not missing, "Deployment is missing %s" % sorted(missing)
 
           # 3. The password Secret the env block's secretKeyRef points at.
           assert 'session-valkey-password:' in split, "session password secret key missing"
@@ -229,7 +236,7 @@ jobs:
           assert 'SESSION_VALKEY' not in default, \
               "default render leaks SESSION_VALKEY_*; sessions must default to the coordination endpoint"
 
-          print("✅ Split session store renders on both workloads; default render unchanged")
+          print("✅ Split session store renders on the serving workload; default render unchanged")
           EOF
 
       - name: Template with SPIRE enabled
@@ -325,7 +332,7 @@ jobs:
           # once shipped a SPIRE server that could never start). The previous
           # incarnation of this step used safe_load (single-doc, dup-tolerant)
           # and swallowed failures with `|| echo`, so it could never fail.
-          for file in /tmp/default-template.yaml /tmp/production-template.yaml /tmp/external-db-template.yaml /tmp/spire-template.yaml /tmp/spire-ephemeral-template.yaml /tmp/gateway-template.yaml /tmp/gateway-bind-template.yaml; do
+          for file in /tmp/*-template.yaml; do
             python3 - "$file" <<'EOF'
           import sys, yaml
 
@@ -353,156 +360,6 @@ jobs:
         with:
           name: helm-templates
           path: /tmp/*-template.yaml
-
-  # NOTE: Integration tests are unreliable in GitHub Actions due to Kind resource constraints
-  # They frequently timeout even with minimal nginx deployments. For reliable testing:
-  # - Use the lint, security, and template validation jobs above
-  # - Run `helm lint` / `helm template` locally against the ci/*.yaml values files
-  # - Test in dedicated Kubernetes environments, not CI
-  integration-test:
-    runs-on: ubuntu-latest
-    name: Kubernetes Integration Test (Experimental)
-    needs: [lint, template-validation]
-    if: false # Disabled due to CI resource constraints
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: ${{ env.HELM_VERSION }}
-
-      - name: Set up Kind
-        uses: helm/kind-action@v1.8.0
-        with:
-          version: ${{ env.KIND_VERSION }}
-          kubectl_version: ${{ env.KUBERNETES_VERSION }}
-
-      - name: Add Bitnami repository
-        run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami
-          helm repo update
-
-      - name: Build dependencies
-        run: |
-          cd helm/strato-control-plane
-          helm dependency build
-
-      - name: Test chart deployment (lightweight)
-        run: |
-          # Create simplified test values file - disable heavy components
-          cat > /tmp/ci-light-values.yaml << 'EOF'
-          image:
-            repository: nginx
-            tag: "1.21"
-            pullPolicy: Always
-
-          strato:
-            logLevel: debug
-
-          # Use external database configuration (no actual DB deployment)
-          postgresql:
-            enabled: false
-
-          externalDatabase:
-            host: "fake-db-host"
-            password: "fake-password"
-
-          resources:
-            requests:
-              cpu: 10m
-              memory: 16Mi
-            limits:
-              cpu: 50m
-              memory: 64Mi
-
-          # Disable all health checks and init containers
-          livenessProbe:
-            enabled: false
-          readinessProbe:
-            enabled: false
-
-          initContainers:
-            waitForDB:
-              enabled: false
-
-          # Disable migration job
-          migration:
-            enabled: false
-          EOF
-
-          # Install the chart (should be fast without databases)
-          echo "Installing chart with lightweight configuration..."
-          helm install strato-ci-test helm/strato-control-plane/ \
-            -f /tmp/ci-light-values.yaml \
-            --wait --timeout=5m
-
-      - name: Verify lightweight deployment
-        run: |
-          # Check that the main application pod is running
-          echo "Checking deployment status..."
-          kubectl get pods -o wide
-          kubectl get services
-          kubectl get secrets
-          kubectl get configmaps
-
-          # Verify the main pod is ready
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=strato-control-plane --timeout=60s
-
-          echo "✅ Chart deployed successfully with lightweight configuration"
-
-      - name: Test chart configuration
-        run: |
-          # Test that we can retrieve and validate the chart configuration
-          echo "Checking chart configuration..."
-          helm get values strato-ci-test
-          helm get notes strato-ci-test
-
-          # Check that secrets and configmaps were created correctly
-          kubectl get secrets -o name | grep strato-ci-test || echo "No chart secrets found (expected with lightweight config)"
-          kubectl get configmaps -o name | grep strato-ci-test || echo "No chart configmaps found"
-
-          echo "✅ Chart configuration validated"
-
-      - name: Describe failing pods (if any)
-        if: failure()
-        run: |
-          echo "=== Pod Status ==="
-          kubectl get pods -o wide
-
-          echo "=== Events ==="
-          kubectl get events --sort-by='.metadata.creationTimestamp'
-
-          echo "=== Services ==="
-          kubectl get services -o wide
-
-          echo "=== Secrets ==="
-          kubectl get secrets
-
-          echo "=== ConfigMaps ==="
-          kubectl get configmaps
-
-          echo "=== Helm Status ==="
-          helm status strato-ci-test || true
-
-          echo "=== Pod Descriptions ==="
-          kubectl get pods -o name | xargs -I {} kubectl describe {} || true
-
-          echo "=== Pod Logs ==="
-          kubectl get pods -o name | while read pod; do
-            echo "--- Logs for $pod ---"
-            kubectl logs $pod --all-containers=true --previous=false || true
-          done
-
-          echo "=== Resource Usage ==="
-          kubectl top nodes || true
-          kubectl top pods || true
-
-      - name: Cleanup
-        if: always()
-        run: |
-          helm uninstall strato-ci-test || true
 
   security-scan:
     runs-on: ubuntu-latest
@@ -559,7 +416,6 @@ jobs:
           else
             echo "✅ No hardcoded secrets found in templates"
           fi
-
       - name: Validate RBAC permissions
         run: |
           # Check if ServiceAccount has minimal permissions
@@ -568,151 +424,3 @@ jobs:
           else
             echo "✅ No additional RBAC permissions found"
           fi
-
-  upgrade-test:
-    runs-on: ubuntu-latest
-    name: Chart Upgrade Test (Experimental)
-    needs: [lint, template-validation]
-    if: false # Disabled due to CI resource constraints
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Helm
-        uses: azure/setup-helm@v3
-        with:
-          version: ${{ env.HELM_VERSION }}
-
-      - name: Set up Kind
-        uses: helm/kind-action@v1.8.0
-        with:
-          version: ${{ env.KIND_VERSION }}
-          kubectl_version: ${{ env.KUBERNETES_VERSION }}
-
-      - name: Add Bitnami repository
-        run: |
-          helm repo add bitnami https://charts.bitnami.com/bitnami
-          helm repo update
-
-      - name: Build dependencies
-        run: |
-          cd helm/strato-control-plane
-          helm dependency build
-
-      - name: Install initial version (lightweight)
-        run: |
-          # Create lightweight initial test values
-          cat > /tmp/upgrade-values-v1.yaml << 'EOF'
-          image:
-            repository: nginx
-            tag: "1.20"
-
-          strato:
-            logLevel: info
-
-          # Disable heavy components for faster testing
-          postgresql:
-            enabled: false
-
-          externalDatabase:
-            host: "fake-db-host-v1"
-            password: "fake-password-v1"
-
-          resources:
-            requests:
-              cpu: 10m
-              memory: 16Mi
-            limits:
-              cpu: 50m
-              memory: 64Mi
-
-          livenessProbe:
-            enabled: false
-          readinessProbe:
-            enabled: false
-
-          initContainers:
-            waitForDB:
-              enabled: false
-
-          migration:
-            enabled: false
-          EOF
-
-          helm install strato-upgrade-test helm/strato-control-plane/ \
-            -f /tmp/upgrade-values-v1.yaml \
-            --wait --timeout=3m
-
-      - name: Upgrade to new version (lightweight)
-        run: |
-          # Create lightweight upgraded test values
-          cat > /tmp/upgrade-values-v2.yaml << 'EOF'
-          image:
-            repository: nginx
-            tag: "1.21"
-
-          strato:
-            logLevel: debug
-
-          # Disable heavy components for faster testing
-          postgresql:
-            enabled: false
-
-          externalDatabase:
-            host: "fake-db-host-v2"
-            password: "fake-password-v2"
-
-          resources:
-            requests:
-              cpu: 15m
-              memory: 24Mi
-            limits:
-              cpu: 75m
-              memory: 96Mi
-
-          livenessProbe:
-            enabled: false
-          readinessProbe:
-            enabled: false
-
-          initContainers:
-            waitForDB:
-              enabled: false
-
-          migration:
-            enabled: false
-          EOF
-
-          echo "Upgrading to new lightweight version..."
-          helm upgrade strato-upgrade-test helm/strato-control-plane/ \
-            -f /tmp/upgrade-values-v2.yaml \
-            --wait --timeout=3m
-
-      - name: Verify upgrade
-        run: |
-          # Check that pods are running with new configuration
-          echo "Checking upgraded deployment..."
-          kubectl get pods -o wide
-
-          # Wait for upgraded pod to be ready
-          kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=strato-control-plane --timeout=60s
-
-          # Check helm history and values
-          echo "Checking upgrade history..."
-          helm history strato-upgrade-test
-          helm get values strato-upgrade-test
-
-          # Verify the image was upgraded
-          if kubectl get deployment -o jsonpath='{.items[0].spec.template.spec.containers[0].image}' | grep -q '1.21'; then
-            echo "✅ Image successfully upgraded to nginx:1.21"
-          else
-            echo "❌ Image upgrade failed"
-            exit 1
-          fi
-
-          echo "✅ Chart upgrade completed successfully"
-
-      - name: Cleanup
-        if: always()
-        run: |
-          helm uninstall strato-upgrade-test || true

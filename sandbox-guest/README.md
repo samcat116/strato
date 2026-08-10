@@ -19,15 +19,13 @@ boot args) and, at **manifest schema v2**, what this guest build can *do*:
 ```
 
 Together they install into `sandbox_guest_image_path` (default
-`/var/lib/strato/sandbox/guest`); their presence is what lights up an agent's
-`sandbox_runtime` capability, and `capabilities` is what lights up
+`/var/lib/strato/sandbox/guest`); a readable schema-v2 manifest is what lights
+up an agent's `sandbox_runtime` capability, and `capabilities` is what lights up
 `sandbox_networking` (STR-103). The two are separate because this image is
-distributed separately from the agent binary — an up-to-date agent paired with
-a guest that predates the config drive's `network` block would refuse every
-networked sandbox, so the control plane withholds their NICs instead. The agent
-reads manifest schema `1...2`, and a v1 manifest advertises nothing rather than
-failing (see `StratoAgentCore/SandboxGuestImage.swift` and
-`SandboxRuntimeProbe`).
+distributed separately from the agent binary. The agent accepts exactly
+manifest schema v2; an older installed guest disables the sandbox runtime with
+an actionable replacement error (see `StratoAgentCore/SandboxGuestImage.swift`
+and `SandboxRuntimeProbe`).
 
 **Adding a capability**: name it in `build.sh`'s manifest *and* teach the agent
 probe to read it. Never advertise one the initramfs cannot actually serve — the
@@ -94,21 +92,12 @@ is optional. `hostname` sits *beside* it rather than inside it, because a
 hostname belongs to the sandbox and not to its NIC — nesting it would leave two
 sandboxes of one image differing in name by NIC presence alone.
 
-**The version stamped is the minimum the document needs, not the newest the
-host knows.** A network-free document is stamped v1 even by an agent that can
-write v2, and the guest accepts anything in `1...SCHEMA_VERSION` — so an
-older guest image keeps booting sandboxes whose drives carry nothing it does
-not understand. A drive carrying a `network` block is stamped v2, and a guest
-that predates it refuses with `unsupported config-drive schema version` on the
-serial console rather than booting a sandbox whose NIC it would silently
-ignore. Since the guest image is distributed separately from the agent, that is
-what keeps a lagging image from being a fleet-wide outage while still failing
-loudly at the point it matters.
-
-In practice that refusal should never fire: the manifest's `network`
-capability, advertised at every agent registration, means the control plane
-does not send a NIC to a host whose guest cannot configure one (STR-103). This
-is the last line of defence, not the first.
+**Every document is schema v2.** Network-free drives omit `network`, but still
+carry schema v2 plus a non-empty sandbox identity and nonce. The guest accepts
+exactly v2. Since the guest image is distributed separately from the agent, the
+host also requires a schema-v2 manifest before it advertises sandbox capacity;
+an old image or checkpoint is replaced, recreated, or purged rather than read
+through a compatibility path.
 
 ### Guest networking ([STR-101])
 

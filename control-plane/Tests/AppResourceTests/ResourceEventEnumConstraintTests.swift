@@ -10,9 +10,8 @@ import AppTestSupport
 /// `resource_events`' database-level guards, which nothing in the type system
 /// ties to the Swift enums they were derived from.
 ///
-/// `CreateResourceEvent` builds its `CHECK` constraints from `allCases`, so a
-/// fresh database always accepts every case — and an already-migrated one
-/// keeps whatever list it was created with. Adding a `VMOperationKind` case
+/// The baseline's `CHECK` constraints are derived from these enums, so a fresh
+/// database must accept every case. Adding a `VMOperationKind` case
 /// (the enum has grown twice already) would pass every other test, work in
 /// development, and reject the insert in production. Because `ResourceEvent`
 /// is written inside the mutation's transaction, that rejection rolls the
@@ -29,7 +28,7 @@ struct ResourceEventEnumConstraintTests {
         column: String, values: [String], on sql: any SQLDatabase
     ) async throws {
         for value in values {
-            let quoted = PostgresMigrationSQL.literal(value)
+            let quoted = "'\(value.replacingOccurrences(of: "'", with: "''"))'"
             // Every column but the one under test gets a known-good value.
             let actorType = column == "actor_type" ? quoted : "'user'"
             let resourceKind = column == "resource_kind" ? quoted : "'virtual_machine'"
@@ -52,9 +51,8 @@ struct ResourceEventEnumConstraintTests {
             let sql = try #require(app.db as? any SQLDatabase)
 
             // If any of these throws, the constraint in the database is
-            // narrower than the Swift enum: add the follow-up migration
-            // re-installing `resource_events`' constraint alongside
-            // `resource_operations`' (see `CreateResourceEvent`).
+            // narrower than the Swift enum: add a follow-up migration that
+            // re-installs both affected constraints.
             try await self.insert(
                 column: "actor_type", values: MutationActorType.allCases.map(\.rawValue), on: sql)
             try await self.insert(

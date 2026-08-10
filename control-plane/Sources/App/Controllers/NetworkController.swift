@@ -210,6 +210,10 @@ struct NetworkController: RouteCollection {
             // same transaction as the row (issue #477).
             let creatorID = user.id!
             try await req.db.transaction { db in
+                // Admission precedes resolver allocation: resolver addresses are
+                // fleet-wide, while the quota is what stops one project from
+                // draining them (STR-236).
+                try await QuotaEnforcementService.reserveNetwork(for: project, on: db)
                 // Inside the same transaction as the row: the allocator's
                 // advisory lock is transaction-scoped, so allocating outside it
                 // would release the lock before the index it chose was durable.
@@ -606,11 +610,11 @@ struct NetworkController: RouteCollection {
             throw Abort(.conflict, reason: "A network named '\(network.name)' already exists")
         }
 
-        // Push the new DHCP config to the fleet: agents reprogram OVN's
+        // Ring the fleet for the new DHCP config: agents reprogram OVN's
         // DHCP_Options for the subnet, and running guests pick up new DNS/lease
         // on their next renew. Level-triggered and cluster-wide, so a network
-        // shared across agents converges everywhere; a lost nudge is caught by
-        // the periodic sync timer.
+        // shared across agents converges everywhere; a lost doorbell is caught
+        // by the agents' unconditional refetches.
         await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
@@ -645,7 +649,10 @@ struct NetworkController: RouteCollection {
         }
 
         try await req.db.transaction { db in
+            try await QuotaEnforcementService.lockProjectNetworkMutations(
+                projectID: network.$project.id, on: db)
             try await network.delete(on: db)
+            try await QuotaEnforcementService.release(for: network, on: db)
             // Bindings have no FK to the resources they protect, so drop
             // them with the node.
             try await RoleBindingService.revokeAll(
@@ -731,8 +738,7 @@ struct NetworkController: RouteCollection {
     }
 
     /// Validates a subnet/gateway pair, defaulting a missing gateway to the
-    /// subnet's first host address. Mirrors the seeding validation in the
-    /// `CreateLogicalNetwork` migration.
+    /// subnet's first host address.
     static func validateAddressing(subnet: String, gateway: String?) throws -> (subnet: String, gateway: String) {
         let trimmedSubnet = subnet.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let (base, prefix) = IPAMService.parseCIDR(trimmedSubnet),

@@ -86,17 +86,20 @@ private func imageInfoJSON(format: String, virtualSize: Int64 = 1_073_741_824) -
 
 private struct StaticImageSource: ImageSource {
     let path: String
-    func localImagePath(for imageInfo: ImageInfo) async throws -> String { path }
+    func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String { path }
 }
 
 private func makeImageInfo() -> ImageInfo {
     ImageInfo(
         imageId: UUID(),
         projectId: UUID(),
-        filename: "debian.qcow2",
-        checksum: "abc",
-        size: 1024,
-        downloadURL: "http://localhost:8080/images/x"
+        architecture: .x86_64,
+        artifacts: [
+            ArtifactInfo(
+                kind: .diskImage, filename: "debian.qcow2",
+                checksum: String(repeating: "a", count: 64), size: 1024,
+                downloadURL: "http://localhost:8080/images/x?artifact=disk-image")
+        ]
     )
 }
 
@@ -158,6 +161,28 @@ struct FileSystemStorageBackendTests {
         #expect(attachment.format == .raw)
         let invocations = await recorder.invocations
         #expect(invocations[0].arguments.contains("raw"))
+    }
+
+    @Test func adoptsHistoricalDiskByIdentityAndDeletesBothLinks() async throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let legacyPath = "\(root)/legacy-vm-disk.qcow2"
+        let bytes = Data("guest-changed-bytes".utf8)
+        FileManager.default.createFile(atPath: legacyPath, contents: bytes)
+        let volumeId = UUID().uuidString
+        let backend = makeBackend(root: root, recorder: SubprocessRecorder())
+
+        let adopted = try await backend.adoptVolume(
+            volumeId: volumeId, existingPath: legacyPath, format: .qcow2)
+
+        #expect(adopted.path == "\(root)/\(volumeId)/volume.qcow2")
+        #expect(FileManager.default.contents(atPath: adopted.path) == bytes)
+        #expect(FileManager.default.contents(atPath: legacyPath) == bytes)
+        #expect(try await backend.listVolumes()[volumeId] == adopted)
+
+        try await backend.deleteVolume(volumeId: volumeId)
+        #expect(!FileManager.default.fileExists(atPath: adopted.path))
+        #expect(!FileManager.default.fileExists(atPath: legacyPath))
     }
 
     @Test func createVolumeSurfacesQemuImgFailure() async throws {
@@ -355,7 +380,8 @@ struct FileSystemStorageBackendTests {
             root: root, recorder: recorder, imageSource: StaticImageSource(path: sourcePath))
 
         let attachment = try await backend.createVolumeFromImage(
-            volumeId: "vol-9", imageInfo: makeImageInfo(), format: .qcow2)
+            volumeId: "vol-9", imageInfo: makeImageInfo(), format: .qcow2,
+            artifactKind: .diskImage)
 
         #expect(attachment == DiskAttachment(path: "\(root)/vol-9/volume.qcow2", format: .qcow2))
         #expect(FileManager.default.fileExists(atPath: "\(root)/vol-9/volume.qcow2"))
@@ -581,7 +607,8 @@ struct FileSystemStorageBackendTests {
 
         _ = try await backend.createVolume(volumeId: "vol-1", sizeBytes: 42, format: .qcow2)
         _ = try await backend.createVolumeFromImage(
-            volumeId: "vol-2", imageInfo: makeImageInfo(), format: .raw)
+            volumeId: "vol-2", imageInfo: makeImageInfo(), format: .raw,
+            artifactKind: .diskImage)
         _ = try await backend.cloneVolume(
             sourceVolumeId: "vol-1", sourcePath: "\(root)/vol-1/volume.qcow2", targetVolumeId: "vol-3")
         _ = try await backend.createSnapshot(

@@ -153,9 +153,9 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let vsockUdsPath: String
         /// The boot nonce stamped into the config drive, echoed by the guest.
         let identityNonce: String
-        /// Learned from a versioned `pong`. Nil is intentionally conservative:
-        /// it covers legacy guests and paused guests adopted before the host
-        /// could query them.
+        /// Learned from a validated current-version `pong`. Nil means only that
+        /// a paused guest was adopted before the host could query it; such a
+        /// guest must resume and verify before it can be checkpointed.
         var guestControlProtocolVersion: Int? = nil
         /// The jail layout when this sandbox runs inside the jailer barrier
         /// (issue #425); nil for an unjailed sandbox (jailer disabled, or an
@@ -997,28 +997,6 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     expected: "\(sourceConfig.sandboxId)/\(sourceConfig.identityNonce)",
                     got: "\(sourceResponse)")
             }
-            guard
-                SandboxGuestControlProtocol.supportsReidentify(
-                    sourceResponse.controlProtocolVersion)
-            else {
-                throw GuestControlError.malformedResponse(
-                    "checkpointed guest does not advertise re-identification support")
-            }
-            // Only a *networked* fork needs the newer guest: an older one
-            // decodes `reidentify` fine but drops the unknown `network` field,
-            // which would publish this sandbox as managed while its guest still
-            // holds the source's address (STR-104). A network-free fork has
-            // nothing to re-address and stays forkable on a v3 guest.
-            if targetNetwork != nil,
-                !SandboxGuestControlProtocol.supportsNetworkReconfigure(
-                    sourceResponse.controlProtocolVersion)
-            {
-                throw SandboxRuntimeError.networkingUnsupported(
-                    "the checkpointed guest speaks control protocol "
-                        + "\(sourceResponse.controlProtocolVersion ?? 0) and cannot re-address its NIC "
-                        + "(need >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))")
-            }
-
             let nonce = UUID().uuidString
             let entropy = Self.freshEntropy()
             let hostname = SandboxConfigDrive.guestHostname(sandboxId: sandboxId)
@@ -1212,11 +1190,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             }
         }
 
-        // Agent wire compatibility says nothing about a guest already
-        // running inside this microVM. Capture the guest's own advertised
-        // protocol version so a later checkpoint can prove it supports fork
-        // re-identification. Legacy guests still answer ping, but omit the
-        // version and remain valid for ordinary lifecycle operations.
+        // Agent wire compatibility says nothing about a guest already running
+        // inside this microVM. The decoder accepts only the current guest
+        // protocol, so a stale installed image/checkpoint fails here before the
+        // workload is reported healthy.
         let capability = try await sendControl(
             .ping, udsPath: managed.vsockUdsPath, timeout: 10)
         guard
@@ -1259,24 +1236,18 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             )
         }
 
-        // A networked sandbox needs a guest that acts on the launch request's
-        // `network` block (STR-104). An older guest would drop the unknown
-        // field, spawn the workload, and answer healthy on an unaddressed
-        // interface — so ask before launching, and let the failure demote this
-        // sandbox to a cold boot, which configures the NIC from the config
-        // drive the way it always has.
-        if drive.network != nil {
-            let capability = try await sendControl(
-                .ping, udsPath: managed.vsockUdsPath, timeout: 10)
-            guard
-                SandboxGuestControlProtocol.supportsNetworkReconfigure(
-                    capability.controlProtocolVersion)
-            else {
-                throw SandboxRuntimeError.warmStartFailed(
-                    "the template's guest speaks control protocol "
-                        + "\(capability.controlProtocolVersion ?? 0) and cannot configure a NIC on launch "
-                        + "(need >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))")
-            }
+        // A cache entry may outlive a guest-image replacement. Verify its
+        // checkpointed init speaks the one current control contract before
+        // delivering launch, regardless of whether this sandbox has a NIC.
+        let capability = try await sendControl(
+            .ping, udsPath: managed.vsockUdsPath, timeout: 10)
+        if let expected = managed.warmHeldIdentity,
+            !identityMatches(
+                capability, sandboxId: expected.templateId,
+                expectedNonce: expected.templateNonce)
+        {
+            throw GuestControlError.identityMismatch(
+                expected: "\(expected.templateId)/\(expected.templateNonce)", got: "\(capability)")
         }
 
         // Clock first, launch second: the workload should start with a sane
@@ -1439,10 +1410,28 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     }
 
     func adoptSandbox(sandboxId: String, spec: SandboxSpec) async throws -> SandboxStatus {
-        if sandboxes[sandboxId] != nil {
+        if let managed = sandboxes[sandboxId] {
             // A replayed sync can race adoption; if already managed, adoption is
-            // satisfied — just report the current status.
-            return try await getSandboxStatus(sandboxId: sandboxId)
+            // satisfied only after a running guest has passed the strict
+            // current-protocol handshake. A prior failed adoption intentionally
+            // leaves the entry routable for teardown, but must not make the next
+            // adoption silently succeed.
+            let status = try await getSandboxStatus(sandboxId: sandboxId)
+            if managed.guestControlProtocolVersion == nil, status != .stopped {
+                let capability = try await sendControl(
+                    .ping, udsPath: managed.vsockUdsPath, timeout: 10)
+                guard
+                    identityMatches(
+                        capability, sandboxId: sandboxId,
+                        expectedNonce: managed.identityNonce)
+                else {
+                    throw GuestControlError.identityMismatch(
+                        expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(capability)")
+                }
+                sandboxes[sandboxId]?.guestControlProtocolVersion =
+                    capability.controlProtocolVersion
+            }
+            return status
         }
 
         // A jailed orphan's socket lives inside its chroot, an unjailed one's
@@ -1521,9 +1510,10 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             configPath = dir + "/config.img"
             vsockUdsPath = vsockUDSPath(sandboxId)
         }
-        // Recover the boot nonce from the staged config drive so post-adoption
-        // identity checks can still distinguish this generation.
-        let identityNonce = recoverIdentityNonce(configPath: configPath)
+        // Recover the complete current-schema identity from the staged config
+        // drive. An absent/legacy drive is not safe to adopt by id alone.
+        let identityNonce = try recoverIdentityNonce(
+            configPath: configPath, expectedSandboxId: sandboxId)
         sandboxes[sandboxId] = Managed(
             spec: spec, rootfsPath: rootfsPath, configPath: configPath,
             vsockUdsPath: vsockUdsPath, identityNonce: identityNonce, jail: jailPlan,
@@ -1532,6 +1522,16 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let status = await mappedStatus(
             instance: info.state, udsPath: vsockUdsPath, sandboxId: sandboxId)
         if info.state == .running {
+            let capability = try await sendControl(.ping, udsPath: vsockUdsPath, timeout: 10)
+            guard
+                identityMatches(
+                    capability, sandboxId: sandboxId, expectedNonce: identityNonce)
+            else {
+                throw GuestControlError.identityMismatch(
+                    expected: "\(sandboxId)/\(identityNonce)", got: "\(capability)")
+            }
+            sandboxes[sandboxId]?.guestControlProtocolVersion =
+                capability.controlProtocolVersion
             // Same contract as boot: while the microVM runs, the guest serves
             // vsock and its retained ring buffer must ship — even when the
             // workload itself is still starting or has already exited (its
@@ -1610,30 +1610,29 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                 "the sandbox has never been booted (warm-provisioned, awaiting launch)")
         }
 
-        // A running guest can be queried immediately. A paused guest uses the
+        // A running guest is queried immediately. A paused guest uses the
         // version learned during its last boot; after an agent restart that
-        // value is unknown, deliberately making the snapshot ineligible for
-        // fork while preserving in-place checkpoint/restore support.
+        // value is unknown and checkpoint capture is refused until the sandbox
+        // has resumed and verified the current contract.
         var guestControlProtocolVersion = managed.guestControlProtocolVersion
         if info.state == .running {
-            do {
-                let response = try await sendControl(
-                    .ping, udsPath: managed.vsockUdsPath, timeout: 10)
-                if identityMatches(
+            let response = try await sendControl(
+                .ping, udsPath: managed.vsockUdsPath, timeout: 10)
+            guard
+                identityMatches(
                     response, sandboxId: sandboxId, expectedNonce: managed.identityNonce)
-                {
-                    guestControlProtocolVersion = response.controlProtocolVersion
-                    sandboxes[sandboxId]?.guestControlProtocolVersion =
-                        guestControlProtocolVersion
-                }
-            } catch {
-                logger.warning(
-                    "Could not discover sandbox guest control version before checkpoint",
-                    metadata: [
-                        "sandboxId": .string(sandboxId),
-                        "error": .string(error.localizedDescription),
-                    ])
+            else {
+                throw GuestControlError.identityMismatch(
+                    expected: "\(sandboxId)/\(managed.identityNonce)", got: "\(response)")
             }
+            guestControlProtocolVersion = response.controlProtocolVersion
+            sandboxes[sandboxId]?.guestControlProtocolVersion = guestControlProtocolVersion
+        }
+        guard let guestControlProtocolVersion else {
+            throw SandboxRuntimeError.notSnapshottable(
+                "the paused guest's control protocol version is unknown after agent restart; "
+                    + "start the sandbox once to verify protocol "
+                    + "\(SandboxGuestControlProtocol.currentVersion), then retry the checkpoint")
         }
 
         logger.info(
@@ -1663,12 +1662,12 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             do {
                 try await managed.manager.pause()
             } catch {
-                // A pause that reports failure is not the same as a pause that
-                // did not happen: Firecracker waits on its vCPUs for its own
-                // `RECV_TIMEOUT_SEC` before answering, so the request can be
-                // abandoned host-side while the guest goes on to stop. Ask the
-                // VMM what actually happened instead of assuming (STR-194),
-                // then put the drained log follow back and surface the failure.
+                // Firecracker sends Pause to every vCPU before it waits for
+                // their acknowledgements, but only changes GET / to Paused
+                // after *all* replies arrive. A failed request can therefore
+                // leave a subset paused while the VMM still reports Running.
+                // Unconditionally send the idempotent Resumed transition to
+                // every vCPU before surfacing the checkpoint failure (STR-205).
                 await resumeAfterFailedPause(managed: managed, sandboxId: sandboxId)
                 startLogFollow(sandboxId: sandboxId)
                 throw error
@@ -1770,6 +1769,15 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         let archiveVmstate = archiveDir + "/" + SnapshotFile.vmstate
         let archiveRootfs = archiveDir + "/" + SnapshotFile.rootfs
         let archiveConfig = archiveDir + "/" + SnapshotFile.configImage
+
+        // Validate the archived config before replacing the live microVM. This
+        // catches schema-v1 checkpoints while the current sandbox is intact.
+        let archivedConfig = try SandboxConfigDrive.decode(
+            fromBlockImage: Data(contentsOf: URL(fileURLWithPath: archiveConfig)))
+        guard archivedConfig.sandboxId == sandboxId else {
+            throw GuestControlError.identityMismatch(
+                expected: sandboxId, got: archivedConfig.sandboxId)
+        }
 
         logger.info(
             "Restoring sandbox from snapshot",
@@ -2087,7 +2095,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             logger: logger)
     }
 
-    /// Undo a pause whose request failed but whose effect landed anyway.
+    /// Undo a pause whose request failed after reaching any of the vCPUs.
     ///
     /// Entirely best effort, and deliberately silent about everything except
     /// the case it exists for: the caller is already throwing the error that
@@ -2095,32 +2103,21 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// will report on. What it must not do is leave a workload the operator
     /// never asked to stop wedged at a pause nothing will lift.
     ///
-    /// The `getInstanceInfo()` below is load-bearing twice over, and the second
-    /// way is invisible here: besides answering the question, it refreshes the
-    /// manager's cached `vmState` as a side effect. A failed `pause()` leaves
-    /// that cache reading `.running`, and `resume()` guards on
-    /// `requireState(.paused)` — so without the read having happened first, the
-    /// resume would refuse itself rather than act.
-    ///
-    /// This is a fast path, not the only safety net, and deliberately does not
-    /// retry. A timeout means the request was abandoned host-side, so the pause
-    /// can still land at an arbitrary later moment — after this samples
-    /// `.running` and returns. The backstop is reconciliation: `mappedStatus`
-    /// folds a paused instance into `stopped`, a `mode: resume` checkpoint
-    /// leaves `desiredStatus == .running`, and the next observed report
-    /// re-drives a boot, which resumes a paused microVM.
+    /// Firecracker's instance-level state cannot answer whether this is needed:
+    /// it remains `Running` when one vCPU fails to acknowledge even though the
+    /// others may already be paused. `recoverFromFailedPause()` consequently
+    /// bypasses the manager's ordinary `.paused` guard and broadcasts the
+    /// idempotent `Resumed` transition. The call is best effort because the
+    /// original checkpoint error remains the operation's result.
     private func resumeAfterFailedPause(managed: Managed, sandboxId: String) async {
-        guard let info = try? await managed.manager.getInstanceInfo(), info.state == .paused else {
-            return
-        }
         logger.warning(
-            "Sandbox pause reported failure but the guest is paused; resuming it",
+            "Sandbox pause reported failure; resuming every vCPU defensively",
             metadata: ["sandboxId": .string(sandboxId)])
         do {
-            try await managed.manager.resume()
+            try await managed.manager.recoverFromFailedPause()
         } catch {
             logger.error(
-                "Could not resume a sandbox left paused by a failed checkpoint",
+                "Could not confirm recovery from a failed sandbox pause",
                 metadata: [
                     "sandboxId": .string(sandboxId),
                     "error": .string(error.localizedDescription),
@@ -2146,8 +2143,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.createSnapshot(
                 SnapshotCreateConfig(
                     snapshotPath: SandboxJailPlan.snapshotVmstatePathInJail,
-                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail,
-                    snapshotType: .full))
+                    memFilePath: SandboxJailPlan.snapshotMemoryPathInJail))
             try moveReplacingItem(
                 from: plan.hostPath(forInJail: SandboxJailPlan.snapshotMemoryPathInJail),
                 to: memoryTarget)
@@ -2159,8 +2155,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
             try await manager.createSnapshot(
                 SnapshotCreateConfig(
                     snapshotPath: vmstateTarget,
-                    memFilePath: memoryTarget,
-                    snapshotType: .full))
+                    memFilePath: memoryTarget))
         }
     }
 
@@ -2281,23 +2276,13 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
                     "the guest did not enter the held state (guest image predates warm start?)")
             }
 
-            // A NIC-shaped template is only useful to a guest that will
-            // configure the device on `launch` (STR-104). Checking here rather
-            // than only at launch time means an installed guest that predates
-            // v4 costs one failed build with a retry interval, instead of a
-            // published template every networked sandbox demotes away from.
-            if !templateAttachments.isEmpty {
-                let capability = try await sendControl(
-                    .ping, udsPath: provisioned.vsockUdsPath, timeout: 10)
-                guard
-                    SandboxGuestControlProtocol.supportsNetworkReconfigure(
-                        capability.controlProtocolVersion)
-                else {
-                    throw SandboxRuntimeError.warmStartFailed(
-                        "the guest speaks control protocol \(capability.controlProtocolVersion ?? 0) "
-                            + "and cannot configure a NIC on launch "
-                            + "(need >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))")
-                }
+            // A template freezes the guest init into a checkpoint, so validate
+            // the exact current protocol before publishing it to the cache.
+            let capability = try await sendControl(
+                .ping, udsPath: provisioned.vsockUdsPath, timeout: 10)
+            guard identityMatches(capability, sandboxId: templateId, expectedNonce: nonce) else {
+                throw GuestControlError.identityMismatch(
+                    expected: "\(templateId)/\(nonce)", got: "\(capability)")
             }
 
             try await provisioned.manager.pause()
@@ -3146,8 +3131,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
     /// Confirm a control response echoes this sandbox's identity, so a stale
     /// generation still serving the deterministic vsock UDS (a leaked process, a
     /// pre-adoption resume) cannot be mistaken for the current one. The nonce is
-    /// checked when known; an empty expected nonce (not yet recovered) falls
-    /// back to the id alone.
+    /// always checked; supported config drives require it.
     private func identityMatches(
         _ response: GuestControlProtocol.Response, sandboxId: String, expectedNonce: String
     ) -> Bool {
@@ -3161,20 +3145,20 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         default:
             return false
         }
-        guard echoedId == sandboxId else { return false }
-        if !expectedNonce.isEmpty, echoedNonce != expectedNonce { return false }
-        return true
+        return echoedId == sandboxId && echoedNonce == expectedNonce
     }
 
     /// Read the boot nonce back from a sandbox's staged config drive (at its
-    /// host-view path, flat or in-jail). Empty when the drive is missing or
-    /// unreadable, in which case identity checks fall back to the sandbox id
-    /// alone.
-    private func recoverIdentityNonce(configPath: String) -> String {
-        guard let data = FileManager.default.contents(atPath: configPath),
-            let drive = try? SandboxConfigDrive.decode(fromBlockImage: data)
-        else {
-            return ""
+    /// host-view path, flat or in-jail), requiring the current schema and the
+    /// expected sandbox identity.
+    private func recoverIdentityNonce(
+        configPath: String, expectedSandboxId: String
+    ) throws -> String {
+        let data = try Data(contentsOf: URL(fileURLWithPath: configPath))
+        let drive = try SandboxConfigDrive.decode(fromBlockImage: data)
+        guard drive.sandboxId == expectedSandboxId else {
+            throw GuestControlError.identityMismatch(
+                expected: expectedSandboxId, got: drive.sandboxId)
         }
         return drive.identityNonce
     }

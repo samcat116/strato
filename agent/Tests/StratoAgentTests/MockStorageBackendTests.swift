@@ -12,14 +12,19 @@ struct MockStorageBackendTests {
         MockStorageBackend(logger: Logger(label: "test"), volumeStoragePath: root)
     }
 
-    private func imageInfo(size: Int64 = 4 * 1024 * 1024 * 1024) -> ImageInfo {
+    private func imageInfo(
+        size: Int64 = 4 * 1024 * 1024 * 1024, kind: ArtifactKind = .diskImage
+    ) -> ImageInfo {
         ImageInfo(
             imageId: UUID(),
             projectId: UUID(),
-            filename: "test.qcow2",
-            checksum: "deadbeef",
-            size: size,
-            downloadURL: "https://example.invalid/test.qcow2"
+            architecture: .x86_64,
+            artifacts: [
+                ArtifactInfo(
+                    kind: kind, filename: "test.qcow2",
+                    checksum: String(repeating: "d", count: 64), size: size,
+                    downloadURL: "https://example.invalid/test.qcow2?artifact=\(kind.rawValue)")
+            ]
         )
     }
 
@@ -32,7 +37,8 @@ struct MockStorageBackendTests {
         let sut = backend(root: root)
 
         let attachment = try await sut.createVolume(volumeId: "vol-1", sizeBytes: 1024, format: .qcow2)
-        _ = try await sut.createVolumeFromImage(volumeId: "vol-2", imageInfo: imageInfo(), format: .raw)
+        _ = try await sut.createVolumeFromImage(
+            volumeId: "vol-2", imageInfo: imageInfo(), format: .raw, artifactKind: .diskImage)
         _ = try await sut.createSnapshot(volumeId: "vol-1", snapshotId: "snap-1", volumePath: attachment.path)
 
         #expect(!FileManager.default.fileExists(atPath: attachment.path))
@@ -54,7 +60,8 @@ struct MockStorageBackendTests {
     func fromImageSize() async throws {
         let sut = backend(root: "/tmp/x")
         let image = imageInfo(size: 8 * 1024 * 1024 * 1024)
-        let attachment = try await sut.createVolumeFromImage(volumeId: "vol-1", imageInfo: image, format: .qcow2)
+        let attachment = try await sut.createVolumeFromImage(
+            volumeId: "vol-1", imageInfo: image, format: .qcow2, artifactKind: .diskImage)
 
         let info = try await sut.volumeInfo(volumePath: attachment.path)
         #expect(info.virtualSize == 8 * 1024 * 1024 * 1024)
@@ -134,7 +141,9 @@ struct MockStorageBackendTests {
         let before = MockStorageBackend(
             logger: Logger(label: "test"), volumeStoragePath: "/tmp/x", metadataPath: metadata)
         let attachment = try await before.createVolume(volumeId: "vol-1", sizeBytes: 4096, format: .qcow2)
-        _ = try await before.createVolumeFromImage(volumeId: "vol-2", imageInfo: imageInfo(size: 2048), format: .raw)
+        _ = try await before.createVolumeFromImage(
+            volumeId: "vol-2", imageInfo: imageInfo(size: 2048), format: .raw,
+            artifactKind: .diskImage)
 
         // A new process, same agent: same metadata path.
         let after = MockStorageBackend(
@@ -190,7 +199,8 @@ struct MockStorageBackendTests {
         let sut = MockStorageBackend(
             logger: Logger(label: "test"), volumeStoragePath: "/tmp/x", metadataPath: metadata)
         let attachment = try await sut.createVolumeFromImage(
-            volumeId: "vol-1", imageInfo: imageInfo(size: 8 * 1024 * 1024 * 1024), format: .qcow2)
+            volumeId: "vol-1", imageInfo: imageInfo(size: 8 * 1024 * 1024 * 1024), format: .qcow2,
+            artifactKind: .diskImage)
 
         // The reported volume does not exist, and the metadata is tiny — not a
         // multi-GB image.
@@ -221,9 +231,19 @@ struct MockStorageBackendTests {
         let sut = backend(root: "/tmp/x")
         let path = "/var/lib/strato/vms/vm-1/rootfs.raw"
         let attachment = try await sut.materializeDisk(
-            at: path, from: imageInfo(), format: .raw, artifactKind: .rootfs)
+            at: path, from: imageInfo(kind: .rootfs), format: .raw, artifactKind: .rootfs)
         #expect(attachment.path == path)
         #expect(attachment.format == .raw)
         #expect(!FileManager.default.fileExists(atPath: path))
+    }
+
+    @Test("materializeDisk rejects a missing requested artifact")
+    func missingMaterializationArtifact() async throws {
+        let sut = backend(root: "/tmp/x")
+        await #expect(throws: StorageBackendError.self) {
+            try await sut.materializeDisk(
+                at: "/var/lib/strato/vms/vm-1/rootfs.raw",
+                from: imageInfo(), format: .raw, artifactKind: .rootfs)
+        }
     }
 }

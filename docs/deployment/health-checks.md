@@ -63,8 +63,8 @@ Checks are graded, because the dependencies are not equally fatal:
   Postgres the **database** check covers.)
 - **coordination** — **degraded only**. The coordination store is deliberately
   fail-open (see [multi-replica](../architecture/multi-replica.md)); agents still
-  converge via the periodic sync. Pulling every replica out of rotation because
-  it blipped would be a worse outage than the blip.
+  converge via their unconditional desired-state refetch. Pulling every replica
+  out of rotation because it blipped would be a worse outage than the blip.
 - **session-store** — **fatal when session storage has its own endpoint,
   `degraded` when it shares the coordination one**. The grade follows whether the
   failure can be replica-local, because that is the only case where pulling this

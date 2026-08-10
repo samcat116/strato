@@ -8,8 +8,7 @@ import StratoShared
 ///
 /// Issue #417 generalized the manifest over `WorkloadKind` so sandbox orphans
 /// are detected on restart, keep their resources reserved, and can be
-/// re-adopted, exactly like VMs. Entries written before sandboxes existed
-/// carry no `kind` key and decode as `.vm`.
+/// re-adopted, exactly like VMs.
 public struct VMManifestEntry: Codable, Sendable {
     public let kind: WorkloadKind
     public let hypervisorType: HypervisorType
@@ -142,19 +141,6 @@ public struct VMManifestEntry: Codable, Sendable {
         return copy
     }
 
-    // Custom decode so `kind` tolerates absence: entries persisted by a
-    // pre-sandbox agent decode as VMs rather than throwing. `encode(to:)`
-    // stays synthesized.
-    public init(from decoder: any Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        kind = try c.decodeIfPresent(WorkloadKind.self, forKey: .kind) ?? .vm
-        hypervisorType = try c.decode(HypervisorType.self, forKey: .hypervisorType)
-        spec = try c.decode(VMSpec.self, forKey: .spec)
-        realizedMemoryReservationBytes = try c.decodeIfPresent(Int64.self, forKey: .realizedMemoryReservationBytes)
-        sandboxSpec = try c.decodeIfPresent(SandboxSpec.self, forKey: .sandboxSpec)
-        vsockCID = try c.decodeIfPresent(UInt32.self, forKey: .vsockCID)
-        appliedEdges = try c.decodeIfPresent(AppliedEdgeNonces.self, forKey: .appliedEdges)
-    }
 }
 
 /// An entry that proves a workload exists under its id but cannot be routed to
@@ -174,9 +160,7 @@ public struct VMManifestEntry: Codable, Sendable {
 /// Rewriting it in a shape this build understands would destroy the routing
 /// information the *newer* build needs when the operator rolls forward again.
 public struct QuarantinedManifestEntry: Sendable {
-    /// The workload kind, when it decoded. Nil means even that is unreadable;
-    /// callers treat nil as `.vm`, matching how a kind-less (pre-sandbox)
-    /// entry decodes.
+    /// The workload kind, when it decoded. Nil means even that is unreadable.
     public let kind: WorkloadKind?
     /// The unroutable backend identifier, verbatim, when the entry carried a
     /// string there at all.
@@ -220,9 +204,61 @@ public struct QuarantinedManifestEntry: Sendable {
         self.raw = raw
     }
 
-    /// The kind to file this entry under, treating an unreadable kind as a VM
-    /// exactly as a pre-sandbox entry decodes.
+    /// The kind to file this entry under. Treating an unreadable kind as a VM
+    /// keeps the entry on the conservative workload path while quarantined.
     public var effectiveKind: WorkloadKind { kind ?? .vm }
+
+    /// Recover an entry written before `VolumeSpec.volumeId` became required.
+    /// This is intentionally manifest-only: the shared wire decoder remains
+    /// strict. Every path-only attachment must match a managed desired volume
+    /// by its historical path, or by its unique device/order identity for the
+    /// Firecracker cutover whose old manifest named `disk.qcow2` while the
+    /// realized rootfs lived at `rootfs.raw`.
+    public func recoveringManagedVolumeIdentities(from desired: VMSpec) -> VMManifestEntry? {
+        guard case .object(var entry) = raw,
+            case .object(var spec)? = entry["spec"],
+            case .array(var volumes)? = spec["volumes"]
+        else { return nil }
+
+        var changed = false
+        for index in volumes.indices {
+            guard case .object(var legacy) = volumes[index] else { continue }
+            let identityIsMissing: Bool
+            switch legacy["volumeId"] {
+            case nil, .some(.null): identityIsMissing = true
+            default: identityIsMissing = false
+            }
+            guard identityIsMissing else { continue }
+
+            let legacyPath: String? =
+                if case .string(let value)? = legacy["storagePath"] { value } else { nil }
+            let legacyDevice: String? =
+                if case .string(let value)? = legacy["deviceName"] { value } else { nil }
+            let legacyOrder: Int? =
+                if case .int(let value)? = legacy["bootOrder"] { value } else { nil }
+
+            let pathMatches = desired.volumes.filter { $0.storagePath == legacyPath && legacyPath != nil }
+            let identityMatches = desired.volumes.filter {
+                let sameOrder =
+                    $0.bootOrder == legacyOrder
+                    || (legacyOrder == nil && $0.bootOrder == 0)
+                return $0.deviceName.rawValue == legacyDevice && sameOrder
+            }
+            let matches = pathMatches.isEmpty ? identityMatches : pathMatches
+            guard matches.count == 1, let managed = matches.first else { return nil }
+
+            legacy["volumeId"] = .string(managed.volumeId.uuidString)
+            legacy["storagePath"] = managed.storagePath.map(CodableValue.string) ?? .null
+            volumes[index] = .object(legacy)
+            changed = true
+        }
+        guard changed else { return nil }
+
+        spec["volumes"] = .array(volumes)
+        entry["spec"] = .object(spec)
+        guard let data = try? JSONEncoder().encode(CodableValue.object(entry)) else { return nil }
+        return try? JSONDecoder().decode(VMManifestEntry.self, from: data)
+    }
 }
 
 /// Why the manifest could not be read, and where the evidence went.
@@ -250,8 +286,8 @@ public struct ManifestReadFailure: Sendable, Equatable {
 /// immediately. A caller now has to decide what an unreadable manifest means,
 /// and the only safe answer is to stop advertising and stop converging.
 public enum ManifestLoad: Sendable {
-    /// No manifest and no legacy manifest: a genuinely fresh host, which is
-    /// the only case that may be read as "nothing is running here".
+    /// No manifest: a genuinely fresh host, which is the only case that may be
+    /// read as "nothing is running here".
     case fresh
     /// The manifest parsed. `entries` are routable; `quarantined` are
     /// workloads that exist but cannot be acted on.
@@ -299,22 +335,14 @@ extension Sequence where Element == VMSpec {
 /// surfaces as `.error` for operator attention.
 public struct VMManifestStore {
     public let path: String
-    /// Path of the manifest written by pre-unified agents, which only the QEMU driver
-    /// maintained. Read once for migration; removed after a successful rewrite in
-    /// the unified format.
-    public let legacyQEMUManifestPath: String?
     let logger: Logger
 
-    public init(path: String, legacyQEMUManifestPath: String? = nil, logger: Logger) {
+    public init(path: String, logger: Logger) {
         self.path = path
-        self.legacyQEMUManifestPath = legacyQEMUManifestPath
         self.logger = logger
     }
 
-    /// Reads the previously-persisted workload manifest. If only a legacy
-    /// QEMU-only manifest exists, its entries are migrated (they are QEMU VMs
-    /// by definition), persisted in the unified format, and the legacy file is
-    /// removed.
+    /// Reads the previously-persisted workload manifest.
     ///
     /// Entries are decoded **one at a time** so one bad entry costs one entry.
     /// The dictionary used to decode as a unit, which made any single
@@ -323,9 +351,7 @@ public struct VMManifestStore {
     /// workload on the host along with it. Only a failure at the top level
     /// (unreadable bytes, truncated or non-object JSON) is `.unreadable` now.
     public func load() -> ManifestLoad {
-        guard FileManager.default.fileExists(atPath: path) else {
-            return migrateLegacyQEMUManifest()
-        }
+        guard FileManager.default.fileExists(atPath: path) else { return .fresh }
 
         let data: Data
         do {
@@ -446,47 +472,6 @@ public struct VMManifestStore {
         return formatter.string(from: Date())
     }
 
-    private func migrateLegacyQEMUManifest() -> ManifestLoad {
-        guard let legacyPath = legacyQEMUManifestPath,
-            FileManager.default.fileExists(atPath: legacyPath)
-        else { return .fresh }
-        do {
-            let data = try Data(contentsOf: URL(fileURLWithPath: legacyPath))
-            let specs: [String: VMSpec]
-            do {
-                specs = try JSONDecoder().decode([String: VMSpec].self, from: data)
-            } catch {
-                // Manifests written before the hypervisor-neutral VMSpec stored the
-                // QEMU-flavored VmConfig. Salvage the resource reservations (all the
-                // orphan-tracking needs) so an upgrade doesn't hand orphaned VMs'
-                // capacity to new placements.
-                let legacy = try JSONDecoder().decode([String: LegacyVmConfig].self, from: data)
-                specs = legacy.mapValues { $0.toSpec() }
-            }
-            let migrated = specs.mapValues { VMManifestEntry(hypervisorType: .qemu, spec: $0) }
-            if !migrated.isEmpty {
-                logger.warning("Migrated \(migrated.count) VM manifest entr(ies) from the QEMU-only manifest format")
-            }
-            // Persist in the unified format before dropping the legacy file, so a
-            // crash — or a failed write (disk full, permissions) — between the two
-            // steps can't destroy the only readable manifest. On failure the legacy
-            // file stays put and the next start retries the migration.
-            if save(migrated) {
-                try? FileManager.default.removeItem(atPath: legacyPath)
-            }
-            return .loaded(entries: migrated, quarantined: [:])
-        } catch {
-            // Same rule as the unified manifest: a manifest that exists and
-            // cannot be read is not evidence of an empty host. The legacy file
-            // is left exactly as it is — nothing writes to that path.
-            logger.error(
-                "Legacy VM manifest is unreadable; this host's workloads are unknown and it will advertise no capacity until the manifest is repaired or removed",
-                metadata: ["path": .string(legacyPath), "reason": .string("\(error)")])
-            return .unreadable(
-                ManifestReadFailure(
-                    path: legacyPath, reason: "could not be read: \(error)", preservedCopyPath: nil))
-        }
-    }
 }
 
 // MARK: - Per-entry decoding
@@ -611,35 +596,4 @@ private struct DynamicCodingKey: CodingKey {
     init(_ stringValue: String) { self.stringValue = stringValue }
     init?(stringValue: String) { self.stringValue = stringValue }
     init?(intValue: Int) { nil }
-}
-
-/// Minimal projection of the pre-VMSpec manifest format, kept only to migrate
-/// existing on-disk manifests. Decodes just the fields that matter for resource
-/// reservation of orphaned VMs.
-private struct LegacyVmConfig: Decodable {
-    struct Cpus: Decodable {
-        let bootVcpus: Int
-        let maxVcpus: Int?
-
-        enum CodingKeys: String, CodingKey {
-            case bootVcpus = "boot_vcpus"
-            case maxVcpus = "max_vcpus"
-        }
-    }
-
-    struct Memory: Decodable {
-        let size: Int64
-    }
-
-    let cpus: Cpus?
-    let memory: Memory?
-
-    func toSpec() -> VMSpec {
-        VMSpec(
-            cpus: cpus?.bootVcpus ?? 0,
-            maxCpus: cpus?.maxVcpus,
-            memoryBytes: memory?.size ?? 0,
-            boot: .disk(firmware: nil)
-        )
-    }
 }

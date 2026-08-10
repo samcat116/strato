@@ -355,6 +355,10 @@ actor Agent {
     private var capacityAdmissionLedger = HostCapacityAdmissionLedger()
     private var capacityManifestRevision: UInt64 = 0
     private var bootCapacityClaims: [String: HostCapacityClaim] = [:]
+    /// Managed identities whose historical VM-side bytes could not be adopted
+    /// on this sync. Creation must fail closed for these IDs: materializing the
+    /// source image would silently replace the guest's changed boot disk.
+    private var volumeAdoptionFailures: [String: String] = [:]
 
     // Simulation ("dummy agent") mode: the agent speaks the full control-plane
     // protocol but drives a no-op mock hypervisor with no real
@@ -469,7 +473,6 @@ actor Agent {
         self.desiredStateFullRefetchInterval = desiredStateFullRefetchInterval
         self.manifestStore = VMManifestStore(
             path: (vmStoragePath as NSString).appendingPathComponent("vm-manifest.json"),
-            legacyQEMUManifestPath: (vmStoragePath as NSString).appendingPathComponent("qemu-manifest.json"),
             logger: logger
         )
         self.snapshotRecordStore = SnapshotRecordStore(
@@ -1512,7 +1515,7 @@ actor Agent {
 
         guard let url = URL(string: controlPlaneHTTPBase + Self.desiredStatePollPath) else {
             logger.error(
-                "Could not build the desired-state poll URL; staying on pushed syncs",
+                "Could not build the desired-state poll URL; desired-state sync cannot start",
                 metadata: ["base": .string(controlPlaneHTTPBase)])
             return
         }
@@ -1536,9 +1539,9 @@ actor Agent {
                 try await downloader.poll(url: url, ifNoneMatch: ifNoneMatch)
             },
             deliver: { [weak self] envelope in
-                // Straight onto the same inbound path a pushed frame takes, so
-                // a polled sync lands on the `.desiredState` serialization lane
-                // and inherits the ordering guarantees the reconciler relies on.
+                // Straight onto the ordinary inbound path so the fetched sync
+                // lands on the `.desiredState` serialization lane and inherits
+                // the ordering guarantees the reconciler relies on.
                 await self?.routeInboundMessage(envelope)
             },
             logger: logger,
@@ -2330,9 +2333,12 @@ actor Agent {
         // manifest carries each VM's `diskBytes` from both the vmCreate and
         // reconciliation paths, and orphans keep reserving across restarts
         // (issue #473). Sandboxes reserve no disk, matching the scheduler.
-        // Otherwise query the storage filesystem live — VM disks are created
-        // directly on it, so this naturally accounts for existing disks
-        // without tracking reservations.
+        // Otherwise query the managed-volume filesystem live. Every VM boot
+        // disk is a managed volume now, and the scheduler compares this value
+        // with `vm.disk`; measuring `vmStoragePath` would make placement wrong
+        // whenever the two directories are on different filesystems. A live
+        // filesystem probe naturally accounts for existing volumes without
+        // tracking reservations.
         let totalDisk: Int64
         let availableDisk: Int64
         if let simulation, simulation.enabled {
@@ -2342,12 +2348,12 @@ actor Agent {
                 + quarantinedWorkloads.values.reduce(0) { $0 + $1.diskBytes }
             availableDisk = inventoryUnknown ? 0 : max(0, totalDisk - reservedDisk)
         } else {
-            let disk = HostResources.diskCapacity(forPath: vmStoragePath)
+            let disk = HostResources.diskCapacity(forPath: volumeStoragePath)
             if disk == nil {
                 logger.warning(
-                    "Unable to determine disk capacity for VM storage path",
+                    "Unable to determine disk capacity for managed volume storage path",
                     metadata: [
-                        "path": .string(vmStoragePath)
+                        "path": .string(volumeStoragePath)
                     ])
             }
             totalDisk = disk?.total ?? 0
@@ -3833,6 +3839,71 @@ extension Agent: ReconcileActuator {
         return presence
     }
 
+    func prepareManagedVolumeInventory(
+        from desiredVMs: [DesiredVMState], desiredVolumes: [DesiredVolumeState]
+    ) async {
+        volumeAdoptionFailures = [:]
+        guard let storageBackend else { return }
+        var formats: [UUID: DiskFormat] = [:]
+        for volume in desiredVolumes {
+            formats[volume.volumeId] = DiskFormat(rawValue: volume.format)
+        }
+
+        var recoveredManifest = false
+        for desiredVM in desiredVMs {
+            let vmId = desiredVM.vmId.uuidString
+            guard let quarantined = quarantinedWorkloads[vmId],
+                quarantined.effectiveKind == .vm,
+                let recovered = quarantined.recoveringManagedVolumeIdentities(
+                    from: desiredVM.spec)
+            else { continue }
+            quarantinedWorkloads.removeValue(forKey: vmId)
+            orphanedVMs[vmId] = recovered
+            recoveredManifest = true
+            logger.warning(
+                "Recovered historical path-only VM manifest with managed volume identities",
+                metadata: ["vmId": .string(vmId)])
+        }
+        if recoveredManifest { persistManifest() }
+
+        var inventory: [String: DiskAttachment]
+        do {
+            inventory = try await storageBackend.listVolumes()
+        } catch {
+            // `observedVolumePresence` will report the authoritative inventory
+            // as unreadable and skip this half of convergence.
+            return
+        }
+
+        for desiredVM in desiredVMs {
+            for volume in desiredVM.spec.volumes where inventory[volume.volumeId.uuidString] == nil {
+                guard let existingPath = volume.storagePath else { continue }
+                let volumeId = volume.volumeId.uuidString
+                guard let format = formats[volume.volumeId] else {
+                    volumeAdoptionFailures[volumeId] =
+                        "managed volume \(volumeId) has no supported desired format"
+                    continue
+                }
+
+                do {
+                    let adopted = try await storageBackend.adoptVolume(
+                        volumeId: volumeId, existingPath: existingPath, format: format)
+                    inventory[volumeId] = adopted
+                } catch {
+                    volumeAdoptionFailures[volumeId] = error.localizedDescription
+                    logger.error(
+                        "Failed to adopt historical VM disk as a managed volume",
+                        metadata: [
+                            "vmId": .string(desiredVM.vmId.uuidString),
+                            "volumeId": .string(volumeId),
+                            "path": .string(existingPath),
+                            "error": .string(error.localizedDescription),
+                        ])
+                }
+            }
+        }
+    }
+
     /// Which VM each volume is plugged into, from the VM manifest entries'
     /// `spec.volumes` — the durable attachment record. Orphans are included:
     /// their disks are still presented to a process this agent has not
@@ -3842,8 +3913,9 @@ extension Agent: ReconcileActuator {
         var attachments: [String: (vmId: String, deviceName: String)] = [:]
         for (vmId, entry) in managedVMs.merging(orphanedVMs, uniquingKeysWith: { managed, _ in managed }) {
             for volume in entry.spec.volumes {
-                guard let volumeId = volume.volumeId?.uuidString else { continue }
-                attachments[volumeId] = (vmId: vmId, deviceName: volume.deviceName.rawValue)
+                attachments[volume.volumeId.uuidString] = (
+                    vmId: vmId, deviceName: volume.deviceName.rawValue
+                )
             }
         }
         return attachments
@@ -4164,9 +4236,14 @@ extension Agent: ReconcileActuator {
             // again because a level-triggered entry outlives the request that
             // made it, and the volume may have been attached since.
             if let holder = desired.capture?.attachedVMId {
-                throw SnapshotConvergenceError.unsupported(
-                    "volume \(parentId) is attached to VM \(holder.uuidString); "
-                        + "detach it before snapshotting, or the snapshot would not be point-in-time")
+                let holderID = holder.uuidString
+                guard let service = getHypervisorServiceForVM(vmId: holderID),
+                    let status = try? await service.getVMStatus(vmId: holderID),
+                    status == .shutdown || status == .created
+                else {
+                    throw SnapshotConvergenceError.sourceNotReady(
+                        "volume \(parentId) is attached to VM \(holderID), which is not confirmed shut down")
+                }
             }
             let backend = try requireStorageBackend()
             guard let disk = try await backend.listVolumes()[parentId] else {
@@ -4403,6 +4480,10 @@ extension Agent: ReconcileActuator {
         guard let format = DiskFormat(rawValue: desired.format) else {
             throw VolumeConvergenceError.unsupported("unsupported volume format '\(desired.format)'")
         }
+        if let adoptionFailure = volumeAdoptionFailures[item.id] {
+            throw VolumeConvergenceError.blocked(
+                "managed volume \(item.id) has historical bytes that could not be adopted: \(adoptionFailure)")
+        }
         let backend = try requireStorageBackend()
 
         // The create strategy is read only here, when the volume does not yet
@@ -4422,14 +4503,31 @@ extension Agent: ReconcileActuator {
                 throw VolumeConvergenceError.sourceNotReady(
                     "source volume \(sourceId) is not present on this agent yet")
             }
+            if let holder = recordedVolumeAttachments()[sourceId] {
+                guard desired.source?.sourceVMId?.uuidString == holder.vmId else {
+                    throw VolumeConvergenceError.sourceNotReady(
+                        "source volume \(sourceId) is attached to VM \(holder.vmId), but its declared source VM lane has not converged"
+                    )
+                }
+                guard let service = getHypervisorServiceForVM(vmId: holder.vmId),
+                    let status = try? await service.getVMStatus(vmId: holder.vmId),
+                    status == .shutdown || status == .created
+                else {
+                    throw VolumeConvergenceError.blocked(
+                        "source volume \(sourceId) is attached to VM \(holder.vmId), which is not confirmed shut down")
+                }
+            }
             attachment = try await backend.cloneVolume(
                 sourceVolumeId: sourceId, sourcePath: source.path, targetVolumeId: item.id)
         case DesiredVolumeSource.image:
-            guard let imageInfo = desired.source?.imageInfo else {
-                throw VolumeConvergenceError.unsupported("image create strategy carries no image info")
+            guard let imageInfo = desired.source?.imageInfo,
+                let artifactKind = desired.source?.artifactKind
+            else {
+                throw VolumeConvergenceError.unsupported(
+                    "image create strategy requires image info and an artifact kind")
             }
             attachment = try await backend.createVolumeFromImage(
-                volumeId: item.id, imageInfo: imageInfo, format: format)
+                volumeId: item.id, imageInfo: imageInfo, format: format, artifactKind: artifactKind)
         default:
             attachment = try await backend.createVolume(
                 volumeId: item.id, sizeBytes: desired.sizeBytes, format: format)
@@ -4573,7 +4671,7 @@ extension Agent: ReconcileActuator {
         // the other order would leave a plugged device nothing remembers, and
         // the guest would lose it at its next power cycle.
         let spec = VolumeSpec(
-            volumeId: UUID(uuidString: item.id),
+            volumeId: desired.volumeId,
             deviceName: attachment.deviceName,
             storagePath: disk.path,
             readonly: attachment.readonly,
@@ -4613,7 +4711,7 @@ extension Agent: ReconcileActuator {
             try await service.detachDisk(vmId: vmId, volumeId: volumeId, deviceName: deviceName)
         }
         guard let entry = managedVMs[vmId] ?? orphanedVMs[vmId] else { return }
-        let remaining = entry.spec.volumes.filter { $0.volumeId?.uuidString != volumeId }
+        let remaining = entry.spec.volumes.filter { $0.volumeId.uuidString != volumeId }
         let updated = entry.with(spec: entry.spec.withVolumes(remaining))
         if managedVMs[vmId] != nil {
             managedVMs[vmId] = updated
@@ -4654,6 +4752,31 @@ extension Agent: ReconcileActuator {
         return service
     }
 
+    /// Resolve every managed volume identity against this agent's own storage
+    /// inventory before a hypervisor sees the VM spec. A sync may arrive before
+    /// image materialization finishes, so absence is a retryable dependency;
+    /// retaining a nil or control-plane-stale path would recreate the legacy
+    /// path-only boot behavior this contract replaces.
+    private func specWithRealizedVolumePaths(_ spec: VMSpec, vmId: String) async throws -> VMSpec {
+        let backend = try requireStorageBackend()
+        let inventory = try await backend.listVolumes()
+        let volumes = try spec.volumes.map { volume -> VolumeSpec in
+            let volumeId = volume.volumeId.uuidString
+            guard let disk = inventory[volumeId] else {
+                throw VolumeConvergenceError.sourceNotReady(
+                    "managed volume \(volumeId) for VM \(vmId) is not present on this agent yet")
+            }
+            return VolumeSpec(
+                volumeId: volume.volumeId,
+                deviceName: volume.deviceName,
+                storagePath: disk.path,
+                readonly: volume.readonly,
+                bootOrder: volume.bootOrder,
+                ioLimits: volume.ioLimits)
+        }
+        return spec.withVolumes(volumes)
+    }
+
     private func reconcileCreate(_ item: ReconcileWorkItem) async throws {
         guard let desired = item.desired else {
             throw HypervisorServiceError.invalidConfiguration("create work item without a desired entry")
@@ -4661,6 +4784,7 @@ extension Agent: ReconcileActuator {
         guard let service = getHypervisorService(for: desired.hypervisorType) else {
             throw HypervisorServiceError.hypervisorNotInstalled(desired.hypervisorType.rawValue)
         }
+        let realizedSpec = try await specWithRealizedVolumePaths(desired.spec, vmId: item.id)
 
         let currentEntry = managedVMs[item.id] ?? orphanedVMs[item.id]
         let currentReservation =
@@ -4668,7 +4792,7 @@ extension Agent: ReconcileActuator {
                 VMHostReservation.forManifestEntry($0, architecture: .current)
             } ?? HostReservation()
         let desiredReservation = VMHostReservation.forSpec(
-            desired.spec, hypervisorType: desired.hypervisorType, architecture: .current)
+            realizedSpec, hypervisorType: desired.hypervisorType, architecture: .current)
         let raw = await rawHostCapacitySnapshot()
         let claim = try capacityAdmissionLedger.claim(
             .positiveDelta(from: currentReservation, to: desiredReservation),
@@ -4701,7 +4825,7 @@ extension Agent: ReconcileActuator {
         let attachments: [ResolvedNetworkAttachment]
         do {
             attachments = try await networkOrchestrator.prepareAttachments(
-                vmId: item.id, networks: desired.spec.networks,
+                vmId: item.id, networks: realizedSpec.networks,
                 metadataDenied: desired.metadata.map { !$0.isServiceEnabled } ?? false)
         } catch {
             vsockCIDs.rollBack(lease)
@@ -4709,11 +4833,11 @@ extension Agent: ReconcileActuator {
         }
         do {
             try await service.createVM(
-                vmId: item.id, spec: desired.spec, imageInfo: desired.imageInfo,
+                vmId: item.id, spec: realizedSpec, imageInfo: desired.imageInfo,
                 networkAttachments: attachments, metadata: desired.metadata)
         } catch {
             await networkOrchestrator.teardownAttachments(
-                vmId: item.id, networks: desired.spec.networks)
+                vmId: item.id, networks: realizedSpec.networks)
             vsockCIDs.rollBack(lease)
             throw error
         }
@@ -4733,7 +4857,7 @@ extension Agent: ReconcileActuator {
         // with a restore outstanding.
         let appliedEdges = (managedVMs[item.id] ?? orphanedVMs[item.id])?.appliedEdges
         managedVMs[item.id] = VMManifestEntry(
-            hypervisorType: desired.hypervisorType, spec: desired.spec,
+            hypervisorType: desired.hypervisorType, spec: realizedSpec,
             realizedMemoryReservationBytes: desired.hypervisorType == .qemu
                 ? desiredReservation.memoryBytes : nil,
             vsockCID: lease.cid,

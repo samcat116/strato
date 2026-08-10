@@ -308,10 +308,9 @@ struct AgentWebSocketController: RouteCollection {
                         )
                         self.sendMessage(ws: ws, message: response, logger: req.logger)
 
-                        // A state-sync agent gets its authoritative desired
-                        // state immediately on (re)registration, so drift
-                        // accumulated while it was away converges without
-                        // waiting for the periodic timer (issue #260).
+                        // Ring immediately on (re)registration so drift
+                        // accumulated while the agent was away converges
+                        // without waiting for its unconditional refetch.
                         await req.agentService.syncDesiredState(agentId: agentUUID.uuidString)
                     } catch {
                         Telemetry.agentRegistrationFailed(reason: "register_error")

@@ -103,9 +103,8 @@ final class LogicalNetwork: Model, @unchecked Sendable {
     /// and `dnsServers` becomes the resolver's upstream forwarders; with it off,
     /// `dnsServers` is handed to guests verbatim, which is what it always was.
     ///
-    /// An opt-*out*, defaulting true, like `metadataEnabled` — see
-    /// `AddResolverEnabledToLogicalNetwork` for why that is safe. The short
-    /// version: the resolver forwards through the *hypervisor's* egress, so a
+    /// An opt-*out*, defaulting true, like `metadataEnabled`. The resolver
+    /// forwards through the *hypervisor's* egress, so a
     /// network whose `dnsServers` already worked keeps working and one with no
     /// external access at all starts being able to resolve public names, which
     /// is the bug this phase was filed for. And the control plane withholds the

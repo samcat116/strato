@@ -376,8 +376,7 @@ extension User {
     package func generateAPIKey(
         on db: Database,
         name: String = "Test API Key",
-        scopes: [String] = ["read", "write"],
-        restriction: CredentialRestriction? = nil
+        restriction: CredentialRestriction = .unrestricted
     ) async throws -> String {
         // Generate a proper API key for testing
         let apiKeyString = APIKey.generateAPIKey()
@@ -389,10 +388,9 @@ extension User {
             name: name,
             keyHash: keyHash,
             keyPrefix: keyPrefix,
-            scopes: scopes,
+            restriction: restriction,
             isActive: true
         )
-        apiKey.store(restriction: restriction)
         try await apiKey.save(on: db)
 
         return apiKeyString
@@ -588,6 +586,7 @@ package struct TestDataBuilder {
         maxMemoryGB: Double = 20.0,
         maxStorageGB: Double = 100.0,
         maxVMs: Int = 5,
+        maxNetworks: Int = 10,
         organization: Organization? = nil,
         ou: OrganizationalUnit? = nil,
         project: Project? = nil,
@@ -602,6 +601,7 @@ package struct TestDataBuilder {
             maxMemory: Int64(maxMemoryGB * 1024 * 1024 * 1024),
             maxStorage: Int64(maxStorageGB * 1024 * 1024 * 1024),
             maxVMs: maxVMs,
+            maxNetworks: maxNetworks,
             environment: environment
         )
         try await quota.save(on: db)
@@ -683,20 +683,39 @@ package struct TestDataBuilder {
         sourceURL: String? = nil,
         checksum: String? = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     ) async throws -> Image {
+        let projectID = try project.requireID()
         let image = Image(
             name: name,
             description: description,
-            projectID: project.id!,
-            filename: filename,
-            size: size,
-            format: format,
+            projectID: projectID,
             status: status,
-            uploadedByID: uploadedBy.id!,
-            sourceURL: sourceURL
+            uploadedByID: uploadedBy.id!
         )
-        image.storagePath = storagePath
-        image.checksum = checksum
         try await image.save(on: db)
+
+        if status == .ready || storagePath != nil || sourceURL != nil {
+            let imageID = try image.requireID()
+            let artifact = ImageArtifact(
+                imageID: imageID,
+                kind: .diskImage,
+                format: format,
+                architecture: image.architecture,
+                filename: filename,
+                size: size,
+                checksum: checksum ?? "",
+                storagePath: storagePath
+                    ?? ImageObjectKey.artifact(
+                        projectId: projectID,
+                        imageId: imageID,
+                        kind: "disk-image",
+                        filename: filename),
+                status: status == .ready ? .ready : .pending,
+                sourceURL: sourceURL,
+                expectedChecksum: status == .ready ? nil : checksum
+            )
+            try await artifact.save(on: db)
+            image.$artifacts.value = [artifact]
+        }
         return image
     }
 }
@@ -705,15 +724,9 @@ package struct TestDataBuilder {
 
 /// Mock ImageFetchService that does nothing (prevents real HTTP requests in tests)
 package actor MockImageFetchService: ImageFetchServiceProtocol {
-    package var startedFetches: [UUID] = []
     package var startedArtifactFetches: [UUID] = []
 
     package init() {}
-
-    package func startFetch(imageId: UUID) async throws {
-        startedFetches.append(imageId)
-        // No-op: don't actually fetch anything
-    }
 
     package func startArtifactFetch(artifactId: UUID) async throws {
         startedArtifactFetches.append(artifactId)
@@ -750,7 +763,7 @@ package func withConditionedRoleBindingsAllowed<T>(
     _ body: () async throws -> T
 ) async throws -> T {
     let sql = try sqlDatabaseForTest(db)
-    let constraint = RejectConditionedRoleBindings.constraintName
+    let constraint = RoleBinding.conditionConstraintName
     try await sql.raw(
         "ALTER TABLE \"role_bindings\" DROP CONSTRAINT IF EXISTS \(unsafeRaw: constraint)"
     ).run()
@@ -775,7 +788,7 @@ package func withConditionedRoleBindingsAllowed<T>(
 }
 
 /// Write a `role_bindings` row carrying a `condition` — which the schema
-/// otherwise refuses (`RejectConditionedRoleBindings`, STR-108) — leaving the
+/// otherwise refuses (STR-108) — leaving the
 /// boundary in place for everything after it. See
 /// `withConditionedRoleBindingsAllowed`.
 package func insertConditionedRoleBinding(
@@ -820,7 +833,7 @@ package func conditionedRoleBindingConstraint(
         """
         SELECT convalidated FROM pg_constraint
         WHERE conrelid = 'role_bindings'::regclass
-          AND conname = \(bind: RejectConditionedRoleBindings.constraintName)
+          AND conname = \(bind: RoleBinding.conditionConstraintName)
         """
     ).all()
     guard let row = rows.first else { return .absent }

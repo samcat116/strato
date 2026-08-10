@@ -578,8 +578,7 @@ struct OrganizationalUnitController: RouteCollection {
     /// subtree that is already self-consistent: a descendant folder whose own
     /// path had drifted would be skipped, and its projects with it. The move path
     /// assumes folder paths are consistent; `GET /api/hierarchy/validate` is what
-    /// catches a violation, and `RebuildDriftedHierarchyPaths` clears any backlog
-    /// at boot.
+    /// catches a violation, and the boot-time hierarchy repair clears any backlog.
     ///
     /// Projects are matched by parent folder id instead, and the set includes the
     /// moved folder itself: a project directly under it extends the path that

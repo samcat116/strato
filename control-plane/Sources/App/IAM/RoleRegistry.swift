@@ -324,14 +324,14 @@ enum IAMRoleRegistry {
     /// deliberately; nothing grants it by accident.
     static let systemAdminOnlyActions: Set<String> = ["agent:updateArtifact"]
 
-    /// Every action whose name says it reads — the action-vocabulary spelling
-    /// of the legacy `read` credential scope (STR-115).
+    /// Every action whose name says it reads — the symbolic `read` credential
+    /// restriction (STR-115).
     ///
     /// Derived from the names rather than curated, so an action shipped later
     /// lands on the right side by default: a new `:read`/`:list` is readable, a
     /// new verb is not. `image:download` and `iam:readPolicy` are named
     /// explicitly because they read without saying so in their suffix, and a
-    /// `read`-scoped credential reaches both today.
+    /// read-only credential reaches both today.
     ///
     /// Three actions a `read` credential can reach on a safe method today are
     /// deliberately *not* here, and lose that reach when their credential's

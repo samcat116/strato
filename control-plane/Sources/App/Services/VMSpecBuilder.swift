@@ -159,62 +159,15 @@ struct VMSpecBuilder {
         }
     }
 
-    /// Legacy single-disk volume list from `vm.diskPath`.
-    private static func legacyVolumeSpecs(from vm: VM) -> [VolumeSpec] {
-        guard let diskPath = vm.diskPath else { return [] }
-        return [
-            VolumeSpec(
-                deviceName: .disk(0),
-                storagePath: diskPath,
-                readonly: vm.readonlyDisk
-            )
-        ]
-    }
-
-    /// Builds a VM spec from VM and Image. The boot volume is materialized by the
-    /// agent from the cached image (see `buildImageInfo`), so no volume entry is
-    /// sent unless the VM carries a legacy disk path.
-    static func buildVMSpec(
-        from vm: VM, image: Image, networkInterfaces: [VMNetworkInterface],
-        networks: [UUID: LogicalNetwork] = [:]
-    ) -> VMSpec {
-        let cpuCount = vm.cpu > 0 ? vm.cpu : (image.defaultCpu ?? 1)
-        let memorySize = vm.memory > 0 ? vm.memory : (image.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
-
-        return VMSpec(
-            cpus: cpuCount,
-            maxCpus: vm.maxCpu > 0 ? vm.maxCpu : cpuCount,
-            memoryBytes: memorySize,
-            maxMemoryBytes: vm.maxMemory > memorySize ? vm.maxMemory : memorySize,
-            balloonTargetBytes: vm.balloonTarget,
-            diskBytes: vm.disk,
-            sharedMemory: vm.sharedMemory,
-            hugepages: vm.hugepages,
-            boot: bootSource(
-                kernel: vm.kernelPath,
-                initramfs: vm.initramfsPath,
-                cmdline: vm.cmdline ?? image.defaultCmdline,
-                firmware: vm.firmwarePath
-            ),
-            machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
-            volumes: legacyVolumeSpecs(from: vm),
-            networks: networkSpecs(from: networkInterfaces, networks: networks),
-            // nil, not an explicit `.headless`, so the key is omitted
-            // entirely and stays out of the sync digest for headless VMs
-            // (issue #566).
-            console: ConsoleSpec(graphics: vm.graphicsConsole ? .vnc : nil),
-            sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
-            userData: vm.userData
-        )
-    }
-
-    /// Builds a VM spec from VM and Image, with attached volumes
+    /// Builds the canonical VM spec. Every VM must carry exactly one managed
+    /// boot volume; a missing or ambiguous boot disk is a persisted-data
+    /// invariant violation, never a reason to reconstruct a path-only disk.
     /// - Parameters:
     ///   - vm: The VM to build the spec for (must have volumes eager-loaded with .with(\.$volumes))
-    ///   - image: The image used for the boot volume (if no boot volume attached)
+    ///   - image: Image defaults used for CPU, memory, and direct-kernel boot metadata
     ///   - volumes: Attached volumes (sorted by boot order, then device name)
     ///   - networkInterfaces: The VM's network interfaces
-    static func buildVMSpecWithVolumes(
+    static func buildVMSpec(
         from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
         storagePathsByVolumeID: [UUID: String] = [:],
         networks: [UUID: LogicalNetwork] = [:],
@@ -222,8 +175,8 @@ struct VMSpecBuilder {
         sendsMetadataPort: Bool = true,
         siteResolverCapable: Bool? = true,
         logger: Logger? = nil
-    ) -> VMSpec {
-        buildVMSpecWithVolumes(
+    ) throws -> VMSpec {
+        try buildVMSpec(
             from: vm, image: image, volumes: volumes,
             storagePathsByVolumeID: storagePathsByVolumeID,
             resolvedInterfaces: resolvedInterfaces(
@@ -235,21 +188,43 @@ struct VMSpecBuilder {
 
     /// The same, for a caller holding an already-resolved NIC list (see
     /// `networkSpecs(fromResolved:securityGroupsByInterface:sendsMetadataPort:)`).
-    static func buildVMSpecWithVolumes(
+    static func buildVMSpec(
         from vm: VM, image: Image?, volumes: [Volume],
         storagePathsByVolumeID: [UUID: String] = [:],
         resolvedInterfaces: [(interface: VMNetworkInterface, network: LogicalNetwork)],
         securityGroupsByInterface: [UUID: [UUID]] = [:],
         sendsMetadataPort: Bool = true,
         siteResolverCapable: Bool? = true
-    ) -> VMSpec {
+    ) throws -> VMSpec {
         let cpuCount = vm.cpu > 0 ? vm.cpu : (image?.defaultCpu ?? 1)
         let memorySize = vm.memory > 0 ? vm.memory : (image?.defaultMemory ?? 1024 * 1024 * 1024)  // 1GB default
 
-        var volumes = volumeSpecs(from: volumes, storagePathsByVolumeID: storagePathsByVolumeID)
-        if volumes.isEmpty {
-            volumes = legacyVolumeSpecs(from: vm)
+        let attachedVolumes = volumes.filter { $0.$vm.id != nil }
+        let bootVolumes = attachedVolumes.filter { $0.volumeType == .boot }
+        guard bootVolumes.count == 1 else {
+            throw Abort(
+                .internalServerError,
+                reason: "VM \(vm.id?.uuidString ?? "unsaved") must have exactly one managed boot volume")
         }
+        let bootVolume = bootVolumes[0]
+        guard bootVolume.deviceName == VolumeDeviceName.disk(0).rawValue,
+            bootVolume.bootOrder == 0,
+            !bootVolume.readonly
+        else {
+            throw Abort(
+                .internalServerError,
+                reason: "VM \(vm.id?.uuidString ?? "unsaved") has a non-canonical boot volume")
+        }
+        if vm.desiredStatus != .absent, bootVolume.desiredStatus != .present {
+            throw Abort(
+                .internalServerError,
+                reason: "Live VM \(vm.id?.uuidString ?? "unsaved") has a terminating boot volume")
+        }
+        let desiredVolumes =
+            vm.desiredStatus == .absent
+            ? attachedVolumes : attachedVolumes.filter { $0.desiredStatus == .present }
+        let volumeSpecs = try volumeSpecs(
+            from: desiredVolumes, storagePathsByVolumeID: storagePathsByVolumeID)
 
         return VMSpec(
             cpus: cpuCount,
@@ -267,7 +242,7 @@ struct VMSpecBuilder {
                 firmware: vm.firmwarePath
             ),
             machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
-            volumes: volumes,
+            volumes: volumeSpecs,
             networks: networkSpecs(
                 fromResolved: resolvedInterfaces,
                 securityGroupsByInterface: securityGroupsByInterface,
@@ -295,7 +270,7 @@ struct VMSpecBuilder {
     /// `(orderIndex, deviceName)`.
     static func volumeSpecs(
         from volumes: [Volume], storagePathsByVolumeID: [UUID: String] = [:]
-    ) -> [VolumeSpec] {
+    ) throws -> [VolumeSpec] {
         // Volumes with no explicit boot order sort after those that have one,
         // which `Int.max` expresses without a special case.
         func sortKey(_ volume: Volume) -> (Int, String, String) {
@@ -312,24 +287,28 @@ struct VMSpecBuilder {
         // The volume lane is authoritative for realizing an attachment; this
         // list is the boot-time convenience that rebuilds the same disk set.
         for volume in sortedVolumes where volume.$vm.id != nil && volume.desiredStatus == .present {
-            guard let volumeID = volume.id, let storagePath = storagePathsByVolumeID[volumeID] else {
-                continue
+            guard let volumeID = volume.id else {
+                throw Abort(.internalServerError, reason: "Attached volume is missing its managed identity")
             }
             // An attached row without a legal device name cannot exist: the API
-            // validates one on the way in, and `NormalizeVolumeAttachments`
-            // added a `vm_id IS NULL OR device_name IS NOT NULL` check plus the
+            // validates one on the way in, and the schema has a
+            // `vm_id IS NULL OR device_name IS NOT NULL` check plus the
             // `(vm_id, device_name)` unique index. Skipped rather than given a
             // synthesized `disk<n>` if one somehow does — that fallback could
             // collide with an explicit name on the same VM, and a duplicate id
             // is what stops the VM booting at all.
             guard let rawDeviceName = volume.deviceName,
                 let deviceName = VolumeDeviceName(rawDeviceName)
-            else { continue }
+            else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "Managed volume \(volumeID) has no valid attachment device name")
+            }
             specs.append(
                 VolumeSpec(
-                    volumeId: volume.id,
+                    volumeId: volumeID,
                     deviceName: deviceName,
-                    storagePath: storagePath,
+                    storagePath: storagePathsByVolumeID[volumeID],
                     readonly: volume.readonly,
                     bootOrder: volume.bootOrder,
                     // Read off the same column `DesiredVolumeState.ioLimits`
@@ -363,7 +342,7 @@ struct VMSpecBuilder {
         // One download descriptor per typed artifact. Exclude any artifact
         // that isn't fully materialized — a pending/downloading URL fetch has no
         // real checksum or bytes yet and must never reach an agent.
-        let artifacts = (image.$artifacts.value ?? []).filter { $0.status == .ready }.map { artifact in
+        let artifacts = (image.$artifacts.value ?? []).filter(\.isUsable).map { artifact in
             ArtifactInfo(
                 kind: artifact.kind,
                 filename: artifact.filename,
@@ -373,36 +352,28 @@ struct VMSpecBuilder {
             )
         }
 
-        // Top-level fields describe the primary disk for the QEMU disk path and
-        // legacy agents. Prefer the disk-image artifact; fall back to any artifact,
-        // then to the image's own single-file columns.
-        let primary = artifacts.first { $0.kind == .diskImage } ?? artifacts.first
-        if let primary {
-            return ImageInfo(
-                imageId: imageId,
-                projectId: projectId,
-                filename: primary.filename,
-                checksum: primary.checksum,
-                size: primary.size,
-                downloadURL: primary.downloadURL,
-                architecture: image.architecture,
-                artifacts: artifacts
-            )
-        }
-
-        // No artifacts (image predates the backfill): fall back to legacy fields.
-        guard let checksum = image.checksum else {
-            throw Abort(.internalServerError, reason: "Image checksum is required")
+        guard !artifacts.isEmpty else {
+            throw Abort(
+                .internalServerError,
+                reason: "Ready image \(imageId) has no ready typed artifacts")
         }
         return ImageInfo(
             imageId: imageId,
             projectId: projectId,
-            filename: image.filename,
-            checksum: checksum,
-            size: image.size,
-            downloadURL: downloadPath,
             architecture: image.architecture,
-            artifacts: []
+            artifacts: artifacts
         )
+    }
+
+    /// Builds the stricter image descriptor used to materialize a managed
+    /// volume. Firecracker's kernel/rootfs pair can boot a VM directly but
+    /// cannot seed the disk-image-only volume creation path.
+    static func buildDiskImageInfo(from image: Image) throws -> ImageInfo {
+        guard image.usableDiskArtifact != nil else {
+            throw Abort(
+                .badRequest,
+                reason: "Image does not have a usable disk-image artifact")
+        }
+        return try buildImageInfo(from: image)
     }
 }

@@ -72,7 +72,7 @@ struct VolumeSnapshotGuardTests {
         CreateSnapshotRequest(name: "guard-snapshot", description: "taken under test", ttlSeconds: nil)
     }
 
-    @Test("Snapshotting an attached volume is refused with 409")
+    @Test("Snapshotting a stopped VM's attached volume is refused with 409")
     func attachedVolumeIsRefused() async throws {
         try await withVolume(status: .attached, attachedToVM: true) { app, volume, token in
             try await app.test(.POST, "/api/volumes/\(volume.id!)/snapshot") { req in
@@ -94,18 +94,23 @@ struct VolumeSnapshotGuardTests {
         }
     }
 
-    @Test("Cloning an attached volume is refused with 409")
-    func attachedVolumeCannotBeCloned() async throws {
+    @Test("Cloning a running VM's attached volume is refused with 409")
+    func runningAttachedVolumeCannotBeCloned() async throws {
         try await withVolume(status: .attached, attachedToVM: true) { app, volume, token in
-            // Clone shares the guard's reasoning: `qemu-img convert` of a file
-            // a guest is writing produces a torn copy. It used to share
-            // `canSnapshot` outright, so this pins it as its own rule.
+            let vm = try #require(try await VM.find(volume.$vm.id, on: app.db))
+            vm.status = .running
+            vm.desiredStatus = .running
+            try await vm.save(on: app.db)
+
+            // Clone admission allows a stopped attachment because the agent
+            // serializes the copy with that VM. A running attachment is still
+            // unsafe: `qemu-img convert` would race guest writes.
             try await app.test(.POST, "/api/volumes/\(volume.id!)/clone") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(CloneVolumeRequest(name: "guard-clone", description: nil))
             } afterResponse: { res in
                 #expect(res.status == .conflict)
-                #expect(res.body.string.contains("detach the volume first"))
+                #expect(res.body.string.contains("only while its VM is shut down"))
             }
 
             let volumeCount = try await Volume.query(on: app.db).count()

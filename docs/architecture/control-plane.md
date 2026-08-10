@@ -200,11 +200,11 @@ The canonical mutation path (`Controllers/VMController.swift`):
 Lifecycle verbs (start/stop/pause/resume/delete) follow the same shape through
 `ResourceMutation.accept(...)`, which then drives a dispatch strategy in the
 background. For the state-sync strategy that is the `AgentDispatch` seam's
-`syncDesiredState(agentId:)`: push directly if this replica holds the agent's
-socket, otherwise publish a nudge to the replica that does. A lost nudge is
-harmless but not instantly repaired: the periodic sync re-sends state to dirty
-agents every minute, and the unconditional full-fleet resend that catches a
-lost cross-replica nudge runs every ~10 minutes.
+`syncDesiredState(agentId:)`: ring the local and broadcast desired-state
+doorbells so whichever replica holds the agent's parked poll wakes it. A lost
+doorbell is harmless but not instantly repaired: the agent omits
+`If-None-Match` on its own full-refetch interval (300 seconds by default), and
+that unconditional request must receive the complete current state.
 
 There is **no double-submit `409`** on these verbs (STR-147). Desired state is
 level-triggered, so two overlapping writes leave the last one standing and the
@@ -620,11 +620,8 @@ fallback.
 
 A single heartbeat-monitor loop in `AgentService` (30s tick, injectable for
 tests) runs, per tick: stale-agent detection (60s threshold, skipped when a
-live Valkey presence key exists), pub/sub subscription re-arming, the
-periodic sync to this replica's agents (every other tick, revision-gated to
-agents whose desired state changed since their last successful sync; every
-20th tick — ~10 minutes — forces an unconditional full-fleet resend, the
-backstop for a lost doorbell), and six sweeps — stuck convergence (STR-147),
+live Valkey presence key exists), pub/sub subscription re-arming, and six
+sweeps — stuck convergence (STR-147),
 steady-state divergence (STR-123), stranded volume attachments (STR-129), orphaned terminating resources
 (STR-144), expired sandboxes (TTL + retention reaping), and agent auto-update
 rollout.

@@ -8,12 +8,10 @@ import Vapor
 /// Purely *observed* since STR-150, like `VolumeStatus` after STR-148: the
 /// control plane no longer writes a transitional status before dispatching an
 /// RPC, because there is no RPC. `ObservedStateApplier` derives this from what
-/// the owning agent reports about the bytes. `restoring` is retained for API
-/// compatibility and is never written.
+/// the owning agent reports about the bytes.
 public enum SnapshotStatus: String, Codable, CaseIterable, Sendable {
     case creating = "creating"  // Snapshot is being captured
     case available = "available"  // Snapshot is ready for use
-    case restoring = "restoring"  // Unused since STR-150; kept for API compatibility
     case deleting = "deleting"  // Snapshot is being deleted
     case error = "error"  // An error occurred
 }

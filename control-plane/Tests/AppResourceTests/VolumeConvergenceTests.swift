@@ -128,7 +128,7 @@ final class VolumeConvergenceTests {
                 on: app, user: user, project: project, agentId: agentId, size: 20 << 30)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.volumes?.first)
+            let entry = try #require(message.volumes.first)
             #expect(entry.volumeId == volume.id)
             #expect(entry.sizeBytes == 20 << 30)
             #expect(entry.format == "qcow2")
@@ -161,7 +161,7 @@ final class VolumeConvergenceTests {
             try await volume.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let attachment = try #require(message.volumes?.first?.attachment)
+            let attachment = try #require(message.volumes.first?.attachment)
             #expect(attachment.vmId == vm.id)
             #expect(attachment.deviceName.rawValue == "disk1")
             #expect(attachment.readonly)
@@ -199,10 +199,15 @@ final class VolumeConvergenceTests {
 
     @Test("A clone's source rides the entry as a create strategy")
     func cloneSourceIsACreateStrategy() async throws {
-        try await withVolumeApp { app, _, user, project in
+        try await withVolumeApp { app, builder, user, project in
             let agentId = try await registerAgent(app: app, named: "clone-agent")
             let source = try await makeVolume(
-                on: app, user: user, project: project, agentId: agentId, name: "clone-source")
+                on: app, user: user, project: project, agentId: agentId, name: "clone-source",
+                status: .attached)
+            let sourceVM = try await builder.createVM(name: "clone-source-vm", project: project)
+            source.$vm.id = sourceVM.id
+            source.deviceName = "disk1"
+            try await source.save(on: app.db)
             let clone = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId, name: "clone-target",
                 status: .creating, observedGeneration: 0)
@@ -210,9 +215,10 @@ final class VolumeConvergenceTests {
             try await clone.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let entry = try #require(message.volumes?.first { $0.volumeId == clone.id })
+            let entry = try #require(message.volumes.first { $0.volumeId == clone.id })
             #expect(entry.source?.kind == DesiredVolumeSource.clone)
             #expect(entry.source?.sourceVolumeId == source.id)
+            #expect(entry.source?.sourceVMId == sourceVM.id)
         }
     }
 
@@ -669,6 +675,36 @@ final class VolumeConvergenceTests {
             // The row survives the request: only the agent's confirmation of
             // absence removes it.
             #expect(stored.isTerminating)
+        }
+    }
+
+    @Test("Reaping a boot volume clears its parent VM finalizer")
+    func bootVolumeReapAcknowledgesParent() async throws {
+        try await withVolumeApp { app, builder, user, project in
+            let vm = try await builder.createVM(name: "boot-owner", project: project)
+            let vmID = try vm.requireID()
+            vm.setDesiredStatus(.absent)
+            vm.finalizers = [
+                ResourceFinalizer.agentAbsent.rawValue,
+                ResourceFinalizer.bootVolumeAbsent.rawValue,
+            ]
+            try await vm.save(on: app.db)
+
+            let boot = Volume(
+                name: "boot", description: "", projectID: try project.requireID(),
+                environment: vm.environment, size: vm.disk, volumeType: .boot,
+                createdByID: try user.requireID())
+            boot.$vm.id = vmID
+            boot.deviceName = "disk0"
+            boot.bootOrder = 0
+            boot.setDesiredStatus(.absent)
+            try await boot.save(on: app.db)
+
+            #expect(try await Volume.reap(boot, on: app.db, app: app))
+            #expect(try await Volume.find(try boot.requireID(), on: app.db) == nil)
+
+            let parent = try #require(try await VM.find(vmID, on: app.db))
+            #expect(parent.finalizers == [ResourceFinalizer.agentAbsent.rawValue])
         }
     }
 

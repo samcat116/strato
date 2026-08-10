@@ -43,7 +43,3 @@ resources:
 initContainers:
   waitForDB:
     enabled: false
-
-# Disable migration job for CI
-migration:
-  enabled: false

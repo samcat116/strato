@@ -36,14 +36,16 @@ final class ImageObjectStoreTests {
 
     // MARK: - Key building
 
-    @Test("Image key is project/image/filename")
-    func imageKey() {
+    @Test("Disk artifact key is project/image/kind/filename")
+    func diskArtifactKey() {
         let projectId = UUID(uuidString: "11111111-1111-1111-1111-111111111111")!
         let imageId = UUID(uuidString: "22222222-2222-2222-2222-222222222222")!
 
-        let key = ImageObjectKey.image(projectId: projectId, imageId: imageId, filename: "disk.qcow2")
+        let key = ImageObjectKey.artifact(
+            projectId: projectId, imageId: imageId,
+            kind: "disk-image", filename: "disk.qcow2")
 
-        #expect(key == "\(projectId)/\(imageId)/disk.qcow2")
+        #expect(key == "\(projectId)/\(imageId)/disk-image/disk.qcow2")
     }
 
     @Test("Artifact key inserts the kind segment so kinds can't collide on filename")
@@ -67,7 +69,9 @@ final class ImageObjectStoreTests {
 
         let prefix = ImageObjectKey.imagePrefix(projectId: projectId, imageId: imageId)
 
-        let disk = ImageObjectKey.image(projectId: projectId, imageId: imageId, filename: "d.qcow2")
+        let disk = ImageObjectKey.artifact(
+            projectId: projectId, imageId: imageId,
+            kind: "disk-image", filename: "d.qcow2")
         let kernel = ImageObjectKey.artifact(
             projectId: projectId, imageId: imageId, kind: "kernel", filename: "vmlinuz")
         #expect(disk.hasPrefix(prefix))
@@ -248,7 +252,7 @@ final class ImageObjectStoreTests {
         try await store.delete(key: "p/i/never-existed.img")
     }
 
-    @Test("Delete prefix removes an image's disk and all of its artifacts")
+    @Test("Delete prefix removes all of an image's typed artifacts")
     func deletePrefixRemovesEverything() async throws {
         let root = try Self.createTempStorageDirectory()
         defer { Self.cleanupTempStorageDirectory(root) }
@@ -256,7 +260,9 @@ final class ImageObjectStoreTests {
         let projectId = UUID()
         let imageId = UUID()
 
-        let disk = ImageObjectKey.image(projectId: projectId, imageId: imageId, filename: "d.qcow2")
+        let disk = ImageObjectKey.artifact(
+            projectId: projectId, imageId: imageId,
+            kind: "disk-image", filename: "d.qcow2")
         let kernel = ImageObjectKey.artifact(
             projectId: projectId, imageId: imageId, kind: "kernel", filename: "vmlinuz")
         try await Self.write("disk", to: disk, in: store)
@@ -277,9 +283,12 @@ final class ImageObjectStoreTests {
         let doomed = UUID()
         let survivor = UUID()
 
-        let doomedKey = ImageObjectKey.image(projectId: projectId, imageId: doomed, filename: "d.qcow2")
-        let survivorKey = ImageObjectKey.image(
-            projectId: projectId, imageId: survivor, filename: "s.qcow2")
+        let doomedKey = ImageObjectKey.artifact(
+            projectId: projectId, imageId: doomed,
+            kind: "disk-image", filename: "d.qcow2")
+        let survivorKey = ImageObjectKey.artifact(
+            projectId: projectId, imageId: survivor,
+            kind: "disk-image", filename: "s.qcow2")
         try await Self.write("doomed", to: doomedKey, in: store)
         try await Self.write("survivor", to: survivorKey, in: store)
 

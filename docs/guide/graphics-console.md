@@ -81,7 +81,7 @@ There is **no VNC password**, and this is deliberate rather than an omission.
 The VNC server binds a Unix socket in the VM's directory — never a TCP port —
 so reaching it at all requires access to the hypervisor node's filesystem. From
 the outside, the only path in is the control plane, which requires an
-authenticated session (or an API key with the `write` scope) and the
+authenticated session (or an API key whose restriction includes `vm:viewConsole`) and the
 `vm:viewConsole` permission on that specific VM, checked before the VM is even
 looked up. A console session is minted single-use, expires in 60 seconds if
 unused, and is bound to the VM and the user it was minted for.

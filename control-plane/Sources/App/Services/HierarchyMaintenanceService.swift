@@ -77,7 +77,7 @@ struct HierarchyMaintenanceService {
         // A deliberate second full pass, not a subtraction of what was repaired:
         // the report describes the tree as it now stands, which is the only form
         // a caller can act on. It costs a second scan of both tables — including
-        // in `RebuildDriftedHierarchyPaths`, which pays for it once at boot.
+        // during the boot-time hierarchy repair.
         let remaining = try await findHierarchyIssues(on: db)
 
         var summary = "Repaired \(repaired.count) of \(scan.issues.count) issues; \(remaining.count) remain."

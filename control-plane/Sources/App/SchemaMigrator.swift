@@ -181,8 +181,8 @@ enum SchemaMigrator {
 
     /// Raises the timeout only for the migration phase on its pinned
     /// connection, then restores the serving budget on success or failure.
-    /// Keeping cleanup here covers both the dedicated migration Job and serving
-    /// processes, which still migrate by default outside that Job.
+    /// Keeping cleanup here covers every serving process that migrates during
+    /// startup.
     static func withMigrationStatementTimeout(
         _ timeouts: StatementTimeouts,
         on connection: any Database,
@@ -420,8 +420,8 @@ enum SchemaMigrator {
 ///
 /// The one real case is `CREATE INDEX CONCURRENTLY`, which Postgres forbids
 /// inside a transaction block. No production migration conforms today —
-/// `AddHotPathIndexes` deliberately uses plain creates — but the escape hatch
-/// exists before a table gets large enough to need one, because discovering it
+/// the current baseline uses plain creates — but the escape hatch exists before
+/// a table gets large enough to need one, because discovering it
 /// is missing while writing that migration is the wrong time.
 ///
 /// **Opting out gives up the atomicity this migrator exists for.** A crash
@@ -507,8 +507,8 @@ enum SchemaMigrationError: Error, CustomStringConvertible {
             return """
                 \(SchemaMigrator.runMigrationsKey) is false, so this process does not migrate, but \
                 \(names.count) migration(s) are unapplied: \(names.joined(separator: ", ")). Refusing \
-                to serve against a schema this build does not expect — run the migration job for this \
-                release first, or unset \(SchemaMigrator.runMigrationsKey).
+                to serve against a schema this build does not expect — unset \
+                \(SchemaMigrator.runMigrationsKey) on a control-plane process and restart it first.
                 """
         }
     }

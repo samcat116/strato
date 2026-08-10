@@ -39,17 +39,19 @@ struct QuotaScope: Sendable {
 struct QuotaMeasuredUsage: Sendable {
     var vcpus: Int
     var memoryBytes: Int64
-    /// Everything in the shared storage pool: VM disks, sandbox-snapshot
-    /// artifacts and VM checkpoints (issues #426, #564), and volumes and their
-    /// snapshots (STR-181). Sandboxes themselves reserve no storage; their
-    /// checkpoints persist real bytes in the same pool.
+    /// Everything in the shared storage pool: managed volumes and their
+    /// snapshots, sandbox-snapshot artifacts, and VM checkpoints. VM boot
+    /// disks are volumes; `vms.disk` is a scheduler request, not a second
+    /// storage allocation.
     var storageBytes: Int64
     var vmCount: Int
     var sandboxCount: Int
     var volumeCount: Int
+    var networkCount: Int
 
     static let none = QuotaMeasuredUsage(
-        vcpus: 0, memoryBytes: 0, storageBytes: 0, vmCount: 0, sandboxCount: 0, volumeCount: 0)
+        vcpus: 0, memoryBytes: 0, storageBytes: 0, vmCount: 0, sandboxCount: 0, volumeCount: 0,
+        networkCount: 0)
 
     /// The API-facing projection.
     var asQuotaUsage: QuotaUsage {
@@ -60,19 +62,19 @@ struct QuotaMeasuredUsage: Sendable {
             vms: vmCount,
             sandboxes: sandboxCount,
             volumes: volumeCount,
-            networks: 0  // TODO: Implement network counting when networking is added
+            networks: networkCount
         )
     }
 }
 
-/// What a scope's volumes and volume snapshots add to it (STR-181): the bytes
-/// they occupy in the shared storage pool, and how many volumes there are for
-/// the optional count limit.
-struct QuotaVolumeTotals: Sendable {
+/// Project-owned infrastructure measured in one round trip: volume bytes and
+/// count (STR-181), plus project-wide logical networks (STR-236).
+struct QuotaInfrastructureTotals: Sendable {
     let storageBytes: Int64
     let volumeCount: Int
+    let networkCount: Int
 
-    static let none = QuotaVolumeTotals(storageBytes: 0, volumeCount: 0)
+    static let none = QuotaInfrastructureTotals(storageBytes: 0, volumeCount: 0, networkCount: 0)
 }
 
 /// A breakdown of a scope's VMs by environment and by status, for the quota
@@ -85,11 +87,10 @@ struct QuotaVMBreakdown: Sendable {
 /// Measures what a resource quota is using, without hydrating the workloads it
 /// measures.
 ///
-/// Every figure is a SQL `SUM`/`COUNT` over the workload tables — three
-/// round-trips for a full measurement regardless of how many folders, projects
-/// or VMs the scope spans. The previous implementation loaded every VM and
-/// sandbox row in scope and reduced in Swift, on every VM/sandbox create
-/// (issue #692).
+/// Every figure is a SQL `SUM`/`COUNT` over the resource tables — a fixed set
+/// of aggregate round trips regardless of how many folders, projects or rows
+/// the scope spans. The previous implementation loaded every VM and sandbox
+/// row in scope and reduced in Swift, on every VM/sandbox create (issue #692).
 struct QuotaUsageAggregator {
 
     /// Resolves what `quota` measures. Costs one indexed row lookup for a
@@ -123,7 +124,8 @@ struct QuotaUsageAggregator {
 
     /// Measures `scope` with one aggregate per workload table: VMs, sandboxes,
     /// the snapshot artifacts that also occupy the storage pool, and volumes
-    /// with their own snapshots (STR-181, which shares a single round trip).
+    /// with their own snapshots and logical networks (STR-181 and STR-236,
+    /// which share a single round trip).
     static func measure(_ scope: QuotaScope, on db: Database) async throws -> QuotaMeasuredUsage {
         if case .none = scope.projects { return .none }
         let sql = try requireSQL(db)
@@ -132,14 +134,12 @@ struct QuotaUsageAggregator {
         struct VMTotals: Decodable {
             let vcpus: Int64
             let memory_bytes: Int64
-            let disk_bytes: Int64
             let vm_count: Int64
         }
         let vms = try await sql.raw(
             """
             SELECT COALESCE(SUM(cpu), 0)::bigint AS vcpus,
                    COALESCE(SUM(memory), 0)::bigint AS memory_bytes,
-                   COALESCE(SUM(disk), 0)::bigint AS disk_bytes,
                    COUNT(*)::bigint AS vm_count
             FROM vms
             WHERE \(inScope)
@@ -163,16 +163,16 @@ struct QuotaUsageAggregator {
 
         let snapshotStorage = try await snapshotStorageBytes(in: scope, on: db)
         let checkpointStorage = try await vmCheckpointStorageBytes(in: scope, on: db)
-        let volumes = try await volumeTotals(in: scope, on: db)
+        let infrastructure = try await infrastructureTotals(in: scope, on: db)
 
         return QuotaMeasuredUsage(
             vcpus: Int(vms?.vcpus ?? 0) + Int(sandboxes?.vcpus ?? 0),
             memoryBytes: (vms?.memory_bytes ?? 0) + (sandboxes?.memory_bytes ?? 0),
-            storageBytes: (vms?.disk_bytes ?? 0) + snapshotStorage + checkpointStorage
-                + volumes.storageBytes,
+            storageBytes: snapshotStorage + checkpointStorage + infrastructure.storageBytes,
             vmCount: Int(vms?.vm_count ?? 0),
             sandboxCount: Int(sandboxes?.sandbox_count ?? 0),
-            volumeCount: volumes.volumeCount
+            volumeCount: infrastructure.volumeCount,
+            networkCount: infrastructure.networkCount
         )
     }
 
@@ -258,19 +258,9 @@ struct QuotaUsageAggregator {
     ///   — and that grow is blocked, not withdrawn: it lands the moment the
     ///   guest stops, with no admission point in between. Charging the smaller
     ///   observed size would make it free until then.
-    /// * **A volume that *is* a VM's boot disk is deduplicated**, because
-    ///   `SUM(vms.disk)` already charges the VM's original size. Only the rows
-    ///   `MigrateVMDisksToVolumes` backfilled can match — nothing since inserts a
-    ///   volume for a VM's boot disk — but for a deployment upgraded from before
-    ///   volumes existed, counting both would double every legacy VM's disk and
-    ///   the symptom would be creates refused against a quota nobody changed.
-    ///   Matching by path rather than the mutable `vm_id` keeps the deduction
-    ///   after that compatibility volume is detached. Only the overlapping
-    ///   bytes are deducted: a later volume resize is still charged above the
-    ///   VM row's original `disk` value. The compatibility row stays out of
-    ///   `volume_count`, since it is still the VM's one boot disk rather than a
-    ///   separately created volume. This is the agent's own identity rule:
-    ///   `LibvirtService.resolveDisks` dedupes the pair by path into one disk.
+    /// * **Every boot disk is a volume**, so it is counted once here for both
+    ///   bytes and volume count. `vms.disk` remains only the scheduler's host
+    ///   capacity request and is intentionally absent from quota aggregation.
     /// * **A snapshot keeps the parent volume's whole size reserved.** Its live
     ///   overlay footprint is exposed separately for observability and billing,
     ///   but it cannot replace the reservation: the overlay can grow toward the
@@ -282,70 +272,43 @@ struct QuotaUsageAggregator {
     /// No status filter on `volumes`, deliberately: a row existing means the
     /// bytes are either asked for or not yet reclaimed. A volume being deleted
     /// keeps its row precisely until the agent confirms the data is gone.
-    static func volumeTotals(in scope: QuotaScope, on db: Database) async throws -> QuotaVolumeTotals {
+    static func infrastructureTotals(
+        in scope: QuotaScope, on db: Database
+    ) async throws -> QuotaInfrastructureTotals {
         if case .none = scope.projects { return .none }
         let sql = try requireSQL(db)
         let inScope = scope.predicate
+        // Networks have no environment column and are deliberately counted only
+        // by quotas that span every environment (STR-236).
+        let networkScope: SQLQueryString = scope.environment == nil ? scope.projectPredicate : "FALSE"
 
         struct Totals: Decodable {
             let volume_bytes: Int64
             let volume_count: Int64
             let snapshot_bytes: Int64
+            let network_count: Int64
         }
         let totals = try await sql.raw(
             """
             SELECT
-                (SELECT COALESCE(SUM(\(Self.volumeReservedBytes)), 0)::bigint FROM volumes
+                (SELECT COALESCE(SUM(size), 0)::bigint FROM volumes
                  WHERE \(inScope)) AS volume_bytes,
                 (SELECT COUNT(*)::bigint FROM volumes
-                 WHERE \(inScope) AND \(Self.volumeIsNotAVMBootDisk)) AS volume_count,
+                 WHERE \(inScope)) AS volume_count,
                 (SELECT COALESCE(SUM(size), 0)::bigint
                  FROM volume_snapshots
                  WHERE \(inScope) AND status::text <> \(bind: SnapshotStatus.error.rawValue)
-                ) AS snapshot_bytes
+                ) AS snapshot_bytes,
+                (SELECT COUNT(*)::bigint FROM logical_networks
+                 WHERE \(networkScope)) AS network_count
             """
         ).first(decoding: Totals.self)
 
-        return QuotaVolumeTotals(
+        return QuotaInfrastructureTotals(
             storageBytes: (totals?.volume_bytes ?? 0) + (totals?.snapshot_bytes ?? 0),
-            volumeCount: Int(totals?.volume_count ?? 0))
+            volumeCount: Int(totals?.volume_count ?? 0),
+            networkCount: Int(totals?.network_count ?? 0))
     }
-
-    /// Bytes this volume adds after deducting any VM-disk reservation for the
-    /// same physical path. `MAX` keeps a malformed duplicate VM path from
-    /// multiplying the deduction; the floor keeps a legacy row whose desired
-    /// size is stale below `vms.disk` from crediting storage back.
-    private static let volumeReservedBytes: SQLQueryString = """
-        GREATEST(
-            volumes.size - COALESCE(
-                (
-                    SELECT MAX(vms.disk)::bigint FROM vms
-                    WHERE vms.project_id = volumes.project_id
-                      AND EXISTS (
-                          SELECT 1 FROM volume_replicas
-                          WHERE volume_replicas.volume_id = volumes.id
-                            AND volume_replicas.dataset_path = vms.disk_path
-                      )
-                ),
-                0
-            ),
-            0
-        )
-        """
-
-    /// A compatibility boot-volume row does not consume a volume-count slot,
-    /// even after detachment clears its mutable `vm_id`.
-    private static let volumeIsNotAVMBootDisk: SQLQueryString = """
-        NOT EXISTS (
-            SELECT 1 FROM vms
-            WHERE vms.project_id = volumes.project_id
-              AND EXISTS (
-                  SELECT 1 FROM volume_replicas
-                  WHERE volume_replicas.volume_id = volumes.id
-                    AND volume_replicas.dataset_path = vms.disk_path
-              )
-        )
-        """
 
     /// Counts the scope's VMs by environment and by status in one grouped
     /// aggregate, for the per-quota usage endpoint.
@@ -395,16 +358,15 @@ extension QuotaScope {
     /// or a folder (`Project.validate`), and every folder both denormalizes its
     /// organization and materializes its `path`, so one join covers both
     /// shapes with no tree walk.
-    fileprivate var predicate: SQLQueryString {
-        var predicate: SQLQueryString
+    fileprivate var projectPredicate: SQLQueryString {
         switch projects {
         case .project(let projectID):
-            predicate = "project_id = \(bind: projectID)"
+            return "project_id = \(bind: projectID)"
         case .folderSubtree(let path):
             // The path is `/orgId/folderId/…/selfId`, so the subtree is the
             // folder itself plus everything whose path extends it. A prefix
             // match, unlike the `LIKE '%<id>%'` it replaced, can use an index.
-            predicate = """
+            return """
                 project_id IN (
                     SELECT p.id FROM projects p
                     JOIN organizational_units ou ON ou.id = p.organizational_unit_id
@@ -412,7 +374,7 @@ extension QuotaScope {
                 )
                 """
         case .organization(let organizationID):
-            predicate = """
+            return """
                 project_id IN (
                     SELECT p.id FROM projects p
                     LEFT JOIN organizational_units ou ON ou.id = p.organizational_unit_id
@@ -421,9 +383,14 @@ extension QuotaScope {
                 )
                 """
         case .none:
-            predicate = "FALSE"
+            return "FALSE"
         }
+    }
 
+    /// Workload predicate. Unlike `projectPredicate`, this also applies the
+    /// environment dimension present on VMs, sandboxes and storage resources.
+    fileprivate var predicate: SQLQueryString {
+        var predicate = projectPredicate
         if let environment {
             predicate += " AND environment = \(bind: environment)"
         }

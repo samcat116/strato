@@ -3,8 +3,7 @@ import Testing
 
 @testable import App
 
-/// STR-115: the restriction value itself — what it permits, and what the legacy
-/// scope shim resolves an existing credential to.
+/// STR-115/STR-227: the canonical restriction value itself and what it permits.
 ///
 /// These are pure: no database, no Cedar. The Cedar half (that a restriction
 /// actually denies) is `CredentialRestrictionPolicyTests`.
@@ -143,21 +142,12 @@ struct CredentialRestrictionTests {
         }
     }
 
-    // MARK: - The legacy scope shim
-
-    @Test("write and admin both resolve to unrestricted, as they always effectively were")
-    func writeAndAdminAreUnrestricted() {
-        #expect(CredentialRestriction(legacyScopes: ["write"]).isUnrestricted)
-        #expect(CredentialRestriction(legacyScopes: ["admin"]).isUnrestricted)
-        #expect(CredentialRestriction(legacyScopes: ["read", "write"]).isUnrestricted)
-    }
+    // MARK: - Symbolic read restrictions
 
     @Test("read resolves to every action whose name says it reads")
     func readResolvesToReadActions() {
-        let r = CredentialRestriction(legacyScopes: ["read"])
+        let r = CredentialRestriction.readOnly
         #expect(!r.isUnrestricted)
-        // The legacy shim and a key minted read-only through the API are the
-        // same value, so the two spellings cannot diverge.
         #expect(r == .readOnly)
         #expect(r.permits(action: "vm:read"))
         #expect(r.permits(action: "vm:list"))
@@ -178,8 +168,7 @@ struct CredentialRestrictionTests {
     }
 
     /// The `read` pattern is resolved on every check, never expanded into the
-    /// stored row — otherwise a key minted read-only today would 403 on an
-    /// action added next release while a legacy `read`-scoped key picked it up.
+    /// stored row, so a key minted today covers read actions added next release.
     @Test("The read pattern stays symbolic and resolves against the live action set")
     func readPatternIsSymbolic() throws {
         let r = try restriction(["read"])
@@ -208,18 +197,6 @@ struct CredentialRestrictionTests {
         let vm = IAMNode(type: .virtualMachine, id: UUID())
         #expect(scoped.permits(action: "vm:read", chain: [vm, project]))
         #expect(!scoped.permits(action: "vm:read", chain: [vm, otherProject]))
-    }
-
-    /// A credential whose scopes hold nothing recognizable is dead today —
-    /// `grants(_:)` answered false for every scope, so even a GET was a 403.
-    /// The shim must not resurrect it.
-    @Test("A credential with no recognizable scope permits nothing")
-    func unrecognizedScopesPermitNothing() {
-        for scopes in [[], ["bogus"], ["Read"], ["", " "]] {
-            let r = CredentialRestriction(legacyScopes: scopes)
-            #expect(r == .denyAll, "\(scopes) resolved to \(r.actions)")
-            #expect(!r.permits(action: "vm:read"))
-        }
     }
 
     @Test("Registry read actions cover every read/list action the registry knows")
@@ -267,21 +244,17 @@ struct CredentialRestrictionTests {
 
     // MARK: - Storage round-trip
 
-    @Test("Stored columns win over the legacy scopes; nil columns fall back to them")
+    @Test("Stored columns round trip and malformed node storage fails closed")
     func storageRoundTrip() throws {
-        let key = APIKey(
-            userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", scopes: ["read"])
-        #expect(key.restriction == CredentialRestriction(legacyScopes: ["read"]))
-
         let scoped = try restriction(["vm:read"], node: project)
-        key.store(restriction: scoped)
+        let key = APIKey(
+            userID: UUID(), name: "k", keyHash: "h", keyPrefix: "p", restriction: scoped)
         #expect(key.restrictionActions == ["vm:read"])
         #expect(key.restrictionNodeType == "project")
         #expect(key.restrictionNodeID == project.id)
         #expect(key.restriction == scoped)
 
-        key.store(restriction: nil)
-        #expect(key.restrictionActions == nil)
-        #expect(key.restriction == CredentialRestriction(legacyScopes: ["read"]))
+        key.restrictionNodeType = "spaceship"
+        #expect(key.restriction == .denyAll)
     }
 }

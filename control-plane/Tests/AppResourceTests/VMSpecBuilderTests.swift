@@ -3,6 +3,56 @@ import Vapor
 import StratoShared
 @testable import App
 
+/// Canonical test fixture: even the compact builder tests exercise the same
+/// managed boot-volume path production uses. There is intentionally no
+/// path-only VMSpec helper.
+private extension VMSpecBuilder {
+    static func testBootVolume(for vm: VM) -> Volume {
+        if vm.id == nil { vm.id = UUID() }
+        let volume = Volume(
+            id: UUID(uuidString: "00000000-0000-4000-8000-000000000001")!,
+            name: "boot", description: "", projectID: vm.$project.id,
+            environment: vm.environment, size: vm.disk, format: .qcow2,
+            volumeType: .boot, status: .attached, createdByID: UUID())
+        volume.$vm.id = vm.id!
+        volume.deviceName = VolumeDeviceName.disk(0).rawValue
+        volume.bootOrder = 0
+        volume.readonly = false
+        volume.generation = 1
+        volume.observedGeneration = 1
+        return volume
+    }
+
+    static func buildVMSpec(
+        from vm: VM, image: Image, networkInterfaces: [VMNetworkInterface],
+        networks: [UUID: LogicalNetwork] = [:]
+    ) -> VMSpec {
+        let boot = testBootVolume(for: vm)
+        return try! buildVMSpec(
+            from: vm, image: image, volumes: [boot], networkInterfaces: networkInterfaces,
+            storagePathsByVolumeID: [boot.id!: "/var/lib/strato/volumes/boot/volume.qcow2"],
+            networks: networks)
+    }
+
+    static func buildCanonicalVMSpec(
+        from vm: VM, image: Image?, volumes: [Volume], networkInterfaces: [VMNetworkInterface],
+        storagePathsByVolumeID: [UUID: String] = [:],
+        networks: [UUID: LogicalNetwork] = [:],
+        securityGroupsByInterface: [UUID: [UUID]] = [:],
+        sendsMetadataPort: Bool = true,
+        siteResolverCapable: Bool? = true
+    ) -> VMSpec {
+        let boot = testBootVolume(for: vm)
+        var paths = storagePathsByVolumeID
+        paths[boot.id!] = "/var/lib/strato/volumes/boot/volume.qcow2"
+        return try! buildVMSpec(
+            from: vm, image: image, volumes: [boot] + volumes,
+            networkInterfaces: networkInterfaces, storagePathsByVolumeID: paths,
+            networks: networks, securityGroupsByInterface: securityGroupsByInterface,
+            sendsMetadataPort: sendsMetadataPort, siteResolverCapable: siteResolverCapable)
+    }
+}
+
 @Suite("VMSpecBuilder Tests", .serialized)
 struct VMSpecBuilderTests {
 
@@ -17,7 +67,6 @@ struct VMSpecBuilderTests {
             name: "test-image",
             description: "Test image",
             projectID: UUID(),
-            filename: "test.qcow2",
             uploadedByID: UUID(),
             defaultCpu: defaultCpu,
             defaultMemory: defaultMemory,
@@ -32,8 +81,6 @@ struct VMSpecBuilderTests {
         disk: Int64 = 20000,
         hugepages: Bool = false,
         sharedMemory: Bool = false,
-        diskPath: String? = "/var/lib/strato/disks/test.qcow2",
-        readonlyDisk: Bool = false,
         consoleMode: ConsoleMode = .pty,
         serialMode: ConsoleMode = .pty,
         kernelPath: String? = nil,
@@ -54,8 +101,6 @@ struct VMSpecBuilderTests {
         )
         vm.hugepages = hugepages
         vm.sharedMemory = sharedMemory
-        vm.diskPath = diskPath
-        vm.readonlyDisk = readonlyDisk
         vm.consoleMode = consoleMode
         vm.serialMode = serialMode
         vm.kernelPath = kernelPath
@@ -126,7 +171,8 @@ struct VMSpecBuilderTests {
             dhcpEnabled: dhcpEnabled,
             dnsServers: dnsServers,
             domainName: domainName,
-            leaseTime: leaseTime
+            leaseTime: leaseTime,
+            siteID: UUID()
         )
         return [interface.logicalNetworkID: network]
     }
@@ -190,7 +236,7 @@ struct VMSpecBuilderTests {
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
         #expect(spec.diskBytes == 10_737_418_240)
 
-        let specWithVolumes = VMSpecBuilder.buildVMSpecWithVolumes(
+        let specWithVolumes = VMSpecBuilder.buildCanonicalVMSpec(
             from: vm, image: image, volumes: [], networkInterfaces: [])
         #expect(specWithVolumes.diskBytes == 10_737_418_240)
     }
@@ -282,28 +328,28 @@ struct VMSpecBuilderTests {
 
     // MARK: - Volume Tests
 
-    @Test("VMSpecBuilder creates a volume when disk path is set")
+    @Test("VMSpecBuilder carries a managed boot volume identity")
     func testVolumeConfiguration() throws {
         let image = createTestImage()
-        let vm = createTestVM(diskPath: "/var/lib/strato/disks/vm.qcow2", readonlyDisk: false)
+        let vm = createTestVM()
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
         #expect(spec.volumes.count == 1)
-        #expect(spec.volumes.first?.storagePath == "/var/lib/strato/disks/vm.qcow2")
+        #expect(spec.volumes.first?.storagePath == "/var/lib/strato/volumes/boot/volume.qcow2")
         #expect(spec.volumes.first?.readonly == false)
         #expect(spec.volumes.first?.deviceName.rawValue == "disk0")
-        #expect(spec.volumes.first?.volumeId == nil)
+        #expect(spec.volumes.first?.volumeId == UUID(uuidString: "00000000-0000-4000-8000-000000000001"))
     }
 
-    @Test("VMSpecBuilder creates readonly volume when specified")
+    @Test("A canonical boot volume is writable")
     func testReadonlyVolume() throws {
         let image = createTestImage()
-        let vm = createTestVM(diskPath: "/var/lib/strato/disks/vm.qcow2", readonlyDisk: true)
+        let vm = createTestVM()
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
-        #expect(spec.volumes.first?.readonly == true)
+        #expect(spec.volumes.first?.readonly == false)
     }
 
     /// An attached volume, as `volumeSpecs` sees it after `.with(\.$volumes)`.
@@ -341,10 +387,10 @@ struct VMSpecBuilderTests {
         ]
 
         let paths = storagePaths(for: volumes)
-        let forward = VMSpecBuilder.volumeSpecs(
+        let forward = try VMSpecBuilder.volumeSpecs(
             from: volumes, storagePathsByVolumeID: paths
         ).map(\.deviceName.rawValue)
-        let reversed = VMSpecBuilder.volumeSpecs(
+        let reversed = try VMSpecBuilder.volumeSpecs(
             from: volumes.reversed(), storagePathsByVolumeID: paths
         ).map(\.deviceName.rawValue)
 
@@ -367,18 +413,18 @@ struct VMSpecBuilderTests {
 
         let paths = storagePaths(for: volumes)
         #expect(
-            VMSpecBuilder.volumeSpecs(
+            try VMSpecBuilder.volumeSpecs(
                 from: volumes, storagePathsByVolumeID: paths
             ).map(\.volumeId) == [first, second])
         #expect(
-            VMSpecBuilder.volumeSpecs(
+            try VMSpecBuilder.volumeSpecs(
                 from: volumes.reversed(), storagePathsByVolumeID: paths
             ).map(\.volumeId) == [first, second])
     }
 
-    @Test("An attached volume with no legal device name is left out of the spec")
-    func testVolumeWithoutALegalNameIsSkipped() throws {
-        // Unrepresentable since `NormalizeVolumeAttachments`, but the fallback
+    @Test("An attached volume with no legal device name fails assembly")
+    func testVolumeWithoutALegalNameFails() throws {
+        // Unrepresentable under the current schema, but the fallback
         // it replaced synthesized `disk<count>` — a name that could collide with
         // an explicit one on the same VM, and a duplicate device id is what
         // stops the VM booting at all.
@@ -388,20 +434,21 @@ struct VMSpecBuilderTests {
             attachedVolume(id: UUID(), deviceName: "not a legal id", bootOrder: nil),
         ]
 
-        #expect(
-            VMSpecBuilder.volumeSpecs(
-                from: volumes, storagePathsByVolumeID: storagePaths(for: volumes)
-            ).map(\.deviceName.rawValue) == ["disk1"])
+        #expect(throws: Abort.self) {
+            try VMSpecBuilder.volumeSpecs(
+                from: volumes, storagePathsByVolumeID: storagePaths(for: volumes))
+        }
     }
 
-    @Test("VMSpecBuilder omits volumes when no disk path is set")
-    func testNoDiskPath() throws {
+    @Test("VMSpecBuilder never omits the managed boot volume")
+    func testManagedBootVolumeIsRequired() throws {
         let image = createTestImage()
-        let vm = createTestVM(diskPath: nil)
+        let vm = createTestVM()
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
-        #expect(spec.volumes.isEmpty)
+        #expect(spec.volumes.count == 1)
+        #expect(spec.volumes[0].storagePath != nil)
     }
 
     // MARK: - Network Tests
@@ -538,14 +585,13 @@ struct VMSpecBuilderTests {
     @Test("VMSpecBuilder builds firmware-boot spec from image without kernel")
     func testImageBasedSpec() throws {
         let image = createTestImage()
-        let vm = createTestVM(diskPath: nil, kernelPath: nil, firmwarePath: nil)
+        let vm = createTestVM(kernelPath: nil, firmwarePath: nil)
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
         #expect(spec.cpus == 2)
         #expect(spec.memoryBytes == 2048)
-        // Boot volume is materialized agent-side from the cached image.
-        #expect(spec.volumes.isEmpty)
+        #expect(spec.volumes.count == 1)
         guard case .disk(let firmware) = spec.boot else {
             Issue.record("Expected disk (firmware) boot, got \(spec.boot)")
             return
@@ -577,8 +623,6 @@ struct VMSpecBuilderTests {
             disk: 50000,
             hugepages: true,
             sharedMemory: true,
-            diskPath: "/var/lib/strato/disks/vm.qcow2",
-            readonlyDisk: false,
             kernelPath: "/vm/kernel"
         )
         let interface = createTestInterface(ipAddress: "192.168.1.100")
@@ -601,13 +645,13 @@ struct VMSpecBuilderTests {
     @Test("VMSpecBuilder creates minimal spec without optional components")
     func testMinimalSpec() throws {
         let image = createTestImage()
-        let vm = createTestVM(diskPath: nil)
+        let vm = createTestVM()
 
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
 
         #expect(spec.cpus == 2)
         #expect(spec.memoryBytes == 2048)
-        #expect(spec.volumes.isEmpty)
+        #expect(spec.volumes.count == 1)
         #expect(spec.networks.isEmpty)
         #expect(spec.userData == nil)
     }
@@ -622,7 +666,7 @@ struct VMSpecBuilderTests {
         let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
         #expect(spec.userData == payload)
 
-        let specWithVolumes = VMSpecBuilder.buildVMSpecWithVolumes(
+        let specWithVolumes = VMSpecBuilder.buildCanonicalVMSpec(
             from: vm, image: image, volumes: [], networkInterfaces: [])
         #expect(specWithVolumes.userData == payload)
     }
@@ -640,7 +684,7 @@ struct VMSpecBuilderTests {
         #expect(spec.machine?.secureBoot == true)
         #expect(spec.machine?.tpm == true)
 
-        let specWithVolumes = VMSpecBuilder.buildVMSpecWithVolumes(
+        let specWithVolumes = VMSpecBuilder.buildCanonicalVMSpec(
             from: vm, image: image, volumes: [], networkInterfaces: [])
         #expect(specWithVolumes.machine?.secureBoot == true)
         #expect(specWithVolumes.machine?.tpm == true)
@@ -669,7 +713,7 @@ struct VMSpecBuilderTests {
         #expect(spec.console?.graphics == .vnc)
         #expect(spec.console?.effectiveGraphics == .vnc)
 
-        let specWithVolumes = VMSpecBuilder.buildVMSpecWithVolumes(
+        let specWithVolumes = VMSpecBuilder.buildCanonicalVMSpec(
             from: vm, image: image, volumes: [], networkInterfaces: [])
         #expect(specWithVolumes.console?.graphics == .vnc)
     }
@@ -686,7 +730,7 @@ struct VMSpecBuilderTests {
 
         for spec in [
             VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: []),
-            VMSpecBuilder.buildVMSpecWithVolumes(from: vm, image: image, volumes: [], networkInterfaces: []),
+            VMSpecBuilder.buildCanonicalVMSpec(from: vm, image: image, volumes: [], networkInterfaces: []),
         ] {
             #expect(spec.console?.graphics == nil)
             #expect(spec.console?.effectiveGraphics == .headless)

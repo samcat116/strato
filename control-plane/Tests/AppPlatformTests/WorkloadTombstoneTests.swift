@@ -124,10 +124,10 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].tombstoneGeneration == 7)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones?.count == 1)
-            #expect(sync.tombstones?[0].workloadId == strayId)
-            #expect(sync.tombstones?[0].kind == .vm)
-            #expect(sync.tombstones?[0].generation == 7)
+            #expect(sync.tombstones.count == 1)
+            #expect(sync.tombstones[0].workloadId == strayId)
+            #expect(sync.tombstones[0].kind == .vm)
+            #expect(sync.tombstones[0].generation == 7)
         }
     }
 
@@ -159,7 +159,7 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].tombstoneGeneration == nil)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones?.isEmpty == true)
+            #expect(sync.tombstones.isEmpty)
             // And the VM itself is untouched — no teardown, no error status.
             let refreshed = try await VM.find(vm.id, on: app.db)
             #expect(refreshed?.status != .error)
@@ -197,7 +197,7 @@ final class WorkloadTombstoneTests {
             #expect(recorded[0].placedOnAgentId == oldId)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: newId)
-            #expect(sync.tombstones?.isEmpty == true)
+            #expect(sync.tombstones.isEmpty)
         }
     }
 
@@ -224,7 +224,7 @@ final class WorkloadTombstoneTests {
             #expect(try await self.claims(for: agentId, on: app).isEmpty)
 
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones?.isEmpty == true)
+            #expect(sync.tombstones.isEmpty)
         }
     }
 
@@ -272,7 +272,7 @@ final class WorkloadTombstoneTests {
 
             #expect(try await self.claims(for: agentId, on: app).isEmpty)
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            #expect(sync.tombstones?.isEmpty == true)
+            #expect(sync.tombstones.isEmpty)
             #expect(sync.vms.map(\.vmId) == [vmID])
         }
     }
@@ -500,8 +500,8 @@ final class WorkloadTombstoneTests {
                 size: 1 << 30, createdByID: try user.requireID())
             attached.attachedAgentId = oldId
             attached.$vm.id = try vm.requireID()
-            // An attached row names its device: `NormalizeVolumeAttachments`
-            // makes that a check constraint (STR-129).
+            // An attached row names its device; the schema enforces that as a
+            // check constraint (STR-129).
             attached.deviceName = "disk0"
             try await attached.save(on: app.db)
             try await VolumeReplica(
@@ -570,8 +570,8 @@ final class WorkloadTombstoneTests {
                 name: "stayed-vol", description: "", projectID: try project.requireID(), environment: "development",
                 size: 1 << 30, createdByID: try user.requireID())
             stayedVolume.$vm.id = try stayed.requireID()
-            // An attached row names its device: `NormalizeVolumeAttachments`
-            // makes that a check constraint (STR-129).
+            // An attached row names its device; the schema enforces that as a
+            // check constraint (STR-129).
             stayedVolume.deviceName = "disk0"
             try await stayedVolume.save(on: app.db)
             try await placeVolume(stayedVolume, on: oldId, using: app.db)

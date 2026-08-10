@@ -43,16 +43,6 @@ final class Image: Model, @unchecked Sendable {
     @Parent(key: "project_id")
     var project: Project
 
-    // File information
-    @Field(key: "filename")
-    var filename: String
-
-    @Field(key: "size")
-    var size: Int64
-
-    @Enum(key: "format")
-    var format: ImageFormat
-
     /// Guest CPU architecture. Authoritative for scheduling — the scheduler reads
     /// this single value rather than reconciling per-artifact architectures.
     @Enum(key: "architecture")
@@ -64,35 +54,9 @@ final class Image: Model, @unchecked Sendable {
     @Children(for: \.$image)
     var artifacts: [ImageArtifact]
 
-    /// SHA-256 of the bytes we actually stored. Computed, never user-supplied —
-    /// `VMSpecBuilder` hands this to agents to verify their own download against,
-    /// so it must always describe the real file.
-    @OptionalField(key: "checksum")
-    var checksum: String?
-
-    /// SHA-256 the caller expects the source to have, for URL imports. Compared
-    /// against `checksum` once the download finishes; a mismatch fails the image
-    /// rather than publishing it. Kept separate from `checksum` precisely because
-    /// that one is a fact about our bytes and this one is a claim about theirs.
-    @OptionalField(key: "expected_checksum")
-    var expectedChecksum: String?
-
-    // Storage location (relative path from IMAGE_STORAGE_PATH)
-    @OptionalField(key: "storage_path")
-    var storagePath: String?
-
     // Status tracking
     @Enum(key: "status")
     var status: ImageStatus
-
-    @OptionalField(key: "source_url")
-    var sourceURL: String?
-
-    @OptionalField(key: "download_progress")
-    var downloadProgress: Int?
-
-    @OptionalField(key: "error_message")
-    var errorMessage: String?
 
     // Default VM configuration (optional)
     @OptionalField(key: "default_cpu")
@@ -125,13 +89,9 @@ final class Image: Model, @unchecked Sendable {
         name: String,
         description: String,
         projectID: UUID,
-        filename: String,
-        size: Int64 = 0,
-        format: ImageFormat = .qcow2,
         architecture: CPUArchitecture = .x86_64,
         status: ImageStatus = .pending,
         uploadedByID: UUID,
-        sourceURL: String? = nil,
         defaultCpu: Int? = nil,
         defaultMemory: Int64? = nil,
         defaultDisk: Int64? = nil,
@@ -141,13 +101,9 @@ final class Image: Model, @unchecked Sendable {
         self.name = name
         self.description = description
         self.$project.id = projectID
-        self.filename = filename
-        self.size = size
-        self.format = format
         self.architecture = architecture
         self.status = status
         self.$uploadedBy.id = uploadedByID
-        self.sourceURL = sourceURL
         self.defaultCpu = defaultCpu
         self.defaultMemory = defaultMemory
         self.defaultDisk = defaultDisk
@@ -157,61 +113,39 @@ final class Image: Model, @unchecked Sendable {
 
 extension Image: Content {}
 
-// MARK: - Public DTO
-
-extension Image {
-    struct Public: Content {
-        let id: UUID?
-        let name: String
-        let description: String
-        let projectId: UUID?
-        let filename: String
-        let size: Int64
-        let format: ImageFormat
-        let architecture: CPUArchitecture
-        let checksum: String?
-        let status: ImageStatus
-        let sourceURL: String?
-        let downloadProgress: Int?
-        let errorMessage: String?
-        let defaultCpu: Int?
-        let defaultMemory: Int64?
-        let defaultDisk: Int64?
-        let defaultCmdline: String?
-        let uploadedById: UUID?
-        let createdAt: Date?
-        let updatedAt: Date?
-    }
-
-    func asPublic() -> Public {
-        return Public(
-            id: self.id,
-            name: self.name,
-            description: self.description,
-            projectId: self.$project.id,
-            filename: self.filename,
-            size: self.size,
-            format: self.format,
-            architecture: self.architecture,
-            checksum: self.checksum,
-            status: self.status,
-            sourceURL: self.sourceURL,
-            downloadProgress: self.downloadProgress,
-            errorMessage: self.errorMessage,
-            defaultCpu: self.defaultCpu,
-            defaultMemory: self.defaultMemory,
-            defaultDisk: self.defaultDisk,
-            defaultCmdline: self.defaultCmdline,
-            uploadedById: self.$uploadedBy.id,
-            createdAt: self.createdAt,
-            updatedAt: self.updatedAt
-        )
-    }
-}
-
 // MARK: - Computed Properties
 
 extension Image {
+    /// The disk artifact that backs the API's historical single-file convenience
+    /// fields. Those fields remain useful to callers, but are never persisted on
+    /// the image row.
+    var diskArtifact: ImageArtifact? {
+        ($artifacts.value ?? []).first { $0.kind == .diskImage }
+    }
+
+    /// The disk artifact that is complete and architecture-compatible enough
+    /// to seed a managed volume.
+    var usableDiskArtifact: ImageArtifact? {
+        diskArtifact.flatMap { artifact in
+            artifact.architecture == architecture && artifact.isUsable ? artifact : nil
+        }
+    }
+
+    /// The artifact whose state explains the aggregate image lifecycle.
+    /// Falls back to the disk convenience projection outside active/error
+    /// states so existing single-disk API fields retain their meaning.
+    var lifecycleArtifact: ImageArtifact? {
+        let artifacts = $artifacts.value ?? []
+        switch status {
+        case .downloading:
+            return artifacts.first { $0.status == .downloading }
+        case .error:
+            return artifacts.first { $0.status == .error }
+        default:
+            return diskArtifact
+        }
+    }
+
     // MARK: - Hypervisor Compatibility
 
     /// The hypervisor types that can run this image, derived from the artifact
@@ -229,7 +163,7 @@ extension Image {
         // `.ready` artifacts count — a still-downloading rootfs must not make the
         // image look bootable (or get sent to an agent).
         let loaded = $artifacts.value ?? []
-        let matching = loaded.filter { $0.architecture == architecture && $0.status == .ready }
+        let matching = loaded.filter { $0.architecture == architecture && $0.isUsable }
         let kinds = Set(matching.map(\.kind))
 
         var result: Set<HypervisorType> = []
@@ -246,6 +180,30 @@ extension Image {
     /// `$artifacts` to be eager-loaded.
     func isUsable(by hypervisorType: HypervisorType) -> Bool {
         compatibleHypervisors().contains(hypervisorType)
+    }
+
+    /// Recompute the aggregate image status from the authoritative artifact
+    /// rows. A complete bootable set wins even when an optional artifact failed;
+    /// otherwise expose the most actionable in-progress/error state.
+    func recomputeStatus(on database: any Database) async throws {
+        try await $artifacts.load(on: database)
+        let loaded = $artifacts.value ?? []
+
+        let newStatus: ImageStatus
+        if !compatibleHypervisors().isEmpty {
+            newStatus = .ready
+        } else if loaded.contains(where: { $0.status == .error }) {
+            newStatus = .error
+        } else if loaded.contains(where: { $0.status == .downloading }) {
+            newStatus = .downloading
+        } else {
+            newStatus = .pending
+        }
+
+        if status != newStatus {
+            status = newStatus
+            try await save(on: database)
+        }
     }
 }
 
@@ -336,10 +294,10 @@ struct ImageResponse: Content {
     let name: String
     let description: String
     let projectId: UUID?
-    let filename: String
-    let size: Int64
-    let sizeFormatted: String
-    let format: ImageFormat
+    let filename: String?
+    let size: Int64?
+    let sizeFormatted: String?
+    let format: ImageFormat?
     let architecture: CPUArchitecture
     let checksum: String?
     let status: ImageStatus
@@ -363,16 +321,17 @@ struct ImageResponse: Content {
         self.name = image.name
         self.description = image.description
         self.projectId = image.$project.id
-        self.filename = image.filename
-        self.size = image.size
-        self.sizeFormatted = image.size.formattedByteSize
-        self.format = image.format
+        let diskArtifact = image.diskArtifact
+        self.filename = diskArtifact?.filename
+        self.size = diskArtifact?.size
+        self.sizeFormatted = diskArtifact?.size.formattedByteSize
+        self.format = diskArtifact?.format
         self.architecture = image.architecture
-        self.checksum = image.checksum
+        self.checksum = diskArtifact?.checksum
         self.status = image.status
-        self.sourceURL = image.sourceURL
-        self.downloadProgress = image.downloadProgress
-        self.errorMessage = image.errorMessage
+        self.sourceURL = diskArtifact?.sourceURL
+        self.downloadProgress = image.lifecycleArtifact?.downloadProgress
+        self.errorMessage = image.lifecycleArtifact?.errorMessage
         self.defaultCpu = image.defaultCpu
         self.defaultMemory = image.defaultMemory
         self.defaultDisk = image.defaultDisk
@@ -396,10 +355,11 @@ struct ImageStatusResponse: Content {
     init(from image: Image) {
         self.id = image.id ?? UUID()
         self.status = image.status
-        self.downloadProgress = image.downloadProgress
-        self.errorMessage = image.errorMessage
-        self.size = image.size
-        self.checksum = image.checksum
+        let diskArtifact = image.diskArtifact
+        self.downloadProgress = image.lifecycleArtifact?.downloadProgress
+        self.errorMessage = image.lifecycleArtifact?.errorMessage
+        self.size = diskArtifact?.size
+        self.checksum = diskArtifact?.checksum
     }
 }
 

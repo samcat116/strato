@@ -121,6 +121,11 @@ struct VolumeController: RouteCollection {
         // Validate format and volume type
         let format = try VolumeNaming.parseFormat(request.format)
         let volumeType = try VolumeNaming.parseVolumeType(request.volumeType)
+        guard volumeType == .data else {
+            throw Abort(
+                .badRequest,
+                reason: "Boot volumes are created and owned by the VM lifecycle; create a data volume instead")
+        }
 
         // Resolve the source image (if any) up front, so a bad image ID fails
         // the request instead of surfacing later as a failed volume.
@@ -143,6 +148,12 @@ struct VolumeController: RouteCollection {
 
             guard image.status == .ready else {
                 throw Abort(.badRequest, reason: "Source image is not ready (status: '\(image.status.rawValue)')")
+            }
+            try await image.$artifacts.load(on: req.db)
+            guard image.usableDiskArtifact != nil else {
+                throw Abort(
+                    .badRequest,
+                    reason: "Source image does not have a usable disk-image artifact")
             }
             sourceImage = image
         }
@@ -420,6 +431,12 @@ struct VolumeController: RouteCollection {
         let volume = try await fetchVolumeWithAction(req: req, action: "volume:attach")
         let request = try req.content.decode(AttachVolumeRequest.self)
 
+        guard volume.volumeType == .data else {
+            throw Abort(
+                .conflict,
+                reason: "Boot-volume attachment is owned by the VM lifecycle")
+        }
+
         guard volume.canAttach else {
             throw Abort(
                 .conflict,
@@ -578,6 +595,12 @@ struct VolumeController: RouteCollection {
     func detachVolume(req: Request) async throws -> Response {
         let user = try req.auth.require(User.self)
         let volume = try await fetchVolumeWithAction(req: req, action: "volume:detach")
+
+        guard volume.volumeType == .data else {
+            throw Abort(
+                .conflict,
+                reason: "A VM's canonical boot volume cannot be detached independently")
+        }
 
         guard volume.canDetach, let vmId = volume.$vm.id else {
             throw Abort(.conflict, reason: "Volume is not attached to any VM")
@@ -794,6 +817,22 @@ struct VolumeController: RouteCollection {
 
     // MARK: - Create Snapshot
 
+    /// An attached clone source can be read safely only while the owning VM is
+    /// both observed and desired stopped. Checking both closes the start/stop
+    /// convergence window; desired state also carries the VM id so the agent
+    /// holds that VM's reconciliation lane for the entire copy.
+    private func requireReadableCloneSource(_ volume: Volume, on db: any Database) async throws {
+        guard let vmID = volume.$vm.id else { return }
+        guard let vm = try await VM.find(vmID, on: db) else {
+            throw Abort(.conflict, reason: "The volume's attached VM no longer exists")
+        }
+        guard vm.desiredStatus == .shutdown, vm.status == .shutdown || vm.status == .created else {
+            throw Abort(
+                .conflict,
+                reason: "An attached volume can be cloned only while its VM is shut down")
+        }
+    }
+
     /// Create a snapshot of a volume
     /// POST /api/volumes/:volumeId/snapshot
     /// Body: { "name": string, "description"?: string, "ttlSeconds"?: int }
@@ -809,16 +848,11 @@ struct VolumeController: RouteCollection {
         let volume = try await fetchVolumeWithAction(req: req, action: "volume:snapshot")
         let request = try req.content.decodeValidated(CreateSnapshotRequest.self)
 
-        // Validate volume can be snapshotted. An attached volume gets its own
-        // message: refusing it is a deliberate correctness guard (issue #747),
-        // not a transient state the caller should wait out.
         guard volume.canSnapshot else {
             if volume.$vm.id != nil {
                 throw Abort(
                     .conflict,
-                    reason:
-                        "Volume is attached to a running VM. Snapshots of an attached volume would not be point-in-time, so they are refused; detach the volume first."
-                )
+                    reason: "Attached volumes cannot be snapshotted; detach the volume first")
             }
             throw Abort(
                 .conflict,
@@ -903,23 +937,19 @@ struct VolumeController: RouteCollection {
         let sourceVolume = try await fetchVolumeWithAction(req: req, action: "volume:clone")
         let request = try req.content.decodeValidated(CloneVolumeRequest.self)
 
-        // Cloning reads the source's bytes, which is why it keeps a
-        // converged-and-detached requirement the other verbs dropped: copying a
-        // volume whose own create is still writing it yields a torn image, and
-        // unlike a resize that cannot be re-driven into correctness.
+        // Cloning reads the source's bytes, which is why it keeps a converged
+        // requirement the other verbs dropped: copying a volume whose own
+        // create is still writing it yields a torn image, and unlike a resize
+        // that cannot be re-driven into correctness. An attached source is
+        // additionally required to be stopped and is serialized with that VM
+        // by the desired-state create strategy.
         guard sourceVolume.canClone else {
-            if sourceVolume.$vm.id != nil {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Volume is attached to a VM. Cloning copies the volume's file, so a guest writing it mid-copy would produce a torn image; detach the volume first."
-                )
-            }
             throw Abort(
                 .conflict,
                 reason: "Volume is not ready to be cloned; wait for it to finish converging."
             )
         }
+        try await requireReadableCloneSource(sourceVolume, on: req.db)
 
         let sourceAgentIds = try await VolumeService.agentIDs(holding: sourceVolume, on: req.db)
         guard !sourceAgentIds.isEmpty else {
@@ -936,7 +966,9 @@ struct VolumeController: RouteCollection {
             environment: sourceVolume.environment,
             size: sourceVolume.size,
             format: sourceVolume.format,
-            volumeType: sourceVolume.volumeType,
+            // A clone is independent data storage. Only VM creation may mint a
+            // canonical boot volume and attach it as disk0.
+            volumeType: .data,
             status: .creating,
             createdByID: user.id!,
             poolID: sourceVolume.$pool.id,

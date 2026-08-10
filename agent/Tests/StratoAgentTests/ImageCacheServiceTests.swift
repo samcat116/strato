@@ -17,15 +17,16 @@ struct ImageCacheServiceTests {
         SHA256.hash(data: imageBytes).map { String(format: "%02x", $0) }.joined()
     }
 
-    private func makeImageInfo(artifacts: [ArtifactInfo] = []) -> ImageInfo {
-        ImageInfo(
+    private func makeImageInfo(artifacts: [ArtifactInfo]? = nil) -> ImageInfo {
+        let disk = ArtifactInfo(
+            kind: .diskImage, filename: "disk.qcow2", checksum: Self.imageChecksum,
+            size: Int64(Self.imageBytes.count),
+            downloadURL: "https://control-plane.example/images/disk.qcow2?artifact=disk-image")
+        return ImageInfo(
             imageId: UUID(),
             projectId: UUID(),
-            filename: "disk.qcow2",
-            checksum: Self.imageChecksum,
-            size: Int64(Self.imageBytes.count),
-            downloadURL: "https://control-plane.example/images/disk.qcow2",
-            artifacts: artifacts
+            architecture: .x86_64,
+            artifacts: artifacts ?? [disk]
         )
     }
 
@@ -88,7 +89,7 @@ struct ImageCacheServiceTests {
         // Two workloads placed on this agent at the same time, both needing the same
         // not-yet-cached image.
         let callers = (0..<2).map { _ in
-            Task { try await service.getImagePath(imageInfo: imageInfo) }
+            Task { try await service.getArtifactPath(imageInfo: imageInfo, kind: .diskImage) }
         }
 
         while await recorder.fetches == 0 {
@@ -100,7 +101,8 @@ struct ImageCacheServiceTests {
         try await Task.sleep(for: .milliseconds(50))
         await recorder.release()
 
-        let expectedPath = await service.buildCachePath(imageInfo: imageInfo)
+        let disk = try #require(imageInfo.artifact(ofKind: .diskImage))
+        let expectedPath = await service.buildArtifactCachePath(imageInfo: imageInfo, artifact: disk)
         for caller in callers {
             let path = try await caller.value
             #expect(path == expectedPath)
@@ -180,21 +182,25 @@ struct ImageCacheServiceTests {
         )
 
         let original = makeImageInfo()
-        // Same imageId/projectId/filename — so the same destination path — but new bytes.
+        // Same image/project/artifact filename — so the same destination path — but new bytes.
+        let originalDisk = try #require(original.artifact(ofKind: .diskImage))
         let replaced = ImageInfo(
             imageId: original.imageId,
             projectId: original.projectId,
-            filename: original.filename,
-            checksum: replacementChecksum,
-            size: Int64(replacementBytes.count),
-            downloadURL: original.downloadURL + "?v2"
+            architecture: original.architecture,
+            artifacts: [
+                ArtifactInfo(
+                    kind: .diskImage, filename: originalDisk.filename,
+                    checksum: replacementChecksum, size: Int64(replacementBytes.count),
+                    downloadURL: originalDisk.downloadURL + "&v2")
+            ]
         )
 
-        let first = Task { try await service.getImagePath(imageInfo: original) }
+        let first = Task { try await service.getArtifactPath(imageInfo: original, kind: .diskImage) }
         while await recorder.fetches == 0 {
             await Task.yield()
         }
-        let second = Task { try await service.getImagePath(imageInfo: replaced) }
+        let second = Task { try await service.getArtifactPath(imageInfo: replaced, kind: .diskImage) }
         // Let the second caller reach the cache check while the first is mid-download.
         try await Task.sleep(for: .milliseconds(50))
         await recorder.release()
@@ -222,8 +228,8 @@ struct ImageCacheServiceTests {
         )
         let imageInfo = makeImageInfo()
 
-        _ = try await service.getImagePath(imageInfo: imageInfo)
-        _ = try await service.getImagePath(imageInfo: imageInfo)
+        _ = try await service.getArtifactPath(imageInfo: imageInfo, kind: .diskImage)
+        _ = try await service.getArtifactPath(imageInfo: imageInfo, kind: .diskImage)
 
         let fetches = await recorder.fetches
         #expect(fetches == 1)
@@ -250,7 +256,8 @@ struct ImageCacheServiceTests {
             fetch: recordingFetcher(recorder: recorder)
         )
         let imageInfo = makeImageInfo()
-        let destination = await service.buildCachePath(imageInfo: imageInfo)
+        let disk = try #require(imageInfo.artifact(ofKind: .diskImage))
+        let destination = await service.buildArtifactCachePath(imageInfo: imageInfo, artifact: disk)
 
         // Stand in for another writer having published the same image between this caller's
         // cache check and its own publish: bytes that don't match the checksum, so the cache
@@ -262,7 +269,7 @@ struct ImageCacheServiceTests {
         try Data("stale bytes from a concurrent writer".utf8)
             .write(to: URL(fileURLWithPath: destination))
 
-        let path = try await service.getImagePath(imageInfo: imageInfo)
+        let path = try await service.getArtifactPath(imageInfo: imageInfo, kind: .diskImage)
         #expect(path == destination)
         let cached = try Data(contentsOf: URL(fileURLWithPath: destination))
         #expect(cached == Self.imageBytes)
@@ -286,10 +293,11 @@ struct ImageCacheServiceTests {
         let imageInfo = makeImageInfo()
 
         await #expect(throws: ImageCacheError.self) {
-            _ = try await service.getImagePath(imageInfo: imageInfo)
+            _ = try await service.getArtifactPath(imageInfo: imageInfo, kind: .diskImage)
         }
 
-        let destination = await service.buildCachePath(imageInfo: imageInfo)
+        let disk = try #require(imageInfo.artifact(ofKind: .diskImage))
+        let destination = await service.buildArtifactCachePath(imageInfo: imageInfo, artifact: disk)
         #expect(!FileManager.default.fileExists(atPath: destination))
         // No staging file survives a failed download either.
         #expect(FileManager.default.allFilesRecursively(under: cachePath).allSatisfy { !$0.contains(".partial") })
@@ -317,7 +325,7 @@ struct ImageCacheServiceTests {
         )
         let imageInfo = makeImageInfo()
 
-        let path = try await service.getImagePath(imageInfo: imageInfo)
+        let path = try await service.getArtifactPath(imageInfo: imageInfo, kind: .diskImage)
         let cached = try Data(contentsOf: URL(fileURLWithPath: path))
         #expect(cached == Self.imageBytes)
         let total = await attempts.value
@@ -369,18 +377,21 @@ struct ImageCacheServiceTests {
         let info = ImageInfo(
             imageId: imageId,
             projectId: projectId,
-            filename: "disk.qcow2",
-            checksum: Self.imageChecksum,
-            size: Int64(Self.imageBytes.count),
-            downloadURL: "/api/projects/\(projectId)/images/\(imageId)/download"
+            architecture: .x86_64,
+            artifacts: [
+                ArtifactInfo(
+                    kind: .diskImage, filename: "disk.qcow2", checksum: Self.imageChecksum,
+                    size: Int64(Self.imageBytes.count),
+                    downloadURL: "/api/projects/\(projectId)/images/\(imageId)/download?artifact=disk-image")
+            ]
         )
 
-        _ = try await service.getImagePath(imageInfo: info)
+        _ = try await service.getArtifactPath(imageInfo: info, kind: .diskImage)
 
         let fetched = await recorder.urls
         #expect(
             fetched.map(\.absoluteString) == [
-                "https://cp.example:8443/api/projects/\(projectId)/images/\(imageId)/download"
+                "https://cp.example:8443/api/projects/\(projectId)/images/\(imageId)/download?artifact=disk-image"
             ])
     }
 
@@ -397,10 +408,29 @@ struct ImageCacheServiceTests {
             fetch: urlRecordingFetcher(recorder: recorder)
         )
 
-        _ = try await service.getImagePath(imageInfo: makeImageInfo())
+        _ = try await service.getArtifactPath(imageInfo: makeImageInfo(), kind: .diskImage)
 
         let fetched = await recorder.urls
-        #expect(fetched.map(\.absoluteString) == ["https://control-plane.example/images/disk.qcow2"])
+        #expect(
+            fetched.map(\.absoluteString)
+                == ["https://control-plane.example/images/disk.qcow2?artifact=disk-image"])
+    }
+
+    @Test("A missing requested artifact fails explicitly")
+    func missingArtifactFailsExplicitly() async throws {
+        let cachePath = try makeTempDirectory()
+        defer { try? FileManager.default.removeItem(atPath: cachePath) }
+
+        let service = ImageCacheService(
+            logger: Logger(label: "test"),
+            cachePath: cachePath,
+            controlPlaneURL: "https://cp.example:8443"
+        )
+
+        await #expect(throws: ImageCacheError.self) {
+            try await service.getArtifactPath(
+                imageInfo: makeImageInfo(artifacts: []), kind: .diskImage)
+        }
     }
 }
 

@@ -58,26 +58,21 @@ struct APIKeyController: RouteCollection {
 
         let createRequest = try req.content.decode(CreateAPIKeyRequest.self)
 
-        // The legacy scope array is still accepted (and still stored, so a
-        // downgrade reads the key correctly), but it no longer decides
-        // anything: `restriction` does. Both are validated; only the
-        // restriction is enforced.
-        let requestedScopes = createRequest.scopes ?? ["read", "write"]
-
-        for scope in requestedScopes {
-            guard APIKeyScope.validValues.contains(scope) else {
-                throw Abort(.badRequest, reason: "Invalid scope: \(scope)")
-            }
-        }
-
         // `issuedUnder` is defense in depth: `CredentialRestrictionMiddleware`
         // already refuses a restricted credential this route, and this refuses
         // it again if that ever stops being true. A key must never be able to
         // mint a wider successor.
-        var restriction: CredentialRestriction?
+        let restriction: CredentialRestriction
         if let payload = createRequest.restriction {
             restriction = try await CredentialRestriction.resolve(
                 payload, issuedUnder: req.credentialRestriction, on: req.db)
+        } else {
+            restriction = .unrestricted
+            guard req.credentialRestriction.covers(restriction) else {
+                throw Abort(
+                    .forbidden,
+                    reason: "This credential is restricted and cannot issue one with broader access than its own")
+            }
         }
 
         // Check API key limit per user (max 10)
@@ -109,10 +104,9 @@ struct APIKeyController: RouteCollection {
             name: createRequest.name,
             keyHash: keyHash,
             keyPrefix: keyPrefix,
-            scopes: requestedScopes,
+            restriction: restriction,
             expiresAt: expiresAt
         )
-        apiKey.store(restriction: restriction)
 
         try await apiKey.save(on: req.db)
 
@@ -142,22 +136,6 @@ struct APIKeyController: RouteCollection {
         // Update fields
         if let name = updateRequest.name {
             apiKey.name = name
-        }
-
-        if let scopes = updateRequest.scopes {
-            for scope in scopes {
-                guard APIKeyScope.validValues.contains(scope) else {
-                    throw Abort(.badRequest, reason: "Invalid scope: \(scope)")
-                }
-            }
-            apiKey.scopes = scopes
-            // A client editing only the legacy scopes means them to take
-            // effect. Leaving a stored restriction in place would silently
-            // ignore the edit, so clear it and let the shim read the new
-            // scopes — narrower or wider, it is what was asked for.
-            if updateRequest.restriction == nil {
-                apiKey.store(restriction: nil)
-            }
         }
 
         if let payload = updateRequest.restriction {

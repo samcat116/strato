@@ -391,8 +391,8 @@ public extension HypervisorService {
 
     /// Backends opt in to pushing lifecycle transitions. Nil is not a
     /// degradation: it is how every backend behaved before STR-135, and the
-    /// periodic sync it falls back to is the same backstop the opted-in ones
-    /// still rely on.
+    /// next full desired-state payload remains the backstop for opted-in
+    /// backends too.
     nonisolated var lifecycleChanges: AsyncStream<VMLifecycleChange>? { nil }
     func startObservingLifecycle() async {}
     func stopObservingLifecycle() async {}

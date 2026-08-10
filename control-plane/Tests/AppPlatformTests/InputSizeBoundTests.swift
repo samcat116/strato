@@ -781,40 +781,6 @@ final class InputSizeBoundTests {
         }
     }
 
-    // MARK: - The migration's pre-scan
-
-    /// `assertRowsFit` exists so an operator gets the offending rows named
-    /// rather than a bare constraint violation. Exercised by dropping one
-    /// column's constraint, writing a row that no longer fits, and re-running
-    /// the migration.
-    @Test("The migration refuses to bound a column whose existing rows do not fit")
-    func migrationRefusesOversizedExistingRows() async throws {
-        try await withApp { app, _, _, _, _ in
-            guard let sql = app.db as? any SQLDatabase else {
-                Issue.record("Control-plane tests run against Postgres")
-                return
-            }
-
-            try await sql.raw(
-                "ALTER TABLE \"organizations\" DROP CONSTRAINT \"ck_organizations_name_length\""
-            ).run()
-            let oversized = self.string(Validate.nameLength + 40)
-            let organization = Organization(name: "placeholder", description: "d")
-            try await organization.save(on: app.db)
-            try await sql.raw(
-                "UPDATE \"organizations\" SET \"name\" = \(bind: oversized) WHERE \"id\" = \(bind: organization.id!)"
-            ).run()
-
-            let error = await #expect(throws: BoundResourceTextColumnsError.self) {
-                try await BoundResourceTextColumns().prepare(on: app.db)
-            }
-            let described = String(describing: try #require(error))
-            #expect(described.contains("organizations.name"))
-            #expect(described.contains(organization.id!.uuidString))
-            #expect(described.contains("\(Validate.nameLength + 40) characters"))
-        }
-    }
-
     // MARK: - The database backstop
 
     /// The API is the layer that produces a good error; the column constraint
@@ -839,10 +805,8 @@ final class InputSizeBoundTests {
         }
     }
 
-    /// The DNS half of the backstop (STR-198). A separate migration, because
-    /// `BoundResourceTextColumns` has already run everywhere and Fluent will
-    /// not re-run it — so this asserts the *constraint*, which is the thing an
-    /// upgraded deployment either has or does not.
+    /// The DNS half of the backstop (STR-198), installed by the current-schema
+    /// baseline alongside the rest of the text-length constraints.
     @Test("The database refuses an oversized zone name written straight to a model")
     func databaseRefusesOversizedDNSZoneName() async throws {
         try await withApp { app, user, project, _, _ in
@@ -857,38 +821,4 @@ final class InputSizeBoundTests {
         }
     }
 
-    @Test("Every bounded column carries its CHECK constraint after migration")
-    func constraintsExist() async throws {
-        try await withApp { app, _, _, _, _ in
-            guard let sql = app.db as? any SQLDatabase else {
-                Issue.record("Control-plane tests run against Postgres")
-                return
-            }
-            let rows = try await sql.raw(
-                "SELECT conname FROM pg_constraint WHERE contype = 'c' AND conname LIKE 'ck_%_length'"
-            ).all()
-            let present = Set(rows.compactMap { try? $0.decode(column: "conname", as: String.self) })
-            let expected = Set(
-                (BoundResourceTextColumns.columns + BoundDNSTextColumns.columns)
-                    .map(\.constraintName))
-            #expect(expected.subtracting(present).isEmpty)
-        }
-    }
-
-    /// The bound the API applies and the bound the column carries have to be
-    /// the same number, or a value the request boundary accepted turns a
-    /// caller's `200` into a `500` at `save`.
-    @Test("The DNS columns are bounded at the numbers the request boundary uses")
-    func dnsColumnLimitsMatchTheAPI() throws {
-        let limits = Dictionary(
-            uniqueKeysWithValues: BoundDNSTextColumns.columns.map {
-                ("\($0.table).\($0.column)", $0.limit)
-            })
-        #expect(limits["dns_zones.name"] == DNSName.maxNameLength)
-        #expect(limits["dns_records.name"] == DNSName.maxNameLength)
-        #expect(limits["dns_zones.description"] == Validate.textLength)
-        // Looser than any RDATA grammar on purpose: a backstop that refused
-        // something `DNSZoneService.validatedValue` accepts would be a 500.
-        #expect(limits["dns_records.value"] == Validate.textLength)
-    }
 }

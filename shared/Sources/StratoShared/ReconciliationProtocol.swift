@@ -105,14 +105,8 @@ public struct DesiredVMState: Codable, Sendable {
     /// control loop or transport: an operator's edit lands on the next sync
     /// instead of requiring the guest to be rebuilt around a new seed ISO.
     ///
-    /// Optional so payloads from older control planes still decode and older
-    /// agents ignore it, matching `subnet6`/`dhcpEnabled`. Absence is
-    /// asymmetric, the `networks`/`sandboxes` hazard in miniature: from a
-    /// control plane that speaks the field (`supportsInstanceMetadata` on the
-    /// envelope's sender version) nil is authoritative — there is nothing to
-    /// serve, and an agent holding stale metadata must drop it — while from an
-    /// older one it means only "no opinion", and the agent leaves whatever it
-    /// serves alone rather than reading silence as an instruction.
+    /// Nil is authoritative: there is nothing to serve, and an agent holding
+    /// stale metadata must drop it.
     public let metadata: InstanceMetadata?
     /// How many times this VM has been asked to reboot (ADR 0001 stage 9,
     /// STR-151) — the `kubectl rollout restart` nonce, applied to the one VM
@@ -124,9 +118,8 @@ public struct DesiredVMState: Codable, Sendable {
     /// like everything else — the agent acts when this outranks the nonce it
     /// durably recorded, and a lost sync costs latency rather than the reboot.
     ///
-    /// Nil from control planes older than v34, and — being a count of requests —
-    /// never an instruction to undo one, so an agent reads absence as "no
-    /// opinion" and leaves its record alone.
+    /// Nil means no reboot has ever been requested and, being a count of
+    /// requests, is never an instruction to undo one.
     public let rebootGeneration: Int64?
     /// The checkpoint this VM should have been restored to, as a nonce
     /// (STR-151). Nil means no restore has ever been requested.
@@ -253,10 +246,19 @@ public struct DesiredVolumeSource: Codable, Sendable {
     /// fetched over SVID mTLS — no signature, so nothing here expires and the
     /// entry stays safe to sit in a sync indefinitely.
     public let imageInfo: ImageInfo?
+    /// The typed image artifact whose bytes initialize this volume. Required
+    /// for `image`: QEMU boot/data volumes use `.diskImage`, while a
+    /// Firecracker boot volume uses `.rootfs`.
+    public let artifactKind: ArtifactKind?
     /// Present for `clone`. The volume/VM co-location constraint guarantees the
     /// source lives on this same agent, and the agent derives the source path
     /// from its own layout — no path travels on the wire (STR-180).
     public let sourceVolumeId: UUID?
+    /// The VM that currently owns an attached clone source. The agent holds
+    /// this VM's reconciliation lane for the complete copy, so a later desired
+    /// state cannot start the source guest while its bytes are being read. Nil
+    /// for a detached clone source.
+    public let sourceVMId: UUID?
     /// The source volume's format, when known, so the agent can pick a copy
     /// strategy without probing. Advisory: the backend detects rather than
     /// assumes.
@@ -265,21 +267,29 @@ public struct DesiredVolumeSource: Codable, Sendable {
     public init(
         kind: String,
         imageInfo: ImageInfo? = nil,
+        artifactKind: ArtifactKind? = nil,
         sourceVolumeId: UUID? = nil,
+        sourceVMId: UUID? = nil,
         sourceFormat: String? = nil
     ) {
         self.kind = kind
         self.imageInfo = imageInfo
+        self.artifactKind = artifactKind
         self.sourceVolumeId = sourceVolumeId
+        self.sourceVMId = sourceVMId
         self.sourceFormat = sourceFormat
     }
 
-    public static func image(_ info: ImageInfo) -> DesiredVolumeSource {
-        DesiredVolumeSource(kind: Self.image, imageInfo: info)
+    public static func image(_ info: ImageInfo, artifactKind: ArtifactKind) -> DesiredVolumeSource {
+        DesiredVolumeSource(kind: Self.image, imageInfo: info, artifactKind: artifactKind)
     }
 
-    public static func clone(from volumeId: UUID, format: String? = nil) -> DesiredVolumeSource {
-        DesiredVolumeSource(kind: Self.clone, sourceVolumeId: volumeId, sourceFormat: format)
+    public static func clone(
+        from volumeId: UUID, sourceVMId: UUID? = nil, format: String? = nil
+    ) -> DesiredVolumeSource {
+        DesiredVolumeSource(
+            kind: Self.clone, sourceVolumeId: volumeId, sourceVMId: sourceVMId,
+            sourceFormat: format)
     }
 }
 
@@ -512,9 +522,9 @@ public struct DesiredAgentUpdate: Codable, Sendable {
 ///
 /// Full-list semantics make the message level-triggered and idempotent:
 /// identical syncs diff to nothing, and the message is safe to drop, replay, or
-/// reorder (per-VM `generation` guards handle reordering). Sent on agent
-/// registration, nudged on any desired-state change, and repeated on a timer as
-/// the correctness backstop.
+/// reorder (per-VM `generation` guards handle reordering). Fetched on agent
+/// registration, nudged on any desired-state change, and fetched
+/// unconditionally on an agent-owned interval as the correctness backstop.
 ///
 /// Omission is **not** teardown (STR-98). A workload the agent holds that this
 /// message does not list is held, untouched, and reported back as an
@@ -536,9 +546,8 @@ public struct DesiredStateMessage: WebSocketMessage {
     public let sandboxes: [DesiredSandboxState]
     /// The full authoritative set of logical networks that should exist on the
     /// receiving agent (full-list, same semantics as `vms`: a network omitted
-    /// here should be torn down). Empty when the control plane is older than the
-    /// network-reconciliation protocol, in which case the agent falls back to
-    /// realizing switches implicitly from `vms`.
+    /// here should be torn down). An empty list authoritatively means this agent
+    /// should realize no logical-network topology.
     public let networks: [DesiredNetworkState]
     /// Whether the receiving agent is the topology authority for its OVN
     /// northbound database. The authority reconciles `networks` — creating and
@@ -549,62 +558,49 @@ public struct DesiredStateMessage: WebSocketMessage {
     /// NB outright and are always authoritative.
     public let networksAuthoritative: Bool
     /// The agent build this agent should be running (issue #434), with a
-    /// freshly resolved artifact. Nil means "no opinion" — from control planes
-    /// that predate the field, deployments without a meaningful target (dev
-    /// builds), agents with auto-update off, and agents the fleet rollout has
-    /// not reached yet. Never an instruction to downgrade or tear anything
-    /// down, so absence is always safe.
+    /// freshly resolved artifact. Nil means "no opinion" — deployments without
+    /// a meaningful target (dev builds), agents with auto-update off, and agents
+    /// the fleet rollout has not reached yet. Never an instruction to downgrade
+    /// or tear anything down, so absence is always safe.
     public let desiredAgentUpdate: DesiredAgentUpdate?
     /// The security groups the receiving agent needs realized as OVN port
     /// groups + ACLs: every group attached to a NIC of a VM in this sync's
     /// scope, plus the transitive closure of groups referenced by their rules
     /// (so `$pg_…` address-set references always resolve). Only the topology
     /// authority acts on this list; other agents consume just the per-NIC
-    /// `NetworkSpec.securityGroupIds` for port membership. Nil from control
-    /// planes that predate security groups — never "tear down all port
-    /// groups": the authority skips security-group reconciliation entirely
-    /// when the field is absent, exactly like the `networks` list before it.
+    /// `NetworkSpec.securityGroupIds` for port membership. Nil means this agent
+    /// is not authoritative for security-group topology — never "tear down all
+    /// port groups": the agent skips security-group reconciliation entirely.
     public let securityGroups: [DesiredSecurityGroup]?
     /// Workloads the receiving agent holds that the control plane has
     /// confirmed have no row, and which it therefore authorizes the agent to
     /// tear down (STR-98). Each entry is the answer to an
     /// `UnrecognizedWorkload` the agent reported, so a tombstone is always the
     /// second half of a round trip — never something the control plane
-    /// volunteers. Nil from control planes that predate the field, which is
-    /// then simply "nothing authorized": such a control plane never confirms a
-    /// teardown, so a stray workload leaks rather than a live one dying.
-    public let tombstones: [DesiredWorkloadTombstone]?
+    /// volunteers. An empty list means no teardown is authorized.
+    public let tombstones: [DesiredWorkloadTombstone]
     /// The full authoritative set of volumes that should exist on the receiving
     /// agent (ADR 0001 stage 5, STR-148), with the same full-list semantics as
-    /// `vms`.
-    ///
-    /// Optional rather than `[]`-defaulted, unlike `sandboxes` and `networks`,
-    /// and that difference is load-bearing: nil means "the sender has no
-    /// opinion about volumes", never "delete every volume on this host". A
-    /// control plane older than v31 omits the key entirely, and the cost of
-    /// misreading its silence is destroyed user data, so the payload describes
-    /// itself instead of relying on a `wireProtocolVersion` lookup being right.
-    /// The agent skips its whole volume half when this is nil.
-    public let volumes: [DesiredVolumeState]?
+    /// `vms`. An empty list authoritatively means this host should hold no
+    /// volumes.
+    public let volumes: [DesiredVolumeState]
     /// The full authoritative set of snapshot artifacts — volume snapshots, VM
     /// checkpoints and sandbox snapshots, in one kind-tagged list — that should
     /// exist on the receiving agent (ADR 0001 stage 8, STR-150).
-    ///
-    /// `Optional` for `volumes`' reason and with the same reading: nil is "the
-    /// sender has no opinion about snapshots", never "delete every checkpoint
-    /// on this host". One list rather than three because the diff, the
-    /// generation guard and the absent-then-confirm dance are identical across
-    /// the families; only the backend that captures the bytes differs, and the
-    /// entry's own `kind` says which.
-    public let snapshots: [DesiredSnapshotState]?
+    /// One list rather than three because the diff, the generation guard and
+    /// the absent-then-confirm dance are identical across the families; only
+    /// the backend that captures the bytes differs, and the entry's own `kind`
+    /// says which. An empty list authoritatively means this host should retain
+    /// no snapshot artifacts.
+    public let snapshots: [DesiredSnapshotState]
     /// The DNS zones the receiving agent should realize into the OVN `DNS`
     /// table (STR-39): every zone attached to a network whose topology this
     /// agent authors, with the zone's full effective record set.
     ///
     /// Nil is "the sender has no opinion about DNS" and the agent leaves every
-    /// managed row alone — what a pre-v36 control plane and a *non-authority*
-    /// agent both get, since realizing switch-scoped rows from two writers
-    /// would have them fight over teardown. `[]` is an opinion and means "no
+    /// managed row alone — what a *non-authority* agent gets, since realizing
+    /// switch-scoped rows from two writers would have them fight over teardown.
+    /// `[]` is an opinion and means "no
     /// zone reaches any network you author": managed rows are removed, which
     /// is what makes detaching the last zone from a network take effect.
     public let dnsZones: [DesiredDNSZone]?
@@ -619,9 +615,9 @@ public struct DesiredStateMessage: WebSocketMessage {
         networksAuthoritative: Bool = true,
         desiredAgentUpdate: DesiredAgentUpdate? = nil,
         securityGroups: [DesiredSecurityGroup]? = nil,
-        tombstones: [DesiredWorkloadTombstone]? = nil,
-        volumes: [DesiredVolumeState]? = nil,
-        snapshots: [DesiredSnapshotState]? = nil,
+        tombstones: [DesiredWorkloadTombstone] = [],
+        volumes: [DesiredVolumeState] = [],
+        snapshots: [DesiredSnapshotState] = [],
         dnsZones: [DesiredDNSZone]? = nil
     ) {
         self.requestId = requestId
@@ -639,29 +635,6 @@ public struct DesiredStateMessage: WebSocketMessage {
         self.dnsZones = dnsZones
     }
 
-    // Custom decode so `networks` and `sandboxes` tolerate absence: a sync
-    // produced by an older control plane (before each became first-class)
-    // decodes to [] rather than throwing, keeping agent↔control-plane
-    // compatible across version skew. `networksAuthoritative` likewise defaults
-    // to true, matching every control plane older than the site/shared-NB
-    // protocol (agents owned their local NB).
-    // `encode(to:)` stays synthesized; all other keys remain required.
-    public init(from decoder: any Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        requestId = try c.decode(String.self, forKey: .requestId)
-        timestamp = try c.decode(Date.self, forKey: .timestamp)
-        syncId = try c.decode(String.self, forKey: .syncId)
-        vms = try c.decode([DesiredVMState].self, forKey: .vms)
-        sandboxes = try c.decodeIfPresent([DesiredSandboxState].self, forKey: .sandboxes) ?? []
-        networks = try c.decodeIfPresent([DesiredNetworkState].self, forKey: .networks) ?? []
-        networksAuthoritative = try c.decodeIfPresent(Bool.self, forKey: .networksAuthoritative) ?? true
-        desiredAgentUpdate = try c.decodeIfPresent(DesiredAgentUpdate.self, forKey: .desiredAgentUpdate)
-        securityGroups = try c.decodeIfPresent([DesiredSecurityGroup].self, forKey: .securityGroups)
-        tombstones = try c.decodeIfPresent([DesiredWorkloadTombstone].self, forKey: .tombstones)
-        volumes = try c.decodeIfPresent([DesiredVolumeState].self, forKey: .volumes)
-        snapshots = try c.decodeIfPresent([DesiredSnapshotState].self, forKey: .snapshots)
-        dnsZones = try c.decodeIfPresent([DesiredDNSZone].self, forKey: .dnsZones)
-    }
 }
 
 // MARK: - Desired Security Groups
@@ -1424,48 +1397,36 @@ public struct ObservedStateReport: WebSocketMessage {
     public let vms: [ObservedVMState]
     /// Sandboxes actually present on this agent. Full-list, like `vms`: a
     /// sandbox missing from the list does not exist, which is how sandbox
-    /// deletions are confirmed. Decodes to `[]` from agents older than the
-    /// sandbox protocol — safe, because the control plane never places
-    /// sandboxes on such agents in the first place.
+    /// deletions are confirmed. The key is required even when the list is
+    /// empty.
     public let sandboxes: [ObservedSandboxState]
     public let resources: AgentResources
     /// Why the agent is not converging on its `DesiredAgentUpdate`, when one
-    /// is desired and something is in the way (issue #434). Nil when no
-    /// update is desired, when convergence is proceeding (the agent restarts
-    /// into the new build rather than reporting progress), and from agents
-    /// older than the field.
+    /// is desired and something is in the way (issue #434). Nil when no update
+    /// is desired or convergence is proceeding (the agent restarts into the new
+    /// build rather than reporting progress).
     public let agentUpdateStatus: ObservedAgentUpdateStatus?
     /// Workloads this agent holds that its last sync did not list (STR-98).
     /// They also appear in `vms`/`sandboxes` above — the agent really is
     /// running them — so this list is the agent asking "should these exist?",
-    /// not a second inventory. Empty from agents older than the field, which
-    /// still read omission as teardown.
+    /// not a second inventory.
     public let unrecognized: [UnrecognizedWorkload]
     /// Set when the blast-radius guard refused a sync's teardowns. Nil in the
-    /// steady state and from agents older than the field.
+    /// steady state.
     public let teardownRefusal: ObservedTeardownRefusal?
-    /// Set when the agent's durable workload manifest could not be read in
-    /// full (STR-138). Nil in the steady state and from agents older than the
-    /// field. `inventoryComplete == false` suspends this report's full-list
-    /// semantics — see `ObservedManifestStatus`.
+    /// Set when the agent's durable workload manifest could not be read in full
+    /// (STR-138). Nil in the steady state. `inventoryComplete == false`
+    /// suspends this report's full-list semantics — see
+    /// `ObservedManifestStatus`.
     public let manifestStatus: ObservedManifestStatus?
     /// Volumes actually present on this agent (STR-148). Full-list, like
     /// `vms`: a volume missing from the list does not exist here, which is how
     /// volume deletions are confirmed.
     ///
-    /// Optional rather than `[]`-defaulted, and that difference is the safety
-    /// property: the control plane must read a missing list as "this agent has
-    /// no opinion about volumes" rather than "every volume on this agent is
-    /// gone" — which would reap every terminating volume row it holds and error
-    /// every live one. Making the payload self-describing means a stale
-    /// `wireProtocolVersion` on the agent row cannot cause that.
-    ///
-    /// Nil has two causes, and the control plane treats them identically
-    /// because the right response to both is to do nothing: an agent older than
-    /// v31 does not speak the field at all, and a v31 agent that cannot
-    /// enumerate its volume store says so this way rather than claiming an
-    /// empty inventory. The second is the volume counterpart of
-    /// `manifestStatus.inventoryComplete == false`.
+    /// Optional rather than `[]`-defaulted because nil means the current agent
+    /// could not enumerate its volume store. The control plane must read that as
+    /// "unknown", not "every volume on this agent is gone" — which would reap
+    /// terminating volume rows and error live ones.
     public let volumes: [ObservedVolumeState]?
     /// Snapshot artifacts actually present on this agent (STR-150). Full-list
     /// and kind-tagged, like the desired counterpart: an artifact missing from
@@ -1473,12 +1434,9 @@ public struct ObservedStateReport: WebSocketMessage {
     /// confirmed and how the finalizer reap learns a checkpoint's bytes are
     /// really gone.
     ///
-    /// `Optional` for `volumes`' reason. Nil has the same two causes and the
-    /// same response — do nothing: an agent older than v33 does not speak the
-    /// field at all, and a v33 agent that cannot enumerate one of its artifact
-    /// stores says so this way rather than claiming an empty inventory. The
-    /// control plane must never read the absence as "every checkpoint on this
-    /// agent is gone".
+    /// `Optional` for `volumes`' reason. Nil means the current agent could not
+    /// enumerate one of its artifact stores, so the control plane must do
+    /// nothing rather than read the absence as "every checkpoint is gone".
     public let snapshots: [ObservedSnapshotState]?
 
     public init(
@@ -1509,23 +1467,4 @@ public struct ObservedStateReport: WebSocketMessage {
         self.snapshots = snapshots
     }
 
-    // Custom decode so `sandboxes` and `unrecognized` tolerate absence: a
-    // report produced by a pre-sandbox (or pre-STR-98) agent decodes to []
-    // rather than throwing. `encode(to:)` stays synthesized; all other keys
-    // remain required.
-    public init(from decoder: any Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        requestId = try c.decode(String.self, forKey: .requestId)
-        timestamp = try c.decode(Date.self, forKey: .timestamp)
-        agentId = try c.decode(String.self, forKey: .agentId)
-        vms = try c.decode([ObservedVMState].self, forKey: .vms)
-        sandboxes = try c.decodeIfPresent([ObservedSandboxState].self, forKey: .sandboxes) ?? []
-        resources = try c.decode(AgentResources.self, forKey: .resources)
-        agentUpdateStatus = try c.decodeIfPresent(ObservedAgentUpdateStatus.self, forKey: .agentUpdateStatus)
-        unrecognized = try c.decodeIfPresent([UnrecognizedWorkload].self, forKey: .unrecognized) ?? []
-        teardownRefusal = try c.decodeIfPresent(ObservedTeardownRefusal.self, forKey: .teardownRefusal)
-        manifestStatus = try c.decodeIfPresent(ObservedManifestStatus.self, forKey: .manifestStatus)
-        volumes = try c.decodeIfPresent([ObservedVolumeState].self, forKey: .volumes)
-        snapshots = try c.decodeIfPresent([ObservedSnapshotState].self, forKey: .snapshots)
-    }
 }

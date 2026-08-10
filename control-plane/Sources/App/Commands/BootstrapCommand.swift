@@ -236,8 +236,7 @@ struct BootstrapCommand: AsyncCommand {
                     userID: userID,
                     name: keyName,
                     keyHash: APIKey.hashAPIKey(fullKey),
-                    keyPrefix: String(fullKey.prefix(12)) + "...",
-                    scopes: [APIKeyScope.admin.rawValue]
+                    keyPrefix: String(fullKey.prefix(12)) + "..."
                 )
                 try await apiKey.save(on: db)
             }
@@ -265,7 +264,7 @@ struct BootstrapCommand: AsyncCommand {
         console.print("  Site:         \(Site.defaultName(forOrganizationNamed: orgName))")
         if let fullKey {
             console.print()
-            console.print("  API key (admin scope — shown once, store it now):")
+            console.print("  API key (unrestricted — shown once, store it now):")
             console.print()
             console.print("    \(fullKey)")
             console.print()

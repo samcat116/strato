@@ -17,6 +17,33 @@ import Darwin
 @Suite("Process supervision")
 struct ProcessSupervisionTests {
 
+    #if os(Linux)
+    /// The agent creates VMMs from libdispatch worker threads, whose signal
+    /// mask blocks Firecracker's SIGRTMIN+1 vCPU kick. The launcher must open
+    /// that one bit for the spawn and restore the worker exactly afterwards.
+    @Test("Firecracker launch temporarily unblocks its vCPU kick signal")
+    func launchSignalMaskIsScoped() throws {
+        let kickSignal = FirecrackerProcessLauncher.vcpuKickSignal
+        var kickSet = sigset_t()
+        #expect(sigemptyset(&kickSet) == 0)
+        #expect(sigaddset(&kickSet, kickSignal) == 0)
+
+        var originalMask = sigset_t()
+        #expect(pthread_sigmask(SIG_BLOCK, &kickSet, &originalMask) == 0)
+        defer { _ = pthread_sigmask(SIG_SETMASK, &originalMask, nil) }
+
+        var observedInside = sigset_t()
+        try FirecrackerProcessLauncher.withVCPUKickSignalUnblocked {
+            #expect(pthread_sigmask(SIG_SETMASK, nil, &observedInside) == 0)
+            #expect(sigismember(&observedInside, kickSignal) == 0)
+        }
+
+        var observedAfter = sigset_t()
+        #expect(pthread_sigmask(SIG_SETMASK, nil, &observedAfter) == 0)
+        #expect(sigismember(&observedAfter, kickSignal) == 1)
+    }
+    #endif
+
     // MARK: - ExitLatch
 
     @Test("wait() resumes when the latch is signalled after suspending")

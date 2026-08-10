@@ -129,7 +129,11 @@ let package = Package(
                 // (GET /api/openapi.yaml). This is the same file the
                 // swift-openapi-generator build plugin consumes; declaring it a
                 // resource additionally copies it into the product bundle.
-                .copy("openapi.yaml")
+                .copy("openapi.yaml"),
+                // The single fresh-install schema baseline (STR-234). Keeping
+                // the reviewed SQL as a resource avoids compiling thousands of
+                // lines of historical compatibility migrations.
+                .copy("Migrations/CurrentSchema.sql")
             ],
             swiftSettings: swiftSettings,
             plugins: [

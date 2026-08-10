@@ -58,9 +58,8 @@ struct DesiredStateAssembler {
             .filter(\.$hypervisorId == agentId)
             .with(\.$volumes)
             .with(\.$networkInterfaces) { $0.with(\.$addresses) }
-            // Artifacts loaded too so buildImageInfo emits the typed artifact
-            // set (kernel/rootfs distribution, issue #214) rather than the
-            // legacy single-file fallback.
+            // Artifacts are required so buildImageInfo can emit the explicit
+            // typed set each hypervisor selects from.
             .with(\.$sourceImage) { image in
                 image.with(\.$artifacts)
             }
@@ -154,7 +153,7 @@ struct DesiredStateAssembler {
             // consumer — which would read as two NICs having gone missing.
             let resolvedInterfaces = VMSpecBuilder.resolvedInterfaces(
                 from: vm.networkInterfaces, networks: networksByID, logger: app.logger)
-            let spec = VMSpecBuilder.buildVMSpecWithVolumes(
+            let spec = try VMSpecBuilder.buildVMSpec(
                 from: vm,
                 image: image,
                 volumes: vm.volumes,
@@ -679,17 +678,31 @@ struct DesiredStateAssembler {
             .all()
             .filter(replicaScope.includes)
         let attachedVMIDs = Array(Set(volumes.compactMap(\.$vm.id)))
-        let attachmentAgentIDs: [UUID: String]
+        let attachmentVMs: [UUID: (agentId: String, hypervisorType: HypervisorType)]
         if attachedVMIDs.isEmpty {
-            attachmentAgentIDs = [:]
+            attachmentVMs = [:]
         } else {
-            attachmentAgentIDs = Dictionary(
+            attachmentVMs = Dictionary(
                 uniqueKeysWithValues: try await VM.query(on: db)
                     .filter(\.$id ~~ attachedVMIDs)
                     .all()
                     .compactMap { vm in
                         guard let vmID = vm.id, let vmAgentID = vm.hypervisorId else { return nil }
-                        return (vmID, vmAgentID)
+                        return (vmID, (vmAgentID, vm.hypervisorType))
+                    })
+        }
+        let cloneSourceIDs = Array(Set(volumes.compactMap(\.$sourceVolume.id)))
+        let cloneSourceVMIDs: [UUID: UUID]
+        if cloneSourceIDs.isEmpty {
+            cloneSourceVMIDs = [:]
+        } else {
+            cloneSourceVMIDs = Dictionary(
+                uniqueKeysWithValues: try await Volume.query(on: db)
+                    .filter(\.$id ~~ cloneSourceIDs)
+                    .all()
+                    .compactMap { source in
+                        guard let sourceID = source.id, let sourceVMID = source.$vm.id else { return nil }
+                        return (sourceID, sourceVMID)
                     })
         }
 
@@ -703,10 +716,19 @@ struct DesiredStateAssembler {
             // and its image lineage is only provenance.
             var source: DesiredVolumeSource?
             if let sourceVolumeID = volume.$sourceVolume.id {
-                source = .clone(from: sourceVolumeID, format: volume.format.rawValue)
+                source = .clone(
+                    from: sourceVolumeID,
+                    sourceVMId: cloneSourceVMIDs[sourceVolumeID],
+                    format: volume.format.rawValue)
             } else if let image = volume.sourceImage, image.status == .ready, let imageId = image.id {
                 do {
-                    source = .image(try VMSpecBuilder.buildImageInfo(from: image))
+                    let artifactKind: ArtifactKind =
+                        volume.volumeType == .boot
+                            && volume.$vm.id.flatMap { attachmentVMs[$0]?.hypervisorType } == .firecracker
+                        ? .rootfs : .diskImage
+                    source = .image(
+                        try VMSpecBuilder.buildImageInfo(from: image),
+                        artifactKind: artifactKind)
                     // Emitting the URLs is what authorizes the fetch, exactly as
                     // it does for a VM's boot image (issue #562). This grant
                     // moved here from the old create RPC's dispatch: with no
@@ -749,7 +771,7 @@ struct DesiredStateAssembler {
             // state is a broken invariant, not a routine skip.
             var attachment: DesiredVolumeAttachment?
             if let vmID = volume.$vm.id,
-                attachmentAgentIDs[vmID] == agentId,
+                attachmentVMs[vmID]?.agentId == agentId,
                 let raw = volume.deviceName
             {
                 if let deviceName = VolumeDeviceName(raw) {

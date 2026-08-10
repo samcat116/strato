@@ -60,11 +60,10 @@ re-register.
 ## Helm
 
 Set `strato.webauthn.relyingPartyId` / `relyingPartyName` /
-`relyingPartyOrigin` in your values. When left empty, the chart derives them:
-the ID from the gateway/ingress hostname, and the origin from the Gateway
-(`https://<host>`) or Ingress (`https://` with TLS, `http://` without),
-falling back to `http://localhost:8080` — which matches a plain
-`kubectl port-forward` to the service port.
+`relyingPartyOrigin` in your values. When left empty, the chart derives the ID
+and HTTPS origin from the Gateway hostname, falling back to `localhost` and
+`http://localhost:8080` — which match a plain `kubectl port-forward` to the
+service port.
 
 ## Native `swift run`
 

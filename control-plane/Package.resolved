@@ -1,13 +1,13 @@
 {
-  "originHash" : "ab0fad13c4278004345edcd37bad80d2b8c7c8fc87ae2be5319101039654fe21",
+  "originHash" : "a924df599fcb47cb1ac15afa00ba9cd9980d951865f044fc089028deddd01534",
   "pins" : [
     {
       "identity" : "async-http-client",
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swift-server/async-http-client.git",
       "state" : {
-        "revision" : "4603a8036d921ea999fadb742931546c341f4bd7",
-        "version" : "1.35.0"
+        "revision" : "9544287b9416c0bc71e58b9f3aead8dd14b16103",
+        "version" : "1.36.0"
       }
     },
     {
@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/grpc/grpc-swift-nio-transport.git",
       "state" : {
-        "revision" : "2ca31f06658ed288a2560e23ad649acbb3d6b3a3",
-        "version" : "2.9.0"
+        "revision" : "c46f77c07c3ae4fce4734e7af03fcb35ab544428",
+        "version" : "2.9.1"
       }
     },
     {
@@ -159,8 +159,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/soto-project/soto.git",
       "state" : {
-        "revision" : "f732b562bb5e0202470157a6041aa754229e777e",
-        "version" : "7.14.0"
+        "revision" : "78d45179881c2e27b3b82548fdc376ccc2611c77",
+        "version" : "7.15.0"
       }
     },
     {
@@ -303,8 +303,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-log.git",
       "state" : {
-        "revision" : "a878e7f8f46cfc0e1125e565b5c08e7d5272dc9a",
-        "version" : "1.14.0"
+        "revision" : "3ffafb9722d5d918c614feb496c8789a3b59d222",
+        "version" : "1.15.0"
       }
     },
     {
@@ -321,8 +321,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/apple/swift-nio.git",
       "state" : {
-        "revision" : "cd3e1152083706d77b223fb29110e590efcc70c0",
-        "version" : "2.101.2"
+        "revision" : "0b18836bd8b0162e7e17a995a3fbee20ed8f3b2b",
+        "version" : "2.101.3"
       }
     },
     {
@@ -393,8 +393,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swift-server/swift-openapi-vapor.git",
       "state" : {
-        "revision" : "b53c1517e889d5479567729fbe143a59da302ffc",
-        "version" : "1.0.1"
+        "revision" : "307560c9a94ba69dc4eb43b1e00534bc86aed440",
+        "version" : "1.1.0"
       }
     },
     {
@@ -402,8 +402,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/swift-otel/swift-otel.git",
       "state" : {
-        "revision" : "599309ecc03d27f3331bb096c5bdcb4839b3d187",
-        "version" : "1.4.0"
+        "revision" : "10f2d41a8787167ea49b6055082b178e7b2fe911",
+        "version" : "1.5.0"
       }
     },
     {

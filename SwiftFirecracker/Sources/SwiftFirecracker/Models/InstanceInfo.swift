@@ -4,10 +4,10 @@ import Foundation
 /// Maps to GET / API endpoint
 public struct InstanceInfo: Codable, Sendable {
     /// Application name (always "Firecracker")
-    public let appName: String
+    let appName: String
 
     /// Unique identifier for this Firecracker instance
-    public let id: String
+    let id: String
 
     /// Current state of the microVM
     public let state: InstanceState
@@ -16,7 +16,7 @@ public struct InstanceInfo: Codable, Sendable {
     public let vmlinuxVersion: String
 
     /// Build information
-    public let vmlinuxBuildTime: String?
+    let vmlinuxBuildTime: String?
 
     enum CodingKeys: String, CodingKey {
         case appName = "app_name"
@@ -41,21 +41,21 @@ public enum InstanceState: String, Codable, Sendable {
 
 /// VM action request
 /// Maps to PUT /actions API endpoint
-public struct VMAction: Codable, Sendable {
+struct VMAction: Codable, Sendable {
     /// Type of action to perform
-    public let actionType: VMActionType
+    let actionType: VMActionType
 
     enum CodingKeys: String, CodingKey {
         case actionType = "action_type"
     }
 
-    public init(actionType: VMActionType) {
+    init(actionType: VMActionType) {
         self.actionType = actionType
     }
 }
 
 /// Types of actions that can be performed on a VM
-public enum VMActionType: String, Codable, Sendable {
+enum VMActionType: String, Codable, Sendable {
     /// Start the VM (begins execution)
     case instanceStart = "InstanceStart"
 
@@ -68,25 +68,25 @@ public enum VMActionType: String, Codable, Sendable {
 
 /// VM state change request
 /// Maps to PATCH /vm API endpoint
-public struct VMStateChange: Codable, Sendable {
+struct VMStateChange: Codable, Sendable {
     /// Target state: "Paused" or "Resumed"
-    public let state: String
+    let state: String
 
-    public init(state: VMTargetState) {
+    init(state: VMTargetState) {
         self.state = state.rawValue
     }
 }
 
 /// Target states for PATCH /vm
-public enum VMTargetState: String, Sendable {
+enum VMTargetState: String, Sendable {
     case paused = "Paused"
     case resumed = "Resumed"
 }
 
 /// Error response from Firecracker API
-public struct FirecrackerAPIError: Codable, Sendable {
+struct FirecrackerAPIError: Codable, Sendable {
     /// Error fault message
-    public let faultMessage: String
+    let faultMessage: String
 
     enum CodingKeys: String, CodingKey {
         case faultMessage = "fault_message"

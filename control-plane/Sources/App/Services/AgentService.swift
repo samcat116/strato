@@ -92,16 +92,6 @@ final class WebSocketManager: @unchecked Sendable {
         }
     }
 
-    /// Every locally connected agent that has completed registration, as
-    /// (identity key, database UUID) pairs. This is the periodic sync's work
-    /// list: each replica syncs exactly the agents whose sockets it holds.
-    func registeredAgents() -> [(key: String, agentId: String)] {
-        lock.withLock {
-            connections.compactMap { key, connection in
-                connection.agentId.map { (key: key, agentId: $0) }
-            }
-        }
-    }
 }
 
 actor AgentService {
@@ -122,33 +112,12 @@ actor AgentService {
     private static let databaseHeartbeatRefreshInterval =
         TimeInterval(CoordinationService.presenceTTLSeconds / 2)
 
-    /// Monotonic per-agent dirtiness generations. Mutation-triggered pushes
-    /// bump before routing; a successful send only clears the exact
-    /// generation it assembled, so a mutation racing an in-flight sync cannot
-    /// be accidentally marked clean.
-
-    /// Agent row ids (as strings) whose desired state travels by long-poll
-    /// rather than by push (STR-146). Pushes are skipped for these — both the
-    /// periodic fan-out and the doorbell's local half — because the agent is
-    /// not listening for them and a redundant push would assemble the whole
-    /// sync a second time for nothing.
-    ///
-    /// Replica-local and socket-scoped, like `presenceRefreshedAt`: it records
-    /// what an agent said when it registered *here*, so it is populated on
-    /// registration and dropped on unregister. A replica that never saw the
-    /// registration defaults to push mode, which is the safe direction — an
-    /// unnecessary push is wasted work, a suppressed one is a stranded agent.
-
     /// The last refused sync this replica has logged per agent (STR-98).
     /// A refusal rides on every observed report until the agent's guard
     /// clears, so without this one stuck refusal would log and count on every
     /// heartbeat instead of once per refused sync. Replica-local: after a
     /// restart the first report re-logs, which is the right side to err on.
     private var reportedTeardownRefusalSyncIds: [String: String] = [:]
-
-    /// Keep periodic fan-out bounded so a large replica does not stampede the
-    /// database while still allowing unrelated agents to make progress.
-    private static let desiredStateSyncConcurrency = 4
 
     /// The startup task that arms the replica pub/sub subscriptions. Tracked
     /// so `shutdown()` can wait for it — otherwise it can still be
@@ -931,13 +900,6 @@ actor AgentService {
 
                     try self.checkTickPreconditions()
 
-                    // Periodic desired-state sync (~60s): the correctness
-                    // backstop of the level-triggered design — a dropped or
-                    // failed sync is repaired here, so pushes on mutation are
-                    // purely a latency optimization (issue #260). Not a
-                    // cluster singleton: syncs go over this process's sockets.
-                    try self.checkTickPreconditions()
-
                     // Degrade workloads that missed their convergence deadline
                     // (STR-147). Lock-free — see `sweepStuckConvergence`.
                     await sweepStuckConvergence()
@@ -1432,9 +1394,8 @@ actor AgentService {
         let db = app.db
 
         do {
-            // The same predicate `NormalizeVolumeAttachments` repairs on, column
-            // for column: they describe one state, so they must agree or a row
-            // the one-off repair fixes is one this backstop never sees again.
+            // This mirrors the schema constraint column for column: the fields
+            // describe one state, so they must agree.
             let strandedVolumes = try await Volume.query(on: db)
                 .filter(\.$vm.$id == nil)
                 .group(.or) { unresolved in
@@ -1978,7 +1939,8 @@ actor AgentService {
                     "currentVersion": .string(next.version),
                     "targetVersion": .string(target),
                 ])
-            // Push the sync now; the periodic timer is only the backstop.
+            // Ring now for low latency; the agent's unconditional refetch is
+            // the correctness backstop.
             await syncDesiredState(agentId: nextId.uuidString)
         } catch {
             app.logger.error("Agent auto-update sweep failed: \(error)")
@@ -1987,7 +1949,7 @@ actor AgentService {
 
     // MARK: - Desired-state sync (issues #260, #261)
 
-    /// Trigger a desired-state sync for an agent from any replica.
+    /// Signal a desired-state change for an agent from any replica.
     ///
     /// This rings the contentless broadcast doorbell (STR-146): the local half
     /// runs inline, and the same signal goes out on `agent:doorbell` so
@@ -2014,8 +1976,8 @@ actor AgentService {
 
     /// The agent id of the site network controller responsible for the given
     /// agent's networks, or nil for unconfigured sites.
-    /// Best-effort: on lookup failure the periodic sync timer still converges
-    /// the controller.
+    /// Best-effort: on lookup failure the controller's own unconditional
+    /// refetch still converges it.
     private func siteNetworkControllerID(forAgentId agentId: String) async -> String? {
         guard let agentUUID = UUID(uuidString: agentId) else { return nil }
         do {
@@ -2033,11 +1995,10 @@ actor AgentService {
     /// every other replica gets the same chance.
     ///
     /// Both halves always run. The local half is not an optimization that
-    /// makes the broadcast redundant — this replica may hold the socket while
-    /// another holds the poll, or vice versa — and the broadcast is not a
-    /// substitute for the local half, because Valkey may be down. Ringing
-    /// twice is free; the doorbell is contentless and every recipient
-    /// re-derives the truth from Postgres.
+    /// makes the broadcast redundant — this replica may hold the poll — and
+    /// the broadcast is not a substitute for the local half, because Valkey
+    /// may be down. Ringing twice is free; the doorbell is contentless and
+    /// every recipient re-derives the truth from Postgres.
     private func ringDesiredStateDoorbell(agentId: String) async {
         guard let agentKey = await agentKey(forId: agentId) else {
             app.logger.warning(
@@ -2379,7 +2340,7 @@ actor AgentService {
     // MARK: - VM Operations
 
     /// Places a VM on an agent selected by the scheduler, persists the
-    /// placement, and pushes (or nudges) a desired-state sync. The pending
+    /// placement, and rings the agent's desired-state doorbell. The pending
     /// create operation completes from the agent's observed-state reports,
     /// with the stuck-operation sweep as the budget backstop. The placement
     /// reservation self-releases once the agent's reports account for the VM
@@ -2415,6 +2376,23 @@ actor AgentService {
                     throw Abort(.notFound, reason: "VM no longer exists")
                 }
 
+                let currentVMID = try currentVM.requireID()
+                let bootVolumes = try await Volume.query(on: tx)
+                    .filter(\.$vm.$id == currentVMID)
+                    .filter(\.$volumeType == .boot)
+                    .filter(\.$desiredStatus == .present)
+                    .with(\.$pool)
+                    .all()
+                guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
+                    throw Abort(
+                        .internalServerError,
+                        reason: "VM \(vmId) must have exactly one managed boot volume before placement")
+                }
+                let poolMembers = bootVolume.pool?.memberAgentIds ?? []
+                let storageEligibleAgents = schedulableAgents.filter { agent in
+                    poolMembers.isEmpty || poolMembers.contains(agent.id)
+                }
+
                 // A network pinned to a site exists only in that site's OVN
                 // deployment, so it pins the VM's placement (issue #343).
                 let requiredSiteID = try await pinnedSiteID(for: currentVM, on: tx)
@@ -2428,7 +2406,7 @@ actor AgentService {
                         requirements: SchedulerService.placementRequirements(
                             for: currentVM, architecture: imageArchitecture, siteID: requiredSiteID),
                         vmId: vmId,
-                        from: schedulableAgents,
+                        from: storageEligibleAgents,
                         coordination: app.coordination,
                         strategy: strategy,
                         vmName: currentVM.name
@@ -2450,6 +2428,24 @@ actor AgentService {
                 // of the agent's desired state and every sync path carries it.
                 currentVM.hypervisorId = selectedAgentId
                 try await currentVM.save(on: tx)
+
+                let bootVolumeID = try bootVolume.requireID()
+                let existingReplicas = try await VolumeReplica.query(on: tx)
+                    .filter(\.$volume.$id == bootVolumeID)
+                    .all()
+                guard existingReplicas.isEmpty else {
+                    throw Abort(
+                        .conflict,
+                        reason: "Boot volume \(bootVolumeID) was already placed before VM \(vmId)")
+                }
+                bootVolume.attachedAgentId = selectedAgentId
+                try await bootVolume.save(on: tx)
+                try await VolumeReplica(
+                    volumeID: bootVolumeID,
+                    agentId: selectedAgentId,
+                    state: .provisioning,
+                    generation: bootVolume.generation
+                ).save(on: tx)
                 return selectedAgentId
             }
         } catch {
@@ -2467,7 +2463,7 @@ actor AgentService {
         vm.hypervisorId = agentId
 
         app.logger.info(
-            "VM creation dispatched via desired-state sync",
+            "VM creation dispatched via desired-state doorbell",
             metadata: [
                 "vmId": .string(vmId),
                 "agentId": .string(agentId),
@@ -2477,7 +2473,7 @@ actor AgentService {
     }
 
     /// Places a sandbox on a Firecracker-capable agent, persists the
-    /// placement, and pushes (or nudges) a desired-state sync — the sandbox
+    /// placement, and rings the agent's desired-state doorbell — the sandbox
     /// half of `createVM`. The pending create operation completes from the
     /// agent's observed-state reports, with the stuck-operation sweep as the
     /// budget backstop.
@@ -2514,25 +2510,14 @@ actor AgentService {
                     "the restore snapshot is unavailable or not ready")
             }
             guard
-                SandboxGuestControlProtocol.supportsReidentify(
-                    snapshot.guestControlProtocolVersion)
+                snapshot.guestControlProtocolVersion
+                    == SandboxGuestControlProtocol.currentVersion
             else {
                 throw AgentServiceError.schedulingFailed(
-                    "snapshot guest is too old for sandbox forks (need guest control protocol >= \(SandboxGuestControlProtocol.reidentifyMinimumVersion))"
-                )
-            }
-            // A *networked* fork needs one version more: the checkpointed
-            // guest holds the source sandbox's MAC and address, and only a v4
-            // guest acts on the `network` block `reidentify` carries to
-            // replace them (STR-104). Re-checked here as well as at admission
-            // because placement is where a stale row would otherwise send the
-            // fork to an agent that can only fail it.
-            if !nic.isEmpty,
-                !SandboxGuestControlProtocol.supportsNetworkReconfigure(
-                    snapshot.guestControlProtocolVersion)
-            {
-                throw AgentServiceError.schedulingFailed(
-                    "snapshot guest cannot re-address its NIC, so it can only be forked without one (need guest control protocol >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))"
+                    "snapshot uses unsupported guest control protocol "
+                        + "\(snapshot.guestControlProtocolVersion.map(String.init) ?? "missing"); "
+                        + "version \(SandboxGuestControlProtocol.currentVersion) is required, so delete "
+                        + "and recapture it after upgrading the sandbox guest image"
                 )
             }
 
@@ -2661,7 +2646,7 @@ actor AgentService {
             }
 
             app.logger.info(
-                "Sandbox creation dispatched via desired-state sync",
+                "Sandbox creation dispatched via desired-state doorbell",
                 metadata: [
                     "sandboxId": .string(sandboxId),
                     "agentId": .string(agentId),

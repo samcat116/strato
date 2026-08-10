@@ -85,4 +85,41 @@ final class APIKeyOwnershipTests {
             }
         }
     }
+
+    @Test("API key requests reject legacy scopes and responses omit them")
+    func legacyScopesAreAbsentFromWire() async throws {
+        try await withTwoUsers { app, alice, aliceToken, _, _ in
+            try await app.test(.POST, "/api/api-keys") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: aliceToken)
+                req.headers.contentType = .json
+                req.body = ByteBuffer(string: #"{"name":"legacy","scopes":["read"]}"#)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            let existing = try #require(
+                try await APIKey.query(on: app.db)
+                    .filter(\.$user.$id == alice.id!)
+                    .first())
+            try await app.test(.PATCH, "/api/api-keys/\(existing.id!)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: aliceToken)
+                req.headers.contentType = .json
+                req.body = ByteBuffer(string: #"{"scopes":["write"]}"#)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+
+            try await app.test(.POST, "/api/api-keys") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: aliceToken)
+                req.headers.contentType = .json
+                req.body = ByteBuffer(
+                    string: #"{"name":"canonical","restriction":{"actions":["read"]}}"#)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                #expect(!res.body.string.contains("scopes"))
+                let created = try res.content.decode(CreateAPIKeyResponse.self)
+                #expect(created.restriction.actions == ["read"])
+            }
+        }
+    }
 }

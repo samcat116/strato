@@ -12,22 +12,20 @@ import Vapor
 /// exchange over a held socket. That went with the cross-replica RPC bridge
 /// (STR-152).
 protocol ReplicaBridgeDelegate: AnyObject, Sendable {
-    /// Act on a broadcast doorbell for `agentKey`: wake a poll parked here and
-    /// push a fresh sync if this process holds the socket of a push-mode agent.
-    /// A replica that can do neither does nothing, which is the common case —
-    /// the doorbell is broadcast to everyone precisely so no one has to know
-    /// in advance who can act on it.
+    /// Act on a broadcast doorbell for `agentKey` by waking a poll parked here.
+    /// A replica that holds no such poll does nothing, which is the common case
+    /// — the doorbell is broadcast precisely so no one has to know in advance
+    /// which replica can act on it.
     func deliverDoorbell(agentKey: String) async
 }
 
 /// Cross-replica desired-state doorbell (issue #261, STR-146).
 ///
-/// The control plane runs as multiple replicas and an agent's WebSocket lives
-/// on exactly one of them. This is how a mutation on any replica reaches that
-/// agent promptly: one fleet-wide `agent:doorbell` channel every replica
-/// listens on, no routing directory and no targeted delivery. A replica that
-/// can act on the doorbell — because it holds the agent's parked poll, or its
-/// socket — does; every other replica drops it.
+/// This is how a mutation handled by any control-plane replica promptly reaches
+/// an agent whose long-poll may be parked on another: one fleet-wide
+/// `agent:doorbell` channel every replica listens on, with no routing directory
+/// or targeted delivery. The replica holding the parked poll acts; every other
+/// replica drops it.
 ///
 /// This used to be two halves. The other was correlated request/reply RPC
 /// forwarding over `replica:{id}:rpc`, which needed a `agent:{name}:replica`
@@ -42,16 +40,15 @@ protocol ReplicaBridgeDelegate: AnyObject, Sendable {
 /// `ReplicaBridgeDelegate`.
 ///
 /// Everything the bridge does is a latency optimization: a lost doorbell or a
-/// dropped subscription never corrupts state — a pull-mode agent converges on
-/// its own unconditional re-fetch, and a push-mode agent on the periodic sync
-/// timer.
+/// dropped subscription never corrupts state because every agent converges on
+/// its own unconditional re-fetch.
 actor ReplicaMessageBridge {
     private let app: Application
 
-    /// The owner that holds agent sockets locally (production: `AgentService`).
+    /// The owner that tracks local parked polls (production: `AgentService`).
     /// Weak so the bridge never keeps its owner alive; a nil delegate means an
-    /// inbound doorbell is dropped (and logged), which the periodic sync
-    /// repairs.
+    /// inbound doorbell is dropped (and logged), which the agent's
+    /// unconditional re-fetch repairs.
     private weak var delegate: (any ReplicaBridgeDelegate)?
 
     /// Health bookkeeping for the replica's pub/sub subscriptions (issue #261
@@ -109,9 +106,8 @@ actor ReplicaMessageBridge {
 
     /// Subscribe to the fleet-wide doorbell channel. Called from `start` and
     /// re-armed by `verifySubscriptions()`; failure is logged and fails open —
-    /// the replica misses doorbell latency (agents still converge on their own
-    /// re-fetch, and push-mode agents on the periodic timer) but stays
-    /// available.
+    /// the replica misses doorbell latency but agents still converge on their
+    /// own unconditional re-fetch, so it stays available.
     ///
     /// Safe to call repeatedly: RediStack replaces the receiver when the
     /// channel is already subscribed on a live connection, and leases a fresh

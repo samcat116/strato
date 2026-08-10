@@ -82,12 +82,14 @@ async-mutations section of [overview](./overview.md)). The frontend flow:
    after several consecutive read failures — one 502 from the proxy must not
    silently kill the toast for a create the user is waiting on.
 
-Two things take a different path, and the watched entry says which
-(`source`) rather than the watcher guessing from the verb: the verbs that
-still answer with an `Operation` (VM restart, the snapshot verbs, wrapped with
-`acceptedOperation(...)`), and **deletes**, whose success is the resource
-being gone — a `404` on it means deleted, never-existed and not-authorized
-alike — so they poll `operationsApi.get(mutationId)` instead.
+Snapshot mutations and deletes take a different observation path, and the
+watched entry says which (`source`) rather than the watcher guessing from the
+verb. They return the same accepted-mutation envelope as every other mutation;
+snapshot entries are adapted with `acceptedSnapshotMutation(...)` because
+snapshots have no single-resource GET, while deletes have no resource left to
+refetch after success. Both poll `operationsApi.get(mutationId)`, whose answer
+is derived from the resource event and conditions rather than an operation
+job.
 
 `degraded` is matched by generation, not presence: a failure can stand against
 an older generation while a newer mutation is in flight, and reporting that as
@@ -115,8 +117,9 @@ and project selection persists to `localStorage` per organization.
 One directory per feature under `components/` (vms, sandboxes, images,
 agents, networks, quotas, hierarchy, workload-identity, audit, terminal, ...),
 with shadcn/ui primitives ("new-york" style, Radix under the hood) in
-`components/ui/`. Forms use react-hook-form + zod; toasts are sonner; icons
-are lucide-react.
+`components/ui/`. Forms use feature-local React state and the shared input,
+label, select, and dialog primitives; toasts are sonner; icons are
+lucide-react.
 
 The most involved pieces:
 

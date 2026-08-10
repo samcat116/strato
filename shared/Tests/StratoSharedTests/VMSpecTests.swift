@@ -53,7 +53,8 @@ struct VMSpecTests {
                 VolumeSpec(
                     volumeId: Fixtures.uuidA, deviceName: .disk(0), storagePath: "/v/disk0.qcow2", readonly: false,
                     bootOrder: 0),
-                VolumeSpec(volumeId: nil, deviceName: .disk(1), storagePath: nil, readonly: true, bootOrder: 1),
+                VolumeSpec(
+                    volumeId: Fixtures.uuidB, deviceName: .disk(1), storagePath: nil, readonly: true, bootOrder: 1),
             ],
             networks: [
                 NetworkSpec(
@@ -75,7 +76,7 @@ struct VMSpecTests {
         #expect(decoded.volumes[0].deviceName.rawValue == "disk0")
         #expect(decoded.volumes[0].storagePath == "/v/disk0.qcow2")
         #expect(decoded.volumes[0].bootOrder == 0)
-        #expect(decoded.volumes[1].volumeId == nil)
+        #expect(decoded.volumes[1].volumeId == Fixtures.uuidB)
         #expect(decoded.volumes[1].readonly)
         #expect(decoded.volumes[1].storagePath == nil)
 
@@ -106,12 +107,13 @@ struct VMSpecTests {
         #expect(decoded.diskBytes == 10_737_418_240)
     }
 
-    /// A spec from a control plane that predates `diskBytes` (issue #473) has
-    /// no such key; a new agent must decode it to nil (rolling-upgrade skew).
+    /// `diskBytes` remains semantic optionality: nil means the caller has no
+    /// disk reservation to report.
     @Test func specWithoutDiskBytesKeyDecodesToNil() throws {
         let json = """
-            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"sharedMemory":false,"hugepages":false,
-             "boot":{"disk":{}},"volumes":[],"networks":[]}
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"maxMemoryBytes":1073741824,
+             "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],
+             "sshAuthorizedKeys":[]}
             """
         let decoded = try decodeJSON(VMSpec.self, from: json)
         #expect(decoded.diskBytes == nil)
@@ -142,16 +144,14 @@ struct VMSpecTests {
         #expect(spec.maxMemoryBytes == 268_435_456)
     }
 
-    /// A spec from a control plane that predates `maxMemoryBytes` (issue
-    /// #568) has no such key; a new agent must read it as "no headroom"
-    /// rather than failing the sync (rolling-upgrade skew).
-    @Test func specWithoutMaxMemoryKeyDecodesToMemory() throws {
+    @Test func currentSpecRequiresMaxMemoryBytes() throws {
         let json = """
             {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"sharedMemory":false,"hugepages":false,
-             "boot":{"disk":{}},"volumes":[],"networks":[]}
+             "boot":{"disk":{}},"volumes":[],"networks":[],"sshAuthorizedKeys":[]}
             """
-        let decoded = try decodeJSON(VMSpec.self, from: json)
-        #expect(decoded.maxMemoryBytes == 1_073_741_824)
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(VMSpec.self, from: json)
+        }
     }
 
     // MARK: - Balloon targets (issue #567 phase 2)
@@ -179,20 +179,15 @@ struct VMSpecTests {
             cpus: 1, memoryBytes: 268_435_456, balloonTargetBytes: 1_073_741_824,
             boot: .disk(firmware: nil))
         #expect(spec.balloonTargetBytes == 268_435_456)
-        let json = """
-            {"cpus":1,"maxCpus":1,"memoryBytes":268435456,"balloonTargetBytes":1073741824,
-             "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[]}
-            """
-        #expect(try decodeJSON(VMSpec.self, from: json).balloonTargetBytes == 268_435_456)
     }
 
-    /// A spec from a control plane that predates `balloonTargetBytes` has no
-    /// such key; a new agent must read it as "no target" rather than failing
-    /// the sync (rolling-upgrade skew).
+    /// No balloon target is a current semantic choice, not a compatibility
+    /// fallback.
     @Test func specWithoutBalloonTargetKeyDecodesToNil() throws {
         let json = """
-            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"sharedMemory":false,"hugepages":false,
-             "boot":{"disk":{}},"volumes":[],"networks":[]}
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"maxMemoryBytes":1073741824,
+             "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],
+             "sshAuthorizedKeys":[]}
             """
         let decoded = try decodeJSON(VMSpec.self, from: json)
         #expect(decoded.balloonTargetBytes == nil)
@@ -206,12 +201,12 @@ struct VMSpecTests {
         #expect(decoded.userData == payload)
     }
 
-    /// A spec from a control plane that predates `userData` has no such key; a
-    /// new agent must decode it to nil (rolling-upgrade skew).
+    /// No user data is a current semantic choice.
     @Test func specWithoutUserDataKeyDecodesToNil() throws {
         let json = """
-            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"sharedMemory":false,"hugepages":false,
-             "boot":{"disk":{}},"volumes":[],"networks":[]}
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"maxMemoryBytes":1073741824,
+             "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],
+             "sshAuthorizedKeys":[]}
             """
         let decoded = try decodeJSON(VMSpec.self, from: json)
         #expect(decoded.userData == nil)
@@ -236,13 +231,13 @@ struct VMSpecTests {
         #expect(decoded.ipAddress == "10.0.0.5")
     }
 
-    /// A spec from a control plane that predates IPv6 has no v6 keys; a new
-    /// agent must decode it to nils (rolling-upgrade skew).
+    /// A current IPv4-only NIC has no IPv6 values.
     @Test func networkSpecWithoutIPv6KeysDecodesToNil() throws {
         let json = """
             {"network":"default","networkId":"\(UUID().uuidString)",
              "macAddress":"52:54:00:00:00:01",
-             "ipAddress":"10.0.0.5","netmask":"255.255.255.0","gateway":"10.0.0.1"}
+             "ipAddress":"10.0.0.5","netmask":"255.255.255.0","gateway":"10.0.0.1",
+             "dhcpEnabled":false,"dnsServers":[]}
             """
         let decoded = try decodeJSON(NetworkSpec.self, from: json)
         #expect(decoded.ipv6Address == nil)
@@ -271,16 +266,10 @@ struct VMSpecTests {
         #expect(decoded.orderIndex == 5)
     }
 
-    /// `NetworkSpec` hand-writes `init(from:)`, so a new field needs both a
-    /// coding key and a `decodeIfPresent` line — miss either and it silently
-    /// decodes as nil forever, which for `metadataEnabled` (STR-49) means a
-    /// chassis that never materializes the metadata address and reports no
-    /// error. Round-tripping alone would not catch it; this decodes the key
-    /// from raw JSON.
     @Test func networkSpecCarriesMetadataEnabled() throws {
         let json = """
             {"network":"default","networkId":"\(UUID().uuidString)",
-             "ipAddress":"10.0.0.5","metadataEnabled":true}
+             "ipAddress":"10.0.0.5","dhcpEnabled":false,"dnsServers":[],"metadataEnabled":true}
             """
         #expect(try decodeJSON(NetworkSpec.self, from: json).metadataEnabled == true)
 
@@ -300,13 +289,12 @@ struct VMSpecTests {
         #expect(decoded.effectiveMachine == MachineProfile(secureBoot: true, tpm: true))
     }
 
-    /// A spec from a control plane that predates the machine profile has no
-    /// `machine` key. It must decode to today's behavior — both features off —
-    /// rather than throwing, or a rolling upgrade would break every sync.
+    /// An omitted machine profile is the current representation of the default
+    /// feature set.
     @Test func specWithoutMachineProfileDecodesToDefaults() throws {
         let json = """
-            {"cpus":1,"maxCpus":1,"memoryBytes":1,"sharedMemory":false,"hugepages":false,
-             "boot":{"disk":{}},"volumes":[],"networks":[]}
+            {"cpus":1,"maxCpus":1,"memoryBytes":1,"maxMemoryBytes":1,"sharedMemory":false,
+             "hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],"sshAuthorizedKeys":[]}
             """
         let decoded = try decodeJSON(VMSpec.self, from: json)
         #expect(decoded.machine == nil)
@@ -315,12 +303,10 @@ struct VMSpecTests {
         #expect(decoded.effectiveMachine.tpm == false)
     }
 
-    /// A partial profile (a peer that carries only one of the flags) decodes
-    /// with the absent flag off, not as a failure.
-    @Test func partialMachineProfileDecodes() throws {
-        let decoded = try decodeJSON(MachineProfile.self, from: #"{"tpm":true}"#)
-        #expect(decoded.tpm)
-        #expect(!decoded.secureBoot)
+    @Test func currentMachineProfileRequiresBothFlags() {
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(MachineProfile.self, from: #"{"tpm":true}"#)
+        }
     }
 
     // MARK: - Graphics console (issue #566)
@@ -367,6 +353,34 @@ struct VMSpecTests {
         let json = #"{"network":"default","dhcpEnabled":false,"dnsServers":[]}"#
         #expect(throws: DecodingError.self) {
             try decodeJSON(NetworkSpec.self, from: json)
+        }
+    }
+
+    @Test func currentNetworkSpecRequiresDHCPAndDNSFields() {
+        let id = UUID().uuidString
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(
+                NetworkSpec.self,
+                from: """
+                    {"network":"default","networkId":"\(id)","dnsServers":[]}
+                    """)
+        }
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(
+                NetworkSpec.self,
+                from: """
+                    {"network":"default","networkId":"\(id)","dhcpEnabled":false}
+                    """)
+        }
+    }
+
+    @Test func currentVMSpecRequiresSSHAuthorizedKeys() {
+        let json = """
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"maxMemoryBytes":1073741824,
+             "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[]}
+            """
+        #expect(throws: DecodingError.self) {
+            try decodeJSON(VMSpec.self, from: json)
         }
     }
 

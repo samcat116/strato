@@ -46,21 +46,9 @@ public struct DiskAttachment: Sendable, Equatable {
 /// and caching as needed). Implemented by the agent's `ImageCacheService`;
 /// abstracted here so the storage layer stays testable without networking.
 public protocol ImageSource: Sendable {
-    /// Returns a local filesystem path holding the image's (primary disk) bytes,
-    /// downloading them first if they are not cached.
-    func localImagePath(for imageInfo: ImageInfo) async throws -> String
-
     /// Returns a local filesystem path holding the bytes of a specific typed
     /// artifact (kernel, rootfs, ...), downloading it first if not cached.
-    /// Defaults to the primary-disk path for sources that don't distinguish
-    /// artifact kinds.
     func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String
-}
-
-extension ImageSource {
-    public func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
-        try await localImagePath(for: imageInfo)
-    }
 }
 
 // MARK: - Volume Info
@@ -104,18 +92,25 @@ public protocol StorageBackend: Actor {
 
     /// Creates a volume whose content comes from an image, converting between
     /// formats when the source image's format differs from `format`.
-    func createVolumeFromImage(volumeId: String, imageInfo: ImageInfo, format: DiskFormat) async throws
+    func createVolumeFromImage(
+        volumeId: String, imageInfo: ImageInfo, format: DiskFormat, artifactKind: ArtifactKind
+    ) async throws
         -> DiskAttachment
 
-    /// Materializes an image artifact as a disk at an explicit path — the single
-    /// image → disk path used by hypervisor drivers for boot disks that live
-    /// in VM directories rather than the volume store. `artifactKind` selects
-    /// which typed artifact to materialize (`.diskImage` for a QEMU boot disk,
-    /// `.rootfs` for a Firecracker root drive). Idempotent: an existing disk at
-    /// `path` is returned as-is. Converts formats when the source artifact's
-    /// format differs from `format`.
+    /// Materializes an image artifact at an explicit backend-owned path.
+    /// `artifactKind` selects the typed source (`.diskImage` for QEMU or
+    /// `.rootfs` for Firecracker). Hypervisor drivers never call this directly;
+    /// managed-volume creation is the single image-to-disk path.
     func materializeDisk(
         at path: String, from imageInfo: ImageInfo, format: DiskFormat, artifactKind: ArtifactKind
+    ) async throws -> DiskAttachment
+
+    /// Adopts bytes that predate managed-volume host layout. The supplied path
+    /// is accepted only together with a control-plane-issued volume identity;
+    /// implementations must preserve the existing bytes and make that identity
+    /// visible through `listVolumes()` before returning.
+    func adoptVolume(
+        volumeId: String, existingPath: String, format: DiskFormat
     ) async throws -> DiskAttachment
 
     /// Deletes a volume and everything under its directory (idempotent).
@@ -146,6 +141,14 @@ public protocol StorageBackend: Actor {
     /// volume — a directory whose `qemu-img create` died partway through is
     /// *not* present, so the next sync re-drives the create over it.
     func listVolumes() async throws -> [String: DiskAttachment]
+}
+
+extension StorageBackend {
+    public func adoptVolume(
+        volumeId _: String, existingPath _: String, format _: DiskFormat
+    ) async throws -> DiskAttachment {
+        throw StorageBackendError.createFailed("this storage backend cannot adopt an existing volume path")
+    }
 }
 
 // MARK: - Errors

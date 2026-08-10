@@ -6,6 +6,7 @@ import NIOCore
 import NIOHTTP1
 import StratoShared
 import AppTestSupport
+import SQLKit
 @testable import App
 
 @Suite("Image Controller Tests", .serialized)
@@ -277,6 +278,48 @@ final class ImageControllerTests {
         Self.cleanupTempStorageDirectory(tempStoragePath)
     }
 
+    /// Runs an operation while PostgreSQL rejects every image-artifact insert,
+    /// then restores the schema before returning or rethrowing.
+    private func withFailingImageArtifactInserts(
+        on app: Application,
+        _ operation: () async throws -> Void
+    ) async throws {
+        let sql = try #require(app.db as? any SQLDatabase)
+        try await sql.raw(
+            """
+            CREATE FUNCTION fail_image_artifact_insert() RETURNS trigger AS $$
+            BEGIN
+                RAISE EXCEPTION 'forced image artifact insert failure';
+            END;
+            $$ LANGUAGE plpgsql
+            """
+        ).run()
+        try await sql.raw(
+            """
+            CREATE TRIGGER fail_image_artifact_insert
+            BEFORE INSERT ON image_artifacts
+            FOR EACH ROW EXECUTE FUNCTION fail_image_artifact_insert()
+            """
+        ).run()
+
+        func removeFailureTrigger() async {
+            try? await sql.raw(
+                "DROP TRIGGER IF EXISTS fail_image_artifact_insert ON image_artifacts"
+            ).run()
+            try? await sql.raw(
+                "DROP FUNCTION IF EXISTS fail_image_artifact_insert()"
+            ).run()
+        }
+
+        do {
+            try await operation()
+        } catch {
+            await removeFailureTrigger()
+            throw error
+        }
+        await removeFailureTrigger()
+    }
+
     // MARK: - Artifact Disk Format Tests
 
     /// The artifact path validates filenames through a separate whitelist to the
@@ -495,12 +538,15 @@ final class ImageControllerTests {
             }
 
             let id = try #require(imageID)
-            let saved = try await Image.find(id, on: app.db)
-            let image = try #require(saved)
-            #expect(image.expectedChecksum == supplied.lowercased())
+            let artifact = try #require(
+                try await ImageArtifact.query(on: app.db)
+                    .filter(\.$image.$id == id)
+                    .filter(\.$kind == .diskImage)
+                    .first())
+            #expect(artifact.expectedChecksum == supplied.lowercased())
             // The observed digest stays empty until the download actually runs;
             // the caller's claim must never be mistaken for it.
-            #expect(image.checksum == nil)
+            #expect(artifact.checksum.isEmpty)
         }
     }
 
@@ -521,9 +567,12 @@ final class ImageControllerTests {
             }
 
             let id = try #require(imageID)
-            let saved = try await Image.find(id, on: app.db)
-            let image = try #require(saved)
-            #expect(image.expectedChecksum == nil)
+            let artifact = try #require(
+                try await ImageArtifact.query(on: app.db)
+                    .filter(\.$image.$id == id)
+                    .filter(\.$kind == .diskImage)
+                    .first())
+            #expect(artifact.expectedChecksum == nil)
         }
     }
 
@@ -701,6 +750,31 @@ final class ImageControllerTests {
                 #expect(response.status == .pending)
                 #expect(response.sourceURL == "https://example.com/image.qcow2")
             }
+        }
+    }
+
+    @Test("Create from URL rolls back when artifact persistence fails")
+    func testCreateImageFromURLArtifactFailureRollsBack() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, _ in
+            try await self.withFailingImageArtifactInserts(on: app) {
+                try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                    req.headers.contentType = .json
+                    try req.content.encode(
+                        CreateImageRequest(
+                            name: "rolled-back-url-import",
+                            sourceURL: "https://example.com/disk.qcow2"))
+                } afterResponse: { res in
+                    #expect(res.status == .internalServerError)
+                }
+            }
+
+            #expect(try await Image.query(on: app.db).count() == 0)
+            #expect(try await ImageArtifact.query(on: app.db).count() == 0)
+            #expect(
+                try await RoleBinding.query(on: app.db)
+                    .filter(\.$nodeType == IAMNodeType.image.rawValue)
+                    .count() == 0)
         }
     }
 
@@ -1018,8 +1092,9 @@ final class ImageControllerTests {
             let imageId = image.id!
 
             // Create actual file in storage
-            let relativePath = ImageObjectKey.image(
-                projectId: project.id!, imageId: imageId, filename: "test.qcow2")
+            let relativePath = ImageObjectKey.artifact(
+                projectId: project.id!, imageId: imageId,
+                kind: ArtifactKind.diskImage.rawValue, filename: "test.qcow2")
             let filePath = "\(tempStoragePath)/\(relativePath)"
             try FileManager.default.createDirectory(
                 atPath: (filePath as NSString).deletingLastPathComponent,
@@ -1152,6 +1227,22 @@ final class ImageControllerTests {
 
     // MARK: - Download Image Tests
 
+    @Test("Download requires an explicit artifact kind")
+    func testDownloadRequiresArtifactKind() async throws {
+        try await withImageTestApp { app, user, _, project, authToken, _ in
+            let builder = TestDataBuilder(db: app.db)
+            let image = try await builder.createImage(project: project, uploadedBy: user)
+
+            try await app.test(
+                .GET, "/api/projects/\(project.id!)/images/\(image.id!)/download"
+            ) { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
     @Test("Download image returns 400 for non-ready image")
     func testDownloadImageNotReady() async throws {
         try await withImageTestApp { app, user, _, project, authToken, _ in
@@ -1162,7 +1253,8 @@ final class ImageControllerTests {
                 uploadedBy: user
             )
 
-            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download") { req in
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=disk-image") {
+                req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -1175,7 +1267,8 @@ final class ImageControllerTests {
         try await withImageTestApp { app, _, _, project, authToken, _ in
             let fakeImageId = UUID()
 
-            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(fakeImageId)/download") { req in
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(fakeImageId)/download?artifact=disk-image")
+            { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
             } afterResponse: { res in
                 #expect(res.status == .notFound)
@@ -1189,7 +1282,8 @@ final class ImageControllerTests {
             let builder = TestDataBuilder(db: app.db)
             let image = try await builder.createImage(project: project, uploadedBy: user)
 
-            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download") { _ in
+            try await app.test(.GET, "/api/projects/\(project.id!)/images/\(image.id!)/download?artifact=disk-image") {
+                _ in
                 // No auth header
             } afterResponse: { res in
                 #expect(res.status == .unauthorized)
@@ -1673,6 +1767,42 @@ final class ImageControllerTests {
                     .filter { !$0.hasSuffix("/") }
                 #expect(leftovers.allSatisfy { $0.isEmpty || !$0.contains("disk.img") })
             }
+        }
+    }
+
+    @Test("A database failure after object publication cleans up the upload")
+    func testArtifactPersistenceFailureCleansUpUpload() async throws {
+        try await withImageTestApp { app, _, _, project, authToken, tempStoragePath in
+            let (body, boundary) = Self.createMultipartFormData(
+                name: "Database failure",
+                description: nil,
+                filename: "failed.qcow2",
+                fileContent: Self.createQCOW2Buffer())
+
+            try await self.withFailingImageArtifactInserts(on: app) {
+                try await app.test(.POST, "/api/projects/\(project.id!)/images") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+                    req.headers.contentType = HTTPMediaType(
+                        type: "multipart", subType: "form-data",
+                        parameters: ["boundary": boundary])
+                    req.body = ByteBuffer(data: body)
+                } afterResponse: { res in
+                    #expect(res.status == .internalServerError)
+                }
+            }
+
+            #expect(try await Image.query(on: app.db).count() == 0)
+
+            let projectDirectory = "\(tempStoragePath)/\(project.id!)"
+            let subpaths =
+                (try? FileManager.default.subpathsOfDirectory(atPath: projectDirectory)) ?? []
+            let files = subpaths.filter { subpath in
+                var isDirectory: ObjCBool = false
+                let exists = FileManager.default.fileExists(
+                    atPath: "\(projectDirectory)/\(subpath)", isDirectory: &isDirectory)
+                return exists && !isDirectory.boolValue
+            }
+            #expect(files.isEmpty)
         }
     }
 

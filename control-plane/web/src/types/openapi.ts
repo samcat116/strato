@@ -807,9 +807,9 @@ export interface paths {
     };
     "/api/projects/{projectID}/images/{imageID}/download": {
         parameters: {
-            query?: {
-                /** @description Which artifact to download. Omit for the legacy whole-image disk. */
-                artifact?: components["schemas"]["ArtifactKind"];
+            query: {
+                /** @description Which typed artifact to download. */
+                artifact: components["schemas"]["ArtifactKind"];
             };
             header?: never;
             path: {
@@ -821,7 +821,7 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Download image (or artifact) bytes
+         * Download image artifact bytes
          * @description Streams raw bytes. Authenticated either by a user session or, for
          *     agents, a forwarded SPIFFE SVID client certificate over mTLS.
          */
@@ -3029,7 +3029,7 @@ export interface paths {
         put?: never;
         /**
          * Move a project to another organization or folder
-         * @description Requires admin on the project and on the destination organization. Exactly one destination must resolve: `organizationalUnitId` (a folder) or `organizationId`.
+         * @description Requires admin on the project and on the destination organization. Exactly one destination must resolve: `organizationalUnitId` (a folder) or `organizationId`. Project-wide network quotas on the destination hierarchy are enforced before the move commits.
          */
         post: operations["transferProject"];
         delete?: never;
@@ -5792,6 +5792,8 @@ export interface components {
             /** @description Artifact kind (see ArtifactKind). */
             kind: string;
             sourceURL: string;
+            /** @description Optional 64-hex SHA-256 the fetched bytes must match. */
+            checksum?: string;
         };
         Image: {
             /** Format: uuid */
@@ -5800,12 +5802,16 @@ export interface components {
             description: string;
             /** Format: uuid */
             projectId?: string;
-            filename: string;
-            /** Format: int64 */
-            size: number;
+            /** @description Convenience projection of the disk-image artifact, when present. */
+            filename?: string;
+            /**
+             * Format: int64
+             * @description Convenience projection of the disk-image artifact, when present.
+             */
+            size?: number;
             /** @description Display form of `size` in binary units (e.g. `2.4 GiB`). */
-            sizeFormatted: string;
-            format: components["schemas"]["ImageFormat"];
+            sizeFormatted?: string;
+            format?: components["schemas"]["ImageFormat"];
             architecture: components["schemas"]["CPUArchitecture"];
             checksum?: string;
             status: components["schemas"]["ImageStatus"];
@@ -6051,7 +6057,7 @@ export interface components {
         /** @enum {string} */
         VolumeStatus: "creating" | "available" | "attaching" | "attached" | "detaching" | "resizing" | "snapshotting" | "cloning" | "deleting" | "error";
         /** @enum {string} */
-        VolumeSnapshotStatus: "creating" | "available" | "restoring" | "deleting" | "error";
+        VolumeSnapshotStatus: "creating" | "available" | "deleting" | "error";
         CreateNetworkRequest: {
             name: string;
             subnet: string;
@@ -6597,7 +6603,6 @@ export interface components {
             name: string;
             /** @description The first 12 characters of the key followed by an ellipsis. */
             keyPrefix: string;
-            scopes: components["schemas"]["APIKeyScope"][];
             restriction: components["schemas"]["CredentialRestriction"];
             isActive: boolean;
             /** Format: date-time */
@@ -6608,15 +6613,9 @@ export interface components {
             createdAt?: string;
         };
         /**
-         * @deprecated
-         * @description Deprecated. The legacy permission scope on an API key or CLI session. Superseded by `CredentialRestriction`, which is what is actually enforced; these values survive as the wire spelling existing clients send and are read only when no restriction is stored. `write` and `admin` both mean unrestricted — nothing ever required `admin` — and `read` means the action set whose names say they read.
-         * @enum {string}
-         */
-        APIKeyScope: "read" | "write" | "admin";
-        /**
          * @description What a credential may do, in the ordinary IAM action and node vocabulary. A restriction only ever *subtracts*: the effective permission is the principal's role bindings intersected with it, and it is enforced by the Cedar evaluator like every other authorization decision, so a refusal appears in `iam_decision_logs` under the `credential` tier. An absent restriction means "everything this credential's owner can do".
          *
-         *     On a response this is the *effective* restriction, whether stored outright or derived from the legacy `scopes`, so a client never has to know which of the two a credential carries. On a device-authorization request it is what the client is asking for — a request, not a grant: the approving user sees it and may narrow it further.
+         *     On a response this is the credential's canonical restriction. On a device-authorization request it is what the client is asking for — a request, not a grant: the approving user sees it and may narrow it further.
          */
         CredentialRestriction: {
             /**
@@ -6633,8 +6632,6 @@ export interface components {
         };
         CreateAPIKeyRequest: {
             name: string;
-            /** @description Deprecated; ignored when `restriction` is present. Defaults to `["read", "write"]`. */
-            scopes?: components["schemas"]["APIKeyScope"][];
             restriction?: components["schemas"]["CredentialRestriction"];
             /** @description Optional lifetime in days (1–365). Omit for a non-expiring key. */
             expiresInDays?: number;
@@ -6647,17 +6644,15 @@ export interface components {
             /** @description The full API key — shown once and never retrievable again. */
             key: string;
             keyPrefix: string;
-            scopes: components["schemas"]["APIKeyScope"][];
             restriction: components["schemas"]["CredentialRestriction"];
             /** Format: date-time */
             expiresAt?: string;
             /** Format: date-time */
             createdAt?: string;
         };
-        /** @description Partial update; omitted fields are left unchanged. Sending `scopes` alone clears any stored restriction, so the edit takes effect rather than being silently shadowed. */
+        /** @description Partial update; omitted fields are left unchanged. */
         UpdateAPIKeyRequest: {
             name?: string;
-            scopes?: components["schemas"]["APIKeyScope"][];
             restriction?: components["schemas"]["CredentialRestriction"];
             isActive?: boolean;
         };
@@ -6665,8 +6660,6 @@ export interface components {
         DeviceAuthorizationRequest: {
             /** @description Human-readable client label shown on the approval page. Defaults to "Strato CLI". */
             client_name?: string;
-            /** @description Deprecated. Space-delimited legacy scopes. Defaults to "read write". */
-            scope?: string;
             restriction?: components["schemas"]["CredentialRestriction"];
         };
         /** @description RFC 8628 §3.2 device authorization response (OAuth snake_case field names). */
@@ -6694,8 +6687,6 @@ export interface components {
             token_type: string;
             expires_in: number;
             refresh_token: string;
-            /** @description Space-delimited granted scopes. */
-            scope: string;
         };
         /** @description RFC 7009 revocation request. */
         OAuthRevokeRequest: {
@@ -6716,7 +6707,6 @@ export interface components {
         PendingDeviceAuthorization: {
             userCode: string;
             clientName: string;
-            scopes: components["schemas"]["APIKeyScope"][];
             restriction: components["schemas"]["CredentialRestriction"];
             /** @description The client IP that started the device flow. */
             requestIP?: string;
@@ -6730,7 +6720,6 @@ export interface components {
             /** Format: uuid */
             id?: string;
             clientName: string;
-            scopes: components["schemas"]["APIKeyScope"][];
             restriction: components["schemas"]["CredentialRestriction"];
             accessTokenPrefix: string;
             /** Format: date-time */
@@ -7046,6 +7035,7 @@ export interface components {
                 maxVMs: number;
                 maxSandboxes: number;
                 maxVolumes?: number | null;
+                /** @description Project-wide network count limit. It is not applied when this quota has an environment. */
                 maxNetworks: number;
             };
             usage: {
@@ -7525,6 +7515,7 @@ export interface components {
             maxSandboxes: number;
             /** @description Volume count limit. Null means no count limit — unlike the VM and sandbox limits, this one is optional, because `maxStorageGB` is the ceiling that protects the host. */
             maxVolumes?: number | null;
+            /** @description Project-wide network count limit. It is not applied when this quota has an environment. */
             maxNetworks: number;
         };
         /** @description Reservations the control plane holds against the quota. */
@@ -7537,6 +7528,7 @@ export interface components {
             vmCount: number;
             sandboxCount: number;
             volumeCount?: number;
+            /** @description Project-wide logical networks in scope. Always zero for an environment-scoped quota. */
             networkCount: number;
         };
         /** @description Reserved amounts as a percentage of each limit. */
@@ -7569,7 +7561,7 @@ export interface components {
             maxSandboxes?: number;
             /** @description Volume count limit. Omitted means **no** count limit, not a default borrowed from `maxVMs`. */
             maxVolumes?: number;
-            /** @description Defaults to 10. */
+            /** @description Defaults to 10. Must be omitted when `environment` is set because logical networks are project-wide. */
             maxNetworks?: number;
             /** @description Project quotas only — narrows the quota to one of the project's deployment environments. */
             environment?: string;
@@ -7588,6 +7580,7 @@ export interface components {
             maxSandboxes?: number;
             /** @description The volume count limit. Omit to leave it as it is; send `0` to remove it. */
             maxVolumes?: number;
+            /** @description Project-wide network count limit. Environment-scoped quotas reject this field. */
             maxNetworks?: number;
             isEnabled?: boolean;
         };
@@ -10784,9 +10777,9 @@ export interface operations {
     };
     downloadImage: {
         parameters: {
-            query?: {
-                /** @description Which artifact to download. Omit for the legacy whole-image disk. */
-                artifact?: components["schemas"]["ArtifactKind"];
+            query: {
+                /** @description Which typed artifact to download. */
+                artifact: components["schemas"]["ArtifactKind"];
             };
             header?: never;
             path: {
@@ -10799,7 +10792,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The image bytes. */
+            /** @description The artifact bytes. */
             200: {
                 headers: {
                     [name: string]: unknown;

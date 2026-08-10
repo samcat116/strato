@@ -32,6 +32,11 @@ struct ResourceFinalizer: RawRepresentable, Hashable, Sendable, Codable {
     /// undeletable.
     static let agentAbsent = ResourceFinalizer(rawValue: "agent.absent")
 
+    /// A VM's canonical managed boot volume has been physically removed and
+    /// its logical row reaped. This keeps the parent row — and its restrictive
+    /// volume foreign key — alive until boot-storage cleanup finishes.
+    static let bootVolumeAbsent = ResourceFinalizer(rawValue: "boot-volume.absent")
+
     // Participants the ADR names next — `ipam.release`, `dns.deregister`,
     // `fip.release` — are deliberately *not* stamped yet. Each is a database
     // cascade today, not an inline step: a VM's addresses go with its NIC rows

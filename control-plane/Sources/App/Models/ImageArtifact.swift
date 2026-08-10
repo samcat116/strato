@@ -16,10 +16,10 @@ public enum ArtifactStatus: String, Codable, CaseIterable, Sendable {
 
 /// One typed file within an image's artifact set (see `ArtifactKind`).
 ///
-/// Artifacts reference the same stored files as the image's legacy single-file
-/// columns; a disk-image artifact for an uploaded image points at the same
-/// `storage_path`. Kernel/rootfs/initramfs artifacts are what make an image
-/// usable by direct-kernel-boot hypervisors like Firecracker.
+/// This row is the sole authority for the stored bytes: their role, location,
+/// format, size, checksum, and fetch lifecycle. Kernel/rootfs/initramfs
+/// artifacts make an image usable by direct-kernel-boot hypervisors like
+/// Firecracker; a disk-image artifact makes it usable by QEMU.
 final class ImageArtifact: Model, @unchecked Sendable {
     static let schema = "image_artifacts"
 
@@ -47,6 +47,12 @@ final class ImageArtifact: Model, @unchecked Sendable {
 
     @Field(key: "checksum")
     var checksum: String
+
+    /// Caller-supplied SHA-256 for URL imports. The stored `checksum` is always
+    /// computed from the bytes; this optional value is only the pre-publication
+    /// expectation those bytes must match.
+    @OptionalField(key: "expected_checksum")
+    var expectedChecksum: String?
 
     /// Storage location (relative path from IMAGE_STORAGE_PATH).
     @Field(key: "storage_path")
@@ -86,7 +92,8 @@ final class ImageArtifact: Model, @unchecked Sendable {
         checksum: String,
         storagePath: String,
         status: ArtifactStatus = .ready,
-        sourceURL: String? = nil
+        sourceURL: String? = nil,
+        expectedChecksum: String? = nil
     ) {
         self.id = id
         self.$image.id = imageID
@@ -99,6 +106,7 @@ final class ImageArtifact: Model, @unchecked Sendable {
         self.storagePath = storagePath
         self.status = status
         self.sourceURL = sourceURL
+        self.expectedChecksum = expectedChecksum
     }
 }
 
@@ -107,6 +115,20 @@ extension ImageArtifact: Content {}
 // MARK: - Public DTO
 
 extension ImageArtifact {
+    /// A ready row is usable only when all metadata required to retrieve and
+    /// verify its bytes is complete. Disk-like artifacts also require a format.
+    var isUsable: Bool {
+        guard status == .ready, !filename.isEmpty, !storagePath.isEmpty,
+            size >= 0, checksum.count == 64, checksum.allSatisfy(\.isHexDigit)
+        else { return false }
+        switch kind {
+        case .diskImage, .rootfs:
+            return format != nil
+        case .kernel, .initramfs:
+            return true
+        }
+    }
+
     struct Public: Content {
         let id: UUID?
         let kind: ArtifactKind

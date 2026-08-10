@@ -285,6 +285,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
             rootfsSizeBytes: 256 * 1024 * 1024,
             storagePath: "/simulated/sandboxes/\(sandboxId)/snapshots/\(snapshotId)",
             firecrackerVersion: "simulated",
+            guestControlProtocolVersion: SandboxGuestControlProtocol.currentVersion,
             forkLayoutVersion: SandboxSnapshotForkLayout.currentVersion)
     }
 

@@ -834,7 +834,7 @@ struct AgentController: RouteCollection {
 
         // Never delete a site's designated network controller while the site
         // still has other members: the controller reference deliberately has
-        // no FK (see CreateSite), so the site would keep pointing at a
+        // no FK, so the site would keep pointing at a
         // vanished agent, no member could ever match it, and reconciliation of
         // the site's networks would silently stop. The site's *last* member is
         // the exception — since the first node to join a site is designated
@@ -1168,7 +1168,8 @@ struct AgentController: RouteCollection {
                 "artifactUrl": .string(DesiredAgentUpdate.redactURL(artifactURL)),
             ])
 
-        // Push the sync now; the periodic timer is only the backstop.
+        // Ring now for low latency; the agent's unconditional refetch is the
+        // correctness backstop.
         await req.agentService.syncDesiredState(agentId: agentId.uuidString)
 
         let response = Response(status: .accepted)

@@ -213,11 +213,12 @@ API keys and CLI sessions carried a `read`/`write`/`admin` scope enforced by
 request had two independent ways to be denied, only one of which the evaluator
 knew about.
 
-Fixed in STR-115. A credential now carries a **restriction** in the ordinary
+Fixed in STR-115 and completed in STR-227. A credential now carries a **restriction** in the ordinary
 action and node vocabulary, and the intersection `bindings ∩ restriction` is
 evaluated by a tier-1 Cedar forbid, so a restriction refusal is an ordinary
 decision-log row with a tier and a determining policy id, and guardrails ceiling
-credentials for free. The legacy scopes survive as a read-time shim. See
+credentials for free. STR-227 backfilled every historical credential and
+removed the persisted and public scope vocabulary. See
 [`iam.md`](./iam.md#credential-restrictions-str-115) for the model and the three
 behaviour tightenings it carried;
 [#873](https://github.com/samcat116/strato/issues/873) tracked the work.

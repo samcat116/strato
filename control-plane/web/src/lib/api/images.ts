@@ -121,7 +121,11 @@ export const imagesApi = {
     return api.delete(`/api/projects/${projectId}/images/${imageId}`);
   },
 
-  getDownloadURL(projectId: string, imageId: string): string {
-    return `/api/projects/${projectId}/images/${imageId}/download`;
+  getDownloadURL(
+    projectId: string,
+    imageId: string,
+    artifact: ArtifactKind
+  ): string {
+    return `/api/projects/${projectId}/images/${imageId}/download?artifact=${encodeURIComponent(artifact)}`;
   },
 };

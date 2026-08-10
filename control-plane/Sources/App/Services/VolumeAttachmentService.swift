@@ -18,8 +18,7 @@ import Vapor
 /// columns together, and claim runs under the same per-subject advisory lock
 /// idiom `IPAMService.lockAllocations` uses, so the read-allocate-write cycle
 /// behind an auto-generated device name serializes across replicas. The
-/// `(vm_id, device_name)` unique index added by `NormalizeVolumeAttachments` is
-/// the backstop, not the only defense.
+/// `(vm_id, device_name)` unique index is the backstop, not the only defense.
 enum VolumeAttachmentService {
 
     // MARK: - Serialization
@@ -167,7 +166,7 @@ enum VolumeAttachmentService {
             by: OperationResourceKind.volume.completionBudgetSeconds(for: .detach))
     }
 
-    /// Releases every volume attached to `vmID`, and returns their ids.
+    /// Releases every data volume attached to `vmID`, and returns their ids.
     ///
     /// Called from the VM reap inside the delete transaction: the guest is
     /// going away, so there is no hot-unplug to arrange — the volume's data is
@@ -176,9 +175,10 @@ enum VolumeAttachmentService {
     /// so a row this skipped would fail the VM's delete, and "a dead agent must
     /// not make its VM undeletable" outranks every other consideration here.
     @discardableResult
-    static func releaseAll(fromVM vmID: UUID, on db: any Database) async throws -> [UUID] {
+    static func releaseDataVolumes(fromVM vmID: UUID, on db: any Database) async throws -> [UUID] {
         let attached = try await Volume.query(on: db)
             .filter(\.$vm.$id == vmID)
+            .filter(\.$volumeType == .data)
             .all()
 
         for volume in attached.sorted(by: {

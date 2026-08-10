@@ -142,8 +142,8 @@ final class AuditLoggingTests {
         }
     }
 
-    @Test("Mutations denied for missing API-key scope are audited")
-    func scopeDeniedMutationIsAudited() async throws {
+    @Test("Mutations denied by an API-key restriction are audited")
+    func restrictionDeniedMutationIsAudited() async throws {
         try await withApp { app, user, _, _ in
             let readOnlyKey = APIKey.generateAPIKey()
             try await APIKey(
@@ -151,7 +151,7 @@ final class AuditLoggingTests {
                 name: "read-only",
                 keyHash: APIKey.hashAPIKey(readOnlyKey),
                 keyPrefix: String(readOnlyKey.prefix(16)),
-                scopes: ["read"]
+                restriction: .readOnly
             ).save(on: app.db)
 
             try await app.test(.POST, "/api/api-keys") { req in

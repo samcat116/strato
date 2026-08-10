@@ -94,71 +94,6 @@ public actor ImageCacheService {
 
     // MARK: - Cache Operations
 
-    /// Gets the local path for a cached image, downloading if necessary
-    /// Returns the path to the image file ready for use by QEMU
-    public func getImagePath(imageInfo: ImageInfo) async throws -> String {
-        let cachedPath = buildCachePath(imageInfo: imageInfo)
-        let key = flightKey(path: cachedPath, checksum: imageInfo.checksum)
-        return try await downloads.run(key: key) {
-            try await self.resolveImagePath(imageInfo: imageInfo, cachedPath: cachedPath)
-        }
-    }
-
-    private func resolveImagePath(imageInfo: ImageInfo, cachedPath: String) async throws -> String {
-        // Check if image is already cached and valid
-        if try await isCached(imageInfo: imageInfo) {
-            DiskCacheLRU.touch(entryDirectory: imageDirectory(imageInfo: imageInfo))
-            logger.info(
-                "Image found in cache",
-                metadata: [
-                    "imageId": .string(imageInfo.imageId.uuidString),
-                    "path": .string(cachedPath),
-                ])
-            return cachedPath
-        }
-
-        // Download the image
-        logger.info(
-            "Image not in cache, downloading",
-            metadata: [
-                "imageId": .string(imageInfo.imageId.uuidString),
-                "url": .string(imageInfo.downloadURL),
-            ])
-
-        makeRoom(forIncomingBytes: imageInfo.size, into: imageDirectory(imageInfo: imageInfo))
-        try await downloadImage(imageInfo: imageInfo, to: cachedPath)
-
-        return cachedPath
-    }
-
-    /// Checks if an image is cached and has valid checksum
-    public func isCached(imageInfo: ImageInfo) async throws -> Bool {
-        let cachedPath = buildCachePath(imageInfo: imageInfo)
-
-        // Check if file exists
-        guard FileManager.default.fileExists(atPath: cachedPath) else {
-            return false
-        }
-
-        // Verify checksum
-        let actualChecksum = try computeChecksum(filePath: cachedPath)
-        let isValid = actualChecksum.lowercased() == imageInfo.checksum.lowercased()
-
-        if !isValid {
-            logger.warning(
-                "Cached image checksum mismatch, will re-download",
-                metadata: [
-                    "imageId": .string(imageInfo.imageId.uuidString),
-                    "expected": .string(imageInfo.checksum),
-                    "actual": .string(actualChecksum),
-                ])
-            // Delete the invalid cached file
-            try? FileManager.default.removeItem(atPath: cachedPath)
-        }
-
-        return isValid
-    }
-
     /// Reduce a control-plane-supplied filename to a single, in-directory path
     /// component. The control plane already validates upload filenames, but this
     /// privileged daemon must not rely solely on that boundary: a `..`/`/`-laden
@@ -171,13 +106,6 @@ public actor ImageCacheService {
             return "_invalid_"
         }
         return component
-    }
-
-    /// Builds the local cache path for an image's primary disk
-    /// Structure: {cachePath}/{projectId}/{imageId}/{filename}
-    public func buildCachePath(imageInfo: ImageInfo) -> String {
-        return
-            "\(cachePath)/\(imageInfo.projectId)/\(imageInfo.imageId)/\(Self.safeComponent(imageInfo.filename))"
     }
 
     /// The eviction unit: everything cached for one image lives under
@@ -244,14 +172,9 @@ public actor ImageCacheService {
     // MARK: - Artifact Operations
 
     /// Returns the local path to a specific typed artifact, downloading and
-    /// verifying it if it isn't cached. Falls back to the primary-disk path when
-    /// the requested kind is `.diskImage` and the image carries no typed artifact
-    /// set (legacy single-file images).
+    /// verifying it if it isn't cached.
     public func getArtifactPath(imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
         guard let artifact = imageInfo.artifact(ofKind: kind) else {
-            if kind == .diskImage {
-                return try await getImagePath(imageInfo: imageInfo)
-            }
             throw ImageCacheError.artifactNotFound(kind.rawValue)
         }
 
@@ -329,27 +252,6 @@ public actor ImageCacheService {
             metadata: [
                 "imageId": .string(imageId.uuidString),
                 "kind": .string(kind.rawValue),
-                "path": .string(localPath),
-            ])
-    }
-
-    /// Downloads an image from the control plane
-    private func downloadImage(imageInfo: ImageInfo, to localPath: String) async throws {
-        logger.info(
-            "Downloading image",
-            metadata: [
-                "imageId": .string(imageInfo.imageId.uuidString),
-                "url": .string(imageInfo.downloadURL),
-                "size": .stringConvertible(imageInfo.size),
-            ])
-
-        try await fetchVerifiedFile(
-            from: imageInfo.downloadURL, checksum: imageInfo.checksum, sizeBytes: imageInfo.size, to: localPath)
-
-        logger.info(
-            "Image downloaded and verified",
-            metadata: [
-                "imageId": .string(imageInfo.imageId.uuidString),
                 "path": .string(localPath),
             ])
     }
@@ -527,10 +429,6 @@ public actor ImageCacheService {
 
 /// The storage layer pulls image bytes through this hook when materializing disks.
 extension ImageCacheService: ImageSource {
-    public func localImagePath(for imageInfo: ImageInfo) async throws -> String {
-        try await getImagePath(imageInfo: imageInfo)
-    }
-
     public func localImagePath(for imageInfo: ImageInfo, kind: ArtifactKind) async throws -> String {
         try await getArtifactPath(imageInfo: imageInfo, kind: kind)
     }
