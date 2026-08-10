@@ -6057,7 +6057,7 @@ export interface components {
         /** @enum {string} */
         VolumeStatus: "creating" | "available" | "attaching" | "attached" | "detaching" | "resizing" | "snapshotting" | "cloning" | "deleting" | "error";
         /** @enum {string} */
-        VolumeSnapshotStatus: "creating" | "available" | "restoring" | "deleting" | "error";
+        VolumeSnapshotStatus: "creating" | "available" | "deleting" | "error";
         CreateNetworkRequest: {
             name: string;
             subnet: string;

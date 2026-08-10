@@ -3,7 +3,8 @@ import SQLKit
 
 /// One string-backed Fluent enum column and the exact raw values its model can
 /// decode. Keep this list in sync with the corresponding `CaseIterable` enum;
-/// adding a case requires a follow-up migration that replaces its constraint.
+/// changing the case set requires a follow-up migration that replaces its
+/// constraint on databases where this migration has already run.
 struct PersistedEnumConstraint: Sendable, Equatable {
     let table: String
     let column: String
@@ -147,7 +148,7 @@ struct EnforcePersistedEnumValues: AsyncMigration {
         ),
         .init(
             table: "volume_snapshots", column: "status",
-            allowedValues: ["creating", "available", "restoring", "deleting", "error"],
+            allowedValues: ["creating", "available", "deleting", "error"],
             defaultValue: "creating"
         ),
     ]

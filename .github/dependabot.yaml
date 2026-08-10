@@ -1,7 +1,13 @@
 version: 2
 updates:
   - package-ecosystem: "swift"
-    directory: "/"
+    directories:
+      - "/SwiftFirecracker"
+      - "/agent"
+      - "/cli"
+      - "/clients/swift"
+      - "/control-plane"
+      - "/shared"
     schedule:
       interval: "weekly"
     commit-message:
