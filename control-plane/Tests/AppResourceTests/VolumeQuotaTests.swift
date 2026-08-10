@@ -204,57 +204,36 @@ final class VolumeQuotaTests {
         #expect(snapshot.observedSizeBytes == (512 << 20) + (2 << 20))
     }
 
-    @Test("A VM's boot-disk volume is charged once, on the VM")
-    func migratedBootVolumeIsNotDoubleCounted() async throws {
+    @Test("A VM's boot disk is charged exactly once as a managed volume")
+    func bootVolumeIsCountedAsManagedStorage() async throws {
         try await withVolumeQuotaApp { app, builder, user, project, _ in
             let quota = try await builder.createResourceQuota(name: "q", project: project)
-            let vm = try await builder.createVM(name: "legacy", project: project)
-            vm.diskPath = "/var/lib/strato/vms/\(try vm.requireID())/disk.qcow2"
-            try await vm.save(on: app.db)
-            let vmDisk = vm.disk
+            let vm = try await builder.createVM(name: "managed", project: project)
 
-            // Exactly what `MigrateVMDisksToVolumes` leaves behind: a boot volume
-            // whose size and path are the VM's.
             let bootVolume = try await seedVolume(
-                app: app, user: user, project: project, name: "legacy-boot", sizeGB: 10)
+                app: app, user: user, project: project, name: "managed-boot", sizeGB: 10)
             bootVolume.volumeType = .boot
             bootVolume.$vm.id = try vm.requireID()
             bootVolume.deviceName = "disk0"
             bootVolume.bootOrder = 0
             try await bootVolume.save(on: app.db)
-            let replica = try #require(
-                try await placeVolume(
-                    bootVolume, on: "legacy-agent", at: vm.diskPath, using: app.db))
 
-            let deduped = try await measure(quota, on: app.db)
-            #expect(deduped.storageBytes == vmDisk, "the boot disk is charged once, via vms.disk")
-            #expect(deduped.volumeCount == 0)
+            let attached = try await measure(quota, on: app.db)
+            #expect(attached.storageBytes == gb(10))
+            #expect(attached.volumeCount == 1)
 
-            // Detaching clears the mutable attachment but does not change
-            // either owner of the shared file. Path identity must continue to
-            // suppress the compatibility volume.
+            // Attachment is lifecycle state, not accounting identity.
             bootVolume.$vm.id = nil
             try await bootVolume.save(on: app.db)
             let detached = try await measure(quota, on: app.db)
-            #expect(detached.storageBytes == vmDisk)
-            #expect(detached.volumeCount == 0)
+            #expect(detached.storageBytes == gb(10))
+            #expect(detached.volumeCount == 1)
 
-            // Resizing changes the volume's desired size but not the legacy VM
-            // row. The shared file is still deduplicated; only the growth above
-            // the VM's original reservation is additional usage.
-            let grownVolumeSize = vmDisk + gb(5)
-            bootVolume.size = grownVolumeSize
+            bootVolume.size = gb(15)
             try await bootVolume.save(on: app.db)
             let grown = try await measure(quota, on: app.db)
-            #expect(grown.storageBytes == grownVolumeSize)
-            #expect(grown.volumeCount == 0)
-
-            // A genuinely separate file is charged, attached or not.
-            replica.datasetPath = "/var/lib/strato/volumes/other.qcow2"
-            try await replica.save(on: app.db)
-            let counted = try await measure(quota, on: app.db)
-            #expect(counted.storageBytes == vmDisk + grownVolumeSize)
-            #expect(counted.volumeCount == 1)
+            #expect(grown.storageBytes == gb(15))
+            #expect(grown.volumeCount == 1)
         }
     }
 

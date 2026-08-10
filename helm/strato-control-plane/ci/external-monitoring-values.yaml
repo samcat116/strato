@@ -41,6 +41,3 @@ opentelemetry:
     # Workload Identity "Issuance" panel keeps working against the external
     # Prometheus even with the bundled one disabled.
     url: "http://kube-prometheus-stack-prometheus.monitoring.svc:9090"
-
-migration:
-  enabled: false

@@ -19,9 +19,9 @@ import Vapor
 /// only has to ring a contentless broadcast doorbell that every replica
 /// evaluates against its own parked polls.
 ///
-/// The response body is a full `MessageEnvelope` wrapping the same
-/// `DesiredStateMessage` the WebSocket push sends, not a bare payload: the
-/// envelope keeps routing and decoding identical across both transports.
+/// The response body is a full `MessageEnvelope`, not a bare payload, so it
+/// enters the agent's ordinary message-routing and desired-state serialization
+/// lane.
 struct AgentDesiredStateController: RouteCollection {
     /// How long a poll parks before answering `304`.
     ///
@@ -32,16 +32,11 @@ struct AgentDesiredStateController: RouteCollection {
     /// Bounded below by cost: every expiry costs a re-poll and an assembly.
     /// 45s clears the 60s convention with room to spare.
     ///
-    /// This is a real increase in assembly load, not a wash. A *converged*
-    /// agent used to be assembled for only on the forced pass — the every-60s
-    /// pass is dirty-gated and skips it — so once per 10 minutes. Every poll
-    /// assembles at least once, converged or not, so an idle fleet goes to once
-    /// per 45s per agent: roughly 13× the assemblies, each a full multi-table
-    /// read set. The trade is bought deliberately (a mutation reaches the agent
-    /// in milliseconds instead of up to 10 minutes on a replica that does not
-    /// hold its socket), and it is why the outbound registry calls in assembly
-    /// are behind `RegistryOperationBackoff`: at this rate a failing call must
-    /// not be retried per assembly.
+    /// Every poll assembles at least once, converged or not, so an idle fleet
+    /// incurs one full multi-table read set per agent per hold window. The
+    /// latency trade is deliberate, and it is why outbound registry calls in
+    /// assembly are behind `RegistryOperationBackoff`: at this rate a failing
+    /// call must not be retried per assembly.
     static let defaultHoldWindow: Duration = .seconds(45)
 
     /// Ceiling on assemblies within one parked poll. The doorbell is
@@ -99,6 +94,7 @@ struct AgentDesiredStateController: RouteCollection {
         // missed doorbell can only cost latency). Never park such a request,
         // and never answer it `304`.
         let ifNoneMatch = req.headers.first(name: .ifNoneMatch)
+        let mode = Telemetry.DesiredStatePollMode.from(ifNoneMatch: ifNoneMatch)
         let clock = ContinuousClock()
         let deadline = clock.now + req.application.desiredStatePollHoldWindow
         var assemblies = 0
@@ -124,7 +120,11 @@ struct AgentDesiredStateController: RouteCollection {
             assemblies += 1
 
             if ifNoneMatch != etag {
-                Telemetry.recordDesiredStatePoll(outcome: "served")
+                let response = try Self.payloadResponse(message: message, etag: etag)
+                Telemetry.recordDesiredStatePoll(mode: mode, outcome: .served)
+                if mode == .unconditional {
+                    Telemetry.recordDesiredStateFullRefetch(agentName: agent.identity.name)
+                }
                 req.logger.debug(
                     "Desired-state poll served",
                     metadata: [
@@ -133,11 +133,11 @@ struct AgentDesiredStateController: RouteCollection {
                         "vmCount": .stringConvertible(message.vms.count),
                         "conditional": .stringConvertible(ifNoneMatch != nil),
                     ])
-                return try Self.payloadResponse(message: message, etag: etag)
+                return response
             }
 
             if clock.now >= deadline {
-                Telemetry.recordDesiredStatePoll(outcome: "not_modified")
+                Telemetry.recordDesiredStatePoll(mode: mode, outcome: .notModified)
                 return Self.notModifiedResponse(etag: etag)
             }
 
@@ -145,7 +145,7 @@ struct AgentDesiredStateController: RouteCollection {
             // the window rather than answering now — see `maxAssembliesPerPoll`
             // for why an early `304` would put the agent in a hot loop.
             if assemblies >= Self.maxAssembliesPerPoll {
-                Telemetry.recordDesiredStatePoll(outcome: "assembly_budget_exhausted")
+                Telemetry.recordDesiredStatePoll(mode: mode, outcome: .assemblyBudgetExhausted)
                 req.logger.notice(
                     "Desired-state poll exhausted its assembly budget; idling out the hold window",
                     metadata: ["agentId": .string(agentId)])
@@ -161,7 +161,7 @@ struct AgentDesiredStateController: RouteCollection {
             // to mean "wait", not "answer now", or the excess polls become a
             // hot loop instead of an idle one.
             if parked == .refused {
-                Telemetry.recordDesiredStatePoll(outcome: "park_refused")
+                Telemetry.recordDesiredStatePoll(mode: mode, outcome: .parkRefused)
                 try? await Task.sleep(until: deadline, clock: clock)
                 return Self.notModifiedResponse(etag: etag)
             }

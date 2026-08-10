@@ -73,11 +73,11 @@ struct VolumeStatusTests {
         #expect(volume(desired: .absent).canResize == false)
     }
 
-    /// Cloning and snapshotting are the two verbs that read the source's bytes,
-    /// so they keep a `bytesAtRest` requirement the others dropped: copying a
-    /// volume whose create is still writing it yields a torn image, and unlike a
-    /// resize that cannot be re-driven into correctness.
-    @Test("canClone and canSnapshot additionally require the bytes to be at rest")
+    /// Cloning and snapshotting both require settled bytes, but only cloning can
+    /// safely admit a stopped attachment: its copy holds the source VM lane.
+    /// A filesystem snapshot keeps reading through its mutable backing volume
+    /// after the VM restarts, so snapshotting remains detach-only.
+    @Test("Reading verbs require settled bytes and snapshots require detachment")
     func readingVerbsRequireBytesAtRest() {
         #expect(volume().canClone)
         #expect(volume().canSnapshot)
@@ -86,7 +86,7 @@ struct VolumeStatusTests {
         #expect(converging.canClone == false)
         #expect(converging.canSnapshot == false)
 
-        #expect(volume(attachedTo: UUID(), status: .attached).canClone == false)
+        #expect(volume(attachedTo: UUID(), status: .attached).canClone)
         #expect(volume(attachedTo: UUID(), status: .attached).canSnapshot == false)
     }
 

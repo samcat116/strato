@@ -46,6 +46,20 @@ struct ReconciliationProtocolTests {
         #expect(decoded.vms[0].imageInfo?.artifact(ofKind: .diskImage)?.filename == "debian.qcow2")
     }
 
+    @Test("A clone source carries the source VM serialization lane")
+    func cloneSourceVMLaneRoundTrip() throws {
+        let sourceVolumeId = UUID()
+        let sourceVMId = UUID()
+        let source = DesiredVolumeSource.clone(
+            from: sourceVolumeId, sourceVMId: sourceVMId, format: "qcow2")
+        let decoded = try roundTrip(source)
+
+        #expect(decoded.kind == DesiredVolumeSource.clone)
+        #expect(decoded.sourceVolumeId == sourceVolumeId)
+        #expect(decoded.sourceVMId == sourceVMId)
+        #expect(decoded.sourceFormat == "qcow2")
+    }
+
     @Test("DesiredStateMessage carries networks through the envelope")
     func desiredStateNetworksRoundTrip() throws {
         let networkId = UUID()

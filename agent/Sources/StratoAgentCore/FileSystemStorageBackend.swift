@@ -94,6 +94,10 @@ public actor FileSystemStorageBackend: StorageBackend {
         "\(volumeStoragePath)/\(volumeId)"
     }
 
+    private func legacyPathRecord(volumeId: String) -> String {
+        "\(volumeDirectory(volumeId: volumeId))/.adopted-path"
+    }
+
     private func snapshotPath(volumeId: String, snapshotId: String) -> String {
         "\(volumeStoragePath)/\(volumeId)/snapshots/\(snapshotId).qcow2"
     }
@@ -150,7 +154,9 @@ public actor FileSystemStorageBackend: StorageBackend {
         return DiskAttachment(path: path, format: format)
     }
 
-    public func createVolumeFromImage(volumeId: String, imageInfo: ImageInfo, format: DiskFormat) async throws
+    public func createVolumeFromImage(
+        volumeId: String, imageInfo: ImageInfo, format: DiskFormat, artifactKind: ArtifactKind
+    ) async throws
         -> DiskAttachment
     {
         logger.info(
@@ -165,7 +171,7 @@ public actor FileSystemStorageBackend: StorageBackend {
             at: volumePath(volumeId: volumeId, format: format),
             from: imageInfo,
             format: format,
-            artifactKind: .diskImage
+            artifactKind: artifactKind
         )
     }
 
@@ -264,6 +270,46 @@ public actor FileSystemStorageBackend: StorageBackend {
         return DiskAttachment(path: path, format: format)
     }
 
+    /// Give a historical VM-side disk a managed volume identity without
+    /// copying or re-materializing its bytes. A hard link is deliberate: it is
+    /// atomic, preserves a running hypervisor's open inode and old domain path,
+    /// and makes cross-filesystem layouts fail closed instead of copying a disk
+    /// while a guest may still be writing it.
+    public func adoptVolume(
+        volumeId: String, existingPath: String, format: DiskFormat
+    ) async throws -> DiskAttachment {
+        let canonicalPath = volumePath(volumeId: volumeId, format: format)
+        if FileManager.default.fileExists(atPath: canonicalPath) {
+            return DiskAttachment(path: canonicalPath, format: format)
+        }
+        guard FileManager.default.fileExists(atPath: existingPath) else {
+            throw StorageBackendError.volumeNotFound(existingPath)
+        }
+
+        let directory = volumeDirectory(volumeId: volumeId)
+        try FileManager.default.createDirectory(
+            atPath: directory, withIntermediateDirectories: true)
+        do {
+            try FileManager.default.linkItem(atPath: existingPath, toPath: canonicalPath)
+            try existingPath.write(
+                toFile: legacyPathRecord(volumeId: volumeId), atomically: true, encoding: .utf8)
+        } catch {
+            try? FileManager.default.removeItem(atPath: canonicalPath)
+            throw StorageBackendError.createFailed(
+                "cannot adopt existing volume \(existingPath) as \(volumeId): \(error.localizedDescription). "
+                    + "The VM disk and volume store must be on the same filesystem.")
+        }
+
+        logger.info(
+            "Adopted historical VM disk as managed volume",
+            metadata: [
+                "volumeId": .string(volumeId),
+                "existingPath": .string(existingPath),
+                "managedPath": .string(canonicalPath),
+            ])
+        return DiskAttachment(path: canonicalPath, format: format)
+    }
+
     // MARK: - Volume Deletion
 
     public func deleteVolume(volumeId: String) async throws {
@@ -272,6 +318,20 @@ public actor FileSystemStorageBackend: StorageBackend {
         logger.info("Deleting volume", metadata: ["volumeId": .string(volumeId)])
 
         if FileManager.default.fileExists(atPath: volumeDir) {
+            // An adopted disk has two hard links to the same inode. Remove the
+            // historical name only if it still names that exact file; an
+            // operator replacing the old path after cutover must never have
+            // their replacement deleted as collateral damage.
+            let recordPath = legacyPathRecord(volumeId: volumeId)
+            if let legacyPath = try? String(contentsOfFile: recordPath, encoding: .utf8),
+                let managedPath = try? requireManagedVolumePath(in: volumeDir),
+                let managed = try? FileManager.default.attributesOfItem(
+                    atPath: managedPath),
+                let legacy = try? FileManager.default.attributesOfItem(atPath: legacyPath),
+                Self.sameFile(managed, legacy)
+            {
+                try FileManager.default.removeItem(atPath: legacyPath)
+            }
             try FileManager.default.removeItem(atPath: volumeDir)
             logger.info("Volume deleted", metadata: ["volumeId": .string(volumeId)])
         } else {
@@ -282,6 +342,25 @@ public actor FileSystemStorageBackend: StorageBackend {
                     "path": .string(volumeDir),
                 ])
         }
+    }
+
+    private func requireManagedVolumePath(in directory: String) throws -> String {
+        for format in DiskFormat.allCases {
+            let path = "\(directory)/volume.\(format.fileExtension)"
+            if FileManager.default.fileExists(atPath: path) { return path }
+        }
+        throw StorageBackendError.volumeNotFound(directory)
+    }
+
+    private static func sameFile(
+        _ lhs: [FileAttributeKey: Any], _ rhs: [FileAttributeKey: Any]
+    ) -> Bool {
+        let lhsSystem = lhs[.systemNumber] as? NSNumber
+        let rhsSystem = rhs[.systemNumber] as? NSNumber
+        let lhsFile = lhs[.systemFileNumber] as? NSNumber
+        let rhsFile = rhs[.systemFileNumber] as? NSNumber
+        guard let lhsSystem, let rhsSystem, let lhsFile, let rhsFile else { return false }
+        return lhsSystem == rhsSystem && lhsFile == rhsFile
     }
 
     // MARK: - Volume Resize

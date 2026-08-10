@@ -187,6 +187,14 @@ struct ProjectsAPIService: APIProtocol {
         // nowhere while still shaping the Cedar schema. Removing roles is a
         // policy-set change and bumps the version.
         let removed = try await PolicySetVersionService.withPolicySetChange(on: req.db) { db in
+            // Global organization/OU quotas survive this project and must be
+            // refreshed after its networks cascade away. Resolve and lock them
+            // while the project still exists; project-scoped quotas are part of
+            // the cascade and deliberately absent from this set (STR-236).
+            let projectWideAncestorQuotas =
+                try await QuotaEnforcementService.lockedProjectWideAncestorQuotas(
+                    for: project, on: db)
+
             // The project node's bindings, and those of every resource that
             // cascades away with it — service accounts (in both directions),
             // images, networks, security groups, floating IPs, DNS zones and
@@ -212,6 +220,8 @@ struct ProjectsAPIService: APIProtocol {
                     reason: "Cannot delete project: a VM or sandbox was created in it. "
                         + "Delete or move its workloads first.")
             }
+            try await QuotaEnforcementService.resyncAndSaveReservations(
+                projectWideAncestorQuotas, on: db)
             let removedRoles = try await RoleStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             let removedPolicies = try await PolicyStore.deleteOwned(by: .project, ownerID: projectID, on: db)
             let removed = removedRoles + removedPolicies

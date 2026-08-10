@@ -52,10 +52,14 @@ fn bringup() -> Result<(), Box<dyn std::error::Error>> {
     let raw = mounts::read_config_drive(&config_device)?;
     let cfg =
         GuestConfig::from_config_drive(&raw).map_err(|e| format!("parse config drive: {e}"))?;
-    // Resolve before touching disks so a bad config fails fast. A warm-start
-    // template (issue #426) has no workload of its own — the real process
-    // arrives with the post-restore `launch` request — so it parks with a
-    // placeholder root context instead (exec sessions on a held template,
+    // Validate before branching on warm-hold: a template does not resolve a
+    // workload at boot, but it must still reject retired schemas and missing
+    // identity before touching disks or advertising `held`.
+    cfg.validate()?;
+
+    // A warm-start template (issue #426) has no workload of its own — the real
+    // process arrives with the post-restore `launch` request — so it parks with
+    // a placeholder root context instead (exec sessions on a held template,
     // should the host ever open one, run as root at `/`).
     let process = if cfg.warm_hold {
         ResolvedProcess {

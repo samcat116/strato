@@ -1,28 +1,16 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { useVMLogs } from "@/lib/hooks";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { useState } from "react";
 import {
   AlertCircle,
+  AlertTriangle,
   CheckCircle,
   Info,
-  AlertTriangle,
-  RefreshCw,
-  Download,
-  Clock,
-  Pause,
 } from "lucide-react";
-import type { VMLogEntry, VMLogLevel, VMEventType } from "@/types/api";
+import { Badge } from "@/components/ui/badge";
+import { LogViewerShell } from "@/components/ui/log-viewer-shell";
+import { useVMLogs } from "@/lib/hooks";
+import type { VMEventType, VMLogEntry, VMLogLevel } from "@/types/api";
 
 interface LogViewerProps {
   vmId: string;
@@ -65,211 +53,64 @@ const EVENT_TYPE_CONFIG: Record<VMEventType, string> = {
   unknown: "bg-gray-500/20 text-muted-foreground border-gray-500/30",
 };
 
-export function LogViewer({ vmId, className }: LogViewerProps) {
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [limit, setLimit] = useState(100);
-  const scrollRef = useRef<HTMLDivElement>(null);
+function getLogLevel(entry: VMLogEntry): VMLogLevel {
+  return (entry.labels.level as VMLogLevel) || "info";
+}
 
-  const {
-    data: logs,
-    isLoading,
-    isFetching,
-    refetch,
-  } = useVMLogs(vmId, {
-    limit,
-    direction: "backward",
-  });
+function getEventType(entry: VMLogEntry): VMEventType {
+  return (entry.labels.event_type as VMEventType) || "info";
+}
 
-  // Auto-scroll to bottom when new logs arrive
-  useEffect(() => {
-    if (scrollRef.current && autoRefresh && logs && logs.length > 0) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [logs, autoRefresh]);
-
-  const formatTimestamp = (timestamp: string) => {
-    try {
-      return new Date(timestamp).toLocaleString();
-    } catch {
-      return timestamp;
-    }
-  };
-
-  const getLogLevel = (entry: VMLogEntry): VMLogLevel => {
-    return (entry.labels.level as VMLogLevel) || "info";
-  };
-
-  const getEventType = (entry: VMLogEntry): VMEventType => {
-    return (entry.labels.event_type as VMEventType) || "info";
-  };
-
-  const downloadLogs = () => {
-    if (!logs || logs.length === 0) return;
-
-    const content = logs
-      .map((log) => `${log.timestamp} [${log.labels.level || "info"}] ${log.message}`)
-      .join("\n");
-
-    const blob = new Blob([content], { type: "text/plain" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `vm-${vmId}-logs.txt`;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
+function renderRow(log: VMLogEntry) {
+  const level = getLogLevel(log);
+  const eventType = getEventType(log);
+  // Labels come from Loki as arbitrary strings (historical rows may carry
+  // retired vocabulary), so fall back rather than crash on unknown values.
+  const levelConfig = LOG_LEVEL_CONFIG[level] ?? LOG_LEVEL_CONFIG.unknown;
+  const eventTypeClass =
+    EVENT_TYPE_CONFIG[eventType] ?? EVENT_TYPE_CONFIG.unknown;
 
   return (
-    <Card className={`bg-card border-border ${className || ""}`}>
-      <CardHeader className="flex flex-row items-center justify-between py-4">
-        <CardTitle className="text-lg font-semibold text-foreground">
-          VM Logs
-        </CardTitle>
-        <div className="flex items-center gap-2">
-          {/* Limit selector */}
-          <Select
-            value={String(limit)}
-            onValueChange={(v) => setLimit(Number(v))}
-          >
-            <SelectTrigger className="w-[100px] bg-muted border-input">
-              <SelectValue placeholder="Limit" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="50">50 logs</SelectItem>
-              <SelectItem value="100">100 logs</SelectItem>
-              <SelectItem value="200">200 logs</SelectItem>
-              <SelectItem value="500">500 logs</SelectItem>
-            </SelectContent>
-          </Select>
-
-          {/* Auto-refresh toggle */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setAutoRefresh(!autoRefresh)}
-            className={`border-input ${
-              autoRefresh ? "bg-green-900/20 border-green-700" : ""
-            }`}
-          >
-            {autoRefresh ? (
-              <>
-                <Clock className="h-4 w-4 mr-1" />
-                Live
-              </>
-            ) : (
-              <>
-                <Pause className="h-4 w-4 mr-1" />
-                Paused
-              </>
-            )}
-          </Button>
-
-          {/* Manual refresh */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => refetch()}
-            disabled={isFetching}
-            className="border-input"
-          >
-            <RefreshCw
-              className={`h-4 w-4 ${isFetching ? "animate-spin" : ""}`}
-            />
-          </Button>
-
-          {/* Download */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={downloadLogs}
-            disabled={!logs || logs.length === 0}
-            className="border-input"
-          >
-            <Download className="h-4 w-4" />
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="p-0">
-        {/* Polling indicator */}
-        {autoRefresh && (
-          <div className="flex items-center gap-2 px-4 py-2 bg-green-900/10 border-b border-border">
-            <div className="h-2 w-2 rounded-full bg-green-500 animate-pulse" />
-            <span className="text-xs text-green-600">
-              Auto-refreshing every 5 seconds
-            </span>
-          </div>
+    <>
+      <td className="px-2 py-2 align-top">
+        <span className={levelConfig.className}>{levelConfig.icon}</span>
+      </td>
+      <td className="px-2 py-2 align-top">
+        <Badge variant="outline" className={`text-xs ${eventTypeClass}`}>
+          {eventType.replace("_", " ")}
+        </Badge>
+      </td>
+      <td className="px-2 py-2 align-top">
+        {log.labels.source && (
+          <span className="text-xs text-muted-foreground">
+            [{log.labels.source}]
+          </span>
         )}
+      </td>
+      <td className={`px-2 py-2 break-words ${levelConfig.className}`}>
+        {log.message}
+      </td>
+    </>
+  );
+}
 
-        {/* Logs list */}
-        <div
-          ref={scrollRef}
-          className="h-[400px] overflow-auto font-mono text-xs"
-        >
-          {isLoading ? (
-            <div className="flex items-center justify-center h-full text-muted-foreground">
-              Loading logs...
-            </div>
-          ) : !logs || logs.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
-              <Info className="h-8 w-8" />
-              <span>No logs available</span>
-              <span className="text-xs text-muted-foreground">
-                Logs will appear here when VM operations are performed
-              </span>
-            </div>
-          ) : (
-            <table className="w-full">
-              <tbody>
-                {logs.map((log, idx) => {
-                  const level = getLogLevel(log);
-                  const eventType = getEventType(log);
-                  // Labels come from Loki as arbitrary strings (historical
-                  // rows may carry retired vocabulary), so fall back rather
-                  // than crash on anything outside the unions.
-                  const levelConfig = LOG_LEVEL_CONFIG[level] ?? LOG_LEVEL_CONFIG.unknown;
-                  const eventTypeClass = EVENT_TYPE_CONFIG[eventType] ?? EVENT_TYPE_CONFIG.unknown;
+export function LogViewer({ vmId, className }: LogViewerProps) {
+  const [limit, setLimit] = useState(100);
+  const query = useVMLogs(vmId, { limit, direction: "backward" });
 
-                  return (
-                    <tr
-                      key={`${log.timestamp}-${idx}`}
-                      className="hover:bg-accent/60 border-b border-border"
-                    >
-                      <td className="px-3 py-2 text-muted-foreground whitespace-nowrap align-top">
-                        {formatTimestamp(log.timestamp)}
-                      </td>
-                      <td className="px-2 py-2 align-top">
-                        <span className={levelConfig.className}>
-                          {levelConfig.icon}
-                        </span>
-                      </td>
-                      <td className="px-2 py-2 align-top">
-                        <Badge
-                          variant="outline"
-                          className={`text-xs ${eventTypeClass}`}
-                        >
-                          {eventType.replace("_", " ")}
-                        </Badge>
-                      </td>
-                      <td className="px-2 py-2 align-top">
-                        {log.labels.source && (
-                          <span className="text-xs text-muted-foreground">
-                            [{log.labels.source}]
-                          </span>
-                        )}
-                      </td>
-                      <td
-                        className={`px-2 py-2 break-words ${levelConfig.className}`}
-                      >
-                        {log.message}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-      </CardContent>
-    </Card>
+  return (
+    <LogViewerShell
+      title="VM Logs"
+      query={query}
+      limit={limit}
+      onLimitChange={setLimit}
+      renderRow={renderRow}
+      formatDownloadLine={(log) =>
+        `${log.timestamp} [${log.labels.level || "info"}] ${log.message}`
+      }
+      emptyStateMessage="Logs will appear here when VM operations are performed"
+      downloadFilename={`vm-${vmId}-logs.txt`}
+      className={className}
+    />
   );
 }

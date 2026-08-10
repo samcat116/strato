@@ -613,6 +613,46 @@ final class ProjectTests {
         }
     }
 
+    @Test("Deleting a project refreshes ancestor quotas after its networks cascade")
+    func testDeleteProjectRefreshesAncestorNetworkQuotas() async throws {
+        try await withProjectTestApp { app, _, testOrganization, testOU, authToken in
+            let builder = TestDataBuilder(db: app.db)
+            let project = try await builder.createProject(
+                name: "Delete Network Project",
+                description: "Its networks cascade with it",
+                ou: testOU)
+            let network = try await builder.createNetwork(
+                name: "cascaded-network", project: project)
+            let organizationQuota = try await builder.createResourceQuota(
+                name: "organization-network-count", organization: testOrganization)
+            let ouQuota = try await builder.createResourceQuota(
+                name: "ou-network-count", ou: testOU)
+            let projectQuota = try await builder.createResourceQuota(
+                name: "project-network-count", project: project)
+
+            for quota in [organizationQuota, ouQuota, projectQuota] {
+                try await QuotaEnforcementService.resyncReservations(quota, on: app.db)
+                try await quota.save(on: app.db)
+                #expect(quota.networkCount == 1)
+            }
+
+            try await app.test(.DELETE, "/api/projects/\(try project.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: authToken)
+            } afterResponse: { res in
+                #expect(res.status == .noContent)
+            }
+
+            #expect(try await LogicalNetwork.find(network.id, on: app.db) == nil)
+            #expect(try await ResourceQuota.find(projectQuota.id, on: app.db) == nil)
+            let refreshedOrganizationQuota = try #require(
+                try await ResourceQuota.find(organizationQuota.id, on: app.db))
+            let refreshedOUQuota = try #require(
+                try await ResourceQuota.find(ouQuota.id, on: app.db))
+            #expect(refreshedOrganizationQuota.networkCount == 0)
+            #expect(refreshedOUQuota.networkCount == 0)
+        }
+    }
+
     @Test("Delete project with VMs fails")
     func testDeleteProjectWithVMs() async throws {
         try await withProjectTestApp { app, _, testOrganization, _, authToken in

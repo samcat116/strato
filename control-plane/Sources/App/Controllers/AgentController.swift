@@ -1168,7 +1168,8 @@ struct AgentController: RouteCollection {
                 "artifactUrl": .string(DesiredAgentUpdate.redactURL(artifactURL)),
             ])
 
-        // Push the sync now; the periodic timer is only the backstop.
+        // Ring now for low latency; the agent's unconditional refetch is the
+        // correctness backstop.
         await req.agentService.syncDesiredState(agentId: agentId.uuidString)
 
         let response = Response(status: .accepted)

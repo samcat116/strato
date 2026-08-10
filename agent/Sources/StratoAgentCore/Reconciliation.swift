@@ -392,7 +392,10 @@ public struct ReconcileWorkItem: Sendable {
     /// "volume/" cannot collide with a UUID string).
     ///
     /// A volume item that carries an attachment also holds the *VM's* lane,
-    /// because realizing it drives that VM's hypervisor session.
+    /// because realizing it drives that VM's hypervisor session. A clone create
+    /// additionally holds its source volume lane and, when the source is
+    /// attached, its source VM lane. That prevents source mutation or a later
+    /// VM start from interleaving with the copy.
     ///
     /// A snapshot item holds its own lane plus its **parent's**, for the same
     /// reason (STR-150): capturing a checkpoint pauses the guest and drives the
@@ -404,8 +407,19 @@ public struct ReconcileWorkItem: Sendable {
         case .vm: return [id]
         case .sandbox: return ["sandbox/" + id]
         case .volume:
-            guard let vmId = desiredVolume?.attachment?.vmId.uuidString else { return ["volume/" + id] }
-            return ["volume/" + id, vmId]
+            var keys = ["volume/" + id]
+            if let sourceVolumeId = desiredVolume?.source?.sourceVolumeId?.uuidString {
+                keys.append(Self.lane(kind: .volume, id: sourceVolumeId))
+            }
+            if let sourceVMId = desiredVolume?.source?.sourceVMId?.uuidString {
+                keys.append(sourceVMId)
+            }
+            if let attachedVMId = desiredVolume?.attachment?.vmId.uuidString {
+                keys.append(attachedVMId)
+            }
+            var unique: [String] = []
+            for key in keys where !unique.contains(key) { unique.append(key) }
+            return unique
         case .volumeSnapshot, .vmCheckpoint, .sandboxSnapshot:
             let own = "snapshot/" + id
             guard let entry = desiredSnapshot else { return [own] }
@@ -579,6 +593,14 @@ public protocol ReconcileActuator: Sendable {
     /// of the plan and makes the observed report carry `volumes: nil`, which
     /// the control plane already reads as "no opinion".
     func observedVolumePresence() async -> [String: VolumePresence]?
+    /// Before volume presence is sampled, adopt any historical VM-side path
+    /// that now arrives with a required managed volume identity. This is the
+    /// host-state half of the STR-231 database cutover: it must run before the
+    /// planner could mistake old bytes for an absent volume and materialize a
+    /// fresh image over the guest's history.
+    func prepareManagedVolumeInventory(
+        from desiredVMs: [DesiredVMState], desiredVolumes: [DesiredVolumeState]
+    ) async
     /// Snapshot of every snapshot artifact this host holds (STR-150), across
     /// all three families, or nil when the agent cannot enumerate them.
     ///
@@ -619,6 +641,12 @@ public protocol ReconcileActuator: Sendable {
     /// Called after every work item finishes (success or failure) so the agent
     /// can push a fresh `ObservedStateReport` to the control plane.
     func convergenceDidChange() async
+}
+
+extension ReconcileActuator {
+    public func prepareManagedVolumeInventory(
+        from _: [DesiredVMState], desiredVolumes _: [DesiredVolumeState]
+    ) async {}
 }
 
 /// Why a volume could not be converged (STR-148). Every case carries a
@@ -662,11 +690,11 @@ public enum VolumeConvergenceError: ClassifiableError, LocalizedError, Sendable 
 /// classifications as `VolumeConvergenceError`, and for the same reason: the
 /// difference decides whether an operator ever sees it.
 public enum SnapshotConvergenceError: ClassifiableError, LocalizedError, Sendable {
-    /// Something this host cannot do however many times it is asked: capture a
-    /// volume snapshot of an attached volume, export a family that has no
-    /// off-node representation, run a backend it does not have. Permanent, so
-    /// the retry policy suppresses it and the control plane degrades the
-    /// artifact with the reason instead of waiting out a completion budget.
+    /// Something this host cannot do however many times it is asked: export a
+    /// family that has no off-node representation, or run a backend it does
+    /// not have. Permanent, so the retry policy suppresses it and the control
+    /// plane degrades the artifact with the reason instead of waiting out a
+    /// completion budget.
     case unsupported(String)
     /// The artifact's *parent* has not converged yet — the volume or VM being
     /// captured may be mid-create in this very sync. A dependency wait: it
@@ -1059,6 +1087,9 @@ public actor Reconciler {
             return
         }
 
+        await actuator.prepareManagedVolumeInventory(
+            from: message.vms, desiredVolumes: message.volumes)
+
         let presentVMs = await actuator.observedPresence()
         // The durable half of the reconciler's memory (STR-151). `lastApplied`
         // is in-process and resets with the agent, which is exactly right for a
@@ -1132,7 +1163,10 @@ public actor Reconciler {
         // Enqueue order matters even though multi-lane items already give
         // mutual exclusion: holding two lanes guarantees isolation, not
         // sequence. Volume data-plane work goes first so a volume exists before
-        // a VM that references it is built, and volume *attachment* work goes
+        // a VM that references it is built. A newly created attached volume is
+        // one item (`create`, then `attach`) that already holds the VM lane, so
+        // it must join that first group too; otherwise its VM runs first and
+        // cannot resolve the volume's local path. Remaining attachment work goes
         // after the VM items so it queues behind that VM's create/boot on the
         // VM's own lane instead of racing it and burning a dependency wait.
         //
@@ -1141,7 +1175,9 @@ public actor Reconciler {
         // own items is what makes it queue *behind* that parent's create/boot
         // instead of racing it — and a checkpoint of a guest that is still
         // being built is not a checkpoint of anything.
-        let (volumeData, volumeAttachment) = volumePlan.items.partitioned { $0.laneKeys.count == 1 }
+        let (volumeData, volumeAttachment) = volumePlan.items.partitioned {
+            $0.laneKeys.count == 1 || $0.steps.contains(.create)
+        }
         plan.items =
             volumeData + vmPlan.items + volumeAttachment + sandboxPlan.items + snapshotPlan.items
 
@@ -1604,8 +1640,8 @@ public actor Reconciler {
     }
 
     /// How many repeats of an unchanged `blocked` reason pass between error
-    /// lines. Roughly a quarter-hour at the periodic sync floor, sooner on a
-    /// doorbell-driven agent — the point is that a stuck volume keeps saying so
+    /// lines. Roughly a quarter-hour at the full-refetch floor, sooner when
+    /// desired state changes — the point is that a stuck volume keeps saying so
     /// rather than falling silent after its first refusal.
     static let blockedRelogInterval = 20
 

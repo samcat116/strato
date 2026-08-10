@@ -2,12 +2,6 @@
 {{- if .Values.gateway.enabled }}
   https://{{ include "strato-control-plane.gateway.webHost" . }}
   (Gateway API / Envoy Gateway — TLS terminated at the Gateway on :443)
-{{- else if .Values.ingress.enabled }}
-{{- range $host := .Values.ingress.hosts }}
-  {{- range .paths }}
-  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}{{ .path }}
-  {{- end }}
-{{- end }}
 {{- else if .Values.frontend.enabled }}
   echo "Visit http://127.0.0.1:8080 to use Strato"
   kubectl --namespace {{ .Release.Namespace }} port-forward service/{{ include "strato-control-plane.fullname" . }}-frontend 8080:{{ .Values.frontend.service.port }}
@@ -51,11 +45,10 @@
    - Relying Party Name: {{ .Values.strato.webauthn.relyingPartyName }}
    - Origin: {{ include "strato-control-plane.webauthnOrigin" . }}
 
-{{- if .Values.migration.enabled }}
-5. Database migrations have been automatically applied.
-{{- else }}
-5. Database migrations are disabled. You may need to run them manually.
-{{- end }}
+5. Database migrations:
+   - Every control-plane pod applies pending migrations before it listens for
+     traffic. An advisory lock serializes concurrent replicas.
+   - A migration failure leaves the new pod unready and is reported in its logs.
 
 6. To connect Strato Agents to this control plane:
    {{- if .Values.gateway.enabled }}
@@ -113,5 +106,5 @@ For more information about Strato, visit: https://github.com/samcat116/strato
 {{- end }}
 
 ⚠️  SECURITY NOTICE:
-   - Configure proper ingress/TLS for external access
+   - Configure Gateway API routing and TLS for external access
    - Set strato.webauthn.relyingPartyOrigin to the exact URL users will visit

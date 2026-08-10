@@ -421,6 +421,68 @@ struct VolumeReconciliationTests {
         #expect(item.laneKeys == ["volume/" + id.uuidString])
     }
 
+    /// A clone's stopped-source check is only useful if no later VM item can
+    /// start that guest before the copy finishes. The source volume lane also
+    /// keeps its attachment, resize, and deletion work out of the copy window.
+    @Test("A clone item holds its target, source volume, and source VM lanes")
+    func cloneItemHoldsSourceLanes() {
+        let id = UUID()
+        let sourceId = UUID()
+        let sourceVMId = UUID()
+        let item = ReconcileWorkItem(
+            kind: .volume, id: id.uuidString, generation: 1, steps: [.create],
+            target: .volume(
+                Self.desired(
+                    id,
+                    source: .clone(from: sourceId, sourceVMId: sourceVMId))))
+        #expect(
+            item.laneKeys == [
+                "volume/" + id.uuidString,
+                "volume/" + sourceId.uuidString,
+                sourceVMId.uuidString,
+            ])
+    }
+
+    /// A new boot volume carries both `.create` and `.attach` in one item. It
+    /// therefore holds the VM lane even though its first step is data-plane
+    /// materialization. Queueing solely by lane count would put that item after
+    /// the VM, whose create cannot resolve the volume's local path yet.
+    @Test("A new attached boot volume is materialized before its VM")
+    func newBootVolumePrecedesVMCreate() async {
+        let volumeId = UUID()
+        let vmId = UUID()
+        let bootVolume = VolumeSpec(
+            volumeId: volumeId,
+            deviceName: .disk(0),
+            storagePath: nil,
+            readonly: false,
+            bootOrder: 0)
+        let vm = DesiredVMState(
+            vmId: vmId,
+            hypervisorType: .qemu,
+            spec: VMSpec(
+                cpus: 1,
+                memoryBytes: 1 << 30,
+                boot: .disk(firmware: nil),
+                volumes: [bootVolume]),
+            desiredStatus: .running,
+            generation: 1)
+        let volume = Self.desired(
+            volumeId,
+            attachment: DesiredVolumeAttachment(vmId: vmId, deviceName: .disk(0)))
+        let actuator = MockVolumeActuator()
+        let reconciler = Self.reconciler(actuator)
+
+        await reconciler.apply(DesiredStateMessage(vms: [vm], volumes: [volume]))
+        _ = await actuator.waitForReports(2)
+
+        let performed = await actuator.performed
+        #expect(performed.map(\.step) == [.create, .attach, .create, .boot])
+        #expect(
+            performed.map(\.id)
+                == [volumeId.uuidString, volumeId.uuidString, vmId.uuidString, vmId.uuidString])
+    }
+
     /// An agent that cannot read its own workload manifest converges no volumes
     /// either (STR-138 ∩ STR-148), even though the storage backend can still
     /// enumerate them: the *attachment* half of a volume's observation rides

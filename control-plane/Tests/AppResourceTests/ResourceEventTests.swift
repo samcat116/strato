@@ -129,6 +129,18 @@ final class ResourceEventTests {
             let created = try #require(
                 try await VM.query(on: app.db).filter(\.$name == "created-vm").first())
             let createdID = try created.requireID()
+            let bootVolumes = try await Volume.query(on: app.db)
+                .filter(\.$vm.$id == createdID)
+                .filter(\.$volumeType == .boot)
+                .all()
+            let bootVolume = try #require(bootVolumes.first)
+            #expect(bootVolumes.count == 1)
+            #expect(bootVolume.deviceName == VolumeDeviceName.disk(0).rawValue)
+            #expect(bootVolume.bootOrder == 0)
+            #expect(!bootVolume.readonly)
+            #expect(bootVolume.size == created.disk)
+            #expect(bootVolume.$sourceImage.id == image.id)
+
             let recorded = try await self.events(for: createdID, on: app.db)
             let create = try #require(recorded.first { $0.mutation == .create })
             #expect(create.actorType == .user)
@@ -139,6 +151,12 @@ final class ResourceEventTests {
             // A fresh VM is desired-shutdown at generation 1, which is what
             // distinguishes "never confirmed by any agent" from "confirmed".
             #expect(create.targetGeneration == 1)
+
+            let volumeEvents = try await self.events(for: try bootVolume.requireID(), on: app.db)
+            #expect(
+                volumeEvents.contains {
+                    $0.resourceKind == .volume && $0.mutation == .create
+                })
         }
     }
 

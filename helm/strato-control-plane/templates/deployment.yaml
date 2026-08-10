@@ -1,9 +1,6 @@
 {{- if not .Values.spire.enabled }}
 {{- fail "spire.enabled must be true: agents authenticate to the control plane only with a SPIRE-issued SVID, so disabling SPIRE yields a control plane that refuses every agent connection. Set spire.enabled=true, or point the chart at an external SPIRE server via spire.controlPlane.serverApiAddress." }}
 {{- end }}
-{{- if and .Values.ingress.enabled (not .Values.gateway.enabled) }}
-{{- fail "ingress.enabled requires gateway.enabled: the legacy Ingress routes /agent to the plain HTTP service port, so agent connections terminate TLS at the Ingress and never reach the Envoy mTLS sidecar. No client certificate arrives, and the control plane rejects every agent (it accepts X-Forwarded-Client-Cert only from the pod-local sidecar over loopback, so an Ingress cannot forward one either). Enable the Gateway, which routes agents.<host> as TLS passthrough to the sidecar, or expose the agent-mtls port yourself and leave the Ingress disabled." }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -177,13 +174,11 @@ spec:
                 secretKeyRef:
                   name: "{{ include "strato-control-plane.databaseSecretName" . }}"
                   key: "{{ include "strato-control-plane.databaseSecretKey" . }}"
-            # Bound normal serving statements on every pooled connection
-            # (STR-207). The migrator temporarily raises this on its pinned
-            # connection, including when a serving pod performs migrations.
+            # Bound statements on every pooled connection (STR-207). The
+            # in-process migrator uses the same bounded budget by default on
+            # its pinned connection and restores it before the pod serves.
             - name: DATABASE_STATEMENT_TIMEOUT_MS
               value: "{{ .Values.strato.database.statementTimeoutMs }}"
-            - name: DATABASE_MIGRATION_STATEMENT_TIMEOUT_MS
-              value: "{{ .Values.migration.statementTimeoutMs }}"
             # Encrypt the Postgres connection (issue #56). Defaults by topology
             # (disable for the bundled in-cluster DB, require for external); set
             # strato.database.tls to override. When a CA bundle is supplied it's
@@ -213,8 +208,8 @@ spec:
               value: "{{ .Values.strato.selfRegistrationEnabled }}"
             # Enable Secure session cookies + HSTS only when browsers reach us over
             # HTTPS. Derived from the resolved WebAuthn origin's scheme so it tracks
-            # exactly what that origin considers HTTPS — an explicit https:// origin
-            # override or ingress.tls — and plaintext installs don't set a Secure
+            # exactly what that origin considers HTTPS — including an explicit
+            # https:// origin override — and plaintext installs don't set a Secure
             # cookie the browser would drop. Force with strato.httpTlsEnabled.
             - name: HTTP_TLS_ENABLED
               value: "{{ include "strato-control-plane.tlsEnabled" . }}"

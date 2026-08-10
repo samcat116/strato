@@ -716,10 +716,20 @@ struct VMController: RouteCollection {
 
         let userID = try user.requireID()
 
+        // A VM's boot disk is a first-class managed volume from its first
+        // committed state. Pool selection is not public yet, so it uses the
+        // same seeded local pool as an explicit volume create.
+        let bootPool = try await StoragePool.defaultPool(on: req.db)
+        guard bootPool.mode == .local else {
+            throw Abort(
+                .conflict,
+                reason: "Storage pool '\(bootPool.name)' is not supported for VM boot volumes")
+        }
+        let bootPoolID = try bootPool.requireID()
+
         // Reserve quota and persist the VM and its create record in one
-        // transaction: enforcement checks, the reservation bump, the initial insert,
-        // the path update, and the attribution event all commit together or roll back
-        // together, so a quota rejection leaves nothing behind.
+        // transaction: enforcement checks, both inserts, creator grants, and
+        // attribution events all commit together or roll back together.
         let accepted: ResourceMutation.Accepted
         do {
             // IPAM's unique (network, address) index is the backstop against
@@ -806,9 +816,6 @@ struct VMController: RouteCollection {
                             basedOn: vm.name, forVM: vmID, in: registrationZones, on: db)
                     }
 
-                    // Image-based paths - disk will be created by agent from cached image
-                    vm.diskPath = "/var/lib/strato/vms/\(vmID)/disk.qcow2"
-
                     // Desired state for a fresh VM: exists but not running. The bump
                     // to generation 1 distinguishes "never confirmed by any agent"
                     // (observed_generation 0) from "confirmed" (issue #260).
@@ -822,8 +829,45 @@ struct VMController: RouteCollection {
                             reason: "Failed to initialize the VM desired-state generation")
                     }
 
-                    // Update VM with generated paths
+                    // Persist the generated hostname and generation.
                     try await vm.update(on: db)
+
+                    let bootVolume = Volume(
+                        name: "boot-\(vmID.uuidString.lowercased())",
+                        description: "Boot volume for VM \(vm.name)",
+                        projectID: projectId,
+                        environment: environment,
+                        size: vm.disk,
+                        format: vm.hypervisorType == .firecracker ? .raw : .qcow2,
+                        volumeType: .boot,
+                        status: .creating,
+                        createdByID: userID,
+                        poolID: bootPoolID,
+                        sourceImageID: imageId)
+                    bootVolume.$vm.id = vmID
+                    bootVolume.deviceName = VolumeDeviceName.disk(0).rawValue
+                    bootVolume.bootOrder = 0
+                    bootVolume.readonly = false
+                    bootVolume.generation = 1
+                    bootVolume.extendConvergenceDeadline(
+                        by: OperationResourceKind.volume.completionBudgetSeconds(for: .create))
+                    try await bootVolume.save(on: db)
+                    let bootVolumeID = try bootVolume.requireID()
+
+                    try await RoleBindingService.grant(
+                        principalType: .user,
+                        principalID: userID,
+                        role: .admin,
+                        nodeType: .volume,
+                        nodeID: bootVolumeID,
+                        createdBy: userID,
+                        on: db)
+                    _ = try await ResourceEvent.record(
+                        .create,
+                        resourceKind: .volume,
+                        resourceID: bootVolumeID,
+                        actor: .user(userID),
+                        on: db)
 
                     let defaultGroupID: UUID?
                     if resolvedInterfaces.contains(where: { $0.securityGroupIDs.isEmpty }) {
@@ -1520,6 +1564,8 @@ struct VMController: RouteCollection {
                 }
                 let outcome: ResourceFinalizerService.ClearOutcome
                 do {
+                    try await ResourceFinalizerService.abandonBootVolumeForOfflineVM(
+                        vmID: vmID, on: db, app: app)
                     outcome = try await ResourceFinalizerService.clear(
                         .agentAbsent, from: vm, on: db, app: app)
                 } catch {
@@ -1548,6 +1594,36 @@ struct VMController: RouteCollection {
             // is already terminating, and re-stamping a second DELETE would
             // resurrect tokens their participants have already cleared.
             try await ResourceFinalizerService.stampForDeletion(vm, on: db)
+            let bootVolumes = try await Volume.query(on: db)
+                .filter(\.$vm.$id == vmID)
+                .filter(\.$volumeType == .boot)
+                .all()
+            guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
+                throw Abort(
+                    .internalServerError,
+                    reason: "VM \(vmID) must have exactly one managed boot volume during deletion")
+            }
+            if !vm.finalizers.contains(ResourceFinalizer.bootVolumeAbsent.rawValue) {
+                vm.finalizers.append(ResourceFinalizer.bootVolumeAbsent.rawValue)
+            }
+            if !bootVolume.isTerminating {
+                try await ResourceFinalizerService.stampForDeletion(bootVolume, on: db)
+                bootVolume.setDesiredStatus(.absent)
+                let expectedGeneration = bootVolume.generation
+                guard
+                    case .applied = try await bootVolume.advanceDesiredStateGeneration(
+                        expectedGeneration: expectedGeneration, on: db)
+                else {
+                    throw ConvergenceWriteError.unsupportedDatabase
+                }
+                try await bootVolume.save(on: db)
+                _ = try await ResourceEvent.record(
+                    .delete,
+                    resourceKind: .volume,
+                    resourceID: try bootVolume.requireID(),
+                    actor: .user(userID),
+                    on: db)
+            }
             vm.setDesiredStatus(.absent)
         }
         // The delete path skips the enforcement lookup: a client follows a

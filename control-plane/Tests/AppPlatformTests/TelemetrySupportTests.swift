@@ -52,6 +52,24 @@ struct TelemetrySupportTests {
         #expect(MetricsMiddleware.routeLabel(fromSegments: nil) == "unmatched")
     }
 
+    // MARK: - Desired-state poll dimensions
+
+    @Test("desired-state requests map to two bounded poll modes")
+    func desiredStatePollModes() {
+        #expect(Telemetry.DesiredStatePollMode.from(ifNoneMatch: nil) == .unconditional)
+        #expect(Telemetry.DesiredStatePollMode.from(ifNoneMatch: "\"etag\"") == .conditional)
+        #expect(
+            Set(Telemetry.DesiredStatePollMode.allCases.map(\.rawValue))
+                == Set(["conditional", "unconditional"]))
+    }
+
+    @Test("desired-state poll outcomes are a bounded dimension")
+    func desiredStatePollOutcomes() {
+        #expect(
+            Set(Telemetry.DesiredStatePollOutcome.allCases.map(\.rawValue))
+                == Set(["served", "not_modified", "assembly_budget_exhausted", "park_refused"]))
+    }
+
     // MARK: - SchedulerService.placementOutcome
 
     @Test("scheduler errors classify as no_candidate")

@@ -145,6 +145,28 @@ enum ResourceFinalizerService {
         return try await R.reap(resource, on: db, app: app) ? .reaped : .alreadyGone
     }
 
+    /// Resolve a VM-owned boot volume when its agent is offline. Physical
+    /// bytes may remain on that host, matching the VM process orphan policy,
+    /// but database ownership still tears down in boot-volume-before-VM order.
+    /// Online deletes never call this; their agent must confirm both absences.
+    static func abandonBootVolumeForOfflineVM(
+        vmID: UUID, on db: any Database, app: Application
+    ) async throws {
+        let bootVolumes = try await Volume.query(on: db)
+            .filter(\.$vm.$id == vmID)
+            .filter(\.$volumeType == .boot)
+            .all()
+
+        if bootVolumes.isEmpty, let vm = try await VM.find(vmID, on: db) {
+            _ = try await clear(.bootVolumeAbsent, from: vm, on: db, app: app)
+            return
+        }
+        guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
+            throw FinalizerError.invalidBootVolumeCount(vmID: vmID, count: bootVolumes.count)
+        }
+        _ = try await clear(.agentAbsent, from: bootVolume, on: db, app: app)
+    }
+
     /// Appends the terminal `resource_events` row for a completed deletion, and
     /// enqueues the `operation.completed` webhook that used to ride the
     /// operation's verdict (STR-147).
@@ -210,11 +232,14 @@ enum ResourceFinalizerService {
 
     enum FinalizerError: Error, CustomStringConvertible {
         case unsupportedDatabase
+        case invalidBootVolumeCount(vmID: UUID, count: Int)
 
         var description: String {
             switch self {
             case .unsupportedDatabase:
                 return "Finalizer bookkeeping requires an SQL database"
+            case .invalidBootVolumeCount(let vmID, let count):
+                return "VM \(vmID) has \(count) canonical boot volumes during deletion"
             }
         }
     }
@@ -229,8 +254,9 @@ extension VM: FinalizableResource {
         let vmID = try vm.requireID()
 
         let reaped = try await db.transaction { tx in
-            // Attached volumes are released, not deleted: the volume outlives
-            // the VM and its data is intact on the agent (STR-129). Necessary
+            // Attached data volumes are released, not deleted: they outlive
+            // the VM. The canonical boot volume has already been reaped — its
+            // finalizer is what allowed this VM to reach the claim. Necessary
             // because `volumes.vm_id` is `ON DELETE RESTRICT` — a volume still
             // pointing here fails the delete rather than being silently
             // stranded the way `SET NULL` left it.
@@ -243,7 +269,7 @@ extension VM: FinalizableResource {
             // the claim's own terms — everything ahead of it must tolerate
             // running twice, and releasing an already-released volume finds no
             // rows to release.
-            let released = try await VolumeAttachmentService.releaseAll(fromVM: vmID, on: tx)
+            let released = try await VolumeAttachmentService.releaseDataVolumes(fromVM: vmID, on: tx)
             if !released.isEmpty {
                 app.logger.info(
                     "Released volumes from deleted VM",
@@ -320,8 +346,9 @@ extension Sandbox: FinalizableResource {
 extension Volume: FinalizableResource {
     static func reap(_ volume: Volume, on db: any Database, app: Application) async throws -> Bool {
         let volumeID = try volume.requireID()
+        let parentVMID = volume.volumeType == .boot ? volume.$vm.id : nil
 
-        return try await db.transaction { tx in
+        let reaped = try await db.transaction { tx in
             guard try await ResourceFinalizerService.reapClaim(Volume.self, id: volumeID, in: tx) else {
                 return false
             }
@@ -331,12 +358,37 @@ extension Volume: FinalizableResource {
             try await ResourceBindingCleanup.revokeBindings(forDeletedVolume: volumeID, on: tx)
             try await ResourceFinalizerService.recordDeletionCompleted(volume, in: tx)
             try await volume.delete(on: tx)
+            if let parentVMID {
+                guard let sql = tx as? any SQLDatabase else {
+                    throw ResourceFinalizerService.FinalizerError.unsupportedDatabase
+                }
+                // Removing the child row and acknowledging its absence on the
+                // parent are one commit. A crash after this transaction cannot
+                // strand a VM behind a token whose only future trigger was the
+                // now-deleted boot volume.
+                try await sql.raw(
+                    """
+                    UPDATE vms
+                    SET finalizers = array_remove(
+                        finalizers, \(bind: ResourceFinalizer.bootVolumeAbsent.rawValue)
+                    )
+                    WHERE id = \(bind: parentVMID)
+                    """
+                ).run()
+            }
             // After the delete, so the volume drops out of the recount (STR-181).
             // One call covers its snapshots too: their rows cascade with the one
             // above, and release recomputes rather than decrements.
             try await QuotaEnforcementService.release(for: volume, on: tx)
             return true
         }
+        guard reaped else { return false }
+
+        if let parentVMID, let parent = try await VM.find(parentVMID, on: db) {
+            _ = try await ResourceFinalizerService.clear(
+                .bootVolumeAbsent, from: parent, on: db, app: app)
+        }
+        return true
         // No placement reservation to give back — volumes draw on none. Their
         // `volume_replicas` and `volume_snapshots` rows cascade with the row
         // above.

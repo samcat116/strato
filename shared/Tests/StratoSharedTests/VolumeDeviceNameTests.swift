@@ -64,7 +64,7 @@ struct VolumeDeviceNameTests {
     @Test("Encodes as the bare string the field always was")
     func encodesAsAString() throws {
         let spec = VolumeSpec(
-            volumeId: UUID(uuidString: "00000000-0000-0000-0000-0000000000AA"),
+            volumeId: UUID(uuidString: "00000000-0000-0000-0000-0000000000AA")!,
             deviceName: VolumeDeviceName("disk1")!,
             storagePath: "/var/lib/strato/volumes/a.qcow2",
             readonly: false,
@@ -76,11 +76,11 @@ struct VolumeDeviceNameTests {
 
     @Test("Decoding validates, so a spec cannot carry an illegal name")
     func decodingValidates() throws {
-        let legal = #"{"deviceName":"disk1","readonly":false}"#
+        let legal = #"{"volumeId":"00000000-0000-0000-0000-0000000000AA","deviceName":"disk1","readonly":false}"#
         let decoded = try JSONDecoder().decode(VolumeSpec.self, from: Data(legal.utf8))
         #expect(decoded.deviceName.rawValue == "disk1")
 
-        let illegal = #"{"deviceName":"disk 1","readonly":false}"#
+        let illegal = #"{"volumeId":"00000000-0000-0000-0000-0000000000AA","deviceName":"disk 1","readonly":false}"#
         #expect(throws: (any Error).self) {
             try JSONDecoder().decode(VolumeSpec.self, from: Data(illegal.utf8))
         }

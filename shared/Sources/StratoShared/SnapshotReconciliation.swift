@@ -249,8 +249,8 @@ public struct ObservedSnapshotFacts: Codable, Sendable, Equatable {
     /// `vmm_version` of the Firecracker that took the snapshot.
     public let firecrackerVersion: String?
     /// Version advertised by the guest frozen into this checkpoint. Nil is a
-    /// legacy/unknown guest and must not be assumed to support fork identity
-    /// rotation merely because its owning agent is current.
+    /// legacy/unknown artifact retained only so it can be inventoried and
+    /// deleted; restore and fork require the exact current version.
     public let guestControlProtocolVersion: Int?
     /// Version of the fork-safe artifact layout, or nil for legacy/unjailed
     /// checkpoints that remain eligible for in-place restore only.

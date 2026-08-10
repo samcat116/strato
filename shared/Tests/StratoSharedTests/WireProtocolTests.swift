@@ -17,32 +17,11 @@ struct WireProtocolTests {
 
     @Test("the current wire contract is exact")
     func currentContractVersion() {
-        #expect(WireProtocol.currentVersion == 41)
+        #expect(WireProtocol.currentVersion == 42)
     }
-    @Test("sandbox fork guest gate rejects legacy and unknown checkpoints")
-    func sandboxForkGuestGate() {
-        #expect(!SandboxGuestControlProtocol.supportsReidentify(nil))
-        #expect(!SandboxGuestControlProtocol.supportsReidentify(2))
-        #expect(SandboxGuestControlProtocol.supportsReidentify(3))
-        #expect(
-            SandboxGuestControlProtocol.supportsReidentify(
-                SandboxGuestControlProtocol.currentVersion))
-    }
-
-    /// A networked fork needs one version more than a network-free one: v3
-    /// rotates identity but drops `reidentify`'s `network` block, which would
-    /// leave the fork holding the source sandbox's address (STR-104).
-    @Test("sandbox NIC re-addressing gate is stricter than the fork gate")
-    func sandboxNetworkReconfigureGate() {
-        #expect(!SandboxGuestControlProtocol.supportsNetworkReconfigure(nil))
-        #expect(!SandboxGuestControlProtocol.supportsNetworkReconfigure(3))
-        #expect(SandboxGuestControlProtocol.supportsNetworkReconfigure(4))
-        #expect(
-            SandboxGuestControlProtocol.supportsNetworkReconfigure(
-                SandboxGuestControlProtocol.currentVersion))
-        #expect(
-            SandboxGuestControlProtocol.networkReconfigureMinimumVersion
-                > SandboxGuestControlProtocol.reidentifyMinimumVersion)
+    @Test("the sandbox guest control contract is exact")
+    func sandboxGuestControlContract() {
+        #expect(SandboxGuestControlProtocol.currentVersion == 4)
     }
 
     // MARK: - Registration version negotiation

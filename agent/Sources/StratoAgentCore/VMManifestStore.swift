@@ -207,6 +207,58 @@ public struct QuarantinedManifestEntry: Sendable {
     /// The kind to file this entry under. Treating an unreadable kind as a VM
     /// keeps the entry on the conservative workload path while quarantined.
     public var effectiveKind: WorkloadKind { kind ?? .vm }
+
+    /// Recover an entry written before `VolumeSpec.volumeId` became required.
+    /// This is intentionally manifest-only: the shared wire decoder remains
+    /// strict. Every path-only attachment must match a managed desired volume
+    /// by its historical path, or by its unique device/order identity for the
+    /// Firecracker cutover whose old manifest named `disk.qcow2` while the
+    /// realized rootfs lived at `rootfs.raw`.
+    public func recoveringManagedVolumeIdentities(from desired: VMSpec) -> VMManifestEntry? {
+        guard case .object(var entry) = raw,
+            case .object(var spec)? = entry["spec"],
+            case .array(var volumes)? = spec["volumes"]
+        else { return nil }
+
+        var changed = false
+        for index in volumes.indices {
+            guard case .object(var legacy) = volumes[index] else { continue }
+            let identityIsMissing: Bool
+            switch legacy["volumeId"] {
+            case nil, .some(.null): identityIsMissing = true
+            default: identityIsMissing = false
+            }
+            guard identityIsMissing else { continue }
+
+            let legacyPath: String? =
+                if case .string(let value)? = legacy["storagePath"] { value } else { nil }
+            let legacyDevice: String? =
+                if case .string(let value)? = legacy["deviceName"] { value } else { nil }
+            let legacyOrder: Int? =
+                if case .int(let value)? = legacy["bootOrder"] { value } else { nil }
+
+            let pathMatches = desired.volumes.filter { $0.storagePath == legacyPath && legacyPath != nil }
+            let identityMatches = desired.volumes.filter {
+                let sameOrder =
+                    $0.bootOrder == legacyOrder
+                    || (legacyOrder == nil && $0.bootOrder == 0)
+                return $0.deviceName.rawValue == legacyDevice && sameOrder
+            }
+            let matches = pathMatches.isEmpty ? identityMatches : pathMatches
+            guard matches.count == 1, let managed = matches.first else { return nil }
+
+            legacy["volumeId"] = .string(managed.volumeId.uuidString)
+            legacy["storagePath"] = managed.storagePath.map(CodableValue.string) ?? .null
+            volumes[index] = .object(legacy)
+            changed = true
+        }
+        guard changed else { return nil }
+
+        spec["volumes"] = .array(volumes)
+        entry["spec"] = .object(spec)
+        guard let data = try? JSONEncoder().encode(CodableValue.object(entry)) else { return nil }
+        return try? JSONDecoder().decode(VMManifestEntry.self, from: data)
+    }
 }
 
 /// Why the manifest could not be read, and where the evidence went.

@@ -11,9 +11,9 @@ import StratoShared
 /// build pipeline in `sandbox-guest/` produces exactly this layout.
 ///
 /// This type is the shared contract for that layout. `SandboxRuntimeProbe`
-/// only asserts the path is present for the base sandbox capability (that
-/// check must stay cheap and never go dark on a parse error); the sandbox
-/// runtime (issue #421) calls ``resolve(atDirectory:architecture:fileManager:)``
+/// validates this manifest before advertising the base sandbox capability, so
+/// an old or unreadable installed image cannot receive new placements. The
+/// sandbox runtime (issue #421) calls ``resolve(atDirectory:architecture:fileManager:)``
 /// to turn the directory into concrete kernel/initramfs paths and boot args for
 /// Firecracker, so the filenames live here rather than being hard-coded at the
 /// call site.
@@ -37,7 +37,7 @@ public struct SandboxGuestImage: Sendable, Equatable {
     /// The architecture token this image was resolved for (`x86_64`/`aarch64`).
     public let arch: String
     /// What this guest build can do beyond booting a workload — see
-    /// ``GuestCapability``. Empty for a v1 manifest, which predates the field.
+    /// ``GuestCapability``.
     public let capabilities: Set<String>
 
     public init(
@@ -52,7 +52,7 @@ public struct SandboxGuestImage: Sendable, Equatable {
         self.capabilities = capabilities
     }
 
-    /// Capability tokens a `guest.json` may advertise (manifest schema v2+).
+    /// Capability tokens a schema-v2 `guest.json` may advertise.
     ///
     /// A named list rather than a config-drive version number: what the host
     /// needs to know is whether *this* guest realizes a feature, and a schema
@@ -69,23 +69,11 @@ public struct SandboxGuestImage: Sendable, Equatable {
     /// Whether the installed guest brings up a NIC from the config drive.
     public var supportsNetworking: Bool { capabilities.contains(GuestCapability.network) }
 
-    /// The oldest manifest schema this build still reads. Every version in
-    /// ``supportedSchemaVersions`` is accepted, mirroring the config drive's
-    /// own `MINIMUM_SCHEMA_VERSION...SCHEMA_VERSION` rule — and for the same
-    /// reason: the guest image is installed separately from the agent, so
-    /// "agent newer than image" is the normal rollout state, not an error.
-    public static let minimumSchemaVersion = 1
-
-    /// Newest manifest schema version this build understands.
+    /// The one manifest schema this build understands.
     ///
-    /// * v1 — schema version, image version, git SHA, per-arch artifacts.
-    /// * v2 — adds the top-level `capabilities` list (STR-103).
+    /// Schema v2 includes the top-level `capabilities` list (STR-103). Older
+    /// schemas are inventory-only artifacts and must be replaced.
     public static let supportedSchemaVersion = 2
-
-    /// The accepted manifest schema range.
-    public static var supportedSchemaVersions: ClosedRange<Int> {
-        minimumSchemaVersion...supportedSchemaVersion
-    }
 
     /// Manifest filename inside the guest image directory.
     public static let manifestName = "guest.json"
@@ -103,7 +91,7 @@ public struct SandboxGuestImage: Sendable, Equatable {
         atDirectory directory: String,
         fileManager: FileManager = .default
     ) throws -> Set<String> {
-        Set(try manifest(atDirectory: directory, fileManager: fileManager).capabilities ?? [])
+        Set(try manifest(atDirectory: directory, fileManager: fileManager).capabilities)
     }
 
     /// Read, decode and version-check the manifest.
@@ -116,17 +104,22 @@ public struct SandboxGuestImage: Sendable, Equatable {
             throw SandboxGuestImageError.manifestMissing(manifestPath)
         }
 
-        let manifest: GuestManifest
+        let version: GuestManifestVersion
         do {
-            manifest = try JSONDecoder().decode(GuestManifest.self, from: data)
+            version = try JSONDecoder().decode(GuestManifestVersion.self, from: data)
         } catch {
             throw SandboxGuestImageError.manifestUnreadable("\(manifestPath): \(error)")
         }
 
-        guard supportedSchemaVersions.contains(manifest.schemaVersion) else {
-            throw SandboxGuestImageError.unsupportedSchema(manifest.schemaVersion)
+        guard version.schemaVersion == supportedSchemaVersion else {
+            throw SandboxGuestImageError.unsupportedSchema(version.schemaVersion)
         }
-        return manifest
+
+        do {
+            return try JSONDecoder().decode(GuestManifest.self, from: data)
+        } catch {
+            throw SandboxGuestImageError.manifestUnreadable("\(manifestPath): \(error)")
+        }
     }
 
     /// Resolve the guest image for a host architecture from its install
@@ -163,7 +156,7 @@ public struct SandboxGuestImage: Sendable, Equatable {
             bootArgs: artifact.bootArgs,
             version: manifest.version,
             arch: artifact.arch,
-            capabilities: Set(manifest.capabilities ?? []))
+            capabilities: Set(manifest.capabilities))
     }
 }
 
@@ -173,7 +166,7 @@ public enum SandboxGuestImageError: Error, LocalizedError, Equatable, Sendable {
     case manifestMissing(String)
     /// `guest.json` could not be decoded.
     case manifestUnreadable(String)
-    /// The manifest schema version is outside the range this build reads.
+    /// The manifest does not use the exact schema this build reads.
     case unsupportedSchema(Int)
     /// The manifest has no artifacts for the host architecture.
     case architectureUnavailable(String)
@@ -187,9 +180,9 @@ public enum SandboxGuestImageError: Error, LocalizedError, Equatable, Sendable {
         case .manifestUnreadable(let detail):
             return "sandbox guest manifest is unreadable: \(detail)"
         case .unsupportedSchema(let version):
-            return "unsupported sandbox guest manifest schema version \(version) "
-                + "(this agent reads \(SandboxGuestImage.minimumSchemaVersion)"
-                + "...\(SandboxGuestImage.supportedSchemaVersion))"
+            return "unsupported sandbox guest manifest schema version \(version); "
+                + "install a schema \(SandboxGuestImage.supportedSchemaVersion) sandbox guest image "
+                + "from the current Strato release before enabling this agent"
         case .architectureUnavailable(let detail):
             return detail
         case .artifactMissing(let path):
@@ -204,11 +197,9 @@ struct GuestManifest: Codable {
     let schemaVersion: Int
     let version: String
     let gitSHA: String?
-    /// Schema v2+ (STR-103). Optional rather than defaulted so a v1 manifest —
-    /// which predates the field entirely — decodes to nil and reads as "this
-    /// guest advertises nothing", which is the safe answer for every
-    /// capability the host might ask about.
-    let capabilities: [String]?
+    /// Schema v2 (STR-103). Required: accepting its absence would recreate the
+    /// schema-v1 ambiguity this manifest version retired.
+    let capabilities: [String]
     let artifacts: [Artifact]
 
     struct Artifact: Codable {
@@ -220,6 +211,12 @@ struct GuestManifest: Codable {
         // verification but are not needed to resolve boot paths, so they are
         // intentionally not decoded here.
     }
+}
+
+/// Version-only envelope decoded before the strict schema-v2 body. This lets
+/// the agent name a retired v1 manifest even though v1 lacks v2-required keys.
+private struct GuestManifestVersion: Decodable {
+    let schemaVersion: Int
 }
 
 extension CPUArchitecture {

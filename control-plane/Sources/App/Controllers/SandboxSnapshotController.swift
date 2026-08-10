@@ -244,6 +244,11 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot cannot be restored in status '\(snapshot.status.rawValue)'")
         }
+        guard snapshot.guestControlProtocolVersion == SandboxGuestControlProtocol.currentVersion else {
+            throw Abort(
+                .conflict,
+                reason: Self.unsupportedGuestProtocolReason(snapshot.guestControlProtocolVersion))
+        }
         // Preserve the specific clone-safety error during request preflight;
         // the locked transaction below repeats this check authoritatively.
         guard try await Self.liveForkCount(from: snapshotID, on: req.db) == 0 else {
@@ -302,6 +307,15 @@ extension SandboxController {
             guard let current = try await SandboxSnapshot.find(snapshotID, on: db), current.canRestore
             else {
                 throw Abort(.conflict, reason: "Snapshot is no longer restorable")
+            }
+            guard
+                current.guestControlProtocolVersion
+                    == SandboxGuestControlProtocol.currentVersion
+            else {
+                throw Abort(
+                    .conflict,
+                    reason: Self.unsupportedGuestProtocolReason(
+                        current.guestControlProtocolVersion))
             }
             // Clone-safety policy (issue #427): do not rewind the source
             // identity to the same memory/RNG/TCP state while live forks of
@@ -404,6 +418,11 @@ extension SandboxController {
                 .conflict,
                 reason: "Snapshot was not captured in a fork-compatible jailed layout")
         }
+        guard snapshot.guestControlProtocolVersion == SandboxGuestControlProtocol.currentVersion else {
+            throw Abort(
+                .conflict,
+                reason: unsupportedGuestProtocolReason(snapshot.guestControlProtocolVersion))
+        }
         let sourceID = snapshot.$sandbox.id
         guard let source = try await Sandbox.find(sourceID, on: db), source.desiredStatus != .absent else {
             throw Abort(.conflict, reason: "Snapshot source sandbox is being deleted")
@@ -458,6 +477,13 @@ extension SandboxController {
             return
         }
         throw Abort(.conflict, reason: "Snapshot is being restored in place")
+    }
+
+    private static func unsupportedGuestProtocolReason(_ version: Int?) -> String {
+        "Snapshot uses unsupported guest control protocol "
+            + "\(version.map(String.init) ?? "missing"); version "
+            + "\(SandboxGuestControlProtocol.currentVersion) is required. Delete this snapshot "
+            + "and recapture it after upgrading the sandbox guest image."
     }
 
     /// Fetch the :snapshotID snapshot and confirm it belongs to `sandbox`

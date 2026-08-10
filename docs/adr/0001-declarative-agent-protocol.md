@@ -34,8 +34,8 @@ database stores desired state, `DesiredStateAssembler` produces a full
 authoritative `DesiredStateMessage` per agent, per-resource monotonic
 `generation` counters guard against reordering, and the agent-side reconciler
 diffs observed vs. desired and converges via per-VM serial lanes. Syncs are
-level-triggered and safe to drop or replay; a periodic timer is the
-correctness backstop.
+level-triggered and safe to drop or replay; the agent's periodic unconditional
+fetch is the correctness backstop.
 
 But of the ~40 message types in `shared/Sources/StratoShared/`
 (`WebSocketProtocol.swift` and friends), only two carry the reconciliation

@@ -122,7 +122,12 @@ export function QuotaDialog({
       : parseInt(form.maxNetworks, 10);
 
     if (
-      Object.values(numbers).some((n) => Number.isNaN(n) || n < 1) ||
+      [numbers.maxVCPUs, numbers.maxVMs].some(
+        (n) => Number.isNaN(n) || n < 1,
+      ) ||
+      [numbers.maxMemoryGB, numbers.maxStorageGB].some(
+        (n) => Number.isNaN(n) || n <= 0,
+      ) ||
       (maxNetworks !== undefined &&
         (Number.isNaN(maxNetworks) || maxNetworks < 1))
     ) {

@@ -316,7 +316,7 @@ actor LibvirtService: HypervisorService {
     /// depends on the number at all. `.dropNewest` inverts exactly that: a
     /// burst would fill the buffer and then discard the transition that just
     /// happened, leaving a guest's self-initiated power-off invisible until the
-    /// next periodic sync, which is the case this whole feature exists for.
+    /// next full desired-state payload, which is the case this feature exists for.
     private static let lifecycleEventBuffer: EventBufferPolicy = .dropOldest(256)
 
     /// Backoff bounds for re-establishing the subscription, matching
@@ -494,7 +494,7 @@ actor LibvirtService: HypervisorService {
     ) {
         if attempt == 1 {
             logger.warning(
-                "libvirt lifecycle subscription failed; VM state will fall back to the periodic sync",
+                "libvirt lifecycle subscription failed; VM state will fall back to full desired-state refetches",
                 metadata: ["error": .string("\(error)")])
         } else if !remindOfOutage(attempt: attempt, since: troubleStarted) {
             logger.debug(
@@ -532,7 +532,7 @@ actor LibvirtService: HypervisorService {
         guard attempt % Self.outageReminderEvery == 0 else { return false }
         let minutes = troubleStarted.map { (ContinuousClock.now - $0).components.seconds / 60 } ?? 0
         logger.warning(
-            "libvirtd is not delivering lifecycle events; observed VM state on this host is only as fresh as the periodic sync",
+            "libvirtd is not delivering lifecycle events; observed VM state on this host is only as fresh as full desired-state refetches",
             metadata: [
                 "minutes": .stringConvertible(minutes),
                 "attempts": .stringConvertible(attempt),
@@ -2150,54 +2150,28 @@ actor LibvirtService: HypervisorService {
 
     /// The VM's disks, in the order the domain document will present them.
     ///
-    /// The boot disk is materialized from the cached image when the sync
-    /// carried one; otherwise the spec's volume references (with agent-reported
-    /// paths) are used. Either way every volume the agent has recorded as
-    /// attached is realized, deduped against the boot disk in case the boot
-    /// volume is also listed.
-    private func resolveDisks(vmId: String, spec: VMSpec, imageInfo: ImageInfo?) async throws -> [ResolvedDisk] {
+    /// Every disk comes from a managed volume reference. Image bytes are
+    /// materialized by the volume reconciler before VM creation; the
+    /// hypervisor never invents a second, path-only boot disk.
+    private func resolveDisks(vmId: String, spec: VMSpec, imageInfo _: ImageInfo?) async throws -> [ResolvedDisk] {
         var disks: [ResolvedDisk] = []
-
-        if let imageInfo {
-            guard let storage else {
-                throw HypervisorServiceError.diskError(
-                    "cannot materialize disk-image artifact for VM \(vmId): storage backend is unavailable")
-            }
-            logger.info(
-                "Materializing boot disk from image",
-                metadata: ["vmId": .string(vmId), "imageId": .string(imageInfo.imageId.uuidString)])
-            // Its own generous budget: multi-GB downloads are legitimate
-            // and must not be squeezed into the define envelope.
-            let attachment = try await StageBudget.run(
-                seconds: StageBudget.imageMaterializationSeconds,
-                stage: "image materialization", onTimeout: .cancelAndWait
-            ) { [vmStoragePath] in
-                try await storage.materializeDisk(
-                    at: "\(vmStoragePath)/\(vmId)/disk.qcow2", from: imageInfo, format: .qcow2,
-                    artifactKind: .diskImage)
-            }
-            // Flagged as a boot disk, which it is by construction — the
-            // image is what this VM boots from. Not cosmetic: `<boot order>`
-            // is emitted for every disk that carries the flag, so leaving
-            // this one unflagged would let a *data* volume the operator
-            // happened to attach with a `bootOrder` become the domain's only
-            // boot entry, and the guest would boot the wrong disk. The value
-            // itself is only a flag; `DomainXMLBuilder.derivedBootOrders`
-            // numbers positionally, and this disk is first.
-            disks.append(
-                ResolvedDisk(path: attachment.path, format: attachment.format, bootOrder: 0))
-        }
-
-        var seen = Set(disks.map(\.path))
+        var seen: Set<String> = []
         for volume in spec.volumes {
-            guard let path = volume.storagePath, seen.insert(path).inserted else { continue }
+            guard let path = volume.storagePath else {
+                throw HypervisorServiceError.diskError(
+                    "managed volume \(volume.volumeId) for VM \(vmId) has no local storage path")
+            }
+            guard seen.insert(path).inserted else {
+                throw HypervisorServiceError.diskError(
+                    "managed volumes for VM \(vmId) resolve to the same storage path \(path)")
+            }
             // Checked here rather than left to libvirt: a define accepts a
             // source file that does not exist and only the *start* fails, so
             // without this a create reports success and the boot that follows
             // fails with an error naming a path but not the volume behind it.
             guard FileManager.default.fileExists(atPath: path) else {
                 throw HypervisorServiceError.diskError(
-                    "volume \(volume.volumeId?.uuidString ?? volume.deviceName.rawValue) for VM \(vmId) has no "
+                    "volume \(volume.volumeId) for VM \(vmId) has no "
                         + "file at "
                         + "\(path) on this host")
             }
@@ -2206,20 +2180,13 @@ actor LibvirtService: HypervisorService {
                     path: path, format: DiskFormat(volumePath: path), readonly: volume.readonly,
                     bootOrder: volume.bootOrder,
                     // Written into the document as `<serial>`, so a detach can
-                    // resolve this disk without the agent remembering anything
-                    // about it. A volume reference with no id is not one the
-                    // control plane placed and has nothing to be named after.
-                    volumeId: volume.volumeId?.uuidString))
+                    // resolve this disk by managed identity after a restart.
+                    volumeId: volume.volumeId.uuidString))
         }
 
-        // A disk-boot VM with no disks can only produce an unbootable shell —
-        // the image download failed (or the sync carried no usable imageInfo)
-        // and the spec had no volume references to fall back on. Fail the create
-        // with the real problem instead of "converging" to a diskless VM.
-        if disks.isEmpty, case .disk = spec.boot {
+        if disks.isEmpty {
             throw HypervisorServiceError.diskError(
-                "no disks resolved for disk-boot VM \(vmId): image materialization failed or the spec carried "
-                    + "no volumes")
+                "no managed volumes resolved for VM \(vmId)")
         }
         return disks
     }

@@ -131,11 +131,10 @@ final class VMOperationTests {
     func attachNetworkInterfaceUsesLowestFreeSlot() async throws {
         try await withVMTestApp { app, user, vm, token in
             try await placeOnAgent(app: app, vm: vm)
-            let projectID = vm.$project.id
-            let network = LogicalNetwork(
-                name: "hotplug-net", subnet: "10.240.0.0/24", gateway: "10.240.0.1",
-                projectID: projectID, createdByID: user.id!)
-            try await network.save(on: app.db)
+            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "hotplug-net", project: project,
+                subnet: "10.240.0.0/24", gateway: "10.240.0.1")
             for slot in [0, 2] {
                 try await VMNetworkInterface(
                     vmID: vm.id!, logicalNetworkID: network.id!,
@@ -176,10 +175,10 @@ final class VMOperationTests {
     func networkInterfaceAttachRejectsStaticNetwork() async throws {
         try await withVMTestApp { app, user, vm, token in
             try await placeOnAgent(app: app, vm: vm)
-            let network = LogicalNetwork(
-                name: "static-hotplug-net", subnet: "10.243.0.0/24", gateway: "10.243.0.1",
-                projectID: vm.$project.id, createdByID: user.id!, dhcpEnabled: false)
-            try await network.save(on: app.db)
+            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "static-hotplug-net", project: project,
+                subnet: "10.243.0.0/24", gateway: "10.243.0.1", dhcpEnabled: false)
 
             try await app.test(.POST, "/api/vms/\(vm.id!)/interfaces") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -200,10 +199,10 @@ final class VMOperationTests {
     func detachFinalNetworkInterfaceAndRetry() async throws {
         try await withVMTestApp { app, user, vm, token in
             try await placeOnAgent(app: app, vm: vm)
-            let network = LogicalNetwork(
-                name: "detach-net", subnet: "10.242.0.0/24", gateway: "10.242.0.1",
-                projectID: vm.$project.id, createdByID: try user.requireID())
-            try await network.save(on: app.db)
+            let project = try #require(try await Project.find(vm.$project.id, on: app.db))
+            let network = try await TestDataBuilder(db: app.db).createNetwork(
+                name: "detach-net", project: project,
+                subnet: "10.242.0.0/24", gateway: "10.242.0.1")
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),
                 macAddress: "52:54:00:00:00:42", deviceName: "net0", orderIndex: 0)

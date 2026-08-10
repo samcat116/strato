@@ -52,15 +52,15 @@ VM.hypervisorId = agentId
     ↓
 Save to Database
     ↓
-syncDesiredState(agentId) — push a fresh DesiredStateMessage
+syncDesiredState(agentId) — ring the agent's desired-state doorbell
     ↓
 Agent reconciler converges on the new VM
 ```
 
 There is no imperative create message: once the placement is persisted, the
-VM is part of the chosen agent's desired state, and every sync path (the
-immediate nudge, the periodic timer, a reconnect sync) carries it until the
-agent's reconciler converges.
+VM is part of the chosen agent's desired state. The immediate doorbell wakes a
+parked poll for low latency; reconnect and unconditional full refetches keep
+carrying it until the agent's reconciler converges.
 
 ## Scheduling Strategies
 

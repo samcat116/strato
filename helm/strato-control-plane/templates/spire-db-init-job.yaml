@@ -19,7 +19,7 @@ metadata:
     app.kubernetes.io/component: spire-db-init
   annotations:
     "helm.sh/hook": post-install,post-upgrade
-    # Before the app migration job (-5).
+    # Before the SPIRE entry bootstrap resources and Job (-4/-3).
     "helm.sh/hook-weight": "-6"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:

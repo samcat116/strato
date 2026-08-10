@@ -610,11 +610,11 @@ struct NetworkController: RouteCollection {
             throw Abort(.conflict, reason: "A network named '\(network.name)' already exists")
         }
 
-        // Push the new DHCP config to the fleet: agents reprogram OVN's
+        // Ring the fleet for the new DHCP config: agents reprogram OVN's
         // DHCP_Options for the subnet, and running guests pick up new DNS/lease
         // on their next renew. Level-triggered and cluster-wide, so a network
-        // shared across agents converges everywhere; a lost nudge is caught by
-        // the periodic sync timer.
+        // shared across agents converges everywhere; a lost doorbell is caught
+        // by the agents' unconditional refetches.
         await req.application.agentService.syncDesiredStateToFleet()
 
         req.logger.info(
