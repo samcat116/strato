@@ -167,6 +167,13 @@ struct VolumeController: RouteCollection {
         // Every volume lives in a pool; without a pool-selection API yet,
         // that's the default local pool seeded by migration.
         let pool = try await StoragePool.defaultPool(on: req.db)
+        guard pool.mode == .local else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Storage pool '\(pool.name)' uses replicated mode, which is not supported by the host-local storage backend"
+            )
+        }
 
         // Create volume record
         let volume = Volume(
@@ -192,8 +199,6 @@ struct VolumeController: RouteCollection {
         // Bind to a `let` so the `@Sendable` dispatch closure captures an
         // immutable copy rather than the mutable `sourceImage` var.
         let poolMemberIds = pool.memberAgentIds
-        let requiredReplicaCount =
-            pool.mode == .local ? 1 : pool.replicationFactor
 
         // How long the create has to converge before the stuck-convergence
         // sweep marks the volume degraded, stamped with the insert so a
@@ -241,25 +246,18 @@ struct VolumeController: RouteCollection {
             targetGeneration: accepted.targetGeneration, agentIDs: [],
             strategy: .placement { @Sendable db in
                 let agents = await app.agentService.getAgentList()
-                let selected = VolumeService.selectVolumeAgents(
-                    from: agents, count: requiredReplicaCount, memberAgentIds: poolMemberIds)
-                let agentIds = selected.compactMap { $0.id?.uuidString }
-                guard agentIds.count == requiredReplicaCount else {
+                guard
+                    let agentId = VolumeService.selectVolumeAgent(
+                        from: agents, memberAgentIds: poolMemberIds)?.id?.uuidString
+                else {
                     throw ResourceMutation.WorkError(
-                        "Not enough agents are available to host this volume: it needs "
-                            + "\(requiredReplicaCount) distinct online, QEMU-capable agent(s) "
-                            + "in the volume's pool.")
+                        "No agent is available to host this volume: it needs an online, "
+                            + "QEMU-capable agent in the volume's local pool.")
                 }
-                try await db.transaction { tx in
-                    for agentId in agentIds {
-                        try await VolumeReplica(
-                            volumeID: volumeId, agentId: agentId, state: .provisioning
-                        ).create(on: tx)
-                    }
-                }
-                for agentId in agentIds {
-                    await app.agentService.syncDesiredState(agentId: agentId)
-                }
+                try await VolumeReplica(
+                    volumeID: volumeId, agentId: agentId, state: .provisioning
+                ).create(on: db)
+                await app.agentService.syncDesiredState(agentId: agentId)
             },
             app: app)
 

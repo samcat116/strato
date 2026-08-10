@@ -1,8 +1,8 @@
 # Volume replica cutover
 
 STR-232 removes `volumes.hypervisor_id` and `volumes.storage_path`. Before
-deploying it, inventory live volumes whose active replica set does not match
-their storage-pool policy:
+deploying it, inventory live volumes that are not in an implemented local pool
+with exactly one active replica:
 
 ```sql
 SELECT v.id,
@@ -39,8 +39,8 @@ CROSS JOIN LATERAL (
 WHERE v.desired_status::text <> 'Absent'
   AND (
       p.id IS NULL
-      OR active.replica_count
-         <> CASE WHEN p.mode = 'local' THEN 1 ELSE p.replication_factor END
+      OR p.mode <> 'local'
+      OR active.replica_count <> 1
       OR active.missing_agent_count > 0
       OR active.nonmember_count > 0
       OR active.pathless_healthy_count > 0
@@ -53,6 +53,12 @@ If anything remains, it stops before dropping either column and reports each
 volume ID and reason. Repair the replica rows from storage inventory, rerun the
 query, and restart the migration. Do not invent a healthy replica for bytes
 whose physical location has not been verified.
+
+`replicated` mode is deliberately rejected. It was reserved for a replication
+backend that was never implemented; multiple filesystem copies are independent
+and can contain different guest writes. Convert a pool to `local` only after
+verifying which single replica contains the authoritative bytes and removing
+the other active replica rows.
 
 After migration, verify that the query returns no rows and that the legacy
 columns and index are absent:

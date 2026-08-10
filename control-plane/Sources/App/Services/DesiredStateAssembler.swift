@@ -681,6 +681,20 @@ struct DesiredStateAssembler {
             .filter(\.$id ~~ Array(Set(volumeIDs)))
             .with(\.$sourceImage) { $0.with(\.$artifacts) }
             .all()
+        let attachedVMIDs = Array(Set(volumes.compactMap(\.$vm.id)))
+        let attachmentAgentIDs: [UUID: String]
+        if attachedVMIDs.isEmpty {
+            attachmentAgentIDs = [:]
+        } else {
+            attachmentAgentIDs = Dictionary(
+                uniqueKeysWithValues: try await VM.query(on: db)
+                    .filter(\.$id ~~ attachedVMIDs)
+                    .all()
+                    .compactMap { vm in
+                        guard let vmID = vm.id, let vmAgentID = vm.hypervisorId else { return nil }
+                        return (vmID, vmAgentID)
+                    })
+        }
 
         var entries: [DesiredVolumeState] = []
         for volume in volumes {
@@ -717,10 +731,14 @@ struct DesiredStateAssembler {
                     metadata: ["volumeId": .string(volumeId.uuidString)])
             }
 
-            // The attachment is projected from the same columns
-            // `VMSpecBuilder.volumeSpecs` reads, so the two projections of one
-            // fact cannot disagree — which is what used to let a volume be
-            // `attached` in the VM's spec and detached in its own record.
+            // Storage realization follows replica placement, but attachment
+            // realization follows VM placement. Only the VM-hosting agent may
+            // receive the attachment: every other replica receives the same
+            // volume generation with `attachment: nil`, so it keeps its bytes
+            // realized without trying to plug them into a VM it cannot host.
+            // The attachment is otherwise projected from the same columns
+            // `VMSpecBuilder.volumeSpecs` reads, so the two projections cannot
+            // disagree.
             //
             // A name outside `VolumeDeviceName`'s charset cannot be stored (the
             // API validates it and the schema's check constraint plus unique
@@ -733,7 +751,10 @@ struct DesiredStateAssembler {
             // it is the one not sent — loudly, because a row that reached this
             // state is a broken invariant, not a routine skip.
             var attachment: DesiredVolumeAttachment?
-            if let vmID = volume.$vm.id, let raw = volume.deviceName {
+            if let vmID = volume.$vm.id,
+                attachmentAgentIDs[vmID] == agentId,
+                let raw = volume.deviceName
+            {
                 if let deviceName = VolumeDeviceName(raw) {
                     attachment = DesiredVolumeAttachment(
                         vmId: vmID, deviceName: deviceName, readonly: volume.readonly,

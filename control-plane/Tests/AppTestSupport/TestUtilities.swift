@@ -839,7 +839,7 @@ package func placeVolume(
         agentId: agentID,
         datasetPath: datasetPath,
         state: state,
-        generation: volume.generation
+        generation: volume.observedGeneration
     )
     try await replica.create(on: db)
     return replica

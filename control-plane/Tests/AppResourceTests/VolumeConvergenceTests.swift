@@ -169,6 +169,34 @@ final class VolumeConvergenceTests {
         }
     }
 
+    @Test("Only the VM host receives a replicated volume's attachment intent")
+    func attachmentIsScopedToVMPlacement() async throws {
+        try await withVolumeApp { app, builder, user, project in
+            let vmAgentID = try await registerAgent(app: app, named: "attachment-vm-host")
+            let storageOnlyAgentID = try await registerAgent(app: app, named: "attachment-storage-only")
+            let vm = try await builder.createVM(name: "attachment-target", project: project)
+            vm.hypervisorId = vmAgentID
+            try await vm.save(on: app.db)
+
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: vmAgentID)
+            try await placeVolume(volume, on: storageOnlyAgentID, using: app.db)
+            volume.$vm.id = vm.id
+            volume.deviceName = "disk1"
+            try await volume.save(on: app.db)
+
+            let vmHostMessage = try await app.desiredStateAssembler.assemble(agentId: vmAgentID)
+            let vmHostEntry = try #require(vmHostMessage.volumes?.first { $0.volumeId == volume.id })
+            #expect(vmHostEntry.attachment?.vmId == vm.id)
+
+            let storageOnlyMessage = try await app.desiredStateAssembler.assemble(
+                agentId: storageOnlyAgentID)
+            let storageOnlyEntry = try #require(
+                storageOnlyMessage.volumes?.first { $0.volumeId == volume.id })
+            #expect(storageOnlyEntry.attachment == nil)
+        }
+    }
+
     @Test("A clone's source rides the entry as a create strategy")
     func cloneSourceIsACreateStrategy() async throws {
         try await withVolumeApp { app, _, user, project in
@@ -218,6 +246,75 @@ final class VolumeConvergenceTests {
                 .filter(\.$volume.$id == volumeID).first()
             #expect(replica?.datasetPath == "/agent/chosen/path.qcow2")
             #expect(replica?.state == .healthy)
+            #expect(replica?.generation == 1)
+        }
+    }
+
+    @Test("Logical convergence waits for every required replica and preserves peer failures")
+    func logicalConvergenceAggregatesReplicas() async throws {
+        try await withVolumeApp { app, _, user, project in
+            let firstAgentID = try await registerAgent(app: app, named: "converge-replica-a")
+            let secondAgentID = try await registerAgent(app: app, named: "converge-replica-b")
+            let volume = try await makeVolume(
+                on: app, user: user, project: project, agentId: firstAgentID,
+                generation: 2, observedGeneration: 1)
+            try await placeVolume(volume, on: secondAgentID, using: app.db)
+            let volumeID = try volume.requireID()
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: firstAgentID,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true, storagePath: "/replica-a",
+                            observedGeneration: 2)
+                    ]))
+
+            var stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.observedGeneration == 1)
+            #expect(!stored.conditions.converged)
+            #expect(stored.convergencePhase == "waiting for replicas")
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: secondAgentID,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true, storagePath: "/replica-b",
+                            observedGeneration: 2, lastError: "replica write failed",
+                            failedGeneration: 2)
+                    ]))
+
+            stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.observedGeneration == 1)
+            #expect(stored.conditions.degraded?.reason == "replica write failed")
+
+            // A heartbeat from the already-settled peer cannot erase another
+            // required replica's failure.
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: firstAgentID,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true, storagePath: "/replica-a",
+                            observedGeneration: 2)
+                    ]))
+            stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.conditions.degraded?.reason == "replica write failed")
+            #expect(!stored.conditions.converged)
+
+            _ = try await app.observedStateApplier.apply(
+                report(
+                    agentId: secondAgentID,
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: volumeID, present: true, storagePath: "/replica-b",
+                            observedGeneration: 2)
+                    ]))
+            stored = try #require(try await Volume.find(volumeID, on: app.db))
+            #expect(stored.observedGeneration == 2)
+            #expect(stored.conditions.converged)
+            #expect(stored.conditions.degraded == nil)
         }
     }
 

@@ -6,8 +6,8 @@ import StratoShared
 /// Final storage phase-1 cutover (STR-232).
 ///
 /// Re-runs the idempotent legacy backfill, inventories every live volume, and
-/// refuses to drop the legacy placement/path columns unless its pool has the
-/// required number of usable replicas. A failed preflight is intentionally a
+/// refuses to drop the legacy placement/path columns unless every volume uses
+/// the implemented local-pool policy and has one usable replica. A failed preflight is intentionally a
 /// migration failure: inventing a host for already-observed bytes would be a
 /// data-loss bug, while dropping the only recorded location would make repair
 /// impossible.
@@ -63,12 +63,11 @@ struct MakeVolumeReplicasAuthoritative: AsyncMigration {
                    CASE
                      WHEN v.pool_id IS NULL THEN 'missing storage pool'
                      WHEN p.id IS NULL THEN 'storage pool row is missing'
-                     WHEN active.replica_count <> CASE
-                            WHEN p.mode = \(bind: StoragePoolMode.local.rawValue) THEN 1
-                            ELSE p.replication_factor
-                          END
+                     WHEN p.mode <> \(bind: StoragePoolMode.local.rawValue)
+                       THEN 'storage pool mode ' || p.mode::text || ' is not implemented'
+                     WHEN active.replica_count <> 1
                        THEN 'active replica count ' || active.replica_count::text
-                            || ' does not match pool policy'
+                            || ' does not match local pool policy'
                      WHEN active.invalid_agent_count > 0
                        THEN 'replica references a missing agent'
                      WHEN active.nonmember_count > 0
@@ -106,10 +105,8 @@ struct MakeVolumeReplicasAuthoritative: AsyncMigration {
               AND (
                   v.pool_id IS NULL
                   OR p.id IS NULL
-                  OR active.replica_count <> CASE
-                       WHEN p.mode = \(bind: StoragePoolMode.local.rawValue) THEN 1
-                       ELSE p.replication_factor
-                     END
+                  OR p.mode <> \(bind: StoragePoolMode.local.rawValue)
+                  OR active.replica_count <> 1
                   OR active.invalid_agent_count > 0
                   OR active.nonmember_count > 0
                   OR active.pathless_healthy_count > 0

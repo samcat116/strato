@@ -115,17 +115,4 @@ struct VolumeAgentSelectionTests {
         #expect(VolumeService.selectVolumeAgent(from: agents, memberAgentIds: [])?.name == "any")
     }
 
-    @Test("replicated placement selects the complete requested set")
-    func testReplicatedSelection() {
-        let agents = [
-            makeAgent(id: "first", hypervisors: [hypervisor(.qemu)]),
-            makeAgent(id: "offline", hypervisors: [hypervisor(.qemu)], status: .offline),
-            makeAgent(id: "second", hypervisors: [hypervisor(.qemu)]),
-        ]
-
-        let selected = VolumeService.selectVolumeAgents(from: agents, count: 2)
-        #expect(selected.map(\.name) == ["first", "second"])
-        #expect(VolumeService.selectVolumeAgents(from: agents, count: 3).count == 2)
-    }
-
 }

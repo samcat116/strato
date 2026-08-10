@@ -155,6 +155,26 @@ final class VolumeSizeValidationTests {
         }
     }
 
+    @Test("POST /api/volumes rejects an unimplemented replicated default pool")
+    func createRejectsReplicatedPool() async throws {
+        try await withVolumeTestApp { app, _, project, token in
+            let pool = try await StoragePool.defaultPool(on: app.db)
+            pool.mode = .replicated
+            pool.replicationFactor = 2
+            try await pool.save(on: app.db)
+
+            try await app.test(.POST, "/api/volumes") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(self.createBody(project: project, sizeGB: 10))
+            } afterResponse: { res in
+                #expect(res.status == .conflict)
+            }
+
+            #expect(try await Volume.query(on: app.db).count() == 0)
+            #expect(try await VolumeReplica.query(on: app.db).count() == 0)
+        }
+    }
+
     // MARK: - Resize
 
     @Test(

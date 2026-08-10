@@ -45,21 +45,13 @@ struct StoragePoolTests {
         #expect(StoragePool.agentCanReach(agentId: "agent-b", pool: nil, replicaAgentIds: []))
     }
 
-    @Test("replicated pool: membership decides, independent of replica placement")
-    func replicatedPoolUsesMembership() {
+    @Test("replicated pools fail closed until a coherent backend exists")
+    func replicatedPoolIsUnreachable() {
         let pool = makePool(mode: .replicated, members: ["agent-a", "agent-b", "agent-c"])
 
-        // A member reaches the replica set over the network even when it
-        // holds no replica itself.
-        #expect(StoragePool.agentCanReach(agentId: "agent-c", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
+        #expect(!StoragePool.agentCanReach(agentId: "agent-a", pool: pool, replicaAgentIds: ["agent-a"]))
         #expect(!StoragePool.agentCanReach(agentId: "agent-d", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
-    }
-
-    @Test("replicated pool with no member restriction accepts any agent")
-    func replicatedPoolEmptyMembersIsUnrestricted() {
-        let pool = makePool(mode: .replicated)
-
-        #expect(StoragePool.agentCanReach(agentId: "anyone", pool: pool, replicaAgentIds: ["agent-a"]))
+        #expect(!StoragePool.agentCanReach(agentId: "agent-c", pool: pool, replicaAgentIds: ["agent-a", "agent-b"]))
     }
 
     // MARK: - Default pool (migration-seeded)
@@ -294,6 +286,39 @@ struct StoragePoolTests {
                 name: "cutover-invalid",
                 hypervisorId: nil,
                 storagePath: "/volumes/unplaced.qcow2")
+
+            await #expect(throws: MakeVolumeReplicasAuthoritative.InvalidReplicaInventory.self) {
+                try await MakeVolumeReplicasAuthoritative().prepare(on: app.db)
+            }
+
+            let sql = try #require(app.db as? any SQLDatabase)
+            struct ColumnCount: Decodable { let count: Int }
+            let remaining = try await sql.raw(
+                """
+                SELECT COUNT(*)::int AS count
+                FROM information_schema.columns
+                WHERE table_schema = current_schema()
+                  AND table_name = 'volumes'
+                  AND column_name IN ('hypervisor_id', 'storage_path')
+                """
+            ).first(decoding: ColumnCount.self)
+            #expect(remaining?.count == 2)
+        }
+    }
+
+    @Test("authoritative cutover rejects the unimplemented replicated pool mode")
+    func authoritativeCutoverRejectsReplicatedPool() async throws {
+        try await withTestApp { app in
+            let agentID = try await registerAgent(on: app, named: "replicated-cutover-agent")
+            _ = try await createLegacyVolume(
+                on: app.db,
+                name: "replicated-cutover",
+                hypervisorId: agentID,
+                storagePath: "/volumes/replicated-cutover.qcow2")
+            let pool = try await StoragePool.defaultPool(on: app.db)
+            pool.mode = .replicated
+            pool.replicationFactor = 2
+            try await pool.save(on: app.db)
 
             await #expect(throws: MakeVolumeReplicasAuthoritative.InvalidReplicaInventory.self) {
                 try await MakeVolumeReplicasAuthoritative().prepare(on: app.db)

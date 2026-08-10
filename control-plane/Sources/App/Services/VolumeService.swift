@@ -145,21 +145,10 @@ enum VolumeService {
     /// local pool) leaves all agents eligible.
     ///
     static func selectVolumeAgent(from agents: [Agent], memberAgentIds: [String] = []) -> Agent? {
-        selectVolumeAgents(from: agents, count: 1, memberAgentIds: memberAgentIds).first
-    }
-
-    /// Select distinct hosts for every replica required by a pool policy.
-    /// Returning fewer than `count` is a placement failure; callers must not
-    /// create a partial replica set and make the volume visible.
-    static func selectVolumeAgents(
-        from agents: [Agent], count: Int, memberAgentIds: [String] = []
-    ) -> [Agent] {
-        guard count > 0 else { return [] }
-        return Array(
-            agents.filter {
-                $0.status == .online && $0.supportedHypervisors.contains(.qemu)
-                    && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
-            }.prefix(count))
+        agents.first {
+            $0.status == .online && $0.supportedHypervisors.contains(.qemu)
+                && (memberAgentIds.isEmpty || memberAgentIds.contains($0.id?.uuidString ?? ""))
+        }
     }
 
     private static func replicaPrecedes(_ lhs: VolumeReplica, _ rhs: VolumeReplica) -> Bool {
