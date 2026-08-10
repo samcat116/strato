@@ -96,6 +96,24 @@ public enum ProcessRunner {
         timeout: Duration? = nil,
         environment: [String: String]? = nil
     ) async throws -> ProcessResult {
+        try await run(
+            executableURL: executableURL,
+            arguments: arguments,
+            timeout: timeout,
+            environment: environment,
+            maxOutputBytes: nil)
+    }
+
+    /// The bounded-output variant used for small host inspection commands.
+    /// The ceiling is shared by stdout and stderr and enforced while draining,
+    /// so a misbehaving command cannot grow the agent's memory without bound.
+    public static func run(
+        executableURL: URL,
+        arguments: [String],
+        timeout: Duration? = nil,
+        environment: [String: String]? = nil,
+        maxOutputBytes: Int?
+    ) async throws -> ProcessResult {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
@@ -144,12 +162,21 @@ public enum ProcessRunner {
         let drainDeadline = timeout.map {
             Date().addingTimeInterval(Double($0.components.seconds) + drainGrace)
         }
+        let outputBudget = maxOutputBytes.map(OutputBudget.init(limit:))
+        let pid = process.processIdentifier
         let stdoutFD = stdoutPipe.fileHandleForReading.fileDescriptor
         let stderrFD = stderrPipe.fileHandleForReading.fileDescriptor
-        async let stdoutData = drain(fd: stdoutFD, deadline: drainDeadline)
-        async let stderrData = drain(fd: stderrFD, deadline: drainDeadline)
+        async let stdoutData = drain(
+            fd: stdoutFD, deadline: drainDeadline, outputBudget: outputBudget, processID: pid)
+        async let stderrData = drain(
+            fd: stderrFD, deadline: drainDeadline, outputBudget: outputBudget, processID: pid)
 
         let (out, err) = await (stdoutData, stderrData)
+
+        if outputBudget?.isExceeded == true {
+            _ = await exited.wait(upTo: exitObservationGrace)
+            throw ProcessRunnerError.outputLimitExceeded(limit: maxOutputBytes ?? 0)
+        }
 
         // The timed-out path must not wait unboundedly for the termination
         // handler. On Linux, corelibs-foundation detects exit through an
@@ -394,7 +421,12 @@ public enum ProcessRunner {
     /// Reads a file descriptor to EOF on a background queue, or until
     /// `deadline` passes. Nil deadline reads to EOF unconditionally — the
     /// behaviour every caller without a timeout relies on.
-    private static func drain(fd: Int32, deadline: Date? = nil) async -> Data {
+    private static func drain(
+        fd: Int32,
+        deadline: Date? = nil,
+        outputBudget: OutputBudget? = nil,
+        processID: Int32? = nil
+    ) async -> Data {
         await withCheckedContinuation { continuation in
             DispatchQueue.global().async {
                 var data = Data()
@@ -424,6 +456,10 @@ public enum ProcessRunner {
                         break
                     }
                     if count == 0 { break }
+                    if let outputBudget, !outputBudget.accept(count) {
+                        if let processID { kill(processID, SIGKILL) }
+                        break
+                    }
                     data.append(contentsOf: buffer.prefix(count))
                 }
                 continuation.resume(returning: data)
@@ -519,6 +555,36 @@ public enum ProcessRunner {
             lock.lock()
             defer { lock.unlock() }
             return tripped
+        }
+    }
+
+    /// A combined stdout/stderr byte ceiling shared by both drain queues.
+    /// Once crossed, both drains stop retaining data and the child is killed.
+    private final class OutputBudget: @unchecked Sendable {
+        private let lock = NSLock()
+        private let limit: Int
+        private var consumed = 0
+        private var exceeded = false
+
+        init(limit: Int) {
+            self.limit = max(1, limit)
+        }
+
+        func accept(_ count: Int) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !exceeded, consumed <= limit - count else {
+                exceeded = true
+                return false
+            }
+            consumed += count
+            return true
+        }
+
+        var isExceeded: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return exceeded
         }
     }
 }

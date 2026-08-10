@@ -30,8 +30,8 @@ enum ResolverCapability {
     {
         try await Agent.query(on: db)
             .filter(\.$site.$id == siteID)
-            .filter(\.$resolverCapable == false)
             .all()
+            .filter { !$0.effectiveResolverCapable }
             .map(\.name)
             .sorted()
     }
@@ -43,8 +43,8 @@ enum ResolverCapability {
     static func index(on db: any Database) async throws -> Index {
         Index(
             incapable: try await Agent.query(on: db)
-                .filter(\.$resolverCapable == false)
-                .all())
+                .all()
+                .filter { !$0.effectiveResolverCapable })
     }
 
     /// A fleet-wide snapshot of which sites are holding the resolver back.

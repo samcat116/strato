@@ -295,6 +295,11 @@ actor Agent {
     private var networkServiceConnected = false
     // Background retry loop for a network service that failed to connect.
     private var networkConnectTask: Task<Void, Never>?
+    // Periodic dependency inspection is deliberately independent of the
+    // heartbeat task: a slow systemd/virsh/OVS probe may make its observation
+    // late, but can never make a live agent miss liveness reports.
+    private var dependencyManager: NodeDependencyManager?
+    private var dependencyObservationTask: Task<Void, Never>?
     private let imageCachePath: String?
     // Byte budgets for the image caches; nil means unbounded (see
     // image_cache_max_size_gb / sandbox_image_cache_max_size_gb).
@@ -911,6 +916,8 @@ actor Agent {
             )
         }
 
+        try await startDependencyObservation()
+
         // Begin draining inbound frames before the connection opens so the registration
         // response (and any early frames) are processed in order.
         startMessageConsumer()
@@ -980,6 +987,10 @@ actor Agent {
 
         networkConnectTask?.cancel()
         networkConnectTask = nil
+
+        dependencyObservationTask?.cancel()
+        dependencyObservationTask = nil
+        dependencyManager = nil
 
         // Stop the per-network resolvers (STR-40). A draining host must not keep
         // a CoreDNS answering for networks whose guests have moved elsewhere:
@@ -1244,6 +1255,7 @@ actor Agent {
 
     private func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
+        let dependencyObservations = await dependencyManager?.observations() ?? []
 
         // A network service that failed to connect earlier may be fixable by
         // now (OVS installed, ovn-controller restarted); retry once before
@@ -1390,7 +1402,8 @@ actor Agent {
             // across the whole site before enabling any network's resolver,
             // because the DHCP option that points guests at it is authored once
             // per network while the listener is per chassis.
-            resolverCapable: resolverBinaryPath != nil
+            resolverCapable: resolverBinaryPath != nil,
+            dependencyObservations: dependencyObservations
         )
 
         if let client = websocketClient {
@@ -1729,6 +1742,123 @@ actor Agent {
         }
     }
 
+    // MARK: - Node dependency observation (STR-237)
+
+    private func startDependencyObservation() async throws {
+        let modules: [any NodeDependencyModule]
+        if isSimulationMode {
+            modules = [
+                SimulatedNodeDependencyModule(
+                    id: .spire, role: .identity, affectedCapabilities: [.workloadIdentity]),
+                SimulatedNodeDependencyModule(
+                    id: .libvirt, role: .compute, affectedCapabilities: [.qemuPlacement]),
+                SimulatedNodeDependencyModule(
+                    id: .ovnOvs, role: .networking,
+                    affectedCapabilities: [.overlayNetworking, .sandboxNetworking, .networkResolver]),
+            ]
+        } else {
+            let systemd = SystemdHostAdapter()
+            let spireVersionCache = NodeDependencyProbeCache<String?>()
+            guard let svidManager else {
+                throw AgentError.spiffeConfigurationError(
+                    "dependency observation started before the SVID manager")
+            }
+            var registry: [any NodeDependencyModule] = [
+                SPIRENodeDependencyModule(
+                    systemd: systemd,
+                    version: {
+                        await spireVersionCache.value(maxAge: 300) {
+                            await DependencyVersionProbe.version(
+                                candidates: [
+                                    "/opt/spire/bin/spire-agent",
+                                    "/usr/local/bin/spire-agent",
+                                    "/usr/bin/spire-agent",
+                                ], arguments: ["-version"])
+                        }
+                    },
+                    svid: {
+                        do {
+                            return .ready(expiresAt: try await svidManager.getSVID().expiresAt)
+                        } catch {
+                            return .unavailable(
+                                "SPIRE Workload API did not provide a usable X.509 SVID: \(error.localizedDescription)")
+                        }
+                    })
+            ]
+
+            #if os(Linux)
+            let libvirtVersionCache = NodeDependencyProbeCache<String?>()
+            registry.append(
+                LibvirtNodeDependencyModule(
+                    systemd: systemd,
+                    installedVersion: {
+                        await libvirtVersionCache.value(maxAge: 300) {
+                            await DependencyVersionProbe.version(
+                                candidates: ["/usr/bin/virsh", "/usr/local/bin/virsh"])
+                        }
+                    },
+                    probe: { await LibvirtProbe.probe() }))
+            #endif
+
+            if effectiveNetworkMode == .ovn {
+                let ovsVersionCache = NodeDependencyProbeCache<String?>()
+                let ovnVersionCache = NodeDependencyProbeCache<String?>()
+                let service = networkService
+                registry.append(
+                    OVNOVSNodeDependencyModule(
+                        systemd: systemd,
+                        ovsVersion: {
+                            await ovsVersionCache.value(maxAge: 300) {
+                                await DependencyVersionProbe.version(
+                                    candidates: [
+                                        "/usr/sbin/ovs-vswitchd", "/usr/bin/ovs-vswitchd",
+                                        "/usr/local/sbin/ovs-vswitchd",
+                                    ])
+                            }
+                        },
+                        ovnVersion: {
+                            await ovnVersionCache.value(maxAge: 300) {
+                                await DependencyVersionProbe.version(
+                                    candidates: [
+                                        "/usr/sbin/ovn-controller", "/usr/bin/ovn-controller",
+                                        "/usr/local/sbin/ovn-controller",
+                                    ])
+                            }
+                        },
+                        functional: {
+                            guard let service else {
+                                return .unhealthy("OVN networking is configured but no network service exists")
+                            }
+                            return await service.inspectDependencyHealth()
+                        }))
+            }
+            modules = registry
+        }
+
+        let manager = try NodeDependencyManager(modules: modules, logger: logger)
+        dependencyManager = manager
+        // Registration carries this initial authoritative snapshot, avoiding a
+        // placement window before the first heartbeat.
+        await manager.refresh()
+        dependencyObservationTask = Task { [weak self] in
+            await self?.runDependencyObservationLoop()
+        }
+    }
+
+    private func runDependencyObservationLoop() async {
+        while !Task.isCancelled, !shutdownRequested {
+            do {
+                try await Task.sleep(for: .seconds(15))
+            } catch {
+                return
+            }
+            guard !shutdownRequested, let dependencyManager else { return }
+            // Delivery 1 is observation-only. Even a future module accidentally
+            // registered as repair-capable receives no lifecycle authority here.
+            await dependencyManager.refresh(allowRemediation: false)
+        }
+    }
+
     // MARK: - Network service connection
 
     private struct NetworkConnectTimeout: Error, LocalizedError {
@@ -1928,10 +2058,12 @@ actor Agent {
         }
 
         let resources = await getAgentResources()
+        let dependencyObservations = await dependencyManager?.observations() ?? []
 
         let message = AgentHeartbeatMessage(
             agentId: effectiveAgentID,
-            resources: resources
+            resources: resources,
+            dependencyObservations: dependencyObservations
         )
 
         if let client = websocketClient {

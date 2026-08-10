@@ -1,4 +1,6 @@
+import Foundation
 import Metrics
+import StratoShared
 
 /// Central definitions for the operational metrics surfaced for production
 /// observability and alerting. Routing all emission through these helpers keeps
@@ -67,6 +69,21 @@ enum Telemetry {
     /// swept it stops updating, so alert on `strato_agent_up` for hard-down detection.
     static func recordHeartbeatStaleness(agentName: String, seconds: Double) {
         Gauge(label: "strato_agent_heartbeat_staleness_seconds", dimensions: [("agent", agentName)]).record(seconds)
+    }
+
+    /// Latest feature dependency state. Counters are reported as gauges because
+    /// the agent owns their monotonicity across control-plane replicas.
+    static func recordDependency(agentName: String, observation: NodeDependencyObservation) {
+        let dimensions = [("agent", agentName), ("dependency", observation.id.rawValue)]
+        let available = observation.allowsNewWork(
+            at: Date(), staleAfter: Agent.dependencyObservationStaleAfter)
+        Gauge(label: "strato_agent_dependency_available", dimensions: dimensions).record(available ? 1 : 0)
+        Gauge(label: "strato_agent_dependency_consecutive_failures", dimensions: dimensions)
+            .record(Int64(observation.consecutiveFailures))
+        Gauge(label: "strato_agent_dependency_remediation_count", dimensions: dimensions)
+            .record(Int64(observation.remediationCount))
+        Gauge(label: "strato_agent_dependency_restart_count", dimensions: dimensions)
+            .record(Int64(observation.restartCount))
     }
 
     /// Whether a site's designated network controller can author its topology:

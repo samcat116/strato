@@ -13,7 +13,7 @@ import Foundation
 public enum WireProtocol {
     /// The only wire/schema version this build accepts. Bump this value whenever
     /// a coordinated release changes an on-wire representation or its semantics.
-    public static let currentVersion = 40
+    public static let currentVersion = 41
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

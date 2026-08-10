@@ -336,6 +336,7 @@ actor AgentService {
             agent.sandboxNetworkingCapable = message.sandboxNetworkingCapable ?? false
             agent.tpmCapable = message.tpmCapable ?? false
             agent.resolverCapable = message.resolverCapable ?? false
+            agent.dependencyObservations = message.dependencyObservations
             _ = agent.updateAvailableResources(message.resources)
             agent.lastHeartbeat = Date()
             agent.status = .online
@@ -761,7 +762,11 @@ actor AgentService {
         // and observed report carry the same snapshot on the same cadence.
         // Persist only real resource/status changes or one heartbeat per half
         // TTL so identical pairs do not churn the row.
-        if applyPeriodicAgentState(message.resources, to: agent) {
+        if applyPeriodicAgentState(
+            message.resources,
+            dependencyObservations: message.dependencyObservations,
+            to: agent)
+        {
             try await agent.save(on: db)
         }
 
@@ -775,8 +780,33 @@ actor AgentService {
     /// Apply the mutable fields from a periodic agent report. A real state
     /// change always persists and refreshes `lastHeartbeat`; otherwise the
     /// timestamp advances at half the presence TTL.
-    private func applyPeriodicAgentState(_ resources: AgentResources, to agent: Agent) -> Bool {
+    private func applyPeriodicAgentState(
+        _ resources: AgentResources,
+        dependencyObservations: [NodeDependencyObservation],
+        to agent: Agent
+    ) -> Bool {
         var changed = agent.updateAvailableResources(resources)
+        let previous = Dictionary(uniqueKeysWithValues: agent.dependencyObservations.map { ($0.id, $0) })
+        if agent.dependencyObservations != dependencyObservations {
+            agent.dependencyObservations = dependencyObservations
+            changed = true
+        }
+        for observation in dependencyObservations {
+            Telemetry.recordDependency(agentName: agent.name, observation: observation)
+            if previous[observation.id]?.functionalState != observation.functionalState
+                || previous[observation.id]?.reason?.code != observation.reason?.code
+            {
+                app.logger.log(
+                    level: observation.functionalState == .unhealthy ? .error : .info,
+                    "Agent dependency state changed",
+                    metadata: [
+                        "agent": .string(agent.name),
+                        "dependency": .string(observation.id.rawValue),
+                        "state": .string(observation.functionalState.rawValue),
+                        "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
+                    ])
+            }
+        }
         if agent.status != .online {
             agent.status = .online
             changed = true
@@ -2082,7 +2112,10 @@ actor AgentService {
         // Reports carry the same resource snapshot as heartbeats; keep the
         // scheduler's view fresh from whichever arrives without re-saving an
         // identical row a second time.
-        var agentChanged = applyPeriodicAgentState(report.resources, to: agent)
+        var agentChanged = applyPeriodicAgentState(
+            report.resources,
+            dependencyObservations: agent.dependencyObservations,
+            to: agent)
         let previousBlockedReason = agent.updateBlockedReason
         let previousFailureReason = agent.updateFailureReason
         applyReportedUpdateStatus(report.agentUpdateStatus, to: agent)
@@ -2706,7 +2739,7 @@ actor AgentService {
                     supportsInterVMNetworking: agent.supportsInterVMNetworking,
                     siteID: agent.$site.id,
                     supportsSandboxWorkloads: agent.sandboxCapable,
-                    supportsSandboxNetworking: agent.sandboxNetworkingCapable,
+                    supportsSandboxNetworking: agent.effectiveSandboxNetworkingCapable,
                     supportsVTPM: agent.tpmCapable
                 )
             }

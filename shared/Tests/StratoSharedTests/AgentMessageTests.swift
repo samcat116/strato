@@ -193,16 +193,24 @@ struct AgentMessageTests {
     }
 
     @Test func agentHeartbeatRoundTrip() throws {
+        let dependency = NodeDependencyObservation(
+            id: .libvirt, role: .compute, desiredState: .required,
+            ownership: .observeOnly, supervisorState: .active,
+            daemonVersion: "11.5.0", compatibility: .compatible,
+            functionalState: .healthy, checkedAt: Fixtures.timestamp,
+            lastHealthyAt: Fixtures.timestamp, affectedCapabilities: [.qemuPlacement])
         let message = AgentHeartbeatMessage(
             requestId: Fixtures.requestId,
             timestamp: Fixtures.timestamp,
             agentId: "agent-1",
-            resources: Fixtures.resources
+            resources: Fixtures.resources,
+            dependencyObservations: [dependency]
         )
         let decoded = try throughEnvelope(message)
         #expect(decoded.type == .agentHeartbeat)
         #expect(decoded.agentId == "agent-1")
         #expect(decoded.resources.availableMemory == Fixtures.resources.availableMemory)
+        #expect(decoded.dependencyObservations == [dependency])
     }
 
     @Test func agentUnregisterRoundTrip() throws {

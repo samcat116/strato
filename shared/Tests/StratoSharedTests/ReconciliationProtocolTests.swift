@@ -492,7 +492,7 @@ struct ReconciliationProtocolTests {
             {"requestId":"r","timestamp":0,"agentId":"a","hostname":"h","version":"1",\
             "resources":{"totalCPU":1,"totalMemory":1,"totalDisk":1,\
             "availableCPU":1,"availableMemory":1,"availableDisk":1},\
-            "protocolVersion":\(WireProtocol.currentVersion)}
+            "protocolVersion":\(WireProtocol.currentVersion),"dependencyObservations":[]}
             """
         let old = try WireProtocol.makeDecoder().decode(
             AgentRegisterMessage.self, from: Data(withoutCapability.utf8))
