@@ -1,0 +1,23 @@
+control-plane/web/src/components/ui/log-viewer-shell.tsx
+  s_4408f3bbc1fd5d::t_9821b4ada304f6 1-200
+control-plane/web/src/components/vms/log-viewer.tsx
+  s_4408f3bbc1fd5d::t_9821b4ada304f6 3,6,10-13,56-58,60-62,64-71,74-87,89-95,97-99,101-114
+control-plane/web/src/components/sandboxes/sandbox-log-viewer.tsx
+  s_4408f3bbc1fd5d::t_9821b4ada304f6 3,5-6,23-46,52,55-71
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "75a26b66b126f46fe0356a33d2551cb40d8ec0ac",
+  "prompts": {},
+  "sessions": {
+    "s_4408f3bbc1fd5d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fed8d-3d81-73f0-939f-189659b5f9eb",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
