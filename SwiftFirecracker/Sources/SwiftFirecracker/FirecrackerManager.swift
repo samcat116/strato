@@ -239,6 +239,27 @@ public actor FirecrackerManager {
     public func resume() async throws {
         try await requireState(.paused)
 
+        try await sendResume()
+    }
+
+    /// Sends `Resumed` without trusting Firecracker's instance-level state.
+    ///
+    /// This is only for recovery after `pause()` failed. Firecracker broadcasts
+    /// `Pause` to every vCPU before collecting their acknowledgements, but it
+    /// changes `GET /` from `Running` to `Paused` only after *all* of them
+    /// acknowledge. A timeout can therefore leave some vCPUs paused while the
+    /// only observable state remains `Running`; the guarded ``resume()`` would
+    /// refuse to send the command that unwinds that partial pause.
+    ///
+    /// `Resumed` is idempotent at the vCPU state machine: a running vCPU
+    /// acknowledges it and keeps running, while a paused one resumes. Callers
+    /// must not use this as an ordinary lifecycle operation because it
+    /// deliberately bypasses the manager's state precondition.
+    public func recoverFromFailedPause() async throws {
+        try await sendResume()
+    }
+
+    private func sendResume() async throws {
         let stateChange = VMStateChange(state: .resumed)
         let body = try encoder.encode(stateChange)
         let response = try await httpClient.request(method: .PATCH, path: "/vm", body: body)

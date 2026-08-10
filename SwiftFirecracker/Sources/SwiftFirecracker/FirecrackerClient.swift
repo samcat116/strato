@@ -213,7 +213,9 @@ public actor FirecrackerClient {
             ])
 
         do {
-            try process.run()
+            try FirecrackerProcessLauncher.run(process)
+        } catch let error as FirecrackerError {
+            throw error
         } catch {
             throw FirecrackerError.processSpawnFailed(error.localizedDescription)
         }

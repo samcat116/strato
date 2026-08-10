@@ -4,9 +4,58 @@ import Logging
 
 #if os(Linux)
 import Glibc
+
+// Glibc exposes SIGRTMIN as a function-backed macro, which Swift cannot import.
+// Firecracker uses the same function plus one for its vCPU kick signal.
+@_silgen_name("__libc_current_sigrtmin")
+private func libcCurrentSignalRTMin() -> Int32
 #else
 import Darwin
 #endif
+
+/// Launches Firecracker with the real-time signal its vCPU threads use left
+/// unblocked in the child.
+///
+/// libdispatch blocks almost every signal on its worker threads. Linux process
+/// launch inherits the launching thread's mask in the child, and Firecracker's
+/// vCPU threads inherit it again. If `SIGRTMIN + 1` stays blocked, `PATCH /vm`
+/// queues Pause and sets KVM's `immediate_exit`, but the kick signal remains
+/// pending and a vCPU in `KVM_RUN` never returns to acknowledge the request.
+///
+/// The mask change is scoped to the synchronous `Process.run()`: the child
+/// inherits the unblocked bit, then this thread gets its exact old mask back.
+/// Ordinary subprocesses do not need this Firecracker-specific exception.
+enum FirecrackerProcessLauncher {
+    #if os(Linux)
+    static var vcpuKickSignal: Int32 { libcCurrentSignalRTMin() + 1 }
+
+    static func withVCPUKickSignalUnblocked<T>(_ operation: () throws -> T) throws -> T {
+        var kickSet = sigset_t()
+        guard sigemptyset(&kickSet) == 0, sigaddset(&kickSet, vcpuKickSignal) == 0 else {
+            throw FirecrackerError.processSpawnFailed(
+                "could not construct the Firecracker vCPU signal mask: \(String(cString: strerror(errno)))")
+        }
+
+        var oldMask = sigset_t()
+        let unblockResult = pthread_sigmask(SIG_UNBLOCK, &kickSet, &oldMask)
+        guard unblockResult == 0 else {
+            throw FirecrackerError.processSpawnFailed(
+                "could not unblock Firecracker vCPU signal \(vcpuKickSignal): "
+                    + String(cString: strerror(unblockResult)))
+        }
+        defer { _ = pthread_sigmask(SIG_SETMASK, &oldMask, nil) }
+        return try operation()
+    }
+    #else
+    static func withVCPUKickSignalUnblocked<T>(_ operation: () throws -> T) throws -> T {
+        try operation()
+    }
+    #endif
+
+    static func run(_ process: Process) throws {
+        try withVCPUKickSignalUnblocked { try process.run() }
+    }
+}
 
 /// A one-shot latch bridging `Process.terminationHandler` into async/await.
 ///
