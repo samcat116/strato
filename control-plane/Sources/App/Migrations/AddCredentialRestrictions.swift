@@ -3,13 +3,10 @@ import Fluent
 /// STR-115: credentials carry a *restriction* in the ordinary IAM action and
 /// node vocabulary instead of a bespoke `read`/`write`/`admin` scope enum.
 ///
-/// All three columns are nullable on every table, and the legacy `scopes`
-/// column stays. A row with `restriction_actions IS NULL` predates this
-/// migration and resolves through `CredentialRestriction(legacyScopes:)`, so
-/// existing keys and sessions keep working with no backfill — and no backfill
-/// is attempted, because "what did this key's scopes mean" is a question the
-/// shim answers correctly at read time and a data migration could only freeze
-/// wrong.
+/// This historical migration deliberately introduced nullable columns beside
+/// the old storage. STR-227's `RemoveLegacyCredentialScopes` performs the
+/// explicit backfill, makes `restriction_actions` required, and removes that
+/// transitional representation.
 struct AddCredentialRestrictions: AsyncMigration {
     private static let tables = ["api_keys", "cli_sessions", "oauth_device_authorizations"]
 

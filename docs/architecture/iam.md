@@ -649,9 +649,8 @@ A restriction has two halves:
   an expansion stored on the row, because `readActions` is derived from action
   *names* precisely so an action shipped later lands on the right side by
   default — a credential holding today's expansion would 403 on next release's
-  `dnsrecord:read` under a forbid nobody wrote, while a legacy `read`-scoped key
-  picked it up for free. The legacy shim and a key minted read-only through the
-  API therefore carry the *same* value.
+  `dnsrecord:read` under a forbid nobody wrote. A key minted read-only therefore
+  stores the symbolic `read` pattern rather than today's expanded action list.
 - **a node scope** (optional) — the credential may only act at or below one
   tree node. Identity-plane *reads* are exempt from this half: a user record is
   parentless, so a project-scoped credential could otherwise not read its own
@@ -692,16 +691,13 @@ Every decision made under a credential records `credential_type` and
 `credential_id`, on allows as well as denies, so "what has this token been
 doing" is a query rather than an inference.
 
-**The legacy scopes are a compatibility shim.** A row with no restriction
-columns resolves through `CredentialRestriction(legacyScopes:)`:
-`write`/`admin` → unrestricted (which is what they always meant — nothing ever
-*required* `admin`, so `read`+`write` was full account power); `read` → the
-`read` pattern, every action whose name says it reads; and no recognized scope
-at all → **nothing**, because such a key is already dead
-(`grants(_:)` answered false for every scope) and a shim that read it as "read"
-would resurrect it.
+Every API key, pending device authorization, and CLI session stores this
+restriction directly. `restriction_actions` is required; the optional node
+type and id carry the subtree half when present. STR-227 backfilled historical
+credentials before dropping their scope arrays, including preserving malformed
+or empty historical rows as deny-all restrictions.
 
-Folding scopes into the evaluator tightened three things a `read` credential
+Folding credential restrictions into the evaluator tightened three things a read-only credential
 could previously reach on a safe method, all of them the defect rather than
 collateral: the sandbox exec-attach WebSocket (`sandbox:exec`, a GET), the VM
 console upgrade (`vm:viewConsole`, an editor action — and CLI sessions, which
@@ -709,7 +705,7 @@ the hand-written scope carve-out never checked, are now covered by the same
 path), and `vm:exec`/`vm:runCommand` when their routes land.
 
 A fourth follows from the same rule but surfaces differently, and operators
-driving enrollment tooling with a read-scoped credential need to widen it before
+driving enrollment tooling with a read-only credential need to widen it before
 upgrading. `GET /api/agent-enrollments` is the one list in the app whose read is
 gated on a write-shaped action (`agent:manage`, matching the item routes), so a
 read-restricted credential now matches no row — and a filtered list answers with

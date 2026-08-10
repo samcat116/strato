@@ -52,21 +52,16 @@ struct CredentialRestriction: Hashable, Sendable {
     /// ancestor chain (the node itself included).
     let node: IAMNode?
 
-    /// Every action, anywhere — what a credential with no restriction columns
-    /// and a `write`/`admin` legacy scope resolves to, and what a session
-    /// cookie or an agent SVID carries.
+    /// Every action, anywhere — what an unrestricted bearer credential, a
+    /// session cookie, or an agent SVID carries.
     static let unrestricted = CredentialRestriction(actions: [GuardrailActions.wildcard], node: nil)
 
-    /// Nothing, anywhere. The resolution of a legacy credential whose `scopes`
-    /// array holds no recognized value: `APIKey.grants(_:)` already answers
-    /// false for every scope in that state, so such a key is dead today and
-    /// must stay dead — a shim that read "no scopes" as "unrestricted" would
-    /// resurrect it with full power.
+    /// Nothing, anywhere. Empty restrictions cannot be created through the
+    /// public API, but the STR-227 data cutover uses this value for malformed or
+    /// empty historical scope arrays so dead credentials cannot be resurrected.
     static let denyAll = CredentialRestriction(actions: [], node: nil)
 
-    /// Every action whose name says it reads, anywhere. What the legacy `read`
-    /// scope resolves to, and what the API mints for a read-only credential —
-    /// one value, so the two paths cannot drift.
+    /// Every action whose name says it reads, anywhere.
     static let readOnly = CredentialRestriction(actions: [readPattern], node: nil)
 
     var isUnrestricted: Bool { self == .unrestricted }
@@ -102,41 +97,27 @@ struct CredentialRestriction: Hashable, Sendable {
         return GuardrailRendering.patternsCover(actions, action: action)
     }
 
-    /// The restriction a pre-STR-115 credential resolves to, from its legacy
-    /// `scopes` column.
-    ///
-    /// `write` and `admin` both mean unrestricted, which is the honest reading
-    /// of what they did: `APIKeyScope.required(for:)` never asked for `admin`,
-    /// so `read`+`write` was already full account power. `read` maps to the
-    /// `read` pattern — the closest expressible statement of "safe methods
-    /// only", now checked against the act rather than the HTTP verb, and the
-    /// *same* value a credential minted read-only through the API carries.
-    init(legacyScopes: [String]) {
-        let granted = Set(legacyScopes.compactMap(APIKeyScope.init(rawValue:)))
-        if granted.contains(.write) || granted.contains(.admin) {
-            self = .unrestricted
-        } else if granted.contains(.read) {
-            self = .readOnly
-        } else {
-            self = .denyAll
-        }
-    }
-
     private init(actions: [String], node: IAMNode?) {
         self.actions = actions
         self.node = node
     }
 
-    /// The restriction stored on a credential row, or nil when the row predates
-    /// STR-115 and its legacy scopes should be read instead.
-    init?(storedActions: [String]?, nodeType: String?, nodeID: UUID?) {
-        guard let storedActions else { return nil }
-        var node: IAMNode?
-        if let nodeType, let nodeID {
-            guard let type = IAMNodeType(rawValue: nodeType) else { return nil }
-            node = IAMNode(type: type, id: nodeID)
+    /// Rebuild the canonical restriction stored on a credential row. Invalid
+    /// node pairs fail closed; normal writes and the database constraint keep
+    /// them out, but corrupt storage must never widen a credential globally.
+    init(storedActions: [String], nodeType: String?, nodeID: UUID?) {
+        switch (nodeType, nodeID) {
+        case (nil, nil):
+            self.init(actions: storedActions, node: nil)
+        case (let rawType?, let id?):
+            guard let type = IAMNodeType(rawValue: rawType) else {
+                self = .denyAll
+                return
+            }
+            self.init(actions: storedActions, node: IAMNode(type: type, id: id))
+        default:
+            self = .denyAll
         }
-        self.init(actions: storedActions, node: node)
     }
 
     /// Validate a caller-supplied restriction for storage.
@@ -292,31 +273,24 @@ extension CredentialRestriction {
 
 // MARK: - The three credential rows that store one
 
-/// A credential row carrying a restriction: `APIKey`, `CLISession`,
-/// `DeviceAuthorization`. The columns are nullable and the legacy `scopes`
-/// column is still there, so one place decides which of the two a row means.
+/// A credential row carrying one canonical restriction: `APIKey`,
+/// `CLISession`, or `DeviceAuthorization`.
 protocol CredentialRestrictionStoring: AnyObject {
-    var scopes: [String] { get }
-    var restrictionActions: [String]? { get set }
+    var restrictionActions: [String] { get set }
     var restrictionNodeType: String? { get set }
     var restrictionNodeID: UUID? { get set }
 }
 
 extension CredentialRestrictionStoring {
-    /// What this credential may do. Rows written before STR-115 have no
-    /// restriction columns and resolve through the legacy scope shim.
     var restriction: CredentialRestriction {
         CredentialRestriction(
             storedActions: restrictionActions, nodeType: restrictionNodeType, nodeID: restrictionNodeID)
-            ?? CredentialRestriction(legacyScopes: scopes)
     }
 
-    /// Store `restriction`, or clear the columns (falling back to the legacy
-    /// scopes) when nil.
-    func store(restriction: CredentialRestriction?) {
-        restrictionActions = restriction?.actions
-        restrictionNodeType = restriction?.node?.type.rawValue
-        restrictionNodeID = restriction?.node?.id
+    func store(restriction: CredentialRestriction) {
+        restrictionActions = restriction.actions
+        restrictionNodeType = restriction.node?.type.rawValue
+        restrictionNodeID = restriction.node?.id
     }
 }
 

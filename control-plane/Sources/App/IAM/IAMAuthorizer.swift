@@ -531,8 +531,7 @@ extension Request {
     /// A restricted credential is refused here too, because there is no action
     /// to intersect its restriction with (STR-115). A node-scoped credential is
     /// refused outright — a token issued for one project has no business on a
-    /// global platform surface — and an action-limited one only on mutations,
-    /// which is exactly what the legacy `read` scope did.
+    /// global platform surface — and a read-only one only on mutations.
     ///
     /// - Throws: `.unauthorized` if unauthenticated, `.forbidden` for
     ///   non-admins, workload principals, and restricted credentials.

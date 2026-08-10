@@ -927,6 +927,10 @@ public func configure(_ app: Application) async throws {
     // reports are the only source of agent capability truth.
     app.migrations.add(DropLegacyAgentCapabilities())
 
+    // STR-227: every API key, device authorization, and CLI session now has a
+    // canonical action/node restriction; retire the persisted scope arrays.
+    app.migrations.add(RemoveLegacyCredentialScopes())
+
     // STR-229: canonical UUID role identity, one-time binding completeness
     // proof, and removal of the project/group grant mirrors.
     app.migrations.add(CanonicalizeMembershipRoleStorage())

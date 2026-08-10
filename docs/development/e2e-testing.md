@@ -150,7 +150,7 @@ Cirros does not ship one.
 ### Serial console
 
 ```
-GET /api/vms/{ID}/console      (WebSocket, needs an API key with `write` scope)
+GET /api/vms/{ID}/console      (WebSocket, needs `vm:viewConsole` in the key restriction)
 ```
 
 The VM id in that path must be **uppercase** — the agent's `managedVMs` map is
