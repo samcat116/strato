@@ -233,13 +233,12 @@ single versioned JSON document (`GuestConfig`) with the rootfs mount spec, the
 sandbox identity + vsock port, the OCI **image config plus the sandbox
 overrides** — the guest performs the OCI merge (entrypoint/cmd/env/workdir/user,
 Docker-compatible rules), so those runtime semantics live in exactly one place —
-and, at schema v2, the NIC's static L3 configuration (STR-101, see
+and the NIC's static L3 configuration when present (STR-101, see
 [Guest networking](#guest-networking)). This keeps the
 container image pristine and lets the workload launch without waiting on the
-host to connect vsock. The host stamps the **minimum schema version the
-document needs** and the guest refuses anything past what it understands, so a
-guest image older than its agent keeps booting the drives it fully understands
-and fails loudly only on one carrying something it would otherwise ignore.
+host to connect vsock. The host always stamps schema v2, including the sandbox
+identity and nonce, and the guest accepts exactly schema v2. Older drives are
+inventory artifacts: they must be recreated rather than partially interpreted.
 
 **vsock control surface.** The init serves newline-delimited JSON on a guest
 vsock port (default 1024). The v1 surface is health + exit only: `ping` →
@@ -252,9 +251,9 @@ protocol v2 added the exec and log-follow stream modes (#423 — see
 state, the fork `reidentify` request, and a versioned `pong`; and v4 (STR-104)
 put a `network` block on `launch` and `reidentify` so a guest restored from
 someone else's checkpoint can be re-addressed in place. Guests
-advertise their control-protocol version, and admission keys on it: v3 for a
-fork, v4 for a *networked* fork or warm start (see
-[Snapshots](#snapshots-warm-start-fork-and-mobility)).
+advertise their control-protocol version and identity on every health
+handshake. The host accepts exactly v4 for create, warm start, checkpoint,
+restore, and fork (see [Snapshots](#snapshots-warm-start-fork-and-mobility)).
 
 **On-disk layout & capability gating.** The two artifacts install as a directory
 at `sandbox_guest_image_path` (default `/var/lib/strato/sandbox/guest`)
@@ -262,14 +261,10 @@ alongside a `guest.json` manifest (schema version, image version, per-arch
 checksums + default boot args). `StratoAgentCore/SandboxGuestImage` is the
 resolver that reads that layout into concrete kernel/initramfs paths for the
 host arch — the shared contract the sandbox runtime consumes so filenames are
-not hard-coded at the call site. `SandboxRuntimeProbe` only asserts the
-path's presence for the base capability (it must stay cheap and never go dark
-on a parse error); presence + a usable Firecracker is what lights up the
-`sandbox_runtime` capability. The manifest also carries a `capabilities` list
-at schema v2 (STR-103), which the same probe reads for the *networking*
-capability — there a manifest it cannot decode does count against the host,
-because advertising a guest behavior nothing confirmed is how a sandbox create
-fails permanently. The build/publish pipeline (`.github/workflows/sandbox-guest.yaml`)
+not hard-coded at the call site. `SandboxRuntimeProbe` requires a readable,
+schema-v2 manifest with its `capabilities` list before it advertises the base
+`sandbox_runtime` capability; the same list drives the stronger networking
+capability. The build/publish pipeline (`.github/workflows/sandbox-guest.yaml`)
 builds both arches on a release tag and uploads the tarballs + `.sha256`
 sidecars + a `sandbox-guest-manifest.json`, mirroring the agent release flow;
 `task install-sandbox-guest` / `deploy/agent/install.sh --sandbox-guest` install
@@ -682,11 +677,11 @@ then any compatible agent is a candidate (see
 [Snapshot mobility](#snapshot-mobility)). The agent
 also captures the checkpointed guest's own control-protocol version from its
 versioned `pong` and persists it on the snapshot. Fork admission and placement
-require guest control protocol v3 — v4 when the fork has a NIC; an upgraded v12
-agent therefore cannot
-mistake an older guest frozen in memory for one that understands
-`reidentify`, and legacy/unknown snapshots remain usable for in-place restore
-only. Snapshot creation also persists a fork-layout version only for jailed
+require guest control protocol v4. An upgraded agent therefore cannot mistake
+an older guest frozen in memory for one that satisfies the current identity,
+networking, and re-identification contract; legacy or unknown snapshots remain
+visible only for inventory and deletion. Snapshot creation also persists a
+fork-layout version only for jailed
 sources; unjailed and legacy snapshots remain in-place-only because their
 Firecracker device paths cannot be reused under a new jail root. The runtime
 repeats the guest capability check after loading the checkpoint as defense in
@@ -841,14 +836,10 @@ the switch. Three decisions worth keeping:
   a sandbox report `running` with a dead NIC. The resolver files are the
   exception (best effort — a read-only rootfs is legitimate), and `/etc` is
   created rather than assumed for scratch/distroless images.
-- **The schema version stamps what the document needs, not what the host
-  knows.** A network-free drive is stamped v1 even by an agent that can write
-  v2, and the guest accepts `1...SCHEMA_VERSION` — so a node whose
-  separately-distributed guest image lags the agent keeps booting sandboxes
-  whose drives carry nothing new. A drive with a `network` block is stamped
-  v2 and an older guest refuses it, loudly, rather than booting a sandbox
-  whose NIC it would ignore in silence. The strictness bites exactly where it
-  buys something.
+- **Schema v2 is the only supported drive.** Network-free and networked
+  sandboxes both carry schema v2 plus a non-empty sandbox identity and nonce.
+  The guest and host reject any other schema, so a separately distributed old
+  image or checkpoint is upgraded by recreation, never by a fallback read.
 
 **Not on the config drive: metadata routes.** A VM's static guest gets
 explicit routes to the instance-metadata addresses from its cloud-init seed,
@@ -886,9 +877,9 @@ So the agent probes all three at every registration
 persisted on the agent row), advertises `sandbox_networking` in its display
 capabilities, and logs a warning naming the specific blocker when it runs
 sandboxes but cannot network them. The guest half is read from `guest.json`,
-whose manifest schema grew to **v2** with a top-level `capabilities` list; the
-agent accepts `1...2` and a v1 manifest advertises nothing, so an older
-installed image reads as "no networking" rather than as an error. A named
+whose manifest schema is **v2** with a required top-level `capabilities` list;
+the agent accepts exactly v2, so an older installed image disables sandbox
+placement until it is replaced. A named
 capability rather than a config-drive version number: an initramfs built
 without the bring-up path would still *parse* a v2 document.
 

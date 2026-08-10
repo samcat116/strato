@@ -37,9 +37,7 @@ struct SandboxConfigDriveTests {
         let json = try drive.encoded()
         let obj = try #require(try JSONSerialization.jsonObject(with: json) as? [String: Any])
 
-        // Network-free, so stamped v1: the version is the minimum the
-        // document needs, not the newest this build can write.
-        #expect(obj["schema_version"] as? Int == 1)
+        #expect(obj["schema_version"] as? Int == 2)
         #expect(obj["sandbox_id"] as? String == "sb-1")
         #expect(obj["identity_nonce"] as? String == "nonce-1")
         #expect(obj["vsock_port"] as? Int == 1024)
@@ -115,7 +113,7 @@ struct SandboxConfigDriveTests {
         let trimmed = image[image.startIndex..<end]
         let decoded = try JSONDecoder().decode(SandboxConfigDrive.self, from: Data(trimmed))
         #expect(decoded.sandboxId == "sb-4")
-        #expect(decoded.schemaVersion == 1)
+        #expect(decoded.schemaVersion == 2)
     }
 
     /// A tiny document still fills at least one sector.
@@ -245,8 +243,8 @@ struct SandboxConfigDriveTests {
         #expect(v6["gateway"] as? String == "fd12:3456:789a::1")
     }
 
-    /// A network-free sandbox's document is unchanged *and still stamped v1*,
-    /// so it keeps booting on a guest image that predates the network block.
+    /// A network-free sandbox omits only the optional network block; its
+    /// identity-bearing document still uses the one current schema.
     @Test("the network block is omitted for a sandbox with no NIC")
     func networkBlockOmittedWithoutANIC() throws {
         let drive = SandboxConfigDrive(
@@ -254,19 +252,16 @@ struct SandboxConfigDriveTests {
         let obj = try #require(
             try JSONSerialization.jsonObject(with: try drive.encoded()) as? [String: Any])
         #expect(obj["network"] == nil)
-        #expect(obj["schema_version"] as? Int == 1)
+        #expect(obj["schema_version"] as? Int == 2)
         // The hostname is not gated on the NIC, so it is here either way.
         #expect(obj["hostname"] as? String == "strato-sb10")
     }
 
-    /// The version stamped is the minimum a document *needs*, not the newest
-    /// this build knows. Bumping unconditionally would strand every sandbox on
-    /// a node whose separately-distributed guest image lags the agent, for a
-    /// field those documents do not carry.
-    @Test("the schema version tracks what the document carries")
-    func schemaVersionTracksContent() throws {
-        #expect(SandboxConfigDrive.requiredSchemaVersion(network: nil) == 1)
-
+    @Test("the current schema is stamped with or without a network")
+    func currentSchemaIsAlwaysStamped() throws {
+        let networkFree = SandboxConfigDrive(
+            sandboxId: "sb-11", identityNonce: "n", guestConfig: guestConfig(), spec: spec())
+        #expect(networkFree.schemaVersion == SandboxConfigDrive.schemaVersion)
         let network = try SandboxConfigDrive.network(for: attachment())
         let drive = SandboxConfigDrive(
             sandboxId: "sb-12", identityNonce: "n", guestConfig: guestConfig(), spec: spec(),
@@ -275,6 +270,29 @@ struct SandboxConfigDriveTests {
         let obj = try #require(
             try JSONSerialization.jsonObject(with: try drive.encoded()) as? [String: Any])
         #expect(obj["schema_version"] as? Int == 2)
+    }
+
+    @Test("encoding requires a non-empty sandbox identity and nonce")
+    func encodingRequiresIdentity() {
+        let drive = SandboxConfigDrive(
+            sandboxId: "", identityNonce: "", guestConfig: guestConfig(), spec: spec())
+        #expect(throws: SandboxConfigDriveError.missingIdentity) {
+            try drive.encoded()
+        }
+    }
+
+    @Test("decode rejects a schema-v1 checkpoint config with an upgrade path")
+    func legacySchemaIsRejected() throws {
+        let current = SandboxConfigDrive(
+            sandboxId: "sb-old", identityNonce: "nonce", guestConfig: guestConfig(), spec: spec())
+        let legacyJSON = String(decoding: try current.encoded(), as: UTF8.self)
+            .replacingOccurrences(of: "\"schema_version\":2", with: "\"schema_version\":1")
+        let legacy = Data(legacyJSON.utf8)
+        #expect {
+            try SandboxConfigDrive.decode(fromBlockImage: legacy)
+        } throws: { error in
+            error as? SandboxConfigDriveError == .unsupportedSchema(1)
+        }
     }
 
     /// The block is written even for a DHCP-enabled NIC: OVN still answers

@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 import Testing
 
 @testable import StratoAgentCore
@@ -291,25 +292,19 @@ struct GuestControlProtocolTests {
         #expect(guest.cols == 120)
     }
 
-    // MARK: - Response decoding (v1 surface, unchanged)
+    // MARK: - Health response decoding
 
-    @Test("pong and status still decode")
-    func v1ResponsesDecode() throws {
+    @Test("current-version pong and identity-bearing status decode")
+    func healthResponsesDecode() throws {
         let pong = try GuestControlProtocol.Response.decode(
-            line: #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1"}"#)
+            line:
+                #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1","control_protocol_version":4}"#
+        )
         #expect(
             pong
                 == .pong(
-                    sandboxId: "sb-1", nonce: "n-1", controlProtocolVersion: nil))
-
-        let versionedPong = try GuestControlProtocol.Response.decode(
-            line:
-                #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1","control_protocol_version":3}"#
-        )
-        #expect(
-            versionedPong
-                == .pong(
-                    sandboxId: "sb-1", nonce: "n-1", controlProtocolVersion: 3))
+                    sandboxId: "sb-1", nonce: "n-1",
+                    controlProtocolVersion: SandboxGuestControlProtocol.currentVersion))
 
         let running = try GuestControlProtocol.Response.decode(
             line: #"{"type":"status","sandbox_id":"sb-1","nonce":"n-1","state":"running"}"#)
@@ -325,6 +320,23 @@ struct GuestControlProtocolTests {
 
         let error = try GuestControlProtocol.Response.decode(line: #"{"type":"error","message":"boom"}"#)
         #expect(error == .error(message: "boom"))
+    }
+
+    @Test("missing and legacy control versions are rejected explicitly")
+    func legacyPongIsRejected() {
+        let missing = #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(
+                line: #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1"}"#)
+        }
+        #expect(missing == .unsupportedProtocolVersion(nil))
+
+        let old = #expect(throws: GuestControlError.self) {
+            try GuestControlProtocol.Response.decode(
+                line:
+                    #"{"type":"pong","sandbox_id":"sb-1","nonce":"n-1","control_protocol_version":3}"#
+            )
+        }
+        #expect(old == .unsupportedProtocolVersion(3))
     }
 
     // MARK: - Response decoding (v2 surface)

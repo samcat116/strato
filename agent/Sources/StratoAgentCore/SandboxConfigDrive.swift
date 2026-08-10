@@ -11,9 +11,9 @@ import StratoShared
 /// distilled `SandboxGuestConfig`, encodes it, and writes it NUL-padded to the
 /// config block device.
 ///
-/// The schema is versioned in lockstep with the guest: the host stamps the
-/// **minimum** version a document needs and a guest that does not understand
-/// that version refuses to launch rather than guessing. Field naming
+/// The schema is versioned in lockstep with the guest: the host always stamps
+/// the current version and a guest rejects every other version rather than
+/// guessing. Field naming
 /// deliberately matches the guest's serde contract — snake_case at the top
 /// level, PascalCase inside `image_config` (so the OCI image config forwards
 /// with minimal reshaping), snake_case inside `overrides` — so this Codable and
@@ -25,31 +25,6 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     /// * v1 — identity, rootfs, vsock, process config.
     /// * v2 — adds the optional ``NetworkConfig`` block (STR-101).
     public static let schemaVersion: UInt32 = 2
-
-    /// The oldest version any document is stamped with — the schema every
-    /// guest image that has ever shipped understands.
-    public static let baseSchemaVersion: UInt32 = 1
-
-    /// The minimum schema version a document carrying `network` needs, which is
-    /// what the drive is actually stamped with.
-    ///
-    /// Stamping the newest version unconditionally would be a fleet-wide
-    /// outage for no gain: the guest image is a separately distributed artifact
-    /// (see `SandboxGuestImage`), so lagging an agent upgrade is the normal
-    /// rollout state, and most documents written are network-free either way.
-    /// Stamping what the *content* requires means a v1 guest keeps booting
-    /// those, and the refusal fires precisely when the drive carries a NIC the
-    /// guest would otherwise ignore in silence. The guest accepts any version in
-    /// `baseSchemaVersion...schemaVersion` for the same reason.
-    ///
-    /// That refusal is the last line of defence, not the first: since STR-103
-    /// the guest image advertises the `network` capability in its `guest.json`,
-    /// the agent reports it at registration, and the control plane withholds
-    /// every sandbox NIC from a host whose guest cannot configure one. A drive
-    /// stamped v2 should therefore never reach a v1 guest at all.
-    public static func requiredSchemaVersion(network: NetworkConfig?) -> UInt32 {
-        network == nil ? baseSchemaVersion : schemaVersion
-    }
 
     /// The guest vsock port the control agent listens on. Matches the guest's
     /// `DEFAULT_VSOCK_PORT`; the runtime connects here for health/status.
@@ -103,7 +78,7 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
         hostname: String? = nil,
         network: NetworkConfig? = nil
     ) {
-        self.schemaVersion = SandboxConfigDrive.requiredSchemaVersion(network: network)
+        self.schemaVersion = SandboxConfigDrive.schemaVersion
         self.hostname = hostname
         self.sandboxId = sandboxId
         self.identityNonce = identityNonce
@@ -382,6 +357,9 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
     /// Encode the document as compact JSON (the guest parses raw bytes, so no
     /// pretty-printing is needed).
     public func encoded() throws -> Data {
+        guard !sandboxId.isEmpty, !identityNonce.isEmpty else {
+            throw SandboxConfigDriveError.missingIdentity
+        }
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         return try encoder.encode(self)
@@ -397,7 +375,15 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
                 || byte == 0x0D
         }
         let end = data.lastIndex(where: { !isPadding($0) }).map { data.index(after: $0) } ?? data.startIndex
-        return try JSONDecoder().decode(SandboxConfigDrive.self, from: data[data.startIndex..<end])
+        let drive = try JSONDecoder().decode(
+            SandboxConfigDrive.self, from: data[data.startIndex..<end])
+        guard drive.schemaVersion == schemaVersion else {
+            throw SandboxConfigDriveError.unsupportedSchema(drive.schemaVersion)
+        }
+        guard !drive.sandboxId.isEmpty, !drive.identityNonce.isEmpty else {
+            throw SandboxConfigDriveError.missingIdentity
+        }
+        return drive
     }
 
     /// Render the config document as a raw block-device image: the JSON bytes
@@ -415,5 +401,22 @@ public struct SandboxConfigDrive: Codable, Equatable, Sendable {
             data.append(Data(repeating: 0, count: target - data.count))
         }
         return data
+    }
+}
+
+public enum SandboxConfigDriveError: Error, LocalizedError, Equatable, Sendable {
+    case unsupportedSchema(UInt32)
+    case missingIdentity
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedSchema(let version):
+            return "unsupported sandbox config-drive schema version \(version); "
+                + "schema \(SandboxConfigDrive.schemaVersion) is required, so recreate the sandbox "
+                + "or purge and recapture its checkpoint with a current guest image"
+        case .missingIdentity:
+            return "sandbox config drive is missing its sandbox identity or identity nonce; "
+                + "recreate the sandbox or purge and recapture its checkpoint"
+        }
     }
 }

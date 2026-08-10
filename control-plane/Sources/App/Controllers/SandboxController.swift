@@ -342,13 +342,16 @@ struct SandboxController: RouteCollection {
                     reason: "Snapshot was not captured in a fork-compatible jailed layout")
             }
             guard
-                SandboxGuestControlProtocol.supportsReidentify(
-                    snapshot.guestControlProtocolVersion)
+                snapshot.guestControlProtocolVersion
+                    == SandboxGuestControlProtocol.currentVersion
             else {
                 throw Abort(
                     .conflict,
                     reason:
-                        "Snapshot's checkpointed guest is too old for sandbox forks (guest control protocol \(snapshot.guestControlProtocolVersion ?? 0), need >= \(SandboxGuestControlProtocol.reidentifyMinimumVersion))"
+                        "Snapshot uses unsupported guest control protocol "
+                        + "\(snapshot.guestControlProtocolVersion.map(String.init) ?? "missing"); "
+                        + "version \(SandboxGuestControlProtocol.currentVersion) is required. "
+                        + "Delete this snapshot and recapture it after upgrading the sandbox guest image."
                 )
             }
             // The fork's NIC shape has to match the checkpoint's (STR-104). A
@@ -375,18 +378,6 @@ struct SandboxController: RouteCollection {
                     .conflict,
                     reason:
                         "The snapshot's sandbox has no NIC, so the fork cannot have a network: a checkpoint's device set cannot grow one on restore"
-                )
-            }
-            // And a networked fork needs a checkpointed guest that can take
-            // the target's address, not just rotate its identity.
-            if restoreSourceNetworkID != nil,
-                !SandboxGuestControlProtocol.supportsNetworkReconfigure(
-                    snapshot.guestControlProtocolVersion)
-            {
-                throw Abort(
-                    .conflict,
-                    reason:
-                        "Snapshot's checkpointed guest cannot re-address its NIC (guest control protocol \(snapshot.guestControlProtocolVersion ?? 0), need >= \(SandboxGuestControlProtocol.networkReconfigureMinimumVersion))"
                 )
             }
             // …and a *host* that can point the checkpointed network device at

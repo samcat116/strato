@@ -26,12 +26,14 @@ struct SandboxRuntimeProbeTests {
     private let missingPath = "/nonexistent/sandbox/guest"
 
     @Test("the runtime (issue #421) has landed: the build gate no longer forces the capability off")
-    func buildGateOpenWithRuntime() {
+    func buildGateOpenWithRuntime() throws {
         // No runtimeBuilt override: the build's own constant now permits the
         // capability, so with every host prerequisite satisfied the probe
         // reports capable. The reconciler drives desired sandboxes on this build.
+        let dir = try makeGuestImage(capabilities: [])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: presentPath)
+            firecracker: firecrackerAvailable, guestImagePath: dir)
 
         #expect(report.capable)
         #expect(report.unavailabilityReason == nil)
@@ -49,18 +51,22 @@ struct SandboxRuntimeProbeTests {
     }
 
     @Test("capable when Firecracker is usable and the guest image is present")
-    func capableWithAllPrerequisites() {
+    func capableWithAllPrerequisites() throws {
+        let dir = try makeGuestImage(capabilities: [])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: presentPath, runtimeBuilt: true)
+            firecracker: firecrackerAvailable, guestImagePath: dir, runtimeBuilt: true)
 
         #expect(report.capable)
         #expect(report.unavailabilityReason == nil)
     }
 
-    @Test("a directory satisfies the guest image presence check")
-    func directoryCountsAsPresent() {
+    @Test("a directory with a current manifest satisfies the guest image check")
+    func directoryCountsAsPresent() throws {
+        let dir = try makeGuestImage(capabilities: [])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: "/tmp", runtimeBuilt: true)
+            firecracker: firecrackerAvailable, guestImagePath: dir, runtimeBuilt: true)
 
         #expect(report.capable)
     }
@@ -170,31 +176,28 @@ struct SandboxRuntimeProbeTests {
         #expect(report.networkingUnavailabilityReason == nil)
     }
 
-    /// The trap this whole signal exists for: the guest image ships separately
-    /// from the agent, so a current agent routinely runs against a guest that
-    /// would refuse a config drive carrying a NIC.
-    @Test("a guest image that predates the network block blocks networking, not sandboxes")
-    func oldGuestImageBlocksNetworkingOnly() throws {
+    @Test("a schema-v1 guest image blocks the sandbox runtime")
+    func oldGuestImageBlocksRuntime() throws {
         let dir = try makeGuestImage(capabilities: nil, schemaVersion: 1)
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
         let report = networkingReport(guestImagePath: dir)
-        #expect(report.capable)
+        #expect(!report.capable)
         #expect(!report.networkingCapable)
-        #expect(report.networkingUnavailabilityReason?.contains("'network' capability") == true)
+        #expect(report.unavailabilityReason?.contains("schema version 1") == true)
     }
 
-    @Test("an unreadable manifest blocks networking rather than being assumed capable")
-    func unreadableManifestBlocksNetworking() throws {
+    @Test("an unreadable manifest blocks the sandbox runtime")
+    func unreadableManifestBlocksRuntime() throws {
         let dir = NSTemporaryDirectory() + "sandbox-probe-guest-" + UUID().uuidString
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
         try "not json".write(toFile: dir + "/guest.json", atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(atPath: dir) }
 
         let report = networkingReport(guestImagePath: dir)
-        #expect(report.capable)
+        #expect(!report.capable)
         #expect(!report.networkingCapable)
-        #expect(report.networkingUnavailabilityReason?.contains("could not be read") == true)
+        #expect(report.unavailabilityReason?.contains("could not be read") == true)
     }
 
     @Test("user-mode networking blocks a sandbox NIC — there is no user-mode form of one")
@@ -236,9 +239,11 @@ struct SandboxRuntimeProbeTests {
     }
 
     @Test("networking is off by default, so a caller that asks nothing never over-claims")
-    func networkingDefaultsOff() {
+    func networkingDefaultsOff() throws {
+        let dir = try makeGuestImage(capabilities: [])
+        defer { try? FileManager.default.removeItem(atPath: dir) }
         let report = SandboxRuntimeProbe.probe(
-            firecracker: firecrackerAvailable, guestImagePath: presentPath)
+            firecracker: firecrackerAvailable, guestImagePath: dir)
         #expect(report.capable)
         #expect(!report.networkingCapable)
     }

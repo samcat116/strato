@@ -10,10 +10,9 @@ import StratoShared
 /// Capability requires everything a Firecracker VM needs — the binary and KVM,
 /// both already folded into the Firecracker probe's `available` — plus the
 /// sandbox guest base image (the maintained kernel + init/guest agent, issue
-/// #419) present on disk. The guest image is the natural switch: a host that
-/// has Firecracker but no guest image cannot boot any sandbox, and gating on
-/// its presence means the capability lights up exactly when the runtime's
-/// artifacts are installed.
+/// #419) installed with the current manifest. The guest image is the natural
+/// switch: a host that has Firecracker but no current guest image cannot boot
+/// a supported sandbox.
 ///
 /// There are **two** capabilities here, and the second is strictly stronger
 /// (STR-103): whether this host can give a sandbox a *NIC*. It needs OVN, the
@@ -87,9 +86,9 @@ public enum SandboxRuntimeProbe {
     ///   - firecracker: The Firecracker entry from `HypervisorProbe.probeAll`
     ///     (post host-preflight gating), or nil when none was probed.
     ///   - guestImagePath: Where the guest base image is installed
-    ///     (`sandbox_guest_image_path`). File or directory — the internal
-    ///     layout is owned by the guest-image work (issue #419); this probe
-    ///     only asserts presence.
+    ///     (`sandbox_guest_image_path`). The current manifest schema is part of
+    ///     the base capability: an old installed guest must be replaced before
+    ///     this agent accepts sandbox placements.
     ///   - runtimeBuilt: Whether the running build includes the sandbox
     ///     runtime driver. Defaults to this build's `runtimeBuilt` constant;
     ///     injectable so tests can exercise the host-prerequisite checks.
@@ -134,28 +133,32 @@ public enum SandboxRuntimeProbe {
         guard fileManager.fileExists(atPath: guestImagePath) else {
             return .unavailable("sandbox guest base image not present at \(guestImagePath)")
         }
+        let capabilities: Set<String>
+        do {
+            capabilities = try SandboxGuestImage.capabilities(
+                atDirectory: guestImagePath, fileManager: fileManager)
+        } catch {
+            return .unavailable(
+                "the installed sandbox guest image could not be read: "
+                    + ((error as? LocalizedError)?.errorDescription ?? "\(error)"))
+        }
         return Report(
             capable: true,
             networkingUnavailabilityReason: networkingUnavailability(
-                guestImagePath: guestImagePath, jailsNewSandboxes: jailsNewSandboxes,
-                networkCapability: networkCapability, fileManager: fileManager))
+                guestImagePath: guestImagePath, capabilities: capabilities,
+                jailsNewSandboxes: jailsNewSandboxes, networkCapability: networkCapability))
     }
 
     /// Why this host cannot give a sandbox a NIC, or nil when it can.
     ///
-    /// Only reached once the base sandbox prerequisites hold, so it asks the
-    /// three questions that are specific to the NIC — and asks the guest image
-    /// last, because that is the read that touches the disk. A manifest that
-    /// cannot be read or is a schema this build does not know is *not*
-    /// capable: unlike the base capability (which deliberately never fails on a
-    /// parse error, since a host that boots sandboxes today must keep booting
-    /// them), advertising networking off an unreadable manifest would be
-    /// claiming a guest behavior nothing has confirmed.
+    /// Only reached once the base sandbox prerequisites and current guest
+    /// manifest hold, so it asks the remaining questions that are specific to
+    /// the NIC.
     private static func networkingUnavailability(
         guestImagePath: String,
+        capabilities: Set<String>,
         jailsNewSandboxes: Bool,
-        networkCapability: NetworkCapability?,
-        fileManager: FileManager
+        networkCapability: NetworkCapability?
     ) -> String? {
         guard networkCapability == .overlay else {
             return "sandbox networking needs network_mode = \"ovn\" with a connected OVN/OVS "
@@ -164,14 +167,6 @@ public enum SandboxRuntimeProbe {
         guard jailsNewSandboxes else {
             return "a sandbox NIC lives in the jail's network namespace, and this agent creates "
                 + "sandboxes unjailed; set sandbox_jailer_mode = \"required\" and satisfy its prerequisites"
-        }
-        let capabilities: Set<String>
-        do {
-            capabilities = try SandboxGuestImage.capabilities(
-                atDirectory: guestImagePath, fileManager: fileManager)
-        } catch {
-            return "the installed sandbox guest image could not be read: "
-                + ((error as? LocalizedError)?.errorDescription ?? "\(error)")
         }
         guard capabilities.contains(SandboxGuestImage.GuestCapability.network) else {
             return "the installed sandbox guest image at \(guestImagePath) does not advertise the "

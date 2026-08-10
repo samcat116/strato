@@ -305,11 +305,11 @@ Why this shape:
 
 ### Per-hypervisor status
 
-- **Sandboxes: ready.** vsock already carries the control protocol
+- **Sandboxes: ready.** vsock carries the exact current control protocol
   (`shared/Sources/StratoShared/SandboxGuestControlProtocol.swift`,
-  `currentVersion = 3`), guest PID 1 is ours (`sandbox-guest/init/`, Rust), and
-  `supportsReidentify(_:)` is the established precedent for version-gating a new
-  capability. Adding a v4 identity port plus the forwarder is a contained change.
+  `currentVersion = 4`) and guest PID 1 is ours (`sandbox-guest/init/`, Rust).
+  Every health handshake now requires the sandbox identity, nonce, and protocol
+  version before the host trusts the guest.
 - **VMs: one device short.** `DomainXMLBuilder` writes a `virtio-serial`
   controller (console and qga) but no vsock. Adding a `<vsock model='virtio'>`
   element is the single blocker for parity — and, because the domain document is
