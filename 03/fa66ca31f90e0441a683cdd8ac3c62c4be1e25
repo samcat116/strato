@@ -1,0 +1,193 @@
+SwiftFirecracker/Sources/SwiftFirecracker/Models/MachineConfig.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 7,10,13
+control-plane/Tests/AppIdentityTests/OAuthDeviceFlowTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 49,176,294-295,300-301,306,475,477-478,482-483
+SwiftFirecracker/Tests/SwiftFirecrackerTests/HTTPConcurrencyTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 269-293
+SwiftFirecracker/Tests/SwiftFirecrackerTests/ProcessSupervisionTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 20-46
+SwiftFirecracker/Tests/SwiftFirecrackerTests/SwiftFirecrackerTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 121
+SwiftFirecracker/Sources/SwiftFirecracker/VsockConnection.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 33
+docs/architecture/authorization-edge-audit.md
+  s_4fdae838d0c2ea::t_72a38ec9c80104 216,220-221
+agent/Sources/StratoAgentCore/Reconciliation.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1024-1027,1029,1095-1110,1115-1122,1124-1134,1193,1195,1327,1329-1330,1340-1341
+  s_4fdae838d0c2ea::t_b12c34d1e5bbe5 1076-1077
+  s_4fdae838d0c2ea::t_85cad4968d4d88 1152-1155,1164-1166
+agent/Sources/StratoAgent/FirecrackerSandboxRuntime.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1666-1671,2090,2098-2103,2106,2109,2112,2138,2150
+.github/dependabot.yaml
+  s_4fdae838d0c2ea::t_72a38ec9c80104 4-10
+docs/guide/graphics-console.md
+  s_4fdae838d0c2ea::t_72a38ec9c80104 84
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Drive.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 7,10,13,16,25,29
+control-plane/Tests/AppResourceTests/VolumeConvergenceTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 131,164,213
+.github/workflows/main-build.yaml
+  s_4fdae838d0c2ea::t_72a38ec9c80104 159,161
+SwiftFirecracker/Sources/SwiftFirecracker/Models/InstanceInfo.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 7,10,19,44,46,52,58,71,73,75,81,87,89
+SwiftFirecracker/Sources/SwiftFirecracker/UnixSocketHTTPClient.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 19,42,52,72,89,184,213,384,392-395,397
+shared/Tests/StratoSharedTests/SecurityGroupProtocolTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 59-65,68,80-84,86-88
+control-plane/Tests/AppResourceTests/ImageDownloadScopingTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 145,174
+cli/Sources/StratoCLICore/Auth/DeviceFlow.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 50-51
+agent/scripts/vm-manifest-preflight.sh
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1-84
+agent/Sources/StratoAgentCore/VMManifestStore.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 11,163,207-208,289-290,340,345,354
+control-plane/Tests/AppIdentityTests/APIKeyAuthenticatorTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 29,40,431,454,469-472,482,523-524,564-565,571
+control-plane/Sources/App/IAM/CredentialRestriction.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 55-56,59-61,64,105-119,276-277,279,290-293
+control-plane/Sources/App/Migrations/RemoveVolumeSnapshotRestoringStatus.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1-31
+shared/Tests/StratoSharedTests/VMSpecTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 110-111,114-116,147,150,152-154,184-185,188-190,204,207-209,234,239-240,272,292-293,296-297,306-309,359-385
+  s_4fdae838d0c2ea::t_8824473a085f49 386
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Vsock.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 13,18,25
+shared/Sources/StratoShared/VMSpec.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 27,36,42-43,52,106-107,280-282,306,335-337,355-356,372-373
+agent/Tests/StratoAgentTests/VMManifestStoreTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 294-295,551-552,557,561-562,564-570
+control-plane/Tests/AppPlatformTests/WorkloadTombstoneTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 127-130,162,200,227,275
+docs/runbooks/credential-restriction-cutover.md
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1-52
+cli/Tests/StratoCLITests/StratoClientTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 20
+shared/Tests/StratoSharedTests/SandboxProtocolTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 163-167,169-171,211-213,216,218-220
+control-plane/web/src/components/api-keys/create-api-key-dialog.tsx
+  s_4fdae838d0c2ea::t_72a38ec9c80104 76-77
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerManager.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 14,23,39,44,136-137,222-242,268,277
+control-plane/Tests/AppPlatformTests/MigrationRoundTripTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 305-436
+control-plane/Tests/AppIAMTests/CredentialRestrictionTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 6,145,149,171,247,250-251,257-258
+control-plane/Tests/AppResourceTests/VolumeIOLimitsTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 346,358
+control-plane/web/src/types/openapi.ts
+  s_4fdae838d0c2ea::t_72a38ec9c80104 6060,6618,6653
+docs/architecture/frontend.md
+  s_4fdae838d0c2ea::t_72a38ec9c80104 85-92,120-122
+shared/Sources/StratoShared/ReconciliationProtocol.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 108-109,121-122,538-539,550-553,560-562,569-570,573-575,579-584,590-592,607-609,1389-1390,1394-1396,1401,1404,1406-1409,1415-1418,1426-1428
+agent/Tests/StratoAgentTests/SnapshotReconciliationTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 94-95,250,252
+control-plane/Sources/App/Models/DeviceAuthorization.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 40-41,78,87-89
+cli/Sources/StratoCLI/Commands/Login.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 57
+control-plane/Sources/App/Commands/BootstrapCommand.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 239,267
+agent/Tests/StratoAgentTests/VolumeReconciliationTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 149
+  s_4fdae838d0c2ea::t_85cad4968d4d88 424-451,454-455,457-461
+docs/deployment/vm-manifest-cutover.md
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1-75
+shared/Tests/StratoSharedTests/AgentAutoUpdateProtocolTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 30-35,37,68-71,73,75
+SwiftFirecracker/Sources/SwiftFirecracker/Models/BootSource.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 7,10,13
+control-plane/Sources/App/openapi.yaml
+  s_4fdae838d0c2ea::t_72a38ec9c80104 10386,11420,11456-11459,11507,11530,11586,11640,11661
+control-plane/Tests/AppPlatformTests/AuditLoggingTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 145-146,154
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Snapshot.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 13,16,18-20,28,40-43,50,68,70,72,86,88,92,98,113-116
+control-plane/Sources/App/Controllers/OAuthController.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 69-90,94-101,103,110,118-119,145,252,286,308
+control-plane/web/src/components/credentials/credential-restriction-badges.tsx
+  s_4fdae838d0c2ea::t_72a38ec9c80104 13-14
+SwiftFirecracker/Sources/SwiftFirecracker/ProcessSupervision.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 7-11,16-58
+  s_4fdae838d0c2ea::t_17ead551bb5d4f 59
+control-plane/Tests/AppTestSupport/TestUtilities.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 379,391
+control-plane/Sources/App/Migrations/EnforcePersistedEnumValues.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 6-7,151
+control-plane/Tests/AppPlatformTests/PersistedEnumConstraintTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 156-205
+cli/Tests/StratoCLITests/DeviceFlowTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 35,45,54
+control-plane/Sources/App/configure.swift
+  s_4fdae838d0c2ea::t_b1eb53b79720c9 957
+  s_4fdae838d0c2ea::t_72a38ec9c80104 945-948,953-956
+docs/architecture/sandboxes.md
+  s_4fdae838d0c2ea::t_72a38ec9c80104 477-479,1065-1068
+control-plane/Tests/AppPlatformTests/BootstrapCommandTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 74
+control-plane/Sources/App/Models/VolumeSnapshot.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 11
+docs/development/e2e-testing.md
+  s_4fdae838d0c2ea::t_72a38ec9c80104 3-8,155
+control-plane/Sources/App/Migrations/AddCredentialRestrictions.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 6-9
+control-plane/Tests/AppIAMTests/CredentialRestrictionRouteTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1-182
+control-plane/Sources/App/IAM/IAMAuthorizer.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 534
+control-plane/Sources/App/IAM/RoleRegistry.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 327-328,334
+shared/Tests/StratoSharedTests/ReconciliationProtocolTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 144-159,203-220,397-403,406,472-476,478
+SwiftFirecracker/Sources/SwiftFirecracker/Models/Jailer.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 15,18,20,22,27,31,34,46,72,77,87,118
+SwiftFirecracker/Sources/SwiftFirecracker/Models/NetworkInterface.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 7,10,13,21,24
+control-plane/Sources/App/Migrations/RemoveLegacyCredentialScopes.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1-68
+control-plane/Tests/AppResourceTests/SnapshotConvergenceTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 150,185,213
+docs/.vitepress/config.mts
+  s_4fdae838d0c2ea::t_72a38ec9c80104 102
+shared/Tests/StratoSharedTests/SnapshotReconciliationTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 56-64,67,70-73,75-76,78,80
+control-plane/Sources/App/Controllers/APIKeyController.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 65,69-75,107
+.github/workflows/release.yaml
+  s_4fdae838d0c2ea::t_72a38ec9c80104 179,181
+control-plane/web/src/types/api.ts
+  s_4fdae838d0c2ea::t_72a38ec9c80104 809
+control-plane/web/README.md
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1,3-6,8-10,13-14,17-18,20,22-28,30-34,36,38-41
+deploy/agent/tests/vm-manifest-preflight-test.sh
+  s_4fdae838d0c2ea::t_72a38ec9c80104 1-72
+control-plane/Sources/App/Models/APIKey.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 24-25,59,68-70,126,129-149,198-218
+docs/architecture/iam.md
+  s_4fdae838d0c2ea::t_72a38ec9c80104 652-653,694-698,700,708
+control-plane/Sources/App/Models/CLISession.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 30-31,81,91-93
+SwiftFirecracker/Sources/SwiftFirecracker/FirecrackerClient.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 103,216-218
+control-plane/Tests/AppIdentityTests/APIKeyOwnershipTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 88-124
+control-plane/Tests/AppIAMTests/CredentialRestrictionEnforcementTests.swift
+  s_4fdae838d0c2ea::t_72a38ec9c80104 382,384,418-419,421,478
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.21",
+  "base_commit_sha": "03fa66ca31f90e0441a683cdd8ac3c62c4be1e25",
+  "prompts": {},
+  "sessions": {
+    "s_4fdae838d0c2ea": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec77-c54c-7c61-a1d3-058bb12398f3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
