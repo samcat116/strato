@@ -1,0 +1,27 @@
+control-plane/Tests/AppPlatformTests/ControlPlaneConfigurationTests.swift
+  s_c00c4227b18597::t_e8cde8bcfbdb0c 1
+  s_c00c4227b18597::t_3174b0a9556cf3 45-111
+control-plane/Sources/App/ControlPlaneConfiguration.swift
+  s_c00c4227b18597::t_c8046c361d363d 453-455
+  s_c00c4227b18597::t_3174b0a9556cf3 456-458
+control-plane/Sources/App/Services/SSFService.swift
+  s_c00c4227b18597::t_3174b0a9556cf3 155-156
+control-plane/Sources/App/Controllers/OAuthController.swift
+  s_c00c4227b18597::t_3174b0a9556cf3 167-168
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "30e0be70a24b124b6a5e18570c2e551e17c74531",
+  "prompts": {},
+  "sessions": {
+    "s_c00c4227b18597": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2e1-98b7-7353-ad7c-717f9036181a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
