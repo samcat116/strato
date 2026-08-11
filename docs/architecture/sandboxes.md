@@ -243,8 +243,10 @@ inventory artifacts: they must be recreated rather than partially interpreted.
 **vsock control surface.** The init serves newline-delimited JSON on a guest
 vsock port (default 1024). The v1 surface is health + exit only: `ping` →
 `pong`, and `get_status` → the workload's lifecycle state and, once it ends,
-its exit code. Every response echoes `sandbox_id` + boot `nonce` so the host
-can re-identify a guest after a snapshot/resume. The surface has grown since:
+its exit code. Those health responses echo `sandbox_id` + boot `nonce`, and
+every response variant echoes the `nonce`, so the host can pin control and
+stream connections to one guest generation after a snapshot/resume. The
+surface has grown since:
 protocol v2 added the exec and log-follow stream modes (#423 — see
 [Exec, attach, and workload logs](#exec-attach-and-workload-logs)); v3 added
 `sync_clock`, the warm-start `launch` request and `held`

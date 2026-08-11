@@ -1015,6 +1015,32 @@ not a per-VM Unix socket. `HostPreflight` checks that character device on Linux
 and reports the `vhost_vsock` transport as unsupported, not failed, on other
 platforms.
 
+### VM guest control daemon (STR-77)
+
+`sandbox-guest/init/Cargo.toml` produces two Linux executables from one Cargo
+package. `strato-sandbox-init` remains PID 1 for Firecracker sandboxes;
+`strato-guest-agent` is a normal service inside an already-booted QEMU VM. Both
+use `strato_sandbox_init::protocol`, so `ping`, `get_status`, exec requests,
+PTY/stdin/resize frames, output, and exit messages have one Rust definition and
+one portable test suite. The VM daemon adds no crate dependency.
+
+The VM daemon binds only AF_VSOCK port 1024 and rejects any peer CID other than
+`VMADDR_CID_HOST` (2). It never opens a guest network listener. `ping` and
+`get_status` use `/etc/machine-id` in the protocol's historical `sandbox_id`
+field and Linux's boot id as `nonce`; that nonce survives a service restart but
+changes when the VM reboots. Every response, including each exec-stream record,
+echoes it so the later host bridge can pin a session to one guest generation.
+The status is `running` while the daemon is serving. Sandbox-only launch,
+reidentify, clock, and log-follow operations are refused.
+
+Exec runs as the service account (root in the planned systemd unit), defaults to
+`/`, and inherits the service environment with request entries overlaid. Pipe
+sessions use a dedicated process group; TTY sessions use a new session and
+controlling PTY. Closing the host connection before `exec_exit` kills that
+group. Unlike the sandbox init, the daemon owns and waits for each child itself
+because it is not PID 1. STR-80 owns the systemd unit and release artifact;
+STR-82 owns the node-agent vsock bridge.
+
 ## Networking
 
 `NetworkOrchestrator` (executable target) resolves a VM's `[NetworkSpec]`

@@ -30,7 +30,7 @@
 
 use std::collections::BTreeMap;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
@@ -46,8 +46,8 @@ use nix::unistd::{setsid, Pid};
 
 use strato_sandbox_init::config::merge_env;
 use strato_sandbox_init::protocol::{
-    decode_base64, decode_request, encode_line, Request, Response, DEFAULT_EXEC_COLS,
-    DEFAULT_EXEC_ROWS, DEFAULT_EXEC_TTY,
+    decode_base64, decode_request, encode_line, read_request_line, Request, Response,
+    DEFAULT_EXEC_COLS, DEFAULT_EXEC_ROWS, DEFAULT_EXEC_TTY,
 };
 
 use super::vsock::GuestState;
@@ -74,11 +74,12 @@ pub fn run_exec_session(
     writer: File,
     req: ExecRequest,
     state: &GuestState,
+    nonce: String,
 ) {
     let writer = Arc::new(Mutex::new(writer));
-    if let Err(message) = session(reader, &writer, req, state) {
+    if let Err(message) = session(reader, &writer, req, state, &nonce) {
         eprintln!("[sandbox-init] exec session failed: {message}");
-        send_response(&writer, &Response::Error { message });
+        send_response(&writer, &Response::Error { nonce, message });
     }
 }
 
@@ -90,6 +91,7 @@ fn session(
     writer: &Arc<Mutex<File>>,
     req: ExecRequest,
     state: &GuestState,
+    nonce: &str,
 ) -> Result<(), String> {
     let Some((program, args)) = req.argv.split_first() else {
         return Err("exec argv must not be empty".to_string());
@@ -193,7 +195,12 @@ fn session(
     // unclaimed map covers an exit racing this registration.
     let exit_rx = state.children.register(pid);
 
-    if !send_response(writer, &Response::ExecStarted) {
+    if !send_response(
+        writer,
+        &Response::ExecStarted {
+            nonce: nonce.to_string(),
+        },
+    ) {
         // Host vanished between request and spawn; don't leave the child
         // running unattended.
         kill_group(pid);
@@ -211,6 +218,7 @@ fn session(
                 File::from(read_half),
                 "stdout",
                 writer.clone(),
+                nonce.to_string(),
             ));
         }
         stdin_sink = pty_master_write
@@ -227,6 +235,7 @@ fn session(
                 out,
                 "stdout",
                 writer.clone(),
+                nonce.to_string(),
             ));
         }
         if let Some(err) = child.stderr.take() {
@@ -235,6 +244,7 @@ fn session(
                 err,
                 "stderr",
                 writer.clone(),
+                nonce.to_string(),
             ));
         }
     }
@@ -249,14 +259,20 @@ fn session(
     // is fine — input is interactive and host-paced.
     let mut stdin_tx = stdin_sink.and_then(spawn_stdin_writer);
 
-    spawn_exit_waiter(exit_rx, pumps, exited.clone(), writer.clone());
+    spawn_exit_waiter(
+        exit_rx,
+        pumps,
+        exited.clone(),
+        writer.clone(),
+        nonce.to_string(),
+    );
 
     // Host-input loop: stdin/stdin_eof/resize until the host closes the
     // connection or the exit waiter shuts the socket down after exec_exit.
     let mut line = String::new();
     loop {
         line.clear();
-        match reader.read_line(&mut line) {
+        match read_request_line(&mut reader, &mut line) {
             Ok(0) => break,
             Ok(_) => {}
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
@@ -349,6 +365,7 @@ fn spawn_output_pump<R: Read + Send + 'static>(
     mut src: R,
     stream: &'static str,
     writer: Arc<Mutex<File>>,
+    nonce: String,
 ) -> Option<JoinHandle<()>> {
     let spawned = std::thread::Builder::new()
         .name(name.to_string())
@@ -359,6 +376,7 @@ fn spawn_output_pump<R: Read + Send + 'static>(
                     Ok(0) => return,
                     Ok(n) => {
                         let resp = Response::Output {
+                            nonce: nonce.clone(),
                             stream: stream.to_string(),
                             data: strato_sandbox_init::protocol::encode_base64(&buf[..n]),
                         };
@@ -390,6 +408,7 @@ fn spawn_exit_waiter(
     pumps: Vec<JoinHandle<()>>,
     exited: Arc<AtomicBool>,
     writer: Arc<Mutex<File>>,
+    nonce: String,
 ) {
     let spawned = std::thread::Builder::new()
         .name("exec-wait".to_string())
@@ -402,7 +421,7 @@ fn spawn_exit_waiter(
                 let _ = pump.join();
             }
             exited.store(true, Ordering::SeqCst);
-            send_response(&writer, &Response::ExecExit { exit_code });
+            send_response(&writer, &Response::ExecExit { nonce, exit_code });
             shutdown_connection(&writer);
         });
     if let Err(e) = spawned {

@@ -26,13 +26,15 @@
 //! All stdio payloads (`data` fields) are standard base64 so arbitrary bytes
 //! survive the JSON framing.
 //!
-//! Every v1 response echoes the sandbox identity (`sandbox_id` + `nonce`).
-//! This is what lets a host re-identify a guest after a phase-4
-//! snapshot/resume (issue #426): the listener is re-established on resume and
-//! the host confirms it is talking to the sandbox it expects, not a stale
-//! generation.
+//! Every response echoes the guest generation's `nonce`. `pong` and `status`
+//! additionally carry the historical `sandbox_id` field (used as the VM's
+//! machine id by `strato-guest-agent`). The nonce lets a host reject output
+//! from a stale guest generation, including in the middle of an exec stream.
+//! The sandbox init receives its nonce from the config drive; the VM agent uses
+//! Linux's boot id so restarting only the service preserves the generation.
 
 use std::collections::BTreeMap;
+use std::io::{self, BufRead};
 
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -44,6 +46,16 @@ use crate::config::{ImageConfig, NetworkConfig, ProcessOverrides};
 /// not override it. Ports below 1024 are conventionally reserved; 1024 is the
 /// first freely usable port and keeps us clear of them.
 pub const DEFAULT_VSOCK_PORT: u32 = 1024;
+
+/// Maximum accepted host request line, including its framing newline.
+///
+/// This matches the host response framer's 1 MiB ceiling. Keeping the bound in
+/// the shared module means neither root-running guest speaker can accidentally
+/// restore unbounded `read_line` allocation.
+pub const MAX_REQUEST_LINE_BYTES: usize = 1 << 20;
+
+/// Maximum UTF-8 size of identity fields accepted by the host parser.
+pub const MAX_IDENTITY_BYTES: usize = 256;
 
 /// Version of the guest control surface. This is advertised in `pong` so an
 /// upgraded host can distinguish a new guest from an older init frozen inside
@@ -236,11 +248,12 @@ pub enum Response {
         exit_code: Option<i32>,
     },
     /// Sent once on an exec session after the child spawned successfully.
-    ExecStarted,
+    ExecStarted { nonce: String },
     /// A chunk of exec child output. For tty sessions everything is reported
     /// as stream `"stdout"`; non-tty sessions report `"stdout"` and
     /// `"stderr"` separately.
     Output {
+        nonce: String,
         stream: String,
         /// base64-encoded output bytes.
         data: String,
@@ -248,9 +261,10 @@ pub enum Response {
     /// Terminal exec-session message: the child was reaped (signal N reported
     /// as `128 + N`) and all buffered output has been flushed. The guest
     /// closes the connection after sending it.
-    ExecExit { exit_code: i32 },
+    ExecExit { nonce: String, exit_code: i32 },
     /// One retained/live workload stdio record on a log follow stream.
     Log {
+        nonce: String,
         /// Monotonic sequence number, starting at 1, shared across streams.
         seq: u64,
         /// `"stdout"` or `"stderr"`.
@@ -263,19 +277,41 @@ pub enum Response {
     /// follow. Lets the host flush a partial final line (output that ended
     /// without a trailing newline) instead of holding it until teardown. The
     /// guest closes the connection after sending it.
-    LogEof,
+    LogEof { nonce: String },
     /// Reply to [`Request::SyncClock`]: the realtime clock was set.
-    ClockSynced,
+    ClockSynced { nonce: String },
     /// Reply to [`Request::Launch`]: the workload spawned under the new
     /// identity. Subsequent `pong`/`status` responses echo the launched
     /// sandbox's identity.
-    Launched,
+    Launched { nonce: String },
     /// Reply to [`Request::Reidentify`]. All later identity-bearing responses
     /// echo the target sandbox id and nonce.
-    Reidentified,
+    Reidentified { nonce: String },
     /// The request could not be decoded, is not valid for the connection's
     /// role, or the exec spawn failed.
-    Error { message: String },
+    Error { nonce: String, message: String },
+}
+
+impl Response {
+    /// The guest-generation nonce carried by every response variant.
+    ///
+    /// Keeping this match exhaustive makes adding an identity-less response a
+    /// compile error in both guest binaries.
+    pub fn nonce(&self) -> &str {
+        match self {
+            Response::Pong { nonce, .. }
+            | Response::Status { nonce, .. }
+            | Response::ExecStarted { nonce }
+            | Response::Output { nonce, .. }
+            | Response::ExecExit { nonce, .. }
+            | Response::Log { nonce, .. }
+            | Response::LogEof { nonce }
+            | Response::ClockSynced { nonce }
+            | Response::Launched { nonce }
+            | Response::Reidentified { nonce }
+            | Response::Error { nonce, .. } => nonce,
+        }
+    }
 }
 
 /// Encode bytes as standard base64 for a protocol `data` field.
@@ -304,9 +340,28 @@ pub fn decode_request(line: &str) -> Result<Request, serde_json::Error> {
     serde_json::from_str(line.trim())
 }
 
+/// Read one request line without allocating beyond the protocol ceiling.
+///
+/// `Ok(0)` is EOF. A line longer than [`MAX_REQUEST_LINE_BYTES`] is consumed
+/// only through the first byte past the limit and rejected; connection handlers
+/// close that connection rather than attempting to resynchronize it.
+pub fn read_request_line(reader: &mut impl BufRead, line: &mut String) -> io::Result<usize> {
+    line.clear();
+    let mut limited = std::io::Read::take(reader, (MAX_REQUEST_LINE_BYTES + 1) as u64);
+    let bytes = limited.read_line(line)?;
+    if bytes > MAX_REQUEST_LINE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("request line exceeds {MAX_REQUEST_LINE_BYTES} bytes"),
+        ));
+    }
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn ping_round_trips() {
@@ -323,6 +378,22 @@ mod tests {
     #[test]
     fn unknown_request_is_rejected() {
         assert!(decode_request("{\"type\":\"reboot\"}").is_err());
+    }
+
+    #[test]
+    fn request_line_reader_enforces_shared_ceiling() {
+        let at_limit = vec![b' '; MAX_REQUEST_LINE_BYTES];
+        let mut reader = Cursor::new(at_limit);
+        let mut line = String::new();
+        assert_eq!(
+            read_request_line(&mut reader, &mut line).expect("line at limit"),
+            MAX_REQUEST_LINE_BYTES
+        );
+
+        let over_limit = vec![b' '; MAX_REQUEST_LINE_BYTES + 1];
+        let mut reader = Cursor::new(over_limit);
+        let err = read_request_line(&mut reader, &mut line).expect_err("oversized line");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]
@@ -392,11 +463,14 @@ mod tests {
     }
 
     #[test]
-    fn launched_encodes_as_bare_tag() {
-        let line = encode_line(&Response::Launched);
-        assert_eq!(line.trim(), r#"{"type":"launched"}"#);
+    fn launched_encodes_identity_nonce() {
+        let response = Response::Launched {
+            nonce: "n-2".into(),
+        };
+        let line = encode_line(&response);
+        assert_eq!(line.trim(), r#"{"type":"launched","nonce":"n-2"}"#);
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
-        assert_eq!(decoded, Response::Launched);
+        assert_eq!(decoded, response);
     }
 
     #[test]
@@ -410,8 +484,11 @@ mod tests {
         let decoded: Request = serde_json::from_str(encode_line(&req).trim()).expect("re-decode");
         assert_eq!(decoded, req);
         assert_eq!(
-            encode_line(&Response::Reidentified).trim(),
-            r#"{"type":"reidentified"}"#
+            encode_line(&Response::Reidentified {
+                nonce: "new".into()
+            })
+            .trim(),
+            r#"{"type":"reidentified","nonce":"new"}"#
         );
     }
 
@@ -456,8 +533,11 @@ mod tests {
     #[test]
     fn clock_synced_encodes() {
         assert_eq!(
-            encode_line(&Response::ClockSynced).trim(),
-            r#"{"type":"clock_synced"}"#
+            encode_line(&Response::ClockSynced {
+                nonce: "n-1".into()
+            })
+            .trim(),
+            r#"{"type":"clock_synced","nonce":"n-1"}"#
         );
     }
 
@@ -604,22 +684,26 @@ mod tests {
 
     #[test]
     fn exec_started_encodes_as_spec() {
-        let line = encode_line(&Response::ExecStarted);
-        assert_eq!(line.trim(), r#"{"type":"exec_started"}"#);
+        let response = Response::ExecStarted {
+            nonce: "n-1".into(),
+        };
+        let line = encode_line(&response);
+        assert_eq!(line.trim(), r#"{"type":"exec_started","nonce":"n-1"}"#);
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
-        assert_eq!(decoded, Response::ExecStarted);
+        assert_eq!(decoded, response);
     }
 
     #[test]
     fn output_round_trips() {
         let resp = Response::Output {
+            nonce: "n-1".into(),
             stream: "stderr".into(),
             data: encode_base64(b"oops\n"),
         };
         let line = encode_line(&resp);
         assert_eq!(
             line.trim(),
-            r#"{"type":"output","stream":"stderr","data":"b29wcwo="}"#
+            r#"{"type":"output","nonce":"n-1","stream":"stderr","data":"b29wcwo="}"#
         );
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
         assert_eq!(decoded, resp);
@@ -627,9 +711,15 @@ mod tests {
 
     #[test]
     fn exec_exit_round_trips() {
-        let resp = Response::ExecExit { exit_code: 137 };
+        let resp = Response::ExecExit {
+            nonce: "n-1".into(),
+            exit_code: 137,
+        };
         let line = encode_line(&resp);
-        assert_eq!(line.trim(), r#"{"type":"exec_exit","exit_code":137}"#);
+        assert_eq!(
+            line.trim(),
+            r#"{"type":"exec_exit","nonce":"n-1","exit_code":137}"#
+        );
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
         assert_eq!(decoded, resp);
     }
@@ -637,6 +727,7 @@ mod tests {
     #[test]
     fn log_round_trips() {
         let resp = Response::Log {
+            nonce: "n-1".into(),
             seq: 18,
             stream: "stdout".into(),
             data: encode_base64(b"line\n"),
@@ -644,18 +735,37 @@ mod tests {
         let line = encode_line(&resp);
         assert_eq!(
             line.trim(),
-            r#"{"type":"log","seq":18,"stream":"stdout","data":"bGluZQo="}"#
+            r#"{"type":"log","nonce":"n-1","seq":18,"stream":"stdout","data":"bGluZQo="}"#
         );
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
         assert_eq!(decoded, resp);
     }
 
     #[test]
-    fn log_eof_encodes_as_bare_tag() {
-        let line = encode_line(&Response::LogEof);
-        assert_eq!(line.trim(), r#"{"type":"log_eof"}"#);
+    fn log_eof_encodes_identity_nonce() {
+        let response = Response::LogEof {
+            nonce: "n-1".into(),
+        };
+        let line = encode_line(&response);
+        assert_eq!(line.trim(), r#"{"type":"log_eof","nonce":"n-1"}"#);
         let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
-        assert_eq!(decoded, Response::LogEof);
+        assert_eq!(decoded, response);
+    }
+
+    #[test]
+    fn error_round_trips_with_identity_nonce() {
+        let response = Response::Error {
+            nonce: "n-1".into(),
+            message: "boom".into(),
+        };
+        let line = encode_line(&response);
+        assert_eq!(
+            line.trim(),
+            r#"{"type":"error","nonce":"n-1","message":"boom"}"#
+        );
+        let decoded: Response = serde_json::from_str(line.trim()).expect("decode");
+        assert_eq!(decoded.nonce(), "n-1");
+        assert_eq!(decoded, response);
     }
 
     #[test]

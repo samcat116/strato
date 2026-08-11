@@ -26,8 +26,8 @@ Consequences worth internalizing:
 
 Two non-Swift test gates do still run on PRs, because both are cheap and
 hosted: the Helm chart lint/template/security jobs (`helm-test.yml`, on
-`helm/**`) and the Rust `cargo fmt`/`test`/`clippy` gate for the sandbox guest
-init (`sandbox-guest.yaml`, on `sandbox-guest/**`).
+`helm/**`) and the Rust `cargo fmt`/`test`/`clippy` gate for the sandbox init and
+VM guest agent (`sandbox-guest.yaml`, on `sandbox-guest/**`).
 
 ## Workflows
 
