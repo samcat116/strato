@@ -16,6 +16,8 @@ enum WebhookDeliveryStatus: String, Codable, Sendable {
 /// produced the event (one row per matching subscription), drained by the
 /// delivery sweep, retried with exponential backoff, and kept afterwards as
 /// the per-subscription delivery history.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class WebhookDelivery: Model, @unchecked Sendable {
     static let schema = "webhook_deliveries"
 

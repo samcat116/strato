@@ -213,31 +213,34 @@ private func tokenResponseJSON(idToken: String) -> String {
 /// Fake Vapor `Client` standing in for the IdP: responses are scripted per URL
 /// substring, and every outgoing request is recorded so tests can assert on
 /// the exact shape of the token-exchange POST.
-private final class FakeIdPClient: Client, @unchecked Sendable {
+private final class FakeIdPClient: Client, Sendable {
     struct Stub {
         var status: HTTPStatus
         var body: String
     }
 
+    private struct State {
+        var stubs: [(match: String, stub: Stub)] = []
+        var recorded: [ClientRequest] = []
+    }
+
     let eventLoop: EventLoop
-    private let lock = NIOLock()
-    private var stubs: [(match: String, stub: Stub)] = []
-    private var recorded: [ClientRequest] = []
+    private let state = NIOLockedValueBox(State())
 
     init(on eventLoop: EventLoop) {
         self.eventLoop = eventLoop
     }
 
     func stub(urlContaining match: String, status: HTTPStatus = .ok, json: String) {
-        lock.withLock { stubs.append((match, Stub(status: status, body: json))) }
+        state.withLockedValue { $0.stubs.append((match, Stub(status: status, body: json))) }
     }
 
     var requests: [ClientRequest] {
-        lock.withLock { recorded }
+        state.withLockedValue { $0.recorded }
     }
 
     func requests(urlContaining match: String) -> [ClientRequest] {
-        lock.withLock { recorded.filter { $0.url.string.contains(match) } }
+        state.withLockedValue { $0.recorded.filter { $0.url.string.contains(match) } }
     }
 
     func delegating(to eventLoop: EventLoop) -> Client {
@@ -247,9 +250,9 @@ private final class FakeIdPClient: Client, @unchecked Sendable {
     func send(_ request: ClientRequest) -> EventLoopFuture<ClientResponse> {
         // Last matching stub wins, so a test can re-stub an endpoint for a
         // second login attempt.
-        let stub = lock.withLock { () -> Stub? in
-            recorded.append(request)
-            return stubs.last { request.url.string.contains($0.match) }?.stub
+        let stub = state.withLockedValue { state -> Stub? in
+            state.recorded.append(request)
+            return state.stubs.last { request.url.string.contains($0.match) }?.stub
         }
         guard let stub else {
             return eventLoop.makeFailedFuture(

@@ -6,6 +6,8 @@ import Vapor
 /// of the VM NIC — sandboxes are a parallel resource with their own lifecycle —
 /// but the shape mirrors the VM path so `IPAMService`, MAC generation, and
 /// stable device naming are reused. v1 gives each sandbox exactly one NIC.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class SandboxNetworkInterface: Model, @unchecked Sendable {
     static let schema = "sandbox_network_interfaces"
 

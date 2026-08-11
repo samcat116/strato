@@ -21,6 +21,8 @@ public enum SnapshotStatus: String, Codable, CaseIterable, Sendable {
 ///
 /// A durable artifact on a specific agent since STR-150 — desired state the
 /// owning agent converges on and confirms, not the result of an RPC.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class VolumeSnapshot: Model, @unchecked Sendable {
     static let schema = "volume_snapshots"
 

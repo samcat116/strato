@@ -99,12 +99,11 @@ extension Application {
 }
 
 /// Thread-safe cache for the decoy key
-final class DecoyKeyCache: @unchecked Sendable {
-    private let lock = NIOLock()
-    private var _key: String?
+final class DecoyKeyCache: Sendable {
+    private let cachedKey = NIOLockedValueBox<String?>(nil)
 
     var key: String? {
-        get { lock.withLock { _key } }
-        set { lock.withLock { _key = newValue } }
+        get { cachedKey.withLockedValue { $0 } }
+        set { cachedKey.withLockedValue { $0 = newValue } }
     }
 }

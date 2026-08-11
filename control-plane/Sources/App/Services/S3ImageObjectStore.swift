@@ -159,28 +159,91 @@ struct S3ImageObjectStore: ImageObjectStore {
 
 /// Buffers into ≥5 MiB parts and uploads them as it goes, so a multi-gigabyte
 /// image never lands in memory whole.
-private actor S3ImageObjectWriter: ImageObjectWriter {
-    private let s3: S3
-    private let bucket: String
-    private let key: String
-    private let uploadId: String
+struct S3MultipartUploadOperations: Sendable {
+    struct CompletedPart: Sendable {
+        let eTag: String?
+        let partNumber: Int
+    }
 
-    private var pending: ByteBuffer
-    private var completedParts: [S3.CompletedPart] = []
-    private var nextPartNumber = 1
-    private var aborted = false
+    let uploadPart: @Sendable (ByteBuffer, Int) async throws -> String?
+    let completeMultipartUpload: @Sendable ([CompletedPart]) async throws -> Void
+    let abortMultipartUpload: @Sendable () async throws -> Void
 
     init(s3: S3, bucket: String, key: String, uploadId: String) {
-        self.s3 = s3
-        self.bucket = bucket
-        self.key = key
-        self.uploadId = uploadId
+        uploadPart = { buffer, partNumber in
+            let result = try await s3.uploadPart(
+                .init(
+                    body: AWSHTTPBody(buffer: buffer),
+                    bucket: bucket,
+                    key: key,
+                    partNumber: partNumber,
+                    uploadId: uploadId
+                )
+            )
+            return result.eTag
+        }
+        completeMultipartUpload = { parts in
+            _ = try await s3.completeMultipartUpload(
+                .init(
+                    bucket: bucket,
+                    key: key,
+                    multipartUpload: S3.CompletedMultipartUpload(
+                        parts: parts.map {
+                            S3.CompletedPart(eTag: $0.eTag, partNumber: $0.partNumber)
+                        }
+                    ),
+                    uploadId: uploadId
+                )
+            )
+        }
+        abortMultipartUpload = {
+            _ = try await s3.abortMultipartUpload(
+                .init(bucket: bucket, key: key, uploadId: uploadId)
+            )
+        }
+    }
+
+    init(
+        uploadPart: @escaping @Sendable (ByteBuffer, Int) async throws -> String?,
+        completeMultipartUpload: @escaping @Sendable ([CompletedPart]) async throws -> Void,
+        abortMultipartUpload: @escaping @Sendable () async throws -> Void
+    ) {
+        self.uploadPart = uploadPart
+        self.completeMultipartUpload = completeMultipartUpload
+        self.abortMultipartUpload = abortMultipartUpload
+    }
+}
+
+actor S3ImageObjectWriter: ImageObjectWriter {
+    private enum Lifecycle {
+        case open
+        case finishing(Task<Void, any Error>)
+        case finished
+        case aborted
+        case failed
+    }
+
+    private let operations: S3MultipartUploadOperations
+
+    private var pending: ByteBuffer
+    private var completedParts: [S3MultipartUploadOperations.CompletedPart] = []
+    private var nextPartNumber = 1
+    private var lifecycle: Lifecycle = .open
+
+    init(s3: S3, bucket: String, key: String, uploadId: String) {
+        self.operations = S3MultipartUploadOperations(
+            s3: s3, bucket: bucket, key: key, uploadId: uploadId)
+        self.pending = ByteBufferAllocator().buffer(capacity: S3ImageObjectStore.partSize)
+    }
+
+    init(operations: S3MultipartUploadOperations) {
+        self.operations = operations
         self.pending = ByteBufferAllocator().buffer(capacity: S3ImageObjectStore.partSize)
     }
 
     func write(_ buffer: ByteBuffer) async throws {
-        guard !aborted else {
-            throw ImageError.storageFailed("Write to an aborted upload")
+        guard case .open = lifecycle else {
+            throw ImageError.storageFailed("Write after the image upload terminated")
         }
         var buffer = buffer
         pending.writeBuffer(&buffer)
@@ -193,48 +256,79 @@ private actor S3ImageObjectWriter: ImageObjectWriter {
     }
 
     func finish() async throws {
-        // The final part is the only one allowed below the 5 MiB minimum.
-        //
-        // It is uploaded even when empty: S3 rejects `completeMultipartUpload`
-        // with an empty part list, so a zero-byte object needs one zero-byte
-        // part rather than none.
-        if pending.readableBytes > 0 || completedParts.isEmpty {
-            let tail = pending.readSlice(length: pending.readableBytes) ?? ByteBuffer()
-            try await uploadPart(tail)
+        let finishTask: Task<Void, any Error>
+        switch lifecycle {
+        case .finished:
+            return
+        case .finishing(let existingTask):
+            finishTask = existingTask
+        case .aborted:
+            throw ImageError.storageFailed("Cannot finish an aborted image upload")
+        case .failed:
+            throw ImageError.storageFailed("Cannot finish an image upload whose publish failed")
+        case .open:
+            let newTask = Task { try await self.publish() }
+            lifecycle = .finishing(newTask)
+            finishTask = newTask
         }
 
-        _ = try await s3.completeMultipartUpload(
-            .init(
-                bucket: bucket,
-                key: key,
-                multipartUpload: S3.CompletedMultipartUpload(parts: completedParts),
-                uploadId: uploadId
-            )
-        )
+        try await finishTask.value
+    }
+
+    private func publish() async throws {
+        do {
+            // The final part is the only one allowed below the 5 MiB minimum.
+            //
+            // It is uploaded even when empty: S3 rejects `completeMultipartUpload`
+            // with an empty part list, so a zero-byte object needs one zero-byte
+            // part rather than none.
+            if pending.readableBytes > 0 || completedParts.isEmpty {
+                let tail = pending.readSlice(length: pending.readableBytes) ?? ByteBuffer()
+                try await uploadPart(tail)
+            }
+
+            try await operations.completeMultipartUpload(completedParts)
+            lifecycle = .finished
+        } catch {
+            lifecycle = .failed
+            throw error
+        }
     }
 
     func abort() async {
-        aborted = true
+        if case .finishing(let finishTask) = lifecycle {
+            do {
+                try await finishTask.value
+                return
+            } catch {
+                // A failed publish still owns multipart parts. Continue below
+                // and make one best-effort attempt to discard them.
+            }
+        }
+
+        switch lifecycle {
+        case .finished, .aborted:
+            return
+        case .finishing:
+            // The shared task above completed before this actor was resumed,
+            // so publish() has already replaced this state.
+            return
+        case .open, .failed:
+            lifecycle = .aborted
+        }
         // Best effort: leaving the multipart upload dangling would keep billing
         // for its parts, but a failure here must not mask the original error.
-        _ = try? await s3.abortMultipartUpload(
-            .init(bucket: bucket, key: key, uploadId: uploadId)
-        )
+        try? await operations.abortMultipartUpload()
     }
 
     private func uploadPart(_ buffer: ByteBuffer) async throws {
         let partNumber = nextPartNumber
         nextPartNumber += 1
 
-        let result = try await s3.uploadPart(
-            .init(
-                body: AWSHTTPBody(buffer: buffer),
-                bucket: bucket,
-                key: key,
-                partNumber: partNumber,
-                uploadId: uploadId
-            )
+        let eTag = try await operations.uploadPart(buffer, partNumber)
+        completedParts.append(
+            S3MultipartUploadOperations.CompletedPart(
+                eTag: eTag, partNumber: partNumber)
         )
-        completedParts.append(S3.CompletedPart(eTag: result.eTag, partNumber: partNumber))
     }
 }

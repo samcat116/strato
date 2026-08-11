@@ -11,6 +11,8 @@ import Vapor
 /// device code is stored (mirroring `AccountClaimToken`); the user code is
 /// stored in the clear because it is short-lived, low-entropy by design, and
 /// only resolvable through session-authenticated endpoints.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class DeviceAuthorization: Model, @unchecked Sendable {
     static let schema = "oauth_device_authorizations"
 

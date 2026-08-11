@@ -31,26 +31,30 @@ enum ResolvedWorkload: Equatable, Sendable {
 
 enum WorkloadRegistry {
 
+    /// Platform-owned namespaces that registration APIs must never allow a
+    /// caller to claim. Each message suffix describes the lifecycle that owns
+    /// the identity so API errors explain how the namespace is populated.
+    private static let reservedNamespaces: [(prefix: String, owner: String)] = [
+        ("/agent/", "hypervisor agents, which register automatically when they first connect"),
+        ("/vm/", "guest virtual machines, which register automatically when they are created"),
+        ("/sandbox/", "guest sandboxes, which register automatically when they are created"),
+    ]
+
     /// Validate a SPIFFE URI supplied to a registration API, returning it
     /// normalized.
     ///
-    /// Beyond the syntax check, the reserved `/agent/<name>` namespace is
-    /// refused outright: agent identities are claimable only by
-    /// trust-on-first-use at the mTLS edge, after SPIRE has verified the
-    /// certificate. Allowing an API caller to pre-register one would let a
-    /// low-privilege principal squat on an enrolled-but-not-yet-connected
-    /// node's identity — `requireAgentRegistration` would then refuse the
-    /// genuine agent (a cross-tenant onboarding denial of service), and
-    /// nothing short of manual registry surgery would clear the row.
+    /// Beyond the syntax check, platform-minted namespaces are refused
+    /// outright. Allowing an API caller to pre-register one would let them
+    /// squat on an identity before its agent, VM, or sandbox lifecycle claims
+    /// it, denying the genuine workload its identity.
     static func validateRegistrable(spiffeID: String) throws -> String {
         guard let identity = SPIFFEIdentity(uri: spiffeID) else {
             throw Abort(.badRequest, reason: "Not a valid SPIFFE URI (spiffe://<trust-domain>/<path>)")
         }
-        guard !identity.isAgent else {
+        if let namespace = reservedNamespaces.first(where: { identity.path.hasPrefix($0.prefix) }) {
             throw Abort(
                 .badRequest,
-                reason:
-                    "The /agent/ SPIFFE namespace is reserved for hypervisor agents, which register automatically when they first connect"
+                reason: "The \(namespace.prefix) SPIFFE namespace is reserved for \(namespace.owner)"
             )
         }
         return identity.uri

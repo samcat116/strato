@@ -13,6 +13,8 @@ import Vapor
 ///
 /// There is deliberately no foreign key on `node_id`: the column points at
 /// many tables (discriminated by `node_type`), same as `ResourceOperation`.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class RoleBinding: Model, @unchecked Sendable {
     static let schema = "role_bindings"
     static let conditionConstraintName = "ck_role_bindings_condition_unsupported"

@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import NIOConcurrencyHelpers
 import Testing
 
 #if os(Linux)
@@ -98,13 +99,12 @@ struct FirecrackerAdoptionTests {
 
 /// Minimal stand-in for Firecracker's HTTP-over-Unix-socket API. Serves a fixed
 /// `GET /` instance-info response so adoption can be tested without the binary.
-private final class FakeFirecrackerAPIServer: @unchecked Sendable {
+private final class FakeFirecrackerAPIServer: Sendable {
     private let socketPath: String
     private let responseBody: Data
     private let listenFD: Int32
     private let queue = DispatchQueue(label: "fake-firecracker-api")
-    private var stopped = false
-    private let lock = NSLock()
+    private let stopped = NIOLockedValueBox(false)
 
     init(socketPath: String, state: String, appName: String = "Firecracker") throws {
         self.socketPath = socketPath
@@ -171,18 +171,14 @@ private final class FakeFirecrackerAPIServer: @unchecked Sendable {
     }
 
     func stop() {
-        lock.lock()
-        stopped = true
-        lock.unlock()
+        stopped.withLockedValue { $0 = true }
         // Closing the listen socket unblocks accept().
         close(listenFD)
         try? FileManager.default.removeItem(atPath: socketPath)
     }
 
     private func isStopped() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return stopped
+        stopped.withLockedValue { $0 }
     }
 
     /// Answers each `GET /`-style request on the persistent connection with the

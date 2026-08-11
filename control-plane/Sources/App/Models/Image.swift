@@ -26,6 +26,8 @@ public enum ImageStatus: String, Codable, CaseIterable, Sendable {
     case error = "error"  // An error occurred
 }
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class Image: Model, @unchecked Sendable {
     static let schema = "images"
 

@@ -4,6 +4,8 @@ import Vapor
 /// A NIC attached to a VM, mirroring how `Volume` models disks. Each row is one
 /// interface on a logical network; `VMSpecBuilder` turns the VM's interfaces into
 /// the `NetworkSpec` list sent to agents, ordered by `orderIndex` then `deviceName`.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class VMNetworkInterface: Model, @unchecked Sendable {
     static let schema = "vm_network_interfaces"
 

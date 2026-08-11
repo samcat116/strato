@@ -13,6 +13,8 @@ import Vapor
 /// OVN object names — keys on the row id (issue #765). The name is a display
 /// label, unique only within its project, so two tenants can each own a network
 /// called "default" without sharing an L2 domain or an IP pool.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class LogicalNetwork: Model, @unchecked Sendable {
     static let schema = "logical_networks"
 

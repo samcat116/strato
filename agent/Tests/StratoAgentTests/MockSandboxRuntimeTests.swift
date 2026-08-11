@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Logging
 import StratoShared
 import Testing
@@ -38,18 +39,13 @@ struct MockSandboxRuntimeTests {
 
     /// Thread-safe recorder for exec events / log lines delivered from
     /// `@Sendable` callbacks.
-    private final class Recorder<T: Sendable>: @unchecked Sendable {
-        private let lock = NSLock()
-        private var items: [T] = []
+    private final class Recorder<T: Sendable>: Sendable {
+        private let items = Mutex<[T]>([])
         func append(_ item: T) {
-            lock.lock()
-            defer { lock.unlock() }
-            items.append(item)
+            items.withLock { $0.append(item) }
         }
         var all: [T] {
-            lock.lock()
-            defer { lock.unlock() }
-            return items
+            items.withLock { $0 }
         }
     }
 

@@ -2,6 +2,8 @@ import Fluent
 import Vapor
 import Foundation
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class User: Model, @unchecked Sendable {
     static let schema = "users"
 
@@ -156,6 +158,8 @@ extension User {
 
 // MARK: - UserCredential Model for Passkeys
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class UserCredential: Model, @unchecked Sendable {
     static let schema = "user_credentials"
 
@@ -247,6 +251,8 @@ extension UserCredential: Content {}
 
 // MARK: - Challenge Storage
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class AuthenticationChallenge: Model, @unchecked Sendable {
     static let schema = "authentication_challenges"
 

@@ -199,8 +199,8 @@ plugin — is what vouched for the workload.
 | `spiffe://<td>/node/<name>` | a hypervisor node (join-token attestation) | existing |
 | `spiffe://<td>/agent/<name>` | the strato-agent workload on that node | existing, reserved |
 | `spiffe://<td>/control-plane` | the control plane | existing |
-| `spiffe://<org-td>/vm/<vm-uuid>` | **a guest VM** | minted by STR-55; namespace reservation still outstanding (STR-165) |
-| `spiffe://<org-td>/sandbox/<sandbox-uuid>` | **a guest sandbox** | to reserve |
+| `spiffe://<org-td>/vm/<vm-uuid>` | **a guest VM** | minted by STR-55; reserved |
+| `spiffe://<org-td>/sandbox/<sandbox-uuid>` | **a guest sandbox** | reserved |
 
 `<org-td>` is the same domain as the hosting node's `<td>` — see
 [the placement prerequisite](#the-placement-prerequisite).
@@ -250,14 +250,11 @@ platform-domain (degraded) VMs and org-domain ones, with no re-issue path. A
 later migration can rewrite `spiffe_id` while the row is still the only artifact;
 once SVIDs are actually issued under these names, it cannot.
 
-Both prefixes must be reserved in `WorkloadRegistry.validateRegistrable` exactly
-as `/agent/` is today, so a system administrator cannot hand-register a URI that
-a VM will later be minted into. **That reservation has not landed** (STR-165).
-Until it does, the `spiffe_id` unique index is the guard, and a squatted URI is
-answered by the VM create path's retry redrawing the VM's id. Note that the
-minting path deliberately does *not* route through `validateRegistrable` — its
-contract is validating a URI supplied to a registration API — so reserving the
-prefix will not break VM creation.
+Both prefixes are reserved in `WorkloadRegistry.validateRegistrable` exactly as
+`/agent/` is, so a system administrator cannot hand-register a URI that a guest
+will later be minted into. The minting path deliberately does *not* route
+through `validateRegistrable` — its contract is validating a URI supplied to a
+registration API — so reserving the prefix does not break guest creation.
 
 ## Selectors, and the subset hazard
 
@@ -660,10 +657,8 @@ Filed under [#496](https://github.com/samcat116/strato/issues/496):
 0. ~~Per-VM `WorkloadRegistration` lifecycle (#789).~~ **Done** — STR-55.
 1. Enable the SPIRE agent admin socket behind an opt-in installer flag
    (`deploy/agent/install.sh`, `deploy/compose/spiffe/`, Helm).
-2. Reserve `/vm/` and `/sandbox/` in `WorkloadRegistry.validateRegistrable`
-   (STR-165). Outstanding, and now load-bearing: every VM holds a `/vm/` URI, so
-   until this lands the `spiffe_id` unique index is the only thing keeping a
-   hand-registered row out of the namespace.
+2. ~~Reserve `/vm/` and `/sandbox/` in
+   `WorkloadRegistry.validateRegistrable`.~~ **Done** — STR-165.
 3. Per-sandbox `WorkloadRegistration` lifecycle (STR-166) — the sandbox twin of
    #789, and the reason VMs and sandboxes are asymmetric today.
 4. Guest SPIRE entry lifecycle parented to the hosting node, including

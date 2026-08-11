@@ -12,6 +12,8 @@ import Vapor
 /// authenticate inbound deliveries with a per-stream bearer token (stored
 /// hashed, like SCIM tokens); poll streams record the transmitter's poll
 /// endpoint and are drained by the periodic poll sweep.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class SSFStream: Model, @unchecked Sendable {
     static let schema = "ssf_streams"
 

@@ -2,6 +2,8 @@ import Fluent
 import Vapor
 import Foundation
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class Organization: Model, @unchecked Sendable {
     static let schema = "organizations"
 
@@ -68,6 +70,8 @@ extension Organization {
 
 // MARK: - User-Organization Relationship (Many-to-Many)
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class UserOrganization: Model, @unchecked Sendable {
     static let schema = "user_organizations"
 

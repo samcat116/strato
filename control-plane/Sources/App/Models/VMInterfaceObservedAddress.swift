@@ -12,6 +12,8 @@ import Vapor
 /// The control plane reconciles these rows against each observed-state report
 /// keyed by MAC, so they reflect the guest's current view rather than a
 /// point-in-time allocation.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class VMInterfaceObservedAddress: Model, @unchecked Sendable {
     static let schema = "vm_interface_observed_addresses"
 
