@@ -734,16 +734,120 @@ public struct DesiredFloatingIP: Codable, Sendable, Equatable {
     /// the NAT rule's `logical_ip`.
     public let logicalIP: String
     /// The VM owning the attached NIC.
-    public let vmId: UUID
+    public let vmId: UUID?
     /// The NIC's position in the VM's interface list (orderIndex), matching
     /// the index the agent used when naming the NIC's logical switch port.
-    public let nicIndex: Int
+    public let nicIndex: Int?
 
-    public init(externalIP: String, logicalIP: String, vmId: UUID, nicIndex: Int) {
+    public init(
+        externalIP: String, logicalIP: String, vmId: UUID? = nil, nicIndex: Int? = nil
+    ) {
         self.externalIP = externalIP
         self.logicalIP = logicalIP
         self.vmId = vmId
         self.nicIndex = nicIndex
+    }
+}
+
+/// One listener on an OVN-native L4 load balancer (STR-28). The control plane
+/// keeps listeners separate so high-churn backend membership never requires a
+/// read-modify-write of this stable port mapping.
+public struct DesiredLoadBalancerListener: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let port: Int
+    public let backendPort: Int
+
+    public init(id: UUID, port: Int, backendPort: Int) {
+        self.id = id
+        self.port = port
+        self.backendPort = backendPort
+    }
+}
+
+/// One backend address for a desired load balancer. VM identity is carried
+/// only for on-platform NICs, allowing the agent to derive the stable OVN LSP
+/// name used by health-check `ip_port_mappings`. Off-platform targets have an
+/// address but no VM, NIC, or member switch.
+public struct DesiredLoadBalancerBackend: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let ipAddress: String
+    public let vmId: UUID?
+    public let nicIndex: Int?
+    public let networkId: UUID?
+    /// Router-port address on the backend's subnet, used as OVN's probe source
+    /// in `ip_port_mappings`. Nil for off-platform targets.
+    public let healthCheckSourceIP: String?
+
+    public init(
+        id: UUID,
+        ipAddress: String,
+        vmId: UUID? = nil,
+        nicIndex: Int? = nil,
+        networkId: UUID? = nil,
+        healthCheckSourceIP: String? = nil
+    ) {
+        self.id = id
+        self.ipAddress = ipAddress
+        self.vmId = vmId
+        self.nicIndex = nicIndex
+        self.networkId = networkId
+        self.healthCheckSourceIP = healthCheckSourceIP
+    }
+}
+
+public struct DesiredLoadBalancerHealthCheck: Codable, Sendable, Equatable {
+    public let enabled: Bool
+    public let intervalSeconds: Int
+    public let timeoutSeconds: Int
+    public let successThreshold: Int
+    public let failureThreshold: Int
+
+    public init(
+        enabled: Bool,
+        intervalSeconds: Int,
+        timeoutSeconds: Int,
+        successThreshold: Int,
+        failureThreshold: Int
+    ) {
+        self.enabled = enabled
+        self.intervalSeconds = intervalSeconds
+        self.timeoutSeconds = timeoutSeconds
+        self.successThreshold = successThreshold
+        self.failureThreshold = failureThreshold
+    }
+}
+
+/// A first-class Strato L4 load balancer, keyed by its resource UUID rather
+/// than its mutable display name. Omission from an authoritative network sync
+/// means the owner-tagged OVN row must be removed.
+public struct DesiredLoadBalancer: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let name: String
+    public let vip: String
+    public let protocolName: String
+    public let generation: Int64
+    public let healthCheck: DesiredLoadBalancerHealthCheck
+    public let listeners: [DesiredLoadBalancerListener]
+    public let backends: [DesiredLoadBalancerBackend]
+
+    public init(
+        id: UUID,
+        name: String,
+        vip: String,
+        protocolName: String,
+        generation: Int64,
+        healthCheck: DesiredLoadBalancerHealthCheck,
+        listeners: [DesiredLoadBalancerListener],
+        backends: [DesiredLoadBalancerBackend]
+    ) {
+        self.id = id
+        self.name = name
+        self.vip = vip
+        self.protocolName = protocolName
+        self.generation = generation
+        self.healthCheck = healthCheck
+        self.listeners = listeners
+        self.backends = backends
     }
 }
 
@@ -880,6 +984,9 @@ public struct DesiredNetworkState: Codable, Sendable {
     /// decode and old agents ignore it. Only meaningful on `externalAccess`
     /// networks (the NAT needs the router's uplink).
     public let floatingIPs: [DesiredFloatingIP]?
+    /// Native OVN load balancers whose VIP belongs to this network. Nil means
+    /// a pre-v43 control plane has no opinion; an empty array is authoritative.
+    public let loadBalancers: [DesiredLoadBalancer]?
 
     public init(
         networkId: UUID,
@@ -898,7 +1005,8 @@ public struct DesiredNetworkState: Codable, Sendable {
         resolverEnabled: Bool? = nil,
         resolverAddresses: [String]? = nil,
         generation: Int64,
-        floatingIPs: [DesiredFloatingIP]? = nil
+        floatingIPs: [DesiredFloatingIP]? = nil,
+        loadBalancers: [DesiredLoadBalancer]? = nil
     ) {
         self.networkId = networkId
         self.name = name
@@ -917,6 +1025,7 @@ public struct DesiredNetworkState: Codable, Sendable {
         self.resolverAddresses = resolverAddresses
         self.generation = generation
         self.floatingIPs = floatingIPs
+        self.loadBalancers = loadBalancers
     }
 }
 
@@ -1378,6 +1487,62 @@ public struct ObservedManifestStatus: Codable, Sendable, Equatable {
     }
 }
 
+// MARK: - Observed Load Balancer State
+
+public enum ObservedLoadBalancerStatus: String, Codable, Sendable {
+    case pending
+    case active
+    case error
+}
+
+public enum ObservedLoadBalancerBackendHealth: String, Codable, Sendable {
+    case unknown
+    case online
+    case offline
+    case error
+}
+
+public struct ObservedLoadBalancerBackend: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let healthStatus: ObservedLoadBalancerBackendHealth
+    public let lastCheckedAt: Date?
+
+    public init(
+        id: UUID,
+        healthStatus: ObservedLoadBalancerBackendHealth,
+        lastCheckedAt: Date? = nil
+    ) {
+        self.id = id
+        self.healthStatus = healthStatus
+        self.lastCheckedAt = lastCheckedAt
+    }
+}
+
+/// What the site's single OVN author observed after reconciling one native
+/// load balancer. Optional at the report level because non-authoritative and
+/// pre-v43 agents have no opinion about these project-scoped rows.
+public struct ObservedLoadBalancerState: Codable, Sendable, Equatable {
+    public let id: UUID
+    public let observedGeneration: Int64
+    public let status: ObservedLoadBalancerStatus
+    public let lastError: String?
+    public let backends: [ObservedLoadBalancerBackend]
+
+    public init(
+        id: UUID,
+        observedGeneration: Int64,
+        status: ObservedLoadBalancerStatus,
+        lastError: String? = nil,
+        backends: [ObservedLoadBalancerBackend] = []
+    ) {
+        self.id = id
+        self.observedGeneration = observedGeneration
+        self.status = status
+        self.lastError = lastError
+        self.backends = backends
+    }
+}
+
 /// Agent → control plane: everything the agent actually has, with resources.
 ///
 /// Full-list semantics mirror `DesiredStateMessage`: a VM missing from `vms`
@@ -1438,6 +1603,9 @@ public struct ObservedStateReport: WebSocketMessage {
     /// enumerate one of its artifact stores, so the control plane must do
     /// nothing rather than read the absence as "every checkpoint is gone".
     public let snapshots: [ObservedSnapshotState]?
+    /// Native LB programming and backend health observed by the site's
+    /// topology author. Nil means no opinion, not an empty authoritative set.
+    public let loadBalancers: [ObservedLoadBalancerState]?
 
     public init(
         requestId: String = UUID().uuidString,
@@ -1451,7 +1619,8 @@ public struct ObservedStateReport: WebSocketMessage {
         teardownRefusal: ObservedTeardownRefusal? = nil,
         manifestStatus: ObservedManifestStatus? = nil,
         volumes: [ObservedVolumeState]? = nil,
-        snapshots: [ObservedSnapshotState]? = nil
+        snapshots: [ObservedSnapshotState]? = nil,
+        loadBalancers: [ObservedLoadBalancerState]? = nil
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -1465,6 +1634,7 @@ public struct ObservedStateReport: WebSocketMessage {
         self.manifestStatus = manifestStatus
         self.volumes = volumes
         self.snapshots = snapshots
+        self.loadBalancers = loadBalancers
     }
 
 }

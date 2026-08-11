@@ -380,6 +380,13 @@ public func configure(_ app: Application) async throws {
     // fresh database; see ADR 0009 for the cutover decision.
     app.migrations.add(CurrentSchemaBaseline())
 
+    // STR-28: project-scoped native OVN load balancers, incremental listener
+    // and backend membership, external Floating IP attachment, and quota.
+    app.migrations.add(CreateLoadBalancer())
+    app.migrations.add(CreateLoadBalancerListener())
+    app.migrations.add(CreateLoadBalancerBackend())
+    app.migrations.add(AddLoadBalancerCountToResourceQuota())
+
     // STR-236: initialize the previously inert network counter from the
     // project-wide logical networks each global quota actually governs.
     app.migrations.add(BackfillNetworkQuotaAccounting())

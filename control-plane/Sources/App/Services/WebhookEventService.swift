@@ -102,6 +102,7 @@ struct QuotaUsageSnapshot: Sendable {
     let sandboxes: Int
     let volumes: Int
     let networks: Int
+    let loadBalancers: Int
 
     init(of quota: ResourceQuota) {
         self.vcpus = quota.reservedVCPUs
@@ -111,6 +112,7 @@ struct QuotaUsageSnapshot: Sendable {
         self.sandboxes = quota.sandboxCount
         self.volumes = quota.volumeCount
         self.networks = quota.networkCount
+        self.loadBalancers = quota.loadBalancerCount
     }
 }
 
@@ -331,6 +333,10 @@ enum WebhookEvents {
             // `limit > 0` guard below already skips (STR-181).
             ("volumes", Int64(baseline.volumes), Int64(quota.volumeCount), Int64(quota.maxVolumes ?? 0)),
             ("networks", Int64(baseline.networks), Int64(quota.networkCount), Int64(quota.maxNetworks)),
+            (
+                "load_balancers", Int64(baseline.loadBalancers), Int64(quota.loadBalancerCount),
+                Int64(quota.maxLoadBalancers)
+            ),
         ]
 
         for entry in pools {

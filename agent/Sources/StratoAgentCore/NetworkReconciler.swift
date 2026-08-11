@@ -644,13 +644,24 @@ public enum NetworkReconciler {
                     // (`-internal`) router must never grow an uplink, and the
                     // control plane rejects attaching to no-egress networks.
                     for fip in network.floatingIPs ?? [] {
+                        let logicalPort: String?
+                        if let vmID = fip.vmId, let nicIndex = fip.nicIndex {
+                            logicalPort = OVNNaming.vmPortName(
+                                vmId: vmID.uuidString, nicIndex: nicIndex)
+                        } else {
+                            // A floating IP targeting an LB VIP is centralized
+                            // router NAT; there is no single backend LSP or MAC
+                            // to pin distributed NAT to.
+                            logicalPort = nil
+                        }
                         dnatRules.append(
                             DesiredDNATRule(
                                 externalIP: fip.externalIP,
                                 logicalIP: fip.logicalIP,
-                                logicalPort: OVNNaming.vmPortName(
-                                    vmId: fip.vmId.uuidString, nicIndex: fip.nicIndex),
-                                externalMAC: OVNNaming.floatingIPMAC(externalIP: fip.externalIP)))
+                                logicalPort: logicalPort,
+                                externalMAC: logicalPort.map { _ in
+                                    OVNNaming.floatingIPMAC(externalIP: fip.externalIP)
+                                }))
                     }
                 }
             }

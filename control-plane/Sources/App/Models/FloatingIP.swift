@@ -34,6 +34,12 @@ final class FloatingIP: Model, @unchecked Sendable {
     @OptionalParent(key: "interface_id")
     var interface: VMNetworkInterface?
 
+    /// Native load balancer whose internal VIP this external address targets
+    /// (STR-28). Mutually exclusive with `interface`; SET NULL on LB deletion
+    /// keeps the project's reserved address available for reattachment.
+    @OptionalParent(key: "load_balancer_id")
+    var loadBalancer: LoadBalancer?
+
     @OptionalParent(key: "created_by_id")
     var createdBy: User?
 
@@ -51,6 +57,7 @@ final class FloatingIP: Model, @unchecked Sendable {
         address: String,
         projectID: UUID,
         interfaceID: UUID? = nil,
+        loadBalancerID: UUID? = nil,
         createdByID: UUID? = nil
     ) {
         self.id = id
@@ -58,6 +65,7 @@ final class FloatingIP: Model, @unchecked Sendable {
         self.address = address
         self.$project.id = projectID
         self.$interface.id = interfaceID
+        self.$loadBalancer.id = loadBalancerID
         self.$createdBy.id = createdByID
     }
 }
@@ -75,9 +83,11 @@ struct CreateFloatingIPRequest: Content {
 }
 
 struct AttachFloatingIPRequest: Content {
-    let vmId: UUID
+    let vmId: UUID?
     /// The VM NIC to attach to; defaults to the VM's first interface.
     let interfaceId: UUID?
+    /// Alternative attachment target: a native load-balancer VIP.
+    let loadBalancerId: UUID?
 }
 
 struct FloatingIPResponse: Content {
@@ -89,13 +99,18 @@ struct FloatingIPResponse: Content {
     let interfaceId: UUID?
     let vmId: UUID?
     let fixedIP: String?
+    let loadBalancerId: UUID?
     /// The attached NIC's network: the id references it, the name is a display
     /// label present only when the caller eager-loaded the relation (issue #765).
     let networkId: UUID?
     let networkName: String?
     let createdAt: Date?
 
-    init(from floatingIP: FloatingIP, interface: VMNetworkInterface? = nil) throws {
+    init(
+        from floatingIP: FloatingIP,
+        interface: VMNetworkInterface? = nil,
+        loadBalancer: LoadBalancer? = nil
+    ) throws {
         self.id = try floatingIP.requireID()
         self.address = floatingIP.address
         self.poolId = floatingIP.$pool.id
@@ -103,8 +118,10 @@ struct FloatingIPResponse: Content {
         self.interfaceId = floatingIP.$interface.id
         self.vmId = interface?.$vm.id
         self.fixedIP = interface?.ipv4Address?.address
-        self.networkId = interface?.$logicalNetwork.id
+        self.loadBalancerId = floatingIP.$loadBalancer.id
+        self.networkId = interface?.$logicalNetwork.id ?? loadBalancer?.$logicalNetwork.id
         self.networkName = interface?.$logicalNetwork.value?.name
+            ?? loadBalancer?.$logicalNetwork.value?.name
         self.createdAt = floatingIP.createdAt
     }
 }

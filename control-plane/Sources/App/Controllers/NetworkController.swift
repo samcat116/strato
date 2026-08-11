@@ -641,10 +641,19 @@ struct NetworkController: RouteCollection {
         let network = try await fetchNetworkWithAction(req: req, user: user, action: "network:delete")
 
         let interfaceCount = try await attachedInterfaceCount(for: network, on: req.db)
+        let loadBalancerCount = try await LoadBalancer.query(on: req.db)
+            .filter(\.$logicalNetwork.$id == network.requireID())
+            .count()
         guard interfaceCount == 0 else {
             throw Abort(
                 .conflict,
                 reason: "Network is in use by \(interfaceCount) interface(s); detach them first"
+            )
+        }
+        guard loadBalancerCount == 0 else {
+            throw Abort(
+                .conflict,
+                reason: "Network is in use by \(loadBalancerCount) load balancer(s); delete them first"
             )
         }
 

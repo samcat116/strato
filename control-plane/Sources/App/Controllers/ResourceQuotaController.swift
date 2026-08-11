@@ -198,10 +198,12 @@ struct ResourceQuotaController: RouteCollection {
         // Verify user has admin access to quota
         try await verifyQuotaAdminAccess(quota: quota, on: req)
 
-        if quota.environment != nil, updateRequest.maxNetworks != nil {
+        if quota.environment != nil,
+            updateRequest.maxNetworks != nil || updateRequest.maxLoadBalancers != nil
+        {
             throw Abort(
                 .badRequest,
-                reason: "Environment-scoped quotas cannot set a network limit because networks are project-wide")
+                reason: "Environment-scoped quotas cannot set network or load-balancer limits because those resources are project-wide")
         }
 
         // Measure the scope before evaluating the "not below current usage" guards
@@ -300,6 +302,16 @@ struct ResourceQuotaController: RouteCollection {
             quota.maxNetworks = maxNetworks
         }
 
+        if let maxLoadBalancers = updateRequest.maxLoadBalancers {
+            if maxLoadBalancers < quota.loadBalancerCount {
+                throw Abort(
+                    .badRequest,
+                    reason:
+                        "New load balancer limit (\(maxLoadBalancers)) cannot be below current count (\(quota.loadBalancerCount))")
+            }
+            quota.maxLoadBalancers = maxLoadBalancers
+        }
+
         if let isEnabled = updateRequest.isEnabled {
             quota.isEnabled = isEnabled
         }
@@ -343,6 +355,7 @@ struct ResourceQuotaController: RouteCollection {
         let usage = try await QuotaUsageAggregator.measure(quota: quota, on: req.db)
         if usage.vcpus > 0 || usage.memoryBytes > 0 || usage.storageBytes > 0 || usage.vmCount > 0
             || usage.sandboxCount > 0 || usage.volumeCount > 0 || usage.networkCount > 0
+            || usage.loadBalancerCount > 0
         {
             throw Abort(.conflict, reason: "Cannot delete quota with active resource reservations")
         }
@@ -676,10 +689,12 @@ struct ResourceQuotaController: RouteCollection {
         projectID: UUID?,
         on db: Database
     ) async throws -> ResourceQuota {
-        if createRequest.environment != nil, createRequest.maxNetworks != nil {
+        if createRequest.environment != nil,
+            createRequest.maxNetworks != nil || createRequest.maxLoadBalancers != nil
+        {
             throw Abort(
                 .badRequest,
-                reason: "Environment-scoped quotas cannot set a network limit because networks are project-wide")
+                reason: "Environment-scoped quotas cannot set network or load-balancer limits because those resources are project-wide")
         }
 
         let maxMemoryBytes = createRequest.maxMemoryGB.gbToBytes
@@ -697,6 +712,7 @@ struct ResourceQuotaController: RouteCollection {
             maxSandboxes: createRequest.maxSandboxes,
             maxVolumes: createRequest.maxVolumes,
             maxNetworks: createRequest.maxNetworks ?? 10,
+            maxLoadBalancers: createRequest.maxLoadBalancers,
             environment: createRequest.environment,
             isEnabled: createRequest.isEnabled ?? true
         )
