@@ -1,0 +1,49 @@
+control-plane/web/src/components/vms/vm-identity-card.tsx
+  s_665a3d8fa75374::t_0727948dcb050c 4-11,104-110,131-133,138,140-141,143-147,230,236-240
+  s_665a3d8fa75374::t_ffdc9d74063cd6 241
+control-plane/web/src/types/api.ts
+  s_665a3d8fa75374::t_0727948dcb050c 154-155,204-209,347-352
+  s_665a3d8fa75374::t_3507a8252273f4 353-354
+control-plane/Tests/AppResourceTests/VMInstanceIdentityTests.swift
+  s_665a3d8fa75374::t_9828fcd653267b 86,156,175,184,194,207,212-213,224-226,230-240,527-536
+  s_665a3d8fa75374::t_4f02c59e6bc1d6 504
+control-plane/web/src/lib/hooks/index.ts
+  s_665a3d8fa75374::t_0727948dcb050c 154
+control-plane/Sources/App/openapi.yaml
+  s_665a3d8fa75374::t_5fd71647a3dfa5 311,4405-4429,9325-9326,12997-13019
+  s_665a3d8fa75374::t_6f19af6471563a 13020
+control-plane/web/src/types/openapi.ts
+  s_665a3d8fa75374::t_18b6571b192525 116,3163-3185,5512,7421-7434,14893-14919
+control-plane/Sources/App/Controllers/ProjectMemberController.swift
+  s_665a3d8fa75374::t_5fd71647a3dfa5 19-21,60-67,174-204
+  s_665a3d8fa75374::t_044719a3325532 205-206
+control-plane/web/src/lib/api/project-members.ts
+  s_665a3d8fa75374::t_0727948dcb050c 4-9,16-19
+  s_665a3d8fa75374::t_9a44eb10390eef 20-21
+control-plane/web/src/lib/hooks/use-project-members.ts
+  s_665a3d8fa75374::t_0727948dcb050c 14-26
+control-plane/Sources/App/Controllers/VMController.swift
+  s_665a3d8fa75374::t_5fd71647a3dfa5 375-376,411-412,1553-1554,1746-1747
+control-plane/Sources/App/Models/vm.swift
+  s_665a3d8fa75374::t_5fd71647a3dfa5 608-612,692-696,710-711,737
+control-plane/web/src/components/project-members/members-section.tsx
+  s_665a3d8fa75374::t_0727948dcb050c 8-12,29-30
+control-plane/web/src/components/project-members/vm-grants-table.tsx
+  s_665a3d8fa75374::t_0727948dcb050c 32,37,61,82-85,142,169-173,175
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "62ed165f1da4b5b047b44b1580be50da405e8ee3",
+  "prompts": {},
+  "sessions": {
+    "s_665a3d8fa75374": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2ea-f8b5-75c1-b293-61394c829bf5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
