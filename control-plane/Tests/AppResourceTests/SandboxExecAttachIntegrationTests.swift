@@ -15,7 +15,7 @@ import AppTestSupport
 /// the production handshake, and a genuine browser WebSocket attaching to a
 /// minted exec session. Regression test for the control-plane crash where
 /// attaching killed the process before the agent ever received
-/// `sandbox_exec_start` — none of this path is reachable through Vapor's
+/// `guest_exec_start` — none of this path is reachable through Vapor's
 /// in-memory `test()` harness, which never performs a WebSocket upgrade.
 @Suite("Sandbox Exec Attach Integration", .serialized)
 struct SandboxExecAttachIntegrationTests {
@@ -99,46 +99,47 @@ struct SandboxExecAttachIntegrationTests {
 
             // The agent must receive the exec start (skipping any periodic
             // desired-state syncs that share the socket).
-            let start: SandboxExecStartMessage = try await {
+            let start: GuestExecStartMessage = try await {
                 while true {
                     let envelope = try await agent.nextEnvelope()
                     if envelope.type == .desiredState { continue }
-                    #expect(envelope.type == .sandboxExecStart)
-                    return try envelope.decode(as: SandboxExecStartMessage.self)
+                    #expect(envelope.type == .guestExecStart)
+                    return try envelope.decode(as: GuestExecStartMessage.self)
                 }
             }()
             #expect(start.sessionId == session.sessionId)
-            #expect(start.sandboxId == sandboxId)
+            #expect(start.resourceKind == .sandbox)
+            #expect(start.resourceId == sandboxId)
             #expect(start.command == ["/bin/echo", "hello"])
             #expect(start.tty == true)
 
             // Agent reports the spawn; the browser sees the ready frame.
             agent.send(
                 text: try encodeEnvelope(
-                    SandboxExecStartedMessage(sessionId: session.sessionId)))
+                    GuestExecStartedMessage(sessionId: session.sessionId)))
             let ready = try await browser.nextControlFrame()
             #expect(ready.type == "ready")
 
             // Output bytes flow to the browser as a binary frame.
             agent.send(
                 text: try encodeEnvelope(
-                    SandboxExecOutputMessage(
+                    GuestExecOutputMessage(
                         sessionId: session.sessionId, rawData: Data("hello\n".utf8))))
             let output = try await browser.nextFrame()
             #expect(output == .binary(Data("hello\n".utf8)))
 
-            // Browser stdin flows to the agent as sandbox_exec_input.
+            // Browser stdin flows to the agent as guest_exec_input.
             browser.send(binary: Data("ls\n".utf8))
             let inputEnvelope = try await agent.nextEnvelope(skipping: [.desiredState])
-            #expect(inputEnvelope.type == .sandboxExecInput)
-            let input = try inputEnvelope.decode(as: SandboxExecInputMessage.self)
+            #expect(inputEnvelope.type == .guestExecInput)
+            let input = try inputEnvelope.decode(as: GuestExecInputMessage.self)
             #expect(input.sessionId == session.sessionId)
             #expect(input.rawData == Data("ls\n".utf8))
 
             // Exit tears the session down and closes the browser socket.
             agent.send(
                 text: try encodeEnvelope(
-                    SandboxExecExitMessage(sessionId: session.sessionId, exitCode: 0)))
+                    GuestExecExitMessage(sessionId: session.sessionId, exitCode: 0)))
             let exit = try await browser.nextControlFrame()
             #expect(exit.type == "exit")
             #expect(exit.exitCode == 0)

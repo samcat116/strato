@@ -10,6 +10,7 @@ struct AgentWebSocketController: RouteCollection {
     /// up with. Matched against the envelope's leading bytes, where `type` is.
     private static let streamingFrameTypes = [
         MessageType.consoleData.rawValue,
+        MessageType.guestExecOutput.rawValue,
         MessageType.sandboxExecOutput.rawValue,
         MessageType.sandboxLog.rawValue,
     ]
@@ -442,25 +443,25 @@ struct AgentWebSocketController: RouteCollection {
                 req.consoleSessionManager.closeSession(
                     sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
 
-            case .sandboxExecStarted:
-                let message = try envelope.decode(as: SandboxExecStartedMessage.self)
+            case .guestExecStarted, .sandboxExecStarted:
+                let message = try envelope.decode(as: GuestExecStartedMessage.self)
                 req.sandboxExecSessionManager.handleStarted(
                     sessionId: message.sessionId, fromAgentKey: agentKey)
 
-            case .sandboxExecOutput:
-                let message = try envelope.decode(as: SandboxExecOutputMessage.self)
+            case .guestExecOutput, .sandboxExecOutput:
+                let message = try envelope.decode(as: GuestExecOutputMessage.self)
                 if let data = message.rawData {
                     req.sandboxExecSessionManager.handleOutput(
                         sessionId: message.sessionId, fromAgentKey: agentKey, data: data)
                 }
 
-            case .sandboxExecExit:
-                let message = try envelope.decode(as: SandboxExecExitMessage.self)
+            case .guestExecExit, .sandboxExecExit:
+                let message = try envelope.decode(as: GuestExecExitMessage.self)
                 req.sandboxExecSessionManager.handleExit(
                     sessionId: message.sessionId, fromAgentKey: agentKey, exitCode: message.exitCode)
 
-            case .sandboxExecClosed:
-                let message = try envelope.decode(as: SandboxExecClosedMessage.self)
+            case .guestExecClosed, .sandboxExecClosed:
+                let message = try envelope.decode(as: GuestExecClosedMessage.self)
                 req.sandboxExecSessionManager.handleClosed(
                     sessionId: message.sessionId, fromAgentKey: agentKey, reason: message.reason)
 

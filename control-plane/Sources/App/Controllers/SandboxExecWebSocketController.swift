@@ -9,7 +9,7 @@ import Vapor
 /// Flow: `POST /api/sandboxes/:id/exec` mints a pending session; the browser
 /// then connects to `GET /api/sandboxes/:id/exec/:sessionId/attach`. This
 /// handler re-authorizes (`exec` on the sandbox), consumes the pending
-/// session, sends the `SandboxExecStartMessage` to the agent, and relays
+/// session, sends the `GuestExecStartMessage` to the agent, and relays
 /// frames until the exec ends or the browser disconnects.
 ///
 /// Browser frame contract:
