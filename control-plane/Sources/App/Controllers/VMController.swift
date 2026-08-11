@@ -1075,12 +1075,12 @@ struct VMController: RouteCollection {
     /// * **Resting VM** — the new sizing is simply persisted (raising the
     ///   hot-add ceilings with it, since the next boot spawns a fresh
     ///   hypervisor process). Answers `200` with the updated VM.
-    /// * **Running VM** — the change must fit the ceilings the running
-    ///   process was spawned with, so it is validated against them, reserved
-    ///   against quota, and written as a desired-state change with a
-    ///   generation bump. The agent's reconciler diffs the new spec against
-    ///   what the VM is running and hot-adds the difference. Answers `202`
-    ///   with the operation to poll, like the other agent-backed mutations.
+    /// * **Running VM** — vCPU growth and memory changes must fit the ceilings
+    ///   the running process was spawned with, so they are validated against
+    ///   them, reserved against quota, and written as a desired-state change
+    ///   with a generation bump. Running vCPU shrink is rejected because the
+    ///   backend cannot unplug CPUs reliably. Answers `202` only for a change
+    ///   the agent can apply online.
     ///
     /// Metadata-only updates keep their historical `200` + VM body.
     func update(req: Request) async throws -> Response {
@@ -1276,6 +1276,23 @@ struct VMController: RouteCollection {
             return try await Self.detailResponse(for: existingVM, on: req)
         }
 
+        // The running-resize contract is online. libvirt deliberately does
+        // not attempt vCPU unplug because guest support is unreliable; writing
+        // only the persistent definition would make this request look
+        // converged while `virsh vcpucount --live` still showed the old count.
+        // Refuse before quota or generation moves when the current desired
+        // count is also known to be the live count. While another resize is
+        // pending, `cpu` is only its desired value: a 2 -> 6 request followed
+        // by 2 -> 4 is still growth from the last observed runtime and retains
+        // ResourceMutation's last-writer-wins contract. The libvirt guard is
+        // authoritative if the runtime races ahead of the control-plane report.
+        if let requestedCPU = updateRequest.cpu,
+            requestedCPU < existingVM.cpu,
+            existingVM.conditions.converged
+        {
+            throw Self.runningVCPUShrinkAbort(from: existingVM.cpu, to: requestedCPU)
+        }
+
         // Online resize: the ceilings were fixed when the process spawned, so
         // exceeding them is a `422` naming the restart as the remedy rather
         // than an operation that could never converge.
@@ -1343,6 +1360,14 @@ struct VMController: RouteCollection {
             placedAgentId: existingVM.hypervisorId,
             app: req.application)
         return try await Self.acceptedResponse(for: existingVM, accepted, on: req)
+    }
+
+    private static func runningVCPUShrinkAbort(from current: Int, to requested: Int) -> Abort {
+        Abort(
+            .unprocessableEntity,
+            reason: "Cannot reduce a running VM from \(current) to \(requested) vCPUs: "
+                + "live vCPU unplug is not supported. Stop the VM, resize it, then start it again; "
+                + "no resize was recorded.")
     }
 
     /// Rejects a placed resize before quota, sizing, or generation mutate.

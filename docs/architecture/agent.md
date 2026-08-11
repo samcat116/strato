@@ -268,9 +268,10 @@ guest *and* in the persistent definition. A process driver can leave the
 definition alone because it respawns from a stored configuration the agent keeps
 in step and re-reads the spec at every boot; here a live-only change silently
 un-happens at the guest's next power cycle. The same correction applies to a
-resize that would otherwise be "deferred to the next reboot" — a vCPU shrink, or
-a memory change on a VM with no virtio-mem device — which is written to `CONFIG`
-alone rather than left for a boot that would not pick it up.
+memory change on a VM with no virtio-mem device: it is written to `CONFIG` alone
+rather than left for a boot that would not pick it up. A running vCPU shrink is
+different: because it cannot change the live domain, it is rejected rather than
+reported as a completed online resize.
 
 Three consequences follow:
 
@@ -700,8 +701,13 @@ The step reaches `LibvirtService.resizeVM`:
   region above boot memory.
 
 Hot-*remove* of vCPUs is deliberately not attempted — guest support for CPU
-unplug is unreliable — and memory never shrinks below the boot size; both
-smaller figures are written to `CONFIG` alone and apply at the next reboot.
+unplug is unreliable — so the API rejects a running vCPU shrink and tells the
+caller to stop the VM, resize it, and start it again. The libvirt driver repeats
+that guard so a desired entry accepted by an older control plane — or a smaller
+last-writer target racing with pending growth — cannot advance
+`observedGeneration` without changing the live count. Memory never shrinks below
+the boot size; that smaller figure is written to `CONFIG` and applies at the
+next reboot.
 Growing past the ceilings the domain was defined with fails on the agent and is
 a `422` at the API, both naming a restart as the remedy — and since STR-187 that
 remedy works, because the boot rewrites `<vcpu>`'s maximum and `<maxMemory>` to

@@ -1164,7 +1164,7 @@ export type OperationKind =
   | "pause"
   | "resume"
   | "delete"
-  // Online vCPU/memory resize of a running VM (backend issue #568).
+  // Online vCPU growth/memory resize of a running VM (backend issue #568).
   | "resize"
   // Sandbox checkpoint/restore (backend issue #426).
   | "snapshot"

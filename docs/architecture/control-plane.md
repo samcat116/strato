@@ -225,13 +225,17 @@ it is re-reported on every agent poll and heals itself. The resize path
 recomputes its quota delta against the committed sizing under the same lock.
 
 `PUT /api/vms/:id` is the same shape once it touches sizing (issue #568).
-`cpu`/`memory` on a **running** VM are validated against the `maxCpu`/
-`maxMemory` ceilings the VM was started with (`422` naming the restart
-otherwise), reserved
-against quota as a *delta*, then written with a generation bump — desired
-status unchanged, since a resize is a spec change, not a power-state change
-— and answered `202` with the VM and its new target generation. On a
-**stopped** VM the new
+vCPU growth and memory changes on a **running** VM are validated against the
+`maxCpu`/`maxMemory` ceilings the VM was started with (`422` naming the restart
+otherwise), reserved against quota as a *delta*, then written with a generation
+bump — desired status unchanged, since a resize is a spec change, not a
+power-state change — and answered `202` with the VM and its new target
+generation. A vCPU shrink from confirmed live sizing is a `422` before quota or
+generation moves: live vCPU unplug is not supported, so the caller must stop the
+VM, resize it, and start it again. A smaller target can still supersede a pending
+growth request under the level-triggered last-writer-wins contract. If the live
+runtime races ahead of its report, the agent refuses the resulting shrink rather
+than advancing convergence. On a **stopped** VM the new
 sizing (and the ceilings, which the next boot re-spawns from) is simply
 persisted and answered `200`. Quota accounting always follows the *current*
 sizing, never the ceiling: reserving to the maximum would strand capacity

@@ -520,10 +520,11 @@ VM's spec — being what libvirt starts when the VM boots:
   One case a restart cannot fix: a VM with so many disks and NICs of its own
   that the root complex is full at create time gets fewer than four spares —
   possibly none — for good. The agent logs that when it creates such a VM.
-- **A resize the guest cannot take online lands at its next boot.** vCPU
-  removal is never attempted on a live guest, and a VM with no memory headroom
-  cannot be resized in place; both are written into the domain definition
-  instead, so the VM comes up at its new size when it is next started.
+- **Running vCPU shrink is rejected.** Guest vCPU unplug support is unreliable,
+  and a config-only write would leave the live domain at its old count while the
+  API claimed convergence. Stop the VM, resize it, and start it again. A memory
+  resize on a VM with no memory headroom remains config-only and lands when the
+  VM is next started.
 
 Two host packages change what a node can be asked to run rather than how it
 runs: `ovmf` (the signed EDK2 firmware Secure Boot needs) and `swtpm` (which
