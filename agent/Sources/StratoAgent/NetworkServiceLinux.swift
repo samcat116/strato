@@ -25,8 +25,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// IPs / tenant routes via FRR. Nil or disabled strips any previously
     /// applied `dynamic-routing*` options during reconcile.
     private let dynamicRoutingConfig: OVNDynamicRoutingConfig?
-    /// Absolute paths to iproute2's `ip` and `tc`, resolved once at agent start
-    /// (`SandboxJailerResolver`). The sandbox netns path invokes them directly
+    /// Absolute paths to iproute2's `ip` and `tc`, plus procps's `sysctl`,
+    /// resolved once at agent start. The sandbox netns path invokes them directly
     /// rather than through `/usr/bin/env` like the host-namespace path does: a
     /// service manager's stripped `PATH` must not break namespace attachment on
     /// a host the start-time probe already declared usable. Nil means the host
@@ -34,6 +34,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     /// instead of failing halfway through wiring one up.
     private let ipBinaryPath: String?
     private let tcBinaryPath: String?
+    private let sysctlBinaryPath: String?
     /// Aggregate ingress packet-rate cap on each of a network's link-local
     /// service interfaces (STR-40); 0 disables the policer. Applied to *both*
     /// feet — the metadata one in the network's chassis namespace and the
@@ -79,6 +80,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         dynamicRouting: OVNDynamicRoutingConfig? = nil,
         ipBinaryPath: String? = nil,
         tcBinaryPath: String? = nil,
+        sysctlBinaryPath: String? = nil,
         linkLocalServiceRatePPS: Int = NetworkResolverDefaults.rateLimitPPS,
         resolverSupervisor: ResolverSupervisor? = nil,
         logger: Logger
@@ -91,6 +93,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         self.dynamicRoutingConfig = dynamicRouting
         self.ipBinaryPath = ipBinaryPath
         self.tcBinaryPath = tcBinaryPath
+        self.sysctlBinaryPath = sysctlBinaryPath
         self.linkLocalServiceRatePPS = linkLocalServiceRatePPS
         self.resolverSupervisor = resolverSupervisor
         self.logger = logger
@@ -1508,7 +1511,7 @@ extension NetworkServiceLinux {
     /// resolver localport, plus its policy routing.
     private func reconcileResolverHostPorts(_ desired: [ResolverNetworkConfig]) async {
         #if os(Linux)
-        guard let ovsManager, let ipBinaryPath else { return }
+        guard let ovsManager, let ipBinaryPath, let sysctlBinaryPath else { return }
         let observed: [ObservedResolverHostPort]
         do {
             observed = try await observedResolverHostPorts(ovsManager)
@@ -1527,7 +1530,8 @@ extension NetworkServiceLinux {
             switch action {
             case .realize(let networkId, let addresses):
                 await attemptResolverHostPortSetup(
-                    networkId: networkId, addresses: addresses, ipBinaryPath: ipBinaryPath)
+                    networkId: networkId, addresses: addresses, ipBinaryPath: ipBinaryPath,
+                    sysctlBinaryPath: sysctlBinaryPath)
             case .remove(let networkId, let interfaceName, let addresses):
                 await removeResolverHostPort(
                     networkId: networkId, interfaceName: interfaceName, addresses: addresses,
@@ -1560,13 +1564,14 @@ extension NetworkServiceLinux {
     }
 
     private func attemptResolverHostPortSetup(
-        networkId: UUID, addresses: [String], ipBinaryPath: String
+        networkId: UUID, addresses: [String], ipBinaryPath: String, sysctlBinaryPath: String
     ) async {
         // A missing `tc` costs the policer, not the resolver: an unlimited but
         // working resolver beats no resolver, and the host preflight already
         // reports the tool as absent.
         let plan = ResolverHostPortPlan.plan(
             networkId: networkId, addresses: addresses, ipBinaryPath: ipBinaryPath,
+            sysctlBinaryPath: sysctlBinaryPath,
             tcBinaryPath: tcBinaryPath ?? "tc",
             bridge: Self.ovnIntegrationBridge, ovsTimeoutSeconds: Self.ovsCommandTimeoutSeconds,
             ratePPS: tcBinaryPath == nil ? 0 : linkLocalServiceRatePPS)

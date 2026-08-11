@@ -563,22 +563,30 @@ actor Agent {
                 // to break a host that has them (issue STR-100).
                 let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
                 let ipBinaryPath = SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable)
+                let sysctlBinaryPath = NetworkResolverDefaults.resolveSysctlBinaryPath(
+                    isExecutable: isExecutable)
                 // The resolver is OVN-only by construction: it terminates on a
                 // per-network OVN `localport`, which does not exist under
                 // user-mode networking. Resolved here rather than at
                 // startup so `resolverBinaryPath` is nil on every path that
                 // cannot run it, and `resolverCapable` follows from one check.
-                resolverBinaryPath =
+                let discoveredResolverBinaryPath =
                     (resolverConfig?.enabled ?? true)
                     ? NetworkResolverDefaults.resolveBinaryPath(
                         configured: resolverConfig?.corednsBinaryPath, isExecutable: isExecutable)
                     : nil
+                // A resolver is only a real capability when the host can also
+                // build its isolated host-side foot. `ip` has no `sysctl`
+                // subcommand; the isolation settings require procps's binary.
+                resolverBinaryPath =
+                    ipBinaryPath != nil && sysctlBinaryPath != nil
+                    ? discoveredResolverBinaryPath : nil
                 let resolverSupervisor = resolverBinaryPath.flatMap { binaryPath -> ResolverSupervisor? in
-                    // Both binaries are required. CoreDNS runs in the host
+                    // All three binaries are required. CoreDNS runs in the host
                     // namespace and needs no `ip` to start, but it binds
                     // addresses that `ip` is what puts on the interface — so
                     // without it there is nothing for the resolver to answer on.
-                    guard let ipBinaryPath else { return nil }
+                    guard let ipBinaryPath, sysctlBinaryPath != nil else { return nil }
                     return ResolverSupervisor(
                         root: resolverConfig?.effectiveConfigDirectory
                             ?? NetworkResolverDefaults.configDirectory,
@@ -592,6 +600,7 @@ actor Agent {
                     uplink: ovnUplink, dynamicRouting: ovnDynamicRouting,
                     ipBinaryPath: ipBinaryPath,
                     tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable),
+                    sysctlBinaryPath: sysctlBinaryPath,
                     linkLocalServiceRatePPS: resolverConfig?.effectiveRateLimitPPS
                         ?? NetworkResolverDefaults.rateLimitPPS,
                     resolverSupervisor: resolverSupervisor,
