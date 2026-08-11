@@ -49,17 +49,22 @@ public actor MetadataHTTPServer {
     /// one and be refused, never wrap around into a plausible TTL.
     private let hopLimit: ChannelOptions.Types.SocketOption.Value
     private let logger: Logger
+    private let idleTimeout: TimeAmount
     private var channels: [any Channel] = []
     /// Shared by every address this listener binds, so the cap is per *listener*
     /// as documented rather than per address family — a box created inside
     /// `listen` would give a dual-stack namespace twice the intended budget.
     private let connections = NIOLockedValueBox(ConnectionLedger())
 
-    public init(group: any EventLoopGroup, responder: MetadataResponder, hopLimit: Int, logger: Logger) {
+    public init(
+        group: any EventLoopGroup, responder: MetadataResponder, hopLimit: Int, logger: Logger,
+        idleTimeout: TimeAmount = .seconds(Int64(MetadataLimits.idleTimeoutSeconds))
+    ) {
         self.group = group
         self.responder = responder
         self.hopLimit = .init(clamping: hopLimit)
         self.logger = logger
+        self.idleTimeout = idleTimeout
     }
 
     /// Binds one address and starts serving. Returns the port actually bound,
@@ -71,6 +76,7 @@ public actor MetadataHTTPServer {
         let responder = self.responder
         let logger = self.logger
         let hopLimitOption = Self.hopLimitOption(for: socketAddress)
+        let idleTimeout = self.idleTimeout
 
         var bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(.backlog, value: 64)
@@ -102,9 +108,6 @@ public actor MetadataHTTPServer {
                 // boundary.
                 return channel.eventLoop.makeCompletedFuture {
                     try channel.pipeline.syncOperations.addHandlers([
-                        // A guest that opens a connection and says nothing must
-                        // not hold a slot against the cap above.
-                        IdleStateHandler(readTimeout: .seconds(Int64(MetadataLimits.idleTimeoutSeconds))),
                         // Ahead of the decoder, because that is the only place
                         // the head's *total* size can be bounded. See the type.
                         MetadataRequestSizeHandler(),
@@ -116,7 +119,8 @@ public actor MetadataHTTPServer {
                             maximumBufferSize: MetadataLimits.maxRequestHeadBytes),
                         HTTPResponseEncoder(),
                         HTTPServerPipelineHandler(),
-                        MetadataChannelHandler(responder: responder, logger: logger),
+                        MetadataChannelHandler(
+                            responder: responder, logger: logger, idleTimeout: idleTimeout),
                     ])
                 }
             }
@@ -253,22 +257,27 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
 
     private let responder: MetadataResponder
     private let logger: Logger
+    private let idleTimeout: TimeAmount
     private var head: HTTPRequestHead?
     private var sawBody = false
     private var queuedRequests: [(head: HTTPRequestHead, hadBody: Bool)] = []
     private var isAnswering = false
+    private var idleTask: Scheduled<Void>?
 
-    init(responder: MetadataResponder, logger: Logger) {
+    init(responder: MetadataResponder, logger: Logger, idleTimeout: TimeAmount) {
         self.responder = responder
         self.logger = logger
+        self.idleTimeout = idleTimeout
     }
 
     func channelActive(context: ChannelHandlerContext) {
         context.fireChannelActive()
+        armIdleTimeout(context: context)
         context.read()
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+        armIdleTimeout(context: context)
         switch unwrapInboundIn(data) {
         case .head(let head):
             self.head = head
@@ -283,13 +292,9 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
         }
     }
 
-    // `Any` is required by NIO's ChannelInboundHandler callback signature.
-    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
-        if event is IdleStateHandler.IdleStateEvent {
-            context.close(promise: nil)
-            return
-        }
-        context.fireUserInboundEventTriggered(event)
+    func channelInactive(context: ChannelHandlerContext) {
+        pauseIdleTimeout()
+        context.fireChannelInactive()
     }
 
     func errorCaught(context: ChannelHandlerContext, error: any Error) {
@@ -301,6 +306,7 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
 
     private func answerNext(context: ChannelHandlerContext) {
         guard !isAnswering, !queuedRequests.isEmpty else { return }
+        pauseIdleTimeout()
         isAnswering = true
         let request = queuedRequests.removeFirst()
         answer(context: context, head: request.head, hadBody: request.hadBody)
@@ -370,14 +376,35 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
             handler.isAnswering = false
 
             guard case .success = result, keepAlive, context.channel.isActive else {
+                handler.pauseIdleTimeout()
                 handler.queuedRequests.removeAll(keepingCapacity: false)
                 if context.channel.isActive { context.close(promise: nil) }
                 return
             }
 
             handler.answerNext(context: context)
-            if !handler.isAnswering { context.read() }
+            if !handler.isAnswering {
+                handler.armIdleTimeout(context: context)
+                context.read()
+            }
         }
+    }
+
+    private func armIdleTimeout(context: ChannelHandlerContext) {
+        guard !isAnswering, queuedRequests.isEmpty else { return }
+        pauseIdleTimeout()
+        let bound = NIOLoopBound((context, self), eventLoop: context.eventLoop)
+        idleTask = context.eventLoop.scheduleTask(in: idleTimeout) {
+            let (context, handler) = bound.value
+            handler.idleTask = nil
+            guard !handler.isAnswering, handler.queuedRequests.isEmpty else { return }
+            context.close(promise: nil)
+        }
+    }
+
+    private func pauseIdleTimeout() {
+        idleTask?.cancel()
+        idleTask = nil
     }
 
     private func write(

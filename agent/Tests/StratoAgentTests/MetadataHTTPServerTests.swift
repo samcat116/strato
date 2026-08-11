@@ -5,6 +5,7 @@ import Darwin
 #endif
 import Foundation
 import Logging
+import NIOCore
 import NIOPosix
 import StratoShared
 import Testing
@@ -79,7 +80,8 @@ struct MetadataHTTPServerTests {
     /// address. Returns the port and a teardown.
     private static func serve(
         host: String = "127.0.0.1", vmId: UUID = UUID(), hostname: String? = "web-01",
-        identity: IdentityPolicy? = nil, identityMinter: GuestIdentityMinter? = nil
+        identity: IdentityPolicy? = nil, identityMinter: GuestIdentityMinter? = nil,
+        idleTimeout: TimeAmount = .seconds(Int64(MetadataLimits.idleTimeoutSeconds))
     ) async throws -> (port: Int, vmId: UUID, stop: @Sendable () async -> Void) {
         let network = UUID()
         let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
@@ -94,7 +96,8 @@ struct MetadataHTTPServerTests {
             identityMinter: identityMinter,
             logger: Logger(label: "test"))
         let server = MetadataHTTPServer(
-            group: group, responder: responder, hopLimit: 1, logger: Logger(label: "test"))
+            group: group, responder: responder, hopLimit: 1, logger: Logger(label: "test"),
+            idleTimeout: idleTimeout)
         // A successful bind is itself evidence about the hop limit: the option
         // is applied to the listening socket through the bootstrap, so a
         // wrong-family `IP_TTL`/`IPV6_UNICAST_HOPS` would fail the bind rather
@@ -170,7 +173,7 @@ struct MetadataHTTPServerTests {
         #expect(second.body == "web-01")
     }
 
-    @Test("Pipelined responses remain in request order while identity minting is suspended")
+    @Test("Pipelined responses remain ordered beyond the read-idle deadline")
     func pipelinedResponseOrder() async throws {
         let vmId = UUID()
         let audience = "spiffe://strato.local/control-plane"
@@ -182,7 +185,7 @@ struct MetadataHTTPServerTests {
             vmId: vmId, identity: policy,
             identityMinter: GuestIdentityMinter { vmId, audience, _ in
                 await gate.mint(vmId: vmId, audience: audience)
-            })
+            }, idleTimeout: .milliseconds(50))
         defer {
             Task {
                 await gate.release()
@@ -201,6 +204,9 @@ struct MetadataHTTPServerTests {
                 + "GET /latest/meta-data/instance-id HTTP/1.1\r\nHost: x\r\n"
                 + "\(MetadataHeaderName.token): \(session.body)\r\nConnection: close\r\n\r\n")
         await gate.waitUntilStarted()
+        // The complete document request is already queued. Holding the first
+        // response beyond the read-idle deadline must not close the channel.
+        try await Task.sleep(for: .milliseconds(100))
         await gate.release()
 
         let raw = connection.readAvailable()
@@ -231,6 +237,21 @@ struct MetadataHTTPServerTests {
     }
 
     // MARK: - Bounds
+
+    @Test("A connection with no outstanding request still closes at the idle deadline")
+    func idleConnectionCloses() async throws {
+        let (port, _, stop) = try await Self.serve(idleTimeout: .milliseconds(50))
+        defer { Task { await stop() } }
+
+        let connection = try RawHTTP.Connection(port: port)
+        defer { connection.disconnect() }
+        try await Task.sleep(for: .milliseconds(100))
+
+        #expect(throws: RawHTTP.ClientError.self) {
+            try connection.roundTrip(
+                "GET /latest/meta-data/instance-id HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        }
+    }
 
     @Test("An over-long request head is dropped rather than buffered")
     func oversizedHead() async throws {
