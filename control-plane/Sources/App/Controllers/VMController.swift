@@ -1270,9 +1270,16 @@ struct VMController: RouteCollection {
         // not attempt vCPU unplug because guest support is unreliable; writing
         // only the persistent definition would make this request look
         // converged while `virsh vcpucount --live` still showed the old count.
-        // Refuse before quota or generation moves, and name the supported
-        // stop/edit/start sequence rather than promising a deferred operation.
-        if let requestedCPU = updateRequest.cpu, requestedCPU < existingVM.cpu {
+        // Refuse before quota or generation moves when the current desired
+        // count is also known to be the live count. While another resize is
+        // pending, `cpu` is only its desired value: a 2 -> 6 request followed
+        // by 2 -> 4 is still growth from the last observed runtime and retains
+        // ResourceMutation's last-writer-wins contract. The libvirt guard is
+        // authoritative if the runtime races ahead of the control-plane report.
+        if let requestedCPU = updateRequest.cpu,
+            requestedCPU < existingVM.cpu,
+            existingVM.conditions.converged
+        {
             throw Self.runningVCPUShrinkAbort(from: existingVM.cpu, to: requestedCPU)
         }
 
@@ -1315,12 +1322,6 @@ struct VMController: RouteCollection {
             // committed sizing — which is what makes the delta right rather
             // than merely refused.
             let committed = try await Self.committedVMSizing(existingVMID, on: db)
-            // Repeat the shrink guard under the row lock. A concurrent grow
-            // can turn a request that looked like growth against the stale
-            // pre-transaction row into a shrink against the committed size.
-            if let requestedCPU = updateRequest.cpu, requestedCPU < committed.cpu {
-                throw Self.runningVCPUShrinkAbort(from: committed.cpu, to: requestedCPU)
-            }
             try await QuotaEnforcementService.reserveVMResize(
                 for: project, environment: existingVM.environment,
                 vcpuDelta: newCPU - committed.cpu, memoryDelta: newMemory - committed.memory, on: db)

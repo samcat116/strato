@@ -703,7 +703,8 @@ The step reaches `LibvirtService.resizeVM`:
 Hot-*remove* of vCPUs is deliberately not attempted — guest support for CPU
 unplug is unreliable — so the API rejects a running vCPU shrink and tells the
 caller to stop the VM, resize it, and start it again. The libvirt driver repeats
-that guard so a desired entry accepted by an older control plane cannot advance
+that guard so a desired entry accepted by an older control plane — or a smaller
+last-writer target racing with pending growth — cannot advance
 `observedGeneration` without changing the live count. Memory never shrinks below
 the boot size; that smaller figure is written to `CONFIG` and applies at the
 next reboot.

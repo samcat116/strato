@@ -303,8 +303,14 @@ final class VMResizeTests {
     func runningVCPUShrinkRejected() async throws {
         try await withResizeTestApp { app, _, vm, project, token in
             try await running(vm, on: app.db)
+            // Model a live count the agent has confirmed, so the control plane
+            // can distinguish this from a smaller replacement for a pending
+            // growth request.
+            vm.observedGeneration = vm.generation
+            try await vm.save(on: app.db)
             let generationBefore = vm.generation
             let observedBefore = vm.observedGeneration
+            let conditionsBefore = vm.conditions
             let quotasBefore = try await QuotaEnforcementService.applicableQuotas(
                 for: project, environment: vm.environment, on: app.db)
             let reservedBefore = try #require(quotasBefore.first).reservedVCPUs
@@ -320,7 +326,7 @@ final class VMResizeTests {
             #expect(refreshed.cpu == 2)
             #expect(refreshed.generation == generationBefore)
             #expect(refreshed.observedGeneration == observedBefore)
-            #expect(refreshed.conditions.converged)
+            #expect(refreshed.conditions == conditionsBefore)
             #expect(refreshed.convergenceDeadline == nil)
             let quotasAfter = try await QuotaEnforcementService.applicableQuotas(
                 for: project, environment: vm.environment, on: app.db)
@@ -456,6 +462,35 @@ final class VMResizeTests {
                 for: project, environment: vm.environment, on: app.db)
             let quota = try #require(quotas.first)
             #expect(quota.reservedVCPUs == refreshed.cpu)
+        }
+    }
+
+    @Test("A smaller pending growth supersedes a larger one instead of becoming a shrink")
+    func pendingGrowthRemainsLastWriterWins() async throws {
+        try await withResizeTestApp { app, _, vm, project, token in
+            try await running(vm, on: app.db)
+            vm.observedGeneration = vm.generation
+            try await vm.save(on: app.db)
+
+            try await put(app, vm, token: token, body: ["cpu": 6]) { res in
+                #expect(res.status == .accepted)
+            }
+            let first = try #require(try await VM.find(vm.id, on: app.db))
+            #expect(first.cpu == 6)
+            #expect(!first.conditions.converged)
+
+            // The confirmed runtime is still 2 vCPUs. Although the desired
+            // column now says 6, replacing that pending request with 4 remains
+            // growth and keeps ResourceMutation's last-writer-wins behavior.
+            try await put(app, vm, token: token, body: ["cpu": 4]) { res in
+                #expect(res.status == .accepted)
+            }
+
+            let refreshed = try #require(try await VM.find(vm.id, on: app.db))
+            let quotas = try await QuotaEnforcementService.applicableQuotas(
+                for: project, environment: vm.environment, on: app.db)
+            #expect(refreshed.cpu == 4)
+            #expect(try #require(quotas.first).reservedVCPUs == 4)
         }
     }
 

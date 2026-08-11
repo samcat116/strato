@@ -373,10 +373,12 @@ paths:
         Updates `name`/`description`, and `cpu`/`memory` (issue #568). vCPU
         growth and memory changes on a *running* VM are applied online within
         the `maxCpu`/`maxMemory` ceilings it was started with and answer `202`
-        with a `resize` operation. Running vCPU shrink is rejected because live
-        vCPU unplug is not supported. A sizing change to a stopped VM (which may
-        also raise those ceilings, since the next boot re-spawns the VM) and a
-        metadata-only update answer `200`.
+        with a `resize` operation. A vCPU shrink from confirmed live sizing is
+        rejected because live vCPU unplug is not supported. A smaller target may
+        supersede a pending growth request; the agent refuses convergence if the
+        live count has already grown past it. A sizing change to a stopped VM
+        (which may also raise those ceilings, since the next boot re-spawns the
+        VM) and a metadata-only update answer `200`.
       tags: [Virtual Machines]
       requestBody:
         required: true
@@ -401,8 +403,8 @@ paths:
           description: >-
             The requested size exceeds the ceilings the running VM was started
             with, its agent is too old to resize online, or the request would
-            reduce a running VM's vCPU count. Stop the VM before reducing vCPUs;
-            otherwise restart it to raise its online-resize ceiling.
+            reduce a running VM's confirmed live vCPU count. Stop the VM before
+            reducing vCPUs; otherwise restart it to raise its online-resize ceiling.
     delete:
       operationId: deleteVM
       summary: Delete a virtual machine
@@ -9101,8 +9103,10 @@ components:
         cpu:
           type: integer
           description: >-
-            Target boot vCPU count. On a running VM it must be at least the
-            current count and must not exceed `maxCpu`; reduce it while stopped.
+            Target boot vCPU count. On a running VM with confirmed sizing it
+            must be at least the current count and must not exceed `maxCpu`;
+            reduce it while stopped. A smaller target may replace growth that
+            has not converged yet.
           maximum: 512
         memory:
           type: integer
