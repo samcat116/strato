@@ -10,6 +10,8 @@ import Vapor
 /// rotates them automatically — so they live in their own table with their own
 /// Settings surface, and the access token authenticates through
 /// `OAuthTokenAuthenticator` (prefix `st_`) alongside the `sk_` key path.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class CLISession: Model, @unchecked Sendable {
     static let schema = "cli_sessions"
 

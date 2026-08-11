@@ -2,6 +2,8 @@ import Fluent
 import Vapor
 
 /// Stores application-level settings and secrets
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class AppSetting: Model, @unchecked Sendable {
     static let schema = "app_settings"
 

@@ -9,6 +9,8 @@ import Vapor
 /// `(logical_network_id, address)` unique index can serve as the sandbox-side
 /// concurrency backstop — IPAM unions this table with `vm_interface_addresses`
 /// when reading the used set.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class SandboxInterfaceAddress: Model, @unchecked Sendable {
     static let schema = "sandbox_interface_addresses"
 

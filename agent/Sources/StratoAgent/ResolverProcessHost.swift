@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import StratoAgentCore
+import Synchronization
 
 /// The host effects behind `ResolverSupervisor` (STR-40): files on disk, and one
 /// CoreDNS in the *host* namespace serving every network on this hypervisor.
@@ -146,20 +147,17 @@ struct ResolverProcessHost: ResolverHosting {
 }
 
 /// When a child exited, written once from its termination handler.
-private final class ExitStamp: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Date?
+private final class ExitStamp: Sendable {
+    private let value = Mutex<Date?>(nil)
 
     func stamp() {
-        lock.lock()
-        if value == nil { value = Date() }
-        lock.unlock()
+        value.withLock { value in
+            if value == nil { value = Date() }
+        }
     }
 
     var date: Date? {
-        lock.lock()
-        defer { lock.unlock() }
-        return value
+        value.withLock { $0 }
     }
 }
 

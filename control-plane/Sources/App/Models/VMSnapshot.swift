@@ -31,6 +31,8 @@ enum VMSnapshotStatus: String, Codable, CaseIterable, Sendable {
 /// machine shape, so the row records the version and architecture it was taken
 /// with alongside placement — all of it reported by the agent on the observed
 /// state report rather than in a one-shot RPC reply (STR-150).
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class VMSnapshot: Model, @unchecked Sendable {
     static let schema = "vm_snapshots"
 

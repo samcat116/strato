@@ -36,6 +36,8 @@ enum OrgTrustDomainPhase: String, Codable, CaseIterable, Sendable {
 /// resolution is always a lookup on this table, never string-parsing of the
 /// domain — identity is a lookup key, never a carrier of authorization
 /// (`docs/architecture/iam.md`, issue #491).
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class OrgTrustDomain: Model, @unchecked Sendable {
     static let schema = "org_trust_domains"
 

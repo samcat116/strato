@@ -1,5 +1,6 @@
 import Crypto
 import Foundation
+import Synchronization
 import Logging
 import NIOCore
 import NIOHTTP1
@@ -169,16 +170,15 @@ struct SPIFFEWebSocketPinningTests {
 
     /// Single-use latch so the continuation resumes exactly once whichever of
     /// success/failure fires first.
-    private final class ResumeGuard: @unchecked Sendable {
-        private let lock = NSLock()
-        private var resumed = false
+    private final class ResumeGuard: Sendable {
+        private let resumed = Mutex(false)
 
         func claim() -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            if resumed { return false }
-            resumed = true
-            return true
+            resumed.withLock { resumed in
+                guard !resumed else { return false }
+                resumed = true
+                return true
+            }
         }
     }
 

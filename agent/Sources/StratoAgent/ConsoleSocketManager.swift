@@ -308,7 +308,7 @@ actor ConsoleSocketManager {
 // MARK: - Console Channel Handler
 
 /// NIO channel handler for console socket I/O
-private final class ConsoleChannelHandler: ChannelInboundHandler, @unchecked Sendable {
+private final class ConsoleChannelHandler: ChannelInboundHandler, Sendable {
     typealias InboundIn = ByteBuffer
     typealias OutboundOut = ByteBuffer
 

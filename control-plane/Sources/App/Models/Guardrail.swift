@@ -18,6 +18,8 @@ import Vapor
 ///
 /// As with `RoleBinding`, `node_id` carries no foreign key — it points at
 /// several tables, discriminated by `node_type`.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class Guardrail: Model, @unchecked Sendable {
     static let schema = "iam_guardrails"
 

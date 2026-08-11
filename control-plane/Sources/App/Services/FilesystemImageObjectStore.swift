@@ -1,6 +1,7 @@
 import Foundation
 import NIOCore
 import NIOPosix
+import Synchronization
 import Vapor
 
 /// Stores image bytes on the control plane's local filesystem.
@@ -176,53 +177,101 @@ struct FilesystemImageObjectStore: ImageObjectStore {
 /// interrupted upload never leaves a truncated image at the real key — an agent
 /// fetching one would get bytes that fail checksum verification at best, and
 /// boot a corrupt disk at worst.
-private final class FilesystemImageObjectWriter: ImageObjectWriter, @unchecked Sendable {
-    private let handle: FileHandle
+private final class FilesystemImageObjectWriter: ImageObjectWriter, Sendable {
+    private enum Lifecycle {
+        case open(FileHandle)
+        case finished
+        case aborted
+        case failed
+    }
+
+    private final class LockedLifecycle: Sendable {
+        let state: Mutex<Lifecycle>
+
+        init(handle: FileHandle) {
+            self.state = Mutex(.open(handle))
+        }
+    }
+
+    /// The file handle never escapes this mutex. The lock is acquired on an
+    /// NIO worker thread, so FileHandle I/O cannot block a cooperative executor
+    /// and write/finish/abort cannot overlap the same descriptor.
+    private let lifecycle: LockedLifecycle
     private let stagingPath: String
     private let destinationPath: String
     private let threadPool: NIOThreadPool
 
     init(handle: FileHandle, stagingPath: String, destinationPath: String, threadPool: NIOThreadPool) {
-        self.handle = handle
+        self.lifecycle = LockedLifecycle(handle: handle)
         self.stagingPath = stagingPath
         self.destinationPath = destinationPath
         self.threadPool = threadPool
     }
 
     func write(_ buffer: ByteBuffer) async throws {
-        guard buffer.readableBytes > 0 else { return }
         // One copy, not two: `readBytes` into `[UInt8]` and then `Data(bytes)`
         // duplicated every chunk of a multi-gigabyte upload.
         let data = Data(buffer.readableBytesView)
-        let handle = self.handle
+        let lifecycle = self.lifecycle
         try await threadPool.runIfActive {
-            try handle.write(contentsOf: data)
+            try lifecycle.state.withLock { state in
+                guard case .open(let handle) = state else {
+                    throw ImageError.storageFailed("Cannot write after the image writer has terminated")
+                }
+                if !data.isEmpty { try handle.write(contentsOf: data) }
+            }
         }
     }
 
     func finish() async throws {
-        let handle = self.handle
+        let lifecycle = self.lifecycle
         let staging = stagingPath
         let destination = destinationPath
         try await threadPool.runIfActive {
-            try handle.close()
-            // POSIX rename rather than FileManager.moveItem: moveItem throws
-            // when the destination exists, which would make replacing an
-            // artifact a check-then-move race. rename(2) is atomic and
-            // overwrites.
-            guard rename(staging, destination) == 0 else {
-                throw ImageError.storageFailed(
-                    "Failed to publish image file: \(String(cString: strerror(errno)))")
+            try lifecycle.state.withLock { state in
+                switch state {
+                case .finished:
+                    return
+                case .aborted:
+                    throw ImageError.storageFailed("Cannot finish an aborted image writer")
+                case .failed:
+                    throw ImageError.storageFailed("Cannot finish an image writer whose publish failed")
+                case .open(let handle):
+                    do {
+                        try handle.close()
+                        // POSIX rename rather than FileManager.moveItem:
+                        // rename(2) atomically replaces an existing artifact.
+                        guard rename(staging, destination) == 0 else {
+                            throw ImageError.storageFailed(
+                                "Failed to publish image file: \(String(cString: strerror(errno)))")
+                        }
+                        state = .finished
+                    } catch {
+                        state = .failed
+                        throw error
+                    }
+                }
             }
         }
     }
 
     func abort() async {
-        let handle = self.handle
+        let lifecycle = self.lifecycle
         let staging = stagingPath
         try? await threadPool.runIfActive {
-            try? handle.close()
-            try? FileManager.default.removeItem(atPath: staging)
+            lifecycle.state.withLock { state in
+                switch state {
+                case .finished, .aborted:
+                    return
+                case .open(let handle):
+                    try? handle.close()
+                    try? FileManager.default.removeItem(atPath: staging)
+                    state = .aborted
+                case .failed:
+                    try? FileManager.default.removeItem(atPath: staging)
+                    state = .aborted
+                }
+            }
         }
     }
 }

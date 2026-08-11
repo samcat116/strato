@@ -1,6 +1,7 @@
 import Foundation
 import Vapor
 import StratoShared
+import NIOCore
 import NIOWebSocket
 import Fluent
 
@@ -31,8 +32,9 @@ struct AgentWebSocketController: RouteCollection {
     /// register frame immediately after the upgrade — without this buffer that
     /// first frame would be dropped and registration would stall until the
     /// agent times out and reconnects.
-    /// All access happens on the WebSocket's event loop, so no actual concurrency.
-    private final class MessageState: @unchecked Sendable {
+    /// The value is intentionally not `Sendable`; `NIOLoopBound` is the checked
+    /// proof that every access happens on the WebSocket's event loop.
+    private final class MessageStateValue {
         var buffer: [String] = []
         /// Total bytes held in `buffer`, checked against
         /// `maxPreAuthBufferBytes` so an unauthenticated peer cannot grow the
@@ -41,6 +43,8 @@ struct AgentWebSocketController: RouteCollection {
         /// Set exactly once, when authentication succeeds; nil means "buffer".
         var agent: AuthenticatedAgent?
     }
+
+    private typealias MessageState = NIOLoopBound<MessageStateValue>
 
     /// Ceiling on bytes buffered for a connection whose authentication is
     /// still in flight. Legitimate pre-auth traffic is a register frame (a few
@@ -54,27 +58,27 @@ struct AgentWebSocketController: RouteCollection {
     /// the connection instead if the peer has exceeded the pre-auth cap.
     /// Runs on the WebSocket's event loop, like all `state` access.
     private func bufferPreAuthFrame(req: Request, ws: WebSocket, text: String, state: MessageState) {
-        state.bufferedBytes += text.utf8.count
-        guard state.bufferedBytes <= Self.maxPreAuthBufferBytes else {
+        state.value.bufferedBytes += text.utf8.count
+        guard state.value.bufferedBytes <= Self.maxPreAuthBufferBytes else {
             req.logger.warning(
                 "Closing agent WebSocket: pre-authentication buffer limit exceeded",
-                metadata: ["bufferedBytes": .stringConvertible(state.bufferedBytes)])
-            state.buffer.removeAll()
+                metadata: ["bufferedBytes": .stringConvertible(state.value.bufferedBytes)])
+            state.value.buffer.removeAll()
             _ = ws.close(code: .policyViolation)
             return
         }
-        state.buffer.append(text)
+        state.value.buffer.append(text)
     }
 
     // Non-async handler - runs on WebSocket's event loop
     private func websocketHandler(req: Request, ws: WebSocket) {
         // Register message handlers IMMEDIATELY (before any await) so no frame
         // can slip through while authentication is in flight.
-        let state = MessageState()
+        let state = MessageState(MessageStateValue(), eventLoop: ws.eventLoop)
 
         ws.onText { ws, text in
-            if let agent = state.agent {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent, state: state)
+            if let agent = state.value.agent {
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
             } else {
                 self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
@@ -85,8 +89,8 @@ struct AgentWebSocketController: RouteCollection {
                 req.logger.error("Failed to convert binary buffer to string")
                 return
             }
-            if let agent = state.agent {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent, state: state)
+            if let agent = state.value.agent {
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
             } else {
                 self.bufferPreAuthFrame(req: req, ws: ws, text: text, state: state)
             }
@@ -129,17 +133,17 @@ struct AgentWebSocketController: RouteCollection {
     /// Hops to the WebSocket's event loop, where all `state` access lives.
     private func activateMessageRouting(req: Request, ws: WebSocket, state: MessageState, agent: AuthenticatedAgent) {
         ws.eventLoop.execute {
-            state.agent = agent
-            if !state.buffer.isEmpty {
+            state.value.agent = agent
+            if !state.value.buffer.isEmpty {
                 req.logger.info(
-                    "Processing \(state.buffer.count) buffered messages",
+                    "Processing \(state.value.buffer.count) buffered messages",
                     metadata: ["agentName": .string(agent.name)]
                 )
             }
-            for text in state.buffer {
-                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent, state: state)
+            for text in state.value.buffer {
+                self.handleWebSocketMessage(req: req, ws: ws, text: text, agent: agent)
             }
-            state.buffer.removeAll()
+            state.value.buffer.removeAll()
         }
     }
 
@@ -232,7 +236,7 @@ struct AgentWebSocketController: RouteCollection {
     // download route (issue #493).
 
     private func handleWebSocketMessage(
-        req: Request, ws: WebSocket, text: String, agent: AuthenticatedAgent, state: MessageState
+        req: Request, ws: WebSocket, text: String, agent: AuthenticatedAgent
     ) {
         // The key every agent-scoped registry is stored under (sockets,
         // presence, routes, session ownership) — the full SPIFFE ID, never the

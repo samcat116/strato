@@ -9,6 +9,8 @@ import Vapor
 ///
 /// Named distinctly from the wire-level `StratoShared.RegistryCredential`,
 /// which is the short-lived material derived from this row at sync assembly.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class RegistryPullSecret: Model, @unchecked Sendable {
     static let schema = "registry_pull_secrets"
 
