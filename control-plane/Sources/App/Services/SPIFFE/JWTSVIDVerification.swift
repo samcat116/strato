@@ -1,5 +1,6 @@
 import Foundation
 import JWT
+import StratoShared
 import Vapor
 
 // JWT-SVIDs as short-lived programmatic credentials (issue #495).
@@ -76,6 +77,9 @@ enum JWTSVIDVerificationError: Error, CustomStringConvertible {
 /// verifier when the header's `alg` is compatible with that key's type, which
 /// is what closes the algorithm-confusion holes of trusting `alg` alone.
 enum JWTSVIDVerification {
+    private struct JWKSKeysEnvelope: Decodable {
+        let keys: [JSONValue]
+    }
 
     /// JWS algorithms accepted in a JWT-SVID header. All asymmetric: `none` and
     /// the HMAC family are rejected outright, since an HMAC "signature" would
@@ -118,33 +122,31 @@ enum JWTSVIDVerification {
     /// authentication — but a document yielding no usable key throws, because
     /// "no keys" can never mean "accept".
     static func makeVerifiers(jwksJSON: Data, logger: Logger? = nil) async throws -> JWTSVIDVerifiers {
-        guard let root = try? JSONSerialization.jsonObject(with: jwksJSON) as? [String: Any],
-            let rawKeys = root["keys"] as? [Any]
-        else {
+        guard let envelope = try? JSONDecoder().decode(JWKSKeysEnvelope.self, from: jwksJSON) else {
             throw JWTSVIDVerificationError.malformed("trust domain JWKS document is malformed")
         }
 
         let keys = JWTKeyCollection()
         let decoder = JSONDecoder()
         var knownKeyIDs: Set<String> = []
-        for rawKey in rawKeys {
-            guard var keyObject = rawKey as? [String: Any] else { continue }
+        for rawKey in envelope.keys {
+            guard var keyObject = rawKey.objectValue else { continue }
             // SPIFFE bundles mark JWT signing keys `use: "jwt-svid"` and X.509
             // roots `use: "x509-svid"`. Only the former are signing keys here,
             // and JWTKit expects the JOSE spelling — so select on the SPIFFE
             // value and hand JWTKit the JOSE one. A key with no `use` at all is
             // taken as a signing key (a plain JWKS, e.g. from FetchJWTBundles).
-            if let use = keyObject["use"] as? String {
+            if let use = keyObject["use"]?.stringValue {
                 guard use == "jwt-svid" || use == "sig" else { continue }
-                keyObject["use"] = "sig"
+                keyObject["use"] = .string("sig")
             }
-            guard let keyData = try? JSONSerialization.data(withJSONObject: keyObject),
+            guard let keyData = try? JSONEncoder().encode(JSONValue.object(keyObject)),
                 let jwk = try? decoder.decode(JWK.self, from: keyData),
                 let kid = jwk.keyIdentifier?.string
             else {
                 logger?.debug(
                     "Skipping unusable key in trust domain JWKS",
-                    metadata: ["kty": .string(keyObject["kty"] as? String ?? "<missing>")])
+                    metadata: ["kty": .string(keyObject["kty"]?.stringValue ?? "<missing>")])
                 continue
             }
             do {
