@@ -254,7 +254,8 @@ struct VMSpecBuilder {
             // (issue #566).
             console: ConsoleSpec(graphics: vm.graphicsConsole ? .vnc : nil),
             sshAuthorizedKeys: vm.sshPublicKey.map { [$0] } ?? [],
-            userData: vm.userData
+            userData: vm.userData,
+            metadataSource: vm.metadataSource
         )
     }
 

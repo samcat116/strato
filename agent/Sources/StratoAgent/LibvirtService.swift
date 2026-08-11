@@ -627,6 +627,7 @@ actor LibvirtService: HypervisorService {
             if await CloudInitProvisioner(logger: logger).makeNoCloudISO(
                 at: isoPath, vmId: vmId, hostname: metadata?.hostname,
                 sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
+                metadataSource: spec.metadataSource,
                 networkAttachments: networkAttachments)
             {
                 cloudInitISOPath = isoPath

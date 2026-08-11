@@ -26,6 +26,7 @@ final class VMNetworkSelectionTests {
         var userData: String? = nil
         var hypervisorType: String? = nil
         var guestAgentEnabled: Bool? = nil
+        var metadataSource: String? = nil
     }
 
     struct CreateNICBody: Content {
@@ -286,6 +287,31 @@ final class VMNetworkSelectionTests {
             let defaulted = try await VM.query(on: app.db).filter(\.$name == "guest-agent-off").first()
             #expect(optedIn?.guestAgentEnabled == true)
             #expect(defaulted?.guestAgentEnabled == false)
+        }
+    }
+
+    @Test("POST /api/vms persists metadataSource and defaults it to the full ISO")
+    func createWithMetadataSource() async throws {
+        try await withApp { app, _, _, project, image, token in
+            for (name, source) in [("bootstrap-imds", "imds"), ("bootstrap-default", nil)] {
+                try await app.test(.POST, "/api/vms") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateVMBody(
+                            name: name, imageId: image.id, projectId: project.id,
+                            environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                            networkId: nil, networkName: "default",
+                            metadataSource: source))
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                    #expect(res.body.string.contains("\"metadataSource\":\"\(source ?? "iso")\""))
+                }
+            }
+
+            let imds = try await VM.query(on: app.db).filter(\.$name == "bootstrap-imds").first()
+            let defaulted = try await VM.query(on: app.db).filter(\.$name == "bootstrap-default").first()
+            #expect(imds?.metadataSource == .imds)
+            #expect(defaulted?.metadataSource == .iso)
         }
     }
 

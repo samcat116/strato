@@ -7,7 +7,47 @@ import Testing
 @Suite("Cloud-init meta-data document assembly")
 struct CloudInitMetaDataTests {
 
-    @Test("NoCloud-net meta-data is byte-identical to the seed ISO renderer")
+    @Test("ISO source carries the complete NoCloud seed")
+    func fullSeedDocuments() throws {
+        let documents = CloudInitProvisioner.seedDocuments(
+            metadataSource: .iso,
+            vmId: "0F6AFCDE-2F3A-4F1C-B704-F8F9AAE2E17B",
+            hostname: "e2e-noble-1",
+            sshAuthorizedKeys: ["ssh-ed25519 AAAA test@example"],
+            userData: "#cloud-config\npackages: [nginx]\n",
+            networkAttachments: [])
+
+        #expect(Set(documents.keys) == ["meta-data", "user-data"])
+        #expect(documents["meta-data"]?.contains("local-hostname: e2e-noble-1") == true)
+        #expect(documents["user-data"]?.contains("packages: [nginx]") == true)
+        #expect(documents["meta-data"] != CloudInitProvisioner.seedFromMetaDataDocument)
+    }
+
+    @Test("IMDS source keeps network bootstrap and omits the immutable payload")
+    func imdsSeedDocuments() throws {
+        let attachment = ResolvedNetworkAttachment(
+            network: "default",
+            attachment: .tap(interface: "tap0123456789ab"),
+            macAddress: "52:54:00:aa:bb:cc",
+            ipAddress: "192.168.1.5",
+            netmask: "255.255.255.0",
+            gateway: "192.168.1.1")
+        let documents = CloudInitProvisioner.seedDocuments(
+            metadataSource: .imds,
+            vmId: "0F6AFCDE-2F3A-4F1C-B704-F8F9AAE2E17B",
+            hostname: "e2e-noble-1",
+            sshAuthorizedKeys: ["ssh-ed25519 AAAA test@example"],
+            userData: "#cloud-config\npackages: [nginx]\n",
+            networkAttachments: [attachment])
+
+        #expect(Set(documents.keys) == ["meta-data", "network-config"])
+        #expect(documents["meta-data"] == "seedfrom: http://169.254.169.254/latest/")
+        #expect(documents["network-config"]?.contains("192.168.1.5/24") == true)
+        #expect(documents["user-data"] == nil)
+        #expect(documents.values.allSatisfy { !$0.contains("packages: [nginx]") })
+    }
+
+    @Test("NoCloud-net meta-data is byte-identical to the full seed renderer")
     func noCloudNetGoldenParity() {
         let vmId = UUID(uuidString: "0F6AFCDE-2F3A-4F1C-B704-F8F9AAE2E17B")!
         let metadata = InstanceMetadata(

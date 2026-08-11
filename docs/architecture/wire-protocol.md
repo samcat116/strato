@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 46). The required registration fields
+currently 48). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -61,20 +61,20 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
-Wire v44 introduced `guest_exec_*` and kept the v43 `sandbox_exec_*`
-discriminators routable. Wire v46 retains that tolerance because it can follow
-v45 before a fleet rollout completes; the aliases are scheduled for removal in
-v47. An upgraded agent translates a legacy start to `resourceKind: sandbox`, and
-the control plane accepts legacy response names. This message-level tolerance
-does not weaken the exact registration handshake.
+Wire v44 introduced the `guest_exec_*` message family. Wire v45 adds QEMU
+guest-agent intent, fixed host-global vsock CIDs, and the per-hypervisor host
+capability used to keep those VMs off nodes without `/dev/vhost-vsock`. Wire
+v46 adds authoritative native-OVN load-balancer desired and observed state.
 
-Wire v45 adds typed dependency observations to agent registration and heartbeats.
-The control plane uses the latest received snapshot for feature-scoped placement
-gates without terminating workloads that are already running.
+Wire v47 adds typed dependency observations to agent registration and
+heartbeats. The control plane uses the latest received snapshot for
+feature-scoped placement gates without terminating workloads that are already
+running.
 
-Wire v46 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
-per-hypervisor host capability used to keep those VMs off nodes without
-`/dev/vhost-vsock`.
+Wire v48 adds `VMSpec.metadataSource`, the create-time choice between the full
+NoCloud seed ISO and an IMDS `seedfrom` stub. Older persisted agent manifests
+decode a missing value as `iso`; a live control plane and agent still require
+the same v48 handshake.
 
 Two consequences worth knowing:
 
@@ -414,9 +414,10 @@ The rest of the package is vocabulary used on both sides:
   CPU/memory/disk sizing, `BootSource` (`.disk(firmware:)` vs
   `.directKernel(kernel:initramfs:cmdline:)`), the `MachineProfile`
   (`secureBoot`/`tpm`; nil decodes to `.default`, both off), `VolumeSpec`, dual-stack
-  `NetworkSpec`, `ConsoleSpec`, SSH keys, and verbatim caller-supplied
-  cloud-init `userData` (tolerantly decoded to nil from older control
-  planes). `CloudInitUserDataFormat` (`CloudInitUserData.swift`) is the
+  `NetworkSpec`, `ConsoleSpec`, SSH keys, create-time `metadataSource`
+  (`iso`/`imds`, with missing durable manifests decoded as `iso`), and verbatim
+  caller-supplied cloud-init `userData` (tolerantly decoded to nil from older
+  control planes). `CloudInitUserDataFormat` (`CloudInitUserData.swift`) is the
   shared header-detection table: the control plane validates user data
   starts with a header cloud-init dispatches on, and the agent labels the
   payload's MIME part with the matching content type.

@@ -93,8 +93,9 @@ Sessions are keyed by `SHA256(token)`. Nothing retains the token itself.
   with no truthful `InstanceMetadata` source remain 404, and placement remains
   hidden unless the renderer's disclosure policy is enabled. STR-60's
   NoCloud-net documents share those authenticated paths and are byte-identical
-  to the seed ISO renderer; nothing depends on them until STR-64 supplies the
-  guest's `seedfrom` stub.
+  to the full seed renderer. STR-64 makes VMs whose `metadataSource` is `imds`
+  consume them through a `seedfrom` stub; `iso` remains the compatibility
+  default.
 - **A guest can mint without limit**, so sessions are capped per instance and
   swept on mint. The cap evicts the soonest-expiring, so a loop costs a bounded
   amount and never evicts a well-behaved guest's newest token.

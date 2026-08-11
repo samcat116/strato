@@ -42,6 +42,8 @@ public struct CloudInitProvisioner {
     ///     provisioning config into a MIME multipart document; a caller
     ///     payload that is itself a full MIME document is used as the seed's
     ///     `user-data` unchanged, replacing Strato's config entirely.
+    ///   - metadataSource: Whether the ISO carries the complete NoCloud
+    ///     documents or only a `seedfrom` stub plus local network bootstrap.
     ///   - networkAttachments: The VM's resolved NICs; ones carrying a static
     ///     IP allocation are configured in the guest via a NoCloud
     ///     `network-config` (v2). User-mode NICs are left on DHCP.
@@ -49,6 +51,7 @@ public struct CloudInitProvisioner {
     public func makeNoCloudISO(
         at isoPath: String, vmId: String, hostname: String? = nil, sshAuthorizedKeys: [String] = [],
         userData: String? = nil,
+        metadataSource: MetadataSource = .iso,
         networkAttachments: [ResolvedNetworkAttachment] = []
     ) async -> Bool {
         let fileManager = FileManager.default
@@ -61,49 +64,42 @@ public struct CloudInitProvisioner {
             // Create temp directory structure
             try fileManager.createDirectory(atPath: tempDir, withIntermediateDirectories: true, attributes: nil)
 
-            // Create meta-data file (required for NoCloud). The warning fires on
-            // exactly the condition the renderer decided on — a resolved label
-            // that is not the one asked for — rather than re-deriving it, so the
-            // two cannot drift. `debugDescription` quotes and escapes the
-            // rejected value: `CustomLogHandler` interpolates metadata straight
-            // into one stderr line, so a name carrying a newline would forge a
-            // log line on its way to being refused (the same injection the
-            // renderer refuses it for, one layer over).
-            let localHostname = Self.localHostname(vmId: vmId, hostname: hostname)
-            if let hostname, hostname != localHostname {
-                logger.warning(
-                    "Desired hostname is not a valid DNS label; booting under a derived name instead",
-                    metadata: [
-                        "vmId": .string(vmId),
-                        "hostname": .string(hostname.debugDescription),
-                        "localHostname": .string(localHostname),
-                    ])
+            if metadataSource == .iso {
+                // The warning fires on exactly the condition the full renderer
+                // decided on. An IMDS seed contains no hostname to disagree
+                // with: the live endpoint renders it after networking is up.
+                let localHostname = Self.localHostname(vmId: vmId, hostname: hostname)
+                if let hostname, hostname != localHostname {
+                    logger.warning(
+                        "Desired hostname is not a valid DNS label; booting under a derived name instead",
+                        metadata: [
+                            "vmId": .string(vmId),
+                            "hostname": .string(hostname.debugDescription),
+                            "localHostname": .string(localHostname),
+                        ])
+                }
+                if let userData, CloudInitUserDataFormat.detect(userData) == nil {
+                    logger.warning(
+                        "VM user data has no recognizable cloud-init header; embedding as text/plain (the guest will ignore it)"
+                    )
+                }
+                if let userData, CloudInitUserDataFormat.detect(userData) == .mime {
+                    logger.info(
+                        "VM user data is a caller-composed MIME document; using it verbatim (Strato console/SSH provisioning skipped)"
+                    )
+                }
             }
-            let metaData = Self.metaDataDocument(vmId: vmId, hostname: hostname)
-            let metaDataPath = (tempDir as NSString).appendingPathComponent("meta-data")
-            try metaData.write(toFile: metaDataPath, atomically: true, encoding: .utf8)
 
-            // Create the user-data file: Strato's provisioning config, combined
-            // with caller-supplied user data when the VM carries any.
-            if let userData, CloudInitUserDataFormat.detect(userData) == nil {
-                logger.warning(
-                    "VM user data has no recognizable cloud-init header; embedding as text/plain (the guest will ignore it)"
-                )
-            }
-            if let userData, CloudInitUserDataFormat.detect(userData) == .mime {
-                logger.info(
-                    "VM user data is a caller-composed MIME document; using it verbatim (Strato console/SSH provisioning skipped)"
-                )
-            }
-            let fullUserData = Self.userDataDocument(sshAuthorizedKeys: sshAuthorizedKeys, userData: userData)
-
-            let userDataPath = (tempDir as NSString).appendingPathComponent("user-data")
-            try fullUserData.write(toFile: userDataPath, atomically: true, encoding: .utf8)
-
-            // Static NIC addressing, when the control plane allocated it.
-            if let networkConfig = Self.networkConfigYAML(for: networkAttachments) {
-                let networkConfigPath = (tempDir as NSString).appendingPathComponent("network-config")
-                try networkConfig.write(toFile: networkConfigPath, atomically: true, encoding: .utf8)
+            let documents = Self.seedDocuments(
+                metadataSource: metadataSource,
+                vmId: vmId,
+                hostname: hostname,
+                sshAuthorizedKeys: sshAuthorizedKeys,
+                userData: userData,
+                networkAttachments: networkAttachments)
+            for (filename, contents) in documents.sorted(by: { $0.key < $1.key }) {
+                let path = (tempDir as NSString).appendingPathComponent(filename)
+                try contents.write(toFile: path, atomically: true, encoding: .utf8)
             }
 
             // Create ISO using hdiutil (macOS) or genisoimage/mkisofs (Linux)
@@ -155,6 +151,42 @@ public struct CloudInitProvisioner {
     }
 
     // MARK: - Meta-data document assembly
+
+    /// The exact files written to the NoCloud ISO.
+    ///
+    /// Network configuration stays local in both modes: a statically addressed
+    /// guest needs it before it can reach the `seedfrom` URL. IMDS mode omits
+    /// `user-data` and replaces the ordinary identity document with the small
+    /// redirect stub; the live service owns both omitted payloads.
+    static func seedDocuments(
+        metadataSource: MetadataSource,
+        vmId: String,
+        hostname: String?,
+        sshAuthorizedKeys: [String],
+        userData: String?,
+        networkAttachments: [ResolvedNetworkAttachment]
+    ) -> [String: String] {
+        var documents: [String: String]
+        switch metadataSource {
+        case .iso:
+            documents = [
+                "meta-data": metaDataDocument(vmId: vmId, hostname: hostname),
+                "user-data": userDataDocument(
+                    sshAuthorizedKeys: sshAuthorizedKeys, userData: userData),
+            ]
+        case .imds:
+            documents = ["meta-data": seedFromMetaDataDocument]
+        }
+
+        if let networkConfig = networkConfigYAML(for: networkAttachments) {
+            documents["network-config"] = networkConfig
+        }
+        return documents
+    }
+
+    /// The local NoCloud seed's hand-off to the agent's live document tree.
+    static let seedFromMetaDataDocument =
+        "seedfrom: http://\(InstanceMetadataEndpoint.address)/latest/"
 
     /// Renders the NoCloud `meta-data` document.
     ///

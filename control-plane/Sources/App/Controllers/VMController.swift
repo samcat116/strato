@@ -467,6 +467,10 @@ struct VMController: RouteCollection {
             // above: hardening a workload that is already running is the case
             // this exists for.
             let metadataEnabled: Bool?
+            // Where cloud-init reads first-boot guest configuration (STR-64).
+            // Defaults to the historical full ISO and is fixed at create,
+            // because the agent materializes that ISO with the domain.
+            let metadataSource: MetadataSource?
 
             mutating func validate() throws {
                 name = try Validate.name(name)
@@ -658,7 +662,8 @@ struct VMController: RouteCollection {
             tpmEnabled: createRequest.tpm ?? false,
             guestAgentEnabled: createRequest.guestAgentEnabled ?? false,
             graphicsConsole: createRequest.graphicsConsole ?? false,
-            metadataEnabled: createRequest.metadataEnabled ?? true
+            metadataEnabled: createRequest.metadataEnabled ?? true,
+            metadataSource: createRequest.metadataSource ?? .iso
         )
         vm.cmdline = cmdlineValue
         // Link VM to source image

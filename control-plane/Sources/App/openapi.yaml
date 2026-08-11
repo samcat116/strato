@@ -8936,6 +8936,10 @@ components:
     HypervisorType:
       type: string
       enum: [qemu, firecracker]
+    MetadataSource:
+      type: string
+      description: Where the VM reads its first-boot guest configuration.
+      enum: [iso, imds]
     CPUArchitecture:
       type: string
       enum: [x86_64, arm64]
@@ -9069,10 +9073,18 @@ components:
             outright — the listener refuses it and an OVN ACL drops its packets
             — which is what hardening one workload against SSRF needs, and what
             the per-network `metadataEnabled` is too coarse to give. Note that
-            the metadata service is also how a guest reads its cloud-init
-            configuration, so a VM created with this off may not finish
-            provisioning. Requires an agent new enough to honour it; placement
-            is constrained to such agents.
+            a VM using `metadataSource: imds` also needs this service to fetch
+            its cloud-init configuration. Requires an agent new enough to
+            honour it; placement is constrained to such agents.
+        metadataSource:
+          allOf:
+            - $ref: "#/components/schemas/MetadataSource"
+          default: iso
+          description: >-
+            Where cloud-init reads the guest bootstrap. `iso` preserves the
+            complete immutable NoCloud seed. `imds` keeps `network-config` and
+            a `seedfrom` stub on the ISO, then fetches meta-data and user-data
+            from `http://169.254.169.254/latest/`. Fixed at VM creation.
     CreateVMNetworkInterfaceRequest:
       type: object
       description: >-
@@ -9221,6 +9233,12 @@ components:
             VM's own switch, not the effective answer: a VM on a network with
             metadata turned off still reports `true` here unless someone turned
             it off for this VM.
+        metadataSource:
+          allOf:
+            - $ref: "#/components/schemas/MetadataSource"
+          description: >-
+            Where this VM reads its first-boot guest configuration. Fixed at
+            creation; VMs created before STR-64 report `iso`.
         qgaAvailable:
           type: boolean
           description: >-

@@ -151,6 +151,8 @@ export interface CreateVMNetworkInterfaceRequest {
   mtu?: number;
 }
 
+export type MetadataSource = "iso" | "imds";
+
 export interface VM {
   id: string;
   name: string;
@@ -214,6 +216,12 @@ export interface VM {
    * as on.
    */
   metadataEnabled?: boolean;
+  /**
+   * Where the VM reads first-boot guest configuration. `iso` is the
+   * compatibility default; `imds` keeps only network bootstrap and a seedfrom
+   * stub on the ISO. Optional only because older control planes omit it.
+   */
+  metadataSource?: MetadataSource;
   /**
    * Observed guest-agent (qga) view (issue #563). `qgaAvailable` is undefined
    * until the agent's slow poll first sees a responsive guest agent;
@@ -1163,11 +1171,12 @@ export interface CreateVMRequest {
   /**
    * Whether the instance metadata service answers this VM. Defaults to true.
    * Creating a VM with it off denies the guest `169.254.169.254` outright, and
-   * only agents new enough to honour that are schedulable — but note the
-   * metadata service is also how a guest reads its cloud-init configuration,
-   * so a VM created this way may not finish provisioning.
+   * only agents new enough to honour that are schedulable. A VM using
+   * `metadataSource: imds` also needs the service for cloud-init bootstrap.
    */
   metadataEnabled?: boolean;
+  /** Guest bootstrap source. Omitted means the server's current `iso` default. */
+  metadataSource?: MetadataSource;
 }
 
 // Async VM operations: lifecycle mutations return 202 Accepted with an

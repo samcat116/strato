@@ -538,10 +538,20 @@ supported case rather than a stale one.
 ## Guest provisioning (cloud-init)
 
 `StratoAgentCore/CloudInitProvisioner.swift` generates the NoCloud seed ISO
-QEMU disk-boot VMs consume (`meta-data`, `user-data`, and — when the control
-plane allocated static addressing — a v2 `network-config`). Guest bootstrap
-is deliberately per-backend: Firecracker VMs inject configuration through
-kernel args instead and do not use this path.
+QEMU disk-boot VMs consume. `VMSpec.metadataSource` (wire v48) selects its
+shape at creation:
+
+- `iso` is the compatibility default and carries `meta-data`, `user-data`, and
+  — when addressing requires it — a v2 `network-config`.
+- `imds` keeps the required `network-config` on the ISO, replaces `meta-data`
+  with exactly `seedfrom: http://169.254.169.254/latest/`, and omits
+  `user-data`. Once the seed has addressed the NIC, cloud-init follows the stub
+  to the agent's live metadata listener.
+
+The ISO cannot disappear even in `imds` mode: a statically addressed guest
+needs `network-config` before it can reach the link-local listener. Guest
+bootstrap is deliberately per-backend: Firecracker VMs inject configuration
+through kernel args instead and do not use this path.
 
 The seed's `local-hostname` is the VM's **desired hostname**, taken from
 `DesiredVMState.metadata.hostname` (STR-48) and passed to `createVM` alongside
@@ -564,7 +574,8 @@ fixing this repaired: **VMs created before it keep booting under their
 or a migration, whose destination agent renders a fresh seed from current
 metadata. Existing DNS drift is not repaired in place.
 
-The `user-data` document has two shapes:
+The rendered `user-data` document — embedded in an `iso` seed or served over
+the metadata listener for `imds` — has two shapes:
 
 - **No caller user data**: a single `#cloud-config` carrying Strato's
   provisioning — a serial-console password (dev convenience for SLIRP
@@ -1319,8 +1330,8 @@ any router dies, and a guest cannot proxy metadata off-box.
 listener off without touching the dataplane, which is a property of the
 network rather than of the agent.
 
-**NoCloud-net reuses the seed ISO renderer byte for byte.** The exact file
-paths are `/latest/meta-data`, `/latest/user-data`, and
+**NoCloud-net reuses the full-seed document renderer byte for byte.** The exact
+file paths are `/latest/meta-data`, `/latest/user-data`, and
 `/latest/network-config` (404 when no NIC needs a network document). The
 no-trailing-slash metadata path matters: `/latest/meta-data/` remains the EC2
 index proved by STR-56. The EC2 projection below it exposes only values the

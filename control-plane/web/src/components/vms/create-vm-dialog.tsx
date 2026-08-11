@@ -20,7 +20,7 @@ import { useImages } from "@/lib/hooks/use-images";
 import { useNetworks } from "@/lib/hooks/use-networks";
 import { useSecurityGroups } from "@/lib/hooks/use-security-groups";
 import { useProjectContext, NO_PROJECT_DESCRIPTION } from "@/providers";
-import { MAX_SECURITY_GROUPS_PER_NIC } from "@/types/api";
+import { MAX_SECURITY_GROUPS_PER_NIC, type MetadataSource } from "@/types/api";
 import { toast } from "sonner";
 
 interface CreateVMDialogProps {
@@ -68,10 +68,10 @@ export function CreateVMDialog({
   // cheaper, and most guests are reached over SSH — but it cannot be turned on
   // later, so this is the only chance to ask for it.
   const [graphicsConsole, setGraphicsConsole] = useState(false);
-  // On by default, unlike its neighbours: the metadata service is how a guest
-  // reads its own cloud-init configuration, so this is an escape hatch rather
-  // than a feature to opt into.
+  // On by default: IMDS-backed bootstrap needs the listener, while ISO-backed
+  // VMs can still use it as a guest metadata API.
   const [metadataEnabled, setMetadataEnabled] = useState(true);
+  const [metadataSource, setMetadataSource] = useState<MetadataSource>("iso");
   const [networkInterfaces, setNetworkInterfaces] = useState<NICRow[]>([
     initialNIC(),
   ]);
@@ -218,6 +218,9 @@ export function CreateVMDialog({
           // already assumes, while pinning a pre-STR-185 control plane to a key
           // it does not know.
           metadataEnabled: metadataEnabled ? undefined : false,
+          // The phase-one default is explicit in the form so users can opt a
+          // VM into the IMDS-backed seed without changing the fleet default.
+          metadataSource,
         }),
       watch: {
         kind: "create",
@@ -244,6 +247,7 @@ export function CreateVMDialog({
         setTpm(false);
         setGraphicsConsole(false);
         setMetadataEnabled(true);
+        setMetadataSource("iso");
         setNetworkInterfaces([initialNIC()]);
         setQuotaError(null);
       },
@@ -568,6 +572,42 @@ export function CreateVMDialog({
 
             <div className="space-y-3 rounded-md border border-border p-3">
               <div className="space-y-1">
+                <Label htmlFor="metadataSource" className="text-foreground">
+                  Guest bootstrap source
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Choose where cloud-init reads hostname, SSH keys, and user
+                  data at first boot.
+                </p>
+              </div>
+              <select
+                id="metadataSource"
+                value={metadataSource}
+                onChange={(e) =>
+                  setMetadataSource(e.target.value as MetadataSource)
+                }
+                disabled={isLoading}
+                className="w-full px-3 py-2 bg-background border border-input text-foreground rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <option value="iso">Seed ISO (default)</option>
+                <option value="imds">Instance metadata service</option>
+              </select>
+              {metadataSource === "imds" ? (
+                <p className="text-xs text-muted-foreground">
+                  The ISO keeps the network configuration needed to get online,
+                  then follows a <code>seedfrom</code> stub to
+                  169.254.169.254 for the remaining, mutable documents.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  The complete, immutable NoCloud payload is written to the ISO.
+                  This preserves today&apos;s behavior.
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-3 rounded-md border border-border p-3">
+              <div className="space-y-1">
                 <p className="text-sm font-medium text-foreground">
                   Windows / Secure Boot
                 </p>
@@ -671,11 +711,9 @@ export function CreateVMDialog({
                 Turning it off denies this VM the service outright, even where
                 its security groups would allow it — the lever for a workload
                 you want an SSRF bug to find nothing behind.{" "}
-                <strong>
-                  It is also how cloud-init configures the guest
-                </strong>
-                , so a VM created without it may not finish provisioning. This
-                one can be changed later.
+                If the guest bootstrap source above is instance metadata,
+                turning this off also prevents cloud-init from fetching its
+                configuration. This switch can be changed later.
               </p>
             </div>
 
