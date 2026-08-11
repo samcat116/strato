@@ -143,6 +143,11 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "dependency_observations")
     var dependencyObservations: [NodeDependencyObservation]
 
+    /// Control-plane time at which the latest dependency snapshot arrived.
+    /// Agent clocks are not authoritative for placement freshness.
+    @OptionalField(key: "dependency_observations_received_at")
+    var dependencyObservationsReceivedAt: Date?
+
     /// Owning organization (exactly one of organization / organizational unit;
     /// see `organizationScope`). Agents are dedicated capacity: the scheduler
     /// only places a VM on an agent whose root organization matches the VM's.
@@ -271,6 +276,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         tpmCapable: Bool = false,
         resolverCapable: Bool = false,
         dependencyObservations: [NodeDependencyObservation] = [],
+        dependencyObservationsReceivedAt: Date? = nil,
         lastHeartbeat: Date? = nil
     ) {
         self.id = id
@@ -293,6 +299,7 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.tpmCapable = tpmCapable
         self.resolverCapable = resolverCapable
         self.dependencyObservations = dependencyObservations
+        self.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
         self.autoUpdate = false
         self.lastHeartbeat = lastHeartbeat
     }
@@ -456,9 +463,12 @@ extension Agent {
     /// Whether every fresh dependency affecting `capability` permits new work.
     func dependencyAllows(_ capability: NodeCapability, at now: Date = Date()) -> Bool {
         let relevant = dependencyObservations.filter { $0.affectedCapabilities.contains(capability) }
-        guard !relevant.isEmpty else { return false }
+        guard !relevant.isEmpty, let receivedAt = dependencyObservationsReceivedAt else { return false }
         return relevant.allSatisfy {
-            $0.allowsNewWork(at: now, staleAfter: Self.dependencyObservationStaleAfter)
+            $0.allowsNewWork(
+                receivedAt: receivedAt,
+                at: now,
+                staleAfter: Self.dependencyObservationStaleAfter)
         }
     }
 
@@ -612,6 +622,8 @@ struct AgentResponse: Content {
     let resolverCapable: Bool
     /// Fresh dependency health used for feature-scoped placement gates.
     let dependencyObservations: [NodeDependencyObservation]
+    /// Control-plane receipt time used to determine snapshot freshness.
+    let dependencyObservationsReceivedAt: Date?
     /// Descriptive hardware/platform/OS details for operator display; nil for
     /// agents that registered before host-info reporting.
     let hostInfo: HostInfo?
@@ -708,6 +720,7 @@ struct AgentResponse: Content {
         self.tpmCapable = agent.tpmCapable
         self.resolverCapable = agent.effectiveResolverCapable
         self.dependencyObservations = agent.dependencyObservations
+        self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt
         self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id
         self.organizationId = agent.$organization.id

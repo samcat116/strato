@@ -14,11 +14,13 @@ struct AddAgentDependencyObservations: AsyncMigration {
                 "dependency_observations", .array(of: .json), .required,
                 .custom(emptyArrayDefault)
             )
+            .field("dependency_observations_received_at", .datetime)
             .update()
     }
 
     func revert(on database: Database) async throws {
         try await database.schema("agents")
+            .deleteField("dependency_observations_received_at")
             .deleteField("dependency_observations")
             .update()
     }

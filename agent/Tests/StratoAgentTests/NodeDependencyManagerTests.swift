@@ -166,16 +166,21 @@ struct NodeDependencyManagerTests {
         #expect(await reconcileCalls.value == 1)
     }
 
-    @Test("Fresh degraded health remains eligible, stale health does not")
+    @Test("Receipt freshness, not the agent check clock, gates new work")
     func stalenessAndDegradedEligibility() {
         let checked = Date(timeIntervalSince1970: 10_000)
+        let received = Date(timeIntervalSince1970: 20_000)
         let observation = NodeDependencyObservation(
             id: .libvirt, role: .compute, desiredState: .required,
             ownership: .observeOnly, supervisorState: .active,
             compatibility: .compatible, functionalState: .degraded,
             checkedAt: checked, affectedCapabilities: [.qemuPlacement])
-        #expect(observation.allowsNewWork(at: checked.addingTimeInterval(59), staleAfter: 60))
-        #expect(!observation.allowsNewWork(at: checked.addingTimeInterval(61), staleAfter: 60))
+        #expect(
+            observation.allowsNewWork(
+                receivedAt: received, at: received.addingTimeInterval(59), staleAfter: 60))
+        #expect(
+            !observation.allowsNewWork(
+                receivedAt: received, at: received.addingTimeInterval(61), staleAfter: 60))
     }
 
     @Test("Dependency commands require absolute paths and systemd output is typed")
@@ -214,7 +219,7 @@ struct InitialNodeDependencyModuleTests {
         let missing = SPIRENodeDependencyModule(
             systemd: FakeSystemd(defaultObservation: .missing("spire-agent.service")),
             version: { "1.12.4" },
-            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+            svid: { .unavailable("Workload API socket is unavailable") })
         #expect(await missing.inspect().reason?.code == .missingUnit)
 
         let missingBinary = SPIRENodeDependencyModule(
@@ -232,6 +237,22 @@ struct InitialNodeDependencyModuleTests {
         let observation = await expiring.inspect()
         #expect(observation.functionalState == .degraded)
         #expect(observation.reason?.code == .functionalProbeFailed)
+    }
+
+    @Test("Externally supervised Workload API does not require a local SPIRE installation")
+    func externalWorkloadAPIState() async {
+        let externalIdentity = SPIRENodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: .missing("spire-agent.service")),
+            source: .workloadAPI,
+            version: { nil },
+            svid: { .ready(expiresAt: Date().addingTimeInterval(3600)) })
+
+        let observation = await externalIdentity.inspect()
+        #expect(observation.supervisorState == .notApplicable)
+        #expect(observation.installedVersion == nil)
+        #expect(observation.compatibility == .compatible)
+        #expect(observation.functionalState == .healthy)
+        #expect(observation.reason == nil)
     }
 
     @Test("File-based SPIFFE does not require a local SPIRE service or binary")

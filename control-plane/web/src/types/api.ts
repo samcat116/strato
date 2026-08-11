@@ -612,6 +612,7 @@ export interface Agent {
   // Whether this node can run the per-network DNS resolver.
   resolverCapable: boolean;
   dependencyObservations: NodeDependencyObservation[];
+  dependencyObservationsReceivedAt?: string;
   networkCapability?: NetworkCapability;
   // Descriptive hardware/platform/OS details for display; absent for agents
   // that haven't re-registered with a build that reports it.

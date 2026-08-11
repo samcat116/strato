@@ -40,15 +40,43 @@ struct AgentDependencyHealthTests {
 
     @Test("Stale observations refuse new placement without changing agent liveness")
     func staleObservation() {
-        let stale = Date().addingTimeInterval(-61)
-        let agent = makeAgent(observations: [
-            observation(.libvirt, capability: .qemuPlacement, state: .healthy, checkedAt: stale),
-            observation(.ovnOvs, capability: .overlayNetworking, state: .healthy, checkedAt: stale),
-        ])
+        let now = Date()
+        let staleReceipt = now.addingTimeInterval(-61)
+        let agent = makeAgent(
+            observations: [
+                observation(
+                    .libvirt, capability: .qemuPlacement, state: .healthy,
+                    checkedAt: now.addingTimeInterval(3_600)),
+                observation(
+                    .ovnOvs, capability: .overlayNetworking, state: .healthy,
+                    checkedAt: now.addingTimeInterval(3_600)),
+            ], receivedAt: staleReceipt)
 
         #expect(agent.status == .online)
-        #expect(!agent.supportedHypervisors.contains(.qemu))
-        #expect(!agent.supportsInterVMNetworking)
+        #expect(!agent.dependencyAllows(.qemuPlacement, at: now))
+        #expect(!agent.dependencyAllows(.overlayNetworking, at: now))
+    }
+
+    @Test("Agent clock skew does not change the freshness window")
+    func agentClockSkew() {
+        let receivedAt = Date(timeIntervalSince1970: 20_000)
+        let agent = makeAgent(
+            observations: [
+                observation(
+                    .libvirt, capability: .qemuPlacement, state: .healthy,
+                    checkedAt: receivedAt.addingTimeInterval(-3_600)),
+                observation(
+                    .ovnOvs, capability: .overlayNetworking, state: .healthy,
+                    checkedAt: receivedAt.addingTimeInterval(3_600)),
+            ], receivedAt: receivedAt)
+
+        let fresh = receivedAt.addingTimeInterval(59)
+        #expect(agent.dependencyAllows(.qemuPlacement, at: fresh))
+        #expect(agent.dependencyAllows(.overlayNetworking, at: fresh))
+
+        let stale = receivedAt.addingTimeInterval(61)
+        #expect(!agent.dependencyAllows(.qemuPlacement, at: stale))
+        #expect(!agent.dependencyAllows(.overlayNetworking, at: stale))
     }
 
     @Test("A first degraded sample remains eligible for hysteresis")
@@ -59,7 +87,10 @@ struct AgentDependencyHealthTests {
         #expect(agent.supportedHypervisors.contains(.qemu))
     }
 
-    private func makeAgent(observations: [NodeDependencyObservation]) -> Agent {
+    private func makeAgent(
+        observations: [NodeDependencyObservation],
+        receivedAt: Date = Date()
+    ) -> Agent {
         Agent(
             name: "node-1", hostname: "node-1", version: "test", status: .online,
             resources: AgentResources(
@@ -78,7 +109,8 @@ struct AgentDependencyHealthTests {
             sandboxCapable: true,
             sandboxNetworkingCapable: true,
             resolverCapable: true,
-            dependencyObservations: observations)
+            dependencyObservations: observations,
+            dependencyObservationsReceivedAt: receivedAt)
     }
 
     private func observation(

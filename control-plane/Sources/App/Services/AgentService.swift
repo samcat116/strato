@@ -266,6 +266,7 @@ actor AgentService {
         var siteID = siteID
         let dependencyObservations = normalizedDependencyObservations(
             message.dependencyObservations, agentName: agentName)
+        let dependencyObservationsReceivedAt = Date()
         // Set when this registration creates the agent row, so the enrollment it
         // drew its scope from can be marked used after a successful save.
         var newAgentEnrollment: AgentEnrollment?
@@ -308,6 +309,7 @@ actor AgentService {
             agent.tpmCapable = message.tpmCapable ?? false
             agent.resolverCapable = message.resolverCapable ?? false
             agent.dependencyObservations = dependencyObservations
+            agent.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
             _ = agent.updateAvailableResources(message.resources)
             agent.lastHeartbeat = Date()
             agent.status = .online
@@ -353,6 +355,7 @@ actor AgentService {
             // Create new agent
             agent = Agent.from(registration: message, name: agentName, trustDomain: trustDomain)
             agent.dependencyObservations = dependencyObservations
+            agent.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
             agent.$site.id = siteID
             agent.status = .online
             newAgentEnrollment = enrollment
@@ -754,33 +757,40 @@ actor AgentService {
     /// timestamp advances at half the presence TTL.
     private func applyPeriodicAgentState(
         _ resources: AgentResources,
-        dependencyObservations: [NodeDependencyObservation],
+        dependencyObservations: [NodeDependencyObservation]?,
         to agent: Agent
     ) -> Bool {
         var changed = agent.updateAvailableResources(resources)
-        let storedObservations = normalizedDependencyObservations(
-            agent.dependencyObservations, agentName: agent.name)
-        let incomingObservations = normalizedDependencyObservations(
-            dependencyObservations, agentName: agent.name)
-        let previous = Dictionary(uniqueKeysWithValues: storedObservations.map { ($0.id, $0) })
-        if agent.dependencyObservations != incomingObservations {
-            agent.dependencyObservations = incomingObservations
-            changed = true
-        }
-        for observation in incomingObservations {
-            Telemetry.recordDependency(agentName: agent.name, observation: observation)
-            if previous[observation.id]?.functionalState != observation.functionalState
-                || previous[observation.id]?.reason?.code != observation.reason?.code
-            {
-                app.logger.log(
-                    level: observation.functionalState == .unhealthy ? .error : .info,
-                    "Agent dependency state changed",
-                    metadata: [
-                        "agent": .string(agent.name),
-                        "dependency": .string(observation.id.rawValue),
-                        "state": .string(observation.functionalState.rawValue),
-                        "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
-                    ])
+        let now = Date()
+        if let dependencyObservations {
+            let storedObservations = normalizedDependencyObservations(
+                agent.dependencyObservations, agentName: agent.name)
+            let incomingObservations = normalizedDependencyObservations(
+                dependencyObservations, agentName: agent.name)
+            let previous = Dictionary(uniqueKeysWithValues: storedObservations.map { ($0.id, $0) })
+            if agent.dependencyObservations != incomingObservations {
+                agent.dependencyObservations = incomingObservations
+                changed = true
+            }
+            agent.dependencyObservationsReceivedAt = now
+            for observation in incomingObservations {
+                Telemetry.recordDependency(
+                    agentName: agent.name,
+                    observation: observation,
+                    receivedAt: now)
+                if previous[observation.id]?.functionalState != observation.functionalState
+                    || previous[observation.id]?.reason?.code != observation.reason?.code
+                {
+                    app.logger.log(
+                        level: observation.functionalState == .unhealthy ? .error : .info,
+                        "Agent dependency state changed",
+                        metadata: [
+                            "agent": .string(agent.name),
+                            "dependency": .string(observation.id.rawValue),
+                            "state": .string(observation.functionalState.rawValue),
+                            "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
+                        ])
+                }
             }
         }
         if agent.status != .online {
@@ -788,7 +798,6 @@ actor AgentService {
             changed = true
         }
 
-        let now = Date()
         let heartbeatDue =
             agent.lastHeartbeat.map {
                 now.timeIntervalSince($0) >= Self.databaseHeartbeatRefreshInterval
@@ -2127,7 +2136,7 @@ actor AgentService {
         // identical row a second time.
         var agentChanged = applyPeriodicAgentState(
             report.resources,
-            dependencyObservations: agent.dependencyObservations,
+            dependencyObservations: nil,
             to: agent)
         let previousBlockedReason = agent.updateBlockedReason
         let previousFailureReason = agent.updateFailureReason

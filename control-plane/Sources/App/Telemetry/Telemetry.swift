@@ -93,10 +93,16 @@ enum Telemetry {
 
     /// Latest feature dependency state. Counters are reported as gauges because
     /// the agent owns their monotonicity across control-plane replicas.
-    static func recordDependency(agentName: String, observation: NodeDependencyObservation) {
+    static func recordDependency(
+        agentName: String,
+        observation: NodeDependencyObservation,
+        receivedAt: Date
+    ) {
         let dimensions = [("agent", agentName), ("dependency", observation.id.rawValue)]
         let available = observation.allowsNewWork(
-            at: Date(), staleAfter: Agent.dependencyObservationStaleAfter)
+            receivedAt: receivedAt,
+            at: Date(),
+            staleAfter: Agent.dependencyObservationStaleAfter)
         Gauge(label: "strato_agent_dependency_available", dimensions: dimensions).record(available ? 1 : 0)
         Gauge(label: "strato_agent_dependency_consecutive_failures", dimensions: dimensions)
             .record(Int64(observation.consecutiveFailures))

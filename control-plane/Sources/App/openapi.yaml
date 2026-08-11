@@ -13549,6 +13549,12 @@ components:
             placement; failures do not terminate running workloads.
           items:
             $ref: "#/components/schemas/NodeDependencyObservation"
+        dependencyObservationsReceivedAt:
+          type: string
+          format: date-time
+          description: >-
+            Control-plane time when the latest dependency snapshot arrived.
+            Placement freshness uses this value instead of the agent's clock.
         hostInfo:
           $ref: "#/components/schemas/AgentHostInfo"
         siteId:

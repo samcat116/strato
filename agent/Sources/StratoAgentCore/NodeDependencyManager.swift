@@ -81,8 +81,7 @@ public struct ClosureNodeDependencyModule: NodeDependencyModule {
     public let ownership: NodeDependencyOwnership
     public let affectedCapabilities: [NodeCapability]
     private let inspection: @Sendable () async -> NodeDependencyInspection
-    private let ensureRunningOperation:
-        @Sendable (NodeDependencyObservation) async -> NodeDependencyRemediationResult
+    private let ensureRunningOperation: @Sendable (NodeDependencyObservation) async -> NodeDependencyRemediationResult
     private let reconciliation: @Sendable (NodeDependencyObservation) async -> NodeDependencyRemediationResult
 
     public init(
@@ -212,7 +211,6 @@ public actor NodeDependencyManager {
         var refreshed: [NodeDependencyID: NodeDependencyObservation] = [:]
 
         for layer in layers {
-            let layerCheckedAt = now()
             let inspectionTimeoutSeconds = policy.inspectionTimeoutSeconds
             let results = await withTaskGroup(
                 of: (NodeDependencyID, NodeDependencyInspection).self,
@@ -222,9 +220,7 @@ public actor NodeDependencyManager {
                     guard let module = modules[id] else { continue }
                     let failedDependencies = module.dependencies.filter { dependency in
                         guard let observation = refreshed[dependency] else { return true }
-                        return !observation.allowsNewWork(
-                            at: layerCheckedAt,
-                            staleAfter: .greatestFiniteMagnitude)
+                        return !observation.permitsDependentWork
                     }
                     group.addTask {
                         if let failed = failedDependencies.first {

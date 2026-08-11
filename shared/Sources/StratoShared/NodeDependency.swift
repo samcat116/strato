@@ -152,11 +152,10 @@ public struct NodeDependencyObservation: Codable, Equatable, Sendable {
         self.affectedCapabilities = affectedCapabilities
     }
 
-    /// Whether this observation is fresh and authoritative for new work.
-    /// Running workloads are deliberately not coupled to this answer.
-    public func allowsNewWork(at now: Date, staleAfter: TimeInterval) -> Bool {
+    /// Whether the observed state permits dependent work. Freshness is a
+    /// receiver concern because `checkedAt` comes from the agent's clock.
+    public var permitsDependentWork: Bool {
         guard desiredState == .required,
-            now.timeIntervalSince(checkedAt) <= staleAfter,
             compatibility == .compatible,
             supervisorState == .active || supervisorState == .notApplicable
         else { return false }
@@ -164,5 +163,17 @@ public struct NodeDependencyObservation: Codable, Equatable, Sendable {
         // A single failed sample is reported as degraded but remains eligible;
         // the manager promotes it to unhealthy only after its failure threshold.
         return functionalState == .healthy || functionalState == .degraded
+    }
+
+    /// Whether this observation is fresh and authoritative for new work.
+    /// `receivedAt` must be assigned by the control plane when it ingests the
+    /// snapshot; agent-supplied timestamps remain diagnostic only.
+    public func allowsNewWork(
+        receivedAt: Date,
+        at now: Date,
+        staleAfter: TimeInterval
+    ) -> Bool {
+        let age = now.timeIntervalSince(receivedAt)
+        return age >= 0 && age <= staleAfter && permitsDependentWork
     }
 }

@@ -7669,6 +7669,11 @@ export interface components {
             resolverCapable: boolean;
             /** @description Latest feature-scoped software dependency health reported by the agent. Fresh healthy observations are authoritative for new placement; failures do not terminate running workloads. */
             dependencyObservations: components["schemas"]["NodeDependencyObservation"][];
+            /**
+             * Format: date-time
+             * @description Control-plane time when the latest dependency snapshot arrived. Placement freshness uses this value instead of the agent's clock.
+             */
+            dependencyObservationsReceivedAt?: string;
             hostInfo?: components["schemas"]["AgentHostInfo"];
             /**
              * Format: uuid
