@@ -1,0 +1,65 @@
+docs/architecture/wire-protocol.md
+  s_e300b0a73c2a9f::t_f63365aea6d8cc 64-76
+.github/workflows/README.md
+  s_e300b0a73c2a9f::t_9d100f4a86bbd2 29-30
+.github/workflows/sandbox-guest.yaml
+  s_e300b0a73c2a9f::t_ebd605d426213b 27-29
+agent/Sources/StratoAgent/Agent.swift
+  s_e300b0a73c2a9f::t_dc7d62796025c5 215-216,499,2687,2690,2693,2696-2697,3333-3334,3434,3446,3454,3469,3479,3483,3486,3499,3511,3515,3518,3530,3549,3564-3565,3567,3569,3571,3584,3594-3595
+agent/Sources/StratoAgent/WebSocketClient.swift
+  s_e300b0a73c2a9f::t_edccb0124aa6d6 356
+agent/Sources/StratoAgentCore/GuestControlProtocol.swift
+  s_e300b0a73c2a9f::t_2e440123cfcb5e 22-27,29-33
+agent/Sources/StratoAgentCore/MessageOrdering.swift
+  s_e300b0a73c2a9f::t_8866dfd2e8b79c 102
+control-plane/Sources/App/Controllers/AgentWebSocketController.swift
+  s_e300b0a73c2a9f::t_b1b56a9d8f19f6 449,454,461,466
+docs/adr/0001-declarative-agent-protocol.md
+  s_e300b0a73c2a9f::t_097d04ea510ea7 117
+docs/architecture/agent.md
+  s_e300b0a73c2a9f::t_efb61bdb9a417b 1042-1067
+docs/architecture/sandboxes.md
+  s_e300b0a73c2a9f::t_b76378af7e6373 246-249
+helm/strato-control-plane/templates/envoy-sidecar-configmap.yaml
+  s_e300b0a73c2a9f::t_dcfa5ca9ded641 134-141,180-187
+sandbox-guest/README.md
+  s_e300b0a73c2a9f::t_2a6e51adbfed1b 34-39,169-173,193-207,225,229-237,240-242
+sandbox-guest/init/Cargo.toml
+  s_e300b0a73c2a9f::t_a8f495b5de14c8 1-6,27-30
+sandbox-guest/init/src/guest_agent.rs
+  s_e300b0a73c2a9f::t_995ea8ce0c8e8c 1-20
+sandbox-guest/init/src/guest_agent/exec.rs
+  s_e300b0a73c2a9f::t_08536dc9cd8e75 1-469
+sandbox-guest/init/src/guest_agent/mod.rs
+  s_e300b0a73c2a9f::t_037b810deaceda 1-107
+sandbox-guest/init/src/guest_agent/vsock.rs
+  s_e300b0a73c2a9f::t_dabb59cb57fa91 1-480
+sandbox-guest/init/src/lib.rs
+  s_e300b0a73c2a9f::t_780b7b68d235a3 1,4-7
+sandbox-guest/init/src/linux/exec.rs
+  s_e300b0a73c2a9f::t_5d5ab62cba2738 33,49-50,77,80,82,94,198-203,221,238,247,262-268,275,368,379,411,424
+sandbox-guest/init/src/linux/logs.rs
+  s_e300b0a73c2a9f::t_c18c794ccac6d4 116,127-132,142
+sandbox-guest/init/src/linux/vsock.rs
+  s_e300b0a73c2a9f::t_3c5536ed42e6df 21,32-33,162,198,203,208,216,228,236-240,253,258,272-274,276,344-347,383,426,440,454-456,461-464,558,571,578,585,591,602,619,625-627
+sandbox-guest/init/src/protocol.rs
+  s_e300b0a73c2a9f::t_9de592845946e7 29-34,37,50-59,251,256,264,267,280,282,286,289,292-314,343-360,364,383-398,466-471,473,487-491,536-540,687-691,693,699,706,714-717,719-722,730,738,745-765,767-768
+shared/Tests/StratoSharedTests/MessageTypeTests.swift
+  s_e300b0a73c2a9f::t_02b64306e60dc9 111-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "72d1be17e4b304b7f9f9bd264d2bd88badd58eca",
+  "prompts": {},
+  "sessions": {
+    "s_e300b0a73c2a9f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff106-7353-7161-b6ab-b306d13023e4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
