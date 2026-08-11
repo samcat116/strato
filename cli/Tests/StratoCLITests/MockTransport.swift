@@ -1,13 +1,14 @@
 import Foundation
 import HTTPTypes
 import OpenAPIRuntime
+import Synchronization
 
 @testable import StratoCLICore
 
 /// Scripted `ClientTransport`: returns queued responses in order and records
 /// every request it saw. The generated client is exercised end to end — path
 /// building, encoding, and decoding all run — with only the network replaced.
-final class MockTransport: ClientTransport, @unchecked Sendable {
+final class MockTransport: ClientTransport, Sendable {
     struct ScriptedResponse {
         let statusCode: Int
         let body: Data
@@ -36,20 +37,22 @@ final class MockTransport: ClientTransport, @unchecked Sendable {
         var bodyText: String { body.map { String(decoding: $0, as: UTF8.self) } ?? "" }
     }
 
-    private let lock = NSLock()
-    private var queue: [ScriptedResponse]
+    private struct State {
+        var queue: [ScriptedResponse]
+        var requests: [RecordedRequest] = []
+    }
+
+    private let state: Mutex<State>
     /// Answers a request from its content instead of from the queue. Needed
     /// wherever requests are concurrent, since arrival order is then undefined.
     private let handler: (@Sendable (RecordedRequest) -> ScriptedResponse)?
-    private var requests: [RecordedRequest] = []
-
     init(responses: [ScriptedResponse]) {
-        self.queue = responses
+        self.state = Mutex(State(queue: responses))
         self.handler = nil
     }
 
     init(handler: @escaping @Sendable (RecordedRequest) -> ScriptedResponse) {
-        self.queue = []
+        self.state = Mutex(State(queue: []))
         self.handler = handler
     }
 
@@ -70,24 +73,20 @@ final class MockTransport: ClientTransport, @unchecked Sendable {
         )
     }
 
-    /// NSLock use lives in a synchronous helper: Swift 6 forbids holding a
-    /// lock across an async function's suspension points.
     private func respond(to request: RecordedRequest) throws -> ScriptedResponse {
-        lock.lock()
-        defer { lock.unlock() }
-        requests.append(request)
-        if let handler { return handler(request) }
-        guard !queue.isEmpty else {
-            struct ExhaustedScript: Error {}
-            throw ExhaustedScript()
+        try state.withLock { state in
+            state.requests.append(request)
+            if let handler { return handler(request) }
+            guard !state.queue.isEmpty else {
+                struct ExhaustedScript: Error {}
+                throw ExhaustedScript()
+            }
+            return state.queue.removeFirst()
         }
-        return queue.removeFirst()
     }
 
     var recordedRequests: [RecordedRequest] {
-        lock.lock()
-        defer { lock.unlock() }
-        return requests
+        state.withLock { $0.requests }
     }
 }
 

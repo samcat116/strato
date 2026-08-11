@@ -1,6 +1,7 @@
 import Dispatch
 import Foundation
 import Logging
+import NIOConcurrencyHelpers
 
 #if os(Linux)
 import Glibc
@@ -68,30 +69,29 @@ enum FirecrackerProcessLauncher {
 /// `false`, so an expired budget costs one timer rather than a wakeup every
 /// 20 ms. Safe against every ordering: the handler may fire before, during, or
 /// after a `wait` suspends, and multiple waiters are supported.
-final class ExitLatch: @unchecked Sendable {
-    private let lock = NSLock()
-    private var signaled = false
-    private var waiters: [UInt64: CheckedContinuation<Bool, Never>] = [:]
-    private var nextWaiterID: UInt64 = 0
+final class ExitLatch: Sendable {
+    private struct State {
+        var signaled = false
+        var waiters: [UInt64: CheckedContinuation<Bool, Never>] = [:]
+        var nextWaiterID: UInt64 = 0
+    }
+
+    private let state = NIOLockedValueBox(State())
 
     /// Marks the process as exited and wakes every waiter. Idempotent.
     func signal() {
-        lock.lock()
-        if signaled {
-            lock.unlock()
-            return
+        let waiting = state.withLockedValue { state -> [CheckedContinuation<Bool, Never>] in
+            guard !state.signaled else { return [] }
+            state.signaled = true
+            let waiting = Array(state.waiters.values)
+            state.waiters.removeAll()
+            return waiting
         }
-        signaled = true
-        let waiting = waiters
-        waiters = [:]
-        lock.unlock()
-        waiting.values.forEach { $0.resume(returning: true) }
+        waiting.forEach { $0.resume(returning: true) }
     }
 
     var isSignaled: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return signaled
+        state.withLockedValue { $0.signaled }
     }
 
     /// Suspends until the child exits.
@@ -112,17 +112,17 @@ final class ExitLatch: @unchecked Sendable {
     @discardableResult
     func wait(upTo budget: Duration?) async -> Bool {
         await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            lock.lock()
-            if signaled {
-                lock.unlock()
+            let waiterID = state.withLockedValue { state -> UInt64? in
+                guard !state.signaled else { return nil }
+                let id = state.nextWaiterID
+                state.nextWaiterID += 1
+                state.waiters[id] = continuation
+                return id
+            }
+            guard let id = waiterID else {
                 continuation.resume(returning: true)
                 return
             }
-
-            let id = nextWaiterID
-            nextWaiterID += 1
-            waiters[id] = continuation
-            lock.unlock()
 
             guard let budget else { return }
             let deadline = DispatchTime.now() + .milliseconds(Int(budget / .milliseconds(1)))
@@ -130,9 +130,7 @@ final class ExitLatch: @unchecked Sendable {
                 guard let self else { return }
                 // Resume only if this waiter is still registered; `signal()`
                 // may have taken it first.
-                self.lock.lock()
-                let waiter = self.waiters.removeValue(forKey: id)
-                self.lock.unlock()
+                let waiter = self.state.withLockedValue { $0.waiters.removeValue(forKey: id) }
                 waiter?.resume(returning: false)
             }
         }
@@ -158,6 +156,10 @@ final class ExitLatch: @unchecked Sendable {
 /// asynchronous — so letting a `FileHandle` deinit close the original out from
 /// under an in-flight cancellation would be a use-after-close of exactly the
 /// kind this package moved to NIO to eliminate.
+///
+/// Safety: `recent`, `partialLine`, and `source` are accessed only under
+/// `lock`; `fd` is immutable, read only by the source handler, and closed only
+/// by that source's cancel handler after GCD stops callbacks.
 final class OutputDrain: @unchecked Sendable {
     private let lock = NSLock()
     private var recent = Data()

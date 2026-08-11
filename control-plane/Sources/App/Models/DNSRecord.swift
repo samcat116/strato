@@ -41,6 +41,8 @@ enum DNSRecordView: String, Codable, Sendable, CaseIterable {
 /// TXT, and SRV live, matching what OpenStack Designate and Proxmox's
 /// PowerDNS plugin both do: auto-generate only A and PTR, and let operators
 /// write the rest.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class DNSRecord: Model, @unchecked Sendable {
     static let schema = "dns_records"
 

@@ -25,6 +25,8 @@ import Vapor
 /// `changed_by` make "why did the policy set change at 03:14?" answerable, and
 /// a monotonic `version` column that only ever gets new rows can't be walked
 /// backwards by a botched write.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class PolicySetVersion: Model, @unchecked Sendable {
     static let schema = "iam_policy_set_versions"
 

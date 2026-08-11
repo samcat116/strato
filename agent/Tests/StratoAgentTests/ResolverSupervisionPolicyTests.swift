@@ -209,6 +209,13 @@ struct ResolverSupervisionPolicyTests {
 /// whole site.
 @Suite("Network Resolver Defaults")
 struct NetworkResolverDefaultsTests {
+    @Test("The sysctl path is the first executable candidate")
+    func sysctlPathResolution() {
+        #expect(
+            NetworkResolverDefaults.resolveSysctlBinaryPath(isExecutable: { $0 == "/sbin/sysctl" })
+                == "/sbin/sysctl")
+        #expect(NetworkResolverDefaults.resolveSysctlBinaryPath(isExecutable: { _ in false }) == nil)
+    }
 
     @Test("An explicit path is used when executable")
     func explicitPathWins() {

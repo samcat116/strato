@@ -7,6 +7,8 @@ import Vapor
 /// (issue #559): org admins register a URL plus a set of event types, and the
 /// delivery sweep POSTs signed payloads for every matching event enqueued in
 /// the `webhook_deliveries` outbox.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class WebhookSubscription: Model, @unchecked Sendable {
     static let schema = "webhook_subscriptions"
 

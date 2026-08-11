@@ -9,6 +9,8 @@ import Vapor
 /// already permits. Where a network's VMs *register* is a separate, singular
 /// decision: `LogicalNetwork.primaryDNSZone`, which must name one of these
 /// attachments.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class DNSZoneNetwork: Model, @unchecked Sendable {
     static let schema = "dns_zone_networks"
 

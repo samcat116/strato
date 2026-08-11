@@ -1,4 +1,9 @@
 import ArgumentParser
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 import Foundation
 import Logging
 import NIOPosix
@@ -39,6 +44,11 @@ extension StratoAgent {
         var logLevel: String = "info"
 
         func run() async throws {
+            // The parent traps SIGTERM by setting it to SIG_IGN, and ignored
+            // dispositions survive exec. Restore the default in this child so
+            // Process.terminate() can stop a listener even when stdin is wedged.
+            signal(SIGTERM, SIG_DFL)
+
             guard let network = UUID(uuidString: networkId) else {
                 throw ValidationError("--network-id must be a UUID")
             }

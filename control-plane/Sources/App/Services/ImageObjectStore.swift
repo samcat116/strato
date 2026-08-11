@@ -45,11 +45,14 @@ protocol ImageObjectWriter: Sendable {
     /// minimum), so bytes are not necessarily durable until `finish()`.
     func write(_ buffer: ByteBuffer) async throws
 
-    /// Publishes the object. After this returns, the key is readable.
+    /// Publishes the object. After this returns, the key is readable. Repeated
+    /// calls are idempotent; writing after this point must fail.
     func finish() async throws
 
     /// Discards everything written so far. Must not throw — it runs on the
-    /// failure path, where a second error would mask the first.
+    /// failure path, where a second error would mask the first. Repeated calls
+    /// are idempotent and must not remove an object already published by
+    /// `finish()`.
     func abort() async
 }
 

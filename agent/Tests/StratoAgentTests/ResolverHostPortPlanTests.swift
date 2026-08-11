@@ -21,7 +21,8 @@ struct ResolverHostPortPlanTests {
     private func plan(_ addresses: [String]? = nil, ratePPS: Int = 0) -> ResolverHostPortPlan {
         ResolverHostPortPlan.plan(
             networkId: networkId, addresses: addresses ?? self.addresses, ipBinaryPath: "/sbin/ip",
-            tcBinaryPath: "/sbin/tc", bridge: "br-int", ovsTimeoutSeconds: 10, ratePPS: ratePPS)
+            sysctlBinaryPath: "/sbin/sysctl", tcBinaryPath: "/sbin/tc", bridge: "br-int",
+            ovsTimeoutSeconds: 10, ratePPS: ratePPS)
     }
 
     private func argv(_ commands: [NetnsCommand]) -> [String] {
@@ -74,8 +75,9 @@ struct ResolverHostPortPlanTests {
         // failure ADR 0003 named when it rejected this shape.
         let lines = argv(plan().setup)
         let device = plan().interfaceName
-        #expect(lines.contains("/sbin/ip sysctl -w net.ipv4.conf.\(device).forwarding=0"))
-        #expect(lines.contains("/sbin/ip sysctl -w net.ipv6.conf.\(device).forwarding=0"))
+        #expect(lines.contains("/sbin/sysctl -w net.ipv4.conf.\(device).forwarding=0"))
+        #expect(lines.contains("/sbin/sysctl -w net.ipv6.conf.\(device).forwarding=0"))
+        #expect(!lines.contains { $0.contains("/sbin/ip sysctl") })
     }
 
     @Test("Reverse-path filtering is loose, not strict")
@@ -84,7 +86,7 @@ struct ResolverHostPortPlanTests {
         // source this interface has no route for in the main table. Loose still
         // rejects a source no interface could reach.
         let device = plan().interfaceName
-        #expect(argv(plan().setup).contains("/sbin/ip sysctl -w net.ipv4.conf.\(device).rp_filter=2"))
+        #expect(argv(plan().setup).contains("/sbin/sysctl -w net.ipv4.conf.\(device).rp_filter=2"))
     }
 
     @Test("The host does not answer ARP here for addresses on its other interfaces")
@@ -96,8 +98,8 @@ struct ResolverHostPortPlanTests {
         // `forwarding=0`. `arp_announce=2` is the outbound half.
         let lines = argv(plan().setup)
         let device = plan().interfaceName
-        #expect(lines.contains("/sbin/ip sysctl -w net.ipv4.conf.\(device).arp_ignore=1"))
-        #expect(lines.contains("/sbin/ip sysctl -w net.ipv4.conf.\(device).arp_announce=2"))
+        #expect(lines.contains("/sbin/sysctl -w net.ipv4.conf.\(device).arp_ignore=1"))
+        #expect(lines.contains("/sbin/sysctl -w net.ipv4.conf.\(device).arp_announce=2"))
     }
 
     @Test("Router Advertisements from a tenant network are ignored")
@@ -105,7 +107,7 @@ struct ResolverHostPortPlanTests {
         // A guest can emit RAs. A host that accepted them from inside a tenant
         // network would take routes — and a default gateway — from it.
         let device = plan().interfaceName
-        #expect(argv(plan().setup).contains("/sbin/ip sysctl -w net.ipv6.conf.\(device).accept_ra=0"))
+        #expect(argv(plan().setup).contains("/sbin/sysctl -w net.ipv6.conf.\(device).accept_ra=0"))
     }
 
     @Test("The sysctls tolerate a kernel that does not expose them")
@@ -113,7 +115,7 @@ struct ResolverHostPortPlanTests {
         // A missing knob costs the mitigation, not the resolver — and the setup
         // runs fail-fast, so an untolerated failure would roll back the whole
         // foot and leave the network with no resolver at all.
-        for command in plan().setup where command.arguments.first == "sysctl" {
+        for command in plan().setup where command.executable == "/sbin/sysctl" {
             #expect(!command.tolerated.isEmpty)
         }
     }

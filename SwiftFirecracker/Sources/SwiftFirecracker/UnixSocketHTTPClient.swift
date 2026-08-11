@@ -267,7 +267,9 @@ actor UnixSocketHTTPClient {
 /// order always matches the order the bytes hit the wire — which is what makes
 /// pairing responses back to callers correct for pipelined requests.
 ///
-/// All state is touched only on the channel's event loop.
+/// All state is touched only on the channel's event loop. That invariant covers
+/// every mutable field below; the unchecked conformance exists only because
+/// `ChannelInboundHandler` cannot express event-loop isolation to the compiler.
 private final class HTTPRoundTripHandler: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = NIOHTTPClientResponseFull
     typealias OutboundOut = HTTPClientRequestPart

@@ -10,6 +10,8 @@ import Vapor
 ///
 /// No foreign keys on purpose: decisions must outlive the users and resources
 /// they describe, exactly like the audit trail.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class IAMDecisionLog: Model, @unchecked Sendable {
     static let schema = "iam_decision_logs"
 

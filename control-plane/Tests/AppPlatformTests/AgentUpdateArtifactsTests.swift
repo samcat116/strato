@@ -321,27 +321,33 @@ struct AgentUpdateArtifactsTests {
 
 /// Serves canned responses per URL and records what was actually requested, so
 /// a test can assert a redirect hop was taken rather than inferred.
-private final class RecordingClient: Client, @unchecked Sendable {
+private final class RecordingClient: Client, Sendable {
+    private struct State {
+        let responses: [String: ClientResponse]
+        var requested: [String] = []
+    }
+
     let eventLoop: any EventLoop
-    private let responses: [String: ClientResponse]
-    private let lock = NIOLock()
-    private var requested: [String] = []
+    private let state: NIOLockedValueBox<State>
 
     init(eventLoop: any EventLoop, responses: [String: ClientResponse]) {
         self.eventLoop = eventLoop
-        self.responses = responses
+        self.state = NIOLockedValueBox(State(responses: responses))
     }
 
     var requestedURLs: [String] {
-        lock.withLock { requested }
+        state.withLockedValue { $0.requested }
     }
 
     func delegating(to eventLoop: any EventLoop) -> any Client { self }
 
     func send(_ request: ClientRequest) -> EventLoopFuture<ClientResponse> {
         let url = request.url.string
-        lock.withLock { requested.append(url) }
-        return eventLoop.makeSucceededFuture(responses[url] ?? ClientResponse(status: .notFound))
+        let response = state.withLockedValue { state in
+            state.requested.append(url)
+            return state.responses[url] ?? ClientResponse(status: .notFound)
+        }
+        return eventLoop.makeSucceededFuture(response)
     }
 }
 

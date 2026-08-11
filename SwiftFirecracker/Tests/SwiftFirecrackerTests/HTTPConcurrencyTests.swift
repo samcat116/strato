@@ -1,5 +1,6 @@
 import Foundation
 import Logging
+import NIOConcurrencyHelpers
 import NIOPosix
 import Testing
 
@@ -296,25 +297,27 @@ struct HTTPConcurrencyTests {
 /// Stand-in Firecracker API server that echoes each request's path, so
 /// responses can be matched to the request that produced them. Handles
 /// pipelined requests on one connection.
-private final class EchoingAPIServer: @unchecked Sendable {
+private final class EchoingAPIServer: Sendable {
+    private struct State {
+        var stopped = false
+        var connections: [Int32] = []
+        var silentRequestsRemaining: Int
+    }
+
     private let socketPath: String
     private let padBodyTo: Int?
     private let silent: Bool
     private let listenFD: Int32
     private let queue = DispatchQueue(label: "echoing-api-server")
-    private let lock = NSLock()
-    private var stopped = false
-    private var connections: [Int32] = []
+    private let state: NIOLockedValueBox<State>
     /// How many more requests to swallow before answering normally — a VMM that
     /// is wedged for a while and then comes back, counted across connections so
     /// a client that redials still sees the recovery.
-    private var silentRequestsRemaining: Int
-
     init(socketPath: String, padBodyTo: Int? = nil, silent: Bool = false, silentRequests: Int = 0) throws {
         self.socketPath = socketPath
         self.padBodyTo = padBodyTo
         self.silent = silent
-        self.silentRequestsRemaining = silentRequests
+        self.state = NIOLockedValueBox(State(silentRequestsRemaining: silentRequests))
 
         if FileManager.default.fileExists(atPath: socketPath) {
             try FileManager.default.removeItem(atPath: socketPath)
@@ -364,9 +367,7 @@ private final class EchoingAPIServer: @unchecked Sendable {
             while !isStopped() {
                 let conn = accept(listenFD, nil, nil)
                 if conn < 0 { break }
-                lock.lock()
-                connections.append(conn)
-                lock.unlock()
+                state.withLockedValue { $0.connections.append(conn) }
                 // Each connection gets its own queue so a pipelined client is
                 // never serialised behind the accept loop.
                 DispatchQueue.global().async { [self] in
@@ -378,11 +379,12 @@ private final class EchoingAPIServer: @unchecked Sendable {
     }
 
     func stop() {
-        lock.lock()
-        stopped = true
-        let open = connections
-        connections = []
-        lock.unlock()
+        let open = state.withLockedValue { state -> [Int32] in
+            state.stopped = true
+            let open = state.connections
+            state.connections = []
+            return open
+        }
         close(listenFD)
         // `Int32(...)` is load-bearing: Glibc imports SHUT_RDWR as `Int`,
         // Darwin as `Int32`, so the bare constant compiles only on Darwin.
@@ -391,18 +393,16 @@ private final class EchoingAPIServer: @unchecked Sendable {
     }
 
     private func isStopped() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return stopped
+        state.withLockedValue { $0.stopped }
     }
 
     /// Consumes one of the leading requests that go unanswered.
     private func swallowRequest() -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        guard silentRequestsRemaining > 0 else { return false }
-        silentRequestsRemaining -= 1
-        return true
+        state.withLockedValue { state in
+            guard state.silentRequestsRemaining > 0 else { return false }
+            state.silentRequestsRemaining -= 1
+            return true
+        }
     }
 
     private func serveConnection(_ fd: Int32) {

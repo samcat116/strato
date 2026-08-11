@@ -328,9 +328,8 @@ final class VMInstanceIdentityTests {
             let vm = try await builder.createVM(name: "squatted-vm", project: project)
             let vmID = try vm.requireID()
 
-            // What an administrator could do today, because `/vm/` is not yet
-            // refused by `WorkloadRegistry.validateRegistrable` (STR-165): claim
-            // the URI a VM would be minted into.
+            // Simulate a legacy or directly inserted row that bypassed the
+            // `/vm/` reservation and claimed the URI a VM would be minted into.
             try await WorkloadRegistration(
                 spiffeID: GuestIdentity.spiffeID(
                     forVM: vmID, trustDomain: PlatformTrustDomain.current),

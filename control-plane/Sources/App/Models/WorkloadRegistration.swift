@@ -30,6 +30,8 @@ enum WorkloadRegistrationKind: String, Codable, CaseIterable, Sendable {
 /// the principal; it never carries authorization"). What a registered
 /// identity may do is answered by `role_bindings` against the principal this
 /// row resolves to.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class WorkloadRegistration: Model, Content, @unchecked Sendable {
     static let schema = "workload_registrations"
 

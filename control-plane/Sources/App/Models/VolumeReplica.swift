@@ -16,6 +16,8 @@ public enum VolumeReplicaState: String, Codable, CaseIterable, Sendable {
 /// executable until a storage backend can keep copies coherent. The logical
 /// volume (size, format, attachment) stays on `Volume` — replicas only record
 /// where the bytes live and the health of each copy.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class VolumeReplica: Model, @unchecked Sendable {
     static let schema = "volume_replicas"
 

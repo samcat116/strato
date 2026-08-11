@@ -2,6 +2,7 @@ import Fluent
 import FluentPostgresDriver
 import Foundation
 import Logging
+import NIOConcurrencyHelpers
 @preconcurrency import NIOCore
 import PostgresNIO
 @preconcurrency import SQLKit
@@ -195,10 +196,9 @@ private struct StatementTimeoutDatabaseDriver: DatabaseDriver {
     }
 }
 
-private final class StatementTimeoutConnectionInitializer: @unchecked Sendable {
+private final class StatementTimeoutConnectionInitializer: Sendable {
     private let timeout: DatabaseStatementTimeout
-    private let lock = NSLock()
-    private var configuredConnectionIDs: Set<PostgresConnection.ID> = []
+    private let configuredConnectionIDs = NIOLockedValueBox<Set<PostgresConnection.ID>>([])
 
     init(timeout: DatabaseStatementTimeout) {
         self.timeout = timeout
@@ -232,23 +232,33 @@ private final class StatementTimeoutConnectionInitializer: @unchecked Sendable {
     }
 
     private func isConfigured(_ id: PostgresConnection.ID) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return configuredConnectionIDs.contains(id)
+        configuredConnectionIDs.withLockedValue { $0.contains(id) }
     }
 
     private func markConfigured(_ id: PostgresConnection.ID) {
-        lock.lock()
-        defer { lock.unlock() }
-        configuredConnectionIDs.insert(id)
+        _ = configuredConnectionIDs.withLockedValue { $0.insert(id) }
     }
 }
 
-/// PostgresNIO's legacy request and connection callback protocols predate
-/// `Sendable`. They are still confined to the connection's event loop; this box
-/// only lets the Fluent wrapper carry them through its newer `@Sendable` API.
-private struct StatementTimeoutUncheckedSendable<Value>: @unchecked Sendable {
+/// A result produced and consumed on the same database event loop. Fluent's
+/// legacy `withConnection` result is not `Sendable`-constrained, but the value
+/// never leaves that loop before this wrapper is removed.
+private struct StatementTimeoutEventLoopResult<Value>: @unchecked Sendable {
     let value: Value
+}
+
+/// PostgresNIO requests predate `Sendable`; `send` forwards this exact request
+/// to a checked-out connection on that connection's event loop and never stores
+/// or invokes it elsewhere.
+private struct StatementTimeoutPostgresRequest: @unchecked Sendable {
+    let value: any PostgresRequest
+}
+
+/// PostgresNIO's connection callback predates `@Sendable`. The callback is
+/// forwarded unchanged to `PostgresDatabase.withConnection`, which invokes it
+/// on the checked-out connection's event loop.
+private struct StatementTimeoutPostgresConnectionCallback<Value>: @unchecked Sendable {
+    let value: (PostgresConnection) -> EventLoopFuture<Value>
 }
 
 /// Transaction state belongs to the pinned connection, not to one immutable
@@ -256,7 +266,7 @@ private struct StatementTimeoutUncheckedSendable<Value>: @unchecked Sendable {
 /// `TransactionControlDatabase`, while individual migrations may call
 /// `Database.transaction`; sharing this reference makes both APIs observe the
 /// same active transaction.
-private final class StatementTimeoutTransactionState: @unchecked Sendable {
+private final class StatementTimeoutTransactionState: Sendable {
     private enum Phase: Equatable {
         case idle
         case beginning
@@ -264,55 +274,44 @@ private final class StatementTimeoutTransactionState: @unchecked Sendable {
         case ending
     }
 
-    private let lock = NSLock()
-    private var phase: Phase = .idle
+    private let phase = NIOLockedValueBox<Phase>(.idle)
 
     var isActive: Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return phase == .active || phase == .ending
+        phase.withLockedValue { $0 == .active || $0 == .ending }
     }
 
     func willBegin() throws {
-        lock.lock()
-        defer { lock.unlock() }
-        guard phase == .idle else {
-            throw DatabaseStatementTimeoutConfigurationError.transactionAlreadyActive
+        try phase.withLockedValue { phase in
+            guard phase == .idle else {
+                throw DatabaseStatementTimeoutConfigurationError.transactionAlreadyActive
+            }
+            phase = .beginning
         }
-        phase = .beginning
     }
 
     func didBegin() {
-        lock.lock()
-        defer { lock.unlock() }
-        phase = .active
+        phase.withLockedValue { $0 = .active }
     }
 
     func beginFailed() {
-        lock.lock()
-        defer { lock.unlock() }
-        phase = .idle
+        phase.withLockedValue { $0 = .idle }
     }
 
     func willEnd() throws {
-        lock.lock()
-        defer { lock.unlock() }
-        guard phase == .active else {
-            throw DatabaseStatementTimeoutConfigurationError.transactionNotActive
+        try phase.withLockedValue { phase in
+            guard phase == .active else {
+                throw DatabaseStatementTimeoutConfigurationError.transactionNotActive
+            }
+            phase = .ending
         }
-        phase = .ending
     }
 
     func didEnd() {
-        lock.lock()
-        defer { lock.unlock() }
-        phase = .idle
+        phase.withLockedValue { $0 = .idle }
     }
 
     func endFailed() {
-        lock.lock()
-        defer { lock.unlock() }
-        phase = .active
+        phase.withLockedValue { $0 = .active }
     }
 }
 
@@ -337,7 +336,7 @@ private struct StatementTimeoutDatabase: Database {
         let boxed = base.withConnection { connection in
             initializer.configure(connection).flatMap {
                 closure(connection).map {
-                    StatementTimeoutUncheckedSendable(value: $0)
+                    StatementTimeoutEventLoopResult(value: $0)
                 }
             }
         }
@@ -513,7 +512,7 @@ extension StatementTimeoutDatabase: PostgresDatabase {
         _ request: any PostgresRequest,
         logger: Logger
     ) -> EventLoopFuture<Void> {
-        let request = StatementTimeoutUncheckedSendable(value: request)
+        let request = StatementTimeoutPostgresRequest(value: request)
         return withConfiguredConnection { database in
             guard let postgres = database as? any PostgresDatabase else {
                 return database.eventLoop.makeFailedFuture(
@@ -527,7 +526,7 @@ extension StatementTimeoutDatabase: PostgresDatabase {
     func withConnection<T>(
         _ closure: @escaping (PostgresConnection) -> EventLoopFuture<T>
     ) -> EventLoopFuture<T> {
-        let closure = StatementTimeoutUncheckedSendable(value: closure)
+        let closure = StatementTimeoutPostgresConnectionCallback(value: closure)
         return withConfiguredConnection { database in
             guard let postgres = database as? any PostgresDatabase else {
                 return database.eventLoop.makeFailedFuture(

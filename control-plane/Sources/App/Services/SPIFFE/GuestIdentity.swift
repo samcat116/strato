@@ -16,13 +16,11 @@ enum GuestIdentity {
 
     /// The guest-VM SPIFFE namespace (`docs/architecture/guest-identity.md`).
     ///
-    /// Not yet refused by `WorkloadRegistry.validateRegistrable` — reserving it
-    /// is STR-165 — so until then the `spiffe_id` unique index is what keeps a
-    /// hand-registered URI from colliding with a VM's. Note that the minting
-    /// path below deliberately does *not* route through `validateRegistrable`:
-    /// its contract is validating a URI **supplied to a registration API**, and
-    /// sending a machine-composed URI through it would break VM creation the day
-    /// the reservation lands.
+    /// Refused by `WorkloadRegistry.validateRegistrable` so registration API
+    /// callers cannot squat on a VM identity. The minting path below deliberately
+    /// does *not* route through that validator: its contract is validating a URI
+    /// **supplied to a registration API**, while this URI is composed by the VM
+    /// lifecycle that owns the reserved namespace.
     static let vmPathPrefix = "/vm/"
 
     /// `/vm/<vm-id>`, the id **lowercased**.

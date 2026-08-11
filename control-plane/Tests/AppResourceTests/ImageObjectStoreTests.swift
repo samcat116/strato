@@ -8,6 +8,49 @@ import Vapor
 @Suite("Image object store", .serialized)
 final class ImageObjectStoreTests {
 
+    private actor SuspendedMultipartUpload {
+        struct Counts: Sendable {
+            var uploadedParts = 0
+            var completions = 0
+            var aborts = 0
+        }
+
+        private var counts = Counts()
+        private var completionWaiters: [CheckedContinuation<Void, Never>] = []
+
+        func uploadPart(_: ByteBuffer, partNumber: Int) -> String? {
+            counts.uploadedParts += 1
+            return "etag-\(partNumber)"
+        }
+
+        func complete(_: [S3MultipartUploadOperations.CompletedPart]) async {
+            counts.completions += 1
+            await withCheckedContinuation { continuation in
+                completionWaiters.append(continuation)
+            }
+        }
+
+        func abort() {
+            counts.aborts += 1
+        }
+
+        func waitUntilCompletionStarts() async {
+            while counts.completions == 0 {
+                await Task.yield()
+            }
+        }
+
+        func releaseCompletions() {
+            let waiters = completionWaiters
+            completionWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+
+        func snapshot() -> Counts {
+            counts
+        }
+    }
+
     // MARK: - Helpers
 
     static func createTempStorageDirectory() throws -> String {
@@ -166,6 +209,110 @@ final class ImageObjectStoreTests {
         // The staging sibling must be gone too, not just unpublished.
         let siblings = try FileManager.default.contentsOfDirectory(atPath: "\(root)/p/i")
         #expect(siblings.isEmpty)
+    }
+
+    @Test("Repeated and concurrent finish calls publish exactly once")
+    func repeatedFinishIsIdempotent() async throws {
+        let root = try Self.createTempStorageDirectory()
+        defer { Self.cleanupTempStorageDirectory(root) }
+        let store = FilesystemImageObjectStore(rootPath: root)
+        let key = "p/i/repeated-finish.img"
+        let writer = try await store.openWriter(key: key)
+        try await writer.write(Self.buffer("complete"))
+
+        async let first: Void = writer.finish()
+        async let second: Void = writer.finish()
+        _ = try await (first, second)
+        try await writer.finish()
+
+        #expect(try String(contentsOfFile: "\(root)/\(key)", encoding: .utf8) == "complete")
+        await #expect(throws: (any Error).self) {
+            try await writer.write(Self.buffer("late"))
+        }
+    }
+
+    @Test("Abort after finish is harmless, while finish after abort fails")
+    func terminalOrderIsEncoded() async throws {
+        let root = try Self.createTempStorageDirectory()
+        defer { Self.cleanupTempStorageDirectory(root) }
+        let store = FilesystemImageObjectStore(rootPath: root)
+
+        let publishedKey = "p/i/published.img"
+        let published = try await store.openWriter(key: publishedKey)
+        try await published.write(Self.buffer("kept"))
+        try await published.finish()
+        await published.abort()
+        #expect(try String(contentsOfFile: "\(root)/\(publishedKey)", encoding: .utf8) == "kept")
+
+        let aborted = try await store.openWriter(key: "p/i/aborted-terminal.img")
+        await aborted.abort()
+        await aborted.abort()
+        await #expect(throws: (any Error).self) {
+            try await aborted.finish()
+        }
+    }
+
+    @Test("Overlapping finish and abort settle on one terminal outcome")
+    func overlappingTerminalCalls() async throws {
+        let root = try Self.createTempStorageDirectory()
+        defer { Self.cleanupTempStorageDirectory(root) }
+        let store = FilesystemImageObjectStore(rootPath: root)
+        let key = "p/i/terminal-race.img"
+        let writer = try await store.openWriter(key: key)
+        try await writer.write(Self.buffer("whole object"))
+
+        let finish = Task { try await writer.finish() }
+        let abort = Task { await writer.abort() }
+        await abort.value
+        _ = try? await finish.value
+
+        await #expect(throws: (any Error).self) {
+            try await writer.write(Self.buffer("late"))
+        }
+        if FileManager.default.fileExists(atPath: "\(root)/\(key)") {
+            #expect(try String(contentsOfFile: "\(root)/\(key)", encoding: .utf8) == "whole object")
+        }
+        let siblings = try FileManager.default.contentsOfDirectory(atPath: "\(root)/p/i")
+        #expect(!siblings.contains(where: { $0.contains(".partial.") }))
+    }
+
+    @Test("Concurrent S3 terminal calls share the in-progress publish")
+    func s3TerminalCallsSharePublish() async throws {
+        let upload = SuspendedMultipartUpload()
+        let writer = S3ImageObjectWriter(
+            operations: S3MultipartUploadOperations(
+                uploadPart: { buffer, partNumber in
+                    await upload.uploadPart(buffer, partNumber: partNumber)
+                },
+                completeMultipartUpload: { parts in
+                    await upload.complete(parts)
+                },
+                abortMultipartUpload: {
+                    await upload.abort()
+                }
+            )
+        )
+        try await writer.write(Self.buffer("complete"))
+
+        let firstFinish = Task { try await writer.finish() }
+        await upload.waitUntilCompletionStarts()
+
+        let secondFinish = Task { try await writer.finish() }
+        let overlappingAbort = Task { await writer.abort() }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        await upload.releaseCompletions()
+        try await firstFinish.value
+        try await secondFinish.value
+        await overlappingAbort.value
+        try await writer.finish()
+
+        let counts = await upload.snapshot()
+        #expect(counts.uploadedParts == 1)
+        #expect(counts.completions == 1)
+        #expect(counts.aborts == 0)
     }
 
     @Test("Opening a writer sweeps staging files abandoned by an earlier crash")

@@ -15,6 +15,8 @@ import Vapor
 /// internally is what makes split-horizon possible later. Uniqueness is per
 /// project, so two tenants may both serve `corp.example.com` without seeing
 /// each other's records.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class DNSZone: Model, @unchecked Sendable {
     static let schema = "dns_zones"
 

@@ -11,6 +11,8 @@ import Vapor
 /// Only the SHA-256 hash of the token is stored (mirroring `SCIMToken`); the
 /// raw value is returned once at creation time and never again. A token is
 /// single-use: `claimedAt` is stamped when consumed, and it also expires.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class AccountClaimToken: Model, @unchecked Sendable {
     static let schema = "account_claim_tokens"
 

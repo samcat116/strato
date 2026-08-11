@@ -3,6 +3,8 @@ import Vapor
 import Foundation
 import Crypto
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class SCIMToken: Model, @unchecked Sendable {
     static let schema = "scim_tokens"
 

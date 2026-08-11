@@ -45,6 +45,11 @@ enum AgentError: Error, LocalizedError {
     }
 }
 
+private enum GuestExecWireDialect: Sendable {
+    case guest
+    case legacySandbox
+}
+
 actor Agent {
     private let initialAgentID: String  // ID used for registration (hostname or CLI arg)
     private var assignedAgentID: String?  // UUID assigned by control plane after registration
@@ -212,8 +217,18 @@ actor Agent {
     // per-session event order and per-sandbox line order survive the hop out
     // of the runtime; two pump tasks drain them into outbound WebSocket
     // messages one at a time (mirroring the ordered inbound pipeline above).
-    private nonisolated let sandboxExecEvents: AsyncStream<(String, String, SandboxExecEvent)>
-    private nonisolated let sandboxExecEventsContinuation: AsyncStream<(String, String, SandboxExecEvent)>.Continuation
+    private nonisolated let sandboxExecEvents:
+        AsyncStream<
+            (
+                String, String, GuestExecWireDialect, SandboxExecEvent
+            )
+        >
+    private nonisolated let sandboxExecEventsContinuation:
+        AsyncStream<
+            (
+                String, String, GuestExecWireDialect, SandboxExecEvent
+            )
+        >.Continuation
     private nonisolated let sandboxLogLines: AsyncStream<(String, String, String)>
     private nonisolated let sandboxLogLinesContinuation: AsyncStream<(String, String, String)>.Continuation
     private var sandboxExecPumpTask: Task<Void, Never>?
@@ -487,7 +502,8 @@ actor Agent {
         self.inboundMessages = stream
         self.inboundContinuation = continuation
 
-        let (execEvents, execContinuation) = AsyncStream.makeStream(of: (String, String, SandboxExecEvent).self)
+        let (execEvents, execContinuation) = AsyncStream.makeStream(
+            of: (String, String, GuestExecWireDialect, SandboxExecEvent).self)
         self.sandboxExecEvents = execEvents
         self.sandboxExecEventsContinuation = execContinuation
 
@@ -547,22 +563,30 @@ actor Agent {
                 // to break a host that has them (issue STR-100).
                 let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
                 let ipBinaryPath = SandboxJailerResolver.resolveIPBinaryPath(isExecutable: isExecutable)
+                let sysctlBinaryPath = NetworkResolverDefaults.resolveSysctlBinaryPath(
+                    isExecutable: isExecutable)
                 // The resolver is OVN-only by construction: it terminates on a
                 // per-network OVN `localport`, which does not exist under
                 // user-mode networking. Resolved here rather than at
                 // startup so `resolverBinaryPath` is nil on every path that
                 // cannot run it, and `resolverCapable` follows from one check.
-                resolverBinaryPath =
+                let discoveredResolverBinaryPath =
                     (resolverConfig?.enabled ?? true)
                     ? NetworkResolverDefaults.resolveBinaryPath(
                         configured: resolverConfig?.corednsBinaryPath, isExecutable: isExecutable)
                     : nil
+                // A resolver is only a real capability when the host can also
+                // build its isolated host-side foot. `ip` has no `sysctl`
+                // subcommand; the isolation settings require procps's binary.
+                resolverBinaryPath =
+                    ipBinaryPath != nil && sysctlBinaryPath != nil
+                    ? discoveredResolverBinaryPath : nil
                 let resolverSupervisor = resolverBinaryPath.flatMap { binaryPath -> ResolverSupervisor? in
-                    // Both binaries are required. CoreDNS runs in the host
+                    // All three binaries are required. CoreDNS runs in the host
                     // namespace and needs no `ip` to start, but it binds
                     // addresses that `ip` is what puts on the interface — so
                     // without it there is nothing for the resolver to answer on.
-                    guard let ipBinaryPath else { return nil }
+                    guard let ipBinaryPath, sysctlBinaryPath != nil else { return nil }
                     return ResolverSupervisor(
                         root: resolverConfig?.effectiveConfigDirectory
                             ?? NetworkResolverDefaults.configDirectory,
@@ -576,6 +600,7 @@ actor Agent {
                     uplink: ovnUplink, dynamicRouting: ovnDynamicRouting,
                     ipBinaryPath: ipBinaryPath,
                     tcBinaryPath: SandboxJailerResolver.resolveTCBinaryPath(isExecutable: isExecutable),
+                    sysctlBinaryPath: sysctlBinaryPath,
                     linkLocalServiceRatePPS: resolverConfig?.effectiveRateLimitPPS
                         ?? NetworkResolverDefaults.rateLimitPPS,
                     resolverSupervisor: resolverSupervisor,
@@ -2523,19 +2548,30 @@ extension Agent {
             case .consoleData:
                 let message = try envelope.decode(as: ConsoleDataMessage.self)
                 await handleConsoleData(message)
-            // Sandbox exec sessions (issue #423)
-            case .sandboxExecStart:
-                let message = try envelope.decode(as: SandboxExecStartMessage.self)
-                await handleSandboxExecStart(message)
+            // Guest exec sessions (STR-78). The sandbox-prefixed cases are the
+            // one-release v43 decode path; their payloads translate directly
+            // except for start, which supplies the implied `.sandbox` kind.
+            case .guestExecStart:
+                let message = try envelope.decode(as: GuestExecStartMessage.self)
+                await handleGuestExecStart(message, dialect: .guest)
+            case .guestExecInput:
+                let message = try envelope.decode(as: GuestExecInputMessage.self)
+                await handleGuestExecInput(message, dialect: .guest)
             case .sandboxExecInput:
-                let message = try envelope.decode(as: SandboxExecInputMessage.self)
-                await handleSandboxExecInput(message)
+                let message = try envelope.decode(as: GuestExecInputMessage.self)
+                await handleGuestExecInput(message, dialect: .legacySandbox)
+            case .guestExecResize:
+                let message = try envelope.decode(as: GuestExecResizeMessage.self)
+                await handleGuestExecResize(message, dialect: .guest)
             case .sandboxExecResize:
-                let message = try envelope.decode(as: SandboxExecResizeMessage.self)
-                await handleSandboxExecResize(message)
-            case .sandboxExecClose:
-                let message = try envelope.decode(as: SandboxExecCloseMessage.self)
-                await handleSandboxExecClose(message)
+                let message = try envelope.decode(as: GuestExecResizeMessage.self)
+                await handleGuestExecResize(message, dialect: .legacySandbox)
+            case .guestExecClose, .sandboxExecClose:
+                let message = try envelope.decode(as: GuestExecCloseMessage.self)
+                await handleGuestExecClose(message)
+            case .sandboxExecStart:
+                let message = try envelope.decode(as: LegacySandboxExecStartMessage.self)
+                await handleGuestExecStart(message.guestMessage, dialect: .legacySandbox)
             // No sandbox lifecycle frames remain either: `sandbox_restore`
             // became `DesiredSandboxState.restore` at wire v34 (STR-151), and
             // capture/delete/export became desired artifacts at v33 (STR-150).
@@ -3161,7 +3197,7 @@ extension Agent {
         }
     }
 
-    // MARK: - Sandbox Exec Message Handlers (issue #423)
+    // MARK: - Guest Exec Message Handlers (STR-78)
 
     /// Start the pumps that drain the runtime's exec events and workload log
     /// lines into outbound WebSocket messages. Idempotent.
@@ -3169,8 +3205,8 @@ extension Agent {
         if sandboxExecPumpTask == nil {
             let events = sandboxExecEvents
             sandboxExecPumpTask = Task { [weak self] in
-                for await (sandboxId, sessionId, event) in events {
-                    await self?.sendSandboxExecEvent(sandboxId: sandboxId, sessionId: sessionId, event: event)
+                for await (_, sessionId, dialect, event) in events {
+                    await self?.sendGuestExecEvent(sessionId: sessionId, dialect: dialect, event: event)
                 }
             }
         }
@@ -3270,20 +3306,31 @@ extension Agent {
         await observedStateTrigger?.signal()
     }
 
-    private func handleSandboxExecStart(_ message: SandboxExecStartMessage) async {
+    private func handleGuestExecStart(
+        _ message: GuestExecStartMessage, dialect: GuestExecWireDialect
+    ) async {
         logger.info(
-            "Sandbox exec start request received",
+            "Guest exec start request received",
             metadata: [
-                "sandboxId": .string(message.sandboxId),
+                "resourceKind": .string(message.resourceKind.rawValue),
+                "resourceId": .string(message.resourceId),
                 "sessionId": .string(message.sessionId),
                 "tty": .stringConvertible(message.tty),
             ])
 
+        guard message.resourceKind == .sandbox else {
+            await sendGuestExecClosed(
+                sessionId: message.sessionId, reason: "VM exec is not supported by this agent build",
+                dialect: dialect)
+            return
+        }
+
         guard let runtime = sandboxRuntime else {
             logger.error(
-                "Sandbox runtime not available for exec", metadata: ["sandboxId": .string(message.sandboxId)])
-            await sendSandboxExecClosed(
-                sessionId: message.sessionId, reason: "this agent has no sandbox runtime")
+                "Sandbox runtime not available for exec", metadata: ["sandboxId": .string(message.resourceId)])
+            await sendGuestExecClosed(
+                sessionId: message.sessionId, reason: "this agent has no sandbox runtime",
+                dialect: dialect)
             return
         }
 
@@ -3294,11 +3341,11 @@ extension Agent {
         // Events yield into the ordered pump stream (never send directly from
         // the runtime's callback, which must stay non-blocking).
         let continuation = sandboxExecEventsContinuation
-        let sandboxId = message.sandboxId
+        let sandboxId = message.resourceId
         let sessionId = message.sessionId
         do {
             try await runtime.startExec(sandboxId: sandboxId, sessionId: sessionId, request: request) { event in
-                continuation.yield((sandboxId, sessionId, event))
+                continuation.yield((sandboxId, sessionId, dialect, event))
             }
         } catch {
             logger.error(
@@ -3308,14 +3355,18 @@ extension Agent {
                     "sessionId": .string(sessionId),
                     "error": .string(error.localizedDescription),
                 ])
-            await sendSandboxExecClosed(sessionId: sessionId, reason: error.localizedDescription)
+            await sendGuestExecClosed(
+                sessionId: sessionId, reason: error.localizedDescription, dialect: dialect)
         }
     }
 
-    private func handleSandboxExecInput(_ message: SandboxExecInputMessage) async {
+    private func handleGuestExecInput(
+        _ message: GuestExecInputMessage, dialect: GuestExecWireDialect
+    ) async {
         guard let runtime = sandboxRuntime else {
-            await sendSandboxExecClosed(
-                sessionId: message.sessionId, reason: "this agent has no sandbox runtime")
+            await sendGuestExecClosed(
+                sessionId: message.sessionId, reason: "this agent has no sandbox runtime",
+                dialect: dialect)
             return
         }
         if message.data != nil && message.rawData == nil {
@@ -3324,48 +3375,54 @@ extension Agent {
             // keystrokes. Treat it as session-fatal, like the handler's other
             // failure paths: tear the session down and tell the control plane.
             logger.warning(
-                "Invalid sandbox exec input received (failed to decode base64); closing session",
+                "Invalid guest exec input received (failed to decode base64); closing session",
                 metadata: ["sessionId": .string(message.sessionId)])
             await runtime.closeExec(sessionId: message.sessionId)
-            await sendSandboxExecClosed(
-                sessionId: message.sessionId, reason: "undecodable exec input (invalid base64)")
+            await sendGuestExecClosed(
+                sessionId: message.sessionId, reason: "undecodable exec input (invalid base64)",
+                dialect: dialect)
             return
         }
         do {
             try await runtime.sendExecInput(sessionId: message.sessionId, data: message.rawData, eof: message.eof)
         } catch {
             logger.warning(
-                "Failed to write sandbox exec input",
+                "Failed to write guest exec input",
                 metadata: [
                     "sessionId": .string(message.sessionId),
                     "error": .string(error.localizedDescription),
                 ])
-            await sendSandboxExecClosed(sessionId: message.sessionId, reason: error.localizedDescription)
+            await sendGuestExecClosed(
+                sessionId: message.sessionId, reason: error.localizedDescription, dialect: dialect)
         }
     }
 
-    private func handleSandboxExecResize(_ message: SandboxExecResizeMessage) async {
+    private func handleGuestExecResize(
+        _ message: GuestExecResizeMessage, dialect: GuestExecWireDialect
+    ) async {
         guard let runtime = sandboxRuntime else {
-            await sendSandboxExecClosed(
-                sessionId: message.sessionId, reason: "this agent has no sandbox runtime")
+            await sendGuestExecClosed(
+                sessionId: message.sessionId, reason: "this agent has no sandbox runtime",
+                dialect: dialect)
             return
         }
         do {
             try await runtime.resizeExec(sessionId: message.sessionId, rows: message.rows, cols: message.cols)
         } catch {
             logger.warning(
-                "Failed to resize sandbox exec session",
+                "Failed to resize guest exec session",
                 metadata: [
                     "sessionId": .string(message.sessionId),
                     "error": .string(error.localizedDescription),
                 ])
-            await sendSandboxExecClosed(sessionId: message.sessionId, reason: error.localizedDescription)
+            await sendGuestExecClosed(
+                sessionId: message.sessionId, reason: error.localizedDescription, dialect: dialect)
         }
     }
 
-    private func handleSandboxExecClose(_ message: SandboxExecCloseMessage) async {
+    private func handleGuestExecClose(_ message: GuestExecCloseMessage) async {
         logger.info(
-            "Sandbox exec close request received",
+            "Guest exec close request received",
             metadata: [
                 "sessionId": .string(message.sessionId),
                 "reason": .string(message.reason ?? ""),
@@ -3378,7 +3435,9 @@ extension Agent {
     /// Translate one runtime exec event into its outbound message. Runs on the
     /// exec pump, so events are sent strictly in the order the runtime
     /// delivered them.
-    private func sendSandboxExecEvent(sandboxId: String, sessionId: String, event: SandboxExecEvent) async {
+    private func sendGuestExecEvent(
+        sessionId: String, dialect: GuestExecWireDialect, event: SandboxExecEvent
+    ) async {
         guard let websocketClient else {
             // No control-plane socket: the event (possibly the session's
             // terminal one) is dropped. The control plane's agent-disconnect
@@ -3393,23 +3452,30 @@ extension Agent {
             return
         }
         do {
-            switch event {
-            case .started:
+            switch (dialect, event) {
+            case (.guest, .started):
+                try await websocketClient.sendMessage(GuestExecStartedMessage(sessionId: sessionId))
+            case (.guest, .output(_, let data)):
+                try await websocketClient.sendMessage(GuestExecOutputMessage(sessionId: sessionId, rawData: data))
+            case (.guest, .exited(let code)):
+                try await websocketClient.sendMessage(GuestExecExitMessage(sessionId: sessionId, exitCode: code))
+            case (.guest, .closed(let reason)):
+                try await websocketClient.sendMessage(GuestExecClosedMessage(sessionId: sessionId, reason: reason))
+            case (.legacySandbox, .started):
+                try await websocketClient.sendMessage(LegacySandboxExecStartedMessage(sessionId: sessionId))
+            case (.legacySandbox, .output(_, let data)):
                 try await websocketClient.sendMessage(
-                    SandboxExecStartedMessage(sessionId: sessionId))
-            case .output(_, let data):
+                    LegacySandboxExecOutputMessage(sessionId: sessionId, rawData: data))
+            case (.legacySandbox, .exited(let code)):
                 try await websocketClient.sendMessage(
-                    SandboxExecOutputMessage(sessionId: sessionId, rawData: data))
-            case .exited(let code):
+                    LegacySandboxExecExitMessage(sessionId: sessionId, exitCode: code))
+            case (.legacySandbox, .closed(let reason)):
                 try await websocketClient.sendMessage(
-                    SandboxExecExitMessage(sessionId: sessionId, exitCode: code))
-            case .closed(let reason):
-                try await websocketClient.sendMessage(
-                    SandboxExecClosedMessage(sessionId: sessionId, reason: reason))
+                    LegacySandboxExecClosedMessage(sessionId: sessionId, reason: reason))
             }
         } catch {
             logger.error(
-                "Failed to send sandbox exec message",
+                "Failed to send guest exec message",
                 metadata: [
                     "sessionId": .string(sessionId),
                     "error": .string(error.localizedDescription),
@@ -3417,20 +3483,29 @@ extension Agent {
         }
     }
 
-    private func sendSandboxExecClosed(sessionId: String, reason: String?) async {
+    private func sendGuestExecClosed(
+        sessionId: String, reason: String?, dialect: GuestExecWireDialect
+    ) async {
         guard let websocketClient else {
             // Terminal for the session but undeliverable; see
-            // `sendSandboxExecEvent` for why a warning is enough.
+            // `sendGuestExecEvent` for why a warning is enough.
             logger.warning(
-                "Dropping sandbox exec closed message: no control plane connection",
+                "Dropping guest exec closed message: no control plane connection",
                 metadata: ["sessionId": .string(sessionId), "reason": .string(reason ?? "")])
             return
         }
         do {
-            try await websocketClient.sendMessage(SandboxExecClosedMessage(sessionId: sessionId, reason: reason))
+            switch dialect {
+            case .guest:
+                try await websocketClient.sendMessage(
+                    GuestExecClosedMessage(sessionId: sessionId, reason: reason))
+            case .legacySandbox:
+                try await websocketClient.sendMessage(
+                    LegacySandboxExecClosedMessage(sessionId: sessionId, reason: reason))
+            }
         } catch {
             logger.error(
-                "Failed to send sandbox exec closed message",
+                "Failed to send guest exec closed message",
                 metadata: ["sessionId": .string(sessionId), "error": .string(error.localizedDescription)])
         }
     }
