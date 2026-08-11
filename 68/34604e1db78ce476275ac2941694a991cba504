@@ -1,0 +1,33 @@
+control-plane/Package.swift
+  s_1caa12ce689fe8::t_678c36e3fc6a8b 214
+  s_1caa12ce689fe8::t_d6ff844e79a1f1 136
+agent/Sources/StratoAgentCore/InitialNodeDependencyModules.swift
+  s_1caa12ce689fe8::t_678c36e3fc6a8b 205-213,216,225
+control-plane/Tests/AppPlatformTests/AgentServiceLifecycleTests.swift
+  s_1caa12ce689fe8::t_678c36e3fc6a8b 7,21-32,45-46,50-61,65
+control-plane/Sources/App/Telemetry/Telemetry.swift
+  s_1caa12ce689fe8::t_d6ff844e79a1f1 138-146
+  s_1caa12ce689fe8::t_678c36e3fc6a8b 99-100,107-108,117-137,147-148
+  s_1caa12ce689fe8::t_653a665328a7fa 149
+control-plane/Sources/App/Services/AgentService.swift
+  s_1caa12ce689fe8::t_678c36e3fc6a8b 10,504-509,625-626,648-654,721-722,996,1044-1047
+agent/Tests/StratoAgentTests/NodeDependencyManagerTests.swift
+  s_1caa12ce689fe8::t_a117dcad132bda 307-314
+  s_1caa12ce689fe8::t_678c36e3fc6a8b 294-306,315-316
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "6834604e1db78ce476275ac2941694a991cba504",
+  "prompts": {},
+  "sessions": {
+    "s_1caa12ce689fe8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fec6f-4fa5-7fd0-bf2a-063474d3e1e0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
