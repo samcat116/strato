@@ -141,16 +141,15 @@ public struct MetadataResponse: Sendable, Equatable {
 /// The documents this listener serves.
 ///
 /// NoCloud-net documents live at the exact sibling paths cloud-init fetches.
-/// The trailing-slash metadata index and its two probe keys remain available
-/// for the EC2 datasource proved by STR-56; STR-65 extends that tree.
-public enum MetadataDocumentPath: Sendable, Equatable, Hashable, CaseIterable {
+/// EC2's `meta-data/` and `dynamic/` trees are parsed separately and rendered
+/// from the same snapshot rather than copied into a second model.
+public enum MetadataDocumentPath: Sendable, Equatable, Hashable {
     case root
     case noCloudMetaData
     case userData
     case networkConfig
-    case metaDataIndex
-    case instanceID
-    case hostname
+    case ec2MetaData(EC2MetadataPath)
+    case ec2Dynamic(EC2DynamicPath)
 }
 
 /// What a syntactically valid request is asking for. Nothing here has consulted
@@ -292,14 +291,35 @@ public enum MetadataRouter {
         case "/latest/meta-data": return .noCloudMetaData
         case "/latest/user-data": return .userData
         case "/latest/network-config": return .networkConfig
-        case "/latest/meta-data/": return .metaDataIndex
-        case "/latest/meta-data/instance-id": return .instanceID
-        case "/latest/meta-data/hostname": return .hostname
         default:
             // Keep the two metadata roots distinct, but preserve the
             // trailing-slash aliases previously accepted for leaf documents.
+            if let components = components(below: "/latest/meta-data", in: path),
+                let ec2Path = EC2MetadataPath.parse(components)
+            {
+                return .ec2MetaData(ec2Path)
+            }
+            if let components = components(below: "/latest/dynamic", in: path),
+                let dynamicPath = EC2DynamicPath.parse(components)
+            {
+                return .ec2Dynamic(dynamicPath)
+            }
             guard path.count > 1, path.hasSuffix("/"), !path.hasSuffix("//") else { return nil }
             return document(for: String(path.dropLast()))
         }
+    }
+
+    /// Splits a hierarchical EC2 path while accepting one trailing slash and
+    /// rejecting empty components. Percent escapes were already refused by
+    /// `normalize`, so no decoded slash can appear after this check.
+    private static func components(below prefix: String, in path: String) -> [String]? {
+        guard path.hasPrefix(prefix + "/") else { return nil }
+        var suffix = String(path.dropFirst(prefix.count + 1))
+        guard !suffix.hasPrefix("/") else { return nil }
+        if suffix.hasSuffix("/") { suffix.removeLast() }
+        if suffix.isEmpty { return [] }
+        let components = suffix.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.allSatisfy({ !$0.isEmpty }) else { return nil }
+        return components.map(String.init)
     }
 }
