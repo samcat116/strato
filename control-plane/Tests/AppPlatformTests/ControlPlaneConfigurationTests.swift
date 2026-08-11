@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 import Vapor
 
@@ -39,6 +40,73 @@ struct ControlPlaneConfigurationTests {
                 environmentVariables: ["SCHEDULING_STRATEGY": "bestfit"],
                 for: .testing)
         }
+    }
+
+    @Test("Explicit strings remain distinguishable from loader defaults")
+    func explicitStringsRemainDistinguishable() async throws {
+        let defaulted = try await ControlPlaneConfiguration.load(
+            environmentVariables: [:], for: .testing)
+        #expect(defaulted.string(.webauthnRelyingPartyOrigin) == "http://localhost:8080")
+        #expect(defaulted.explicitlyConfiguredString(.webauthnRelyingPartyOrigin) == nil)
+
+        let configured = try await ControlPlaneConfiguration.load(
+            environmentVariables: [
+                "WEBAUTHN_RELYING_PARTY_ORIGIN": "https://identity.example.com"
+            ],
+            for: .testing)
+        #expect(
+            configured.explicitlyConfiguredString(.webauthnRelyingPartyOrigin)
+                == "https://identity.example.com")
+    }
+
+    @Test("OAuth keeps its frontend fallback until an origin is explicitly configured")
+    func oauthFrontendFallbackUsesExplicitOrigins() async throws {
+        let defaulted = try await ControlPlaneConfiguration.load(
+            environmentVariables: [:], for: .testing)
+        #expect(OAuthController.publicOrigin(configuration: defaulted) == "http://localhost:3000")
+
+        let webauthn = try await ControlPlaneConfiguration.load(
+            environmentVariables: [
+                "WEBAUTHN_RELYING_PARTY_ORIGIN": "https://identity.example.com/"
+            ],
+            for: .testing)
+        #expect(OAuthController.publicOrigin(configuration: webauthn) == "https://identity.example.com")
+
+        let publicURL = try await ControlPlaneConfiguration.load(
+            environmentVariables: [
+                "STRATO_PUBLIC_URL": "https://strato.example.com/",
+                "WEBAUTHN_RELYING_PARTY_ORIGIN": "https://identity.example.com",
+            ],
+            for: .testing)
+        #expect(OAuthController.publicOrigin(configuration: publicURL) == "https://strato.example.com")
+    }
+
+    @Test("SSF push delivery requires an explicitly configured callback origin")
+    func ssfPushEndpointUsesExplicitOrigins() async throws {
+        let streamID = UUID(uuidString: "6AD6BE4A-599A-4FE4-B862-DB06994B7075")!
+        let defaulted = try await ControlPlaneConfiguration.load(
+            environmentVariables: [:], for: .testing)
+        #expect(
+            SSFService.pushEndpointURL(for: streamID, configuration: defaulted) == nil)
+
+        let webauthn = try await ControlPlaneConfiguration.load(
+            environmentVariables: [
+                "WEBAUTHN_RELYING_PARTY_ORIGIN": "https://identity.example.com/"
+            ],
+            for: .testing)
+        #expect(
+            SSFService.pushEndpointURL(for: streamID, configuration: webauthn)
+                == "https://identity.example.com/ssf/events/\(streamID.uuidString)")
+
+        let callback = try await ControlPlaneConfiguration.load(
+            environmentVariables: [
+                "SSF_CALLBACK_BASE_URL": "https://signals.example.com/",
+                "WEBAUTHN_RELYING_PARTY_ORIGIN": "https://identity.example.com",
+            ],
+            for: .testing)
+        #expect(
+            SSFService.pushEndpointURL(for: streamID, configuration: callback)
+                == "https://signals.example.com/ssf/events/\(streamID.uuidString)")
     }
 
     @Test("The registry contains every typed key exactly once")

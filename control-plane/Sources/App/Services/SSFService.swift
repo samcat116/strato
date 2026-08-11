@@ -152,8 +152,8 @@ actor SSFService {
         configuration: ControlPlaneConfiguration
     ) -> String? {
         let base =
-            configuration.string(.ssfCallbackBaseURL)
-            ?? configuration.string(.webauthnRelyingPartyOrigin)
+            configuration.explicitlyConfiguredString(.ssfCallbackBaseURL)
+            ?? configuration.explicitlyConfiguredString(.webauthnRelyingPartyOrigin)
         guard let base, !base.isEmpty else { return nil }
         let trimmed = base.hasSuffix("/") ? String(base.dropLast()) : base
         return "\(trimmed)/ssf/events/\(streamID.uuidString)"

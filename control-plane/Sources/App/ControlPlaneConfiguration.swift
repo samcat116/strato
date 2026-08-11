@@ -450,6 +450,12 @@ struct ControlPlaneConfiguration: Sendable {
     func int(_ key: ControlPlaneIntKey) -> Int? { integers[key] }
     func double(_ key: ControlPlaneDoubleKey) -> Double { numbers[key]! }
     func string(_ key: ControlPlaneStringKey) -> String? { strings[key] }
+
+    /// Returns the resolved value only when the environment supplied this key,
+    /// preserving call-site fallbacks that must not be activated by a default.
+    func explicitlyConfiguredString(_ key: ControlPlaneStringKey) -> String? {
+        isConfigured(key.rawValue) ? strings[key] : nil
+    }
     func isConfigured(_ name: String) -> Bool { configuredNames.contains(name.uppercased()) }
 
     static func registry(for environment: Environment) -> [ControlPlaneConfigurationEntry] {

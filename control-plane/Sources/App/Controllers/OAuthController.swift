@@ -164,8 +164,8 @@ struct OAuthController: RouteCollection {
     /// separate service, so this comes from configuration, not the request.
     static func publicOrigin(configuration: ControlPlaneConfiguration) -> String {
         let origin =
-            configuration.string(.stratoPublicURL)
-            ?? configuration.string(.webauthnRelyingPartyOrigin)
+            configuration.explicitlyConfiguredString(.stratoPublicURL)
+            ?? configuration.explicitlyConfiguredString(.webauthnRelyingPartyOrigin)
             ?? "http://localhost:3000"
         return origin.hasSuffix("/") ? String(origin.dropLast()) : origin
     }
