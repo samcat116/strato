@@ -427,9 +427,15 @@ final class IAMAuthorizerBackstopTests {
             // org-anchored guardrail could not match it.
             let orphanProject = try await builder.createProject(
                 name: "Orphan Project", description: "no organization")
-            let network = try await builder.createNetwork(
-                name: "orphan-net", project: orphanProject, subnet: "10.99.0.0/24",
-                gateway: "10.99.0.1", externalAccess: false)
+            // The network's required site must not repair the intentionally
+            // truncated ownership chain, so keep it scopeless as well.
+            let orphanSite = Site(name: "orphan-site")
+            try await orphanSite.save(on: app.db)
+            let network = LogicalNetwork(
+                name: "orphan-net", subnet: "10.99.0.0/24", gateway: "10.99.0.1",
+                projectID: try orphanProject.requireID(), externalAccess: false,
+                siteID: try orphanSite.requireID())
+            try await network.save(on: app.db)
 
             let user = try await builder.createUser(
                 username: "trunc-user", email: "trunc-user@example.com")
@@ -585,6 +591,7 @@ final class IAMAuthorizerBackstopTests {
         }
         // Handler-checked (the evaluator runs in the handler).
         #expect(M.classify(path: "/api/organizations/\(id)/members") == .handlerChecked)
+        #expect(M.classify(path: "/api/load-balancers/\(id)/listeners") == .handlerChecked)
         #expect(M.classify(path: "/api/iam/guardrails") == .handlerChecked)
         #expect(M.classify(path: "/organizations/\(id)/settings/scim-tokens") == .handlerChecked)
         // Unknown paths classify as nothing — denied.

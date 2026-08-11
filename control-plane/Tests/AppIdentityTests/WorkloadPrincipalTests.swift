@@ -246,7 +246,7 @@ final class WorkloadPrincipalTests {
                     $0.principal == WhoCanPrincipalRef(type: .serviceAccount, id: accountID)
                 })
             #expect(entry.source == .binding)
-            #expect(entry.role == "viewer")
+            #expect(entry.role == IAMRole.viewer.seededID)
 
             #expect(
                 try await WhoCanService.can(

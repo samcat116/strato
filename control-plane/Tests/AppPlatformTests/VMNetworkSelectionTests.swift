@@ -85,12 +85,17 @@ final class VMNetworkSelectionTests {
             .first()
     }
 
+    private func placementSiteID(for project: Project, on db: any Database) async throws -> UUID {
+        try await TestDataBuilder(db: db).placementSite(for: project).requireID()
+    }
+
     @Test("POST /api/vms with a networkId attaches the NIC to that network")
     func createWithNetworkId() async throws {
         try await withApp { app, user, _, project, image, token in
             let network = LogicalNetwork(
                 name: "selectable-net", subnet: "10.100.0.0/24", gateway: "10.100.0.1",
-                projectID: project.id!, createdByID: user.id!)
+                projectID: project.id!, createdByID: user.id!,
+                siteID: try await placementSiteID(for: project, on: app.db))
             try await network.save(on: app.db)
 
             try await app.test(.POST, "/api/vms") { req in
@@ -222,7 +227,8 @@ final class VMNetworkSelectionTests {
             let network = LogicalNetwork(
                 name: "ipv6-mtu-net", subnet: "10.102.0.0/24", gateway: "10.102.0.1",
                 subnet6: "fd00:102::/64", gateway6: "fd00:102::1",
-                projectID: try project.requireID(), createdByID: try user.requireID())
+                projectID: try project.requireID(), createdByID: try user.requireID(),
+                siteID: try await placementSiteID(for: project, on: app.db))
             try await network.save(on: app.db)
 
             try await app.test(.POST, "/api/vms") { req in
@@ -414,7 +420,8 @@ final class VMNetworkSelectionTests {
             let network = LogicalNetwork(
                 name: "dual-net", subnet: "10.101.0.0/24", gateway: "10.101.0.1",
                 subnet6: "fd00:66::/64", gateway6: "fd00:66::1",
-                projectID: project.id!, createdByID: user.id!)
+                projectID: project.id!, createdByID: user.id!,
+                siteID: try await placementSiteID(for: project, on: app.db))
             try await network.save(on: app.db)
 
             try await app.test(.POST, "/api/vms") { req in
@@ -491,7 +498,8 @@ final class VMNetworkSelectionTests {
                 name: "Foreign Project", description: "p", organization: org)
             let foreignNetwork = LogicalNetwork(
                 name: "foreign-net", subnet: "10.110.0.0/24", gateway: "10.110.0.1",
-                projectID: otherProject.id!, createdByID: user.id!)
+                projectID: otherProject.id!, createdByID: user.id!,
+                siteID: try await placementSiteID(for: project, on: app.db))
             try await foreignNetwork.save(on: app.db)
 
             // 404, not 403: confirming the id exists elsewhere would disclose
@@ -516,7 +524,8 @@ final class VMNetworkSelectionTests {
         try await withApp { app, user, _, project, image, token in
             let network = LogicalNetwork(
                 name: "both-net", subnet: "10.120.0.0/24", gateway: "10.120.0.1",
-                projectID: project.id!, createdByID: user.id!)
+                projectID: project.id!, createdByID: user.id!,
+                siteID: try await placementSiteID(for: project, on: app.db))
             try await network.save(on: app.db)
 
             try await app.test(.POST, "/api/vms") { req in

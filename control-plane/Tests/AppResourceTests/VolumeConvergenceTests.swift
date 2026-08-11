@@ -61,9 +61,12 @@ final class VolumeConvergenceTests {
             ),
             protocolVersion: protocolVersion
         )
+        let project = try #require(try await Project.query(on: app.db).sort(\.$createdAt).first())
+        let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, organizationScope: orgID.map { .organization($0) })
+            message, agentName: name, siteID: siteID,
+            organizationScope: orgID.map { .organization($0) })
         return uuid.uuidString
     }
 
@@ -148,6 +151,14 @@ final class VolumeConvergenceTests {
             vm.hypervisorId = agentId
             try await vm.save(on: app.db)
 
+            let boot = try await makeVolume(
+                on: app, user: user, project: project, agentId: agentId, name: "attach-boot")
+            boot.$vm.id = vm.id
+            boot.volumeType = .boot
+            boot.deviceName = "disk0"
+            boot.bootOrder = 0
+            try await boot.save(on: app.db)
+
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: agentId)
             volume.$vm.id = vm.id
@@ -161,7 +172,8 @@ final class VolumeConvergenceTests {
             try await volume.save(on: app.db)
 
             let message = try await app.desiredStateAssembler.assemble(agentId: agentId)
-            let attachment = try #require(message.volumes.first?.attachment)
+            let attachment = try #require(
+                message.volumes.first { $0.volumeId == volume.id }?.attachment)
             #expect(attachment.vmId == vm.id)
             #expect(attachment.deviceName.rawValue == "disk1")
             #expect(attachment.readonly)
@@ -178,6 +190,15 @@ final class VolumeConvergenceTests {
             vm.hypervisorId = vmAgentID
             try await vm.save(on: app.db)
 
+            let boot = try await makeVolume(
+                on: app, user: user, project: project, agentId: vmAgentID,
+                name: "attachment-target-boot")
+            boot.$vm.id = vm.id
+            boot.volumeType = .boot
+            boot.deviceName = "disk0"
+            boot.bootOrder = 0
+            try await boot.save(on: app.db)
+
             let volume = try await makeVolume(
                 on: app, user: user, project: project, agentId: vmAgentID)
             try await placeVolume(volume, on: storageOnlyAgentID, using: app.db)
@@ -186,13 +207,13 @@ final class VolumeConvergenceTests {
             try await volume.save(on: app.db)
 
             let vmHostMessage = try await app.desiredStateAssembler.assemble(agentId: vmAgentID)
-            let vmHostEntry = try #require(vmHostMessage.volumes?.first { $0.volumeId == volume.id })
+            let vmHostEntry = try #require(vmHostMessage.volumes.first { $0.volumeId == volume.id })
             #expect(vmHostEntry.attachment?.vmId == vm.id)
 
             let storageOnlyMessage = try await app.desiredStateAssembler.assemble(
                 agentId: storageOnlyAgentID)
             let storageOnlyEntry = try #require(
-                storageOnlyMessage.volumes?.first { $0.volumeId == volume.id })
+                storageOnlyMessage.volumes.first { $0.volumeId == volume.id })
             #expect(storageOnlyEntry.attachment == nil)
         }
     }
@@ -528,9 +549,9 @@ final class VolumeConvergenceTests {
             let secondDesiredState = try await app.desiredStateAssembler.assemble(
                 agentId: secondAgentID)
             #expect(
-                secondDesiredState.volumes?.contains {
+                secondDesiredState.volumes.contains {
                     $0.volumeId == volumeID && $0.desiredStatus == .absent
-                } == true)
+                })
             #expect(
                 Set(try await volume.placementAgentIDs(on: app.db))
                     == Set([firstAgentID, secondAgentID]))

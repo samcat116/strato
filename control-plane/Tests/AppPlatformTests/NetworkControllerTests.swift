@@ -14,6 +14,8 @@ import AppTestSupport
 @Suite("Network Controller Tests", .serialized)
 final class NetworkControllerTests {
 
+    fileprivate static let fixtureSiteID = UUID(uuidString: "00000000-0000-4000-8000-000000000765")!
+
     private func withNetworkTestApp(
         _ test: (Application, User, Project, String) async throws -> Void
     ) async throws {
@@ -40,6 +42,11 @@ final class NetworkControllerTests {
                 description: "Project for network tests",
                 organization: org
             )
+            let site = Site(
+                id: Self.fixtureSiteID,
+                name: "Network Test Site",
+                organizationScope: .organization(try org.requireID()))
+            try await site.save(on: app.db)
             let token = try await user.generateAPIKey(on: app.db)
 
             try await test(app, user, project, token)
@@ -559,7 +566,8 @@ final class NetworkControllerTests {
                     protocolVersion: protocolVersion
                 )
                 return try await app.agentService.registerAgent(
-                    message, agentName: name, organizationScope: .organization(org.id!))
+                    message, agentName: name, siteID: Self.fixtureSiteID,
+                    organizationScope: .organization(org.id!))
             }
 
             await #expect(throws: AgentServiceError.self) {
@@ -968,11 +976,11 @@ final class NetworkControllerTests {
         #expect(unallocated.contains("no address allocated"))
     }
 
-    @Test("The capability index answers per site, and from site-less agents when unpinned")
+    @Test("The capability index answers per site")
     func capabilityIndexScopesBySite() {
         let siteA = UUID()
         let siteB = UUID()
-        func incapableAgent(named name: String, site: UUID?) -> Agent {
+        func incapableAgent(named name: String, site: UUID) -> Agent {
             let agent = Agent(
                 name: name, hostname: name, version: "1.0",
                 resources: AgentResources(
@@ -985,16 +993,12 @@ final class NetworkControllerTests {
             incapableAgent(named: "old-b", site: siteB),
             incapableAgent(named: "old-a2", site: siteA),
             incapableAgent(named: "old-a1", site: siteA),
-            incapableAgent(named: "unsited", site: nil),
         ])
 
         #expect(index.incapableAgentNames(forSite: siteA) == ["old-a1", "old-a2"])
         #expect(index.incapableAgentNames(forSite: siteB) == ["old-b"])
         // A site with nothing holding it back is capable, not unknown.
         #expect(index.incapableAgentNames(forSite: UUID()).isEmpty)
-        // The sync path asks a site-less receiving agent's own flag, so agents
-        // assigned to other sites cannot be named as the cause here.
-        #expect(index.incapableAgentNames(forSite: nil) == ["unsited"])
     }
 
     @Test("subnetsOverlap detects containment, equality, and disjoint ranges")
@@ -1323,5 +1327,86 @@ final class NetworkControllerTests {
         // Exhaustion is a real outcome, not an infinite scan.
         let all = Set(NetworkResolverEndpoint.firstIndex...NetworkResolverEndpoint.lastIndex)
         #expect(ResolverAddressAllocator.firstFree(after: all) == nil)
+    }
+}
+
+/// Most tests in this suite predate site placement and exercise unrelated
+/// network behavior. Their requests and rows all use the real site created by
+/// `withNetworkTestApp`; site-specific cases continue to pass an explicit ID.
+private extension CreateNetworkRequest {
+    init(
+        name: String,
+        subnet: String,
+        gateway: String? = nil,
+        subnet6: String? = nil,
+        gateway6: String? = nil,
+        ipv6Enabled: Bool? = nil,
+        projectId: UUID? = nil,
+        dhcpEnabled: Bool? = nil,
+        dnsServers: [String]? = nil,
+        domainName: String? = nil,
+        leaseTime: Int? = nil,
+        externalAccess: Bool? = nil,
+        metadataEnabled: Bool? = nil,
+        resolverEnabled: Bool? = nil
+    ) {
+        self.init(
+            name: name,
+            subnet: subnet,
+            gateway: gateway,
+            subnet6: subnet6,
+            gateway6: gateway6,
+            ipv6Enabled: ipv6Enabled,
+            projectId: projectId,
+            dhcpEnabled: dhcpEnabled,
+            dnsServers: dnsServers,
+            domainName: domainName,
+            leaseTime: leaseTime,
+            externalAccess: externalAccess,
+            metadataEnabled: metadataEnabled,
+            resolverEnabled: resolverEnabled,
+            siteId: NetworkControllerTests.fixtureSiteID)
+    }
+}
+
+private extension LogicalNetwork {
+    convenience init(
+        id: UUID? = nil,
+        name: String,
+        subnet: String,
+        gateway: String? = nil,
+        subnet6: String? = nil,
+        gateway6: String? = nil,
+        projectID: UUID,
+        createdByID: UUID? = nil,
+        dhcpEnabled: Bool = true,
+        dnsServers: [String] = [],
+        domainName: String? = nil,
+        leaseTime: Int? = nil,
+        externalAccess: Bool = true,
+        metadataEnabled: Bool = true,
+        resolverEnabled: Bool = true,
+        resolverIndex: Int? = nil,
+        generation: Int = 1
+    ) {
+        self.init(
+            id: id,
+            name: name,
+            subnet: subnet,
+            gateway: gateway,
+            subnet6: subnet6,
+            gateway6: gateway6,
+            projectID: projectID,
+            createdByID: createdByID,
+            dhcpEnabled: dhcpEnabled,
+            dnsServers: dnsServers,
+            domainName: domainName,
+            leaseTime: leaseTime,
+            externalAccess: externalAccess,
+            metadataEnabled: metadataEnabled,
+            resolverEnabled: resolverEnabled,
+            resolverIndex: resolverIndex,
+            generation: generation,
+            siteID: NetworkControllerTests.fixtureSiteID)
     }
 }
