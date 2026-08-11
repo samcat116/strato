@@ -1,4 +1,5 @@
 import Foundation
+import MetricsTestKit
 import StratoShared
 import Testing
 
@@ -85,6 +86,36 @@ struct AgentDependencyHealthTests {
             observation(.libvirt, capability: .qemuPlacement, state: .degraded, checkedAt: Date())
         ])
         #expect(agent.supportedHypervisors.contains(.qemu))
+    }
+
+    @Test("Re-registration clears availability only for removed dependencies")
+    func removedDependencyMetrics() throws {
+        let now = Date()
+        let libvirt = observation(
+            .libvirt, capability: .qemuPlacement, state: .healthy, checkedAt: now)
+        let networking = observation(
+            .ovnOvs, capability: .overlayNetworking, state: .healthy, checkedAt: now)
+        let metrics = TestMetrics()
+
+        Telemetry.recordDependency(
+            agentName: "node-1", observation: libvirt, receivedAt: now, factory: metrics)
+        Telemetry.recordDependency(
+            agentName: "node-1", observation: networking, receivedAt: now, factory: metrics)
+        let libvirtAvailability = try metrics.expectGauge(
+            "strato_agent_dependency_available",
+            [("agent", "node-1"), ("dependency", NodeDependencyID.libvirt.rawValue)])
+        let networkingAvailability = try metrics.expectGauge(
+            "strato_agent_dependency_available",
+            [("agent", "node-1"), ("dependency", NodeDependencyID.ovnOvs.rawValue)])
+
+        Telemetry.recordRemovedDependenciesUnavailable(
+            agentName: "node-1",
+            previousObservations: [libvirt, networking],
+            currentObservations: [libvirt],
+            factory: metrics)
+
+        #expect(libvirtAvailability.lastValue == 1)
+        #expect(networkingAvailability.lastValue == 0)
     }
 
     private func makeAgent(

@@ -274,6 +274,7 @@ actor AgentService {
         // Set when this registration creates the agent row, so the enrollment it
         // drew its scope from can be marked used after a successful save.
         var newAgentEnrollment: AgentEnrollment?
+        var previousDependencyObservations: [NodeDependencyObservation] = []
 
         // Find existing agent or create new one
         let agent: Agent
@@ -284,6 +285,7 @@ actor AgentService {
         {
             // Update existing agent
             agent = existingAgent
+            previousDependencyObservations = existingAgent.dependencyObservations
             if siteID == nil { siteID = existingAgent.$site.id }
             if existingAgent.version != message.version {
                 // The visible confirmation that a self-update (issue #432)
@@ -501,6 +503,10 @@ actor AgentService {
 
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
+        Telemetry.recordRemovedDependenciesUnavailable(
+            agentName: agent.name,
+            previousObservations: previousDependencyObservations,
+            currentObservations: dependencyObservations)
         for observation in dependencyObservations {
             Telemetry.recordDependency(
                 agentName: agent.name,

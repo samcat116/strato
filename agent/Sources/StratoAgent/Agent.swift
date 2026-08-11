@@ -1283,7 +1283,6 @@ actor Agent {
 
     private func registerWithControlPlane() async throws {
         let resources = await getAgentResources()
-        let dependencyObservations = await dependencyManager?.observations() ?? []
 
         // A network service that failed to connect earlier may be fixable by
         // now (OVS installed, ovn-controller restarted); retry once before
@@ -1421,6 +1420,16 @@ actor Agent {
                 metadata: [
                     "reason": .string(reason)
                 ])
+        }
+
+        // Refresh after every registration-time recovery attempt and host
+        // probe. The capability report and dependency snapshot must describe
+        // the same host state in this registration message.
+        let dependencyObservations: [NodeDependencyObservation]
+        if let dependencyManager {
+            dependencyObservations = await dependencyManager.refresh(allowRemediation: false)
+        } else {
+            dependencyObservations = []
         }
 
         let message = AgentRegisterMessage(

@@ -130,6 +130,21 @@ enum Telemetry {
         }
     }
 
+    /// Clear availability series that disappeared from a successful
+    /// re-registration before the previous snapshot is discarded.
+    static func recordRemovedDependenciesUnavailable(
+        agentName: String,
+        previousObservations: [NodeDependencyObservation],
+        currentObservations: [NodeDependencyObservation],
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let currentIDs = Set(currentObservations.map { $0.id.rawValue })
+        recordDependenciesUnavailable(
+            agentName: agentName,
+            observations: previousObservations.filter { !currentIDs.contains($0.id.rawValue) },
+            factory: factory)
+    }
+
     private static func recordDependencyAvailability(
         dimensions: [(String, String)],
         available: Bool,
