@@ -466,16 +466,43 @@ final class WorkloadPrincipalTests {
         }
     }
 
-    @Test("The reserved agent namespace cannot be registered through the API surface")
+    @Test("Platform-owned SPIFFE namespaces cannot be registered through the API surface")
     func reservedNamespaceRejected() async throws {
-        #expect(throws: (any Error).self) {
-            try WorkloadRegistry.validateRegistrable(spiffeID: "spiffe://strato.local/agent/node-a")
+        let reserved = [
+            (
+                "spiffe://strato.local/agent/node-a",
+                "The /agent/ SPIFFE namespace is reserved for hypervisor agents, which register automatically when they first connect"
+            ),
+            (
+                "spiffe://org-0123456789abcdef.strato.local/vm/00000000-0000-0000-0000-000000000001",
+                "The /vm/ SPIFFE namespace is reserved for guest virtual machines, which register automatically when they are created"
+            ),
+            (
+                "spiffe://org-0123456789abcdef.strato.local/sandbox/00000000-0000-0000-0000-000000000002",
+                "The /sandbox/ SPIFFE namespace is reserved for guest sandboxes, which register automatically when they are created"
+            ),
+        ]
+
+        for (spiffeID, expectedReason) in reserved {
+            do {
+                _ = try WorkloadRegistry.validateRegistrable(spiffeID: spiffeID)
+                Issue.record("Expected \(spiffeID) to be rejected")
+            } catch let abort as Abort {
+                #expect(abort.status == .badRequest)
+                #expect(abort.reason == expectedReason)
+            }
         }
+
         #expect(throws: (any Error).self) {
             try WorkloadRegistry.validateRegistrable(spiffeID: "not-a-spiffe-uri")
         }
-        #expect(
-            try WorkloadRegistry.validateRegistrable(spiffeID: "spiffe://strato.local/sa/fine")
-                == "spiffe://strato.local/sa/fine")
+
+        for registrable in [
+            "spiffe://strato.local/sa/fine",
+            "spiffe://strato.local/vmware/fine",
+            "spiffe://strato.local/sandboxed/fine",
+        ] {
+            #expect(try WorkloadRegistry.validateRegistrable(spiffeID: registrable) == registrable)
+        }
     }
 }

@@ -988,9 +988,8 @@ struct VMController: RouteCollection {
                     // to no organization still gets a row, scoped to nothing, on
                     // the platform domain.
                     //
-                    // A `spiffe_id` collision — an administrator having
-                    // hand-registered this VM's URI while `/vm/` is still
-                    // unreserved (STR-165) — is a constraint failure, which the
+                    // A `spiffe_id` collision from a legacy or directly
+                    // inserted registration is a constraint failure, which the
                     // retry wrapper answers by redrawing the VM's id and
                     // therefore its identity, exactly as it answers an IPAM
                     // address race.
