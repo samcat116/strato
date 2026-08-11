@@ -229,6 +229,23 @@ struct NodeDependencyManagerTests {
         #expect(SystemdHostAdapter.parse(unit: "bad", output: "garbage") == nil)
     }
 
+    @Test("Systemd discovery prefers an active alternative over the first loaded unit")
+    func systemdDiscoveryPrefersActiveAlternative() async {
+        let executor = SystemctlOutputExecutor(outputs: [
+            "virtqemud.socket":
+                "LoadState=loaded\nActiveState=inactive\nSubState=dead\nUnitFileState=enabled\n",
+            "libvirtd.socket":
+                "LoadState=loaded\nActiveState=active\nSubState=listening\nUnitFileState=enabled\n",
+        ])
+        let adapter = SystemdHostAdapter(executor: executor)
+
+        let observation = await adapter.discoverFirst(
+            units: ["virtqemud.socket", "libvirtd.socket"])
+
+        #expect(observation.name == "libvirtd.socket")
+        #expect(observation.supervisorState == .active)
+    }
+
     private func module(
         _ id: NodeDependencyID,
         dependencies: [NodeDependencyID] = [],
@@ -380,6 +397,24 @@ struct InitialNodeDependencyModuleTests {
         #expect(timeoutInspection.functionalState == .unhealthy)
         #expect(timeoutInspection.reason?.code == .commandTimedOut)
     }
+
+    @Test("A missing optional OVN diagnostic remains healthy and visible")
+    func missingOVNDiagnosticIsAdvisory() async {
+        let module = OVNOVSNodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: active),
+            ovsVersion: { "3.5.0" }, ovnVersion: { "25.03.0" },
+            functional: {
+                .advisory(
+                    "ovn-appctl is missing; ovn-controller connection status cannot be verified",
+                    code: .missingBinary)
+            })
+
+        let inspection = await module.inspect()
+
+        #expect(inspection.functionalState == .healthy)
+        #expect(inspection.reason?.code == .missingBinary)
+        #expect(inspection.isHealthy)
+    }
 }
 
 private actor CallCounter {
@@ -391,6 +426,19 @@ private actor InspectionSequence {
     private var values: [NodeDependencyInspection]
     init(_ values: [NodeDependencyInspection]) { self.values = values }
     func next() -> NodeDependencyInspection { values.removeFirst() }
+}
+
+private struct SystemctlOutputExecutor: NodeDependencyCommandExecuting {
+    let outputs: [String: String]
+
+    func execute(_ command: BoundedHostCommand) async throws -> ProcessResult {
+        let unit = command.arguments.count > 1 ? command.arguments[1] : ""
+        let output = outputs[unit] ?? "LoadState=not-found\nActiveState=inactive\n"
+        return ProcessResult(
+            terminationStatus: 0,
+            standardOutput: Data(output.utf8),
+            standardError: Data())
+    }
 }
 
 private struct FakeSystemd: SystemdControlling {

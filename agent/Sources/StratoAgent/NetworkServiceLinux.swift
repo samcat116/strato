@@ -255,7 +255,7 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
             ProcessInfo.processInfo.environment["PATH"]
             ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         guard let appctl = HostPreflight.locateTool("ovn-appctl", searchPath: toolSearchPath) else {
-            return .unhealthy(
+            return .advisory(
                 "ovn-appctl is missing; ovn-controller connection status cannot be verified",
                 code: .missingBinary)
         }

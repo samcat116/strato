@@ -133,10 +133,14 @@ public struct SystemdHostAdapter: SystemdControlling {
     }
 
     public func discoverFirst(units: [String]) async -> SystemdUnitObservation {
+        var firstLoaded: SystemdUnitObservation?
         for unit in units {
             let observation = await inspect(unit: unit)
-            if observation.loadState == "loaded" { return observation }
+            guard observation.loadState == "loaded" else { continue }
+            if observation.supervisorState == .active { return observation }
+            if firstLoaded == nil { firstLoaded = observation }
         }
+        if let firstLoaded { return firstLoaded }
         return SystemdUnitObservation(
             name: units.first ?? "unknown", loadState: "not-found", activeState: "inactive",
             subState: "dead", unitFileState: "unknown")

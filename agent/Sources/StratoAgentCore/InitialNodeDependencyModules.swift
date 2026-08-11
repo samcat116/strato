@@ -21,6 +21,17 @@ public struct NodeDependencyFunctionalHealth: Sendable, Equatable {
     }
 
     public static let healthy = NodeDependencyFunctionalHealth(state: .healthy)
+    /// A missing optional diagnostic remains visible without withdrawing the
+    /// capability already proved by the service's functional APIs.
+    public static func advisory(
+        _ message: String,
+        code: NodeDependencyFailureCode
+    ) -> NodeDependencyFunctionalHealth {
+        NodeDependencyFunctionalHealth(
+            state: .healthy,
+            reason: NodeDependencyFailureReason(code: code, message: message))
+    }
+
     public static func unhealthy(
         _ message: String,
         code: NodeDependencyFailureCode = .functionalProbeFailed
