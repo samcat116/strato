@@ -1,3 +1,8 @@
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 import Foundation
 import Logging
 import Synchronization
@@ -81,6 +86,7 @@ struct MetadataServerProcessIO: Sendable {
     let isRunning: @Sendable () -> Bool
     let write: @Sendable (Data) throws -> Void
     let terminateProcess: @Sendable () -> Void
+    let forceTerminateProcess: @Sendable () -> Void
     let closeInput: @Sendable () -> Void
 
     private final class LiveResourceBox: Sendable {
@@ -111,6 +117,11 @@ struct MetadataServerProcessIO: Sendable {
                     if process.isRunning { process.terminate() }
                 }
             },
+            forceTerminateProcess: {
+                resources.process.withLock { process in
+                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                }
+            },
             closeInput: {
                 resources.input.withLock { try? $0.close() }
             }
@@ -133,6 +144,7 @@ final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
     private let io: MetadataServerProcessIO
     private let networkId: UUID
     private let logger: Logger
+    private let terminationGrace: Duration
 
     /// Writes happen here, never on the caller's thread.
     ///
@@ -152,11 +164,13 @@ final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
 
     init(
         io: MetadataServerProcessIO, errors: Pipe? = nil,
-        networkId: UUID, logger: Logger
+        networkId: UUID, logger: Logger,
+        terminationGrace: Duration = ProcessRunner.signalEscalationGrace
     ) {
         self.io = io
         self.networkId = networkId
         self.logger = logger
+        self.terminationGrace = terminationGrace
         self.queue = DispatchQueue(label: "strato.metadata-listener.\(networkId.uuidString)")
         if let errors { relay(errors) }
     }
@@ -193,10 +207,23 @@ final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
         guard shouldTerminate else { return }
 
         // Process termination must not queue behind a pipe write: a child that
-        // stopped reading can block that write forever. SIGTERM closes the
-        // child's read side and releases the writer. FileHandle closure remains
-        // queued after the write so those operations never overlap.
+        // stopped reading can block that write forever. FileHandle closure
+        // remains queued after the write so those operations never overlap.
         io.terminateProcess()
+
+        let escalationIO = io
+        let grace = terminationGrace
+        let logger = logger
+        let networkId = networkId
+        Task {
+            try? await Task.sleep(for: grace)
+            guard escalationIO.isRunning() else { return }
+            logger.warning(
+                "Metadata listener ignored SIGTERM; escalating to SIGKILL",
+                metadata: ["networkId": .string(networkId.uuidString)])
+            escalationIO.forceTerminateProcess()
+        }
+
         queue.async { self.io.closeInput() }
     }
 
