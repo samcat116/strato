@@ -60,7 +60,7 @@ export function VMIdentityCard({ vm }: VMIdentityCardProps) {
 
   const grant = useMemo(
     () =>
-      members?.workloads.find(
+      members?.workloads?.find(
         (candidate) =>
           candidate.registrationId === vm.instanceIdentityPrincipalId
       ),
