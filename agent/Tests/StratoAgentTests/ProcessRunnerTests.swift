@@ -64,4 +64,15 @@ struct ProcessRunnerTests {
         let stdout = String(data: result.standardOutput, encoding: .utf8)
         #expect(stdout == "ok")
     }
+
+    @Test("A child crossing the combined output ceiling is terminated")
+    func outputLimitTerminatesAndThrows() async {
+        await #expect(throws: ProcessRunnerError.self) {
+            try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: "/bin/sh"),
+                arguments: ["-c", "printf 12345; printf 67890 >&2"],
+                timeout: .seconds(5),
+                maxOutputBytes: 8)
+        }
+    }
 }

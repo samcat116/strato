@@ -1,5 +1,6 @@
 import Foundation
 import Metrics
+import StratoShared
 
 /// Central definitions for the operational metrics surfaced for production
 /// observability and alerting. Routing all emission through these helpers keeps
@@ -88,6 +89,77 @@ enum Telemetry {
     /// swept it stops updating, so alert on `strato_agent_up` for hard-down detection.
     static func recordHeartbeatStaleness(agentName: String, seconds: Double) {
         Gauge(label: "strato_agent_heartbeat_staleness_seconds", dimensions: [("agent", agentName)]).record(seconds)
+    }
+
+    /// Latest feature dependency state. Counters are reported as gauges because
+    /// the agent owns their monotonicity across control-plane replicas.
+    static func recordDependency(
+        agentName: String,
+        observation: NodeDependencyObservation,
+        receivedAt: Date,
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let dimensions = [("agent", agentName), ("dependency", observation.id.rawValue)]
+        let available = observation.allowsNewWork(
+            receivedAt: receivedAt,
+            at: Date(),
+            staleAfter: Agent.dependencyObservationStaleAfter)
+        recordDependencyAvailability(
+            dimensions: dimensions, available: available, factory: factory)
+        Gauge(label: "strato_agent_dependency_consecutive_failures", dimensions: dimensions)
+            .record(Int64(observation.consecutiveFailures))
+        Gauge(label: "strato_agent_dependency_remediation_count", dimensions: dimensions)
+            .record(Int64(observation.remediationCount))
+        Gauge(label: "strato_agent_dependency_restart_count", dimensions: dimensions)
+            .record(Int64(observation.restartCount))
+    }
+
+    /// Clear every dependency availability series when an agent goes offline.
+    /// A gauge otherwise retains its last healthy value forever because no
+    /// further heartbeat will arrive to update it.
+    static func recordDependenciesUnavailable(
+        agentName: String,
+        observations: [NodeDependencyObservation],
+        factory: (any MetricsFactory)? = nil
+    ) {
+        for observation in observations {
+            recordDependencyAvailability(
+                dimensions: [("agent", agentName), ("dependency", observation.id.rawValue)],
+                available: false,
+                factory: factory)
+        }
+    }
+
+    /// Clear availability series that disappeared from a successful
+    /// re-registration before the previous snapshot is discarded.
+    static func recordRemovedDependenciesUnavailable(
+        agentName: String,
+        previousObservations: [NodeDependencyObservation],
+        currentObservations: [NodeDependencyObservation],
+        factory: (any MetricsFactory)? = nil
+    ) {
+        let currentIDs = Set(currentObservations.map { $0.id.rawValue })
+        recordDependenciesUnavailable(
+            agentName: agentName,
+            observations: previousObservations.filter { !currentIDs.contains($0.id.rawValue) },
+            factory: factory)
+    }
+
+    private static func recordDependencyAvailability(
+        dimensions: [(String, String)],
+        available: Bool,
+        factory: (any MetricsFactory)?
+    ) {
+        let gauge =
+            if let factory {
+                Gauge(
+                    label: "strato_agent_dependency_available",
+                    dimensions: dimensions,
+                    factory: factory)
+            } else {
+                Gauge(label: "strato_agent_dependency_available", dimensions: dimensions)
+            }
+        gauge.record(available ? 1 : 0)
     }
 
     /// Whether a site's designated network controller can author its topology:

@@ -7620,6 +7620,38 @@ export interface components {
             volumes: number;
             networks: number;
         };
+        NodeDependencyFailureReason: {
+            /** @enum {string} */
+            code: "dependency_failed" | "missing_binary" | "missing_unit" | "incompatible_version" | "inactive_unit" | "failed_unit" | "command_timed_out" | "malformed_output" | "functional_probe_failed" | "stale_observation" | "remediation_unauthorized" | "remediation_budget_exhausted" | "remediation_failed";
+            message: string;
+        };
+        NodeDependencyObservation: {
+            /** @enum {string} */
+            id: "spire" | "libvirt" | "ovn_ovs" | "frr" | "ceph_client" | "ceph_cluster";
+            /** @enum {string} */
+            role: "identity" | "compute" | "networking" | "routing" | "storage";
+            /** @enum {string} */
+            desiredState: "disabled" | "required";
+            /** @enum {string} */
+            ownership: "observe_only" | "ensure_running" | "reconcile";
+            /** @enum {string} */
+            supervisorState: "not_applicable" | "missing" | "inactive" | "activating" | "active" | "failed" | "unknown";
+            installedVersion?: string | null;
+            daemonVersion?: string | null;
+            /** @enum {string} */
+            compatibility: "unknown" | "compatible" | "incompatible";
+            /** @enum {string} */
+            functionalState: "unknown" | "starting" | "healthy" | "degraded" | "unhealthy";
+            /** Format: date-time */
+            checkedAt: string;
+            /** Format: date-time */
+            lastHealthyAt?: string | null;
+            reason?: components["schemas"]["NodeDependencyFailureReason"];
+            consecutiveFailures: number;
+            remediationCount: number;
+            restartCount: number;
+            affectedCapabilities: ("workload_identity" | "qemu_placement" | "overlay_networking" | "sandbox_networking" | "network_resolver" | "dynamic_routing" | "ceph_volumes")[];
+        };
         /** @description A registered hypervisor node. */
         AgentDetail: {
             /** Format: uuid */
@@ -7642,6 +7674,13 @@ export interface components {
             tpmCapable: boolean;
             /** @description Whether this node can run the per-network DNS resolver. Resolver enablement requires every node in the site to report true. */
             resolverCapable: boolean;
+            /** @description Latest feature-scoped software dependency health reported by the agent. Fresh healthy observations are authoritative for new placement; failures do not terminate running workloads. */
+            dependencyObservations: components["schemas"]["NodeDependencyObservation"][];
+            /**
+             * Format: date-time
+             * @description Control-plane time when the latest dependency snapshot arrived. Placement freshness uses this value instead of the agent's clock.
+             */
+            dependencyObservationsReceivedAt?: string;
             hostInfo?: components["schemas"]["AgentHostInfo"];
             /**
              * Format: uuid

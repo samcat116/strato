@@ -4,6 +4,7 @@ import Fluent
 import StratoShared
 import VaporTesting
 import AppTestSupport
+import MetricsTestKit
 @testable import App
 
 /// Regression test for the "Core not configured" crash: `AgentService` starts a
@@ -17,6 +18,18 @@ final class AgentServiceLifecycleTests {
     @Test("heartbeat monitor durably marks stale agents offline")
     func heartbeatMonitorMarksStaleAgentsOffline() async throws {
         try await withTestApp { app in
+            let checkedAt = Date()
+            let dependency = NodeDependencyObservation(
+                id: .libvirt,
+                role: .compute,
+                desiredState: .required,
+                ownership: .observeOnly,
+                supervisorState: .active,
+                compatibility: .compatible,
+                functionalState: .healthy,
+                checkedAt: checkedAt,
+                lastHealthyAt: checkedAt,
+                affectedCapabilities: [.qemuPlacement])
             let agent = Agent(
                 name: "stale-agent",
                 hostname: "stale-agent.example",
@@ -29,13 +42,27 @@ final class AgentServiceLifecycleTests {
                     availableMemory: 16_000_000_000,
                     totalDisk: 100_000_000_000,
                     availableDisk: 100_000_000_000),
+                dependencyObservations: [dependency],
+                dependencyObservationsReceivedAt: checkedAt,
                 lastHeartbeat: Date().addingTimeInterval(-120))
             try await agent.save(on: app.db)
 
-            await app.agentService.checkStaleAgents()
+            let metrics = TestMetrics()
+            Telemetry.recordDependency(
+                agentName: agent.name,
+                observation: dependency,
+                receivedAt: checkedAt,
+                factory: metrics)
+            let availability = try metrics.expectGauge(
+                "strato_agent_dependency_available",
+                [("agent", agent.name), ("dependency", NodeDependencyID.libvirt.rawValue)])
+            #expect(availability.lastValue == 1)
+
+            await app.agentService.checkStaleAgents(dependencyMetricsFactory: metrics)
 
             let persisted = try #require(try await Agent.find(agent.id, on: app.db))
             #expect(persisted.status == .offline)
+            #expect(availability.lastValue == 0)
         }
     }
 

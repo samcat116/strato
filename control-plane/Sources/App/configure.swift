@@ -391,6 +391,10 @@ public func configure(_ app: Application) async throws {
     // project-wide logical networks each global quota actually governs.
     app.migrations.add(BackfillNetworkQuotaAccounting())
 
+    // STR-237: fresh, feature-scoped dependency health becomes the authority
+    // for new placement while existing workloads remain untouched.
+    app.migrations.add(AddAgentDependencyObservations())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

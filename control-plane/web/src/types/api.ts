@@ -614,6 +614,8 @@ export interface Agent {
   tpmCapable: boolean;
   // Whether this node can run the per-network DNS resolver.
   resolverCapable: boolean;
+  dependencyObservations: NodeDependencyObservation[];
+  dependencyObservationsReceivedAt?: string;
   networkCapability?: NetworkCapability;
   // Descriptive hardware/platform/OS details for display; absent for agents
   // that haven't re-registered with a build that reports it.
@@ -660,6 +662,28 @@ export interface Agent {
   // whose teardown the control plane refused to authorize, because a record
   // still exists for them. Returned by the single-agent endpoint only.
   heldWorkloads?: HeldWorkload[];
+}
+
+export interface NodeDependencyObservation {
+  id: "spire" | "libvirt" | "ovn_ovs" | "frr" | "ceph_client" | "ceph_cluster";
+  role: "identity" | "compute" | "networking" | "routing" | "storage";
+  desiredState: "disabled" | "required";
+  ownership: "observe_only" | "ensure_running" | "reconcile";
+  supervisorState: "not_applicable" | "missing" | "inactive" | "activating" | "active" | "failed" | "unknown";
+  installedVersion?: string;
+  daemonVersion?: string;
+  compatibility: "unknown" | "compatible" | "incompatible";
+  functionalState: "unknown" | "starting" | "healthy" | "degraded" | "unhealthy";
+  checkedAt: string;
+  lastHealthyAt?: string;
+  reason?: {
+    code: string;
+    message: string;
+  };
+  consecutiveFailures: number;
+  remediationCount: number;
+  restartCount: number;
+  affectedCapabilities: string[];
 }
 
 // One workload an agent holds that the control plane will not authorize

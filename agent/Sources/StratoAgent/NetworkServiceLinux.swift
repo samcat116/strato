@@ -266,6 +266,98 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         #endif
     }
 
+    /// Proves the dataplane prerequisites without changing host state: the
+    /// configured NB accepts a transaction, local OVSDB still contains
+    /// `br-int`, chassis metadata matches the desired configuration, and
+    /// ovn-controller remains connected to SB.
+    func inspectDependencyHealth() async -> NetworkDependencyHealth {
+        #if os(Linux)
+        guard isConnected, let ovnManager, let ovsManager else {
+            return .unhealthy("OVN/OVS database clients are not connected")
+        }
+
+        do {
+            // A lookup for an impossible Strato-owned name is still a complete
+            // read transaction and has no side effect when it returns nil.
+            _ = try await ovnManager.getLogicalSwitch(named: "__strato_dependency_health__")
+            guard try await ovsManager.getBridge(named: Self.ovnIntegrationBridge) != nil else {
+                return .unhealthy("OVS integration bridge br-int is missing")
+            }
+        } catch {
+            return .unhealthy("OVN/OVS database health query failed: \(error.localizedDescription)")
+        }
+
+        let chassisHealth = await inspectChassisConfiguration()
+        guard chassisHealth.state == .healthy else { return chassisHealth }
+
+        let toolSearchPath =
+            ProcessInfo.processInfo.environment["PATH"]
+            ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        guard let appctl = HostPreflight.locateTool("ovn-appctl", searchPath: toolSearchPath) else {
+            return .advisory(
+                "ovn-appctl is missing; ovn-controller connection status cannot be verified",
+                code: .missingBinary)
+        }
+        do {
+            let result = try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: appctl),
+                arguments: ["-t", "ovn-controller", "connection-status"],
+                timeout: .seconds(5))
+            let output = result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard result.terminationStatus == 0, output == "connected" else {
+                return .unhealthy(
+                    "ovn-controller is not connected to SB (\(output.isEmpty ? "no status" : output))")
+            }
+        } catch is ProcessTimedOutError {
+            return .unhealthy("ovn-controller connection probe timed out", code: .commandTimedOut)
+        } catch {
+            return .unhealthy("ovn-controller connection probe failed: \(error.localizedDescription)")
+        }
+        return .healthy
+        #else
+        return .healthy
+        #endif
+    }
+
+    private func inspectChassisConfiguration() async -> NetworkDependencyHealth {
+        guard chassisConfig.bootstrapEnabled else { return .healthy }
+
+        let candidates = [
+            "/usr/bin/ovs-vsctl", "/usr/sbin/ovs-vsctl", "/usr/local/bin/ovs-vsctl",
+        ]
+        guard let executable = candidates.first(where: FileManager.default.isExecutableFile(atPath:)) else {
+            return .unhealthy("ovs-vsctl is missing", code: .missingBinary)
+        }
+        do {
+            let result = try await ProcessRunner.run(
+                executableURL: URL(fileURLWithPath: executable),
+                arguments: ["--timeout=5", "get", "open_vswitch", ".", "external_ids"],
+                timeout: .seconds(5),
+                maxOutputBytes: 16 * 1024)
+            guard result.terminationStatus == 0 else {
+                return .unhealthy(
+                    "cannot read chassis external_ids: "
+                        + result.combinedOutput.trimmingCharacters(in: .whitespacesAndNewlines))
+            }
+            let existing = OVNChassisBootstrap.parseExternalIDs(result.combinedOutput)
+            let plan = OVNChassisBootstrap.plan(
+                config: chassisConfig,
+                existing: existing,
+                detectedEncapIP: nil,
+                generatedSystemID: "dependency-health-probe")
+            guard plan.settings.isEmpty, !plan.encapIPUnresolved else {
+                let missingOrDrifted = plan.settings.map(\.key).joined(separator: ", ")
+                let detail = missingOrDrifted.isEmpty ? "ovn-encap-ip" : missingOrDrifted
+                return .unhealthy("OVN chassis external_ids are missing or drifted: \(detail)")
+            }
+            return .healthy
+        } catch is ProcessTimedOutError {
+            return .unhealthy("OVN chassis configuration probe timed out", code: .commandTimedOut)
+        } catch {
+            return .unhealthy("OVN chassis configuration probe failed: \(error.localizedDescription)")
+        }
+    }
+
     #if os(Linux)
     private func southboundConnectionString() throws -> String {
         if let configured = chassisConfig.remote, !configured.isEmpty {

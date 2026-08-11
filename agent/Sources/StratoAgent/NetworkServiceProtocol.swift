@@ -10,6 +10,10 @@ protocol NetworkServiceProtocol: Sendable {
     func connect() async throws
     func disconnect() async
 
+    /// Read-only functional health for the dependency manager. This must not
+    /// create bridges, rewrite chassis configuration, or reconnect sockets.
+    func inspectDependencyHealth() async -> NetworkDependencyHealth
+
     // VM Network Lifecycle
     /// Realizes one NIC for a workload on this host. `nicIndex` is the NIC's
     /// position in the workload's interface list; it namespaces host-side
@@ -86,6 +90,8 @@ protocol NetworkServiceProtocol: Sendable {
 }
 
 extension NetworkServiceProtocol {
+    func inspectDependencyHealth() async -> NetworkDependencyHealth { .healthy }
+
     /// No-op by default: only SDN-backed services (OVN on Linux) realize L3.
     func reconcileNetworks(
         _ networks: [DesiredNetworkState], authoritative: Bool,
@@ -96,6 +102,8 @@ extension NetworkServiceProtocol {
 
     func observedLoadBalancers() async -> [ObservedLoadBalancerState]? { nil }
 }
+
+typealias NetworkDependencyHealth = NodeDependencyFunctionalHealth
 
 // MARK: - Network Configuration Models
 

@@ -141,6 +141,15 @@ final class Agent: Model, Content, @unchecked Sendable {
     @Field(key: "resolver_capable")
     var resolverCapable: Bool
 
+    /// Latest dependency-health snapshot from registration or heartbeat.
+    @Field(key: "dependency_observations")
+    var dependencyObservations: [NodeDependencyObservation]
+
+    /// Control-plane time at which the latest dependency snapshot arrived.
+    /// Agent clocks are not authoritative for placement freshness.
+    @OptionalField(key: "dependency_observations_received_at")
+    var dependencyObservationsReceivedAt: Date?
+
     /// Owning organization (exactly one of organization / organizational unit;
     /// see `organizationScope`). Agents are dedicated capacity: the scheduler
     /// only places a VM on an agent whose root organization matches the VM's.
@@ -268,6 +277,8 @@ final class Agent: Model, Content, @unchecked Sendable {
         sandboxNetworkingCapable: Bool = false,
         tpmCapable: Bool = false,
         resolverCapable: Bool = false,
+        dependencyObservations: [NodeDependencyObservation] = [],
+        dependencyObservationsReceivedAt: Date? = nil,
         lastHeartbeat: Date? = nil
     ) {
         self.id = id
@@ -289,6 +300,8 @@ final class Agent: Model, Content, @unchecked Sendable {
         self.sandboxNetworkingCapable = sandboxNetworkingCapable
         self.tpmCapable = tpmCapable
         self.resolverCapable = resolverCapable
+        self.dependencyObservations = dependencyObservations
+        self.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
         self.autoUpdate = false
         self.lastHeartbeat = lastHeartbeat
     }
@@ -413,6 +426,7 @@ extension Agent {
             sandboxNetworkingCapable: registration.sandboxNetworkingCapable ?? false,
             tpmCapable: registration.tpmCapable ?? false,
             resolverCapable: registration.resolverCapable ?? false,
+            dependencyObservations: registration.dependencyObservations,
             lastHeartbeat: Date()
         )
         agent.operatingSystem = registration.operatingSystem?.rawValue
@@ -444,13 +458,32 @@ extension Agent {
         operatingSystem.flatMap(OperatingSystem.init(rawValue:))
     }
 
+    /// Dependency samples older than three heartbeat intervals fail closed for
+    /// new work even while the WebSocket and agent row remain online.
+    static let dependencyObservationStaleAfter: TimeInterval = 60
+
+    /// Whether every fresh dependency affecting `capability` permits new work.
+    func dependencyAllows(_ capability: NodeCapability, at now: Date = Date()) -> Bool {
+        let relevant = dependencyObservations.filter { $0.affectedCapabilities.contains(capability) }
+        guard !relevant.isEmpty, let receivedAt = dependencyObservationsReceivedAt else { return false }
+        return relevant.allSatisfy {
+            $0.allowsNewWork(
+                receivedAt: receivedAt,
+                at: now,
+                staleAfter: Self.dependencyObservationStaleAfter)
+        }
+    }
+
     /// Hypervisor backends this agent can actually run. Agents probe each
     /// backend before reporting it, so an empty list means the agent cannot
     /// run VMs at all — it stays registered but is never eligible for
     /// placement. No QEMU fallback here: assuming QEMU for an empty list
     /// would defeat the agent-side probe in exactly the case it exists for.
     var supportedHypervisors: [HypervisorType] {
-        hypervisors.filter(\.available).map(\.type)
+        hypervisors.filter { support in
+            guard support.available else { return false }
+            return support.type != .qemu || dependencyAllows(.qemuPlacement)
+        }.map(\.type)
     }
 
     /// Whether this agent proved that its usable QEMU backend can attach a
@@ -467,6 +500,15 @@ extension Agent {
     /// (SLIRP) agents cannot. Absence is not capability.
     var supportsInterVMNetworking: Bool {
         networkCapability.flatMap(NetworkCapability.init(rawValue:)) == .overlay
+            && dependencyAllows(.overlayNetworking)
+    }
+
+    var effectiveSandboxNetworkingCapable: Bool {
+        sandboxNetworkingCapable && dependencyAllows(.sandboxNetworking)
+    }
+
+    var effectiveResolverCapable: Bool {
+        resolverCapable && dependencyAllows(.networkResolver)
     }
 
     /// Whether the structured registration report proves that this agent can
@@ -487,6 +529,7 @@ extension Agent {
 
         return hypervisors.contains {
             $0.type == backend && $0.available && $0.capabilities.supportsSnapshots
+                && (backend != .qemu || dependencyAllows(.qemuPlacement))
         }
     }
 
@@ -589,6 +632,10 @@ struct AgentResponse: Content {
     let tpmCapable: Bool
     /// Whether this host can run the per-network DNS resolver (STR-40).
     let resolverCapable: Bool
+    /// Fresh dependency health used for feature-scoped placement gates.
+    let dependencyObservations: [NodeDependencyObservation]
+    /// Control-plane receipt time used to determine snapshot freshness.
+    let dependencyObservationsReceivedAt: Date?
     /// Descriptive hardware/platform/OS details for operator display; nil for
     /// agents that registered before host-info reporting.
     let hostInfo: HostInfo?
@@ -681,9 +728,11 @@ struct AgentResponse: Content {
         self.hypervisors = agent.hypervisors
         self.networkCapability = agent.networkCapability.flatMap(NetworkCapability.init(rawValue:))
         self.sandboxCapable = agent.sandboxCapable
-        self.sandboxNetworkingCapable = agent.sandboxNetworkingCapable
+        self.sandboxNetworkingCapable = agent.effectiveSandboxNetworkingCapable
         self.tpmCapable = agent.tpmCapable
-        self.resolverCapable = agent.resolverCapable
+        self.resolverCapable = agent.effectiveResolverCapable
+        self.dependencyObservations = agent.dependencyObservations
+        self.dependencyObservationsReceivedAt = agent.dependencyObservationsReceivedAt
         self.hostInfo = agent.hostInfo
         self.siteId = agent.$site.id
         self.organizationId = agent.$organization.id

@@ -7,6 +7,7 @@ import NIOCore
 import NIOConcurrencyHelpers
 import SQLKit
 import Tracing
+import Metrics
 
 /// Thread-safe WebSocket connection manager
 /// This is NOT an actor to avoid event loop conflicts with NIO
@@ -267,9 +268,13 @@ actor AgentService {
         let db = app.db
         var organizationScope = organizationScope
         var siteID = siteID
+        let dependencyObservations = normalizedDependencyObservations(
+            message.dependencyObservations, agentName: agentName)
+        let dependencyObservationsReceivedAt = Date()
         // Set when this registration creates the agent row, so the enrollment it
         // drew its scope from can be marked used after a successful save.
         var newAgentEnrollment: AgentEnrollment?
+        var previousDependencyObservations: [NodeDependencyObservation] = []
 
         // Find existing agent or create new one
         let agent: Agent
@@ -280,6 +285,7 @@ actor AgentService {
         {
             // Update existing agent
             agent = existingAgent
+            previousDependencyObservations = existingAgent.dependencyObservations
             if siteID == nil { siteID = existingAgent.$site.id }
             if existingAgent.version != message.version {
                 // The visible confirmation that a self-update (issue #432)
@@ -308,6 +314,8 @@ actor AgentService {
             agent.sandboxNetworkingCapable = message.sandboxNetworkingCapable ?? false
             agent.tpmCapable = message.tpmCapable ?? false
             agent.resolverCapable = message.resolverCapable ?? false
+            agent.dependencyObservations = dependencyObservations
+            agent.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
             _ = agent.updateAvailableResources(message.resources)
             agent.lastHeartbeat = Date()
             agent.status = .online
@@ -352,6 +360,8 @@ actor AgentService {
             }
             // Create new agent
             agent = Agent.from(registration: message, name: agentName, trustDomain: trustDomain)
+            agent.dependencyObservations = dependencyObservations
+            agent.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
             agent.$site.id = siteID
             agent.status = .online
             newAgentEnrollment = enrollment
@@ -493,6 +503,16 @@ actor AgentService {
 
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
+        Telemetry.recordRemovedDependenciesUnavailable(
+            agentName: agent.name,
+            previousObservations: previousDependencyObservations,
+            currentObservations: dependencyObservations)
+        for observation in dependencyObservations {
+            Telemetry.recordDependency(
+                agentName: agent.name,
+                observation: observation,
+                receivedAt: dependencyObservationsReceivedAt)
+        }
         await WebhookEvents.emitAgentPresence(
             agent: agent, connected: true, reason: "registered", on: db, logger: app.logger)
         app.logger.info(
@@ -608,6 +628,8 @@ actor AgentService {
 
         Telemetry.agentDisconnected(reason: "unregister")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
+        Telemetry.recordDependenciesUnavailable(
+            agentName: agent.name, observations: agent.dependencyObservations)
         await WebhookEvents.emitAgentPresence(
             agent: agent, connected: false, reason: "unregistered", on: db, logger: app.logger)
         app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
@@ -627,6 +649,13 @@ actor AgentService {
             app.logger.warning(
                 "Cannot force unregister: agent not found by identity key", metadata: ["agentKey": .string(agentKey)])
             return
+        }
+
+        if let agentUUID = UUID(uuidString: agentId),
+            let agent = try? await Agent.find(agentUUID, on: app.db)
+        {
+            Telemetry.recordDependenciesUnavailable(
+                agentName: agent.name, observations: agent.dependencyObservations)
         }
 
         app.websocketManager.removeConnection(agentKey: agentKey)
@@ -695,6 +724,8 @@ actor AgentService {
                         .first()
                 {
                     agent.status = .offline
+                    Telemetry.recordDependenciesUnavailable(
+                        agentName: agent.name, observations: agent.dependencyObservations)
                     try await agent.save(on: db)
                     await WebhookEvents.emitAgentPresence(
                         agent: agent, connected: false, reason: "connection_closed",
@@ -733,7 +764,11 @@ actor AgentService {
         // and observed report carry the same snapshot on the same cadence.
         // Persist only real resource/status changes or one heartbeat per half
         // TTL so identical pairs do not churn the row.
-        if applyPeriodicAgentState(message.resources, to: agent) {
+        if applyPeriodicAgentState(
+            message.resources,
+            dependencyObservations: message.dependencyObservations,
+            to: agent)
+        {
             try await agent.save(on: db)
         }
 
@@ -747,14 +782,49 @@ actor AgentService {
     /// Apply the mutable fields from a periodic agent report. A real state
     /// change always persists and refreshes `lastHeartbeat`; otherwise the
     /// timestamp advances at half the presence TTL.
-    private func applyPeriodicAgentState(_ resources: AgentResources, to agent: Agent) -> Bool {
+    private func applyPeriodicAgentState(
+        _ resources: AgentResources,
+        dependencyObservations: [NodeDependencyObservation]?,
+        to agent: Agent
+    ) -> Bool {
         var changed = agent.updateAvailableResources(resources)
+        let now = Date()
+        if let dependencyObservations {
+            let storedObservations = normalizedDependencyObservations(
+                agent.dependencyObservations, agentName: agent.name)
+            let incomingObservations = normalizedDependencyObservations(
+                dependencyObservations, agentName: agent.name)
+            let previous = Dictionary(uniqueKeysWithValues: storedObservations.map { ($0.id, $0) })
+            if agent.dependencyObservations != incomingObservations {
+                agent.dependencyObservations = incomingObservations
+                changed = true
+            }
+            agent.dependencyObservationsReceivedAt = now
+            for observation in incomingObservations {
+                Telemetry.recordDependency(
+                    agentName: agent.name,
+                    observation: observation,
+                    receivedAt: now)
+                if previous[observation.id]?.functionalState != observation.functionalState
+                    || previous[observation.id]?.reason?.code != observation.reason?.code
+                {
+                    app.logger.log(
+                        level: observation.functionalState == .unhealthy ? .error : .info,
+                        "Agent dependency state changed",
+                        metadata: [
+                            "agent": .string(agent.name),
+                            "dependency": .string(observation.id.rawValue),
+                            "state": .string(observation.functionalState.rawValue),
+                            "reasonCode": .string(observation.reason?.code.rawValue ?? "none"),
+                        ])
+                }
+            }
+        }
         if agent.status != .online {
             agent.status = .online
             changed = true
         }
 
-        let now = Date()
         let heartbeatDue =
             agent.lastHeartbeat.map {
                 now.timeIntervalSince($0) >= Self.databaseHeartbeatRefreshInterval
@@ -764,6 +834,51 @@ actor AgentService {
             return true
         }
         return false
+    }
+
+    /// Canonicalize an agent-controlled wire array before it is indexed or
+    /// persisted. A dependency ID names one registry module, so duplicate IDs
+    /// are malformed; retaining the freshest sample keeps ingestion resilient
+    /// without letting array order replace newer health with older health.
+    private func normalizedDependencyObservations(
+        _ observations: [NodeDependencyObservation],
+        agentName: String
+    ) -> [NodeDependencyObservation] {
+        let normalized = Self.normalizedDependencyObservations(observations)
+        guard normalized.count != observations.count else { return normalized }
+
+        var seen = Set<NodeDependencyID>()
+        let duplicateIDs = Set(
+            observations.compactMap { observation in
+                seen.insert(observation.id).inserted ? nil : observation.id.rawValue
+            }
+        ).sorted()
+        app.logger.warning(
+            "Agent reported duplicate dependency observations; retaining the freshest sample",
+            metadata: [
+                "agent": .string(agentName),
+                "dependencyIds": .array(duplicateIDs.map { .string($0) }),
+            ])
+        return normalized
+    }
+
+    /// Pure test seam for the dependency-observation wire invariant.
+    static func normalizedDependencyObservations(
+        _ observations: [NodeDependencyObservation]
+    ) -> [NodeDependencyObservation] {
+        var orderedIDs: [NodeDependencyID] = []
+        var byID: [NodeDependencyID: NodeDependencyObservation] = [:]
+        for observation in observations {
+            guard let current = byID[observation.id] else {
+                orderedIDs.append(observation.id)
+                byID[observation.id] = observation
+                continue
+            }
+            if observation.checkedAt >= current.checkedAt {
+                byID[observation.id] = observation
+            }
+        }
+        return orderedIDs.compactMap { byID[$0] }
     }
 
     /// Refresh the agent's presence key at most once per half TTL. Failed
@@ -884,7 +999,7 @@ actor AgentService {
     }
 
     /// Internal so tests can drive one monitor pass without waiting for the timer.
-    func checkStaleAgents() async {
+    func checkStaleAgents(dependencyMetricsFactory: (any MetricsFactory)? = nil) async {
         // Shutdown sets this before cancelling the loop; a tick that already
         // slipped past its sleep must not start a database sweep it doesn't
         // need to finish. The app-level check is a backstop for loops armed
@@ -932,6 +1047,10 @@ actor AgentService {
                 }
 
                 agent.status = .offline
+                Telemetry.recordDependenciesUnavailable(
+                    agentName: agent.name,
+                    observations: agent.dependencyObservations,
+                    factory: dependencyMetricsFactory)
                 try await agent.save(on: app.db)
 
                 Telemetry.agentDisconnected(reason: "stale")
@@ -2046,7 +2165,10 @@ actor AgentService {
         // Reports carry the same resource snapshot as heartbeats; keep the
         // scheduler's view fresh from whichever arrives without re-saving an
         // identical row a second time.
-        var agentChanged = applyPeriodicAgentState(report.resources, to: agent)
+        var agentChanged = applyPeriodicAgentState(
+            report.resources,
+            dependencyObservations: nil,
+            to: agent)
         let previousBlockedReason = agent.updateBlockedReason
         let previousFailureReason = agent.updateFailureReason
         applyReportedUpdateStatus(report.agentUpdateStatus, to: agent)
@@ -2694,7 +2816,7 @@ actor AgentService {
                     supportsInterVMNetworking: agent.supportsInterVMNetworking,
                     siteID: agent.$site.id,
                     supportsSandboxWorkloads: agent.sandboxCapable,
-                    supportsSandboxNetworking: agent.sandboxNetworkingCapable,
+                    supportsSandboxNetworking: agent.effectiveSandboxNetworkingCapable,
                     supportsVTPM: agent.tpmCapable,
                     supportsVsock: agent.supportsVsock
                 )

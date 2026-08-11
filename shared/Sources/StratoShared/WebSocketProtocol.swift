@@ -77,8 +77,9 @@ public enum MessageType: String, Codable, Sendable {
     case guestExecClose = "guest_exec_close"
     case guestExecClosed = "guest_exec_closed"
 
-    // Wire v43 legacy names, retained for one release so agents can decode
-    // both sides of the STR-78 rename. Remove these aliases in wire v45.
+    // Wire v43 legacy names, retained through v47 so agents can decode both
+    // sides of the STR-78 rename. Remove these aliases in wire v48; v47's
+    // dependency-health contract may follow v46 before fleet rollout.
     case sandboxExecStart = "sandbox_exec_start"
     case sandboxExecStarted = "sandbox_exec_started"
     case sandboxExecInput = "sandbox_exec_input"
@@ -198,6 +199,10 @@ public struct AgentRegisterMessage: WebSocketMessage {
     /// older agents decode fine; absent means not capable, which is the safe
     /// default in both directions of skew.
     public let resolverCapable: Bool?
+    /// Periodic, feature-scoped software dependency health. This is also sent
+    /// at registration so a newly connected agent is not placement-eligible in
+    /// the window before its first heartbeat.
+    public let dependencyObservations: [NodeDependencyObservation]
 
     public init(
         requestId: String = UUID().uuidString,
@@ -215,7 +220,8 @@ public struct AgentRegisterMessage: WebSocketMessage {
         tpmCapable: Bool? = nil,
         operatingSystem: OperatingSystem? = nil,
         hostInfo: HostInfo? = nil,
-        resolverCapable: Bool? = nil
+        resolverCapable: Bool? = nil,
+        dependencyObservations: [NodeDependencyObservation] = []
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
@@ -233,6 +239,7 @@ public struct AgentRegisterMessage: WebSocketMessage {
         self.operatingSystem = operatingSystem
         self.hostInfo = hostInfo
         self.resolverCapable = resolverCapable
+        self.dependencyObservations = dependencyObservations
     }
 
     /// The hypervisor list to act on. An agent advertising no backend stays
@@ -248,17 +255,20 @@ public struct AgentHeartbeatMessage: WebSocketMessage {
     public let timestamp: Date
     public let agentId: String
     public let resources: AgentResources
+    public let dependencyObservations: [NodeDependencyObservation]
 
     public init(
         requestId: String = UUID().uuidString,
         timestamp: Date = Date(),
         agentId: String,
-        resources: AgentResources
+        resources: AgentResources,
+        dependencyObservations: [NodeDependencyObservation] = []
     ) {
         self.requestId = requestId
         self.timestamp = timestamp
         self.agentId = agentId
         self.resources = resources
+        self.dependencyObservations = dependencyObservations
     }
 }
 
