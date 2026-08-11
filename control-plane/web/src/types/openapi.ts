@@ -5378,7 +5378,7 @@ export interface components {
              */
             metadataEnabled: boolean;
             /**
-             * @description Where cloud-init reads the guest bootstrap. `iso` preserves the complete immutable NoCloud seed. `imds` keeps `network-config` and a `seedfrom` stub on the ISO, then fetches meta-data and user-data from `http://169.254.169.254/latest/`. Fixed at VM creation.
+             * @description Where cloud-init reads the guest bootstrap. `iso` preserves the complete immutable NoCloud seed. `imds` keeps `network-config` and a `seedfrom` stub on the ISO, then fetches meta-data and user-data from a per-VM capability URL on `169.254.169.254`. Fixed at VM creation.
              * @default iso
              */
             metadataSource: components["schemas"]["MetadataSource"];

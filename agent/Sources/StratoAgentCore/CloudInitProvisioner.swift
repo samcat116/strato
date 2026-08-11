@@ -44,6 +44,8 @@ public struct CloudInitProvisioner {
     ///     `user-data` unchanged, replacing Strato's config entirely.
     ///   - metadataSource: Whether the ISO carries the complete NoCloud
     ///     documents or only a `seedfrom` stub plus local network bootstrap.
+    ///   - noCloudSeedToken: The per-VM capability embedded in an IMDS-backed
+    ///     seed URL. Required when `metadataSource` is `.imds`.
     ///   - networkAttachments: The VM's resolved NICs; ones carrying a static
     ///     IP allocation are configured in the guest via a NoCloud
     ///     `network-config` (v2). User-mode NICs are left on DHCP.
@@ -52,6 +54,7 @@ public struct CloudInitProvisioner {
         at isoPath: String, vmId: String, hostname: String? = nil, sshAuthorizedKeys: [String] = [],
         userData: String? = nil,
         metadataSource: MetadataSource = .iso,
+        noCloudSeedToken: UUID? = nil,
         networkAttachments: [ResolvedNetworkAttachment] = []
     ) async -> Bool {
         let fileManager = FileManager.default
@@ -90,8 +93,9 @@ public struct CloudInitProvisioner {
                 }
             }
 
-            let documents = Self.seedDocuments(
+            let documents = try Self.seedDocuments(
                 metadataSource: metadataSource,
+                noCloudSeedToken: noCloudSeedToken,
                 vmId: vmId,
                 hostname: hostname,
                 sshAuthorizedKeys: sshAuthorizedKeys,
@@ -155,17 +159,19 @@ public struct CloudInitProvisioner {
     /// The exact files written to the NoCloud ISO.
     ///
     /// Network configuration stays local in both modes: a statically addressed
-    /// guest needs it before it can reach the `seedfrom` URL. IMDS mode omits
-    /// `user-data` and replaces the ordinary identity document with the small
-    /// redirect stub; the live service owns both omitted payloads.
+    /// guest needs it before it can reach the `seedfrom` URL. IMDS mode keeps
+    /// the empty `user-data` file NoCloud requires for filesystem discovery
+    /// and replaces the ordinary identity document with the small redirect
+    /// stub; the live service owns the real payload.
     static func seedDocuments(
         metadataSource: MetadataSource,
+        noCloudSeedToken: UUID? = nil,
         vmId: String,
         hostname: String?,
         sshAuthorizedKeys: [String],
         userData: String?,
         networkAttachments: [ResolvedNetworkAttachment]
-    ) -> [String: String] {
+    ) throws -> [String: String] {
         var documents: [String: String]
         switch metadataSource {
         case .iso:
@@ -175,7 +181,15 @@ public struct CloudInitProvisioner {
                     sshAuthorizedKeys: sshAuthorizedKeys, userData: userData),
             ]
         case .imds:
-            documents = ["meta-data": seedFromMetaDataDocument]
+            guard let noCloudSeedToken else {
+                throw CloudInitProvisionerError.missingNoCloudSeedToken
+            }
+            documents = [
+                "meta-data": seedFromMetaDataDocument(token: noCloudSeedToken),
+                // NoCloud's filesystem seed probe requires both files even
+                // though the real payload is fetched from `seedfrom`.
+                "user-data": "",
+            ]
         }
 
         if let networkConfig = networkConfigYAML(for: networkAttachments) {
@@ -185,8 +199,9 @@ public struct CloudInitProvisioner {
     }
 
     /// The local NoCloud seed's hand-off to the agent's live document tree.
-    static let seedFromMetaDataDocument =
-        "seedfrom: http://\(InstanceMetadataEndpoint.address)/latest/"
+    static func seedFromMetaDataDocument(token: UUID) -> String {
+        "seedfrom: http://\(InstanceMetadataEndpoint.address)\(MetadataRouter.noCloudSeedPath(for: token))"
+    }
 
     /// Renders the NoCloud `meta-data` document.
     ///
@@ -896,5 +911,16 @@ public struct CloudInitProvisioner {
         // open with a `:` indicator), and an unparseable network-config costs
         // the guest every other setting in this document too.
         "\n      - to: \(destination)\n        via: \"::\""
+    }
+}
+
+enum CloudInitProvisionerError: LocalizedError {
+    case missingNoCloudSeedToken
+
+    var errorDescription: String? {
+        switch self {
+        case .missingNoCloudSeedToken:
+            return "an IMDS-backed NoCloud seed requires a bootstrap token"
+        }
     }
 }

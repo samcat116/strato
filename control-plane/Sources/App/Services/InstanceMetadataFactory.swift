@@ -88,6 +88,11 @@ extension InstanceMetadata {
                     spiffeId: $0, audiences: identityAudiences,
                     ttlSeconds: identityTTLSeconds)
             },
+            // NoCloud cannot attach an IMDSv2 header while following
+            // `seedfrom`, so IMDS-backed VMs receive a narrow capability that
+            // authenticates only their bootstrap document paths. ISO-backed
+            // VMs never publish one.
+            noCloudSeedToken: vm.metadataSource == .imds ? vm.metadataSeedToken : nil,
             // The per-instance kill switch (STR-185). Sent as the column's
             // literal value rather than folded with the network's
             // `metadataEnabled`: the two are enforced at different layers — the

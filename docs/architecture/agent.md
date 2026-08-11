@@ -543,10 +543,12 @@ shape at creation:
 
 - `iso` is the compatibility default and carries `meta-data`, `user-data`, and
   — when addressing requires it — a v2 `network-config`.
-- `imds` keeps the required `network-config` on the ISO, replaces `meta-data`
-  with exactly `seedfrom: http://169.254.169.254/latest/`, and omits
-  `user-data`. Once the seed has addressed the NIC, cloud-init follows the stub
-  to the agent's live metadata listener.
+- `imds` keeps the required `network-config` and an empty `user-data` on the
+  ISO, then replaces `meta-data` with a `seedfrom` URL under
+  `http://169.254.169.254/latest/nocloud/<per-VM capability>/`. NoCloud requires
+  both local `meta-data` and `user-data` to accept a filesystem seed. Once the
+  seed has addressed the NIC, cloud-init follows the stub to the agent's live
+  metadata listener for the real documents.
 
 The ISO cannot disappear even in `imds` mode: a statically addressed guest
 needs `network-config` before it can reach the link-local listener. Guest
@@ -1277,17 +1279,25 @@ host state that outlives the process (created by the chassis reconcile, cleared
 only by a host reboot). A network removed while the agent was down leaves a
 stale namespace and so starts an unwanted listener; the first sync stops it.
 
-**Session auth is mandatory.** `PUT /latest/api/token` with an
+**Session auth is mandatory for ordinary reads.** `PUT /latest/api/token` with an
 `X-aws-ec2-metadata-token-ttl-seconds` header (1..21600) mints an opaque
-bearer token; every read requires `X-aws-ec2-metadata-token`. There is no
-unauthenticated mode — AWS shipped IMDSv1 optional and spent years unwinding
-it, and there was no compatibility debt here to justify repeating that. The
+bearer token; every ordinary read requires `X-aws-ec2-metadata-token`. There is
+no general unauthenticated mode — AWS shipped IMDSv1 optional and spent years
+unwinding it, and there was no compatibility debt here to justify repeating that. The
 barrier is the shape of the mint, not the name of the header: a request-forging
 bug inside a guest can reach a link-local URL but cannot make it a `PUT`
 carrying a custom header. `GET /latest/api/token` answers 405 and mints
 nothing. EC2's header spellings are used rather than Strato-prefixed ones so
 stock guest tooling can complete the handshake at all; see
 [ADR 0006](../adr/0006-imds-session-auth.md).
+
+The one protocol adapter is the NoCloud `seedfrom` tree at
+`/latest/nocloud/<per-VM capability>/`. Stock NoCloud cannot perform the
+IMDSv2 handshake, so those exact `meta-data`, `user-data`, and
+`network-config` GETs use a random capability embedded in the seed ISO. The
+responder still binds the request to the source VM and applies its kill switch;
+ordinary `/latest/*` reads stay token-only. Request logging replaces everything
+after `/latest/nocloud/` with `[redacted]`.
 
 **The caller is its source address, and the session is bound to it.**
 `MetadataCallerIndex` resolves `(this namespace's network, source address) →
@@ -1330,9 +1340,11 @@ any router dies, and a guest cannot proxy metadata off-box.
 listener off without touching the dataplane, which is a property of the
 network rather than of the agent.
 
-**NoCloud-net reuses the full-seed document renderer byte for byte.** The exact
-file paths are `/latest/meta-data`, `/latest/user-data`, and
-`/latest/network-config` (404 when no NIC needs a network document). The
+**NoCloud-net reuses the full-seed document renderer byte for byte.** Below the
+per-VM seed capability, the exact file names are `meta-data`, `user-data`, and
+`network-config` (404 when no NIC needs a network document). The ordinary
+IMDSv2 paths remain `/latest/meta-data`, `/latest/user-data`, and
+`/latest/network-config`. The
 no-trailing-slash metadata path matters: `/latest/meta-data/` remains the EC2
 index proved by STR-56. The EC2 projection below it exposes only values the
 shared `InstanceMetadata` can state truthfully: instance identity and hostname,

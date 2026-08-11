@@ -1185,10 +1185,13 @@ verification on real multi-node hardware (recipe in
   ([ADR 0006](../adr/0006-imds-session-auth.md)), so a guest that probes
   `/latest/meta-data/instance-id` gets an answer and `/latest/user-data` carries
   the same rendered bytes as a full seed ISO. The rest of the EC2 tree is 404
-  until STR-65 renders it. A VM created with `metadataSource: imds` now uses
-  NoCloud-net's exact `/latest/meta-data`, `/latest/user-data`, and optional
-  `/latest/network-config` documents: its ISO retains network bootstrap and a
-  `seedfrom` stub instead of embedding guest user data. `metadataSource: iso`
+  until STR-65 renders it. A VM created with `metadataSource: imds` uses
+  NoCloud-net's exact `meta-data`, `user-data`, and optional `network-config`
+  documents below `/latest/nocloud/<per-VM capability>/`: its ISO retains
+  network bootstrap, an empty discovery `user-data`, and a `seedfrom` stub
+  instead of embedding guest user data. The source-bound capability is the
+  authentication stock NoCloud can send; ordinary `/latest/*` reads still
+  require IMDSv2. `metadataSource: iso`
   remains the default for this phase, and `datasource_list` still puts NoCloud
   ahead of Ec2.
 - **A downgrade below wire v37 strips a network's resolver addresses** from its

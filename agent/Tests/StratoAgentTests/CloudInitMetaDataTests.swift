@@ -9,7 +9,7 @@ struct CloudInitMetaDataTests {
 
     @Test("ISO source carries the complete NoCloud seed")
     func fullSeedDocuments() throws {
-        let documents = CloudInitProvisioner.seedDocuments(
+        let documents = try CloudInitProvisioner.seedDocuments(
             metadataSource: .iso,
             vmId: "0F6AFCDE-2F3A-4F1C-B704-F8F9AAE2E17B",
             hostname: "e2e-noble-1",
@@ -20,11 +20,12 @@ struct CloudInitMetaDataTests {
         #expect(Set(documents.keys) == ["meta-data", "user-data"])
         #expect(documents["meta-data"]?.contains("local-hostname: e2e-noble-1") == true)
         #expect(documents["user-data"]?.contains("packages: [nginx]") == true)
-        #expect(documents["meta-data"] != CloudInitProvisioner.seedFromMetaDataDocument)
+        #expect(documents["meta-data"]?.contains("seedfrom:") == false)
     }
 
-    @Test("IMDS source keeps network bootstrap and omits the immutable payload")
+    @Test("IMDS source keeps the required local stub and omits the immutable payload")
     func imdsSeedDocuments() throws {
+        let seedToken = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
         let attachment = ResolvedNetworkAttachment(
             network: "default",
             attachment: .tap(interface: "tap0123456789ab"),
@@ -32,19 +33,35 @@ struct CloudInitMetaDataTests {
             ipAddress: "192.168.1.5",
             netmask: "255.255.255.0",
             gateway: "192.168.1.1")
-        let documents = CloudInitProvisioner.seedDocuments(
+        let documents = try CloudInitProvisioner.seedDocuments(
             metadataSource: .imds,
+            noCloudSeedToken: seedToken,
             vmId: "0F6AFCDE-2F3A-4F1C-B704-F8F9AAE2E17B",
             hostname: "e2e-noble-1",
             sshAuthorizedKeys: ["ssh-ed25519 AAAA test@example"],
             userData: "#cloud-config\npackages: [nginx]\n",
             networkAttachments: [attachment])
 
-        #expect(Set(documents.keys) == ["meta-data", "network-config"])
-        #expect(documents["meta-data"] == "seedfrom: http://169.254.169.254/latest/")
+        #expect(Set(documents.keys) == ["meta-data", "network-config", "user-data"])
+        #expect(
+            documents["meta-data"]
+                == "seedfrom: http://169.254.169.254/latest/nocloud/11111111-2222-4333-8444-555555555555/")
         #expect(documents["network-config"]?.contains("192.168.1.5/24") == true)
-        #expect(documents["user-data"] == nil)
+        #expect(documents["user-data"] == "")
         #expect(documents.values.allSatisfy { !$0.contains("packages: [nginx]") })
+    }
+
+    @Test("IMDS source cannot create an unauthenticated seed")
+    func imdsSeedRequiresToken() {
+        #expect(throws: CloudInitProvisionerError.self) {
+            try CloudInitProvisioner.seedDocuments(
+                metadataSource: .imds,
+                vmId: UUID().uuidString,
+                hostname: nil,
+                sshAuthorizedKeys: [],
+                userData: nil,
+                networkAttachments: [])
+        }
     }
 
     @Test("NoCloud-net meta-data is byte-identical to the full seed renderer")

@@ -29,10 +29,12 @@ import Foundation
 /// can reach the link-local address, so this is a publication boundary, not an
 /// internal DTO: adding a field here hands it to unprivileged guest code.
 ///
-/// `serviceEnabled` is the one deliberate exception, and it earns the exception
-/// by being the field that decides whether any of the rest is disclosed at all
-/// — see its own doc for why it rides here rather than beside `metadata` on
-/// `DesiredVMState`.
+/// `serviceEnabled` and `noCloudSeedToken` are deliberate transport controls.
+/// The first decides whether any of the rest is disclosed at all; the second is
+/// copied into the local seed ISO so stock NoCloud can authenticate the three
+/// bootstrap GETs it makes before an IMDSv2-aware client exists. Neither is
+/// rendered as metadata. See their own docs for why they ride here rather than
+/// beside `metadata` on `DesiredVMState`.
 ///
 /// ## Size on the wire
 ///
@@ -126,6 +128,20 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
     /// every VM gets until identity ships.
     public let identity: IdentityPolicy?
 
+    /// The per-VM capability carried by an IMDS-backed NoCloud seed URL.
+    ///
+    /// Stock NoCloud follows `seedfrom` with ordinary GETs and cannot perform
+    /// the IMDSv2 token handshake. This value lets the agent authenticate only
+    /// those three bootstrap document reads without weakening the ordinary
+    /// `/latest/*` tree. It is deliberately not rendered into any metadata
+    /// document; the agent copies it only into the VM's local seed ISO.
+    ///
+    /// Nil for an ISO-backed VM and for desired-state payloads produced before
+    /// STR-64. Although it rides the durable desired-state snapshot so agent
+    /// restarts do not invalidate an already-created ISO, it is a credential:
+    /// callers must never log this value or the seed URL containing it.
+    public let noCloudSeedToken: UUID?
+
     /// Whether the metadata service answers this instance at all — Strato's
     /// per-instance kill switch, `VM.metadataEnabled`, and the equivalent of
     /// EC2's `MetadataOptions.HttpEndpoint` (STR-185).
@@ -173,6 +189,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         vendorData: String? = nil,
         tags: [String: String] = [:],
         identity: IdentityPolicy? = nil,
+        noCloudSeedToken: UUID? = nil,
         serviceEnabled: Bool
     ) {
         self.instanceId = instanceId
@@ -187,6 +204,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         self.vendorData = vendorData
         self.tags = tags
         self.identity = identity
+        self.noCloudSeedToken = noCloudSeedToken
         self.serviceEnabled = serviceEnabled
     }
 
@@ -212,6 +230,7 @@ public struct InstanceMetadata: Codable, Sendable, Equatable {
         vendorData = try c.decodeIfPresent(String.self, forKey: .vendorData)
         tags = try c.decodeIfPresent([String: String].self, forKey: .tags) ?? [:]
         identity = try c.decodeIfPresent(IdentityPolicy.self, forKey: .identity)
+        noCloudSeedToken = try c.decodeIfPresent(UUID.self, forKey: .noCloudSeedToken)
         serviceEnabled = try c.decode(Bool.self, forKey: .serviceEnabled)
     }
 }

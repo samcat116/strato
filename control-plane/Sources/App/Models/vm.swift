@@ -162,6 +162,12 @@ final class VM: Model, @unchecked Sendable {
     @Enum(key: "metadata_source")
     var metadataSource: MetadataSource
 
+    /// Secret capability used only by an IMDS-backed NoCloud `seedfrom` URL.
+    /// It is stable for the VM's lifetime because the ISO is materialized once,
+    /// and it is not part of any public VM response.
+    @Field(key: "metadata_seed_token")
+    var metadataSeedToken: UUID
+
     // Observed guest-agent (qga) state (issue #563). Purely informational and
     // best-effort: nil until the agent's guest-info poll first sees a
     // responsive qga on this VM. `qgaAvailable` records the positive liveness
@@ -344,7 +350,8 @@ final class VM: Model, @unchecked Sendable {
         guestAgentEnabled: Bool = false,
         graphicsConsole: Bool = false,
         metadataEnabled: Bool = true,
-        metadataSource: MetadataSource = .iso
+        metadataSource: MetadataSource = .iso,
+        metadataSeedToken: UUID = UUID()
     ) {
         self.id = id
         self.name = name
@@ -375,6 +382,7 @@ final class VM: Model, @unchecked Sendable {
         self.graphicsConsole = graphicsConsole
         self.metadataEnabled = metadataEnabled
         self.metadataSource = metadataSource
+        self.metadataSeedToken = metadataSeedToken
     }
 }
 

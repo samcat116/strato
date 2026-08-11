@@ -72,9 +72,10 @@ feature-scoped placement gates without terminating workloads that are already
 running.
 
 Wire v48 adds `VMSpec.metadataSource`, the create-time choice between the full
-NoCloud seed ISO and an IMDS `seedfrom` stub. Older persisted agent manifests
-decode a missing value as `iso`; a live control plane and agent still require
-the same v48 handshake.
+NoCloud seed ISO and an IMDS `seedfrom` stub. IMDS-backed metadata also carries
+the optional per-VM NoCloud seed capability; old snapshots decode it as nil.
+Older persisted agent manifests decode a missing source as `iso`; a live
+control plane and agent still require the same v48 handshake.
 
 Two consequences worth knowing:
 
@@ -426,9 +427,12 @@ The rest of the package is vocabulary used on both sides:
   ids, hostname, environment, `region`/`availabilityZone` placement keys,
   `MetadataNIC` entries (device name, MAC, network, address + prefix per
   family, gateway, MTU, DNS), SSH keys, `userData`/`vendorData`, tags, and an
-  optional `IdentityPolicy`. Since STR-55 that policy carries the VM's SPIFFE
-  instance identity — `spiffe://<trust-domain>/vm/<vm-id>` — and nothing else:
-  no key, token, audiences, or TTL crosses the sync. STR-57 adds the
+  optional `IdentityPolicy`. STR-64 adds an optional `noCloudSeedToken`, a
+  credential used by the agent to authenticate only an IMDS-backed VM's
+  NoCloud bootstrap URL; it is not rendered as a document and must not be
+  logged. Since STR-55 the identity policy carries the VM's SPIFFE
+  instance identity — `spiffe://<trust-domain>/vm/<vm-id>` — and no identity
+  key, token, audiences, or TTL crosses the sync. STR-57 adds the
   placement-checked `POST /agent/vms/{vmID}/jwt-svid` control-plane endpoint,
   but the optional policy fields remain empty until the agent implements the
   guest-facing request path and token cache. It rides

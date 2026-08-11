@@ -628,6 +628,7 @@ actor LibvirtService: HypervisorService {
                 at: isoPath, vmId: vmId, hostname: metadata?.hostname,
                 sshAuthorizedKeys: spec.sshAuthorizedKeys, userData: spec.userData,
                 metadataSource: spec.metadataSource,
+                noCloudSeedToken: metadata?.noCloudSeedToken,
                 networkAttachments: networkAttachments)
             {
                 cloudInitISOPath = isoPath
