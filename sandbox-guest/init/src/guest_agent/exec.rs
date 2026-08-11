@@ -14,7 +14,7 @@ use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -29,6 +29,10 @@ use strato_sandbox_init::protocol::{
 
 nix::ioctl_write_int_bad!(tiocsctty, libc::TIOCSCTTY);
 nix::ioctl_write_ptr_bad!(tiocswinsz, libc::TIOCSWINSZ, Winsize);
+
+/// Bound decoded stdin waiting behind a child that is slow or stopped. The
+/// shared protocol framer already limits each request line to 1 MiB.
+const MAX_QUEUED_STDIN_FRAMES: usize = 4;
 
 pub struct ExecRequest {
     pub argv: Vec<String>,
@@ -220,8 +224,15 @@ fn session(
             Ok(Request::Stdin { data }) => match decode_base64(&data) {
                 Ok(bytes) => {
                     if let Some(sender) = stdin_tx.as_ref() {
-                        if sender.send(bytes).is_err() {
-                            stdin_tx = None;
+                        match sender.try_send(bytes) {
+                            Ok(()) => {}
+                            Err(TrySendError::Disconnected(_)) => stdin_tx = None,
+                            Err(TrySendError::Full(_)) => {
+                                eprintln!(
+                                    "[strato-guest-agent] exec stdin queue is full; cancelling exec"
+                                );
+                                break;
+                            }
                         }
                     }
                 }
@@ -271,8 +282,12 @@ fn validate_environment(environment: Option<&BTreeMap<String, String>>) -> Resul
     Ok(())
 }
 
-fn spawn_stdin_writer(mut sink: Box<dyn Write + Send>) -> Option<Sender<Vec<u8>>> {
-    let (sender, receiver) = std::sync::mpsc::channel::<Vec<u8>>();
+fn stdin_channel() -> (SyncSender<Vec<u8>>, Receiver<Vec<u8>>) {
+    std::sync::mpsc::sync_channel(MAX_QUEUED_STDIN_FRAMES)
+}
+
+fn spawn_stdin_writer(mut sink: Box<dyn Write + Send>) -> Option<SyncSender<Vec<u8>>> {
+    let (sender, receiver) = stdin_channel();
     match std::thread::Builder::new()
         .name("guest-exec-stdin".to_string())
         .spawn(move || {
@@ -430,5 +445,25 @@ mod tests {
         use std::os::unix::process::ExitStatusExt;
 
         assert_eq!(exit_status_code(std::process::ExitStatus::from_raw(9)), 137);
+    }
+
+    #[test]
+    fn stdin_queue_caps_pending_frames_and_reports_disconnect() {
+        let (sender, receiver) = stdin_channel();
+        for byte in 0..MAX_QUEUED_STDIN_FRAMES {
+            sender
+                .try_send(vec![byte as u8])
+                .expect("queue frame within capacity");
+        }
+        assert!(matches!(
+            sender.try_send(vec![0]),
+            Err(TrySendError::Full(_))
+        ));
+
+        drop(receiver);
+        assert!(matches!(
+            sender.try_send(vec![0]),
+            Err(TrySendError::Disconnected(_))
+        ));
     }
 }
