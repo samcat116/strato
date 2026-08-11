@@ -1301,9 +1301,21 @@ actor Agent {
             // #428): snapshot mobility keys cross-agent restore placement on
             // version equality, so the control plane needs to know what each
             // host would load snapshots with.
-            hypervisors = HypervisorProbe.stampingFirecrackerVersion(
+            let versioned = HypervisorProbe.stampingFirecrackerVersion(
                 probed,
                 version: await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath))
+            hypervisors = versioned.map { support in
+                guard support.type == .qemu else { return support }
+                return HypervisorSupport(
+                    type: support.type,
+                    available: support.available,
+                    accelerated: support.accelerated,
+                    unavailabilityReason: support.unavailabilityReason,
+                    capabilities: support.capabilities,
+                    supportsVsock: preflight.vhostVsockAvailable,
+                    version: support.version
+                )
+            }
         }
         let networkCapability = currentNetworkCapability()
 
@@ -1632,7 +1644,8 @@ actor Agent {
                 type: type,
                 available: true,
                 accelerated: true,
-                capabilities: HypervisorCapabilities.capabilities(for: type)
+                capabilities: HypervisorCapabilities.capabilities(for: type),
+                supportsVsock: type == .qemu ? true : nil
             )
         }
     }

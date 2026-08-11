@@ -44,6 +44,7 @@ struct HostPreflightTests {
         let report = HostPreflight.run(passingInputs(root: root))
 
         #expect(report.failures.isEmpty)
+        #expect(report.vhostVsockAvailable)
         #expect(FileManager.default.fileExists(atPath: "\(root)/vms"))
         #expect(FileManager.default.fileExists(atPath: "\(root)/volumes"))
         #expect(FileManager.default.fileExists(atPath: "\(root)/images"))
@@ -251,6 +252,7 @@ struct HostPreflightTests {
         #expect(check.supported)
         #expect(check.severity == .advisory)
         #expect(check.detail?.contains("modprobe vhost_vsock") == true)
+        #expect(!HostPreflight.run(inputs).vhostVsockAvailable)
     }
 
     @Test("non-Linux vsock is unsupported rather than failed")
@@ -267,6 +269,7 @@ struct HostPreflightTests {
         #expect(check.detail == "not supported on this platform")
         #expect(report.failures.isEmpty)
         #expect(report.unsupported == [check])
+        #expect(!report.vhostVsockAvailable)
     }
 
     @Test(

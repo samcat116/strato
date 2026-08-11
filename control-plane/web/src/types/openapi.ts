@@ -7775,6 +7775,8 @@ export interface components {
             accelerated: boolean;
             unavailabilityReason?: string | null;
             capabilities: components["schemas"]["AgentHypervisorCapabilities"];
+            /** @description Whether this host can attach a virtio-vsock device for this hypervisor; null for agents that predate vsock probing. */
+            supportsVsock?: boolean | null;
             /** @description The hypervisor binary's probed version; null for agents predating version probing or when the probe failed. */
             version?: string | null;
         };

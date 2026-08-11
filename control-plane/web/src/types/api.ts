@@ -566,6 +566,7 @@ export interface HypervisorSupport {
   accelerated: boolean;
   unavailabilityReason?: string;
   capabilities: HypervisorCapabilities;
+  supportsVsock?: boolean;
 }
 
 // Descriptive hardware/platform/OS details the agent reports at registration,

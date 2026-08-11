@@ -251,6 +251,14 @@ public enum HostPreflight {
             check(.vtpmSupport)?.passed ?? false
         }
 
+        /// Whether QEMU can attach its host-backed virtio-vsock device. An
+        /// unsupported platform deliberately returns false even though the
+        /// diagnostic check itself is not a startup failure.
+        public var vhostVsockAvailable: Bool {
+            guard let check = check(.vhostVsockSupport) else { return false }
+            return check.supported && check.passed
+        }
+
         /// Whether this host's libvirt is usable: reachable at
         /// `qemu:///system` and new enough. True when the libvirt checks were
         /// skipped, which is the non-Linux case — there the QEMU probe already

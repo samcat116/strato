@@ -13706,6 +13706,12 @@ components:
           nullable: true
         capabilities:
           $ref: "#/components/schemas/AgentHypervisorCapabilities"
+        supportsVsock:
+          type: boolean
+          nullable: true
+          description: >-
+            Whether this host can attach a virtio-vsock device for this
+            hypervisor; null for agents that predate vsock probing.
         version:
           type: string
           nullable: true
