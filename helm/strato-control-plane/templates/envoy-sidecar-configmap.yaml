@@ -131,7 +131,14 @@ data:
                                                     # org alternative that matches no SVID at all — and only
                                                     # the /ingest/* routes would break, since the platform
                                                     # alternative keeps working.
-                                                    regex: 'spiffe://({{ regexQuoteMeta (lower .Values.spire.trustDomain) }}|org-[0-9a-f]{16}\.{{ regexQuoteMeta (lower .Values.spire.trustDomain) }})/agent/.+'
+                                                    #
+                                                    # Optional org- prefix rather than a two-branch
+                                                    # alternation: spelling the trust domain twice
+                                                    # pushes the compiled RE2 program past Envoy's
+                                                    # default 100-instruction error threshold once the
+                                                    # domain is long enough (dev.stratocloud.app hit
+                                                    # 106), and Envoy refuses to start.
+                                                    regex: 'spiffe://(org-[0-9a-f]{16}\.)?{{ regexQuoteMeta (lower .Values.spire.trustDomain) }}/agent/.+'
                             # Sandbox snapshot artifact transfer (issue #428):
                             # agents PUT exported checkpoint artifacts during an
                             # export and GET them back for cross-agent
@@ -170,7 +177,14 @@ data:
                                                     # org alternative that matches no SVID at all — and only
                                                     # the /ingest/* routes would break, since the platform
                                                     # alternative keeps working.
-                                                    regex: 'spiffe://({{ regexQuoteMeta (lower .Values.spire.trustDomain) }}|org-[0-9a-f]{16}\.{{ regexQuoteMeta (lower .Values.spire.trustDomain) }})/agent/.+'
+                                                    #
+                                                    # Optional org- prefix rather than a two-branch
+                                                    # alternation: spelling the trust domain twice
+                                                    # pushes the compiled RE2 program past Envoy's
+                                                    # default 100-instruction error threshold once the
+                                                    # domain is long enough (dev.stratocloud.app hit
+                                                    # 106), and Envoy refuses to start.
+                                                    regex: 'spiffe://(org-[0-9a-f]{16}\.)?{{ regexQuoteMeta (lower .Values.spire.trustDomain) }}/agent/.+'
                             # The agent control channel: the WebSocket at
                             # /agent/ws and the desired-state long-poll at
                             # /agent/desired-state (STR-146). Both are
