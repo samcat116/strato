@@ -96,20 +96,55 @@ enum Telemetry {
     static func recordDependency(
         agentName: String,
         observation: NodeDependencyObservation,
-        receivedAt: Date
+        receivedAt: Date,
+        factory: (any MetricsFactory)? = nil
     ) {
         let dimensions = [("agent", agentName), ("dependency", observation.id.rawValue)]
         let available = observation.allowsNewWork(
             receivedAt: receivedAt,
             at: Date(),
             staleAfter: Agent.dependencyObservationStaleAfter)
-        Gauge(label: "strato_agent_dependency_available", dimensions: dimensions).record(available ? 1 : 0)
+        recordDependencyAvailability(
+            dimensions: dimensions, available: available, factory: factory)
         Gauge(label: "strato_agent_dependency_consecutive_failures", dimensions: dimensions)
             .record(Int64(observation.consecutiveFailures))
         Gauge(label: "strato_agent_dependency_remediation_count", dimensions: dimensions)
             .record(Int64(observation.remediationCount))
         Gauge(label: "strato_agent_dependency_restart_count", dimensions: dimensions)
             .record(Int64(observation.restartCount))
+    }
+
+    /// Clear every dependency availability series when an agent goes offline.
+    /// A gauge otherwise retains its last healthy value forever because no
+    /// further heartbeat will arrive to update it.
+    static func recordDependenciesUnavailable(
+        agentName: String,
+        observations: [NodeDependencyObservation],
+        factory: (any MetricsFactory)? = nil
+    ) {
+        for observation in observations {
+            recordDependencyAvailability(
+                dimensions: [("agent", agentName), ("dependency", observation.id.rawValue)],
+                available: false,
+                factory: factory)
+        }
+    }
+
+    private static func recordDependencyAvailability(
+        dimensions: [(String, String)],
+        available: Bool,
+        factory: (any MetricsFactory)?
+    ) {
+        let gauge =
+            if let factory {
+                Gauge(
+                    label: "strato_agent_dependency_available",
+                    dimensions: dimensions,
+                    factory: factory)
+            } else {
+                Gauge(label: "strato_agent_dependency_available", dimensions: dimensions)
+            }
+        gauge.record(available ? 1 : 0)
     }
 
     /// Whether a site's designated network controller can author its topology:

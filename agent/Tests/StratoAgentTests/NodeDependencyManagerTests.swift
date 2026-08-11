@@ -291,6 +291,29 @@ struct InitialNodeDependencyModuleTests {
         #expect(oldInspection.reason?.code == .incompatibleVersion)
     }
 
+    @Test("Reachable externally supervised libvirt remains placement eligible")
+    func externallySupervisedLibvirt() async throws {
+        let module = LibvirtNodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: .missing("virtqemud.socket")),
+            probe: { .reachable(.init(major: 11, minor: 5, patch: 0)) })
+        let manager = try NodeDependencyManager(
+            modules: [module], logger: Logger(label: "test"))
+
+        let observation = await manager.refresh().first
+        #expect(observation?.supervisorState == .notApplicable)
+        #expect(observation?.compatibility == .compatible)
+        #expect(observation?.functionalState == .healthy)
+        #expect(observation?.permitsDependentWork == true)
+
+        let inactive = SystemdUnitObservation(
+            name: "virtqemud.socket", loadState: "loaded", activeState: "inactive",
+            subState: "dead", unitFileState: "enabled")
+        let locallyStopped = LibvirtNodeDependencyModule(
+            systemd: FakeSystemd(defaultObservation: inactive),
+            probe: { .reachable(.init(major: 11, minor: 5, patch: 0)) })
+        #expect(await locallyStopped.inspect().supervisorState == .inactive)
+    }
+
     @Test("Libvirt distinguishes malformed output and an inactive supervisor")
     func libvirtFailures() async {
         let malformed = LibvirtNodeDependencyModule(

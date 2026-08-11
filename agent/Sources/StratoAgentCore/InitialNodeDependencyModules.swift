@@ -202,9 +202,18 @@ public struct LibvirtNodeDependencyModule: NodeDependencyModule {
                 compatibility: .unknown, functionalState: .unhealthy,
                 reason: .init(code: .malformedOutput, message: detail))
         case .reachable(let daemonVersion):
+            // A successful daemon probe is authoritative for externally
+            // supervised deployments. `discoverFirst` reports `.missing` both
+            // when neither unit exists and when systemd cannot be inspected
+            // (for example, the documented container agent using the host's
+            // mounted libvirt socket). Preserve known inactive/failed units,
+            // but do not gate a reachable daemon on an unavailable supervisor.
+            let effectiveSupervisor: NodeDependencySupervisorState =
+                supervisor.supervisorState == .missing || supervisor.supervisorState == .unknown
+                ? .notApplicable : supervisor.supervisorState
             guard daemonVersion >= LibvirtProbe.minimumVersion else {
                 return NodeDependencyInspection(
-                    supervisorState: supervisor.supervisorState,
+                    supervisorState: effectiveSupervisor,
                     installedVersion: installed,
                     daemonVersion: daemonVersion.description,
                     compatibility: .incompatible, functionalState: .healthy,
@@ -213,7 +222,7 @@ public struct LibvirtNodeDependencyModule: NodeDependencyModule {
                         message: "libvirt \(daemonVersion) is older than required \(LibvirtProbe.minimumVersion)"))
             }
             return NodeDependencyInspection(
-                supervisorState: supervisor.supervisorState == .unknown ? .active : supervisor.supervisorState,
+                supervisorState: effectiveSupervisor,
                 installedVersion: installed,
                 daemonVersion: daemonVersion.description,
                 compatibility: .compatible, functionalState: .healthy)

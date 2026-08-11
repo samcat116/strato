@@ -7,6 +7,7 @@ import NIOCore
 import NIOConcurrencyHelpers
 import SQLKit
 import Tracing
+import Metrics
 
 /// Thread-safe WebSocket connection manager
 /// This is NOT an actor to avoid event loop conflicts with NIO
@@ -500,6 +501,12 @@ actor AgentService {
 
         Telemetry.agentConnected()
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: true)
+        for observation in dependencyObservations {
+            Telemetry.recordDependency(
+                agentName: agent.name,
+                observation: observation,
+                receivedAt: dependencyObservationsReceivedAt)
+        }
         await WebhookEvents.emitAgentPresence(
             agent: agent, connected: true, reason: "registered", on: db, logger: app.logger)
         app.logger.info(
@@ -615,6 +622,8 @@ actor AgentService {
 
         Telemetry.agentDisconnected(reason: "unregister")
         Telemetry.recordAgentUp(agentName: Self.displayName(forKey: agentKey), up: false)
+        Telemetry.recordDependenciesUnavailable(
+            agentName: agent.name, observations: agent.dependencyObservations)
         await WebhookEvents.emitAgentPresence(
             agent: agent, connected: false, reason: "unregistered", on: db, logger: app.logger)
         app.logger.info("Agent unregistered", metadata: ["agentId": .string(agentId)])
@@ -634,6 +643,13 @@ actor AgentService {
             app.logger.warning(
                 "Cannot force unregister: agent not found by identity key", metadata: ["agentKey": .string(agentKey)])
             return
+        }
+
+        if let agentUUID = UUID(uuidString: agentId),
+            let agent = try? await Agent.find(agentUUID, on: app.db)
+        {
+            Telemetry.recordDependenciesUnavailable(
+                agentName: agent.name, observations: agent.dependencyObservations)
         }
 
         app.websocketManager.removeConnection(agentKey: agentKey)
@@ -702,6 +718,8 @@ actor AgentService {
                         .first()
                 {
                     agent.status = .offline
+                    Telemetry.recordDependenciesUnavailable(
+                        agentName: agent.name, observations: agent.dependencyObservations)
                     try await agent.save(on: db)
                     await WebhookEvents.emitAgentPresence(
                         agent: agent, connected: false, reason: "connection_closed",
@@ -975,7 +993,7 @@ actor AgentService {
     }
 
     /// Internal so tests can drive one monitor pass without waiting for the timer.
-    func checkStaleAgents() async {
+    func checkStaleAgents(dependencyMetricsFactory: (any MetricsFactory)? = nil) async {
         // Shutdown sets this before cancelling the loop; a tick that already
         // slipped past its sleep must not start a database sweep it doesn't
         // need to finish. The app-level check is a backstop for loops armed
@@ -1023,6 +1041,10 @@ actor AgentService {
                 }
 
                 agent.status = .offline
+                Telemetry.recordDependenciesUnavailable(
+                    agentName: agent.name,
+                    observations: agent.dependencyObservations,
+                    factory: dependencyMetricsFactory)
                 try await agent.save(on: app.db)
 
                 Telemetry.agentDisconnected(reason: "stale")

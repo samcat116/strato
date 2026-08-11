@@ -133,7 +133,7 @@ let package = Package(
                 // The single fresh-install schema baseline (STR-234). Keeping
                 // the reviewed SQL as a resource avoids compiling thousands of
                 // lines of historical compatibility migrations.
-                .copy("Migrations/CurrentSchema.sql")
+                .copy("Migrations/CurrentSchema.sql"),
             ],
             swiftSettings: swiftSettings,
             plugins: [
@@ -211,6 +211,7 @@ let package = Package(
                 .target(name: "AppTestSupport"),
                 .product(name: "VaporTesting", package: "vapor"),
                 .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+                .product(name: "MetricsTestKit", package: "swift-metrics"),
                 // Mints the throwaway server certificate GuardedHTTPClientTests
                 // uses to prove TLS is still verified against the hostname when
                 // the connection is pinned to an address.
