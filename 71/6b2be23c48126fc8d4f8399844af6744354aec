@@ -1,0 +1,21 @@
+control-plane/Tests/AppPlatformTests/LoadBalancerControllerTests.swift
+  s_29c73f0503496f::t_5a508999b98082 115-172
+control-plane/Sources/App/Controllers/LoadBalancerController.swift
+  s_29c73f0503496f::t_5a508999b98082 162,168-181
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "716b2be23c48126fc8d4f8399844af6744354aec",
+  "prompts": {},
+  "sessions": {
+    "s_29c73f0503496f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee44-e04e-77c1-8bb6-33ca2ed727bc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
