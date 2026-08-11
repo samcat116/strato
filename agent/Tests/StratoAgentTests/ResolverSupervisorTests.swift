@@ -114,6 +114,36 @@ struct ResolverSupervisorTests {
         #expect(await host.spawned() == 1)
     }
 
+    @Test("A scheduled restart retries a pending configuration write")
+    func scheduledRestartRetriesPendingWrite() async {
+        let host = FakeResolverHost()
+        let clock = TestClock()
+        let supervisor = supervisor(host: host, clock: clock)
+
+        await supervisor.reconcile(request([a]))
+        host.failWrites(true)
+        await supervisor.reconcile(request([a], upstreams: ["9.9.9.9"]))
+        #expect(host.written() == 1, "the changed configuration write should fail")
+
+        await host.kill()
+        let delay = ResolverSupervisionPolicy.restartDelay(consecutiveFailures: 1)
+        await clock.advance(by: TimeInterval(delay.components.seconds))
+
+        #expect(host.spawned() == 1, "a failed write must still block the restart")
+        #expect(clock.scheduledCount() == 1, "the failed deadline write must retain a retry")
+
+        // No desired-state reconciliation after the exit: the next supervisor
+        // deadline must write the pending configuration and start CoreDNS.
+        host.failWrites(false)
+        await clock.advance(by: TimeInterval(delay.components.seconds) - 0.5)
+        #expect(host.spawned() == 1, "the write retry must retain the bounded delay")
+        await clock.advance(by: 0.5)
+        #expect(host.written() == 2)
+        #expect(host.spawned() == 2)
+        #expect(clock.scheduledCount() == 0)
+        #expect(host.overlappingSpawns() == 0)
+    }
+
     // MARK: - The failure counter
 
     @Test("A child that dies immediately escalates the backoff and reports a crash loop")

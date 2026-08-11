@@ -230,15 +230,7 @@ public actor ResolverSupervisor {
         // reap.
         if desired.servesNothing { cancelScheduledRestart() }
 
-        for action in ResolverSupervisionPolicy.actions(
-            desired: desired, observed: observedState())
-        {
-            switch action {
-            case .writeConfiguration: write(desired)
-            case .start: start(desired)
-            case .stop: await stop()
-            }
-        }
+        _ = await applyActions(for: desired)
     }
 
     /// Stops the resolver, for agent shutdown. A draining host must not keep
@@ -263,7 +255,25 @@ public actor ResolverSupervisor {
 
     // MARK: - Effects
 
-    private func write(_ desired: DesiredResolver) {
+    /// Apply policy actions in their declared order. A failed write stops the
+    /// pass so `.start` can never run against a missing or partial Corefile.
+    /// The return value lets a scheduled restart retain autonomous ownership
+    /// of the retry when the write at its deadline fails.
+    private func applyActions(for desired: DesiredResolver) async -> Bool {
+        for action in ResolverSupervisionPolicy.actions(
+            desired: desired, observed: observedState())
+        {
+            switch action {
+            case .writeConfiguration:
+                guard write(desired) else { return false }
+            case .start: start(desired)
+            case .stop: await stop()
+            }
+        }
+        return true
+    }
+
+    private func write(_ desired: DesiredResolver) -> Bool {
         do {
             try host.writeConfiguration(desired, root: root)
             state.configurationDigest = desired.configurationDigest
@@ -271,6 +281,7 @@ public actor ResolverSupervisor {
                 logger.warning(
                     "Resolver zone rendering skipped a record", metadata: ["detail": .string(diagnostic)])
             }
+            return true
         } catch {
             logger.error(
                 "Failed to write resolver configuration",
@@ -278,6 +289,7 @@ public actor ResolverSupervisor {
             // Leave the digest unset so the next pass rewrites and retries
             // rather than believing the files on disk match what was rendered.
             state.configurationDigest = nil
+            return false
         }
     }
 
@@ -417,7 +429,7 @@ public actor ResolverSupervisor {
     /// have changed while this task slept, so the deadline is a generation
     /// token and the supervision policy remains the authority for whether a
     /// start is still wanted.
-    private func restartIfNeeded(at deadline: Date) {
+    private func restartIfNeeded(at deadline: Date) async {
         guard scheduledRestart?.deadline == deadline,
             state.nextStartAllowedAt == deadline
         else { return }
@@ -434,7 +446,25 @@ public actor ResolverSupervisor {
                 desired: desired, observed: observedState()
             ).contains(.start)
         else { return }
-        start(desired)
+        guard await applyActions(for: desired) else {
+            scheduleRestartAfterFailedWrite(desired)
+            return
+        }
+    }
+
+    /// A configuration write can fail at the restart deadline after the child
+    /// has already exited. Keep one bounded retry alive so recovery still does
+    /// not depend on a control-plane mutation or full desired-state refetch.
+    private func scheduleRestartAfterFailedWrite(_ desired: DesiredResolver) {
+        guard
+            ResolverSupervisionPolicy.actions(
+                desired: desired, observed: observedState()
+            ).contains(.start)
+        else { return }
+        let deadline = now().addingTimeInterval(
+            delaySeconds(max(1, state.consecutiveFailures)))
+        state.nextStartAllowedAt = deadline
+        scheduleRestart(at: deadline)
     }
 
     private func cancelScheduledRestart() {
