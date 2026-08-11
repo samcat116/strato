@@ -93,6 +93,25 @@ struct OVNChassisBootstrapTests {
         #expect(!plan.encapIPUnresolved)
     }
 
+    @Test("Disabled bootstrap leaves operator-owned chassis metadata unvalidated")
+    func disabledBootstrapProducesNoPlan() {
+        let plan = OVNChassisBootstrap.plan(
+            config: OVNChassisConfig(
+                encapIP: "10.0.0.5", encapType: "geneve",
+                remote: "tcp:configured-central:6642", bootstrapEnabled: false),
+            existing: [
+                "system-id": "operator-host",
+                "ovn-remote": "tcp:operator-central:6642",
+                "ovn-encap-type": "vxlan",
+                "ovn-encap-ip": "192.168.10.15",
+            ],
+            detectedEncapIP: nil,
+            generatedSystemID: "dependency-health-probe")
+
+        #expect(plan.settings.isEmpty)
+        #expect(!plan.encapIPUnresolved)
+    }
+
     @Test("Explicit agent config overrides drifted host values")
     func planExplicitConfigWins() {
         var existing = freshHost

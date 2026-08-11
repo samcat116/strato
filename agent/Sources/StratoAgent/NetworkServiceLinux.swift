@@ -281,6 +281,8 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
     }
 
     private func inspectChassisConfiguration() async -> NetworkDependencyHealth {
+        guard chassisConfig.bootstrapEnabled else { return .healthy }
+
         let candidates = [
             "/usr/bin/ovs-vsctl", "/usr/sbin/ovs-vsctl", "/usr/local/bin/ovs-vsctl",
         ]

@@ -77,13 +77,18 @@ public enum OVNChassisBootstrap {
     /// config value always wins (idempotent — reapplied when the host drifts);
     /// otherwise an existing host value is respected; otherwise a default is
     /// applied. `generatedSystemID` is only used when the host has no
-    /// `system-id` yet (the OVS packaging normally sets one).
+    /// `system-id` yet (the OVS packaging normally sets one). A disabled
+    /// bootstrap produces no plan because the operator owns every value.
     public static func plan(
         config: OVNChassisConfig,
         existing: [String: String],
         detectedEncapIP: String?,
         generatedSystemID: String
     ) -> Plan {
+        guard config.bootstrapEnabled else {
+            return Plan(settings: [], encapIPUnresolved: false)
+        }
+
         var settings: [Setting] = []
 
         if existing["system-id"] == nil || existing["system-id"]?.isEmpty == true {
