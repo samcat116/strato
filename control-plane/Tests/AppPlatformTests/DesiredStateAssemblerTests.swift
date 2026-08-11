@@ -47,6 +47,7 @@ final class DesiredStateAssemblerTests {
         app: Application,
         named name: String,
         siteID: UUID? = nil,
+        resolverCapable: Bool? = nil,
         protocolVersion: Int = WireProtocol.currentVersion
     ) async throws -> String {
         let message = AgentRegisterMessage(
@@ -58,7 +59,8 @@ final class DesiredStateAssemblerTests {
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
                 totalDisk: 1 << 40, availableDisk: 1 << 40
             ),
-            protocolVersion: protocolVersion
+            protocolVersion: protocolVersion,
+            resolverCapable: resolverCapable
         )
         let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
         let uuid = try await app.agentService.registerAgent(
@@ -117,7 +119,8 @@ final class DesiredStateAssemblerTests {
             let site = Site(name: "dc-meta", organizationScope: .organization(try org.requireID()))
             try await site.save(on: app.db)
             let agentId = try await self.registerAgent(
-                app: app, named: "meta-agent", siteID: try site.requireID())
+                app: app, named: "meta-agent", siteID: try site.requireID(),
+                resolverCapable: true)
 
             let vm = try await self.placeVM(
                 app: app, project: project, named: "meta-vm", onAgent: agentId,
@@ -139,12 +142,12 @@ final class DesiredStateAssemblerTests {
                 name: "front", subnet: "10.40.0.0/24", gateway: "10.40.0.1",
                 subnet6: "fd40::/64", gateway6: "fd40::1", projectID: try project.requireID(),
                 dnsServers: ["10.40.0.53", "fd40::53"], domainName: "front.example",
-                siteID: try site.requireID())
+                resolverIndex: 7, siteID: try site.requireID())
             try await front.save(on: app.db)
             let back = LogicalNetwork(
                 name: "back", subnet: "10.41.0.0/24", gateway: "10.41.0.1",
                 projectID: try project.requireID(), dnsServers: ["10.41.0.53"],
-                siteID: try site.requireID())
+                resolverIndex: 8, siteID: try site.requireID())
             try await back.save(on: app.db)
 
             // Attached out of order, so ordering can only come from
@@ -198,6 +201,9 @@ final class DesiredStateAssemblerTests {
             #expect(net0.mtu == 9000)
             #expect(net0.dnsServers == ["10.40.0.53", "fd40::53"])
             #expect(net0.domainName == "front.example")
+            #expect(net0.dhcpEnabled)
+            #expect(net0.metadataEnabled)
+            #expect(net0.resolverAddresses == (front.resolverAddressesIfEnabled(siteCapable: true) ?? []))
 
             let net1 = metadata.nics[1]
             #expect(net1.networkName == "back")
@@ -208,6 +214,9 @@ final class DesiredStateAssemblerTests {
             #expect(net1.mtu == nil)
             #expect(net1.dnsServers == ["10.41.0.53"])
             #expect(net1.domainName == nil)
+            #expect(net1.dhcpEnabled)
+            #expect(net1.metadataEnabled)
+            #expect(net1.resolverAddresses == (back.resolverAddressesIfEnabled(siteCapable: true) ?? []))
 
             // The metadata NIC order is the spec's NIC order — a guest matches
             // by MAC, but an operator reading both sees one list.

@@ -22,6 +22,8 @@ struct MetadataResponderTests {
         mac: String = "52:54:00:00:00:01",
         ipv4: String? = nil,
         ipv6: String? = nil,
+        sshAuthorizedKeys: [String] = [],
+        userData: String? = nil,
         serviceEnabled: Bool = true
     ) -> InstanceMetadata {
         InstanceMetadata(
@@ -34,6 +36,8 @@ struct MetadataResponderTests {
                     ipAddress: ipv4, prefixLength: ipv4 == nil ? nil : 24,
                     ipv6Address: ipv6, ipv6PrefixLength: ipv6 == nil ? nil : 64)
             ],
+            sshAuthorizedKeys: sshAuthorizedKeys,
+            userData: userData,
             serviceEnabled: serviceEnabled)
     }
 
@@ -410,9 +414,11 @@ struct MetadataResponderTests {
     @Test("The served tree is exactly what the listing advertises")
     func documentTree() async {
         let vmId = UUID()
-        let responder = Self.responder(instances: [
-            Self.instance(vmId, hostname: "web-01", network: Self.networkA, ipv4: "10.0.0.5")
-        ])
+        let metadata = Self.instance(
+            vmId, hostname: "web-01", network: Self.networkA, ipv4: "10.0.0.5",
+            sshAuthorizedKeys: ["ssh-ed25519 AAAA key@host"],
+            userData: "#cloud-config\nruncmd:\n  - echo caller\n")
+        let responder = Self.responder(instances: [metadata])
         let now = ContinuousClock.now
         let token = await Self.mint(responder, from: "10.0.0.5", at: now).body
 
@@ -421,13 +427,41 @@ struct MetadataResponderTests {
                 to: Self.request("GET", target, from: "10.0.0.5", (MetadataHeaderName.token, token)), at: now)
         }
 
-        #expect(await get("/latest/").body == "meta-data")
+        #expect(await get("/latest/").body == "meta-data\nnetwork-config\nuser-data")
+        #expect(await get("/latest/meta-data").body == CloudInitProvisioner.metaDataDocument(for: metadata))
         #expect(await get("/latest/meta-data/").body == "hostname\ninstance-id")
         #expect(await get("/latest/meta-data/instance-id").body == vmId.uuidString)
         #expect(await get("/latest/meta-data/hostname").body == "web-01")
-        // Deliberately not served here — STR-60/STR-65 own these.
-        #expect(await get("/latest/user-data").status == 404)
+        #expect(await get("/latest/user-data").body == CloudInitProvisioner.userDataDocument(for: metadata))
+        #expect(await get("/latest/network-config").body == CloudInitProvisioner.networkConfigYAML(for: metadata))
+        // Deliberately not served here — STR-65 owns the rest of the EC2 tree.
         #expect(await get("/latest/meta-data/local-ipv4").status == 404)
+    }
+
+    @Test("An absent NoCloud network-config is a 404 and is not advertised")
+    func absentNetworkConfig() async {
+        let metadata = Self.instance(UUID(), network: Self.networkA, ipv4: "10.0.0.5")
+        let withoutAddressing = InstanceMetadata(
+            instanceId: metadata.instanceId,
+            projectId: metadata.projectId,
+            nics: [
+                MetadataNIC(
+                    deviceName: "net0", macAddress: metadata.nics[0].macAddress,
+                    networkId: Self.networkA, networkName: "tenant",
+                    ipAddress: "10.0.0.5")
+            ],
+            serviceEnabled: true)
+        let responder = Self.responder(instances: [withoutAddressing])
+        let now = ContinuousClock.now
+        let token = await Self.mint(responder, from: "10.0.0.5", at: now).body
+
+        func get(_ target: String) async -> MetadataResponse {
+            await responder.respond(
+                to: Self.request("GET", target, from: "10.0.0.5", (MetadataHeaderName.token, token)), at: now)
+        }
+
+        #expect(await get("/latest/").body == "meta-data\nuser-data")
+        #expect(await get("/latest/network-config").status == 404)
     }
 
     @Test("A hostname-less instance 404s rather than inventing one")

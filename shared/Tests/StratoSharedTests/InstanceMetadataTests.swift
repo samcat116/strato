@@ -27,7 +27,10 @@ struct InstanceMetadataTests {
                 gateway6: "fd12:3456:789a::1",
                 mtu: 1442,
                 dnsServers: ["10.0.0.1", "fd12:3456:789a::1"],
-                domainName: "corp.example.com"
+                domainName: "corp.example.com",
+                dhcpEnabled: true,
+                metadataEnabled: true,
+                resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"]
             ),
             MetadataNIC(
                 deviceName: "net1",
@@ -104,6 +107,9 @@ struct InstanceMetadataTests {
         #expect(primary.mtu == 1442)
         #expect(primary.dnsServers == ["10.0.0.1", "fd12:3456:789a::1"])
         #expect(primary.domainName == "corp.example.com")
+        #expect(primary.dhcpEnabled)
+        #expect(primary.metadataEnabled)
+        #expect(primary.resolverAddresses == ["169.254.1.0", "fd00:ec2:1::100"])
 
         // A NIC IPAM has not addressed keeps nils rather than fabricated
         // empties — the guest must be able to tell "unassigned" from "0.0.0.0".
@@ -115,6 +121,9 @@ struct InstanceMetadataTests {
         #expect(secondary.mtu == nil)
         #expect(secondary.dnsServers.isEmpty)
         #expect(secondary.domainName == nil)
+        #expect(!secondary.dhcpEnabled)
+        #expect(!secondary.metadataEnabled)
+        #expect(secondary.resolverAddresses.isEmpty)
     }
 
     @Test("Identity policy round-trips (phase 3 shape)")
@@ -251,7 +260,7 @@ struct InstanceMetadataTests {
         }
     }
 
-    @Test("A metadata NIC carrying only its identifying keys decodes to empty DNS")
+    @Test("A metadata NIC carrying only its identifying keys decodes safe network defaults")
     func metadataNICTolerantDecoding() throws {
         // The `dnsServers` branch of the hand-written decoder: a round trip
         // encodes the key as `[]`, so only JSON that genuinely omits it
@@ -263,6 +272,9 @@ struct InstanceMetadataTests {
         let decoded = try decodeJSON(MetadataNIC.self, from: minimal)
         #expect(decoded.deviceName == "net0")
         #expect(decoded.dnsServers.isEmpty)
+        #expect(decoded.resolverAddresses.isEmpty)
+        #expect(!decoded.dhcpEnabled)
+        #expect(!decoded.metadataEnabled)
         #expect(decoded.domainName == nil)
         #expect(decoded.ipAddress == nil)
         #expect(decoded.ipv4CIDR == nil)
