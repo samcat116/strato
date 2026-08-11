@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import Synchronization
 import Testing
 import Vapor
 import VaporTesting
@@ -199,7 +200,7 @@ final class CedarPolicySetCacheTests {
     @Test("A failed rebuild keeps the previous set — stale beats broken")
     func failedRebuildKeepsPrevious() async throws {
         try await withApp { app in
-            final class ToggleEngine: CedarEngine, @unchecked Sendable {
+            final class ToggleEngine: CedarEngine, Sendable {
                 struct Failure: Error {}
                 struct Artifact: CedarCompiledPolicySet {
                     func authorize(
@@ -209,7 +210,11 @@ final class CedarPolicySetCacheTests {
                         CedarCheckDecision(allowed: false, determiningPolicyIDs: [], evaluationErrors: [])
                     }
                 }
-                var failing = false
+                private let failureState = Mutex(false)
+                var failing: Bool {
+                    get { failureState.withLock { $0 } }
+                    set { failureState.withLock { $0 = newValue } }
+                }
                 func compile(schemaText: String, policies: [CedarPolicySource]) throws -> any CedarCompiledPolicySet {
                     if failing { throw Failure() }
                     return Artifact()

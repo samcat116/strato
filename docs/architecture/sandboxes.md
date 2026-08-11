@@ -418,10 +418,10 @@ control connections report.
 
 ### Host bridging and the wire
 
-The agent bridges vsock streams to new **v8 stream messages** — correlated by
+The agent bridges vsock streams to **guest exec stream messages** — correlated by
 `sessionId`, ordered by the WebSocket, never answered with `success`/`error`:
-`sandbox_exec_start/started/input/output/resize/exit/close/closed`. A
-`sandbox_exec_start` is answered by `started` on success or `closed` (with a
+`guest_exec_start/started/input/output/resize/exit/close/closed`. A
+`guest_exec_start` is answered by `started` on success or `closed` (with a
 reason) on failure.
 
 Per running sandbox the agent also keeps a long-lived log-follow task

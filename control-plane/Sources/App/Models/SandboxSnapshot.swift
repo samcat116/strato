@@ -26,6 +26,8 @@ enum SandboxSnapshotStatus: String, Codable, CaseIterable, Sendable {
 /// fork placement stay pinned to `agentId`. A snapshot can restore its source
 /// in place or seed a new sandbox identity (issue #427); off-node export and
 /// cross-agent restore remain issue #428.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class SandboxSnapshot: Model, @unchecked Sendable {
     static let schema = "sandbox_snapshots"
 

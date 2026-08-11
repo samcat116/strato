@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 #if os(Linux)
 import Glibc
@@ -303,19 +304,42 @@ public enum ProcessRunner {
     /// supervises QEMU and swtpm, Firecracker is driven over its API socket, and
     /// the agent itself assumes an external supervisor — so there was nothing to
     /// reuse.
-    public struct SpawnedProcess: @unchecked Sendable {
-        public let process: Process
-        public var processIdentifier: Int32 { process.processIdentifier }
-        public var isRunning: Bool { process.isRunning }
+    public struct SpawnedProcess: Sendable {
+        private final class Lifecycle: Sendable {
+            let process: Mutex<Process>
+
+            init(process: Process) {
+                self.process = Mutex(process)
+            }
+        }
+
+        private let lifecycle: Lifecycle
+
+        fileprivate init(process: Process) {
+            self.lifecycle = Lifecycle(process: process)
+        }
+
+        public var processIdentifier: Int32 {
+            lifecycle.process.withLock(\.processIdentifier)
+        }
+
+        public var isRunning: Bool {
+            lifecycle.process.withLock(\.isRunning)
+        }
 
         /// Sends SIGTERM, then SIGKILL after a grace period if it is still
         /// running. The same escalation `run`'s timeout path uses, exposed
         /// because a supervisor stopping a resolver has the identical problem.
         public func terminate(grace: Duration = ProcessRunner.signalEscalationGrace) async {
-            guard process.isRunning else { return }
-            process.terminate()
+            let pid = lifecycle.process.withLock { process -> Int32? in
+                guard process.isRunning else { return nil }
+                process.terminate()
+                return process.processIdentifier
+            }
+            guard let pid else { return }
             try? await Task.sleep(for: grace)
-            if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            let stillRunning = lifecycle.process.withLock(\.isRunning)
+            if stillRunning { kill(pid, SIGKILL) }
         }
     }
 
@@ -491,26 +515,28 @@ public enum ProcessRunner {
     /// against every ordering: the handler may fire before, during, or after
     /// `wait()` suspends. `wait()` uses a bare continuation with no
     /// cancellation handler, so a cancelled caller still waits for the signal.
-    private final class ExitLatch: @unchecked Sendable {
-        private let lock = NSLock()
-        private var signaled = false
-        private var continuation: CheckedContinuation<Void, Never>?
+    private final class ExitLatch: Sendable {
+        private struct State {
+            var signaled = false
+            var continuation: CheckedContinuation<Void, Never>?
+        }
+
+        private let state = Mutex(State())
 
         func signal() {
-            lock.lock()
-            signaled = true
-            let waiter = continuation
-            continuation = nil
-            lock.unlock()
+            let waiter = state.withLock { state -> CheckedContinuation<Void, Never>? in
+                state.signaled = true
+                let waiter = state.continuation
+                state.continuation = nil
+                return waiter
+            }
             waiter?.resume()
         }
 
         /// Whether the child has already exited, for the timeout watchdog's
         /// last-moment check before it signals by pid.
         var isSignaled: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return signaled
+            state.withLock(\.signaled)
         }
 
         /// Bounded wait for the signal, for the timed-out path only. Polling
@@ -527,34 +553,27 @@ public enum ProcessRunner {
 
         func wait() async {
             await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
-                lock.lock()
-                if signaled {
-                    lock.unlock()
-                    waiter.resume()
-                } else {
-                    continuation = waiter
-                    lock.unlock()
+                let shouldResume = state.withLock { state -> Bool in
+                    if state.signaled { return true }
+                    state.continuation = waiter
+                    return false
                 }
+                if shouldResume { waiter.resume() }
             }
         }
     }
 
     /// One-way flag recording that the timeout watchdog fired, so `run` can
     /// tell a SIGTERM it requested from one the child received elsewhere.
-    private final class TimeoutFlag: @unchecked Sendable {
-        private let lock = NSLock()
-        private var tripped = false
+    private final class TimeoutFlag: Sendable {
+        private let tripped = Mutex(false)
 
         func trip() {
-            lock.lock()
-            tripped = true
-            lock.unlock()
+            tripped.withLock { $0 = true }
         }
 
         var isTripped: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return tripped
+            tripped.withLock { $0 }
         }
     }
 

@@ -16,7 +16,7 @@ import Foundation
 /// `SandboxExecWebSocketController`'s pump): producers `yield` synchronously,
 /// preserving arrival order, and exactly one consumer task drains the stream,
 /// so the sink is entered once at a time and in order.
-public final class OrderedByteRelay: @unchecked Sendable {
+public final class OrderedByteRelay: Sendable {
     private let continuation: AsyncStream<Data>.Continuation
 
     /// The task draining the stream. Held so the owner can cancel it, and so

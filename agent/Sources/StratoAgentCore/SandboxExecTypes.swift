@@ -2,7 +2,7 @@ import Foundation
 
 /// The host-side description of an exec session to start inside a sandbox
 /// (issue #423): the `SandboxRuntimeService.startExec` request, mirroring the
-/// control plane's `SandboxExecStartMessage` fields.
+/// control plane's `GuestExecStartMessage` fields.
 public struct SandboxExecRequest: Equatable, Sendable {
     /// The argv to run in the container context. Never empty.
     public let command: [String]

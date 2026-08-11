@@ -284,17 +284,15 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
 }
 
 /// Service responsible for scheduling VM placement decisions
-final class SchedulerService: @unchecked Sendable {
+final class SchedulerService: Sendable {
     private let logger: Logger
     private let defaultStrategy: SchedulingStrategy
-    private let lock: NIOLock
-    private var roundRobinCounter: Int
+    private let roundRobinCounter: NIOLockedValueBox<Int>
 
     init(logger: Logger, defaultStrategy: SchedulingStrategy = .leastLoaded) {
         self.logger = logger
         self.defaultStrategy = defaultStrategy
-        self.lock = NIOLock()
-        self.roundRobinCounter = 0
+        self.roundRobinCounter = NIOLockedValueBox(0)
     }
 
     /// Select an agent for VM placement using the configured strategy
@@ -643,10 +641,11 @@ final class SchedulerService: @unchecked Sendable {
         }
 
         // Thread-safe increment and wrap
-        lock.lock()
-        let index = roundRobinCounter % agents.count
-        roundRobinCounter += 1
-        lock.unlock()
+        let index = roundRobinCounter.withLockedValue { counter in
+            let index = counter % agents.count
+            counter += 1
+            return index
+        }
 
         let selected = agents[index]
         logger.debug("RoundRobin selected agent '\(selected.name)' (index: \(index)/\(agents.count))")

@@ -18,6 +18,8 @@ public enum StoragePoolBacking: String, Codable, CaseIterable, Sendable {
 /// replicated among them. Every volume belongs to exactly one pool; a volume's
 /// physical copies are its `VolumeReplica` rows, each on one of the pool's
 /// member agents. See `docs/architecture/distributed-storage.md`.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class StoragePool: Model, @unchecked Sendable {
     static let schema = "storage_pools"
 

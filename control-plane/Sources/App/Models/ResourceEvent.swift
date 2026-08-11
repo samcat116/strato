@@ -78,6 +78,8 @@ enum ResourceEventPhase: String, Codable, CaseIterable, Sendable {
 /// 11 (STR-152) the only one — `resource_operations.user_id` was the other, and
 /// went with its table. Unlike `user_id` this row can name a machine principal,
 /// which is what unblocks JWT-SVID mutations (STR-15).
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class ResourceEvent: Model, @unchecked Sendable {
     static let schema = "resource_events"
 

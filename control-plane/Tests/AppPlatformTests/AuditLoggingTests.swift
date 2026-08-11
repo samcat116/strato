@@ -365,7 +365,7 @@ final class AuditLoggingTests {
     /// A backend that records what it was handed, and can be made arbitrarily
     /// slow — standing in for the Loki/webhook POSTs whose five-second timeout
     /// used to be paid on the request path.
-    private final class RecordingAuditBackend: AuditBackend, @unchecked Sendable {
+    private final class RecordingAuditBackend: AuditBackend, Sendable {
         let name = "recording"
         private let delay: Duration?
         private let state = NIOLockedValueBox<[[AuditRecord]]>([])

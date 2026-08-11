@@ -56,7 +56,9 @@ public protocol OCIHTTPTransport: Sendable {
 }
 
 /// The production transport: URLSession with automatic redirects disabled
-/// (see `OCIHTTPTransport` for why).
+/// (see `OCIHTTPTransport` for why). `session` is assigned once during init and
+/// never mutated afterward; Foundation documents `URLSession` as safe for
+/// concurrent requests and owns serialization of delegate callbacks.
 public final class URLSessionOCITransport: NSObject, OCIHTTPTransport, URLSessionTaskDelegate,
     @unchecked Sendable
 {

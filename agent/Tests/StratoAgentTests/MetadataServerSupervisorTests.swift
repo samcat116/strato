@@ -1,6 +1,8 @@
 import Foundation
+import Dispatch
 import Logging
 import StratoShared
+import Synchronization
 import Testing
 
 @testable import StratoAgentCore
@@ -10,96 +12,90 @@ struct MetadataServerSupervisorTests {
 
     // MARK: - Doubles
 
-    private final class RecordingHandle: MetadataServerHandle, @unchecked Sendable {
-        private let lock = NSLock()
-        private var alive = true
-        private var pushed: [MetadataSnapshot] = []
-        private var pushFailure: (any Error)?
+    private final class RecordingHandle: MetadataServerHandle, Sendable {
+        private struct State {
+            var alive = true
+            var pushed: [MetadataSnapshot] = []
+            var pushFailure: (any Error)?
+        }
+        private let state: Mutex<State>
 
-        init(pushFailure: (any Error)? = nil) { self.pushFailure = pushFailure }
+        init(pushFailure: (any Error)? = nil) {
+            self.state = Mutex(State(pushFailure: pushFailure))
+        }
 
         var isRunning: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return alive
+            state.withLock { $0.alive }
         }
 
         var snapshots: [MetadataSnapshot] {
-            lock.lock()
-            defer { lock.unlock() }
-            return pushed
+            state.withLock { $0.pushed }
         }
 
         var terminated: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return !alive
+            state.withLock { !$0.alive }
         }
 
         /// Simulate the child dying on its own.
         func die() {
-            lock.lock()
-            alive = false
-            lock.unlock()
+            state.withLock { $0.alive = false }
         }
 
         func push(_ snapshot: MetadataSnapshot) throws {
-            lock.lock()
-            let failure = pushFailure
-            if failure == nil { pushed.append(snapshot) }
-            lock.unlock()
+            let failure = state.withLock { state -> (any Error)? in
+                let failure = state.pushFailure
+                if failure == nil { state.pushed.append(snapshot) }
+                return failure
+            }
             if let failure { throw failure }
         }
 
         func terminate() {
-            lock.lock()
-            alive = false
-            lock.unlock()
+            state.withLock { $0.alive = false }
         }
     }
 
     private struct SpawnFailure: Error {}
 
-    private final class RecordingSpawner: MetadataServerSpawning, @unchecked Sendable {
-        private let lock = NSLock()
-        private var namespaces: Set<UUID>
-        private var failFor: Set<UUID>
-        private var pushFailFor: Set<UUID>
-        private(set) var handles: [UUID: RecordingHandle] = [:]
-        private(set) var spawnCount = 0
+    private final class RecordingSpawner: MetadataServerSpawning, Sendable {
+        private struct State {
+            var namespaces: Set<UUID>
+            var failFor: Set<UUID>
+            var pushFailFor: Set<UUID>
+            var handles: [UUID: RecordingHandle] = [:]
+            var spawnCount = 0
+        }
+        private let state: Mutex<State>
+
+        var handles: [UUID: RecordingHandle] { state.withLock { $0.handles } }
+        var spawnCount: Int { state.withLock { $0.spawnCount } }
 
         init(namespaces: Set<UUID> = [], failFor: Set<UUID> = [], pushFailFor: Set<UUID> = []) {
-            self.namespaces = namespaces
-            self.failFor = failFor
-            self.pushFailFor = pushFailFor
+            self.state = Mutex(
+                State(namespaces: namespaces, failFor: failFor, pushFailFor: pushFailFor))
         }
 
         func present(_ networkId: UUID) {
-            lock.lock()
-            namespaces.insert(networkId)
-            lock.unlock()
+            _ = state.withLock { $0.namespaces.insert(networkId) }
         }
 
         func namespaceExists(networkId: UUID) -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return namespaces.contains(networkId)
+            state.withLock { $0.namespaces.contains(networkId) }
         }
 
         func existingNamespaces() -> [UUID] {
-            lock.lock()
-            defer { lock.unlock() }
-            return namespaces.sorted { $0.uuidString < $1.uuidString }
+            state.withLock { $0.namespaces.sorted { $0.uuidString < $1.uuidString } }
         }
 
         func spawn(networkId: UUID) throws -> any MetadataServerHandle {
-            lock.lock()
-            defer { lock.unlock() }
-            spawnCount += 1
-            guard !failFor.contains(networkId) else { throw SpawnFailure() }
-            let handle = RecordingHandle(pushFailure: pushFailFor.contains(networkId) ? SpawnFailure() : nil)
-            handles[networkId] = handle
-            return handle
+            try state.withLock { state in
+                state.spawnCount += 1
+                guard !state.failFor.contains(networkId) else { throw SpawnFailure() }
+                let handle = RecordingHandle(
+                    pushFailure: state.pushFailFor.contains(networkId) ? SpawnFailure() : nil)
+                state.handles[networkId] = handle
+                return handle
+            }
         }
     }
 
@@ -231,6 +227,86 @@ struct MetadataServerSupervisorTests {
         #expect(await supervisor.runningNetworks().isEmpty)
         #expect(spawner.handles[first]?.terminated == true)
         #expect(spawner.handles[second]?.terminated == true)
+    }
+}
+
+@Suite("Metadata Server Process Lifecycle Tests")
+struct MetadataServerProcessLifecycleTests {
+    private static func snapshot() -> MetadataSnapshot {
+        MetadataSnapshot(networkId: UUID(), origin: .live, instances: [])
+    }
+
+    @Test("Termination force-kills a child blocked in a snapshot write before closing the pipe")
+    func terminationInterruptsBlockedWrites() async throws {
+        let writeStarted = Mutex(false)
+        let writeCount = Mutex(0)
+        let processTerminationCount = Mutex(0)
+        let forceTerminationCount = Mutex(0)
+        let inputCloseCount = Mutex(0)
+        let allowWriteToFinish = DispatchSemaphore(value: 0)
+        defer { allowWriteToFinish.signal() }
+
+        let io = MetadataServerProcessIO(
+            isRunning: { true },
+            write: { _ in
+                writeStarted.withLock { $0 = true }
+                allowWriteToFinish.wait()
+                writeCount.withLock { $0 += 1 }
+            },
+            terminateProcess: { processTerminationCount.withLock { $0 += 1 } },
+            forceTerminateProcess: { forceTerminationCount.withLock { $0 += 1 } },
+            closeInput: { inputCloseCount.withLock { $0 += 1 } }
+        )
+        let handle = MetadataServerProcessHandle(
+            io: io, networkId: UUID(), logger: Logger(label: "test"),
+            terminationGrace: .zero)
+
+        try handle.push(Self.snapshot())
+        while !writeStarted.withLock({ $0 }) { await Task.yield() }
+
+        handle.terminate()
+        #expect(processTerminationCount.withLock { $0 } == 1)
+        for _ in 0..<100 where forceTerminationCount.withLock({ $0 }) == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(forceTerminationCount.withLock { $0 } == 1)
+        #expect(inputCloseCount.withLock { $0 } == 0)
+        #expect(!handle.isRunning)
+        #expect(throws: (any Error).self) { try handle.push(Self.snapshot()) }
+
+        allowWriteToFinish.signal()
+        for _ in 0..<100 where inputCloseCount.withLock({ $0 }) == 0 {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+
+        #expect(writeCount.withLock { $0 } == 1)
+        #expect(inputCloseCount.withLock { $0 } == 1)
+
+        handle.terminate()
+        #expect(processTerminationCount.withLock { $0 } == 1)
+        #expect(forceTerminationCount.withLock { $0 } == 1)
+        #expect(inputCloseCount.withLock { $0 } == 1)
+    }
+
+    @Test("Termination skips SIGKILL when the child exits during the grace period")
+    func gracefulTerminationDoesNotEscalate() async throws {
+        let isRunning = Mutex(true)
+        let forceTerminationCount = Mutex(0)
+        let io = MetadataServerProcessIO(
+            isRunning: { isRunning.withLock { $0 } },
+            write: { _ in },
+            terminateProcess: { isRunning.withLock { $0 = false } },
+            forceTerminateProcess: { forceTerminationCount.withLock { $0 += 1 } },
+            closeInput: {}
+        )
+        let handle = MetadataServerProcessHandle(
+            io: io, networkId: UUID(), logger: Logger(label: "test"),
+            terminationGrace: .zero)
+
+        handle.terminate()
+        try await Task.sleep(for: .milliseconds(20))
+
+        #expect(forceTerminationCount.withLock { $0 } == 0)
     }
 }
 

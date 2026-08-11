@@ -11,6 +11,8 @@ import Vapor
 /// RFC 5952 for IPv6 — because the per-network uniqueness index compares
 /// strings. `logicalNetwork` and `gateway` are denormalized at allocation time
 /// so IPAM's used-set query and spec building need no joins.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class VMInterfaceAddress: Model, @unchecked Sendable {
     static let schema = "vm_interface_addresses"
 
