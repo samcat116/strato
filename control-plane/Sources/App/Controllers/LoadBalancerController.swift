@@ -344,6 +344,21 @@ struct LoadBalancerController: RouteCollection {
         guard interface.ipv4Address != nil else {
             throw Abort(.conflict, reason: "Backend interface has no IPv4 address")
         }
+        guard
+            let loadBalancerNetwork = try await LogicalNetwork.find(
+                loadBalancer.$logicalNetwork.id, on: req.db),
+            let backendNetwork = try await LogicalNetwork.find(
+                interface.$logicalNetwork.id, on: req.db)
+        else {
+            throw Abort(.conflict, reason: "Load balancer or backend network no longer exists")
+        }
+        guard loadBalancerNetwork.$site.id == backendNetwork.$site.id else {
+            throw Abort(
+                .conflict,
+                reason:
+                    "Backend interface network '\(backendNetwork.name)' is pinned to a different site than load balancer network '\(loadBalancerNetwork.name)'"
+            )
+        }
         return ResolvedBackend(interface: interface, address: nil)
     }
 

@@ -659,9 +659,8 @@ public enum NetworkReconciler {
                                 externalIP: fip.externalIP,
                                 logicalIP: fip.logicalIP,
                                 logicalPort: logicalPort,
-                                externalMAC: logicalPort.map { _ in
-                                    OVNNaming.floatingIPMAC(externalIP: fip.externalIP)
-                                }))
+                                externalMAC: logicalPort == nil
+                                    ? nil : OVNNaming.floatingIPMAC(externalIP: fip.externalIP)))
                     }
                 }
             }

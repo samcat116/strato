@@ -90,7 +90,7 @@ actor NetworkServiceMacOS: NetworkServiceProtocol {
         let reason = "Native OVN load balancers are not supported with user-mode networking"
         let desired = networks.flatMap { $0.loadBalancers ?? [] }
         if !desired.isEmpty {
-            logger.error(reason)
+            logger.error("\(reason)")
         }
         lastObservedLoadBalancers = desired.map {
             ObservedLoadBalancerState(

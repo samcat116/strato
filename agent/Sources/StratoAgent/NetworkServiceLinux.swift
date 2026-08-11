@@ -67,6 +67,10 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
     #if os(Linux)
     private var ovnManager: OVNManager?
+    /// Read-only Southbound connection used for Service_Monitor health. The
+    /// NB manager cannot read this table even when both databases share one
+    /// ovn-central process.
+    private var ovnSouthboundManager: OVNManager?
     private var ovsManager: OVSManager?
     private var isConnected = false
     #endif
@@ -197,6 +201,38 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         try ensureChassisConfiguration()
         try await verifyOVNControllerConnected()
 
+        // Service_Monitor lives in Southbound. Keep this connection separate
+        // from the single-writer NB manager and do not make basic networking
+        // unavailable if the operator's SB RBAC permits ovn-controller but not
+        // this read — health observation will report a backend error until the
+        // access is fixed.
+        do {
+            let connection = try southboundConnectionString()
+            var endpoint = try OVSDBEndpoint(parsing: connection)
+            if case .ssl(let host, let port, _) = endpoint, let tls = ovnNBTLS {
+                endpoint = .ssl(
+                    host: host, port: port,
+                    tls: OVSDBTLSConfiguration(
+                        caCertificatePath: tls.caCertPath,
+                        clientCertificatePath: tls.clientCertPath,
+                        clientPrivateKeyPath: tls.clientKeyPath,
+                        verifiesServerCertificate: tls.verifyServerCertificate,
+                        serverHostname: tls.serverHostname))
+            }
+            let manager = OVNManager(
+                endpoint: endpoint, database: OVNDatabase.southbound, logger: logger)
+            try await manager.connect()
+            ovnSouthboundManager = manager
+            logger.info(
+                "Connected to OVN Southbound database for load-balancer health",
+                metadata: ["endpoint": .string(connection)])
+        } catch {
+            ovnSouthboundManager = nil
+            logger.error(
+                "Cannot connect to OVN Southbound database; native LB health will report an error",
+                metadata: ["error": .string(error.localizedDescription)])
+        }
+
         isConnected = true
         logger.info("Network service connected successfully")
         #else
@@ -210,12 +246,14 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
 
         do {
             try await ovnManager?.disconnect()
+            try await ovnSouthboundManager?.disconnect()
             try await ovsManager?.disconnect()
         } catch {
             logger.error("Error disconnecting from OVN/OVS: \(error)")
         }
 
         ovnManager = nil
+        ovnSouthboundManager = nil
         ovsManager = nil
         isConnected = false
 
@@ -224,6 +262,23 @@ actor NetworkServiceLinux: NetworkServiceProtocol {
         logger.info("Mock network service disconnected (development mode)")
         #endif
     }
+
+    #if os(Linux)
+    private func southboundConnectionString() throws -> String {
+        if let configured = chassisConfig.remote, !configured.isEmpty {
+            return configured
+        }
+        let result = try runProcess(
+            "ovs-vsctl",
+            ["--timeout=\(Self.ovsCommandTimeoutSeconds)", "get", "open_vswitch", ".", "external_ids"])
+        guard result.status == 0 else {
+            throw NetworkError.ovsError(
+                "cannot read chassis external_ids for the Southbound endpoint (exit \(result.status))")
+        }
+        return OVNChassisBootstrap.parseExternalIDs(result.output)["ovn-remote"]
+            ?? OVNChassisBootstrap.defaultRemote
+    }
+    #endif
 
     // MARK: - VM Network Lifecycle
 
@@ -1406,8 +1461,12 @@ extension NetworkServiceLinux {
                 metadata: ["error": .string(error.localizedDescription)])
         }
 
+        #if os(Linux)
         lastObservedLoadBalancers = await LoadBalancerReconciler.reconcile(
             networks: current, actuator: self, logger: logger)
+        #else
+        lastObservedLoadBalancers = nil
+        #endif
 
         // Converge each network's DHCP_Options rows here, level-triggered,
         // not only when a NIC is realized: DHCP edits don't bump VM or
@@ -3199,6 +3258,34 @@ extension NetworkServiceLinux: LoadBalancerActuator {
         return rowUUID
     }
 
+    func observeBackendHealth(
+        for desired: DesiredLoadBalancer
+    ) async throws -> [ObservedLoadBalancerBackend] {
+        guard desired.healthCheck.enabled else {
+            return desired.backends.map {
+                ObservedLoadBalancerBackend(id: $0.id, healthStatus: .unknown)
+            }
+        }
+        guard let ovnSouthboundManager else {
+            throw NetworkError.notConnected(
+                "OVN Southbound manager is not connected; cannot read Service_Monitor")
+        }
+        let monitors = try await ovnSouthboundManager.getServiceMonitors()
+        return LoadBalancerBackendHealthMapper.map(
+            desired: desired,
+            monitors: monitors.map {
+                LoadBalancerServiceMonitorObservation(
+                    monitorType: $0.monitorType,
+                    ipAddress: $0.ip,
+                    port: $0.port,
+                    protocolName: $0.protocolType,
+                    logicalPort: $0.logical_port,
+                    sourceIP: $0.src_ip,
+                    status: $0.status)
+            },
+            observedAt: Date())
+    }
+
     func removeLoadBalancer(_ observed: ManagedLoadBalancerObservation) async throws {
         guard let ovnManager else {
             throw NetworkError.notConnected("OVN manager not connected")
@@ -3299,23 +3386,21 @@ extension NetworkServiceLinux: LoadBalancerActuator {
         healthChecks: [String],
         externalIDs: [String: String]
     ) -> OVNLoadBalancer {
-        let vips = Dictionary(uniqueKeysWithValues: desired.listeners.map { listener in
-            (
-                "\(desired.vip):\(listener.port)",
-                desired.backends.map { "\($0.ipAddress):\(listener.backendPort)" }
-                    .joined(separator: ",")
-            )
-        })
-        let mappings = Dictionary(
-            uniqueKeysWithValues: desired.backends.compactMap { backend in
-                guard let vmID = backend.vmId,
-                    let nicIndex = backend.nicIndex,
-                    let sourceIP = backend.healthCheckSourceIP
-                else { return nil }
-                return (
-                    backend.ipAddress,
-                    "\(OVNNaming.vmPortName(vmId: vmID.uuidString, nicIndex: nicIndex)):\(sourceIP)")
-            })
+        var vips: [String: String] = [:]
+        for listener in desired.listeners {
+            vips["\(desired.vip):\(listener.port)"] = desired.backends
+                .map { "\($0.ipAddress):\(listener.backendPort)" }
+                .joined(separator: ",")
+        }
+        var mappings: [String: String] = [:]
+        for backend in desired.backends {
+            guard let vmID = backend.vmId,
+                let nicIndex = backend.nicIndex,
+                let sourceIP = backend.healthCheckSourceIP
+            else { continue }
+            mappings[backend.ipAddress] =
+                "\(OVNNaming.vmPortName(vmId: vmID.uuidString, nicIndex: nicIndex)):\(sourceIP)"
+        }
         return OVNLoadBalancer(
             name: "strato-lb-\(desired.id.uuidString.lowercased())",
             vips: vips,
