@@ -1317,10 +1317,22 @@ network rather than of the agent.
 paths are `/latest/meta-data`, `/latest/user-data`, and
 `/latest/network-config` (404 when no NIC needs a network document). The
 no-trailing-slash metadata path matters: `/latest/meta-data/` remains the EC2
-index proved by STR-56, with `instance-id` and optional `hostname` children,
-and STR-65 extends that tree. All documents render from the listener's latest
+index proved by STR-56. The EC2 projection below it exposes only values the
+shared `InstanceMetadata` can state truthfully: instance identity and hostname,
+SSH keys, per-NIC addresses and network identity, safe instance tags, and the
+instance-identity document under
+`/latest/dynamic/instance-identity/document`. It does not invent AMI, instance
+type, VPC, or interface identifiers. Directory listings follow EC2's nested
+shape (including the `0=<name>` public-key index), so stock EC2 datasource
+crawlers can discover the leaves rather than depending on a second endpoint
+tree. Placement is a renderer policy and defaults to hidden; enabling it adds
+region and availability zone to both the metadata tree and identity document.
+
+Both projections, and `/latest/user-data`, render from the listener's latest
 `InstanceMetadata` snapshot, so an applied metadata sync changes the next HTTP
-response without rebuilding guest media.
+response without rebuilding guest media. The EC2 and NoCloud surfaces are
+therefore different serializations of one current value, not independently
+maintained metadata stores.
 
 **Bounds, because the peer is untrusted guest code that can retry forever:**
 a raw-byte cap in front of the HTTP decoder (`ByteToMessageHandler`'s

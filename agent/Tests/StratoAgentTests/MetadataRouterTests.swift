@@ -92,15 +92,30 @@ struct MetadataRouterTests {
         #expect(Self.route("GET", "/latest") == .document(.root))
         #expect(Self.route("GET", "/latest/") == .document(.root))
         #expect(Self.route("GET", "/latest/meta-data") == .document(.noCloudMetaData))
-        #expect(Self.route("GET", "/latest/meta-data/") == .document(.metaDataIndex))
+        #expect(Self.route("GET", "/latest/meta-data/") == .document(.ec2MetaData(.index)))
         #expect(Self.route("GET", "/latest/user-data") == .document(.userData))
         #expect(Self.route("GET", "/latest/user-data/") == .document(.userData))
         #expect(Self.route("GET", "/latest/network-config") == .document(.networkConfig))
         #expect(Self.route("GET", "/latest/network-config/") == .document(.networkConfig))
-        #expect(Self.route("GET", "/latest/meta-data/instance-id") == .document(.instanceID))
-        #expect(Self.route("GET", "/latest/meta-data/instance-id/") == .document(.instanceID))
-        #expect(Self.route("GET", "/latest/meta-data/hostname") == .document(.hostname))
-        #expect(Self.route("GET", "/latest/meta-data/hostname/") == .document(.hostname))
+        #expect(Self.route("GET", "/latest/meta-data/instance-id") == .document(.ec2MetaData(.instanceID)))
+        #expect(Self.route("GET", "/latest/meta-data/instance-id/") == .document(.ec2MetaData(.instanceID)))
+        #expect(Self.route("GET", "/latest/meta-data/hostname") == .document(.ec2MetaData(.hostname)))
+        #expect(Self.route("GET", "/latest/meta-data/hostname/") == .document(.ec2MetaData(.hostname)))
+        #expect(Self.route("GET", "/latest/meta-data/local-hostname") == .document(.ec2MetaData(.localHostname)))
+        #expect(
+            Self.route("GET", "/latest/meta-data/network/interfaces/macs/52:54:00:12:34:56/local-ipv4s")
+                == .document(
+                    .ec2MetaData(
+                        .networkInterfaceLeaf(macAddress: "52:54:00:12:34:56", leaf: .localIPv4s))))
+        #expect(
+            Self.route("GET", "/latest/meta-data/public-keys/0/openssh-key")
+                == .document(.ec2MetaData(.publicKeyOpenSSH(index: 0))))
+        #expect(
+            Self.route("GET", "/latest/dynamic/instance-identity/document")
+                == .document(.ec2Dynamic(.instanceIdentityDocument)))
+        #expect(
+            Self.route("GET", "/latest/dynamic/instance-identity/")
+                == .document(.ec2Dynamic(.instanceIdentity)))
     }
 
     @Test("An unserved path is not rejected at the router, so its 404 can wait for authentication")
@@ -108,6 +123,8 @@ struct MetadataRouterTests {
         // If the router rejected here, anything that could reach the address
         // could map the tree without ever holding a session.
         #expect(Self.route("GET", "/latest/meta-data/ami-id") == .unknownDocument)
+        #expect(Self.route("GET", "/latest/meta-data/public-keys/00/openssh-key") == .unknownDocument)
+        #expect(Self.route("GET", "/latest/dynamic/instance-identity/signature") == .unknownDocument)
         #expect(Self.route("GET", "/latest/vendor-data/") == .unknownDocument)
         #expect(Self.route("GET", "/latest/meta-data/instance-id//") == .unknownDocument)
         #expect(Self.route("GET", "/") == .unknownDocument)

@@ -429,13 +429,16 @@ struct MetadataResponderTests {
 
         #expect(await get("/latest/").body == "meta-data\nnetwork-config\nuser-data")
         #expect(await get("/latest/meta-data").body == CloudInitProvisioner.metaDataDocument(for: metadata))
-        #expect(await get("/latest/meta-data/").body == "hostname\ninstance-id")
+        #expect(
+            await get("/latest/meta-data/").body
+                == "hostname\ninstance-id\nlocal-hostname\nlocal-ipv4\nmac\nnetwork/\npublic-keys/")
         #expect(await get("/latest/meta-data/instance-id").body == vmId.uuidString)
         #expect(await get("/latest/meta-data/hostname").body == "web-01")
+        #expect(await get("/latest/meta-data/local-hostname").body == "web-01")
+        #expect(await get("/latest/meta-data/local-ipv4").body == "10.0.0.5")
+        #expect(await get("/latest/meta-data/public-keys/0/openssh-key").body == "ssh-ed25519 AAAA key@host")
         #expect(await get("/latest/user-data").body == CloudInitProvisioner.userDataDocument(for: metadata))
         #expect(await get("/latest/network-config").body == CloudInitProvisioner.networkConfigYAML(for: metadata))
-        // Deliberately not served here — STR-65 owns the rest of the EC2 tree.
-        #expect(await get("/latest/meta-data/local-ipv4").status == 404)
     }
 
     @Test("An absent NoCloud network-config is a 404 and is not advertised")
@@ -484,7 +487,7 @@ struct MetadataResponderTests {
             to: Self.request(
                 "GET", "/latest/meta-data/", from: "10.0.0.5", (MetadataHeaderName.token, token)),
             at: now)
-        #expect(listing.body == "instance-id")
+        #expect(listing.body == "instance-id\nlocal-ipv4\nmac\nnetwork/")
     }
 
     @Test("An unserved path 404s only after authentication")
