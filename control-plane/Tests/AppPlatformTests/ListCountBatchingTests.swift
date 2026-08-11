@@ -170,11 +170,13 @@ final class ListCountBatchingTests {
             try await builder.addUserToOrganization(user: user, organization: org, role: "admin")
             let project = try await builder.createProject(
                 name: "Pool Count Project", description: "d", organization: org)
+            let siteID = try await builder.placementSite(for: project).requireID()
 
             func addPool(_ index: Int, allocations: Int = 0) async throws {
                 let pool = FloatingIPPool(
                     name: "pool-\(String(format: "%03d", index))",
                     cidr: "203.0.\(index).0/24", gateway: "203.0.\(index).1",
+                    siteID: siteID,
                     organizationScope: .organization(org.id!))
                 try await pool.save(on: app.db)
                 for allocation in 0..<allocations {

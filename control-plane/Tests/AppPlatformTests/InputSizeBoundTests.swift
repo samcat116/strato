@@ -381,13 +381,15 @@ final class InputSizeBoundTests {
     /// between the string and an identity key in the datapath's control database.
     @Test("POST /api/networks refuses an oversized name before it can reach OVSDB")
     func networkNameNeverReachesOVSDB() async throws {
-        try await withApp { app, _, project, _, token in
+        try await withApp { app, _, _, project, _, token in
+            let siteID = try await TestDataBuilder(db: app.db).placementSite(for: project).requireID()
             let oversized = self.string(Validate.nameLength + 1)
             try await app.test(.POST, "/api/networks") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
                 try req.content.encode(
                     CreateNetworkRequest(
-                        name: oversized, subnet: "10.77.0.0/24", projectId: project.id))
+                        name: oversized, subnet: "10.77.0.0/24", projectId: project.id,
+                        siteId: siteID))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
             }

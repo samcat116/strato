@@ -100,6 +100,7 @@ struct VMAttachTargetDisclosureTests {
                 name: "Home Project", description: "Owns the attachable resources", organization: org)
             let other = try await builder.createProject(
                 name: "Other Project", description: "Owns the VM being named", organization: org)
+            let site = try await builder.placementSite(for: home)
 
             let editor = try await builder.createUser(
                 username: "disclosure-editor",
@@ -135,6 +136,7 @@ struct VMAttachTargetDisclosureTests {
 
             let pool = FloatingIPPool(
                 name: "disclosure-edge", cidr: "203.0.113.0/29", gateway: "203.0.113.1",
+                siteID: try site.requireID(),
                 organizationScope: .organization(try org.requireID()))
             try await pool.save(on: app.db)
             let floatingIP = FloatingIP(
@@ -145,7 +147,8 @@ struct VMAttachTargetDisclosureTests {
             // A VM the editor cannot touch, with a NIC so that nothing behind
             // the check under test could fail first for want of one.
             let network = try await builder.createNetwork(
-                name: "disclosure-net", project: other, subnet: "10.95.0.0/24", gateway: "10.95.0.1")
+                name: "disclosure-net", project: other, subnet: "10.95.0.0/24",
+                gateway: "10.95.0.1", site: site)
             let vm = try await builder.createVM(name: "disclosure-vm", project: other)
             let nic = VMNetworkInterface(
                 vmID: try vm.requireID(), logicalNetworkID: try network.requireID(),

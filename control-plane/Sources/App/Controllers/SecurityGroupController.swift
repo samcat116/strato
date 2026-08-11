@@ -217,6 +217,13 @@ struct SecurityGroupController: RouteCollection {
 
         do {
             try await req.db.transaction { db in
+                // PostgreSQL checks the self-reference's NO ACTION FK before
+                // the owner-side CASCADE can remove the same rule. Delete the
+                // group's own rules explicitly so a self rule does not make a
+                // non-default group undeletable.
+                try await SecurityGroupRule.query(on: db)
+                    .filter(\.$securityGroup.$id == groupId)
+                    .delete()
                 try await group.delete(on: db)
                 try await RoleBindingService.revokeAll(nodeType: .securityGroup, nodeID: groupId, on: db)
             }
