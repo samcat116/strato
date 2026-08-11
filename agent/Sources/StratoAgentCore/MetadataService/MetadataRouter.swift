@@ -27,9 +27,11 @@ public enum MetadataLimits {
     public static let minTokenTTLSeconds = 1
     public static let maxTokenTTLSeconds = 21600
 
-    /// Longest request target accepted. Nothing this service serves comes close;
-    /// the cap is here so a guest cannot make the agent hold a long string.
-    public static let maxTargetBytes = 256
+    /// Longest request target accepted. The identity audience is capped at 512
+    /// bytes by the issuer, so leave room for its path and percent encoding
+    /// while still bounding what an untrusted guest can make the agent hold.
+    public static let maxTargetBytes = 2 * 1024
+    public static let maxIdentityAudienceBytes = 512
     /// Cap on the buffered request head, enforced by the decoder's
     /// `maximumBufferSize`.
     public static let maxRequestHeadBytes = 8 * 1024
@@ -156,6 +158,9 @@ public enum MetadataDocumentPath: Sendable, Equatable, Hashable, CaseIterable {
 public enum MetadataRoute: Sendable, Equatable {
     case mintToken(ttlSeconds: Int)
     case document(MetadataDocumentPath)
+    /// Strato's guest-identity surface. Deliberately outside `/latest/`: it is
+    /// not part of the EC2-compatible metadata tree.
+    case identity(audience: String)
     /// A well-formed read of a path this service does not serve.
     ///
     /// Distinct from `.rejected` so the 404 can wait until *after* the caller
@@ -177,14 +182,18 @@ public enum MetadataRoute: Sendable, Equatable {
 /// rather than through a socket and a store.
 public enum MetadataRouter {
     public static let tokenPath = "/latest/api/token"
+    public static let identityPath = "/strato/v1/identity"
 
     public static func route(method: String, target: String, headers: MetadataHeaders) -> MetadataRoute {
-        guard let path = normalize(target: target) else {
+        guard let parsed = parse(target: target) else {
+            return .rejected(.rejected(400, "malformed request target"))
+        }
+        guard parsed.query == nil || parsed.path == identityPath else {
             return .rejected(.rejected(400, "malformed request target"))
         }
         let method = method.uppercased()
 
-        if path == tokenPath {
+        if parsed.path == tokenPath, parsed.query == nil {
             guard method == "PUT" else {
                 // A GET must never mint. This is the barrier the issue names:
                 // a token obtainable by GET is a token an SSRF primitive can
@@ -203,7 +212,15 @@ public enum MetadataRouter {
         if headers.lookup(MetadataHeaderName.token) == .duplicated {
             return .rejected(.rejected(400, "\(MetadataHeaderName.token) given more than once"))
         }
-        guard let document = document(for: path) else { return .unknownDocument }
+        if parsed.path == identityPath {
+            guard let audience = identityAudience(from: parsed.query) else {
+                return .rejected(.rejected(400, "identity requests require exactly one audience"))
+            }
+            return .identity(audience: audience)
+        }
+        guard parsed.query == nil, let document = document(for: parsed.path) else {
+            return .unknownDocument
+        }
         return .document(document)
     }
 
@@ -237,18 +254,39 @@ public enum MetadataRouter {
     /// The request target reduced to a path, or nil if it is not one this
     /// service will look at.
     ///
-    /// No percent-decoding at all, deliberately: nothing in the served tree
-    /// needs escaping, so a decoder here would exist only to be the traversal
-    /// bug. A target carrying `%` is refused rather than normalized.
-    private static func normalize(target: String) -> String? {
+    /// Paths are never percent-decoded: nothing in the served tree needs
+    /// escaping, so a path decoder would exist only to be the traversal bug.
+    /// The identity query's audience is decoded separately after the path has
+    /// been matched exactly.
+    private static func parse(target: String) -> (path: String, query: String?)? {
         guard target.utf8.count <= MetadataLimits.maxTargetBytes else { return nil }
         guard target.hasPrefix("/") else { return nil }
-        guard !target.contains("%"), !target.contains(".."), !target.contains("?"), !target.contains("#")
-        else { return nil }
+        guard !target.contains(".."), !target.contains("#") else { return nil }
         guard target.allSatisfy({ $0.isASCII && !$0.isNewline && $0 != " " }) else { return nil }
+        let pieces = target.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        guard pieces.count <= 2 else { return nil }
+        var path = String(pieces[0])
+        let query = pieces.count == 2 ? String(pieces[1]) : nil
+        // Percent encoding is useful only in the identity audience. Refusing it
+        // in paths keeps the no-decoding traversal argument intact.
+        guard !path.contains("%") else { return nil }
         // One trailing slash is the same resource; EC2 clients write both forms.
-        if target.count > 1, target.hasSuffix("/") { return String(target.dropLast()) }
-        return target
+        if path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return (path, query)
+    }
+
+    private static func identityAudience(from query: String?) -> String? {
+        guard let query, !query.isEmpty else { return nil }
+        let items = query.split(separator: "&", omittingEmptySubsequences: false)
+        guard items.count == 1 else { return nil }
+        let pair = items[0].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
+        guard pair.count == 2, pair[0] == "audience" else { return nil }
+        let raw = String(pair[1])
+        guard let audience = raw.removingPercentEncoding, !audience.isEmpty,
+            audience.utf8.count <= MetadataLimits.maxIdentityAudienceBytes,
+            audience.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+        else { return nil }
+        return audience
     }
 
     private static func document(for path: String) -> MetadataDocumentPath? {

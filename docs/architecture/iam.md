@@ -929,8 +929,10 @@ existing VMs on the platform domain until a migration re-issues them. The VM's
 SPIFFE ID is published to the guest through the instance metadata service:
 publishable precisely because it is a *name*. STR-57 now lets the hosting agent
 obtain a short-lived bearer credential naming that same principal through a
-placement-checked mTLS route. The invariant is unchanged: the token names the VM
-and grants nothing; ordinary bindings still decide authorization. Guest minting
+placement-checked mTLS route. STR-62 bridges that route to the authenticated
+`/strato/v1/identity` IMDS endpoint with local audience enforcement and a
+per-VM, per-audience half-life cache. The invariant is unchanged: the token names
+the VM and grants nothing; ordinary bindings still decide authorization. Guest minting
 has its own explicit relying-party allowlist, `GUEST_IDENTITY_AUDIENCES`, so it
 does not accidentally inherit the API's `SPIFFE_JWT_AUDIENCE` and turn every
 guest into a bearer-token client of Strato. **Sandboxes are not covered yet**

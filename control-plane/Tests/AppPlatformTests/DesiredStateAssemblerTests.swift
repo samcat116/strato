@@ -176,8 +176,8 @@ final class DesiredStateAssemblerTests {
             #expect(metadata.vendorData == nil)
             #expect(metadata.tags.isEmpty)
             // The VM's own SPIFFE ID (STR-55) is publishable because it is only
-            // a name. STR-57's audience and TTL policy remain hidden until the
-            // production agent exposes the guest-facing mint bridge.
+            // a name. Empty issuance configuration keeps STR-62 disabled and
+            // publishes no audience or TTL capability to the agent.
             #expect(metadata.identity?.spiffeId == identity.spiffeID)
             #expect(metadata.identity?.audiences == [])
             #expect(metadata.identity?.ttlSeconds == nil)
@@ -228,6 +228,32 @@ final class DesiredStateAssemblerTests {
             let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
             let metadata = try #require(sync.vms.first { $0.vmId == vm.id }?.metadata)
             #expect(metadata.identity == nil)
+        }
+    }
+
+    @Test("Guest identity issuance policy is published sorted with the IMDS TTL ceiling")
+    func guestIdentityPolicyIsPublished() async throws {
+        try await withAssemblerApp { app, _, project in
+            app.guestIdentityIssuanceConfig = GuestIdentityIssuanceConfig(
+                allowedAudiences: ["spiffe://strato.local/other", "spiffe://strato.local/control-plane"],
+                defaultTTLSeconds: 300,
+                maximumTTLSeconds: 1_200)
+            let agentId = try await self.registerAgent(app: app, named: "identity-policy-agent")
+            let vm = try await self.placeVM(
+                app: app, project: project, named: "identity-policy-vm", onAgent: agentId)
+            let identity = try await GuestIdentity.register(
+                vmID: try vm.requireID(), organizationID: nil, createdBy: nil, on: app.db)
+
+            let sync = try await app.desiredStateAssembler.assemble(agentId: agentId)
+            let policy = try #require(
+                sync.vms.first { $0.vmId == vm.id }?.metadata?.identity)
+
+            #expect(policy.spiffeId == identity.spiffeID)
+            #expect(
+                policy.audiences == [
+                    "spiffe://strato.local/control-plane", "spiffe://strato.local/other",
+                ])
+            #expect(policy.ttlSeconds == 900)
         }
     }
 

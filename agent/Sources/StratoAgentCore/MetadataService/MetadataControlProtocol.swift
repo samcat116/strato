@@ -1,4 +1,37 @@
 import Foundation
+import StratoShared
+
+/// Parent-to-listener frames. Snapshots remain level-triggered state; identity
+/// responses are correlated replies to the listener's narrowly scoped mint
+/// requests on stdout.
+public enum MetadataParentMessage: Codable, Sendable, Equatable {
+    case snapshot(MetadataSnapshot)
+    case identityResponse(MetadataIdentityResponse)
+}
+
+public struct MetadataIdentityRequest: Codable, Sendable, Equatable {
+    public let requestId: UUID
+    public let vmId: UUID
+    public let audience: String
+    public let ttlSeconds: Int
+
+    public init(requestId: UUID, vmId: UUID, audience: String, ttlSeconds: Int) {
+        self.requestId = requestId
+        self.vmId = vmId
+        self.audience = audience
+        self.ttlSeconds = ttlSeconds
+    }
+}
+
+public struct MetadataIdentityResponse: Codable, Sendable, Equatable {
+    public let requestId: UUID
+    public let svid: GuestJWTSVIDResponse?
+
+    public init(requestId: UUID, svid: GuestJWTSVIDResponse?) {
+        self.requestId = requestId
+        self.svid = svid
+    }
+}
 
 /// Framing for the channel between the agent and one of its metadata listeners
 /// (STR-56).
@@ -8,11 +41,10 @@ import Foundation
 /// byte stream, so the frames have to delimit themselves: four bytes of
 /// big-endian length, then that many bytes of JSON.
 ///
-/// The direction is deliberately one-way. The child answers guests entirely from
-/// what it was last pushed, with no request-time call back to the parent, which
-/// is the same fail-static posture `MetadataStore` documents: a wedged or
-/// restarting agent must not turn into a hung metadata service, because a guest
-/// that cannot read its metadata may fail to boot.
+/// Metadata documents remain one-way and fail-static. The only reverse message
+/// is a typed guest-identity mint request: bearer credentials cannot be pushed
+/// in snapshots or persisted, and the namespace child must not receive the
+/// parent agent's control-plane credentials.
 public enum MetadataControlProtocol {
     /// The largest frame either side will produce or accept.
     ///
@@ -44,6 +76,48 @@ public enum MetadataControlProtocol {
         }
         frame.append(payload)
         return frame
+    }
+}
+
+/// Listener-side request/reply adapter over the child's stdout and stdin.
+public actor MetadataIdentityIPCClient {
+    private let output: FileHandle
+    private var pending: [UUID: CheckedContinuation<GuestJWTSVIDResponse, Error>] = [:]
+
+    public init(output: FileHandle) {
+        self.output = output
+    }
+
+    public func mint(vmId: UUID, audience: String, ttlSeconds: Int) async throws -> GuestJWTSVIDResponse {
+        let request = MetadataIdentityRequest(
+            requestId: UUID(), vmId: vmId, audience: audience, ttlSeconds: ttlSeconds)
+        let frame = try MetadataControlProtocol.encode(request)
+        return try await withCheckedThrowingContinuation { continuation in
+            pending[request.requestId] = continuation
+            do {
+                try output.write(contentsOf: frame)
+            } catch {
+                pending.removeValue(forKey: request.requestId)
+                continuation.resume(throwing: error)
+            }
+        }
+    }
+
+    public func receive(_ response: MetadataIdentityResponse) {
+        guard let continuation = pending.removeValue(forKey: response.requestId) else { return }
+        guard let svid = response.svid else {
+            continuation.resume(throwing: GuestIdentityMintingError.unavailable)
+            return
+        }
+        continuation.resume(returning: svid)
+    }
+
+    public func finish() {
+        let continuations = Array(pending.values)
+        pending = [:]
+        for continuation in continuations {
+            continuation.resume(throwing: GuestIdentityMintingError.unavailable)
+        }
     }
 }
 

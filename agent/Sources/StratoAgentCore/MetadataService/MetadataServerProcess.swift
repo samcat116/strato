@@ -13,16 +13,18 @@ public struct MetadataServerProcessSpawner: MetadataServerSpawning {
     private let agentBinaryPath: String
     private let logLevel: String
     private let hopLimit: Int
+    private let identityMinter: GuestIdentityMinter
     private let logger: Logger
 
     public init(
         ipBinaryPath: String, agentBinaryPath: String = MetadataServerProcessSpawner.currentBinaryPath(),
-        logLevel: String, hopLimit: Int, logger: Logger
+        logLevel: String, hopLimit: Int, identityMinter: GuestIdentityMinter, logger: Logger
     ) {
         self.ipBinaryPath = ipBinaryPath
         self.agentBinaryPath = agentBinaryPath
         self.logLevel = logLevel
         self.hopLimit = hopLimit
+        self.identityMinter = identityMinter
         self.logger = logger
     }
 
@@ -52,14 +54,16 @@ public struct MetadataServerProcessSpawner: MetadataServerSpawning {
         ]
 
         let input = Pipe()
+        let requests = Pipe()
         let errors = Pipe()
         process.standardInput = input
-        process.standardOutput = FileHandle.nullDevice
+        process.standardOutput = requests
         process.standardError = errors
 
         try process.run()
         return MetadataServerProcessHandle(
-            process: process, input: input, errors: errors, networkId: networkId, logger: logger)
+            process: process, input: input, requests: requests, errors: errors,
+            networkId: networkId, identityMinter: identityMinter, logger: logger)
     }
 
     /// This binary's own path, so a child is always the same build as its
@@ -95,16 +99,21 @@ final class MetadataServerProcessHandle: MetadataServerHandle, @unchecked Sendab
     /// like everything else, so a backlog is just an older version of what is
     /// pending.
     private var pending: MetadataSnapshot?
+    private var pendingIdentityResponses: [MetadataIdentityResponse] = []
     private var draining = false
     private var failure: (any Error)?
 
-    init(process: Process, input: Pipe, errors: Pipe, networkId: UUID, logger: Logger) {
+    init(
+        process: Process, input: Pipe, requests: Pipe, errors: Pipe, networkId: UUID,
+        identityMinter: GuestIdentityMinter, logger: Logger
+    ) {
         self.process = process
         self.input = input
         self.networkId = networkId
         self.logger = logger
         self.queue = DispatchQueue(label: "strato.metadata-listener.\(networkId.uuidString)")
         relay(errors)
+        receiveIdentityRequests(requests, minter: identityMinter)
     }
 
     var isRunning: Bool { process.isRunning }
@@ -141,22 +150,70 @@ final class MetadataServerProcessHandle: MetadataServerHandle, @unchecked Sendab
     private func drain() {
         while true {
             state.lock()
-            guard let snapshot = pending else {
+            let message: MetadataParentMessage?
+            // Policy and placement snapshots outrank credential replies so a
+            // busy guest cannot delay a revocation behind mint traffic.
+            if let snapshot = pending {
+                pending = nil
+                message = .snapshot(snapshot)
+            } else if !pendingIdentityResponses.isEmpty {
+                message = .identityResponse(pendingIdentityResponses.removeFirst())
+            } else {
+                message = nil
+            }
+            guard let message else {
                 draining = false
                 state.unlock()
                 return
             }
-            pending = nil
             state.unlock()
 
             do {
-                try input.fileHandleForWriting.write(contentsOf: MetadataControlProtocol.encode(snapshot))
+                try input.fileHandleForWriting.write(
+                    contentsOf: MetadataControlProtocol.encode(message))
             } catch {
                 state.lock()
                 failure = error
                 draining = false
                 state.unlock()
                 return
+            }
+        }
+    }
+
+    private func enqueue(_ response: MetadataIdentityResponse) {
+        state.lock()
+        pendingIdentityResponses.append(response)
+        let alreadyDraining = draining
+        draining = true
+        state.unlock()
+        if !alreadyDraining { queue.async { [weak self] in self?.drain() } }
+    }
+
+    private func receiveIdentityRequests(_ requests: Pipe, minter: GuestIdentityMinter) {
+        let reader = MetadataChildRequestReader()
+        requests.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty else {
+                handle.readabilityHandler = nil
+                return
+            }
+            let decoded: [MetadataIdentityRequest]
+            do {
+                decoded = try reader.append(data)
+            } catch {
+                self?.logger.warning(
+                    "Metadata listener sent an unreadable identity request",
+                    metadata: ["error": .string("\(error)")])
+                return
+            }
+            for request in decoded {
+                Task { [weak self] in
+                    let svid = try? await minter.mint(
+                        vmId: request.vmId, audience: request.audience,
+                        ttlSeconds: request.ttlSeconds)
+                    self?.enqueue(MetadataIdentityResponse(requestId: request.requestId, svid: svid))
+                }
             }
         }
     }
@@ -197,5 +254,20 @@ final class MetadataServerProcessHandle: MetadataServerHandle, @unchecked Sendab
             return (.info, line)
         }
         return (level, String(line[line.index(after: tab)...]))
+    }
+}
+
+/// Mutable frame reassembly behind a lock because `FileHandle` owns the queue
+/// on which its readability callback runs.
+private final class MetadataChildRequestReader: @unchecked Sendable {
+    private let lock = NSLock()
+    private var reader = MetadataFrameReader()
+
+    func append(_ data: Data) throws -> [MetadataIdentityRequest] {
+        lock.lock()
+        defer { lock.unlock() }
+        return try reader.append(data).map {
+            try JSONDecoder().decode(MetadataIdentityRequest.self, from: $0)
+        }
     }
 }

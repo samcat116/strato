@@ -629,7 +629,7 @@ Control-plane environment reference:
 | `SPIFFE_JWT_BUNDLE_REFRESH_INTERVAL` | How long the JWT authorities are cached (seconds) before the next request re-fetches them — there is no background refresh. Rotation is also picked up on demand when a token names an unknown key. | `300` |
 | `GUEST_IDENTITY_AUDIENCES` | Comma-separated relying-party audiences for which a hosting agent may mint a VM JWT-SVID through `POST /agent/vms/{vmID}/jwt-svid`. Empty disables guest issuance. | empty (issuance off) |
 | `GUEST_IDENTITY_JWT_TTL` | Default guest JWT-SVID lifetime in seconds when the agent does not request one. | `300` |
-| `GUEST_IDENTITY_JWT_MAX_TTL` | Maximum guest JWT-SVID lifetime in seconds; larger requests are clamped to this value. | `3600` |
+| `GUEST_IDENTITY_JWT_MAX_TTL` | Maximum guest JWT-SVID lifetime in seconds; larger requests are clamped to this value. The guest-facing `/strato/v1/identity` endpoint applies its own tighter 900-second ceiling and requests 300 seconds by default. | `3600` |
 
 ### Connectivity (remote nodes)
 
