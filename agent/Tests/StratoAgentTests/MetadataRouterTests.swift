@@ -94,9 +94,13 @@ struct MetadataRouterTests {
         #expect(Self.route("GET", "/latest/meta-data") == .document(.noCloudMetaData))
         #expect(Self.route("GET", "/latest/meta-data/") == .document(.metaDataIndex))
         #expect(Self.route("GET", "/latest/user-data") == .document(.userData))
+        #expect(Self.route("GET", "/latest/user-data/") == .document(.userData))
         #expect(Self.route("GET", "/latest/network-config") == .document(.networkConfig))
+        #expect(Self.route("GET", "/latest/network-config/") == .document(.networkConfig))
         #expect(Self.route("GET", "/latest/meta-data/instance-id") == .document(.instanceID))
+        #expect(Self.route("GET", "/latest/meta-data/instance-id/") == .document(.instanceID))
         #expect(Self.route("GET", "/latest/meta-data/hostname") == .document(.hostname))
+        #expect(Self.route("GET", "/latest/meta-data/hostname/") == .document(.hostname))
     }
 
     @Test("An unserved path is not rejected at the router, so its 404 can wait for authentication")
@@ -104,7 +108,8 @@ struct MetadataRouterTests {
         // If the router rejected here, anything that could reach the address
         // could map the tree without ever holding a session.
         #expect(Self.route("GET", "/latest/meta-data/ami-id") == .unknownDocument)
-        #expect(Self.route("GET", "/latest/user-data/") == .unknownDocument)
+        #expect(Self.route("GET", "/latest/vendor-data/") == .unknownDocument)
+        #expect(Self.route("GET", "/latest/meta-data/instance-id//") == .unknownDocument)
         #expect(Self.route("GET", "/") == .unknownDocument)
     }
 

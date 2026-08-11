@@ -258,7 +258,11 @@ public enum MetadataRouter {
         case "/latest/meta-data/": return .metaDataIndex
         case "/latest/meta-data/instance-id": return .instanceID
         case "/latest/meta-data/hostname": return .hostname
-        default: return nil
+        default:
+            // Keep the two metadata roots distinct, but preserve the
+            // trailing-slash aliases previously accepted for leaf documents.
+            guard path.count > 1, path.hasSuffix("/"), !path.hasSuffix("//") else { return nil }
+            return document(for: String(path.dropLast()))
         }
     }
 }
