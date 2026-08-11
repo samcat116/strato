@@ -35,7 +35,7 @@ struct GuestIdentityIssuanceConfig: Sendable, Equatable {
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty })
         guard audiences.allSatisfy(GuestIdentityLimits.isValidAudience) else {
-            throw GuestIdentityIssuanceConfigurationError.audienceTooLong
+            throw GuestIdentityIssuanceConfigurationError.invalidAudience
         }
         return audiences
     }
@@ -78,13 +78,15 @@ extension Application {
 }
 
 enum GuestIdentityIssuanceConfigurationError: Error, LocalizedError {
-    case audienceTooLong
+    case invalidAudience
 
     var errorDescription: String? {
         switch self {
-        case .audienceTooLong:
-            return "GUEST_IDENTITY_AUDIENCES entries must contain at most "
-                + "\(GuestIdentityLimits.maximumAudienceCharacters) characters"
+        case .invalidAudience:
+            return "GUEST_IDENTITY_AUDIENCES entries must be non-empty, contain no control "
+                + "characters, contain at most \(GuestIdentityLimits.maximumAudienceCharacters) "
+                + "characters, and fit within \(GuestIdentityLimits.maximumMetadataRequestTargetBytes) "
+                + "bytes after metadata endpoint encoding"
         }
     }
 }

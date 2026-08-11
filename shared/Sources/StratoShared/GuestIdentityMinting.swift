@@ -6,9 +6,27 @@ import Foundation
 public enum GuestIdentityLimits {
     public static let maximumAudiencesPerRequest = 8
     public static let maximumAudienceCharacters = 255
+    public static let maximumMetadataRequestTargetBytes = 2 * 1024
+    public static let metadataIdentityPath = "/strato/v1/identity"
 
     public static func isValidAudience(_ audience: String) -> Bool {
-        !audience.isEmpty && audience.count <= maximumAudienceCharacters
+        guard
+            !audience.isEmpty,
+            audience.count <= maximumAudienceCharacters,
+            audience.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+        else { return false }
+
+        // The listener accepts only an ASCII request target, so every Unicode
+        // audience needs an encoded representation that fits its target bound.
+        // Encode punctuation too: this canonical form cannot accidentally add
+        // query delimiters or the `..` sequence rejected by the path parser.
+        let unescaped = CharacterSet(
+            charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_~")
+        guard let encoded = audience.addingPercentEncoding(withAllowedCharacters: unescaped) else {
+            return false
+        }
+        let prefix = "\(metadataIdentityPath)?audience="
+        return prefix.utf8.count + encoded.utf8.count <= maximumMetadataRequestTargetBytes
     }
 }
 

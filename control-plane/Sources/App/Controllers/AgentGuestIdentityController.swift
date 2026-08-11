@@ -134,7 +134,10 @@ struct AgentGuestIdentityController: RouteCollection {
                 .invalidRequest,
                 status: .badRequest,
                 reason: "audiences must contain 1 to \(GuestIdentityLimits.maximumAudiencesPerRequest) "
-                    + "non-empty values of at most \(GuestIdentityLimits.maximumAudienceCharacters) characters",
+                    + "non-empty values with no control characters, at most "
+                    + "\(GuestIdentityLimits.maximumAudienceCharacters) characters, and an encoded "
+                    + "metadata target no larger than "
+                    + "\(GuestIdentityLimits.maximumMetadataRequestTargetBytes) bytes",
                 req: req,
                 authenticatedAgent: authenticatedAgent,
                 agentID: agentID,

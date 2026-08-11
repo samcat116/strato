@@ -151,7 +151,7 @@ struct MetadataRouterTests {
         #expect(Self.status(of: Self.route("GET", target)) == 400)
     }
 
-    @Test("Identity audiences use the issuer's character limit")
+    @Test("Identity audiences use the issuer's character and encoded target limits")
     func identityAudienceLengthLimit() {
         let accepted = String(repeating: "a", count: 255)
         let rejected = String(repeating: "a", count: 256)
@@ -162,6 +162,22 @@ struct MetadataRouterTests {
         #expect(
             Self.status(
                 of: Self.route("GET", "\(MetadataRouter.identityPath)?audience=\(rejected)"))
+                == 400)
+
+        let multibyteAccepted = String(repeating: "😀", count: 168)
+        let multibyteRejected = String(repeating: "😀", count: 169)
+        let encodedAccepted =
+            multibyteAccepted
+            .addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        let encodedRejected =
+            multibyteRejected
+            .addingPercentEncoding(withAllowedCharacters: .alphanumerics)!
+        #expect(
+            Self.route("GET", "\(MetadataRouter.identityPath)?audience=\(encodedAccepted)")
+                == .identity(audience: multibyteAccepted))
+        #expect(
+            Self.status(
+                of: Self.route("GET", "\(MetadataRouter.identityPath)?audience=\(encodedRejected)"))
                 == 400)
     }
 

@@ -28,6 +28,18 @@ struct GuestIdentityIssuanceConfigTests {
         }
     }
 
+    @Test("Audience parsing rejects values that cannot fit the encoded metadata endpoint")
+    func encodedAudienceLengthLimit() throws {
+        // A four-byte scalar becomes twelve ASCII bytes when percent encoded.
+        let accepted = String(repeating: "😀", count: 168)
+        let rejected = String(repeating: "😀", count: 169)
+
+        #expect(try GuestIdentityIssuanceConfig.audiences(rawValue: accepted) == [accepted])
+        #expect(throws: GuestIdentityIssuanceConfigurationError.self) {
+            try GuestIdentityIssuanceConfig.audiences(rawValue: rejected)
+        }
+    }
+
     @Test(
         "TTL parsing uses the fallback unless the value is positive",
         arguments: [nil, "", "words", "0", "-1"])

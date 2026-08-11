@@ -31,7 +31,7 @@ public enum MetadataLimits {
     /// Longest request target accepted. This leaves room for an identity
     /// audience and percent encoding while still bounding what an untrusted
     /// guest can make the agent hold.
-    public static let maxTargetBytes = 2 * 1024
+    public static let maxTargetBytes = GuestIdentityLimits.maximumMetadataRequestTargetBytes
     /// Cap on the buffered request head, enforced by the decoder's
     /// `maximumBufferSize`.
     public static let maxRequestHeadBytes = 8 * 1024
@@ -182,7 +182,7 @@ public enum MetadataRoute: Sendable, Equatable {
 /// rather than through a socket and a store.
 public enum MetadataRouter {
     public static let tokenPath = "/latest/api/token"
-    public static let identityPath = "/strato/v1/identity"
+    public static let identityPath = GuestIdentityLimits.metadataIdentityPath
 
     public static func route(method: String, target: String, headers: MetadataHeaders) -> MetadataRoute {
         guard let parsed = parse(target: target) else {
@@ -281,8 +281,7 @@ public enum MetadataRouter {
         guard pair.count == 2, pair[0] == "audience" else { return nil }
         let raw = String(pair[1])
         guard let audience = raw.removingPercentEncoding,
-            GuestIdentityLimits.isValidAudience(audience),
-            audience.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
+            GuestIdentityLimits.isValidAudience(audience)
         else { return nil }
         return audience
     }
