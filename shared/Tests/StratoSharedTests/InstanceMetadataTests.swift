@@ -48,6 +48,7 @@ struct InstanceMetadataTests {
             audiences: ["strato", "vault"],
             ttlSeconds: 3600
         ),
+        noCloudSeedToken: UUID(uuidString: "11111111-2222-4333-8444-555555555555"),
         serviceEnabled: true
     )
 
@@ -80,6 +81,7 @@ struct InstanceMetadataTests {
         #expect(metadata.userData == "#cloud-config\npackages: [htop]\n")
         #expect(metadata.vendorData == "#cloud-config\nruncmd: [echo strato]\n")
         #expect(metadata.tags == ["role": "web", "tier": "frontend"])
+        #expect(metadata.noCloudSeedToken?.uuidString == "11111111-2222-4333-8444-555555555555")
 
         // The rest of the desired entry is unaffected by riding alongside it.
         #expect(decoded.vms.first?.generation == 9)
@@ -198,6 +200,7 @@ struct InstanceMetadataTests {
         #expect(decoded.nics.isEmpty)
         #expect(decoded.sshAuthorizedKeys.isEmpty)
         #expect(decoded.tags.isEmpty)
+        #expect(decoded.noCloudSeedToken == nil)
         // A VM predating `VM.hostname` (issue #770) has none, and nothing here
         // may invent one — it would disagree with the VM's DNS zone.
         #expect(decoded.hostname == nil)

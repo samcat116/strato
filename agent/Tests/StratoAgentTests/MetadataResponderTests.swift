@@ -24,6 +24,7 @@ struct MetadataResponderTests {
         ipv6: String? = nil,
         sshAuthorizedKeys: [String] = [],
         userData: String? = nil,
+        noCloudSeedToken: UUID? = nil,
         serviceEnabled: Bool = true
     ) -> InstanceMetadata {
         InstanceMetadata(
@@ -38,6 +39,7 @@ struct MetadataResponderTests {
             ],
             sshAuthorizedKeys: sshAuthorizedKeys,
             userData: userData,
+            noCloudSeedToken: noCloudSeedToken,
             serviceEnabled: serviceEnabled)
     }
 
@@ -83,6 +85,67 @@ struct MetadataResponderTests {
         #expect(response.status == 401)
         // The refusal must not leak the very thing it refused to serve.
         #expect(!response.body.contains(vmId.uuidString))
+    }
+
+    @Test("NoCloud seed capability serves bootstrap documents without weakening IMDSv2")
+    func noCloudSeedCapability() async {
+        let vmId = UUID()
+        let seedToken = UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+        let responder = Self.responder(instances: [
+            Self.instance(
+                vmId, hostname: "web-01", network: Self.networkA, ipv4: "10.0.0.5",
+                sshAuthorizedKeys: ["ssh-ed25519 AAAA test@example"],
+                userData: "#cloud-config\npackages: [nginx]\n",
+                noCloudSeedToken: seedToken)
+        ])
+        let root = MetadataRouter.noCloudSeedPath(for: seedToken)
+
+        let metadata = await responder.respond(
+            to: Self.request("GET", root + "meta-data", from: "10.0.0.5"), at: .now)
+        let userData = await responder.respond(
+            to: Self.request("GET", root + "user-data", from: "10.0.0.5"), at: .now)
+        #expect(metadata.status == 200)
+        #expect(metadata.body.contains("instance-id: \(vmId.uuidString)"))
+        #expect(userData.status == 200)
+        #expect(userData.body.contains("packages: [nginx]"))
+
+        // The capability does not turn the ordinary document tree into IMDSv1.
+        let ordinary = await responder.respond(
+            to: Self.request("GET", "/latest/user-data", from: "10.0.0.5"), at: .now)
+        #expect(ordinary.status == 401)
+
+        let wrongRoot = MetadataRouter.noCloudSeedPath(for: UUID())
+        let wrong = await responder.respond(
+            to: Self.request("GET", wrongRoot + "user-data", from: "10.0.0.5"), at: .now)
+        #expect(wrong.status == 404)
+
+        // NoCloud may probe optional filenames. A valid seed capability gets
+        // an ordinary 404, not an IMDSv2 challenge it cannot answer.
+        let optional = await responder.respond(
+            to: Self.request("GET", root + "vendor-data", from: "10.0.0.5"), at: .now)
+        #expect(optional.status == 404)
+    }
+
+    @Test("NoCloud seed capability remains source-bound and obeys the kill switch")
+    func noCloudSeedCapabilityPolicy() async {
+        let tokenA = UUID()
+        let tokenB = UUID()
+        let responder = Self.responder(instances: [
+            Self.instance(UUID(), network: Self.networkA, ipv4: "10.0.0.5", noCloudSeedToken: tokenA),
+            Self.instance(UUID(), network: Self.networkA, ipv4: "10.0.0.6", noCloudSeedToken: tokenB),
+            Self.instance(
+                UUID(), network: Self.networkA, ipv4: "10.0.0.7",
+                noCloudSeedToken: tokenA, serviceEnabled: false),
+        ])
+        let target = MetadataRouter.noCloudSeedPath(for: tokenA) + "meta-data"
+
+        let neighbour = await responder.respond(
+            to: Self.request("GET", target, from: "10.0.0.6"), at: .now)
+        #expect(neighbour.status == 404)
+
+        let disabled = await responder.respond(
+            to: Self.request("GET", target, from: "10.0.0.7"), at: .now)
+        #expect(disabled.status == 404)
     }
 
     @Test("A token that was never minted, or has expired, is refused")

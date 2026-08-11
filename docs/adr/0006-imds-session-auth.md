@@ -8,10 +8,12 @@
 
 ## Summary
 
-Reads from `169.254.169.254` require a session token, minted by
+Ordinary reads from `169.254.169.254` require a session token, minted by
 `PUT /latest/api/token` with an `X-aws-ec2-metadata-token-ttl-seconds` header
-and presented as `X-aws-ec2-metadata-token`. There is no unauthenticated mode
-and no flag to enable one. The header names are **EC2's**, not
+and presented as `X-aws-ec2-metadata-token`. The only exception is a per-VM,
+source-bound capability URL used by stock NoCloud while it follows the
+`seedfrom` stub; there is no general unauthenticated mode and no flag to enable
+one. The header names are **EC2's**, not
 `X-strato-metadata-token-*` as STR-56 was originally written. Each token is
 bound to the instance it was minted for and is refused when presented by
 another.
@@ -38,11 +40,29 @@ this is our service and not EC2's.
 
 ## Decision
 
-### IMDSv2 is mandatory
+### IMDSv2 is mandatory for the ordinary metadata tree
 
-No unauthenticated read path exists, and no configuration turns one on. The
-config knob (`metadata_service`) turns the whole listener off; it cannot weaken
-it.
+Every ordinary metadata and identity read requires an IMDSv2 session, and no
+configuration turns that requirement off. The config knob (`metadata_service`)
+turns the whole listener off; it cannot weaken it.
+
+### NoCloud bootstrap uses a narrow URL capability
+
+NoCloud's `seedfrom` fetcher performs ordinary document GETs. It cannot mint an
+IMDSv2 token or attach one to those GETs, so an IMDS-backed VM gets a random,
+stable UUID capability in its local seed URL:
+`/latest/nocloud/<capability>/`. Only `meta-data`, `user-data`, and
+`network-config` exist below that prefix. The responder still derives the VM
+from the request's source address, compares the capability only with that VM's
+desired metadata, and applies the per-VM kill switch first. A capability copied
+from a neighbour therefore buys nothing, and the ordinary `/latest/*` paths
+remain IMDSv2-only.
+
+The capability is durable for the VM's lifetime because the ISO is created
+once. It crosses desired state only for an IMDS-backed VM, is never rendered
+into a metadata document, and must be redacted anywhere a request target is
+logged. This is bearer authentication adapted to the only request shape stock
+NoCloud can send, not an IMDSv1 compatibility mode.
 
 ### The header names are EC2's
 
@@ -81,20 +101,19 @@ Sessions are keyed by `SHA256(token)`. Nothing retains the token itself.
   would be a bearer credential for *the metadata service*, and one guest that
   could read another's memory, logs, or environment would inherit its identity.
   With it, the token is only usable from the address it was minted from.
-- **There is no constant-time comparison anywhere, and none is needed.** The
-  lookup is a dictionary hit on a digest of a value the caller already supplied,
-  so no secret is ever compared against attacker input. This is a design that
-  avoids the problem rather than a mitigation of it, which matters because the
-  repository has no constant-time helper to reach for. A heap dump yields
-  digests.
+- **Session tokens are never compared as secrets.** The lookup is a dictionary
+  hit on a digest of a value the caller already supplied, so a heap dump yields
+  digests. The NoCloud capability is the deliberate exception: it must remain
+  available across restarts to match the already-created ISO, and the responder
+  compares its fixed-size representation without an early exit.
 - **Guest tooling gets an EC2-shaped projection, not fabricated AWS state.**
   cloud-init's Ec2 datasource can complete the handshake and crawl STR-65's
   nested instance, SSH-key, network, tag, and identity-document paths. Fields
   with no truthful `InstanceMetadata` source remain 404, and placement remains
   hidden unless the renderer's disclosure policy is enabled. STR-60's
-  NoCloud-net documents share those authenticated paths and are byte-identical
-  to the seed ISO renderer; nothing depends on them until STR-64 supplies the
-  guest's `seedfrom` stub.
+  NoCloud-net documents share the full seed renderer byte for byte. STR-64
+  makes VMs whose `metadataSource` is `imds` consume them through the scoped
+  capability above; `iso` remains the compatibility default.
 - **A guest can mint without limit**, so sessions are capped per instance and
   swept on mint. The cap evicts the soonest-expiring, so a loop costs a bounded
   amount and never evicts a well-behaved guest's newest token.

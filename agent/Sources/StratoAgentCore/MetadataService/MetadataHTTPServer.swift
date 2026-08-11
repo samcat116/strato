@@ -353,15 +353,15 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
             case .success(let value): response = value
             case .failure: response = MetadataResponse(status: 500, body: "internal error")
             }
-            // Method, target, status and source — never a header dictionary and
-            // never the token, not even a prefix of one. Adding exactly that is
-            // the natural debugging instinct, and it would write guests'
-            // credentials into the agent's log.
+            // Method, redacted target, status and source — never a header
+            // dictionary and never either kind of token, not even a prefix of
+            // one. The NoCloud capability lives in its URL, so the target must
+            // pass through the same no-credential logging boundary.
             logger.debug(
                 "Metadata request",
                 metadata: [
                     "method": .string(request.method),
-                    "target": .string(request.target),
+                    "target": .string(MetadataRouter.redactedTargetForLogging(request.target)),
                     "status": .stringConvertible(response.status),
                     "source": .string(request.source.description),
                 ])

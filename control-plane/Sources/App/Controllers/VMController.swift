@@ -467,6 +467,10 @@ struct VMController: RouteCollection {
             // above: hardening a workload that is already running is the case
             // this exists for.
             let metadataEnabled: Bool?
+            // Where cloud-init reads first-boot guest configuration (STR-64).
+            // Defaults to the historical full ISO and is fixed at create,
+            // because the agent materializes that ISO with the domain.
+            let metadataSource: MetadataSource?
 
             mutating func validate() throws {
                 name = try Validate.name(name)
@@ -642,6 +646,19 @@ struct VMController: RouteCollection {
             chosenHypervisor = compatible.count == 1 ? compatible.first! : .qemu
         }
 
+        let metadataEnabled = createRequest.metadataEnabled ?? true
+        let metadataSource = createRequest.metadataSource ?? .iso
+        if metadataSource == .imds, !metadataEnabled {
+            throw Abort(
+                .badRequest,
+                reason: "'metadataSource: imds' requires 'metadataEnabled' to be true during VM creation")
+        }
+        if metadataSource == .imds, chosenHypervisor == .firecracker {
+            throw Abort(
+                .badRequest,
+                reason: "'metadataSource: imds' is not supported for firecracker VMs; use the qemu hypervisor")
+        }
+
         let vm = VM(
             name: createRequest.name,
             description: createRequest.description ?? "",
@@ -658,7 +675,8 @@ struct VMController: RouteCollection {
             tpmEnabled: createRequest.tpm ?? false,
             guestAgentEnabled: createRequest.guestAgentEnabled ?? false,
             graphicsConsole: createRequest.graphicsConsole ?? false,
-            metadataEnabled: createRequest.metadataEnabled ?? true
+            metadataEnabled: metadataEnabled,
+            metadataSource: metadataSource
         )
         vm.cmdline = cmdlineValue
         // Link VM to source image
@@ -807,6 +825,21 @@ struct VMController: RouteCollection {
                         }
                         resolvedInterfaces.append(
                             (interface, network, try network.requireID(), resolvedRequestedGroupsByIndex[index]))
+                    }
+
+                    // An IMDS seed carries no real user data of its own. At
+                    // least one selected network must publish the metadata
+                    // localport/listener or the seedfrom hand-off can never
+                    // complete. This runs inside the create transaction after
+                    // project-scoped resolution; throwing rolls back the VM
+                    // row and quota reservation together.
+                    if vm.metadataSource == .imds,
+                        !resolvedInterfaces.contains(where: { $0.network.metadataEnabled })
+                    {
+                        throw Abort(
+                            .badRequest,
+                            reason: "'metadataSource: imds' requires at least one selected network "
+                                + "with metadata enabled")
                     }
 
                     // The VM's DNS label (issue #770), resolved against the

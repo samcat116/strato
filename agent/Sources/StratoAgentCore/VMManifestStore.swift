@@ -138,7 +138,8 @@ public struct VMManifestEntry: Codable, Sendable {
             networks: spec.networks,
             console: spec.console,
             sshAuthorizedKeys: spec.sshAuthorizedKeys,
-            userData: spec.userData)
+            userData: spec.userData,
+            metadataSource: spec.metadataSource)
         return copy
     }
 

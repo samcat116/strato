@@ -1440,6 +1440,11 @@ actor Agent {
             // because the DHCP option that points guests at it is authored once
             // per network while the listener is per chassis.
             resolverCapable: resolverBinaryPath != nil,
+            // `startMetadataService` sets the supervisor only after the
+            // service is enabled and the host passes its Linux, OVN, and `ip`
+            // tool gates. Reporting the initialized supervisor rather than the
+            // config bit makes every failure path ineligible by default.
+            metadataServiceCapable: metadataServers != nil,
             dependencyObservations: dependencyObservations
         )
 

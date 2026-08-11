@@ -41,6 +41,7 @@ struct SchedulerServiceTests {
         supportedHypervisors: [HypervisorType] = [.qemu],
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
+        supportsMetadataService: Bool = false,
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
         supportsVTPM: Bool = false,
@@ -60,6 +61,7 @@ struct SchedulerServiceTests {
             supportedHypervisors: supportedHypervisors,
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
+            supportsMetadataService: supportsMetadataService,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
             supportsVTPM: supportsVTPM,
@@ -549,6 +551,59 @@ struct SchedulerServiceTests {
         let selectedId = try scheduler.selectAgent(requirements: requirements, from: agents)
 
         #expect(selectedId == "ovn")
+    }
+
+    @Test("IMDS bootstrap derives OVN and metadata-service placement requirements")
+    func testIMDSBootstrapRequiresMetadataCapableOVNAgent() throws {
+        let logger = Logger(label: "test")
+        let scheduler = SchedulerService(logger: logger)
+        let isoVM = createTestVM()
+        let imdsVM = createTestVM()
+        imdsVM.metadataSource = .imds
+
+        #expect(!SchedulerService.placementRequirements(for: isoVM).requiresInterVMNetworking)
+        #expect(!SchedulerService.placementRequirements(for: isoVM).requiresMetadataService)
+        #expect(SchedulerService.placementRequirements(for: imdsVM).requiresInterVMNetworking)
+        #expect(SchedulerService.placementRequirements(for: imdsVM).requiresMetadataService)
+
+        let agents = [
+            createTestAgent(
+                id: "slirp", name: "slirp", availableCPU: 8,
+                supportsInterVMNetworking: false),
+            createTestAgent(
+                id: "metadata-off", name: "metadata-off", availableCPU: 6,
+                supportsInterVMNetworking: true, supportsMetadataService: false),
+            createTestAgent(
+                id: "metadata-ready", name: "metadata-ready", availableCPU: 2,
+                supportsInterVMNetworking: true, supportsMetadataService: true),
+        ]
+
+        let selectedId = try scheduler.selectAgent(for: imdsVM, from: agents)
+
+        #expect(selectedId == "metadata-ready")
+    }
+
+    @Test("IMDS bootstrap fails closed when no OVN agent advertises metadata serving")
+    func testIMDSBootstrapRejectsMetadataDisabledFleet() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+        let imdsVM = createTestVM()
+        imdsVM.metadataSource = .imds
+        let agents = [
+            createTestAgent(
+                id: "metadata-off", name: "metadata-off",
+                supportsInterVMNetworking: true, supportsMetadataService: false)
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(for: imdsVM, from: agents)
+            Issue.record("Expected metadataServiceUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .metadataServiceUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected metadataServiceUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 1)
+        }
     }
 
     @Test("Inter-VM networking requirement fails placement on user-mode-only fleet")

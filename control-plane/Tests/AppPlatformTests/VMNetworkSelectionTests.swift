@@ -26,6 +26,8 @@ final class VMNetworkSelectionTests {
         var userData: String? = nil
         var hypervisorType: String? = nil
         var guestAgentEnabled: Bool? = nil
+        var metadataEnabled: Bool? = nil
+        var metadataSource: String? = nil
     }
 
     struct CreateNICBody: Content {
@@ -42,6 +44,7 @@ final class VMNetworkSelectionTests {
         let networkInterfaces: [CreateNICBody]
         var networkId: UUID? = nil
         var securityGroupIds: [UUID]? = nil
+        var metadataSource: String? = nil
     }
 
     private func gb(_ value: Double) -> Int64 { Int64(value * 1024 * 1024 * 1024) }
@@ -295,6 +298,116 @@ final class VMNetworkSelectionTests {
         }
     }
 
+    @Test("POST /api/vms persists metadataSource and defaults it to the full ISO")
+    func createWithMetadataSource() async throws {
+        try await withApp { app, _, _, project, image, token in
+            for (name, source) in [("bootstrap-imds", "imds"), ("bootstrap-default", nil)] {
+                try await app.test(.POST, "/api/vms") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateVMBody(
+                            name: name, imageId: image.id, projectId: project.id,
+                            environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                            networkId: nil, networkName: "default",
+                            metadataSource: source))
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                    #expect(res.body.string.contains("\"metadataSource\":\"\(source ?? "iso")\""))
+                }
+            }
+
+            let imds = try await VM.query(on: app.db).filter(\.$name == "bootstrap-imds").first()
+            let defaulted = try await VM.query(on: app.db).filter(\.$name == "bootstrap-default").first()
+            #expect(imds?.metadataSource == .imds)
+            #expect(defaulted?.metadataSource == .iso)
+        }
+    }
+
+    @Test("POST /api/vms requires a reachable metadata service for IMDS bootstrap")
+    func createIMDSRequiresMetadataReachability() async throws {
+        try await withApp { app, user, _, project, image, token in
+            let defaultNetwork = try #require(
+                try await LogicalNetwork.query(on: app.db)
+                    .filter(\.$project.$id == project.id!)
+                    .filter(\.$name == "default")
+                    .first())
+
+            // A VM-level opt-out makes the bootstrap endpoint refuse this VM
+            // even when its selected network publishes the service.
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "imds-disabled-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default",
+                        metadataEnabled: false, metadataSource: "imds"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("metadataEnabled"))
+            }
+
+            // A network-level opt-out means the agent creates no metadata
+            // localport or listener for the seedfrom URL.
+            defaultNetwork.metadataEnabled = false
+            try await defaultNetwork.save(on: app.db)
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "imds-disabled-network", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default", metadataSource: "imds"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("at least one selected network"))
+            }
+            #expect(
+                try await VM.query(on: app.db)
+                    .filter(\.$name == "imds-disabled-vm")
+                    .first() == nil)
+            #expect(
+                try await VM.query(on: app.db)
+                    .filter(\.$name == "imds-disabled-network")
+                    .first() == nil)
+
+            // The compatibility ISO does not need the metadata service.
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "iso-disabled-network", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default", metadataSource: "iso"))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+
+            // One enabled network is sufficient even when another selected
+            // network has opted out.
+            defaultNetwork.metadataEnabled = true
+            try await defaultNetwork.save(on: app.db)
+            let disabledNetwork = LogicalNetwork(
+                name: "metadata-off", subnet: "10.121.0.0/24", gateway: "10.121.0.1",
+                projectID: project.id!, createdByID: user.id!, metadataEnabled: false,
+                siteID: defaultNetwork.$site.id)
+            try await disabledNetwork.save(on: app.db)
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateMultiVMBody(
+                        name: "imds-mixed-networks", imageId: image.id!, projectId: project.id!,
+                        networkInterfaces: [
+                            CreateNICBody(networkId: defaultNetwork.id, networkName: nil),
+                            CreateNICBody(networkId: disabledNetwork.id, networkName: nil),
+                        ],
+                        metadataSource: "imds"))
+            } afterResponse: { res in
+                #expect(res.status == .accepted)
+            }
+        }
+    }
+
     @Test("POST /api/vms rejects user data without a cloud-init header (400)")
     func createWithHeaderlessUserDataRejected() async throws {
         try await withApp { app, _, _, project, image, token in
@@ -335,6 +448,28 @@ final class VMNetworkSelectionTests {
             }
 
             let vm = try await VM.query(on: app.db).filter(\.$name == "fc-userdata-vm").first()
+            #expect(vm == nil)
+        }
+    }
+
+    @Test("POST /api/vms rejects IMDS bootstrap for firecracker VMs (400)")
+    func createFirecrackerWithIMDSRejected() async throws {
+        try await withApp { app, _, _, project, image, token in
+            try await app.test(.POST, "/api/vms") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                try req.content.encode(
+                    CreateVMBody(
+                        name: "fc-imds-vm", imageId: image.id, projectId: project.id,
+                        environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                        networkId: nil, networkName: "default",
+                        hypervisorType: "firecracker", metadataSource: "imds"))
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+                #expect(res.body.string.contains("metadataSource: imds"))
+                #expect(res.body.string.contains("firecracker"))
+            }
+
+            let vm = try await VM.query(on: app.db).filter(\.$name == "fc-imds-vm").first()
             #expect(vm == nil)
         }
     }

@@ -5298,6 +5298,11 @@ export interface components {
         OperationStatus: "pending" | "succeeded" | "failed";
         /** @enum {string} */
         HypervisorType: "qemu" | "firecracker";
+        /**
+         * @description Where the VM reads its first-boot guest configuration.
+         * @enum {string}
+         */
+        MetadataSource: "iso" | "imds";
         /** @enum {string} */
         CPUArchitecture: "x86_64" | "arm64";
         CreateVMRequest: {
@@ -5368,10 +5373,15 @@ export interface components {
             /** @description Security groups for the VM's NIC (same project, at most 5). Omitted or empty means the project's default group — every NIC belongs to at least one group. */
             securityGroupIds?: string[];
             /**
-             * @description Whether the instance metadata service answers this VM. Turning it off denies the guest `169.254.169.254` and `[fd00:ec2::254]` outright — the listener refuses it and an OVN ACL drops its packets — which is what hardening one workload against SSRF needs, and what the per-network `metadataEnabled` is too coarse to give. Note that the metadata service is also how a guest reads its cloud-init configuration, so a VM created with this off may not finish provisioning. Requires an agent new enough to honour it; placement is constrained to such agents.
+             * @description Whether the instance metadata service answers this VM. Turning it off denies the guest `169.254.169.254` and `[fd00:ec2::254]` outright — the listener refuses it and an OVN ACL drops its packets — which is what hardening one workload against SSRF needs, and what the per-network `metadataEnabled` is too coarse to give. Note that a VM using `metadataSource: imds` also needs this service to fetch its cloud-init configuration. Requires an agent new enough to honour it; placement is constrained to such agents.
              * @default true
              */
             metadataEnabled: boolean;
+            /**
+             * @description Where cloud-init reads the guest bootstrap. `iso` preserves the complete immutable NoCloud seed. `imds` keeps `network-config` and a `seedfrom` stub on the ISO, then fetches meta-data and user-data from a per-VM capability URL on `169.254.169.254`. An IMDS-backed VM must enable its metadata service and select at least one network that has metadata enabled. It is supported only for QEMU and constrains placement to an OVN-capable agent that advertises a running metadata service. Fixed at VM creation.
+             * @default iso
+             */
+            metadataSource: components["schemas"]["MetadataSource"];
         };
         /** @description One VM network interface. Exactly one of `networkId` or `networkName` is required and is resolved inside the VM's project. */
         CreateVMNetworkInterfaceRequest: {
@@ -5439,6 +5449,8 @@ export interface components {
             graphicsConsole?: boolean;
             /** @description Whether the instance metadata service answers this VM. This is the VM's own switch, not the effective answer: a VM on a network with metadata turned off still reports `true` here unless someone turned it off for this VM. */
             metadataEnabled?: boolean;
+            /** @description Where this VM reads its first-boot guest configuration. Fixed at creation; VMs created before STR-64 report `iso`. */
+            metadataSource?: components["schemas"]["MetadataSource"];
             /** @description Whether the guest agent is responding. Absent until the agent's slow poll has seen the guest once. */
             qgaAvailable?: boolean;
             /** @description What the guest OS calls itself, when it reported one. Distinct from `hostname`, which is the DNS label Strato registers it under. */
@@ -7674,6 +7686,8 @@ export interface components {
             tpmCapable: boolean;
             /** @description Whether this node can run the per-network DNS resolver. Resolver enablement requires every node in the site to report true. */
             resolverCapable: boolean;
+            /** @description Whether this node initialized the guest-facing instance metadata service. IMDS-backed VMs only place on nodes reporting true; OVN networking alone is not sufficient. */
+            metadataServiceCapable: boolean;
             /** @description Latest feature-scoped software dependency health reported by the agent. Fresh healthy observations are authoritative for new placement; failures do not terminate running workloads. */
             dependencyObservations: components["schemas"]["NodeDependencyObservation"][];
             /**
