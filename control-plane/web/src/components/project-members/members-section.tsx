@@ -5,7 +5,11 @@ import { Plus, Server, Users, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useProjectMembers, usePermissions, useProjectVMs } from "@/lib/hooks";
+import {
+  useProjectMembers,
+  usePermissions,
+  useProjectVMPrincipals,
+} from "@/lib/hooks";
 import { MembersTable } from "./members-table";
 import { GroupGrantsTable } from "./group-grants-table";
 import { AddMemberDialog } from "./add-member-dialog";
@@ -22,7 +26,8 @@ export function ProjectMembersSection({
   organizationId,
 }: ProjectMembersSectionProps) {
   const { data, isLoading } = useProjectMembers(projectId);
-  const { data: vms = [], isLoading: vmsLoading } = useProjectVMs(projectId);
+  const { data: vms = [], isLoading: vmsLoading } =
+    useProjectVMPrincipals(projectId);
   const { permissions } = usePermissions([
     {
       key: "set_policy",

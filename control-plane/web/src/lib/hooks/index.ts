@@ -1,6 +1,5 @@
 export {
   useVMs,
-  useProjectVMs,
   useVM,
   useVMSnapshots,
   useInvalidateVMs,
@@ -152,6 +151,7 @@ export { usePermissions } from "./use-permissions";
 export { useCurrentOrgAccess } from "./use-current-org-access";
 export {
   useProjectMembers,
+  useProjectVMPrincipals,
   useGrantProjectMember,
   useUpdateProjectMemberRole,
   useRevokeProjectMember,

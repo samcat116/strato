@@ -83,6 +83,7 @@ final class VMInstanceIdentityTests {
         let name: String
         let spiffeId: String?
         let instanceIdentityPrincipalId: UUID?
+        let instanceIdentityStatus: InstanceIdentityStatus?
     }
 
     private struct RoleBody: Content {
@@ -152,6 +153,7 @@ final class VMInstanceIdentityTests {
                 .filter(\.$principalID == registrationID)
                 .count()
             #expect(bindings == 0)
+            #expect(created.instanceIdentityStatus == .enabled)
         }
     }
 
@@ -170,6 +172,7 @@ final class VMInstanceIdentityTests {
             // The `202` a create answers with.
             #expect(created.spiffeId == expected)
             #expect(created.instanceIdentityPrincipalId == expectedPrincipalID)
+            #expect(created.instanceIdentityStatus == .enabled)
 
             try await app.test(.GET, "/api/vms/\(vmID)") { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
@@ -178,6 +181,7 @@ final class VMInstanceIdentityTests {
                 let detail = try res.content.decode(VMBody.self)
                 #expect(detail.spiffeId == expected)
                 #expect(detail.instanceIdentityPrincipalId == expectedPrincipalID)
+                #expect(detail.instanceIdentityStatus == .enabled)
             }
 
             try await app.test(.GET, "/api/vms/\(vmID)/status") { req in
@@ -187,6 +191,7 @@ final class VMInstanceIdentityTests {
                 let status = try res.content.decode(VMBody.self)
                 #expect(status.spiffeId == expected)
                 #expect(status.instanceIdentityPrincipalId == expectedPrincipalID)
+                #expect(status.instanceIdentityStatus == .enabled)
             }
 
             // The list is the one surface that could have gone N+1; it resolves
@@ -199,12 +204,13 @@ final class VMInstanceIdentityTests {
                 let mine = try #require(listed.items.first { $0.id == vmID })
                 #expect(mine.spiffeId == expected)
                 #expect(mine.instanceIdentityPrincipalId == expectedPrincipalID)
+                #expect(mine.instanceIdentityStatus == .enabled)
             }
         }
     }
 
-    @Test("The VM list can be scoped to one project")
-    func listCanBeScopedToProject() async throws {
+    @Test("Project IAM lists its complete lightweight VM principal inventory")
+    func projectVMPrincipalsAreScopedAndLightweight() async throws {
         try await withIdentityTestApp { app, user, org, project, token in
             let otherProject = try await TestDataBuilder(db: app.db).createProject(
                 name: "Other Identity Project", description: "not requested", organization: org)
@@ -215,18 +221,23 @@ final class VMInstanceIdentityTests {
                 app, project: otherProject, user: user, token: token, name: "other-project-vm",
                 suffix: "other-project")
 
-            try await app.test(.GET, "/api/vms?project_id=\(try project.requireID())") { req in
+            try await app.test(
+                .GET, "/api/projects/\(try project.requireID())/vm-principals"
+            ) { req in
                 req.headers.bearerAuthorization = BearerAuthorization(token: token)
             } afterResponse: { res in
                 #expect(res.status == .ok)
-                let listed = try res.content.decode(PagedBody.self)
-                #expect(listed.items.map(\.id) == [expected.id])
-            }
-
-            try await app.test(.GET, "/api/vms?project_id=not-a-uuid") { req in
-                req.headers.bearerAuthorization = BearerAuthorization(token: token)
-            } afterResponse: { res in
-                #expect(res.status == .badRequest)
+                let listed = try res.content.decode(
+                    [ProjectMemberController.ProjectVMPrincipalResponse].self)
+                let principal = try #require(listed.first)
+                #expect(listed.count == 1)
+                #expect(principal.id == expected.id)
+                #expect(principal.name == expected.name)
+                #expect(principal.spiffeId == expected.spiffeId)
+                #expect(
+                    principal.instanceIdentityPrincipalId
+                        == expected.instanceIdentityPrincipalId)
+                #expect(principal.instanceIdentityStatus == .enabled)
             }
         }
     }
@@ -490,7 +501,7 @@ final class VMInstanceIdentityTests {
 
     @Test("Revoking a VM's registration leaves the VM running with no identity")
     func revocationLeavesTheVMWithoutAnIdentity() async throws {
-        try await withIdentityTestApp { app, user, org, project, _ in
+        try await withIdentityTestApp { app, user, org, project, token in
             let admin = try await TestDataBuilder(db: app.db).createUser(
                 username: "identityadmin", email: "identityadmin@example.com",
                 displayName: "Identity Admin", isSystemAdmin: true)
@@ -513,6 +524,16 @@ final class VMInstanceIdentityTests {
             #expect(try await VM.find(vmID, on: app.db) != nil)
             #expect(try await self.registration(forVM: vmID, on: app.db) == nil)
             #expect(try await GuestIdentity.spiffeID(forVM: vmID, on: app.db) == nil)
+
+            try await app.test(.GET, "/api/vms/\(vmID)") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let detail = try res.content.decode(VMBody.self)
+                #expect(detail.spiffeId == nil)
+                #expect(detail.instanceIdentityPrincipalId == nil)
+                #expect(detail.instanceIdentityStatus == .revoked)
+            }
         }
     }
 }

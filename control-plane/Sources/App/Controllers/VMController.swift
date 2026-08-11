@@ -305,7 +305,6 @@ struct VMController: RouteCollection {
 
     /// GET /api/vms
     /// Query params: organization_id (optional) — narrows to one org's hierarchy;
-    /// project_id (optional) — narrows to one project;
     /// limit/offset (optional) — select the page.
     func index(req: Request) async throws -> PagedResponse<VMDetailResponse> {
         let paging = try ListPaging.decode(from: req)
@@ -334,12 +333,6 @@ struct VMController: RouteCollection {
             }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
-        if let rawProjectID = req.query[String.self, at: "project_id"] {
-            guard let projectID = UUID(uuidString: rawProjectID) else {
-                throw Abort(.badRequest, reason: "Invalid project_id")
-            }
-            query = query.filter(\.$project.$id == projectID)
-        }
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
             let projectIDs = try await orgFilter.projectIDs(on: req.db)
             if projectIDs.isEmpty { return [] }
@@ -379,7 +372,8 @@ struct VMController: RouteCollection {
                 from: vm,
                 securityGroupsEnforced: enforcement[id],
                 spiffeId: identities[id]?.spiffeID,
-                instanceIdentityPrincipalId: identities[id]?.principalID)
+                instanceIdentityPrincipalId: identities[id]?.principalID,
+                instanceIdentityStatus: identities[id] == nil ? .revoked : .enabled)
         }
     }
 
@@ -414,7 +408,8 @@ struct VMController: RouteCollection {
             from: vm,
             securityGroupsEnforced: enforcement,
             spiffeId: identity?.spiffeID,
-            instanceIdentityPrincipalId: identity?.principalID)
+            instanceIdentityPrincipalId: identity?.principalID,
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
     }
 
     func create(req: Request) async throws -> Response {
@@ -1555,7 +1550,8 @@ struct VMController: RouteCollection {
             // lookup, and a client polling a delete still wants to know which
             // identity is going away.
             spiffeId: identity?.spiffeID,
-            instanceIdentityPrincipalId: identity?.principalID)
+            instanceIdentityPrincipalId: identity?.principalID,
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
     }
 
     /// The `202` body every accepted VM lifecycle mutation answers with
@@ -1747,7 +1743,8 @@ struct VMController: RouteCollection {
             from: vm,
             securityGroupsEnforced: enforcement,
             spiffeId: identity?.spiffeID,
-            instanceIdentityPrincipalId: identity?.principalID)
+            instanceIdentityPrincipalId: identity?.principalID,
+            instanceIdentityStatus: identity == nil ? .revoked : .enabled)
     }
 
     func start(req: Request) async throws -> Response {

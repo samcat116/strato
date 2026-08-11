@@ -1,7 +1,14 @@
 "use client";
 
 import { useMemo } from "react";
-import { Fingerprint, Loader2, ShieldCheck, ShieldOff, Trash2 } from "lucide-react";
+import {
+  CircleHelp,
+  Fingerprint,
+  Loader2,
+  ShieldCheck,
+  ShieldOff,
+  Trash2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -94,7 +101,13 @@ export function VMIdentityCard({ vm }: VMIdentityCardProps) {
     }
   };
 
-  const identityAvailable = !!vm.spiffeId && !!vm.instanceIdentityPrincipalId;
+  const identityState =
+    vm.instanceIdentityStatus === "revoked"
+      ? "revoked"
+      : vm.spiffeId && vm.instanceIdentityPrincipalId
+        ? "enabled"
+        : "unavailable";
+  const identityAvailable = identityState === "enabled";
 
   return (
     <Card className="bg-card border-border">
@@ -115,15 +128,23 @@ export function VMIdentityCard({ vm }: VMIdentityCardProps) {
             className={
               identityAvailable
                 ? "border-green-500/60 bg-green-500/10 text-green-700 dark:text-green-400"
-                : "border-red-500/60 bg-red-500/10 text-red-700 dark:text-red-400"
+                : identityState === "revoked"
+                  ? "border-red-500/60 bg-red-500/10 text-red-700 dark:text-red-400"
+                  : "border-border bg-muted text-muted-foreground"
             }
           >
             {identityAvailable ? (
               <ShieldCheck className="h-3.5 w-3.5 mr-1" />
-            ) : (
+            ) : identityState === "revoked" ? (
               <ShieldOff className="h-3.5 w-3.5 mr-1" />
+            ) : (
+              <CircleHelp className="h-3.5 w-3.5 mr-1" />
             )}
-            {identityAvailable ? "Enabled" : "Revoked"}
+            {identityAvailable
+              ? "Enabled"
+              : identityState === "revoked"
+                ? "Revoked"
+                : "Unavailable"}
           </Badge>
         </div>
       </CardHeader>
@@ -206,11 +227,17 @@ export function VMIdentityCard({ vm }: VMIdentityCardProps) {
               )}
             </div>
           </>
-        ) : (
+        ) : identityState === "revoked" ? (
           <p className="text-sm text-muted-foreground">
             An administrator revoked this VM&apos;s identity. Revocation is
             permanent for this VM; create a replacement VM if it needs a new
             instance identity.
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            This control plane did not report the VM&apos;s instance identity
+            status. The identity may still be active; verify it before making
+            replacement or access decisions.
           </p>
         )}
       </CardContent>

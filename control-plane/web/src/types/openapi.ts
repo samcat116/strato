@@ -113,7 +113,7 @@ export interface paths {
         };
         /**
          * List virtual machines
-         * @description Returns a page of the VMs the caller can read, newest first, optionally scoped to one organization and/or project.
+         * @description Returns a page of the VMs the caller can read, newest first, optionally scoped to one organization.
          */
         get: operations["listVMs"];
         put?: never;
@@ -3160,6 +3160,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/projects/{projectID}/vm-principals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * List a project's VM instance-identity principals
+         * @description Returns every VM the caller can read in the project, with only the fields needed to manage its instance-identity role. This is a single unpaged lightweight inventory operation; it does not hydrate VM interfaces or security-group enforcement.
+         */
+        get: operations["listProjectVMPrincipals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/projects/{projectID}/members/{userID}": {
         parameters: {
             query?: never;
@@ -5486,6 +5509,7 @@ export interface components {
              * @description The workload-registration row id and IAM principal id for this instance identity. Use it as the subject of a project workload grant. Absent together with `spiffeId` after identity revocation.
              */
             instanceIdentityPrincipalId?: string;
+            instanceIdentityStatus?: components["schemas"]["InstanceIdentityStatus"];
             conditions: components["schemas"]["ResourceConditions"];
             /** Format: date-time */
             createdAt?: string;
@@ -7393,6 +7417,20 @@ export interface components {
             roleDisplayName: string;
             /** Format: date-time */
             grantedAt?: string;
+        };
+        /**
+         * @description Whether the VM's workload registration exists. Older control planes omit this field; clients must treat absence as unknown, never revoked.
+         * @enum {string}
+         */
+        InstanceIdentityStatus: "enabled" | "revoked";
+        ProjectVMPrincipal: {
+            /** Format: uuid */
+            id: string;
+            name: string;
+            spiffeId?: string;
+            /** Format: uuid */
+            instanceIdentityPrincipalId?: string;
+            instanceIdentityStatus: components["schemas"]["InstanceIdentityStatus"];
         };
         /**
          * Format: uuid
@@ -9741,8 +9779,6 @@ export interface operations {
             query?: {
                 /** @description Scope results to one organization. */
                 organization_id?: components["parameters"]["OrganizationIdQuery"];
-                /** @description Scope results to one project. */
-                project_id?: components["parameters"]["ProjectIdQuery"];
                 /** @description Maximum number of items to return per page (1–500). */
                 limit?: components["parameters"]["ListLimitQuery"];
                 /** @description Number of items to skip before the page starts. */
@@ -14852,6 +14888,33 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    listProjectVMPrincipals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The project's id. */
+                projectID: components["parameters"]["ProjectID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The project's readable VM principals. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectVMPrincipal"][];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     revokeProjectMember: {

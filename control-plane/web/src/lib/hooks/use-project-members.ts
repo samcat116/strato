@@ -11,6 +11,19 @@ export function useProjectMembers(projectId: string) {
   });
 }
 
+/**
+ * One lightweight, non-polling inventory request for project IAM management.
+ * VM mutation invalidation still refreshes it because its key starts with
+ * `vms`, alongside the ordinary VM queries.
+ */
+export function useProjectVMPrincipals(projectId: string) {
+  return useQuery({
+    queryKey: ["vms", "project-principals", projectId],
+    queryFn: () => projectMembersApi.listVMPrincipals(projectId),
+    enabled: !!projectId,
+  });
+}
+
 function useInvalidateMembers(projectId: string) {
   const queryClient = useQueryClient();
   return () =>

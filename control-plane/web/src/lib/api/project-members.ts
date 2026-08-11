@@ -1,11 +1,22 @@
 // Project-level role grant endpoints (users, groups, and workloads)
 
 import { api } from "./client";
-import type { GrantWriteResponse, ProjectMembers, ProjectRole } from "@/types/api";
+import type {
+  GrantWriteResponse,
+  ProjectMembers,
+  ProjectRole,
+  ProjectVMPrincipal,
+} from "@/types/api";
 
 export const projectMembersApi = {
   list(projectId: string): Promise<ProjectMembers> {
     return api.get<ProjectMembers>(`/api/projects/${projectId}/members`);
+  },
+
+  listVMPrincipals(projectId: string): Promise<ProjectVMPrincipal[]> {
+    return api.get<ProjectVMPrincipal[]>(
+      `/api/projects/${projectId}/vm-principals`
+    );
   },
 
   grant(

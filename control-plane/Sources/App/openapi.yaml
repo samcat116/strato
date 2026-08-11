@@ -308,11 +308,10 @@ paths:
       summary: List virtual machines
       description: >-
         Returns a page of the VMs the caller can read, newest first, optionally
-        scoped to one organization and/or project.
+        scoped to one organization.
       tags: [Virtual Machines]
       parameters:
         - $ref: "#/components/parameters/OrganizationIdQuery"
-        - $ref: "#/components/parameters/ProjectIdQuery"
         - $ref: "#/components/parameters/ListLimitQuery"
         - $ref: "#/components/parameters/ListOffsetQuery"
       responses:
@@ -4403,6 +4402,31 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /api/projects/{projectID}/vm-principals:
+    parameters:
+      - $ref: "#/components/parameters/ProjectID"
+    get:
+      operationId: listProjectVMPrincipals
+      summary: List a project's VM instance-identity principals
+      description: >-
+        Returns every VM the caller can read in the project, with only the
+        fields needed to manage its instance-identity role. This is a single
+        unpaged lightweight inventory operation; it does not hydrate VM
+        interfaces or security-group enforcement.
+      tags: [Projects]
+      responses:
+        "200":
+          description: The project's readable VM principals.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ProjectVMPrincipal"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /api/projects/{projectID}/members/{userID}:
     parameters:
       - $ref: "#/components/parameters/ProjectID"
@@ -9298,6 +9322,8 @@ components:
             The workload-registration row id and IAM principal id for this
             instance identity. Use it as the subject of a project workload
             grant. Absent together with `spiffeId` after identity revocation.
+        instanceIdentityStatus:
+          $ref: "#/components/schemas/InstanceIdentityStatus"
         conditions:
           $ref: "#/components/schemas/ResourceConditions"
         createdAt:
@@ -12967,6 +12993,30 @@ components:
         grantedAt:
           type: string
           format: date-time
+
+    InstanceIdentityStatus:
+      type: string
+      enum: [enabled, revoked]
+      description: >-
+        Whether the VM's workload registration exists. Older control planes
+        omit this field; clients must treat absence as unknown, never revoked.
+
+    ProjectVMPrincipal:
+      type: object
+      required: [id, name, instanceIdentityStatus]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        spiffeId:
+          type: string
+        instanceIdentityPrincipalId:
+          type: string
+          format: uuid
+        instanceIdentityStatus:
+          $ref: "#/components/schemas/InstanceIdentityStatus"
 
     ProjectMemberRoleInput:
       type: string

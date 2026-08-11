@@ -16,6 +16,9 @@ struct ProjectMemberController: RouteCollection {
         let groups = routes.grouped("api", "projects", ":projectID", "groups")
         groups.post(use: grantGroup)
         groups.delete(":groupID", use: revokeGroup)
+
+        routes.grouped("api", "projects", ":projectID", "vm-principals")
+            .get(use: listVMPrincipals)
     }
 
     struct ProjectMemberResponse: Content {
@@ -52,6 +55,14 @@ struct ProjectMemberController: RouteCollection {
         let role: UUID
         let roleDisplayName: String
         let grantedAt: Date?
+    }
+
+    struct ProjectVMPrincipalResponse: Content {
+        let id: UUID
+        let name: String
+        let spiffeId: String?
+        let instanceIdentityPrincipalId: UUID?
+        let instanceIdentityStatus: InstanceIdentityStatus
     }
 
     struct GrantMemberRequest: Content {
@@ -158,6 +169,39 @@ struct ProjectMemberController: RouteCollection {
                     roleDisplayName: displayNames.displayName(forRoleID: binding.roleID),
                     grantedAt: binding.createdAt)
             })
+    }
+
+    /// The lightweight VM-principal inventory used by project IAM management.
+    /// Unlike `GET /api/vms`, this performs no interface or enforcement
+    /// hydration and returns the complete readable set in one request.
+    func listVMPrincipals(req: Request) async throws -> [ProjectVMPrincipalResponse] {
+        let project = try await req.requireProject()
+        try await OrganizationAccessService.requireProjectMember(project: project, on: req)
+        let projectID = try project.requireID()
+
+        let vms = try await VM.query(on: req.db)
+            .filter(\.$project.$id == projectID)
+            .sort(\.$createdAt, .descending)
+            .sort(\.$id, .descending)
+            .all()
+        let nodes = vms.compactMap { $0.id.map { IAMNode(type: .virtualMachine, id: $0) } }
+        let readable = try await req.canFilter("vm:read", on: nodes)
+        let visible = vms.filter { vm in
+            vm.id.map { readable.contains(IAMNode(type: .virtualMachine, id: $0)) } ?? false
+        }
+        let identities = try await GuestIdentity.registrations(
+            forVMs: visible.compactMap(\.id), on: req.db)
+
+        return visible.compactMap { vm in
+            guard let id = vm.id else { return nil }
+            let identity = identities[id]
+            return ProjectVMPrincipalResponse(
+                id: id,
+                name: vm.name,
+                spiffeId: identity?.spiffeID,
+                instanceIdentityPrincipalId: identity?.principalID,
+                instanceIdentityStatus: identity == nil ? .revoked : .enabled)
+        }
     }
 
     func grant(req: Request) async throws -> Response {

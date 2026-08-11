@@ -29,12 +29,12 @@ import {
   useSetProjectWorkloadRole,
 } from "@/lib/hooks";
 import { warnAboutGrantCeilings } from "@/lib/grant-ceilings";
-import type { ProjectWorkloadGrant, VM } from "@/types/api";
+import type { ProjectVMPrincipal, ProjectWorkloadGrant } from "@/types/api";
 import { toast } from "sonner";
 
 interface VMGrantsTableProps {
   projectId: string;
-  vms: VM[];
+  vms: ProjectVMPrincipal[];
   grants: ProjectWorkloadGrant[];
   isLoading?: boolean;
   canManage: boolean;
@@ -58,7 +58,7 @@ export function VMGrantsTable({
     grants.map((grant) => [grant.registrationId, grant])
   );
 
-  const handleRoleChange = async (vm: VM, role: string) => {
+  const handleRoleChange = async (vm: ProjectVMPrincipal, role: string) => {
     const principalId = vm.instanceIdentityPrincipalId;
     if (!principalId || role === grantsByPrincipal.get(principalId)?.role) return;
     const roleName = roles.find((candidate) => candidate.id === role)?.name ?? role;
@@ -79,7 +79,10 @@ export function VMGrantsTable({
     }
   };
 
-  const handleRevoke = async (vm: VM, grant: ProjectWorkloadGrant) => {
+  const handleRevoke = async (
+    vm: ProjectVMPrincipal,
+    grant: ProjectWorkloadGrant
+  ) => {
     if (!window.confirm(`Revoke ${vm.name}'s ${grant.roleDisplayName} role?`)) {
       return;
     }
@@ -136,6 +139,7 @@ export function VMGrantsTable({
             : undefined;
           const isPending = pendingId === principalId;
           const identityAvailable = !!principalId && !!vm.spiffeId;
+          const identityRevoked = vm.instanceIdentityStatus === "revoked";
 
           return (
             <TableRow key={vm.id} className="border-border hover:bg-accent/60">
@@ -162,9 +166,13 @@ export function VMGrantsTable({
                 ) : (
                   <Badge
                     variant="outline"
-                    className="border-red-500/60 bg-red-500/10 text-red-700 dark:text-red-400"
+                    className={
+                      identityRevoked
+                        ? "border-red-500/60 bg-red-500/10 text-red-700 dark:text-red-400"
+                        : "border-border bg-muted text-muted-foreground"
+                    }
                   >
-                    Revoked
+                    {identityRevoked ? "Revoked" : "Unavailable"}
                   </Badge>
                 )}
               </TableCell>

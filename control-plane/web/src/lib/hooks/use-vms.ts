@@ -1,6 +1,5 @@
 import { vmsApi } from "@/lib/api/vms";
 import { useOrganization } from "@/providers";
-import { useQuery } from "@tanstack/react-query";
 import { makeResourceQueryHooks } from "./use-resource-queries";
 
 const hooks = makeResourceQueryHooks({
@@ -15,16 +14,6 @@ const hooks = makeResourceQueryHooks({
 export function useVMs() {
   const { currentOrg, isLoading: orgLoading } = useOrganization();
   return hooks.useList(currentOrg?.id, { enabled: !orgLoading });
-}
-
-/** All readable VMs in the displayed project, independent of selected org. */
-export function useProjectVMs(projectId: string) {
-  return useQuery({
-    queryKey: ["vms", { projectId }],
-    queryFn: () => vmsApi.listProject(projectId),
-    enabled: !!projectId,
-    refetchInterval: 5000,
-  });
 }
 
 export const useVM = hooks.useDetail;
