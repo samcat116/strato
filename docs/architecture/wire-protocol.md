@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 48). The required registration fields
+currently 49). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -77,6 +77,10 @@ the optional per-VM NoCloud seed capability; old snapshots decode it as nil.
 Older persisted agent manifests decode a missing source as `iso`; a live
 control plane and agent still require the same v48 handshake.
 
+Wire v49 adds `AgentRegisterMessage.metadataServiceCapable`. The agent reports
+true only after it initializes the guest-facing listener supervisor; the
+control plane requires the explicit signal for IMDS-backed VM placement.
+
 Two consequences worth knowing:
 
 - **A rejected agent cannot self-update.** Declarative self-update rides the
@@ -85,13 +89,12 @@ Two consequences worth knowing:
   matching release, then restart it so it can register again.
 - **Capabilities still exist, and they are not versions.** A capability
   (`sandboxCapable`, `sandboxNetworkingCapable`, `tpmCapable`,
-  `resolverCapable`, or QEMU `supportsVsock`) is evidence that a *host* can
-  realize a feature — a runtime, a binary, a guest image — all installed
-  independently of the agent binary. Version says "the peer understands the
-  payload"; capability says "the host can act on it". The exact handshake
-  answers the first question;
-  capabilities keep answering the second per host, re-probed at every
-  registration.
+  `resolverCapable`, `metadataServiceCapable`, or QEMU `supportsVsock`) is
+  evidence that a *host* can realize a feature — a runtime, a binary, a guest
+  image — all installed independently of the agent binary. Version says "the
+  peer understands the payload"; capability says "the host can act on it". The
+  exact handshake answers the first question; capabilities keep answering the
+  second per host, re-probed at every registration.
 
 The current contract includes the per-instance metadata kill switch (STR-185):
 `InstanceMetadata.serviceEnabled` is EC2's `MetadataOptions.HttpEndpoint`,
@@ -139,7 +142,7 @@ v34 no `vm_reboot`, `vm_restore` or `sandbox_restore` either.
 
 | Message | Purpose |
 |---|---|
-| `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, `sandboxNetworkingCapable`, protocol version |
+| `agent_register` | Handshake: hostname, version, capabilities, resources, hypervisor support, architecture/OS, `sandboxCapable`, `sandboxNetworkingCapable`, `metadataServiceCapable`, protocol version |
 | `agent_heartbeat` | Periodic resource usage and running VM IDs |
 | `agent_unregister` | Graceful disconnect with a reason |
 | `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567, incl. `balloonActualBytes` at v19) |

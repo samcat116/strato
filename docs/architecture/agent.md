@@ -561,7 +561,10 @@ none of its selected logical networks publish metadata. Either configuration
 would create a seed whose hand-off URL has no reachable listener; `iso` remains
 valid on metadata-disabled networks because its bootstrap is self-contained.
 IMDS-backed VMs also require a QEMU agent that advertises OVN networking, since
-user-mode networking cannot realize the metadata localport.
+user-mode networking cannot realize the metadata localport. The agent also
+advertises `metadataServiceCapable` only after it initializes the listener
+supervisor; the scheduler requires both signals, so `metadata_service = false`
+and missing host prerequisites fail closed before placement.
 
 The seed's `local-hostname` is the VM's **desired hostname**, taken from
 `DesiredVMState.metadata.hostname` (STR-48) and passed to `createVM` alongside

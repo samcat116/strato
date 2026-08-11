@@ -399,6 +399,10 @@ public func configure(_ app: Application) async throws {
     // rows stay on the full ISO explicitly; this phase does not cut them over.
     app.migrations.add(AddMetadataSourceToVM())
 
+    // STR-64: an OVN agent may still disable its metadata listener. Persist
+    // the explicit registration capability and fail closed until it reports.
+    app.migrations.add(AddAgentMetadataServiceCapability())
+
     // Not `app.autoMigrate()` (STR-183). Fluent's migrator takes no lock and
     // wraps no transaction around a migration and the `_fluent_migrations` row
     // that records it, so concurrent replica boots race the same migration and a

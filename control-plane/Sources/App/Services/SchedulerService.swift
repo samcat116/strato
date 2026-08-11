@@ -38,6 +38,9 @@ struct SchedulableAgent: Sendable {
     /// Whether the agent's networking backend supports VM-to-VM traffic
     /// (OVN/OVS). User-mode (SLIRP) agents cannot satisfy inter-VM networking.
     let supportsInterVMNetworking: Bool
+    /// Whether the agent initialized its guest-facing metadata listener
+    /// supervisor. Overlay networking alone does not imply this capability.
+    let supportsMetadataService: Bool
     /// Site (availability zone) the agent belongs to; nil for site-less agents.
     let siteID: UUID?
     /// Whether this agent can run sandbox workloads (issue #415): it
@@ -69,6 +72,7 @@ struct SchedulableAgent: Sendable {
         supportedHypervisors: [HypervisorType] = [.qemu],
         architecture: CPUArchitecture? = nil,
         supportsInterVMNetworking: Bool = false,
+        supportsMetadataService: Bool = false,
         siteID: UUID? = nil,
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
@@ -88,6 +92,7 @@ struct SchedulableAgent: Sendable {
         self.supportedHypervisors = supportedHypervisors
         self.architecture = architecture
         self.supportsInterVMNetworking = supportsInterVMNetworking
+        self.supportsMetadataService = supportsMetadataService
         self.siteID = siteID
         self.supportsSandboxWorkloads = supportsSandboxWorkloads
         self.supportsSandboxNetworking = supportsSandboxNetworking
@@ -144,6 +149,7 @@ struct SchedulableAgent: Sendable {
             supportedHypervisors: supportedHypervisors,
             architecture: architecture,
             supportsInterVMNetworking: supportsInterVMNetworking,
+            supportsMetadataService: supportsMetadataService,
             siteID: siteID,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
@@ -170,6 +176,9 @@ struct VMPlacementRequirements: Sendable {
     /// Whether the VM needs VM-to-VM networking, which user-mode (SLIRP)
     /// agents cannot provide.
     let requiresInterVMNetworking: Bool
+    /// Whether the VM's first-boot seed must fetch from the guest-facing
+    /// metadata service. Independent from the overlay-networking requirement.
+    let requiresMetadataService: Bool
     /// Site the VM must place into, when one of its networks is pinned to a
     /// site (a pinned network only exists in that site's OVN deployment).
     /// Hard constraint; nil means unconstrained.
@@ -211,6 +220,7 @@ struct VMPlacementRequirements: Sendable {
         hypervisorType: HypervisorType = .qemu,
         architecture: CPUArchitecture? = nil,
         requiresInterVMNetworking: Bool = false,
+        requiresMetadataService: Bool = false,
         siteID: UUID? = nil,
         requiresSandboxRuntime: Bool = false,
         requiresSandboxNetworking: Bool = false,
@@ -223,6 +233,7 @@ struct VMPlacementRequirements: Sendable {
         self.hypervisorType = hypervisorType
         self.architecture = architecture
         self.requiresInterVMNetworking = requiresInterVMNetworking
+        self.requiresMetadataService = requiresMetadataService
         self.siteID = siteID
         self.requiresSandboxRuntime = requiresSandboxRuntime
         self.requiresSandboxNetworking = requiresSandboxNetworking
@@ -238,6 +249,7 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case noUsableHypervisors(onlineAgents: Int)
     case architectureMismatch(required: CPUArchitecture)
     case networkCapabilityUnsatisfied
+    case metadataServiceUnsatisfied(eligibleAgents: Int)
     case sandboxRuntimeUnsatisfied(eligibleAgents: Int)
     case sandboxNetworkingUnsatisfied(eligibleAgents: Int)
     case vtpmUnsatisfied(eligibleAgents: Int)
@@ -267,6 +279,11 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
                 "No eligible agent has a \(required.displayName) host architecture (required for hardware-accelerated guests)"
         case .networkCapabilityUnsatisfied:
             return "No eligible agent supports VM-to-VM networking required by this VM"
+        case .metadataServiceUnsatisfied(let eligibleAgents):
+            return
+                "No eligible agent advertises the instance metadata service "
+                + "(\(eligibleAgents) OVN-capable agent(s) checked) — enable `metadata_service`, "
+                + "satisfy its host prerequisites, and let the agent re-register"
         case .sandboxRuntimeUnsatisfied(let eligibleAgents):
             return
                 "No eligible agent advertises the sandbox runtime (\(eligibleAgents) Firecracker-capable agent(s) checked) — each needs a working Firecracker/KVM setup and the sandbox guest base image installed"
@@ -340,7 +357,9 @@ final class SchedulerService: Sendable {
     /// IMDS-backed NoCloud seed is different: its `seedfrom` hand-off must
     /// reach the per-VM metadata localport, which only an OVN-backed agent can
     /// realize. That bootstrap choice therefore imposes the hard network
-    /// capability requirement.
+    /// capability requirement. It also requires the independent metadata
+    /// listener capability because an OVN host can disable that service or
+    /// fail one of its startup prerequisites.
     static func placementRequirements(
         for vm: VM, architecture: CPUArchitecture? = nil, siteID: UUID? = nil
     ) -> VMPlacementRequirements {
@@ -351,6 +370,7 @@ final class SchedulerService: Sendable {
             hypervisorType: vm.hypervisorType,
             architecture: architecture,
             requiresInterVMNetworking: vm.metadataSource == .imds,
+            requiresMetadataService: vm.metadataSource == .imds,
             siteID: siteID,
             requiresVTPM: vm.tpmEnabled,
             requiresVsock: vm.guestAgentEnabled
@@ -630,12 +650,20 @@ final class SchedulerService: Sendable {
             throw SchedulerError.networkCapabilityUnsatisfied
         }
 
-        let eligible = networkCapable.filter { agent in
+        let metadataCapable =
+            requirements.requiresMetadataService
+            ? networkCapable.filter { $0.supportsMetadataService }
+            : networkCapable
+        guard !metadataCapable.isEmpty else {
+            throw SchedulerError.metadataServiceUnsatisfied(eligibleAgents: networkCapable.count)
+        }
+
+        let eligible = metadataCapable.filter { agent in
             agent.availableCPU >= requirements.cpu && agent.availableMemory >= requirements.memory
                 && agent.availableDisk >= requirements.disk
         }
         guard !eligible.isEmpty else {
-            throw SchedulerError.insufficientResources(required: requirements, available: networkCapable)
+            throw SchedulerError.insufficientResources(required: requirements, available: metadataCapable)
         }
 
         return eligible

@@ -5378,7 +5378,7 @@ export interface components {
              */
             metadataEnabled: boolean;
             /**
-             * @description Where cloud-init reads the guest bootstrap. `iso` preserves the complete immutable NoCloud seed. `imds` keeps `network-config` and a `seedfrom` stub on the ISO, then fetches meta-data and user-data from a per-VM capability URL on `169.254.169.254`. An IMDS-backed VM must enable its metadata service and select at least one network that has metadata enabled. It is supported only for QEMU and constrains placement to an OVN-capable agent. Fixed at VM creation.
+             * @description Where cloud-init reads the guest bootstrap. `iso` preserves the complete immutable NoCloud seed. `imds` keeps `network-config` and a `seedfrom` stub on the ISO, then fetches meta-data and user-data from a per-VM capability URL on `169.254.169.254`. An IMDS-backed VM must enable its metadata service and select at least one network that has metadata enabled. It is supported only for QEMU and constrains placement to an OVN-capable agent that advertises a running metadata service. Fixed at VM creation.
              * @default iso
              */
             metadataSource: components["schemas"]["MetadataSource"];
@@ -7686,6 +7686,8 @@ export interface components {
             tpmCapable: boolean;
             /** @description Whether this node can run the per-network DNS resolver. Resolver enablement requires every node in the site to report true. */
             resolverCapable: boolean;
+            /** @description Whether this node initialized the guest-facing instance metadata service. IMDS-backed VMs only place on nodes reporting true; OVN networking alone is not sufficient. */
+            metadataServiceCapable: boolean;
             /** @description Latest feature-scoped software dependency health reported by the agent. Fresh healthy observations are authoritative for new placement; failures do not terminate running workloads. */
             dependencyObservations: components["schemas"]["NodeDependencyObservation"][];
             /**

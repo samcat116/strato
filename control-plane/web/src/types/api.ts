@@ -622,6 +622,9 @@ export interface Agent {
   tpmCapable: boolean;
   // Whether this node can run the per-network DNS resolver.
   resolverCapable: boolean;
+  // Whether this node initialized the guest-facing instance metadata service.
+  // IMDS-backed VMs only place on nodes reporting true.
+  metadataServiceCapable: boolean;
   dependencyObservations: NodeDependencyObservation[];
   dependencyObservationsReceivedAt?: string;
   networkCapability?: NetworkCapability;

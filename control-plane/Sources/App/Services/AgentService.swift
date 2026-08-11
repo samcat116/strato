@@ -314,6 +314,7 @@ actor AgentService {
             agent.sandboxNetworkingCapable = message.sandboxNetworkingCapable ?? false
             agent.tpmCapable = message.tpmCapable ?? false
             agent.resolverCapable = message.resolverCapable ?? false
+            agent.metadataServiceCapable = message.metadataServiceCapable ?? false
             agent.dependencyObservations = dependencyObservations
             agent.dependencyObservationsReceivedAt = dependencyObservationsReceivedAt
             _ = agent.updateAvailableResources(message.resources)
@@ -2814,6 +2815,7 @@ actor AgentService {
                     supportedHypervisors: agent.supportedHypervisors,
                     architecture: agent.cpuArchitecture,
                     supportsInterVMNetworking: agent.supportsInterVMNetworking,
+                    supportsMetadataService: agent.metadataServiceCapable,
                     siteID: agent.$site.id,
                     supportsSandboxWorkloads: agent.sandboxCapable,
                     supportsSandboxNetworking: agent.effectiveSandboxNetworkingCapable,
