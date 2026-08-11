@@ -1,0 +1,22 @@
+agent/Sources/StratoAgentCore/ResolverSupervisor.swift
+  s_617fe1efeed7d9::t_e5ce7bff132a37 233,258-276,284,292,432,449-467
+agent/Tests/StratoAgentTests/ResolverSupervisorTests.swift
+  s_617fe1efeed7d9::t_c88e06e1fc2ea2 117-123,125,127-131,133-136,143,145-146
+  s_617fe1efeed7d9::t_4edcc035ad359a 124,126,132,137-142,144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "c119712b3ef52654418d61fe89dc0ea32b59053d",
+  "prompts": {},
+  "sessions": {
+    "s_617fe1efeed7d9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee74-bab6-7c72-a38c-fa2fc717e345",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
