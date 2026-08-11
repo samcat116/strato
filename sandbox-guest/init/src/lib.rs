@@ -1,10 +1,10 @@
-//! Strato sandbox guest init / guest-agent (issue #419).
+//! Portable guest-side code shared by Strato's sandbox init and VM guest agent.
 //!
 //! The binary (`src/main.rs`) is a Linux-only PID-1 init that boots inside a
-//! Firecracker microVM. This library holds the parts that carry no Linux
-//! syscall dependency — the config-drive format, the OCI process-config merge,
-//! the vsock control protocol, and the resolver files guest networking writes
-//! into the rootfs — so they can be unit-tested on any host.
+//! Firecracker microVM. `strato-guest-agent` is a normal Linux service for
+//! general-purpose VMs. This library holds the parts that carry no Linux syscall
+//! dependency — most importantly the shared vsock control protocol — so both
+//! speakers use one wire definition and its tests run on any host.
 //!
 //! Boot contract (produced host-side by the sandbox runtime, issue #421):
 //!   * kernel + initramfs (this init) via Firecracker `boot-source`;
