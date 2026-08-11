@@ -1,0 +1,30 @@
+control-plane/Tests/AppResourceTests/VMResizeTests.swift
+  s_a5b8ccedc35df5::t_f963fa4861e6fc 306-310,313,329,468-493
+  s_a5b8ccedc35df5::t_326ed5d1005d6d 494-496
+docs/architecture/control-plane.md
+  s_a5b8ccedc35df5::t_8744b49d16934b 233-238
+control-plane/Sources/App/Controllers/VMController.swift
+  s_a5b8ccedc35df5::t_f963fa4861e6fc 1273-1282
+docs/architecture/agent.md
+  s_a5b8ccedc35df5::t_8744b49d16934b 706-707
+control-plane/web/src/types/openapi.ts
+  s_a5b8ccedc35df5::t_1dfd74c525618c 145,5386,9767
+control-plane/Sources/App/openapi.yaml
+  s_a5b8ccedc35df5::t_8744b49d16934b 376-381,406-407,9106-9109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "a654be1ae0976b4cd9175f140efac94a62758f20",
+  "prompts": {},
+  "sessions": {
+    "s_a5b8ccedc35df5": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee74-d982-7572-a421-9be9c3f6390a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
