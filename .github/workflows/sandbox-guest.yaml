@@ -24,9 +24,9 @@ permissions:
   contents: write
 
 jobs:
-  # Fast gate on every PR touching the guest: lint + unit-test the init crate's
-  # portable logic (config merge, vsock protocol) and type-check the Linux
-  # syscall paths cross-compiled to musl. No kernel build here.
+  # Fast gate on every PR touching the guest: lint + unit-test the shared Cargo
+  # package (sandbox init plus VM guest agent) and type-check all Linux syscall
+  # paths cross-compiled to musl. No kernel build here.
   test-init:
     runs-on: ubuntu-latest
     defaults:

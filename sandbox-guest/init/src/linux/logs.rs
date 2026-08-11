@@ -113,6 +113,7 @@ pub fn run_follow_stream(
     mut writer: File,
     since_seq: u64,
     logs: &LogBuffer,
+    nonce: String,
 ) {
     let probe_fd = reader.get_ref().as_raw_fd();
     let mut next = since_seq.max(1);
@@ -123,7 +124,12 @@ pub fn run_follow_stream(
                 // Every pipe hit EOF and everything retained was delivered:
                 // tell the host the stream is complete so it can flush a
                 // partial final line, then end the connection.
-                let _ = writer.write_all(encode_line(&Response::LogEof).as_bytes());
+                let _ = writer.write_all(
+                    encode_line(&Response::LogEof {
+                        nonce: nonce.clone(),
+                    })
+                    .as_bytes(),
+                );
                 return;
             }
             if peer_hung_up(probe_fd) {
@@ -133,6 +139,7 @@ pub fn run_follow_stream(
         }
         for record in &records {
             let line = encode_line(&Response::Log {
+                nonce: nonce.clone(),
                 seq: record.seq,
                 stream: record.stream.to_string(),
                 data: encode_base64(&record.data),

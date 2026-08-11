@@ -61,15 +61,19 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
-Wire v44 introduced the `guest_exec_*` message family. Wire v45 adds QEMU
-guest-agent intent, fixed host-global vsock CIDs, and the per-hypervisor host
-capability used to keep those VMs off nodes without `/dev/vhost-vsock`. Wire
-v46 adds authoritative native-OVN load-balancer desired and observed state.
+Wire v44 generalized the interactive exec stream across VMs and sandboxes with
+`guest_exec_*` messages and a resource-kind discriminator on start.
 
-Wire v47 adds typed dependency observations to agent registration and
-heartbeats. The control plane uses the latest received snapshot for
-feature-scoped placement gates without terminating workloads that are already
-running.
+Wire v45 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
+per-hypervisor host capability used to keep those VMs off nodes without
+`/dev/vhost-vsock`.
+
+Wire v46 adds authoritative native-OVN load-balancer desired state, programming,
+and backend-health observations.
+
+Wire v47 adds typed dependency observations to agent registration and heartbeats.
+The control plane uses the latest received snapshot for feature-scoped placement
+gates without terminating workloads that are already running.
 
 Wire v48 adds `VMSpec.metadataSource`, the create-time choice between the full
 NoCloud seed ISO and an IMDS `seedfrom` stub. IMDS-backed metadata also carries

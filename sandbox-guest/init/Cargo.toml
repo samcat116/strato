@@ -1,8 +1,9 @@
-# strato-sandbox-init — the guest init / guest-agent (PID 1) for Strato
-# sandboxes (issue #419). Runs inside a Firecracker microVM booted from our
-# guest kernel + initramfs; mounts the container rootfs, applies the OCI
-# process config, pivot_roots, execs the workload, reaps zombies, and reports
-# the exit status over vsock.
+# The two Strato guest-side control daemons share this crate so their protocol
+# definitions and tests cannot drift:
+#
+# * strato-sandbox-init is PID 1 in a Firecracker sandbox (issue #419).
+# * strato-guest-agent is a normal service in an already-booted Linux VM
+#   (STR-77).
 #
 # License: per the repository LICENSE.md (Functional Source License 1.1).
 [package]
@@ -22,6 +23,10 @@ path = "src/lib.rs"
 [[bin]]
 name = "strato-sandbox-init"
 path = "src/main.rs"
+
+[[bin]]
+name = "strato-guest-agent"
+path = "src/guest_agent.rs"
 
 [dependencies]
 # base64 payload encoding for exec/log stdio chunks on the vsock protocol (v2).

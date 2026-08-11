@@ -31,6 +31,12 @@ and `SandboxRuntimeProbe`).
 probe to read it. Never advertise one the initramfs cannot actually serve — the
 list is the only evidence the host has.
 
+The Cargo package under [`init/`](init/) also builds `strato-guest-agent`
+(STR-77), the normal-service counterpart for general-purpose Linux VMs. It is
+not part of this initramfs or `guest.json`; its systemd unit and release artifact
+belong to STR-80. Both executables import the same Rust `protocol` module, so
+their NDJSON shapes and portable protocol tests are one contract.
+
 ## What the init does
 
 Booted by Firecracker with our kernel + initramfs, `strato-sandbox-init` runs
@@ -160,9 +166,11 @@ init frozen inside a checkpoint — v3 added `sync_clock`, `launch` and
 - **Control** — `{"type":"ping"}` → `{"type":"pong",…}`;
   `{"type":"get_status"}` →
   `{"type":"status","state":"running|exited","exit_code":…}` (the v1 surface,
-  unchanged; the connection keeps serving requests). Every control response
-  echoes `sandbox_id` + `nonce` so a host can re-identify a guest after a
-  snapshot/resume (phase 4, [#426]).
+  unchanged; the connection keeps serving requests). `pong` and `status` echo
+  `sandbox_id` + `nonce` so a host can re-identify a guest after a
+  snapshot/resume (phase 4, [#426]). Every response variant carries `nonce`,
+  including exec and log stream records, so the host can pin a whole connection
+  to one guest generation.
 - **Exec session** ([#423]) —
   `{"type":"exec","argv":[…],"env":{…},"cwd":…,"tty":…,"rows":…,"cols":…}`
   runs a command in the workload's context (its resolved env with the
@@ -182,6 +190,21 @@ init frozen inside a checkpoint — v3 added `sync_clock`, `launch` and
   follows new output forever as
   `{"type":"log","seq":…,"stream":"stdout|stderr","data":"<base64>"}` lines.
 
+### VM guest agent (STR-77)
+
+`strato-guest-agent` attaches this protocol to an already-booted Linux VM. It
+does no config-drive parsing, mounting, pivot, OCI merge, or workload log
+capture. It serves `ping`, `get_status`, and `exec`; status is `running` for the
+life of the service, and unsupported sandbox-only operations return `error`.
+
+The historical `sandbox_id` response field carries `/etc/machine-id`. The
+generation `nonce` is `/proc/sys/kernel/random/boot_id`: a VM reboot changes it,
+while restarting only the systemd service preserves it and simply rebinds the
+listener. The daemon binds AF_VSOCK port 1024 only and accepts CID 2 (the host),
+never a guest network or guest-local vsock client. Exec commands run in their
+own process group (or PTY session), inherit the service environment with request
+overrides, default to `/`, and are killed as a group if the host disconnects.
+
 ## Building
 
 Requires a Linux build host (kernel builds are Linux-only). Use the pinned
@@ -199,16 +222,24 @@ Or, on a suitably provisioned host, directly:
 ./build.sh --arch x86_64 --out ./build/out    # kernel + initramfs + guest.json
 ```
 
-The init's portable logic (config merge, vsock protocol, resolver-file
+The shared portable logic (config merge, vsock protocol, resolver-file
 rendering) is unit-tested on any host, including macOS/CI:
 
 ```sh
-cargo test --manifest-path init/Cargo.toml --lib
+cargo test --manifest-path init/Cargo.toml
 ```
 
-The Linux-only halves — the network ioctls and the rtnetlink route — have unit
-tests too (`cargo test` on a Linux host runs them), but their real check is a
-namespace, which needs no microVM, no OVN, and no control plane:
+On Linux that command also exercises the VM agent's pipe and PTY exec sessions
+through a local socket pair. Build its static binary directly with:
+
+```sh
+cargo build --release --locked --manifest-path init/Cargo.toml \
+  --target x86_64-unknown-linux-musl --bin strato-guest-agent
+```
+
+The sandbox init's Linux-only network ioctls and rtnetlink route have unit tests
+too, but their real check is a namespace, which needs no microVM, no OVN, and no
+control plane:
 
 ```sh
 sudo ip netns add guest-test

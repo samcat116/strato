@@ -19,15 +19,18 @@ import StratoShared
 ///   streams `log` records (the workload's stdout/stderr ring buffer) from
 ///   `since_seq` onward, forever; no further host input is expected.
 ///
-/// Every v1 response echoes the guest's identity (`sandbox_id` + `nonce`), so
-/// the host can confirm it is talking to the generation it expects rather than
-/// a stale one — the same identity check that lets a host re-confirm a guest
-/// after re-adoption.
+/// `pong` and `status` echo the guest's identity (`sandbox_id` + `nonce`), and
+/// every response on the current Rust wire carries `nonce`, so the host can
+/// confirm it is talking to the generation it expects rather than a stale one.
+/// The VM bridge consumes the per-record nonce in STR-82; the sandbox path's
+/// existing health handshake remains the same identity check used after
+/// re-adoption.
 ///
-/// Sandbox guests are the only speakers today, and the wire format is unchanged
-/// from when this was `SandboxControlProtocol`. The shape was never actually
-/// sandbox-specific: an exec mode that answers `exec_started`, streams `output`
-/// and ends with `exec_exit` is exactly what a VM guest agent needs (STR-73).
+/// Sandbox guests and `strato-guest-agent` share the Rust definition. The
+/// request/response roles from the former `SandboxControlProtocol` are shared:
+/// an exec mode that answers `exec_started`, streams `output` and ends with
+/// `exec_exit` is equally useful for a VM guest (STR-73). STR-77 adds the
+/// generation nonce to every response without changing those discriminators.
 ///
 /// Not to be confused with `StratoShared.SandboxGuestControlProtocol`, which is
 /// only the *version gates* for this protocol — it is shared with the control
