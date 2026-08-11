@@ -2,8 +2,7 @@
 
 use std::io::{BufReader, Write};
 use std::mem;
-use std::os::fd::{FromRawFd, OwnedFd};
-use std::os::unix::io::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::Arc;
 
 use strato_sandbox_init::protocol::{
@@ -23,22 +22,23 @@ pub fn serve(identity: Arc<GuestIdentity>) -> Result<(), String> {
     loop {
         let mut peer: libc::sockaddr_vm = unsafe { mem::zeroed() };
         let mut peer_len = mem::size_of::<libc::sockaddr_vm>() as libc::socklen_t;
-        // SAFETY: accept(2) initializes `peer` and returns a fresh owned fd.
-        let raw = unsafe {
-            libc::accept(
+        // SAFETY: accept4(2) initializes `peer` and returns a fresh owned fd.
+        let connection = unsafe {
+            accept_cloexec(
                 listener.as_raw_fd(),
                 &mut peer as *mut libc::sockaddr_vm as *mut libc::sockaddr,
                 &mut peer_len,
             )
         };
-        if raw < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() != std::io::ErrorKind::Interrupted {
-                eprintln!("[strato-guest-agent] vsock accept failed: {err}");
+        let connection = match connection {
+            Ok(connection) => connection,
+            Err(error) => {
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    eprintln!("[strato-guest-agent] vsock accept failed: {error}");
+                }
+                continue;
             }
-            continue;
-        }
-        let connection = unsafe { OwnedFd::from_raw_fd(raw) };
+        };
 
         // The control plane reaches the guest through the hypervisor's host
         // endpoint (CID 2). Refuse guest-local vsock clients: the daemon is a
@@ -75,14 +75,8 @@ fn bind_listener(port: u32) -> Result<OwnedFd, String> {
     // SAFETY: standard socket(2)/bind(2)/listen(2) on AF_VSOCK only. This
     // executable never creates an AF_INET or AF_INET6 socket.
     unsafe {
-        let raw = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM, 0);
-        if raw < 0 {
-            return Err(format!(
-                "socket(AF_VSOCK): {}",
-                std::io::Error::last_os_error()
-            ));
-        }
-        let listener = OwnedFd::from_raw_fd(raw);
+        let listener = open_stream_socket(libc::AF_VSOCK)
+            .map_err(|error| format!("socket(AF_VSOCK): {error}"))?;
         let mut address: libc::sockaddr_vm = mem::zeroed();
         address.svm_family = libc::AF_VSOCK as libc::sa_family_t;
         address.svm_cid = libc::VMADDR_CID_ANY;
@@ -106,6 +100,36 @@ fn bind_listener(port: u32) -> Result<OwnedFd, String> {
         }
         Ok(listener)
     }
+}
+
+fn open_stream_socket(domain: libc::c_int) -> std::io::Result<OwnedFd> {
+    // SOCK_CLOEXEC makes descriptor inheritance impossible even if another
+    // thread forks between socket creation and a separate fcntl(2) call.
+    let raw = unsafe { libc::socket(domain, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: socket(2) returned a new descriptor owned by this process.
+    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
+}
+
+/// Accept a connection without exposing the new descriptor to a concurrent
+/// fork-and-exec between accept and a separate fcntl(2) call.
+///
+/// # Safety
+///
+/// `address` and `address_len` must satisfy accept4(2)'s pointer requirements.
+unsafe fn accept_cloexec(
+    listener: RawFd,
+    address: *mut libc::sockaddr,
+    address_len: *mut libc::socklen_t,
+) -> std::io::Result<OwnedFd> {
+    let raw = unsafe { libc::accept4(listener, address, address_len, libc::SOCK_CLOEXEC) };
+    if raw < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: accept4(2) returned a new descriptor owned by this process.
+    Ok(unsafe { OwnedFd::from_raw_fd(raw) })
 }
 
 fn handle_connection(connection: OwnedFd, identity: &GuestIdentity) -> std::io::Result<()> {
@@ -226,7 +250,8 @@ mod tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::os::fd::OwnedFd;
-    use std::os::unix::net::UnixStream;
+    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use strato_sandbox_init::protocol::{decode_base64, Request};
 
@@ -235,6 +260,47 @@ mod tests {
             guest_id: "machine-1".into(),
             nonce: "boot-1".into(),
         }
+    }
+
+    #[test]
+    fn listener_and_accepted_sockets_are_close_on_exec() {
+        let socket = open_stream_socket(libc::AF_UNIX).expect("create stream socket");
+        assert_close_on_exec(socket.as_raw_fd());
+
+        static NEXT_SOCKET_ID: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "strato-guest-agent-cloexec-{}-{}.sock",
+            std::process::id(),
+            NEXT_SOCKET_ID.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).expect("bind unix listener");
+        let client = UnixStream::connect(&path).expect("connect unix client");
+        // SAFETY: null address pointers tell accept4(2) to omit the peer address.
+        let accepted = unsafe {
+            accept_cloexec(
+                listener.as_raw_fd(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        }
+        .expect("accept unix client");
+        assert_close_on_exec(accepted.as_raw_fd());
+
+        drop(accepted);
+        drop(client);
+        drop(listener);
+        std::fs::remove_file(path).expect("remove unix listener");
+    }
+
+    fn assert_close_on_exec(fd: RawFd) {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        assert!(
+            flags >= 0,
+            "F_GETFD failed: {}",
+            std::io::Error::last_os_error()
+        );
+        assert_ne!(flags & libc::FD_CLOEXEC, 0);
     }
 
     fn connection() -> (UnixStream, std::thread::JoinHandle<()>) {
