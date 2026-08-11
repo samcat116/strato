@@ -1,0 +1,25 @@
+agent/Tests/StratoAgentTests/MetadataServerSupervisorTests.swift
+  s_d3c90e184e731d::t_d723b33fb489c8 290-310
+  s_d3c90e184e731d::t_b1b700531831c9 239,244,257,261-262,269,271-272,287
+  s_d3c90e184e731d::t_2e467802a6e582 270
+agent/Sources/StratoAgent/MetadataServerCommand.swift
+  s_d3c90e184e731d::t_b1b700531831c9 2-6,47-51
+agent/Sources/StratoAgentCore/MetadataService/MetadataServerProcess.swift
+  s_d3c90e184e731d::t_b1b700531831c9 1-5,89,120-124,147,167-168,173,210-211,213-226
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b8330f08c1316d6f2ce4c8ca2ba5ce585986b154",
+  "prompts": {},
+  "sessions": {
+    "s_d3c90e184e731d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fede4-bec2-7343-aad5-ce620399e429",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
