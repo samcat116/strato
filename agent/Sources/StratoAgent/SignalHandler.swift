@@ -42,19 +42,19 @@ final class SignalHandler: Sendable {
         }
         guard shouldInstall else { return }
 
-        var sources: [DispatchSourceSignal] = []
-        for sig in signals {
-            // Ignore the default action so the dispatch source can observe it
-            // instead of the process being terminated immediately.
-            signal(sig, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: sig, queue: queue)
-            source.setEventHandler { [weak self] in
-                self?.fire(signal: sig)
+        state.withLock { state in
+            for sig in signals {
+                // Ignore the default action so the dispatch source can observe it
+                // instead of the process being terminated immediately.
+                signal(sig, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: sig, queue: queue)
+                source.setEventHandler { [weak self] in
+                    self?.fire(signal: sig)
+                }
+                state.sources.append(source)
             }
-            sources.append(source)
+            state.sources.forEach { $0.resume() }
         }
-        state.withLock { $0.sources = sources }
-        sources.forEach { $0.resume() }
     }
 
     private func fire(signal: Int32) {

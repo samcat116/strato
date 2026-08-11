@@ -8,6 +8,49 @@ import Vapor
 @Suite("Image object store", .serialized)
 final class ImageObjectStoreTests {
 
+    private actor SuspendedMultipartUpload {
+        struct Counts: Sendable {
+            var uploadedParts = 0
+            var completions = 0
+            var aborts = 0
+        }
+
+        private var counts = Counts()
+        private var completionWaiters: [CheckedContinuation<Void, Never>] = []
+
+        func uploadPart(_: ByteBuffer, partNumber: Int) -> String? {
+            counts.uploadedParts += 1
+            return "etag-\(partNumber)"
+        }
+
+        func complete(_: [S3MultipartUploadOperations.CompletedPart]) async {
+            counts.completions += 1
+            await withCheckedContinuation { continuation in
+                completionWaiters.append(continuation)
+            }
+        }
+
+        func abort() {
+            counts.aborts += 1
+        }
+
+        func waitUntilCompletionStarts() async {
+            while counts.completions == 0 {
+                await Task.yield()
+            }
+        }
+
+        func releaseCompletions() {
+            let waiters = completionWaiters
+            completionWaiters.removeAll()
+            waiters.forEach { $0.resume() }
+        }
+
+        func snapshot() -> Counts {
+            counts
+        }
+    }
+
     // MARK: - Helpers
 
     static func createTempStorageDirectory() throws -> String {
@@ -231,6 +274,45 @@ final class ImageObjectStoreTests {
         }
         let siblings = try FileManager.default.contentsOfDirectory(atPath: "\(root)/p/i")
         #expect(!siblings.contains(where: { $0.contains(".partial.") }))
+    }
+
+    @Test("Concurrent S3 terminal calls share the in-progress publish")
+    func s3TerminalCallsSharePublish() async throws {
+        let upload = SuspendedMultipartUpload()
+        let writer = S3ImageObjectWriter(
+            operations: S3MultipartUploadOperations(
+                uploadPart: { buffer, partNumber in
+                    await upload.uploadPart(buffer, partNumber: partNumber)
+                },
+                completeMultipartUpload: { parts in
+                    await upload.complete(parts)
+                },
+                abortMultipartUpload: {
+                    await upload.abort()
+                }
+            )
+        )
+        try await writer.write(Self.buffer("complete"))
+
+        let firstFinish = Task { try await writer.finish() }
+        await upload.waitUntilCompletionStarts()
+
+        let secondFinish = Task { try await writer.finish() }
+        let overlappingAbort = Task { await writer.abort() }
+        for _ in 0..<10 {
+            await Task.yield()
+        }
+
+        await upload.releaseCompletions()
+        try await firstFinish.value
+        try await secondFinish.value
+        await overlappingAbort.value
+        try await writer.finish()
+
+        let counts = await upload.snapshot()
+        #expect(counts.uploadedParts == 1)
+        #expect(counts.completions == 1)
+        #expect(counts.aborts == 0)
     }
 
     @Test("Opening a writer sweeps staging files abandoned by an earlier crash")
