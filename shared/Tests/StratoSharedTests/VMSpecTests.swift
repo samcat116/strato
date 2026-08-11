@@ -98,6 +98,32 @@ struct VMSpecTests {
         #expect(decoded.networks.isEmpty)
         #expect(decoded.console == nil)
         #expect(decoded.diskBytes == nil)
+        #expect(!decoded.guestAgentEnabled)
+    }
+
+    @Test func guestAgentOptInRoundTrips() throws {
+        let spec = VMSpec(
+            cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil),
+            guestAgentEnabled: true)
+        #expect(try roundTrip(spec).guestAgentEnabled)
+    }
+
+    @Test func specWithoutGuestAgentFlagDefaultsOff() throws {
+        let json = """
+            {"cpus":2,"maxCpus":2,"memoryBytes":1073741824,"maxMemoryBytes":1073741824,
+             "sharedMemory":false,"hugepages":false,"boot":{"disk":{}},"volumes":[],"networks":[],
+             "sshAuthorizedKeys":[]}
+            """
+        #expect(try decodeJSON(VMSpec.self, from: json).guestAgentEnabled == false)
+    }
+
+    @Test func attachmentCopiesPreserveGuestAgentOptIn() {
+        let spec = VMSpec(
+            cpus: 1, memoryBytes: 268_435_456, boot: .disk(firmware: nil),
+            guestAgentEnabled: true)
+        #expect(spec.withVolumes([]).guestAgentEnabled)
+        #expect(spec.withNetworks([]).guestAgentEnabled)
+        #expect(spec.withSizing(from: spec).guestAgentEnabled)
     }
 
     @Test func diskBytesRoundTrip() throws {

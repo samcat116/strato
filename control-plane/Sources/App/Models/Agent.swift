@@ -2,6 +2,8 @@ import Fluent
 import Vapor
 import StratoShared
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class Agent: Model, Content, @unchecked Sendable {
     static let schema = "agents"
 
@@ -449,6 +451,16 @@ extension Agent {
     /// would defeat the agent-side probe in exactly the case it exists for.
     var supportedHypervisors: [HypervisorType] {
         hypervisors.filter(\.available).map(\.type)
+    }
+
+    /// Whether this agent proved that its usable QEMU backend can attach a
+    /// host-backed virtio-vsock device. Missing capability is fail-closed so
+    /// registrations persisted before the probe do not attract guest-agent
+    /// VMs.
+    var supportsVsock: Bool {
+        hypervisors.contains {
+            $0.type == .qemu && $0.available && $0.supportsVsock == true
+        }
     }
 
     /// Only OVN-backed agents can provide VM-to-VM networking; user-mode

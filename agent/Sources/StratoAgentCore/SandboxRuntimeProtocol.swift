@@ -120,7 +120,7 @@ public protocol SandboxRuntimeService: Sendable {
     func setSandboxLogHandler(_ handler: @escaping @Sendable (String, String, String) -> Void) async
 
     /// The control-plane WebSocket dropped. Ends every live exec session (the
-    /// control plane tears down its side but cannot send `sandboxExecClose`
+    /// control plane tears down its side but cannot send `guestExecClose`
     /// over a dead socket — closing guest-side kills the exec process groups,
     /// so quiet processes don't outlive their frontends) and suspends log
     /// follows so workload output stays in the guest ring buffer instead of
@@ -195,7 +195,7 @@ public enum SandboxRuntimeError: Error, LocalizedError, ClassifiableError, Senda
     case adoptionTargetGone(String)
     /// An exec input/resize referenced a session this runtime is not tracking
     /// (never started, or already ended). The Agent answers with
-    /// `sandboxExecClosed` so the control plane tears its side down.
+    /// `guestExecClosed` so the control plane tears its side down.
     case execSessionNotFound(String)
     /// The sandbox requested a NIC this host or this code path cannot realize:
     /// an unjailed agent (a sandbox NIC lives in the jail's network namespace),

@@ -31,6 +31,8 @@ enum IAMPolicyEffect: String, Codable, Sendable, CaseIterable {
 /// As with `RoleBinding` and `Guardrail`, `owner_id` carries no foreign key —
 /// it points at one of several owner tables, discriminated by `owner_type`.
 /// Org/project delete cascades remove owned policies (`PolicyStore.deleteOwned`).
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class IAMPolicy: Model, @unchecked Sendable {
     static let schema = "iam_policies"
 

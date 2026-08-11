@@ -133,6 +133,7 @@ public struct VMManifestEntry: Codable, Sendable {
             hugepages: spec.hugepages,
             boot: spec.boot,
             machine: spec.machine,
+            guestAgentEnabled: spec.guestAgentEnabled,
             volumes: spec.volumes,
             networks: spec.networks,
             console: spec.console,

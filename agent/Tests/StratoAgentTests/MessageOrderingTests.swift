@@ -157,22 +157,25 @@ struct MessageOrderingTests {
     // (issue #765): topology is level-triggered from the desired-state sync,
     // which rides `reconcileLane`.
 
-    @Test("Sandbox exec frames for one session share a per-session lane")
-    func sandboxExecFramesShareSessionLane() {
-        let sandboxId = UUID().uuidString
+    @Test("Guest exec frames for one session share a per-session lane")
+    func guestExecFramesShareSessionLane() {
+        let resourceId = UUID().uuidString
         let sessionId = UUID().uuidString
         let startKeys = MessageEnvelope.serializationKeys(
-            type: .sandboxExecStart,
-            payload: payload(["sandboxId": sandboxId, "sessionId": sessionId, "command": ["/bin/sh"]])
+            type: .guestExecStart,
+            payload: payload([
+                "resourceKind": "virtual_machine", "resourceId": resourceId,
+                "sessionId": sessionId, "command": ["/bin/sh"],
+            ])
         )
         let inputKeys = MessageEnvelope.serializationKeys(
-            type: .sandboxExecInput, payload: payload(["sessionId": sessionId, "eof": false])
+            type: .guestExecInput, payload: payload(["sessionId": sessionId, "eof": false])
         )
         let resizeKeys = MessageEnvelope.serializationKeys(
-            type: .sandboxExecResize, payload: payload(["sessionId": sessionId, "rows": 24, "cols": 80])
+            type: .guestExecResize, payload: payload(["sessionId": sessionId, "rows": 24, "cols": 80])
         )
         let closeKeys = MessageEnvelope.serializationKeys(
-            type: .sandboxExecClose, payload: payload(["sessionId": sessionId])
+            type: .guestExecClose, payload: payload(["sessionId": sessionId])
         )
 
         // Input/resize/close are applied strictly after the session's start...
@@ -180,20 +183,34 @@ struct MessageOrderingTests {
         #expect(inputKeys == startKeys)
         #expect(resizeKeys == startKeys)
         #expect(closeKeys == startKeys)
-        // ...while staying off the sandbox's own lifecycle lane and the unkeyed lane.
-        #expect(!startKeys.contains(sandboxId))
+        // ...while staying off the resource's own lifecycle lane and the unkeyed lane.
+        #expect(!startKeys.contains(resourceId))
         #expect(!startKeys.contains(MessageEnvelope.unkeyedSerializationLane))
     }
 
-    @Test("Sandbox exec sessions get independent lanes")
-    func sandboxExecSessionsAreIndependent() {
+    @Test("Guest exec sessions get independent lanes")
+    func guestExecSessionsAreIndependent() {
         let a = MessageEnvelope.serializationKeys(
-            type: .sandboxExecInput, payload: payload(["sessionId": UUID().uuidString])
+            type: .guestExecInput, payload: payload(["sessionId": UUID().uuidString])
         )
         let b = MessageEnvelope.serializationKeys(
-            type: .sandboxExecInput, payload: payload(["sessionId": UUID().uuidString])
+            type: .guestExecInput, payload: payload(["sessionId": UUID().uuidString])
         )
         #expect(a != b)
+    }
+
+    @Test("Wire v43 sandbox exec frames retain the per-session lane")
+    func legacySandboxExecFramesRetainSessionLane() {
+        let sessionId = UUID().uuidString
+        let types: [MessageType] = [
+            .sandboxExecStart, .sandboxExecInput, .sandboxExecResize, .sandboxExecClose,
+        ]
+
+        for type in types {
+            let keys = MessageEnvelope.serializationKeys(
+                type: type, payload: payload(["sessionId": sessionId]))
+            #expect(keys == ["exec:\(sessionId)"])
+        }
     }
 
     @Test("Frames without a resource id fall back to the shared unkeyed lane")

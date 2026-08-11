@@ -37,9 +37,9 @@ struct MessageEnvelope {
   discriminator, a `requestId`, and a `timestamp`. **Nothing correlates on
   `requestId` any more** — the generic pending-request apparatus went with the
   last imperative exchange (STR-152), so the field survives as a log-correlation
-  handle. Streaming messages (console, sandbox exec) correlate by `sessionId`
+  handle. Streaming messages (console, guest exec) correlate by `sessionId`
   and take their ordering from the WebSocket itself (see the header comment in
-  `SandboxExecMessages.swift`).
+  `GuestExecMessages.swift`).
 - `SuccessMessage` and `ErrorMessage` survive as **unsolicited** frames, sent
   control plane → agent only: an acknowledgement the agent logs (register,
   heartbeat, unregister), and a registration rejection whose machine-readable
@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 40). The required registration fields
+currently 45). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -61,6 +61,16 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
+Wire v44 introduced the generalized `guest_exec_*` stream while keeping the v43
+`sandbox_exec_*` discriminators routable.
+An upgraded agent translates a legacy start to `resourceKind: sandbox`, and the
+control plane accepts legacy response names. This is message-level tolerance for
+the exec rename only; it does not weaken the exact registration handshake.
+
+Wire v45 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
+per-hypervisor host capability used to keep those VMs off nodes without
+`/dev/vhost-vsock`.
+
 Two consequences worth knowing:
 
 - **A rejected agent cannot self-update.** Declarative self-update rides the
@@ -69,10 +79,11 @@ Two consequences worth knowing:
   matching release, then restart it so it can register again.
 - **Capabilities still exist, and they are not versions.** A capability
   (`sandboxCapable`, `sandboxNetworkingCapable`, `tpmCapable`,
-  `resolverCapable`) is evidence that a *host* can realize a feature — a
-  runtime, a binary, a guest image — all installed independently of the agent
-  binary. Version says "the peer understands the payload"; capability says
-  "the host can act on it". The exact handshake answers the first question;
+  `resolverCapable`, or QEMU `supportsVsock`) is evidence that a *host* can
+  realize a feature — a runtime, a binary, a guest image — all installed
+  independently of the agent binary. Version says "the peer understands the
+  payload"; capability says "the host can act on it". The exact handshake
+  answers the first question;
   capabilities keep answering the second per host, re-probed at every
   registration.
 
@@ -108,7 +119,7 @@ bump and a coordinated deployment of both sides.
 | `agent_register_response` | Registration reply: assigns the agent's DB UUID and name, echoes the protocol version |
 | `desired_state` | The authoritative `DesiredStateMessage` sync (see below) |
 | `console_connect`, `console_disconnect`, `console_data` | Console session control and input. `console_connect.stream` picks the serial console (default) or the VNC framebuffer (v23+) |
-| `sandbox_exec_start`, `sandbox_exec_input`, `sandbox_exec_resize`, `sandbox_exec_close` | Interactive exec into a sandbox (v8+) |
+| `guest_exec_start`, `guest_exec_input`, `guest_exec_resize`, `guest_exec_close` | Interactive exec into a VM or sandbox; start carries `resourceKind` and `resourceId` (v44+) |
 
 Everything the control plane sends is now either the sync or a live byte
 stream — the disposition ADR 0001 set out to reach. There are deliberately no
@@ -128,7 +139,7 @@ v34 no `vm_reboot`, `vm_restore` or `sandbox_restore` either.
 | `observed_state` | Level-triggered `ObservedStateReport`: VM/sandbox observed state, resources, agent-update status, optional per-VM `guestInfo` from qga (issue #563), and optional per-VM balloon `memoryStats` (issue #567, incl. `balloonActualBytes` at v19) |
 | `vm_log`, `sandbox_log` | Log lines destined for Loki |
 | `console_connected`, `console_disconnected`, `console_data` | Console session lifecycle and output |
-| `sandbox_exec_started`, `sandbox_exec_output`, `sandbox_exec_exit`, `sandbox_exec_closed` | Exec stream responses |
+| `guest_exec_started`, `guest_exec_output`, `guest_exec_exit`, `guest_exec_closed` | Guest exec stream responses |
 
 Nothing in the agent → control plane direction is a *reply*. `success` and
 `error` travel control plane → agent only, unsolicited and uncorrelated

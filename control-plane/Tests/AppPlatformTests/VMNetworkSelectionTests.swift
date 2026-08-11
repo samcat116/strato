@@ -25,6 +25,7 @@ final class VMNetworkSelectionTests {
         let networkName: String?
         var userData: String? = nil
         var hypervisorType: String? = nil
+        var guestAgentEnabled: Bool? = nil
     }
 
     struct CreateNICBody: Content {
@@ -260,6 +261,31 @@ final class VMNetworkSelectionTests {
 
             let vm = try await VM.query(on: app.db).filter(\.$name == "userdata-vm").first()
             #expect(vm?.userData == payload)
+        }
+    }
+
+    @Test("POST /api/vms persists an explicit guest-agent opt-in and defaults it off")
+    func createWithGuestAgentFlag() async throws {
+        try await withApp { app, _, _, project, image, token in
+            for (name, enabled) in [("guest-agent-on", true), ("guest-agent-off", nil)] {
+                try await app.test(.POST, "/api/vms") { req in
+                    req.headers.bearerAuthorization = BearerAuthorization(token: token)
+                    try req.content.encode(
+                        CreateVMBody(
+                            name: name, imageId: image.id, projectId: project.id,
+                            environment: "development", cpu: 1, memory: gb(1), disk: gb(10),
+                            networkId: nil, networkName: "default",
+                            guestAgentEnabled: enabled))
+                } afterResponse: { res in
+                    #expect(res.status == .accepted)
+                    #expect(res.body.string.contains("\"guestAgentEnabled\":\(enabled ?? false)"))
+                }
+            }
+
+            let optedIn = try await VM.query(on: app.db).filter(\.$name == "guest-agent-on").first()
+            let defaulted = try await VM.query(on: app.db).filter(\.$name == "guest-agent-off").first()
+            #expect(optedIn?.guestAgentEnabled == true)
+            #expect(defaulted?.guestAgentEnabled == false)
         }
     }
 

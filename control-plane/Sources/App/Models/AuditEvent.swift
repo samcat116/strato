@@ -7,6 +7,8 @@ import Vapor
 ///
 /// `user_id` and `organization_id` deliberately have no foreign keys: audit
 /// events must outlive the user or organization they describe.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class AuditEvent: Model, @unchecked Sendable {
     static let schema = "audit_events"
 

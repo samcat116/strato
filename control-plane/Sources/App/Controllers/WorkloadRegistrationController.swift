@@ -105,7 +105,7 @@ struct WorkloadRegistrationController: RouteCollection {
         let body = try req.content.decode(CreateWorkloadRegistrationRequest.self)
 
         // Same reserved-namespace rule as the service-account endpoint: even
-        // an admin does not hand out /agent/ identities through the registry.
+        // an admin does not hand out platform-owned identities through the registry.
         let spiffeID = try WorkloadRegistry.validateRegistrable(spiffeID: body.spiffeId)
         guard try await Organization.find(body.organizationId, on: req.db) != nil else {
             throw Abort(.notFound, reason: "Organization not found")

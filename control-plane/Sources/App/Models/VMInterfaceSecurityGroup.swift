@@ -7,6 +7,8 @@ import Vapor
 /// cannot be deleted while any NIC still attaches it, surfaced by the API as
 /// a 409. Every NIC has at least one row (the ≥1-group invariant), enforced
 /// by the controllers rather than the schema.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class VMInterfaceSecurityGroup: Model, @unchecked Sendable {
     static let schema = "vm_interface_security_groups"
 

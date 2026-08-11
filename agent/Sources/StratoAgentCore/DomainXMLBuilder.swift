@@ -68,6 +68,9 @@ public struct DomainXMLInput: Sendable {
     /// QEMU process memory ceiling. Nil deliberately emits no `<memtune>` for
     /// hosts without a usable cgroup-v2 memory controller.
     public var memoryHardLimitBytes: Int64?
+    /// Host-global CID for the VM's virtio-vsock device. It must be present
+    /// exactly when `spec.guestAgentEnabled` is true.
+    public var vsockCID: UInt32?
 
     public init(
         vmId: String,
@@ -80,6 +83,7 @@ public struct DomainXMLInput: Sendable {
         accelerator: DomainAccelerator,
         firmware: FirmwareSet? = nil,
         emulatorPath: String? = nil,
+        vsockCID: UInt32? = nil,
         memoryHardLimitBytes: Int64? = nil
     ) {
         self.vmId = vmId
@@ -92,6 +96,7 @@ public struct DomainXMLInput: Sendable {
         self.accelerator = accelerator
         self.firmware = firmware
         self.emulatorPath = emulatorPath
+        self.vsockCID = vsockCID
         self.memoryHardLimitBytes = memoryHardLimitBytes
     }
 }
@@ -111,6 +116,10 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
     /// Likewise for a memory size of zero, which libvirt rejects with "Memory
     /// size must be specified via <memory> or in the <numa> configuration".
     case invalidMemorySize(Int64)
+    /// The opt-in and the host-global lease must describe one device topology.
+    case missingVsockCID
+    case unexpectedVsockCID(UInt32)
+    case invalidVsockCID(UInt32)
 
     public var description: String {
         switch self {
@@ -124,6 +133,12 @@ public enum DomainXMLBuilderError: Error, Equatable, CustomStringConvertible {
             return "a domain needs at least one vCPU; the spec asked for \(cpus)"
         case .invalidMemorySize(let bytes):
             return "a domain needs a non-zero memory size; the spec asked for \(bytes) bytes"
+        case .missingVsockCID:
+            return "guestAgentEnabled requires a host-global vsock CID"
+        case .unexpectedVsockCID(let cid):
+            return "vsock CID \(cid) was supplied for a VM whose guest agent is disabled"
+        case .invalidVsockCID(let cid):
+            return "vsock CID \(cid) is reserved or is the wildcard and cannot be assigned to a guest"
         }
     }
 }
@@ -256,6 +271,14 @@ public enum DomainXMLBuilder {
         }
         guard input.spec.memoryBytes > 0 else {
             throw DomainXMLBuilderError.invalidMemorySize(input.spec.memoryBytes)
+        }
+        if input.spec.guestAgentEnabled {
+            guard let cid = input.vsockCID else { throw DomainXMLBuilderError.missingVsockCID }
+            guard VsockCIDAllocator.isAssignable(cid) else {
+                throw DomainXMLBuilderError.invalidVsockCID(cid)
+            }
+        } else if let cid = input.vsockCID {
+            throw DomainXMLBuilderError.unexpectedVsockCID(cid)
         }
 
         let spec = input.spec
@@ -621,6 +644,19 @@ public enum DomainXMLBuilder {
                         "target", [("type", "virtio"), ("name", "org.qemu.guest_agent.0")]),
                 ]))
 
+        if let cid = input.vsockCID {
+            // libvirt translates this to `vhost-vsock-pci,guest-cid=N` and
+            // opens /dev/vhost-vsock itself. Host clients connect with
+            // AF_VSOCK; unlike Firecracker, there is no per-VM UDS.
+            devices.append(
+                DomainXMLNode(
+                    "vsock", [("model", "virtio")],
+                    children: [
+                        DomainXMLNode(
+                            "cid", [("auto", "no"), ("address", String(cid))])
+                    ]))
+        }
+
         if graphics {
             // A unix socket in the VM's directory, never a TCP listener: the
             // socket's file mode plus the control plane's `view_console`
@@ -728,6 +764,7 @@ public enum DomainXMLBuilder {
             + (input.cloudInitISOPath == nil ? 0 : 1)
             + input.networks.count
             + 1  // virtio-serial
+            + (input.vsockCID == nil ? 0 : 1)  // virtio-vsock
             + (graphics ? 2 : 0)  // qemu-xhci, and the framebuffer
             + 1  // memballoon
             + (hotplugBytes > 0 ? 1 : 0)  // virtio-mem

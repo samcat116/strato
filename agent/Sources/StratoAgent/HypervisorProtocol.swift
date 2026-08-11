@@ -76,6 +76,8 @@ public protocol HypervisorService: Actor, Sendable {
     ///   - spec: Hypervisor-neutral VM specification
     ///   - imageInfo: Optional image info for disk caching
     ///   - networkAttachments: Host-realized NICs, in `spec.networks` order
+    ///   - vsockCID: Host-global CID reserved for this VM, present only when
+    ///     `spec.guestAgentEnabled` and the backend uses the host namespace.
     ///   - metadata: What the control plane publishes about this instance, from
     ///     the desired-state sync. A driver's guest-bootstrap media renders from
     ///     it — today only the hostname, which the seed ISO must agree with
@@ -86,7 +88,7 @@ public protocol HypervisorService: Actor, Sendable {
     ///     (pre-STR-51), which is not an instruction — just nothing to render.
     func createVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo?, networkAttachments: [ResolvedNetworkAttachment],
-        metadata: InstanceMetadata?
+        metadata: InstanceMetadata?, vsockCID: UInt32?
     ) async throws
 
     /// Makes whatever stored configuration this backend holds for a *stopped*

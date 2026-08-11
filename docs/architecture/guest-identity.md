@@ -193,8 +193,8 @@ plugin — is what vouched for the workload.
 | `spiffe://<td>/node/<name>` | a hypervisor node (join-token attestation) | existing |
 | `spiffe://<td>/agent/<name>` | the strato-agent workload on that node | existing, reserved |
 | `spiffe://<td>/control-plane` | the control plane | existing |
-| `spiffe://<org-td>/vm/<vm-uuid>` | **a guest VM** | minted by STR-55; namespace reservation still outstanding (STR-165) |
-| `spiffe://<org-td>/sandbox/<sandbox-uuid>` | **a guest sandbox** | to reserve |
+| `spiffe://<org-td>/vm/<vm-uuid>` | **a guest VM** | minted by STR-55; reserved |
+| `spiffe://<org-td>/sandbox/<sandbox-uuid>` | **a guest sandbox** | reserved |
 
 `<org-td>` is the same domain as the hosting node's `<td>` — see
 [the placement prerequisite](#the-placement-prerequisite).
@@ -244,14 +244,11 @@ platform-domain (degraded) VMs and org-domain ones, with no re-issue path. A
 later migration can rewrite `spiffe_id` while the row is still the only artifact;
 once SVIDs are actually issued under these names, it cannot.
 
-Both prefixes must be reserved in `WorkloadRegistry.validateRegistrable` exactly
-as `/agent/` is today, so a system administrator cannot hand-register a URI that
-a VM will later be minted into. **That reservation has not landed** (STR-165).
-Until it does, the `spiffe_id` unique index is the guard, and a squatted URI is
-answered by the VM create path's retry redrawing the VM's id. Note that the
-minting path deliberately does *not* route through `validateRegistrable` — its
-contract is validating a URI supplied to a registration API — so reserving the
-prefix will not break VM creation.
+Both prefixes are reserved in `WorkloadRegistry.validateRegistrable` exactly as
+`/agent/` is, so a system administrator cannot hand-register a URI that a guest
+will later be minted into. The minting path deliberately does *not* route
+through `validateRegistrable` — its contract is validating a URI supplied to a
+registration API — so reserving the prefix does not break guest creation.
 
 ## Selectors, and the subset hazard
 
@@ -310,13 +307,14 @@ Why this shape:
   `currentVersion = 4`) and guest PID 1 is ours (`sandbox-guest/init/`, Rust).
   Every health handshake now requires the sandbox identity, nonce, and protocol
   version before the host trusts the guest.
-- **VMs: one device short.** `DomainXMLBuilder` writes a `virtio-serial`
-  controller (console and qga) but no vsock. Adding a `<vsock model='virtio'>`
-  element is the single blocker for parity — and, because the domain document is
-  written once, only VMs created after that lands would have one. The CID half is done (STR-72): `VsockCIDAllocator` allocates from the
-  host-global namespace and the VM manifest persists each assignment, so
-  collisions across re-adoption and restart are handled — see
-  [agent](./agent.md#vsock-context-ids-str-72).
+- **VM transport: ready behind an opt-in.** A VM created with
+  `guestAgentEnabled` receives a fixed-CID `<vsock model='virtio'>` device from
+  `DomainXMLBuilder`; VMs that do not opt in keep their existing PCI topology.
+  `VsockCIDAllocator` assigns from the host-global namespace and the VM manifest
+  persists each assignment, so collisions across re-adoption and restart are
+  handled — see [agent](./agent.md#vsock-context-ids-str-72). Linux preflight
+  checks `/dev/vhost-vsock` at startup; platforms without `vhost_vsock` report
+  the transport as unsupported rather than failed.
 - **The guest daemon for VMs** is installed once by cloud-init
   (`CloudInitProvisioner.makeNoCloudISO`, `write_files`/`runcmd`). Cloud-init is
   a legitimate **bootstrap** channel: it installs the daemon and **never carries
@@ -654,10 +652,8 @@ Filed under [#496](https://github.com/samcat116/strato/issues/496):
 0. ~~Per-VM `WorkloadRegistration` lifecycle (#789).~~ **Done** — STR-55.
 1. Enable the SPIRE agent admin socket behind an opt-in installer flag
    (`deploy/agent/install.sh`, `deploy/compose/spiffe/`, Helm).
-2. Reserve `/vm/` and `/sandbox/` in `WorkloadRegistry.validateRegistrable`
-   (STR-165). Outstanding, and now load-bearing: every VM holds a `/vm/` URI, so
-   until this lands the `spiffe_id` unique index is the only thing keeping a
-   hand-registered row out of the namespace.
+2. ~~Reserve `/vm/` and `/sandbox/` in
+   `WorkloadRegistry.validateRegistrable`.~~ **Done** — STR-165.
 3. Per-sandbox `WorkloadRegistration` lifecycle (STR-166) — the sandbox twin of
    #789, and the reason VMs and sandboxes are asymmetric today.
 4. Guest SPIRE entry lifecycle parented to the hosting node, including
@@ -667,7 +663,8 @@ Filed under [#496](https://github.com/samcat116/strato/issues/496):
    and deduping re-sends across reconnects.
 6. Agent: minimal Workload API server, one identity per connection.
 7. Sandbox guest control protocol v4 identity channel + in-guest forwarder.
-8. QEMU `vhost-vsock-pci` (host-global CID allocation landed in STR-72).
+8. ~~QEMU `vhost-vsock-pci` and host preflight.~~ **Done** — STR-76 (host-global
+   CID allocation landed in STR-72).
 9. `strato-guest-identity` daemon for VMs, installed by cloud-init.
 10. Fork/clone identity safety.
 11. Audit events and metrics for guest identity issuance and refusal. **Done for

@@ -496,7 +496,9 @@ apt_packages() {
   # be on the host even though the agent never launches it itself.
   pkgs+=(libvirt-daemon-system libvirt-clients swtpm swtpm-tools)
   if [ "$NETWORK_MODE" = "ovn" ]; then
-    pkgs+=(ovn-host ovn-common openvswitch-switch openvswitch-common)
+    # procps supplies `sysctl`, which the per-network resolver foot uses for
+    # isolation settings. iproute2's `ip` has no `sysctl` subcommand.
+    pkgs+=(ovn-host ovn-common openvswitch-switch openvswitch-common procps)
   fi
   if [ "$INSTALL_TELEMETRY" -eq 1 ]; then
     # Grafana Alloy releases ship as zip archives.

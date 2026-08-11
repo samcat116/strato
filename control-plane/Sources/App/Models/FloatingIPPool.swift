@@ -11,6 +11,8 @@ import Vapor
 /// Pools are infrastructure, scoped like sites: an org-or-OU owner, plus an
 /// required placement in one site. A pool only attaches to NICs on networks
 /// of that site (one OVN deployment advertises/answers for the addresses).
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class FloatingIPPool: Model, @unchecked Sendable {
     static let schema = "floating_ip_pools"
 

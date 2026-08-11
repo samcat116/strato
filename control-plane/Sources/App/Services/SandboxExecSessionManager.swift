@@ -13,7 +13,7 @@ import Vapor
 ///    attached; expired entries are swept lazily on access.
 /// 2. **Attached** — the browser connected to
 ///    `/api/sandboxes/:id/exec/:sessionId/attach` and the
-///    `SandboxExecStartMessage` went to the agent. Frames are relayed both
+///    `GuestExecStartMessage` went to the agent. Frames are relayed both
 ///    ways until exit/close.
 ///
 /// Like the console path, messages go to the agent only over a *local*
@@ -22,6 +22,9 @@ import Vapor
 /// and documented in `docs/architecture/sandboxes.md`).
 ///
 /// This is NOT an actor to avoid event loop conflicts with NIO WebSockets.
+/// Safety: `app` is immutable and every access to pending, attached, browser,
+/// and sandbox-index state is inside `lock`. Returned session values are
+/// immutable snapshots rather than references to that state.
 final class SandboxExecSessionManager: @unchecked Sendable {
     /// How long a pending session may sit unattached before it expires.
     static let pendingSessionTTL: TimeInterval = 60
@@ -42,7 +45,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     private var sandboxSessions: [String: Set<String>] = [:]
 
     /// A minted-but-not-yet-attached exec session: everything needed to build
-    /// the `SandboxExecStartMessage` once the browser attaches.
+    /// the `GuestExecStartMessage` once the browser attaches.
     struct PendingExecSession: Sendable {
         let sessionId: String
         let sandboxId: String
@@ -264,8 +267,9 @@ final class SandboxExecSessionManager: @unchecked Sendable {
 
     /// Send the exec start message to the agent for a freshly attached session.
     func sendExecStart(for session: PendingExecSession) async throws {
-        let message = SandboxExecStartMessage(
-            sandboxId: session.sandboxId,
+        let message = GuestExecStartMessage(
+            resourceKind: .sandbox,
+            resourceId: session.sandboxId,
             sessionId: session.sessionId,
             command: session.command,
             env: session.env,
@@ -282,11 +286,11 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         guard let session = getSession(sessionId: sessionId) else {
             throw SandboxExecSessionError.sessionNotFound(sessionId)
         }
-        let message: SandboxExecInputMessage
+        let message: GuestExecInputMessage
         if let data {
-            message = SandboxExecInputMessage(sessionId: sessionId, rawData: data, eof: eof)
+            message = GuestExecInputMessage(sessionId: sessionId, rawData: data, eof: eof)
         } else {
-            message = SandboxExecInputMessage(sessionId: sessionId, eof: eof)
+            message = GuestExecInputMessage(sessionId: sessionId, eof: eof)
         }
         try await sendMessageToAgent(message, agentKey: session.agentKey)
     }
@@ -296,7 +300,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         guard let session = getSession(sessionId: sessionId) else {
             throw SandboxExecSessionError.sessionNotFound(sessionId)
         }
-        let message = SandboxExecResizeMessage(sessionId: sessionId, rows: rows, cols: cols)
+        let message = GuestExecResizeMessage(sessionId: sessionId, rows: rows, cols: cols)
         try await sendMessageToAgent(message, agentKey: session.agentKey)
     }
 
@@ -304,7 +308,7 @@ final class SandboxExecSessionManager: @unchecked Sendable {
     /// A no-op when the session is already gone (e.g. removed after exit).
     func sendExecClose(sessionId: String, reason: String? = nil) async throws {
         guard let session = getSession(sessionId: sessionId) else { return }
-        let message = SandboxExecCloseMessage(sessionId: sessionId, reason: reason)
+        let message = GuestExecCloseMessage(sessionId: sessionId, reason: reason)
         try await sendMessageToAgent(message, agentKey: session.agentKey)
     }
 
@@ -396,14 +400,14 @@ final class SandboxExecSessionManager: @unchecked Sendable {
         return websocket
     }
 
-    /// Best-effort `SandboxExecCloseMessage` to an agent that reported output
+    /// Best-effort `GuestExecCloseMessage` to an agent that reported output
     /// for a session this control plane does not know, so the agent tears the
     /// orphaned bridge down instead of streaming forever. Errors are swallowed:
     /// this is advisory, and the agent's own sandbox-stop path also reaps
     /// bridges.
     private func sendOrphanedBridgeClose(sessionId: String, toAgentKey agentKey: String) {
         guard let websocket = app.websocketManager.getConnection(agentKey: agentKey) else { return }
-        let message = SandboxExecCloseMessage(sessionId: sessionId, reason: "unknown exec session")
+        let message = GuestExecCloseMessage(sessionId: sessionId, reason: "unknown exec session")
         guard
             let envelope = try? MessageEnvelope(message: message),
             let data = try? WireProtocol.makeEncoder().encode(envelope)

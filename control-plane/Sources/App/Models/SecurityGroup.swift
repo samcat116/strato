@@ -10,6 +10,8 @@ import Vapor
 /// `generation` is bumped on every rule mutation and travels with the group
 /// on the desired-state sync, so a replayed or reordered sync can never
 /// resurrect a deleted rule (the `LogicalNetwork.generation` pattern).
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class SecurityGroup: Model, @unchecked Sendable {
     static let schema = "security_groups"
 

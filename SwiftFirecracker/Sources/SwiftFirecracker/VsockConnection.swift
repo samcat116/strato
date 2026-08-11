@@ -311,7 +311,9 @@ private final class VsockHandshakeHandler: ChannelInboundHandler, RemovableChann
 ///
 /// All state is touched only on the channel's event loop: the handler callbacks
 /// run there by definition, and ``next(on:)`` hops onto it before inspecting
-/// anything.
+/// anything. That invariant covers every mutable field below; the unchecked
+/// conformance exists only because `ChannelInboundHandler` cannot express its
+/// event-loop isolation to the compiler.
 private final class VsockInboundBridge: ChannelInboundHandler, @unchecked Sendable {
     typealias InboundIn = ByteBuffer
 

@@ -155,7 +155,9 @@ private let auditJSONEncoder: JSONEncoder = {
 
 /// Persists events as `AuditEvent` rows — the default backend, and the one the
 /// query API (`/api/audit-events`) reads from.
-final class DatabaseAuditBackend: AuditBackend, @unchecked Sendable {
+/// Safety: `app` is immutable, and each write creates fresh Fluent models that
+/// remain within that write operation; no mutable model crosses a child task.
+final class DatabaseAuditBackend: AuditBackend, Sendable {
     let name = "database"
     private let app: Application
 
@@ -230,7 +232,9 @@ struct LogAuditBackend: AuditBackend {
 /// Ships events to the same Loki deployment that stores VM console logs,
 /// under `service_name=strato-audit`. Labels stay low-cardinality (service +
 /// event type); the full record is the JSON log line.
-final class LokiAuditBackend: AuditBackend, @unchecked Sendable {
+/// Safety: every field is immutable; AsyncHTTPClient owns synchronization of
+/// its shared client and requests are method-local values.
+final class LokiAuditBackend: AuditBackend, Sendable {
     let name = "loki"
     private let endpoint: String
     private let httpClient: HTTPClient
@@ -279,7 +283,9 @@ final class LokiAuditBackend: AuditBackend, @unchecked Sendable {
 
 /// POSTs each event as a JSON object to an operator-supplied HTTP endpoint
 /// (SIEM ingestion, custom collectors).
-final class WebhookAuditBackend: AuditBackend, @unchecked Sendable {
+/// Safety: every field is immutable; AsyncHTTPClient owns synchronization of
+/// its shared client and requests are method-local values.
+final class WebhookAuditBackend: AuditBackend, Sendable {
     let name = "webhook"
     private let url: String
     private let httpClient: HTTPClient
@@ -424,7 +430,10 @@ actor AuditEventQueue {
 /// `AUDIT_SYNCHRONOUS` — the default under `.testing` — awaits the backends
 /// inline instead, which is what lets the suites assert on the trail right
 /// after a request returns.
-final class AuditService: @unchecked Sendable {
+/// Safety: configuration, backends, logger, application, and actor queue are
+/// immutable; the only mutable reference, `retentionTask`, is entirely behind
+/// `NIOLockedValueBox`.
+final class AuditService: Sendable {
     let config: AuditConfig
     private let backends: [any AuditBackend]
     private let logger: Logger

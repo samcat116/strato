@@ -1,6 +1,7 @@
 import Foundation
 import Logging
 import StratoShared
+import Synchronization
 import Testing
 
 @testable import StratoAgentCore
@@ -42,7 +43,7 @@ struct ResolverSupervisorTests {
     private func supervisor(
         host: FakeResolverHost, clock: TestClock = TestClock()
     ) -> ResolverSupervisor {
-        host.clock = clock
+        host.setClock(clock)
         return ResolverSupervisor(
             root: "/tmp/resolver-tests", host: host, now: { clock.now },
             logger: Logger(label: "test"))
@@ -320,20 +321,15 @@ struct ResolverSupervisorTests {
 
 /// A clock the supervisor reads instead of the wall, so backoff and the
 /// healthy-runtime floor can be crossed without sleeping.
-private final class TestClock: @unchecked Sendable {
-    private let lock = NSLock()
-    private var current = Date(timeIntervalSince1970: 1_000_000)
+private final class TestClock: Sendable {
+    private let current = Mutex(Date(timeIntervalSince1970: 1_000_000))
 
     var now: Date {
-        lock.lock()
-        defer { lock.unlock() }
-        return current
+        current.withLock { $0 }
     }
 
     func advance(by seconds: TimeInterval) {
-        lock.lock()
-        current = current.addingTimeInterval(seconds)
-        lock.unlock()
+        current.withLock { $0 = $0.addingTimeInterval(seconds) }
     }
 }
 
@@ -354,89 +350,86 @@ private struct WriteRefused: Error {}
 /// `isAlive` are synchronous, and an actor would have to bounce every one of
 /// them through a `Task`, which reorders exactly the sequence these tests are
 /// asserting.
-private final class FakeResolverHost: ResolverHosting, @unchecked Sendable {
-    private let lock = NSLock()
+private final class FakeResolverHost: ResolverHosting, Sendable {
+    private struct State {
+        var writes = 0
+        var spawns = 0
+        var removals = 0
+        var terminatedByHandle = 0
+        var terminatedByPID: [Int32] = []
+        var adoptableResolver: AdoptableResolver?
+        var deadPIDs: Set<Int32> = []
+        var refuseWrites = false
+        var running = false
+        var exitedAt: Date?
+        var nextPID: Int32 = 1000
+        var clock: TestClock?
+    }
 
-    private var writes = 0
-    private var spawns = 0
-    private var removals = 0
-    private var terminatedByHandle = 0
-    private var terminatedByPID: [Int32] = []
-    private var adoptableResolver: AdoptableResolver?
-    private var deadPIDs: Set<Int32> = []
-    private var refuseWrites = false
-    private var running = false
-    private var exitedAt: Date?
-    private var nextPID: Int32 = 1000
+    private let state = Mutex(State())
 
     /// The clock the supervisor reads, so a killed child's exit is stamped at
     /// the instant the test says it died rather than when it is noticed.
-    var clock: TestClock?
-
-    private func withLock<T>(_ body: () -> T) -> T {
-        lock.lock()
-        defer { lock.unlock() }
-        return body()
-    }
-
     // MARK: Observations
 
-    func written() -> Int { withLock { writes } }
-    func spawned() -> Int { withLock { spawns } }
-    func removed() -> Int { withLock { removals } }
-    func terminatedHandles() -> Int { withLock { terminatedByHandle } }
-    func terminatedPIDs() -> [Int32] { withLock { terminatedByPID } }
+    func written() -> Int { state.withLock { $0.writes } }
+    func spawned() -> Int { state.withLock { $0.spawns } }
+    func removed() -> Int { state.withLock { $0.removals } }
+    func terminatedHandles() -> Int { state.withLock { $0.terminatedByHandle } }
+    func terminatedPIDs() -> [Int32] { state.withLock { $0.terminatedByPID } }
+    func setClock(_ clock: TestClock) { state.withLock { $0.clock = clock } }
 
     // MARK: Arrangement
 
-    func failWrites(_ refuse: Bool) { withLock { refuseWrites = refuse } }
-    func setAdoptable(_ resolver: AdoptableResolver?) { withLock { adoptableResolver = resolver } }
-    func setDead(pids: Set<Int32>) { withLock { deadPIDs = pids } }
+    func failWrites(_ refuse: Bool) { state.withLock { $0.refuseWrites = refuse } }
+    func setAdoptable(_ resolver: AdoptableResolver?) { state.withLock { $0.adoptableResolver = resolver } }
+    func setDead(pids: Set<Int32>) { state.withLock { $0.deadPIDs = pids } }
 
     /// Kill the child, the way a CoreDNS that refuses its Corefile dies:
     /// cleanly forked, then gone a moment later. The supervisor notices on its
     /// next reconcile.
     func kill() {
-        let at = clock?.now ?? Date()
-        withLock {
-            running = false
-            exitedAt = at
+        state.withLock { state in
+            state.running = false
+            state.exitedAt = state.clock?.now ?? Date()
         }
     }
 
-    func processIsRunning() -> Bool { withLock { running } }
-    func processExitedAt() -> Date? { withLock { exitedAt } }
+    func processIsRunning() -> Bool { state.withLock { $0.running } }
+    func processExitedAt() -> Date? { state.withLock { $0.exitedAt } }
 
     func terminateHandle() {
-        withLock {
-            running = false
-            terminatedByHandle += 1
+        state.withLock { state in
+            state.running = false
+            state.terminatedByHandle += 1
         }
     }
 
     // MARK: ResolverHosting
 
     func writeConfiguration(_ resolver: DesiredResolver, root: String) throws {
-        if withLock({ refuseWrites }) { throw WriteRefused() }
-        withLock { writes += 1 }
+        try state.withLock { state in
+            if state.refuseWrites { throw WriteRefused() }
+            state.writes += 1
+        }
     }
 
-    func removeConfiguration(root: String) { withLock { removals += 1 } }
+    func removeConfiguration(root: String) { state.withLock { $0.removals += 1 } }
 
     func spawn(root: String) throws -> any ResolverHandle {
-        let pid: Int32 = withLock {
-            nextPID += 1
-            spawns += 1
-            running = true
-            exitedAt = nil
-            return nextPID
+        let pid: Int32 = state.withLock { state in
+            state.nextPID += 1
+            state.spawns += 1
+            state.running = true
+            state.exitedAt = nil
+            return state.nextPID
         }
         return FakeHandle(processIdentifier: pid, host: self)
     }
 
-    func adoptable(root: String) -> AdoptableResolver? { withLock { adoptableResolver } }
+    func adoptable(root: String) -> AdoptableResolver? { state.withLock { $0.adoptableResolver } }
 
-    func isAlive(pid: Int32) -> Bool { withLock { !deadPIDs.contains(pid) } }
+    func isAlive(pid: Int32) -> Bool { state.withLock { !$0.deadPIDs.contains(pid) } }
 
-    func terminate(pid: Int32) async { withLock { terminatedByPID.append(pid) } }
+    func terminate(pid: Int32) async { state.withLock { $0.terminatedByPID.append(pid) } }
 }

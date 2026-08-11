@@ -32,6 +32,23 @@ public enum NetworkResolverDefaults {
         "/opt/coredns/coredns",
     ]
 
+    /// Where the procps `sysctl` binary is usually installed, in probe order.
+    /// Resolver host-port setup writes per-interface isolation knobs through
+    /// this executable; iproute2's `ip` has no `sysctl` subcommand.
+    public static let sysctlBinaryCandidates = [
+        "/usr/sbin/sysctl",
+        "/sbin/sysctl",
+        "/usr/bin/sysctl",
+        "/bin/sysctl",
+    ]
+
+    /// Resolves the `sysctl` binary the resolver host-port plan invokes.
+    public static func resolveSysctlBinaryPath(
+        isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
+    ) -> String? {
+        sysctlBinaryCandidates.first(where: isExecutable)
+    }
+
     /// Resolves the CoreDNS binary, preferring an explicit configuration.
     ///
     /// Returns nil when nothing usable is present, which is not an error: the

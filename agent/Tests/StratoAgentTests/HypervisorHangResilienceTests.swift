@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import Synchronization
 @testable import StratoAgentCore
 import StratoShared
 import Logging
@@ -188,49 +189,47 @@ struct HypervisorHangResilienceTests {
     }
 
     /// Minimal thread-safe boolean for observing that cleanup ran.
-    private final class Flag: @unchecked Sendable {
-        private let lock = NSLock()
-        private var value = false
+    private final class Flag: Sendable {
+        private let value = Mutex(false)
 
         func set() {
-            lock.lock()
-            value = true
-            lock.unlock()
+            value.withLock { $0 = true }
         }
 
         var isSet: Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            return value
+            value.withLock { $0 }
         }
     }
 
     /// Work parked on a continuation that cancellation cannot touch — the
     /// shape of an unanswered QMP round-trip. Only `finish()` releases it.
-    private final class UncancellableWork: @unchecked Sendable {
-        private let lock = NSLock()
-        private var continuation: CheckedContinuation<Void, any Error>?
-        private var finished = false
+    private final class UncancellableWork: Sendable {
+        private struct State {
+            var continuation: CheckedContinuation<Void, any Error>?
+            var finished = false
+        }
+        private let state = Mutex(State())
 
         func run() async throws {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
-                lock.lock()
-                if finished {
-                    lock.unlock()
-                    continuation.resume()
-                    return
+                let shouldResume = state.withLock { state -> Bool in
+                    if state.finished { return true }
+                    state.continuation = continuation
+                    return false
                 }
-                self.continuation = continuation
-                lock.unlock()
+                if shouldResume {
+                    continuation.resume()
+                }
             }
         }
 
         func finish() {
-            lock.lock()
-            finished = true
-            let waiter = continuation
-            continuation = nil
-            lock.unlock()
+            let waiter = state.withLock { state -> CheckedContinuation<Void, any Error>? in
+                state.finished = true
+                let waiter = state.continuation
+                state.continuation = nil
+                return waiter
+            }
             waiter?.resume()
         }
     }

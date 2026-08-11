@@ -5,6 +5,7 @@ import Darwin
 #endif
 import Dispatch
 import Foundation
+import Synchronization
 
 /// Traps process termination signals (SIGINT/SIGTERM by default) and runs a
 /// graceful-shutdown closure exactly once when the first such signal arrives.
@@ -14,14 +15,15 @@ import Foundation
 /// first, so the kernel doesn't terminate the process before the dispatch
 /// source can observe the signal.
 ///
-/// `@unchecked Sendable`: mutable state is confined to the private serial
-/// `queue`. `install()` populates `sources` once, before any signal can fire,
-/// and `hasFired` is only ever touched from `fire(signal:)`, which runs on that
-/// queue.
-final class SignalHandler: @unchecked Sendable {
+final class SignalHandler: Sendable {
+    private struct State {
+        var installed = false
+        var sources: [DispatchSourceSignal] = []
+        var hasFired = false
+    }
+
     private let queue = DispatchQueue(label: "com.strato.agent.signal-handler")
-    private var sources: [DispatchSourceSignal] = []
-    private var hasFired = false
+    private let state = Mutex(State())
     private let handler: @Sendable (Int32) -> Void
 
     /// - Parameter handler: Invoked with the signal number the first time any
@@ -33,23 +35,34 @@ final class SignalHandler: @unchecked Sendable {
 
     /// Begins trapping the given signals (SIGINT and SIGTERM by default).
     func install(signals: [Int32] = [SIGINT, SIGTERM]) {
-        for sig in signals {
-            // Ignore the default action so the dispatch source can observe it
-            // instead of the process being terminated immediately.
-            signal(sig, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: sig, queue: queue)
-            source.setEventHandler { [weak self] in
-                self?.fire(signal: sig)
+        let shouldInstall = state.withLock { state -> Bool in
+            guard !state.installed else { return false }
+            state.installed = true
+            return true
+        }
+        guard shouldInstall else { return }
+
+        state.withLock { state in
+            for sig in signals {
+                // Ignore the default action so the dispatch source can observe it
+                // instead of the process being terminated immediately.
+                signal(sig, SIG_IGN)
+                let source = DispatchSource.makeSignalSource(signal: sig, queue: queue)
+                source.setEventHandler { [weak self] in
+                    self?.fire(signal: sig)
+                }
+                state.sources.append(source)
             }
-            source.resume()
-            sources.append(source)
+            state.sources.forEach { $0.resume() }
         }
     }
 
-    // Runs on `queue`, so access to `hasFired` is serialized.
     private func fire(signal: Int32) {
-        guard !hasFired else { return }
-        hasFired = true
-        handler(signal)
+        let shouldFire = state.withLock { state -> Bool in
+            guard !state.hasFired else { return false }
+            state.hasFired = true
+            return true
+        }
+        if shouldFire { handler(signal) }
     }
 }

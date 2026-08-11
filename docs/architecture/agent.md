@@ -963,14 +963,15 @@ waiting to happen — at best a failed VM start, at worst a host process reachin
 the wrong guest's control agent. `VsockCIDAllocator` (`StratoAgentCore`) hands
 them out instead, and every assignment is written to the VM manifest as
 `VMManifestEntry.vsockCID` so a restarted agent cannot re-issue a live VM's CID.
-The manifest read reserves every recorded CID, **including the quarantined
-entries'** — that workload may still be running on it. Allocation is idempotent
-per VM (the re-create-an-orphan path runs the same code twice), released when
-the VM's manifest entry goes, and rolled back when a create fails — via a
-`VsockCIDLease`, so the "don't free a CID this create didn't take" rule lives in
-the allocator rather than at each call site. Exhaustion **throws**, classified
-`.permanent` so the reconciler reports it instead of burning a retry budget on a
-create that only another VM's deletion can unblock.
+Only QEMU VMs whose persisted `VMSpec.guestAgentEnabled` is true claim a CID;
+older or disabled typed manifests ignore stale values, while quarantined entries
+still reserve every salvageable CID because their full spec cannot be trusted.
+Allocation is idempotent per VM (the re-create-an-orphan path runs the same code
+twice), released when the VM's manifest entry goes, and rolled back when a create
+fails — via a `VsockCIDLease`, so the "don't free a CID this create didn't take"
+rule lives in the allocator rather than at each call site. Exhaustion **throws**,
+classified `.permanent` so the reconciler reports it instead of burning a retry
+budget on a create that only another VM's deletion can unblock.
 
 Allocation walks forward from a cursor rather than reusing the lowest free CID,
 so a host-side connection that outlives its guest cannot land on the next VM.
@@ -1000,6 +1001,13 @@ the host (`VsockConfig.udsPath`), so a Firecracker guest's CID never reaches the
 host kernel. That is why every sandbox can use CID 3 and why sandboxes are
 deliberately *not* routed through this allocator: it would spend a host-global
 resource on devices that occupy none of it.
+
+For opted-in QEMU VMs, `DomainXMLBuilder` emits a fixed-address
+`<vsock model='virtio'>` device using that leased CID. The host connects through
+the kernel AF_VSOCK transport; `/dev/vhost-vsock` is the QEMU/libvirt backend,
+not a per-VM Unix socket. `HostPreflight` checks that character device on Linux
+and reports the `vhost_vsock` transport as unsupported, not failed, on other
+platforms.
 
 ## Networking
 
@@ -1305,12 +1313,14 @@ any router dies, and a guest cannot proxy metadata off-box.
 listener off without touching the dataplane, which is a property of the
 network rather than of the agent.
 
-**What it serves is deliberately four documents**: `/latest/`,
-`/latest/meta-data/`, `/latest/meta-data/instance-id` and
-`/latest/meta-data/hostname` (404 on a hostname-less VM — nothing here may
-invent one). The renderer trees are STR-60 (NoCloud-net), STR-65 (EC2) and
-STR-62 (identity); naming an EC2-shaped key now would commit those issues to
-serving it forever.
+**NoCloud-net reuses the seed ISO renderer byte for byte.** The exact file
+paths are `/latest/meta-data`, `/latest/user-data`, and
+`/latest/network-config` (404 when no NIC needs a network document). The
+no-trailing-slash metadata path matters: `/latest/meta-data/` remains the EC2
+index proved by STR-56, with `instance-id` and optional `hostname` children,
+and STR-65 extends that tree. All documents render from the listener's latest
+`InstanceMetadata` snapshot, so an applied metadata sync changes the next HTTP
+response without rebuilding guest media.
 
 **Bounds, because the peer is untrusted guest code that can retry forever:**
 a raw-byte cap in front of the HTTP decoder (`ByteToMessageHandler`'s

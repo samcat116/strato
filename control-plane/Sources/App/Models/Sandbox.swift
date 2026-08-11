@@ -8,6 +8,8 @@ import StratoShared
 /// desired/observed state split (issue #260): `status` is purely observed,
 /// `desiredStatus` is the goal written by API mutations, and the generation
 /// pair tracks agent convergence.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class Sandbox: Model, @unchecked Sendable {
     static let schema = "sandboxes"
 

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import StratoAgentCore
@@ -12,14 +13,13 @@ struct MetadataTokenStoreTests {
         return { counter.next() }
     }
 
-    private final class Counter: @unchecked Sendable {
-        private var value = 0
-        private let lock = NSLock()
+    private final class Counter: Sendable {
+        private let value = Mutex(0)
         func next() -> String {
-            lock.lock()
-            defer { lock.unlock() }
-            value += 1
-            return "token-\(value)"
+            value.withLock { value in
+                value += 1
+                return "token-\(value)"
+            }
         }
     }
 

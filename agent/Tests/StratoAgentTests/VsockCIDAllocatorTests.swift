@@ -269,10 +269,12 @@ struct VsockCIDAllocatorTests {
 
     // MARK: - Reclaiming a manifest read
 
-    private func vmEntry(cid: UInt32?) -> VMManifestEntry {
+    private func vmEntry(cid: UInt32?, guestAgentEnabled: Bool = true) -> VMManifestEntry {
         VMManifestEntry(
             hypervisorType: .qemu,
-            spec: VMSpec(cpus: 1, memoryBytes: 1024, boot: .disk(firmware: nil)),
+            spec: VMSpec(
+                cpus: 1, memoryBytes: 1024, boot: .disk(firmware: nil),
+                guestAgentEnabled: guestAgentEnabled),
             vsockCID: cid)
     }
 
@@ -301,6 +303,18 @@ struct VsockCIDAllocatorTests {
         // And the reload leaves the cursor above them, so the next VM does not
         // land on a CID a since-deleted guest's connections may still target.
         #expect(try allocator.allocate(for: "vm-new") == 12)
+    }
+
+    @Test("A disabled typed VM does not reclaim a stale pre-STR-76 CID")
+    func disabledVMDoesNotReserveCID() throws {
+        var allocator = VsockCIDAllocator()
+        let refusals = allocator.reserveAll(
+            entries: ["vm-off": vmEntry(cid: 10, guestAgentEnabled: false)], quarantined: [:])
+
+        #expect(refusals.isEmpty)
+        #expect(allocator.cid(for: "vm-off") == nil)
+        #expect(allocator.count == 0)
+        #expect(try allocator.allocate(for: "vm-on") == 3)
     }
 
     /// Which side of a duplicate wins must not be a dictionary-ordering coin

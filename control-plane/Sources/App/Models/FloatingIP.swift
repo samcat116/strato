@@ -11,6 +11,8 @@ import Vapor
 /// The interface FK is `SET NULL` on delete, so deleting the VM (or NIC)
 /// detaches the address instead of releasing it — the project keeps the
 /// (possibly DNS-published) address to re-attach elsewhere.
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class FloatingIP: Model, @unchecked Sendable {
     static let schema = "floating_ips"
 

@@ -957,14 +957,14 @@ Two consequences worth stating plainly:
   it is one-way: identity is granted at VM create and nothing re-creates the row.
   A self-heal would undo the only revocation lever on an unpredictable delay.
 
-`/vm/` and `/sandbox/` are **not yet refused** by
-`WorkloadRegistry.validateRegistrable` — that reservation is STR-165 — so until
-it lands the `spiffe_id` unique index is what stops a hand-registered URI from
-colliding with a VM's, and a collision is answered by the create path's retry
-redrawing the VM's id. The minting path deliberately does not route through
-`validateRegistrable`: its contract is validating a URI *supplied to a
-registration API*, so sending a machine-composed URI through it would break VM
-creation the day the reservation lands.
+`/vm/` and `/sandbox/` are reserved by
+`WorkloadRegistry.validateRegistrable`, alongside `/agent/`, so even a system
+administrator cannot hand-register an identity that a guest lifecycle owns.
+The minting path deliberately does not route through `validateRegistrable`: its
+contract is validating a URI *supplied to a registration API*, while guest
+identities are composed by the lifecycle that owns the reserved namespace. The
+`spiffe_id` unique index remains a defense against legacy or directly inserted
+rows; a collision is answered by the create path's retry redrawing the VM's id.
 
 ## Architecture: the evaluator is in-process
 

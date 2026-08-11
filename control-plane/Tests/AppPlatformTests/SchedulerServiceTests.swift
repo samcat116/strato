@@ -43,7 +43,8 @@ struct SchedulerServiceTests {
         supportsInterVMNetworking: Bool = false,
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
-        supportsVTPM: Bool = false
+        supportsVTPM: Bool = false,
+        supportsVsock: Bool = false
     ) -> SchedulableAgent {
         return SchedulableAgent(
             id: id,
@@ -61,7 +62,8 @@ struct SchedulerServiceTests {
             supportsInterVMNetworking: supportsInterVMNetworking,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
-            supportsVTPM: supportsVTPM
+            supportsVTPM: supportsVTPM,
+            supportsVsock: supportsVsock
         )
     }
 
@@ -815,6 +817,61 @@ struct SchedulerServiceTests {
         windows.secureBoot = true
         windows.tpmEnabled = true
         #expect(SchedulerService.placementRequirements(for: windows).requiresVTPM)
+    }
+
+    // MARK: - Guest agent vsock placement (STR-76)
+
+    @Test("A guest-agent VM only places on an agent that advertised vhost-vsock")
+    func testGuestAgentPlacementPrefersVsockCapableAgent() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+        let requirements = VMPlacementRequirements(
+            cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu, requiresVsock: true)
+        let agents = [
+            // More attractive to least-loaded placement, but it cannot start
+            // a QEMU domain containing the guest agent's vsock device.
+            createTestAgent(id: "no-vsock", name: "no-vsock", availableCPU: 8),
+            createTestAgent(
+                id: "vsock-ready", name: "vsock-ready", availableCPU: 2,
+                supportsVsock: true),
+        ]
+
+        let selectedId = try scheduler.selectAgent(requirements: requirements, from: agents)
+
+        #expect(selectedId == "vsock-ready")
+    }
+
+    @Test("A guest-agent VM fails placement when no agent advertised vhost-vsock")
+    func testGuestAgentVsockConstraintFails() throws {
+        let scheduler = SchedulerService(logger: Logger(label: "test"))
+        let requirements = VMPlacementRequirements(
+            cpu: 2, memory: 1000, disk: 0, hypervisorType: .qemu, requiresVsock: true)
+        let agents = [
+            createTestAgent(id: "a1", name: "a1"),
+            createTestAgent(id: "a2", name: "a2"),
+        ]
+
+        do {
+            _ = try scheduler.selectAgent(requirements: requirements, from: agents)
+            Issue.record("Expected vsockUnsatisfied error")
+        } catch let error as SchedulerError {
+            guard case .vsockUnsatisfied(let eligibleAgents) = error else {
+                Issue.record("Expected vsockUnsatisfied, got \(error)")
+                return
+            }
+            #expect(eligibleAgents == 2)
+            #expect(error.description.contains("vhost_vsock"))
+            #expect(error.description.contains("/dev/vhost-vsock"))
+        }
+    }
+
+    @Test("Placement requirements carry the VM's guest-agent intent")
+    func testPlacementRequirementsCarryGuestAgentIntent() throws {
+        let plain = createTestVM(cpu: 2)
+        #expect(!SchedulerService.placementRequirements(for: plain).requiresVsock)
+
+        let managed = createTestVM(cpu: 2)
+        managed.guestAgentEnabled = true
+        #expect(SchedulerService.placementRequirements(for: managed).requiresVsock)
     }
 
 }

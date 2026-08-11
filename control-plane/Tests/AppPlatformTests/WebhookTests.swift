@@ -577,12 +577,24 @@ private struct HookOrigin {
         let contentType: String?
     }
 
+    struct PlannedResponse: Sendable {
+        let status: HTTPResponseStatus
+        let delay: Duration?
+
+        init(_ status: HTTPResponseStatus, delay: Duration? = nil) {
+            self.status = status
+            self.delay = delay
+        }
+    }
+
     let app: Application
     let port: Int
     let captured: NIOLockedValueBox<[CapturedRequest]>
     let responseStatus: NIOLockedValueBox<HTTPResponseStatus>
 
-    static func start() async throws -> HookOrigin {
+    static func start(
+        responseForRequest: (@Sendable (CapturedRequest) -> PlannedResponse)? = nil
+    ) async throws -> HookOrigin {
         var env = Environment.testing
         env.arguments = ["vapor"]
         let origin = try await Application.make(env)
@@ -600,6 +612,10 @@ private struct HookOrigin {
                 contentType: req.headers.first(name: "Content-Type")
             )
             captured.withLockedValue { $0.append(request) }
+            if let planned = responseForRequest?(request) {
+                if let delay = planned.delay { try? await Task.sleep(for: delay) }
+                return Response(status: planned.status)
+            }
             return Response(status: responseStatus.withLockedValue { $0 })
         }
 
@@ -791,6 +807,111 @@ struct WebhookDeliverySweepTests {
                     try await WebhookSubscription.find(subscription.id, on: app.db))
                 #expect(!disabled.isActive)
                 #expect(disabled.disabledReason?.contains("Automatically disabled") == true)
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
+
+    @Test("A concurrent success prevents a stale sibling failure from disabling the subscription")
+    func concurrentSuccessAndFailure() async throws {
+        let origin = try await HookOrigin.start { request in
+            if request.body.contains("succeeds") {
+                return HookOrigin.PlannedResponse(.ok)
+            }
+            // Keep the failure in flight until the success has recorded its
+            // verdict. Before per-subscription serialization, this delivery
+            // retained the old failure-streak model and disabled the freshly
+            // recovered subscription when it resumed.
+            return HookOrigin.PlannedResponse(.internalServerError, delay: .milliseconds(200))
+        }
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                let subscription = try await makeSubscription(
+                    app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
+                subscription.failingSince = Date().addingTimeInterval(
+                    -Double(app.webhookDelivery.autoDisableDays + 1) * 86_400)
+                try await subscription.save(on: app.db)
+
+                let failure = WebhookDelivery(
+                    subscriptionID: subscription.id!, eventID: UUID(),
+                    eventType: .webhookTest, payload: "{\"outcome\":\"fails\"}")
+                failure.nextAttemptAt = Date().addingTimeInterval(-2)
+                try await failure.save(on: app.db)
+
+                // Start one pass with the failing request held at the origin.
+                // A second pass then claims the success row for the same
+                // subscription, reproducing the cross-pass overlap that can
+                // happen when a sweep outlives the distributed lock TTL.
+                let failingSweep = Task {
+                    await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                }
+                let waitDeadline = ContinuousClock.now.advanced(by: .seconds(2))
+                while origin.captured.withLockedValue({ $0.isEmpty }),
+                    ContinuousClock.now < waitDeadline
+                {
+                    try await Task.sleep(for: .milliseconds(10))
+                }
+                #expect(!origin.captured.withLockedValue { $0.isEmpty })
+
+                let success = WebhookDelivery(
+                    subscriptionID: subscription.id!, eventID: UUID(),
+                    eventType: .webhookTest, payload: "{\"outcome\":\"succeeds\"}")
+                success.nextAttemptAt = Date().addingTimeInterval(-1)
+                try await success.save(on: app.db)
+                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                await failingSweep.value
+
+                let reloaded = try #require(
+                    try await WebhookSubscription.find(subscription.id, on: app.db))
+                #expect(reloaded.isActive)
+                #expect(reloaded.disabledReason == nil)
+                let failingSince = try #require(reloaded.failingSince)
+                #expect(failingSince > Date().addingTimeInterval(-60))
+            }
+        } catch {
+            await origin.shutdown()
+            throw error
+        }
+        await origin.shutdown()
+    }
+
+    @Test("A pass claims only the deliveries it can start inside the lease")
+    func claimDoesNotOutrunFanOutCapacity() async throws {
+        let origin = try await HookOrigin.start()
+        do {
+            try await withTestApp { app in
+                let fixture = try await makeFixture(app)
+                let subscription = try await makeSubscription(
+                    app, fixture: fixture, url: "http://127.0.0.1:\(origin.port)/hook")
+                let deliveryCount = WebhookDeliveryService.maxConcurrentDeliveries + 1
+                for index in 0..<deliveryCount {
+                    let delivery = WebhookDelivery(
+                        subscriptionID: subscription.id!, eventID: UUID(),
+                        eventType: .webhookTest, payload: "{\"index\":\(index)}")
+                    delivery.nextAttemptAt = Date().addingTimeInterval(-1)
+                    try await delivery.save(on: app.db)
+                }
+
+                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+
+                let afterFirstPass = try await WebhookDelivery.query(on: app.db).all()
+                #expect(
+                    origin.captured.withLockedValue { $0.count }
+                        == WebhookDeliveryService.maxConcurrentDeliveries)
+                #expect(
+                    afterFirstPass.filter { $0.statusValue == .succeeded }.count
+                        == WebhookDeliveryService.maxConcurrentDeliveries)
+                let unclaimed = try #require(afterFirstPass.first { $0.statusValue == .pending })
+                #expect(unclaimed.attempts == 0)
+                #expect(unclaimed.nextAttemptAt <= Date())
+
+                await app.webhookDelivery.sweepOnce(acquiringLock: false)
+                let afterSecondPass = try await WebhookDelivery.query(on: app.db).all()
+                #expect(afterSecondPass.allSatisfy { $0.statusValue == .succeeded })
             }
         } catch {
             await origin.shutdown()

@@ -1,5 +1,11 @@
+#if canImport(Glibc)
+import Glibc
+#elseif canImport(Darwin)
+import Darwin
+#endif
 import Foundation
 import Logging
+import Synchronization
 
 /// Starts metadata listeners as child processes of the agent, one per network
 /// namespace (STR-56).
@@ -76,11 +82,69 @@ public struct MetadataServerProcessSpawner: MetadataServerSpawning {
 }
 
 /// One running listener child.
-final class MetadataServerProcessHandle: MetadataServerHandle, @unchecked Sendable {
-    private let process: Process
-    private let input: Pipe
+struct MetadataServerProcessIO: Sendable {
+    let isRunning: @Sendable () -> Bool
+    let write: @Sendable (Data) throws -> Void
+    let terminateProcess: @Sendable () -> Void
+    let forceTerminateProcess: @Sendable () -> Void
+    let closeInput: @Sendable () -> Void
+
+    private final class LiveResourceBox: Sendable {
+        let process: Mutex<Process>
+        let input: Mutex<FileHandle>
+
+        init(process: Process, input: FileHandle) {
+            self.process = Mutex(process)
+            self.input = Mutex(input)
+        }
+    }
+
+    static func live(process: Process, input: Pipe) -> MetadataServerProcessIO {
+        let resources = LiveResourceBox(
+            process: process, input: input.fileHandleForWriting)
+        return MetadataServerProcessIO(
+            // Process observation must not wait behind a pipe write that can
+            // block on a wedged child. Pipe closure is still serialized behind
+            // writes by MetadataServerProcessHandle's private queue.
+            isRunning: { resources.process.withLock { $0.isRunning } },
+            write: { data in
+                try resources.input.withLock { input in
+                    try input.write(contentsOf: data)
+                }
+            },
+            terminateProcess: {
+                resources.process.withLock { process in
+                    if process.isRunning { process.terminate() }
+                }
+            },
+            forceTerminateProcess: {
+                resources.process.withLock { process in
+                    if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                }
+            },
+            closeInput: {
+                resources.input.withLock { try? $0.close() }
+            }
+        )
+    }
+}
+
+private enum MetadataServerProcessLifecycleError: Error {
+    case terminated
+}
+
+final class MetadataServerProcessHandle: MetadataServerHandle, Sendable {
+    private struct State {
+        var pending: MetadataSnapshot?
+        var draining = false
+        var failure: (any Error)?
+        var terminated = false
+    }
+
+    private let io: MetadataServerProcessIO
     private let networkId: UUID
     private let logger: Logger
+    private let terminationGrace: Duration
 
     /// Writes happen here, never on the caller's thread.
     ///
@@ -90,72 +154,98 @@ final class MetadataServerProcessHandle: MetadataServerHandle, @unchecked Sendab
     /// exists to avoid, so the write is queued and the caller is never blocked
     /// by it.
     private let queue: DispatchQueue
-    private let state = NSLock()
-    /// Only the newest snapshot is worth writing: the channel is level-triggered
-    /// like everything else, so a backlog is just an older version of what is
-    /// pending.
-    private var pending: MetadataSnapshot?
-    private var draining = false
-    private var failure: (any Error)?
+    private let state = Mutex(State())
 
-    init(process: Process, input: Pipe, errors: Pipe, networkId: UUID, logger: Logger) {
-        self.process = process
-        self.input = input
-        self.networkId = networkId
-        self.logger = logger
-        self.queue = DispatchQueue(label: "strato.metadata-listener.\(networkId.uuidString)")
-        relay(errors)
+    convenience init(process: Process, input: Pipe, errors: Pipe, networkId: UUID, logger: Logger) {
+        self.init(
+            io: .live(process: process, input: input), errors: errors,
+            networkId: networkId, logger: logger)
     }
 
-    var isRunning: Bool { process.isRunning }
+    init(
+        io: MetadataServerProcessIO, errors: Pipe? = nil,
+        networkId: UUID, logger: Logger,
+        terminationGrace: Duration = ProcessRunner.signalEscalationGrace
+    ) {
+        self.io = io
+        self.networkId = networkId
+        self.logger = logger
+        self.terminationGrace = terminationGrace
+        self.queue = DispatchQueue(label: "strato.metadata-listener.\(networkId.uuidString)")
+        if let errors { relay(errors) }
+    }
+
+    var isRunning: Bool {
+        let terminated = state.withLock(\.terminated)
+        return !terminated && io.isRunning()
+    }
 
     func push(_ snapshot: MetadataSnapshot) throws {
-        state.lock()
-        // Reported one push late, deliberately: the write it describes happened
-        // on the queue after the previous call returned, and there is nowhere
-        // else to surface it. The supervisor reaps the child on the next sync.
-        let previous = failure
-        failure = nil
-        pending = snapshot
-        let alreadyDraining = draining
-        draining = true
-        state.unlock()
+        let result = try state.withLock { state -> (previous: (any Error)?, shouldDrain: Bool) in
+            guard !state.terminated else { throw MetadataServerProcessLifecycleError.terminated }
+            // Reported one push late, deliberately: the write it describes
+            // happened after the previous call returned.
+            let previous = state.failure
+            state.failure = nil
+            state.pending = snapshot
+            let shouldDrain = !state.draining
+            state.draining = true
+            return (previous, shouldDrain)
+        }
 
-        // Scheduled *before* the throw, never after. The reverse order left the
-        // handle able to become a silent black hole: a caller that swallowed the
-        // error would leave `draining` true with nothing draining, and every
-        // later push would return success and write nothing. The supervisor does
-        // reap on a throw today, which is the only reason that was latent rather
-        // than a stale-metadata bug — and one refactor away from not being.
-        if !alreadyDraining { queue.async { [weak self] in self?.drain() } }
-        if let previous { throw previous }
+        if result.shouldDrain { queue.async { self.drain() } }
+        if let previous = result.previous { throw previous }
     }
 
     func terminate() {
-        // Closing stdin is the graceful exit — the child stops on EOF — and the
-        // terminate covers a child that is wedged somewhere else.
-        try? input.fileHandleForWriting.close()
-        if process.isRunning { process.terminate() }
+        let shouldTerminate = state.withLock { state -> Bool in
+            guard !state.terminated else { return false }
+            state.terminated = true
+            state.pending = nil
+            return true
+        }
+        guard shouldTerminate else { return }
+
+        // Process termination must not queue behind a pipe write: a child that
+        // stopped reading can block that write forever. FileHandle closure
+        // remains queued after the write so those operations never overlap.
+        io.terminateProcess()
+
+        let escalationIO = io
+        let grace = terminationGrace
+        let logger = logger
+        let networkId = networkId
+        Task {
+            try? await Task.sleep(for: grace)
+            guard escalationIO.isRunning() else { return }
+            logger.warning(
+                "Metadata listener ignored SIGTERM; escalating to SIGKILL",
+                metadata: ["networkId": .string(networkId.uuidString)])
+            escalationIO.forceTerminateProcess()
+        }
+
+        queue.async { self.io.closeInput() }
     }
 
     private func drain() {
         while true {
-            state.lock()
-            guard let snapshot = pending else {
-                draining = false
-                state.unlock()
-                return
+            let snapshot = state.withLock { state -> MetadataSnapshot? in
+                guard !state.terminated, let snapshot = state.pending else {
+                    state.draining = false
+                    return nil
+                }
+                state.pending = nil
+                return snapshot
             }
-            pending = nil
-            state.unlock()
+            guard let snapshot else { return }
 
             do {
-                try input.fileHandleForWriting.write(contentsOf: MetadataControlProtocol.encode(snapshot))
+                try io.write(MetadataControlProtocol.encode(snapshot))
             } catch {
-                state.lock()
-                failure = error
-                draining = false
-                state.unlock()
+                state.withLock { state in
+                    if !state.terminated { state.failure = error }
+                    state.draining = false
+                }
                 return
             }
         }

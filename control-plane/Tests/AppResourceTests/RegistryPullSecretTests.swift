@@ -574,56 +574,63 @@ final class RegistryPullSecretTests {
 /// `RegistryClientProtocol` double for assembly tests: returns fixed material
 /// and records what it was asked, including the decrypted credential secrets
 /// it received.
-private final class ScriptedRegistryClient: RegistryClientProtocol, @unchecked Sendable {
-    private let digest: String?
-    private let token: RegistryPullToken?
-    private let throwOnResolve: Bool
-    private let mintError: Error?
-    private let lock = NIOLock()
-    private var _resolveCredentials: [String?] = []
-    private var _mintCallCount = 0
+private final class ScriptedRegistryClient: RegistryClientProtocol, Sendable {
+    private struct State {
+        let digest: String?
+        let token: RegistryPullToken?
+        let throwOnResolve: Bool
+        let mintError: Error?
+        var resolveCredentials: [String?] = []
+        var mintCallCount = 0
+    }
+
+    private let state: NIOLockedValueBox<State>
 
     init(
         digest: String?, token: RegistryPullToken?, throwOnResolve: Bool = false,
         mintError: Error? = nil
     ) {
-        self.digest = digest
-        self.token = token
-        self.throwOnResolve = throwOnResolve
-        self.mintError = mintError
+        self.state = NIOLockedValueBox(
+            State(digest: digest, token: token, throwOnResolve: throwOnResolve, mintError: mintError))
     }
 
     var resolveCallCount: Int {
-        lock.withLock { _resolveCredentials.count }
+        state.withLockedValue { $0.resolveCredentials.count }
     }
 
     var mintCallCount: Int {
-        lock.withLock { _mintCallCount }
+        state.withLockedValue { $0.mintCallCount }
     }
 
     /// The secret (password) of each credential passed to `resolveDigest`.
     var resolveCredentials: [String?] {
-        lock.withLock { _resolveCredentials }
+        state.withLockedValue { $0.resolveCredentials }
     }
 
     func resolveDigest(
         for ref: OCIImageReference, credential: RegistryBasicCredential?
     ) async throws -> String? {
-        lock.withLock { _resolveCredentials.append(credential?.password) }
-        if throwOnResolve {
+        let result = state.withLockedValue { state -> (digest: String?, shouldThrow: Bool) in
+            state.resolveCredentials.append(credential?.password)
+            return (state.digest, state.throwOnResolve)
+        }
+        if result.shouldThrow {
             throw Abort(.badGateway, reason: "scripted resolution failure")
         }
-        return digest
+        return result.digest
     }
 
     func mintPullToken(
         for ref: OCIImageReference, credential: RegistryBasicCredential?
     ) async throws -> RegistryPullToken? {
-        lock.withLock { _mintCallCount += 1 }
-        if let mintError {
+        let result = state.withLockedValue { state -> (token: RegistryPullToken?, error: Error?) in
+            state.mintCallCount += 1
+            return (state.token, state.mintError)
+        }
+        if let mintError = result.error {
             throw mintError
         }
-        return token
+        return result.token
     }
 }
 
@@ -632,32 +639,37 @@ private final class ScriptedRegistryClient: RegistryClientProtocol, @unchecked S
 /// Vapor `Client` double for `DistributionRegistryClient` tests, in the mold
 /// of `FakeIdPClient`: URL-substring stubs (with response headers, which the
 /// registry flow needs for challenges and digests) plus request recording.
-private final class FakeRegistryHTTPClient: Client, @unchecked Sendable {
+private final class FakeRegistryHTTPClient: Client, Sendable {
     struct Stub {
         var status: HTTPStatus
         var headers: HTTPHeaders
         var body: String
     }
 
+    private struct State {
+        var stubs: [(match: String, stub: Stub)] = []
+        var recorded: [ClientRequest] = []
+    }
+
     let eventLoop: EventLoop
-    private let lock = NIOLock()
-    private var stubs: [(match: String, stub: Stub)] = []
-    private var recorded: [ClientRequest] = []
+    private let state = NIOLockedValueBox(State())
 
     init(on eventLoop: EventLoop) {
         self.eventLoop = eventLoop
     }
 
     func stub(urlContaining match: String, status: HTTPStatus, headers: HTTPHeaders = [:], body: String) {
-        lock.withLock { stubs.append((match, Stub(status: status, headers: headers, body: body))) }
+        state.withLockedValue {
+            $0.stubs.append((match, Stub(status: status, headers: headers, body: body)))
+        }
     }
 
     var allRequests: [ClientRequest] {
-        lock.withLock { recorded }
+        state.withLockedValue { $0.recorded }
     }
 
     func requests(urlContaining match: String) -> [ClientRequest] {
-        lock.withLock { recorded.filter { $0.url.string.contains(match) } }
+        state.withLockedValue { $0.recorded.filter { $0.url.string.contains(match) } }
     }
 
     func delegating(to eventLoop: EventLoop) -> Client {
@@ -665,9 +677,9 @@ private final class FakeRegistryHTTPClient: Client, @unchecked Sendable {
     }
 
     func send(_ request: ClientRequest) -> EventLoopFuture<ClientResponse> {
-        let stub = lock.withLock { () -> Stub? in
-            recorded.append(request)
-            return stubs.last { request.url.string.contains($0.match) }?.stub
+        let stub = state.withLockedValue { state -> Stub? in
+            state.recorded.append(request)
+            return state.stubs.last { request.url.string.contains($0.match) }?.stub
         }
         guard let stub else {
             return eventLoop.makeFailedFuture(

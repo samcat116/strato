@@ -2,6 +2,8 @@ import Fluent
 import Vapor
 import StratoShared
 
+/// Safety: this mutable Fluent model stays inside one logical operation; child tasks
+/// receive IDs or immutable snapshots and reload their own instance.
 final class VM: Model, @unchecked Sendable {
     static let schema = "vms"
 
@@ -274,6 +276,11 @@ final class VM: Model, @unchecked Sendable {
     @Field(key: "tpm_enabled")
     var tpmEnabled: Bool
 
+    /// Whether Strato's root guest daemon is expected in this VM. Fixed at
+    /// creation because changing it changes the domain's PCI device topology.
+    @Field(key: "guest_agent_enabled")
+    var guestAgentEnabled: Bool
+
     // Graphics console (issue #566): whether the guest boots with a display
     // device and a VNC server for the web UI to attach to. Like the machine
     // profile above, the control plane records only the intent — the agent
@@ -322,6 +329,7 @@ final class VM: Model, @unchecked Sendable {
         serialMode: ConsoleMode = .pty,
         secureBoot: Bool = false,
         tpmEnabled: Bool = false,
+        guestAgentEnabled: Bool = false,
         graphicsConsole: Bool = false,
         metadataEnabled: Bool = true
     ) {
@@ -350,6 +358,7 @@ final class VM: Model, @unchecked Sendable {
         self.serialMode = serialMode
         self.secureBoot = secureBoot
         self.tpmEnabled = tpmEnabled
+        self.guestAgentEnabled = guestAgentEnabled
         self.graphicsConsole = graphicsConsole
         self.metadataEnabled = metadataEnabled
     }
@@ -624,6 +633,8 @@ struct VMDetailResponse: Content {
     /// Boot and whether it has an emulated TPM 2.0.
     let secureBoot: Bool
     let tpmEnabled: Bool
+    /// Whether this VM was created with Strato's vsock guest-agent channel.
+    let guestAgentEnabled: Bool
     /// Graphics console (issue #566): whether the guest has a display device
     /// whose framebuffer the web UI can attach to. Fixed at create.
     let graphicsConsole: Bool
@@ -706,6 +717,7 @@ struct VMDetailResponse: Content {
         self.hostname = vm.hostname
         self.secureBoot = vm.secureBoot
         self.tpmEnabled = vm.tpmEnabled
+        self.guestAgentEnabled = vm.guestAgentEnabled
         self.graphicsConsole = vm.graphicsConsole
         self.metadataEnabled = vm.metadataEnabled
         self.qgaAvailable = vm.qgaAvailable
