@@ -29,6 +29,7 @@ struct HostPreflightTests {
             firmwarePath: "/bin/ls",
             tpmSupport: .supported,
             libvirt: .reachable(LibvirtProbe.minimumVersion),
+            vhostVsock: .device(path: "/dev/null"),
             minimumFreeDiskBytes: 0
         )
     }
@@ -237,6 +238,36 @@ struct HostPreflightTests {
     }
 
     // MARK: - Advisory checks
+
+    @Test("vhost-vsock requires the Linux character device and names the module remedy")
+    func vhostVsockDeviceIsChecked() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.vhostVsock = .device(path: "\(root)/missing-vhost-vsock")
+        let check = try #require(HostPreflight.run(inputs).check(.vhostVsockSupport))
+        #expect(!check.passed)
+        #expect(check.supported)
+        #expect(check.severity == .advisory)
+        #expect(check.detail?.contains("modprobe vhost_vsock") == true)
+    }
+
+    @Test("non-Linux vsock is unsupported rather than failed")
+    func vhostVsockUnsupportedPlatform() throws {
+        let root = try makeTempDir()
+        defer { try? FileManager.default.removeItem(atPath: root) }
+
+        var inputs = passingInputs(root: root)
+        inputs.vhostVsock = .unsupportedPlatform("not supported on this platform")
+        let report = HostPreflight.run(inputs)
+        let check = try #require(report.check(.vhostVsockSupport))
+        #expect(check.passed)
+        #expect(!check.supported)
+        #expect(check.detail == "not supported on this platform")
+        #expect(report.failures.isEmpty)
+        #expect(report.unsupported == [check])
+    }
 
     @Test(
         "No vTPM backend is advisory and only withholds the TPM capability",

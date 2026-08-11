@@ -310,13 +310,14 @@ Why this shape:
   `currentVersion = 4`) and guest PID 1 is ours (`sandbox-guest/init/`, Rust).
   Every health handshake now requires the sandbox identity, nonce, and protocol
   version before the host trusts the guest.
-- **VMs: one device short.** `DomainXMLBuilder` writes a `virtio-serial`
-  controller (console and qga) but no vsock. Adding a `<vsock model='virtio'>`
-  element is the single blocker for parity — and, because the domain document is
-  written once, only VMs created after that lands would have one. The CID half is done (STR-72): `VsockCIDAllocator` allocates from the
-  host-global namespace and the VM manifest persists each assignment, so
-  collisions across re-adoption and restart are handled — see
-  [agent](./agent.md#vsock-context-ids-str-72).
+- **VM transport: ready behind an opt-in.** A VM created with
+  `guestAgentEnabled` receives a fixed-CID `<vsock model='virtio'>` device from
+  `DomainXMLBuilder`; VMs that do not opt in keep their existing PCI topology.
+  `VsockCIDAllocator` assigns from the host-global namespace and the VM manifest
+  persists each assignment, so collisions across re-adoption and restart are
+  handled — see [agent](./agent.md#vsock-context-ids-str-72). Linux preflight
+  checks `/dev/vhost-vsock` at startup; platforms without `vhost_vsock` report
+  the transport as unsupported rather than failed.
 - **The guest daemon for VMs** is installed once by cloud-init
   (`CloudInitProvisioner.makeNoCloudISO`, `write_files`/`runcmd`). Cloud-init is
   a legitimate **bootstrap** channel: it installs the daemon and **never carries
@@ -667,7 +668,8 @@ Filed under [#496](https://github.com/samcat116/strato/issues/496):
    and deduping re-sends across reconnects.
 6. Agent: minimal Workload API server, one identity per connection.
 7. Sandbox guest control protocol v4 identity channel + in-guest forwarder.
-8. QEMU `vhost-vsock-pci` (host-global CID allocation landed in STR-72).
+8. ~~QEMU `vhost-vsock-pci` and host preflight.~~ **Done** — STR-76 (host-global
+   CID allocation landed in STR-72).
 9. `strato-guest-identity` daemon for VMs, installed by cloud-init.
 10. Fork/clone identity safety.
 11. Audit events and metrics for guest identity issuance and refusal. **Done for

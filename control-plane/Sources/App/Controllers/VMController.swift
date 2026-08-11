@@ -446,6 +446,9 @@ struct VMController: RouteCollection {
             // behavior — and both are what Windows 11 / Server 2025 require.
             let secureBoot: Bool?
             let tpm: Bool?
+            // Strato guest agent (STR-76), distinct from QEMU's qga. Default
+            // off; when enabled the QEMU domain gets a fixed-CID vsock device.
+            let guestAgentEnabled: Bool?
             // Graphics console (issue #566): whether the guest boots with a
             // display device whose framebuffer the web UI can attach to.
             // Defaults false — headless, today's behavior. Fixed at create,
@@ -653,6 +656,7 @@ struct VMController: RouteCollection {
             maxMemory: maxMemoryValue,
             secureBoot: createRequest.secureBoot ?? false,
             tpmEnabled: createRequest.tpm ?? false,
+            guestAgentEnabled: createRequest.guestAgentEnabled ?? false,
             graphicsConsole: createRequest.graphicsConsole ?? false,
             metadataEnabled: createRequest.metadataEnabled ?? true
         )
@@ -695,6 +699,12 @@ struct VMController: RouteCollection {
                 .badRequest,
                 reason: "'secureBoot' and 'tpm' are not supported for firecracker VMs "
                     + "(no UEFI firmware or TPM device); use the qemu hypervisor")
+        }
+
+        if vm.guestAgentEnabled, vm.hypervisorType == .firecracker {
+            throw Abort(
+                .badRequest,
+                reason: "'guestAgentEnabled' is not supported for firecracker VMs; use the qemu hypervisor")
         }
 
         if vm.userData != nil, vm.hypervisorType == .firecracker {

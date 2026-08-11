@@ -17,16 +17,16 @@ import FoundationXML
 /// from the builder — a generated expectation only proves the code agrees with
 /// itself.
 ///
-/// Every golden here has been checked against real libvirt, not just against
-/// this builder:
+/// The ten pre-STR-76 goldens were checked against real libvirt, not just
+/// against this builder:
 ///
-/// - all nine validate against the RELAX-NG schema of libvirt 11.5.0 (the
+/// - all ten validate against the RELAX-NG schema of libvirt 11.5.0 (the
 ///   version floor), 12.0.0 and 12.6.0 — re-checked after STR-134 added
 ///   `<serial>` and the spare `pcie-root-port`s, together with the hot-plug and
 ///   detach fragments `DomainDeviceXML` sends (asserted in
 ///   `DomainDiskInventoryTests`, validated by splicing them into this
 ///   scenario's `<devices>`);
-/// - all nine are accepted by `virsh define --validate` on libvirt 11.6.0,
+/// - all ten are accepted by `virsh define --validate` on libvirt 11.6.0,
 ///   which runs libvirt's own parser and the QEMU driver's checks on top of the
 ///   schema — that is what caught `<acpi/>` being invalid on aarch64 without
 ///   UEFI (`acpiRequiresUEFIOnArm64`);
@@ -34,6 +34,10 @@ import FoundationXML
 ///   `console.sock`, `qga.sock` and `vnc.sock` at exactly these paths, seeded
 ///   the varstore from the autoselected Secure Boot firmware, and reported
 ///   through the balloon.
+///
+/// The STR-76 vsock golden is covered by the schema validation below. It still
+/// needs the same cross-version `virsh define --validate` pass on a Linux host;
+/// macOS/HVF has no `vhost_vsock` backend and cannot perform that runtime check.
 ///
 /// The schema is not the last word, and `DomainXMLLibvirtTests` beside this file
 /// is where the rest of it lives: the document that left every VM with zero free
@@ -82,11 +86,12 @@ struct DomainXMLBuilderTests {
         maxMemoryBytes: Int64? = nil,
         boot: BootSource = .disk(firmware: nil),
         machine: MachineProfile? = nil,
+        guestAgentEnabled: Bool = false,
         graphics: GraphicsMode? = nil
     ) -> VMSpec {
         VMSpec(
             cpus: cpus, maxCpus: maxCpus, memoryBytes: memoryBytes, maxMemoryBytes: maxMemoryBytes,
-            boot: boot, machine: machine,
+            boot: boot, machine: machine, guestAgentEnabled: guestAgentEnabled,
             console: ConsoleSpec(graphics: graphics))
     }
 
@@ -99,12 +104,14 @@ struct DomainXMLBuilderTests {
         accelerator: DomainAccelerator = .kvm,
         firmware: FirmwareSet? = nil,
         emulatorPath: String? = nil,
+        vsockCID: UInt32? = nil,
         memoryHardLimitBytes: Int64? = nil
     ) -> DomainXMLInput {
         DomainXMLInput(
             vmId: vmId, vmDirectory: vmDirectory, spec: spec, disks: disks,
             cloudInitISOPath: cloudInitISOPath, networks: networks, architecture: architecture,
             accelerator: accelerator, firmware: firmware, emulatorPath: emulatorPath,
+            vsockCID: vsockCID,
             memoryHardLimitBytes: memoryHardLimitBytes)
     }
 
@@ -121,6 +128,9 @@ struct DomainXMLBuilderTests {
     static let scenarios: [Scenario] = [
         // The baseline every other scenario is a delta from.
         Scenario(name: "x86_64-uefi-headless-minimal", input: input(spec: spec())),
+        Scenario(
+            name: "x86_64-uefi-vsock",
+            input: input(spec: spec(guestAgentEnabled: true), vsockCID: 42)),
         // Secure Boot pulls in the firmware features and SMM; the graphics
         // console pulls in the xHCI controller, video model and input devices.
         Scenario(
@@ -481,6 +491,32 @@ struct DomainXMLBuilderTests {
         }
         #expect(throws: DomainXMLBuilderError.invalidMemorySize(0)) {
             try DomainXMLBuilder.build(Self.input(spec: Self.spec(memoryBytes: 0)))
+        }
+    }
+
+    @Test("the guest-agent opt-in and CID produce exactly one fixed-address vsock device")
+    func guestAgentVsockDevice() throws {
+        let xml = try DomainXMLBuilder.build(
+            Self.input(spec: Self.spec(guestAgentEnabled: true), vsockCID: 42))
+        #expect(xml.contains("<vsock model='virtio'>"))
+        #expect(xml.contains("<cid auto='no' address='42'/>"))
+        #expect(xml.components(separatedBy: "<vsock ").count == 2)
+        #expect(!xml.contains("vsock.sock"))
+    }
+
+    @Test("vsock CID and guest-agent opt-in must agree")
+    func guestAgentVsockContract() {
+        #expect(throws: DomainXMLBuilderError.missingVsockCID) {
+            try DomainXMLBuilder.build(Self.input(spec: Self.spec(guestAgentEnabled: true)))
+        }
+        #expect(throws: DomainXMLBuilderError.unexpectedVsockCID(42)) {
+            try DomainXMLBuilder.build(Self.input(spec: Self.spec(), vsockCID: 42))
+        }
+        for cid in [UInt32(0), 1, 2, UInt32.max] {
+            #expect(throws: DomainXMLBuilderError.invalidVsockCID(cid)) {
+                try DomainXMLBuilder.build(
+                    Self.input(spec: Self.spec(guestAgentEnabled: true), vsockCID: cid))
+            }
         }
     }
 

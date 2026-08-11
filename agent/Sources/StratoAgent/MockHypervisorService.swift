@@ -64,7 +64,7 @@ actor MockHypervisorService: HypervisorService {
 
     func createVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo?, networkAttachments: [ResolvedNetworkAttachment],
-        metadata: InstanceMetadata?
+        metadata: InstanceMetadata?, vsockCID: UInt32?
     ) async throws {
         logger.info("Creating mock VM (mock mode)", metadata: ["vmId": .string(vmId)])
         vms[vmId] = MockVM(

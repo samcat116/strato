@@ -34,6 +34,7 @@ public enum HostPreflight {
         case vtpmSupport = "vtpm"
         case libvirtConnection = "libvirtd"
         case libvirtVersion = "libvirt_version"
+        case vhostVsockSupport = "vhost_vsock"
         case ovnDatabaseSocket = "ovn_nb_socket"
         case ovnDatabaseTLSFiles = "ovn_nb_tls_files"
         case ovsDatabaseSocket = "ovsdb_socket"
@@ -59,19 +60,34 @@ public enum HostPreflight {
         public let kind: CheckKind
         public let severity: Severity
         public let passed: Bool
-        /// Failure reason including the remediation; nil when passed.
+        /// False when this dependency does not exist on the current platform.
+        /// Unsupported is a reported platform fact, not a failed check.
+        public let supported: Bool
+        /// Failure reason/remediation, or an unsupported-platform explanation.
         public let detail: String?
 
         static func pass(_ kind: CheckKind, severity: Severity = .gating) -> Check {
-            Check(kind: kind, severity: severity, passed: true, detail: nil)
+            Check(kind: kind, severity: severity, passed: true, supported: true, detail: nil)
         }
 
         static func fail(_ kind: CheckKind, severity: Severity = .gating, _ detail: String) -> Check {
-            Check(kind: kind, severity: severity, passed: false, detail: detail)
+            Check(kind: kind, severity: severity, passed: false, supported: true, detail: detail)
+        }
+
+        static func unsupported(_ kind: CheckKind, _ detail: String) -> Check {
+            Check(kind: kind, severity: .advisory, passed: true, supported: false, detail: detail)
         }
     }
 
     // MARK: - Inputs
+
+    /// Platform resolution for QEMU's kernel-backed virtio-vsock device.
+    public enum VhostVsockSupport: Sendable, Equatable {
+        /// The device node QEMU/libvirt must be able to open.
+        case device(path: String)
+        /// This kernel/device model does not exist on the current platform.
+        case unsupportedPlatform(String)
+    }
 
     /// Everything the preflight needs to know about this agent's
     /// configuration, resolved by the caller so the checks stay pure.
@@ -101,6 +117,9 @@ public enum HostPreflight {
         public var libvirt: LibvirtProbe.Status?
         /// The oldest libvirt this agent will drive.
         public var minimumLibvirtVersion: LibvirtProbe.Version
+        /// Linux resolves this to `/dev/vhost-vsock`; non-Linux callers state
+        /// that the backend is unsupported rather than passing a fake path.
+        public var vhostVsock: VhostVsockSupport
         /// Whether the agent runs with OVN networking (enables the OVN/OVS
         /// socket and tool checks).
         public var ovnMode: Bool
@@ -134,6 +153,8 @@ public enum HostPreflight {
             qemuFirmwareDescriptorPath: String? = nil,
             libvirt: LibvirtProbe.Status? = nil,
             minimumLibvirtVersion: LibvirtProbe.Version = LibvirtProbe.minimumVersion,
+            vhostVsock: VhostVsockSupport = .unsupportedPlatform(
+                "virtio-vsock for QEMU is not supported on this platform"),
             ovnMode: Bool = false,
             ovnNBConnection: String = "unix:/var/run/ovn/ovnnb_db.sock",
             ovnNBTLSFilePaths: [String] = [],
@@ -153,6 +174,7 @@ public enum HostPreflight {
             self.qemuFirmwareDescriptorPath = qemuFirmwareDescriptorPath
             self.libvirt = libvirt
             self.minimumLibvirtVersion = minimumLibvirtVersion
+            self.vhostVsock = vhostVsock
             self.ovnMode = ovnMode
             self.ovnNBConnection = ovnNBConnection
             self.ovnNBTLSFilePaths = ovnNBTLSFilePaths
@@ -188,6 +210,10 @@ public enum HostPreflight {
 
         public var failures: [Check] {
             checks.filter { !$0.passed }
+        }
+
+        public var unsupported: [Check] {
+            checks.filter { !$0.supported }
         }
 
         public func check(_ kind: CheckKind) -> Check? {
@@ -320,6 +346,7 @@ public enum HostPreflight {
             libvirtUsable = libvirtChecks.allSatisfy(\.passed)
             checks.append(contentsOf: libvirtChecks)
         }
+        checks.append(checkVhostVsock(inputs.vhostVsock))
         checks.append(checkTPMSupport(inputs.tpmSupport, libvirtUsable: libvirtUsable))
         if let descriptorPath = inputs.qemuFirmwareDescriptorPath {
             checks.append(checkFirmwareDescriptors(descriptorPath))
@@ -479,6 +506,28 @@ public enum HostPreflight {
                     + "the agent cannot create or convert VM disks without it.")
         }
         return .pass(.qemuImgBinary)
+    }
+
+    /// The Linux vhost-vsock backend libvirt opens for a `<vsock>` domain
+    /// device. Checking the character device proves the module is loaded (or
+    /// built in) and the kernel registered its userspace endpoint; merely
+    /// finding a module file on disk would not.
+    static func checkVhostVsock(_ support: VhostVsockSupport) -> Check {
+        switch support {
+        case .unsupportedPlatform(let detail):
+            return .unsupported(.vhostVsockSupport, detail)
+
+        case .device(let path):
+            let attributes = try? FileManager.default.attributesOfItem(atPath: path)
+            guard attributes?[.type] as? FileAttributeType == .typeCharacterSpecial else {
+                return .fail(
+                    .vhostVsockSupport, severity: .advisory,
+                    "vhost-vsock is unavailable at \(path) — VMs with the Strato guest agent cannot start. "
+                        + "Load the kernel module (`modprobe vhost_vsock`) and configure it to load at boot; "
+                        + "if the module is absent, install the matching Linux extra-modules package.")
+            }
+            return .pass(.vhostVsockSupport, severity: .advisory)
+        }
     }
 
     static func checkFirmware(_ path: String?) -> Check {

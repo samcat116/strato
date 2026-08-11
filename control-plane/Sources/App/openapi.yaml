@@ -9027,6 +9027,14 @@ components:
             `tpmCapable` (swtpm installed) are eligible; rejected for
             firecracker. Windows 11 and Server 2025 require this together with
             `secureBoot`.
+        guestAgentEnabled:
+          type: boolean
+          default: false
+          description: >-
+            Attach Strato's fixed-CID virtio-vsock channel for the in-guest
+            daemon. This is distinct from QEMU guest agent (qga), is supported
+            only for QEMU VMs, and is fixed at creation because it changes the
+            domain's PCI device topology.
         graphicsConsole:
           type: boolean
           default: false
@@ -9187,6 +9195,11 @@ components:
         tpmEnabled:
           type: boolean
           description: Whether the guest has an emulated TPM 2.0.
+        guestAgentEnabled:
+          type: boolean
+          description: >-
+            Whether this VM was created with Strato's virtio-vsock guest-agent
+            channel. Distinct from `qgaAvailable`.
         graphicsConsole:
           type: boolean
           description: >-

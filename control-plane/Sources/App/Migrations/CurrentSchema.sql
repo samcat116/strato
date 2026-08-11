@@ -1294,6 +1294,7 @@ CREATE TABLE public.vms (
     guest_memory_balloon_actual_bytes bigint,
     secure_boot boolean DEFAULT false NOT NULL,
     tpm_enabled boolean DEFAULT false NOT NULL,
+    guest_agent_enabled boolean DEFAULT false NOT NULL,
     hostname text,
     graphics_console boolean DEFAULT false NOT NULL,
     finalizers text[] DEFAULT '{}'::text[] NOT NULL,
