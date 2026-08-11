@@ -1313,12 +1313,14 @@ any router dies, and a guest cannot proxy metadata off-box.
 listener off without touching the dataplane, which is a property of the
 network rather than of the agent.
 
-**What it serves is deliberately four documents**: `/latest/`,
-`/latest/meta-data/`, `/latest/meta-data/instance-id` and
-`/latest/meta-data/hostname` (404 on a hostname-less VM — nothing here may
-invent one). The renderer trees are STR-60 (NoCloud-net), STR-65 (EC2) and
-STR-62 (identity); naming an EC2-shaped key now would commit those issues to
-serving it forever.
+**NoCloud-net reuses the seed ISO renderer byte for byte.** The exact file
+paths are `/latest/meta-data`, `/latest/user-data`, and
+`/latest/network-config` (404 when no NIC needs a network document). The
+no-trailing-slash metadata path matters: `/latest/meta-data/` remains the EC2
+index proved by STR-56, with `instance-id` and optional `hostname` children,
+and STR-65 extends that tree. All documents render from the listener's latest
+`InstanceMetadata` snapshot, so an applied metadata sync changes the next HTTP
+response without rebuilding guest media.
 
 **Bounds, because the peer is untrusted guest code that can retry forever:**
 a raw-byte cap in front of the HTTP decoder (`ByteToMessageHandler`'s

@@ -200,6 +200,27 @@ public struct SPIREServiceConfig: Sendable {
 
 /// Service for managing SPIRE trust bundles and validating agent certificates
 public actor SPIREService {
+    private struct BundleEnvelope: Decodable {
+        let keys: [BundleKey]
+    }
+
+    private struct BundleKey: Decodable {
+        let use: String?
+        let x5c: [String]?
+
+        private enum CodingKeys: String, CodingKey {
+            case use, x5c
+        }
+
+        init(from decoder: any Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            // A malformed or irrelevant field makes this key unusable, not the
+            // whole versioned bundle. The envelope itself remains strict.
+            use = try? container.decode(String.self, forKey: .use)
+            x5c = try? container.decode([String].self, forKey: .x5c)
+        }
+    }
+
     private let config: SPIREServiceConfig
     private let logger: Logger
     private let httpClient: Client
@@ -561,26 +582,8 @@ public actor SPIREService {
                 throw SPIREServiceError.serverConnectionFailed("Empty response body")
             }
 
-            // Parse SPIFFE bundle format (JSON with x509_authorities)
             let bundleData = Data(buffer: body)
-            let json = try JSONSerialization.jsonObject(with: bundleData) as? [String: Any]
-
-            guard let keys = json?["keys"] as? [[String: Any]] else {
-                throw SPIREServiceError.serverConnectionFailed("Invalid bundle format")
-            }
-
-            var certificates: [String] = []
-            for key in keys {
-                if let use = key["use"] as? String, use == "x509-svid",
-                    let x5c = key["x5c"] as? [String]
-                {
-                    for cert in x5c {
-                        // x5c contains base64-encoded DER certificates
-                        let pem = "-----BEGIN CERTIFICATE-----\n\(cert)\n-----END CERTIFICATE-----"
-                        certificates.append(pem)
-                    }
-                }
-            }
+            let certificates = try Self.parseTrustBundleCertificates(bundleData)
 
             guard !certificates.isEmpty else {
                 throw SPIREServiceError.trustBundleUnavailable
@@ -604,6 +607,20 @@ public actor SPIREService {
         } catch {
             throw SPIREServiceError.serverConnectionFailed(error.localizedDescription)
         }
+    }
+
+    /// Decode the narrow SPIFFE bundle fields this service consumes. Unknown
+    /// bundle and key fields are ignored by Codable for forward compatibility.
+    static func parseTrustBundleCertificates(_ data: Data) throws -> [String] {
+        guard let bundle = try? JSONDecoder().decode(BundleEnvelope.self, from: data) else {
+            throw SPIREServiceError.serverConnectionFailed("Invalid bundle format")
+        }
+        return bundle.keys
+            .filter { $0.use == "x509-svid" }
+            .flatMap { $0.x5c ?? [] }
+            .map { certificate in
+                "-----BEGIN CERTIFICATE-----\n\(certificate)\n-----END CERTIFICATE-----"
+            }
     }
 
     private func startPeriodicRefresh() {

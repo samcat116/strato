@@ -1,10 +1,26 @@
 import Foundation
+import StratoShared
 import Testing
 
 @testable import StratoAgentCore
 
 @Suite("Cloud-init meta-data document assembly")
 struct CloudInitMetaDataTests {
+
+    @Test("NoCloud-net meta-data is byte-identical to the seed ISO renderer")
+    func noCloudNetGoldenParity() {
+        let vmId = UUID(uuidString: "0F6AFCDE-2F3A-4F1C-B704-F8F9AAE2E17B")!
+        let metadata = InstanceMetadata(
+            instanceId: vmId,
+            hostname: "e2e-noble-1",
+            projectId: UUID(),
+            serviceEnabled: true)
+
+        let seedISO = CloudInitProvisioner.metaDataDocument(
+            vmId: vmId.uuidString, hostname: metadata.hostname)
+        let noCloudNet = CloudInitProvisioner.metaDataDocument(for: metadata)
+        #expect(noCloudNet.utf8.elementsEqual(seedISO.utf8))
+    }
 
     @Test("the desired hostname is what the guest configures itself under")
     func desiredHostnameWins() {
