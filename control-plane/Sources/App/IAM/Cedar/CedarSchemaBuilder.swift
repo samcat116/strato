@@ -75,6 +75,7 @@ enum CedarSchemaBuilder {
         case "image": return [.image] + projectContainers
         case "network": return [.network] + projectContainers
         case "floatingip": return [.floatingIP] + projectContainers
+        case "loadbalancer": return [.loadBalancer] + projectContainers
         case "securitygroup": return [.securityGroup] + projectContainers
         // Records sit under their zone, so a `dns:*` action can target either
         // — a binding on one zone reaches its records and nothing else.
@@ -245,6 +246,7 @@ enum CedarSchemaBuilder {
         case .folder: return [.organization, .folder]
         case .project: return [.organization, .folder]
         case .vm, .sandbox, .image, .volume, .volumeSnapshot, .sandboxSnapshot, .vmSnapshot, .floatingIP,
+            .loadBalancer,
             .securityGroup, .serviceAccount, .network, .dnsZone:
             return [.project]
         // A record's container is its zone, not the project directly: records

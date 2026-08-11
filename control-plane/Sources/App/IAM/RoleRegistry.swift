@@ -76,6 +76,7 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
     case image
     case network
     case floatingIP = "floating_ip"
+    case loadBalancer = "load_balancer"
     case securityGroup = "security_group"
     /// A DNS zone (issue #770) — a project-scoped resource, like a network.
     case dnsZone = "dns_zone"
@@ -123,6 +124,7 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
         case .image: return "image:read"
         case .network: return "network:read"
         case .floatingIP: return "floatingip:read"
+        case .loadBalancer: return "loadbalancer:read"
         case .securityGroup: return "securitygroup:read"
         case .dnsZone, .dnsRecord: return "dns:read"
         case .volume, .volumeSnapshot: return "volume:read"
@@ -151,6 +153,7 @@ enum IAMNodeType: String, Codable, Sendable, CaseIterable {
         case .image: return Image.schema
         case .network: return LogicalNetwork.schema
         case .floatingIP: return FloatingIP.schema
+        case .loadBalancer: return LoadBalancer.schema
         case .securityGroup: return SecurityGroup.schema
         case .dnsZone: return DNSZone.schema
         case .dnsRecord: return DNSRecord.schema
@@ -200,6 +203,7 @@ enum IAMRoleRegistry {
             "image:read", "image:list", "image:download",
             "network:read", "network:list",
             "floatingip:read", "floatingip:list",
+            "loadbalancer:read", "loadbalancer:list",
             "securitygroup:read", "securitygroup:list",
             "dns:read", "dns:list",
             "serviceaccount:read", "serviceaccount:list",
@@ -232,6 +236,7 @@ enum IAMRoleRegistry {
             "network:create", "network:update", "network:delete",
             "floatingip:create", "floatingip:release",
             "floatingip:attach", "floatingip:detach",
+            "loadbalancer:create", "loadbalancer:update", "loadbalancer:delete",
             "securitygroup:create", "securitygroup:update", "securitygroup:delete",
             "securitygroup:attach", "securitygroup:detach",
             // Zones and records share one service: they are one authoring

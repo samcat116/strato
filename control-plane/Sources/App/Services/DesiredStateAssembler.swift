@@ -251,7 +251,11 @@ struct DesiredStateAssembler {
         // field, so sending it only misstates what the sync achieved; the
         // attach API refuses new attachments against such agents.
         let floatingIPsByNetwork = try await desiredFloatingIPs(
-            forAgentIDs: scope.floatingIPAgentIDs, on: db)
+            forAgentIDs: scope.floatingIPAgentIDs,
+            networkIDs: scope.networkIDs,
+            on: db)
+        let loadBalancersByNetwork = try await desiredLoadBalancers(
+            networkIDs: scope.networkIDs, on: db)
         // Sorted by id: names are no longer unique, so only the id gives the
         // topology list a stable, total order.
         let networkStates =
@@ -277,7 +281,8 @@ struct DesiredStateAssembler {
                     resolverAddresses: network.resolverAddressesIfEnabled(
                         siteCapable: siteResolverCapable),
                     generation: Int64(network.generation),
-                    floatingIPs: floatingIPsByNetwork[networkId]
+                    floatingIPs: floatingIPsByNetwork[networkId] ?? [],
+                    loadBalancers: loadBalancersByNetwork[networkId] ?? []
                 )
             }
 
@@ -1325,15 +1330,97 @@ struct DesiredStateAssembler {
     /// that network's router. Only attachments to VMs placed on `agentIDs` —
     /// the hosts whose topology the receiving agent authors — so a site-less
     /// agent never NATs for a VM on some other node's private NB.
+    private func desiredLoadBalancers(
+        networkIDs: Set<UUID>, on db: any Database
+    ) async throws -> [UUID: [DesiredLoadBalancer]] {
+        guard !networkIDs.isEmpty else { return [:] }
+        let rows = try await LoadBalancer.query(on: db)
+            .filter(\.$logicalNetwork.$id ~~ networkIDs)
+            .sort(\.$id)
+            .all()
+        var byNetwork: [UUID: [DesiredLoadBalancer]] = [:]
+        var gatewaysByNetwork: [UUID: String?] = [:]
+        for row in rows {
+            guard let loadBalancerID = row.id else { continue }
+            let listeners = try await LoadBalancerListener.query(on: db)
+                .filter(\.$loadBalancer.$id == loadBalancerID)
+                .sort(\.$port)
+                .sort(\.$id)
+                .all()
+            let backendRows = try await LoadBalancerBackend.query(on: db)
+                .filter(\.$loadBalancer.$id == loadBalancerID)
+                .sort(\.$id)
+                .all()
+            var backends: [DesiredLoadBalancerBackend] = []
+            for backend in backendRows {
+                guard let backendID = backend.id else { continue }
+                if let address = backend.address {
+                    backends.append(DesiredLoadBalancerBackend(id: backendID, ipAddress: address))
+                    continue
+                }
+                guard let interfaceID = backend.$interface.id,
+                    let interface = try await VMNetworkInterface.query(on: db)
+                        .filter(\.$id == interfaceID)
+                        .with(\.$addresses)
+                        .first(),
+                    interface.detachGeneration == nil,
+                    let address = interface.ipv4Address?.address
+                else {
+                    // SET NULL on NIC deletion deliberately leaves the backend
+                    // record as history, but it no longer participates in the
+                    // desired OVN set.
+                    continue
+                }
+                let backendNetworkID = interface.logicalNetworkID
+                let healthCheckSourceIP: String?
+                if let cached = gatewaysByNetwork[backendNetworkID] {
+                    healthCheckSourceIP = cached
+                } else {
+                    let gateway = try await LogicalNetwork.find(backendNetworkID, on: db)?.gateway
+                    gatewaysByNetwork[backendNetworkID] = gateway
+                    healthCheckSourceIP = gateway
+                }
+                backends.append(
+                    DesiredLoadBalancerBackend(
+                        id: backendID,
+                        ipAddress: address,
+                        vmId: interface.$vm.id,
+                        nicIndex: interface.orderIndex,
+                        networkId: backendNetworkID,
+                        healthCheckSourceIP: healthCheckSourceIP))
+            }
+            let desired = DesiredLoadBalancer(
+                id: loadBalancerID,
+                name: row.name,
+                vip: row.vip,
+                protocolName: row.protocolName.rawValue,
+                generation: row.generation,
+                healthCheck: DesiredLoadBalancerHealthCheck(
+                    enabled: row.healthCheckEnabled,
+                    intervalSeconds: row.healthCheckIntervalSeconds,
+                    timeoutSeconds: row.healthCheckTimeoutSeconds,
+                    successThreshold: row.healthCheckSuccessThreshold,
+                    failureThreshold: row.healthCheckFailureThreshold),
+                listeners: listeners.compactMap { listener in
+                    listener.id.map {
+                        DesiredLoadBalancerListener(
+                            id: $0, port: listener.port, backendPort: listener.backendPort)
+                    }
+                },
+                backends: backends)
+            byNetwork[row.$logicalNetwork.id, default: []].append(desired)
+        }
+        return byNetwork
+    }
+
     private func desiredFloatingIPs(
-        forAgentIDs agentIDs: Set<String>, on db: any Database
+        forAgentIDs agentIDs: Set<String>, networkIDs: Set<UUID>, on db: any Database
     ) async throws -> [UUID: [DesiredFloatingIP]] {
-        guard !agentIDs.isEmpty else { return [:] }
+        guard !agentIDs.isEmpty, !networkIDs.isEmpty else { return [:] }
         let attached = try await FloatingIP.query(on: db)
             .filter(\.$interface.$id != nil)
             .with(\.$interface)
             .all()
-        guard !attached.isEmpty else { return [:] }
 
         // Load the owning VMs (scoped to the covered agents) with their NIC
         // address rows. The NAT target uses each row's stable `orderIndex`,
@@ -1370,6 +1457,19 @@ struct DesiredStateAssembler {
                     logicalIP: logicalIP,
                     vmId: vmId,
                     nicIndex: desiredInterface.orderIndex))
+        }
+        let loadBalancerFloatingIPs = try await FloatingIP.query(on: db)
+            .filter(\.$loadBalancer.$id != nil)
+            .with(\.$loadBalancer)
+            .all()
+        for floatingIP in loadBalancerFloatingIPs {
+            guard let loadBalancer = floatingIP.loadBalancer,
+                networkIDs.contains(loadBalancer.$logicalNetwork.id)
+            else { continue }
+            byNetwork[loadBalancer.$logicalNetwork.id, default: []].append(
+                DesiredFloatingIP(
+                    externalIP: floatingIP.address,
+                    logicalIP: loadBalancer.vip))
         }
         return byNetwork.mapValues { $0.sorted { $0.externalIP < $1.externalIP } }
     }

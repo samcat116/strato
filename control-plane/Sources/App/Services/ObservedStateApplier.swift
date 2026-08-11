@@ -88,6 +88,13 @@ struct ObservedStateApplier {
     func apply(_ report: ObservedStateReport) async throws -> UnrecognizedOutcome {
         let db = app.db
 
+        // Network observations are independent of the workload manifest. A
+        // host can fail to enumerate its local VM store while its site's OVN
+        // author still has a valid view of shared load-balancer rows.
+        if let loadBalancers = report.loadBalancers {
+            try await applyObservedLoadBalancers(loadBalancers, on: db)
+        }
+
         // A report from an agent that cannot read its own workload manifest
         // carries no inventory (STR-138). Its `vms`/`sandboxes` lists are
         // empty because the host's contents are unknown, not because it is
@@ -272,6 +279,53 @@ struct ObservedStateApplier {
         }
 
         return unrecognizedOutcome
+    }
+
+    private func applyObservedLoadBalancers(
+        _ observations: [ObservedLoadBalancerState], on db: any Database
+    ) async throws {
+        for observed in observations {
+            try await db.transaction { tx in
+                guard let loadBalancer = try await LoadBalancer.find(observed.id, on: tx) else {
+                    return
+                }
+                // A delayed report may describe a superseded desired row; it
+                // must not make the current generation look converged. A value
+                // ahead of the database indicates a rollback/split-brain and
+                // is equally unsafe to apply.
+                guard observed.observedGeneration <= loadBalancer.generation,
+                    observed.observedGeneration >= loadBalancer.observedGeneration
+                else { return }
+
+                loadBalancer.observedGeneration = observed.observedGeneration
+                loadBalancer.observedState =
+                    switch observed.status {
+                    case .pending: .pending
+                    case .active: .active
+                    case .error: .error
+                    }
+                loadBalancer.lastError = observed.lastError
+                try await loadBalancer.save(on: tx)
+
+                for backendObservation in observed.backends {
+                    guard
+                        let backend = try await LoadBalancerBackend.query(on: tx)
+                            .filter(\.$id == backendObservation.id)
+                            .filter(\.$loadBalancer.$id == observed.id)
+                            .first()
+                    else { continue }
+                    backend.healthStatus =
+                        switch backendObservation.healthStatus {
+                        case .unknown: .unknown
+                        case .online: .online
+                        case .offline: .offline
+                        case .error: .error
+                        }
+                    backend.lastHealthCheckAt = backendObservation.lastCheckedAt
+                    try await backend.save(on: tx)
+                }
+            }
+        }
     }
 
     // MARK: - Unrecognized workloads (STR-98)

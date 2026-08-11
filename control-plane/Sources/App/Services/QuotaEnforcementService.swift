@@ -282,6 +282,24 @@ struct QuotaEnforcementService {
         }
     }
 
+    /// Admission for a native load balancer (STR-28). Load balancers are
+    /// project-wide infrastructure, so only quotas spanning every environment
+    /// apply. The shared project lock serializes their create/delete with
+    /// hierarchy transfers just like logical networks.
+    static func reserveLoadBalancer(
+        for project: Project,
+        on db: Database
+    ) async throws {
+        try await lockProjectNetworkMutations(for: project, on: db)
+        let quotas = try await applicableProjectWideQuotas(for: project, on: db)
+        try await reserveResource(for: project, quotas: quotas, on: db) { quota in
+            let check = quota.canAccommodateLoadBalancers()
+            guard check.allowed else { return check }
+            try quota.reserveLoadBalancerResources()
+            return check
+        }
+    }
+
     /// Validates the networks carried by a project moving between hierarchy
     /// paths and returns every project-wide quota whose cached usage must be
     /// refreshed after the move (STR-236).
@@ -293,6 +311,7 @@ struct QuotaEnforcementService {
     /// either hierarchy cannot interleave with the transfer's check and recount.
     static func validateNetworkTransfer(
         networkCount: Int,
+        loadBalancerCount: Int = 0,
         sourceQuotas: [ResourceQuota],
         destinationQuotas: [ResourceQuota],
         on db: Database
@@ -318,6 +337,12 @@ struct QuotaEnforcementService {
                 throw Abort(
                     .forbidden,
                     reason: "Quota '\(quota.name)' exceeded: \(check.reason ?? "limit reached")")
+            }
+            let loadBalancerCheck = quota.canAccommodateLoadBalancers(loadBalancerCount)
+            guard loadBalancerCheck.allowed else {
+                throw Abort(
+                    .forbidden,
+                    reason: "Quota '\(quota.name)' exceeded: \(loadBalancerCheck.reason ?? "limit reached")")
             }
         }
         return affected
@@ -505,6 +530,20 @@ struct QuotaEnforcementService {
         try await resyncAndSaveReservations(quotas, on: db)
     }
 
+    /// Native-load-balancer counterpart: call after the row is deleted so its
+    /// project-wide slot drops out of the canonical recount (STR-28).
+    static func release(
+        for loadBalancer: LoadBalancer,
+        on db: Database
+    ) async throws {
+        let projectID = loadBalancer.$project.id
+        try await lockProjectNetworkMutations(projectID: projectID, on: db)
+        guard let project = try await Project.find(projectID, on: db) else { return }
+        let quotas = try await applicableProjectWideQuotas(for: project, on: db)
+        try await lockQuotas(quotas, on: db)
+        try await resyncAndSaveReservations(quotas, on: db)
+    }
+
     private static func releaseWorkload(projectID: UUID, environment: String, on db: Database) async throws {
         guard let project = try await Project.find(projectID, on: db) else { return }
         let quotas = try await applicableQuotas(for: project, environment: environment, on: db)
@@ -595,5 +634,6 @@ struct QuotaEnforcementService {
         quota.sandboxCount = usage.sandboxCount
         quota.volumeCount = usage.volumeCount
         quota.networkCount = usage.networkCount
+        quota.loadBalancerCount = usage.loadBalancerCount
     }
 }

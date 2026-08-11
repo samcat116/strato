@@ -5428,7 +5428,8 @@ extension Agent: ReconcileActuator {
             // to get wrong: an empty list the control plane believed would reap
             // every checkpoint row it holds for this agent, and a checkpoint is
             // a point in time nothing can recreate (STR-150).
-            snapshots: await observedSnapshotStates(reconciler: reconciler)
+            snapshots: await observedSnapshotStates(reconciler: reconciler),
+            loadBalancers: await networkService?.observedLoadBalancers()
         )
         // A newer report started while this one was assembling — which is
         // exactly what happens when this one overran its budget and was

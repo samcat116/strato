@@ -301,6 +301,7 @@ struct FloatingIPController: RouteCollection {
 
         var query = FloatingIP.query(on: req.db)
             .with(\.$interface) { $0.with(\.$addresses) }
+            .with(\.$loadBalancer) { $0.with(\.$logicalNetwork) }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
 
@@ -333,7 +334,10 @@ struct FloatingIPController: RouteCollection {
             floatingIPs = try await visibility.readableRows(
                 floatingIPs, projectID: { $0.$project.id }, on: req)
         }
-        return try floatingIPs.map { try FloatingIPResponse(from: $0, interface: $0.interface) }
+        return try floatingIPs.map {
+            try FloatingIPResponse(
+                from: $0, interface: $0.interface, loadBalancer: $0.loadBalancer)
+        }
     }
 
     /// POST /api/floating-ips — allocate the lowest free address in a pool.
@@ -401,7 +405,9 @@ struct FloatingIPController: RouteCollection {
     func getFloatingIP(req: Request) async throws -> FloatingIPResponse {
         let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:read")
         let interface = try await loadedInterface(of: floatingIP, on: req.db)
-        return try FloatingIPResponse(from: floatingIP, interface: interface)
+        let loadBalancer = try await loadedLoadBalancer(of: floatingIP, on: req.db)
+        return try FloatingIPResponse(
+            from: floatingIP, interface: interface, loadBalancer: loadBalancer)
     }
 
     /// DELETE /api/floating-ips/:floatingIpId — release the address back to
@@ -410,7 +416,7 @@ struct FloatingIPController: RouteCollection {
     @Sendable
     func releaseFloatingIP(req: Request) async throws -> HTTPStatus {
         let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:release")
-        guard floatingIP.$interface.id == nil else {
+        guard floatingIP.$interface.id == nil, floatingIP.$loadBalancer.id == nil else {
             throw Abort(.conflict, reason: "Floating IP is attached; detach it first")
         }
         let floatingIpId = try floatingIP.requireID()
@@ -428,12 +434,28 @@ struct FloatingIPController: RouteCollection {
         let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:attach")
         let request = try req.content.decode(AttachFloatingIPRequest.self)
 
+        guard (request.vmId != nil) != (request.loadBalancerId != nil) else {
+            throw Abort(
+                .badRequest,
+                reason: "Specify exactly one attachment target: vmId or loadBalancerId")
+        }
+        if let loadBalancerID = request.loadBalancerId {
+            guard request.interfaceId == nil else {
+                throw Abort(.badRequest, reason: "interfaceId is only valid with vmId")
+            }
+            return try await attach(
+                floatingIP: floatingIP, toLoadBalancer: loadBalancerID, req: req)
+        }
+        guard let vmID = request.vmId else {
+            throw Abort(.badRequest, reason: "vmId is required for a VM attachment")
+        }
+
         // Owning the floating IP is not enough: attaching changes the *VM's*
         // inbound exposure and outbound SNAT, so the caller needs update on
         // the VM too (the volume-attach rule). An unreachable VM is answered as
         // absent whether it is missing or merely forbidden — see `reachableVM`
         // (issue #881).
-        let vm = try await req.reachableVM(request.vmId, action: "vm:update")
+        let vm = try await req.reachableVM(vmID, action: "vm:update")
         // After the VM check, never before: a containment refusal handed to a
         // caller who can't touch the VM would tell them it exists in another
         // project (issue #777).
@@ -442,7 +464,7 @@ struct FloatingIPController: RouteCollection {
             sameProjectAs: "the floating IP", in: floatingIP.$project.id)
 
         let interfaces = try await VMNetworkInterface.query(on: req.db)
-            .filter(\.$vm.$id == request.vmId)
+            .filter(\.$vm.$id == vmID)
             .with(\.$addresses)
             // The response reports the NIC's network by name as well as id.
             .with(\.$logicalNetwork)
@@ -451,7 +473,7 @@ struct FloatingIPController: RouteCollection {
         let interface: VMNetworkInterface
         if let interfaceId = request.interfaceId {
             guard let match = interfaces.first(where: { $0.id == interfaceId }) else {
-                throw Abort(.badRequest, reason: "Interface \(interfaceId) does not belong to VM \(request.vmId)")
+                throw Abort(.badRequest, reason: "Interface \(interfaceId) does not belong to VM \(vmID)")
             }
             interface = match
         } else {
@@ -462,6 +484,9 @@ struct FloatingIPController: RouteCollection {
         }
         let interfaceId = try interface.requireID()
 
+        if floatingIP.$loadBalancer.id != nil {
+            throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
+        }
         if let currentId = floatingIP.$interface.id {
             guard currentId == interfaceId else {
                 throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
@@ -535,7 +560,7 @@ struct FloatingIPController: RouteCollection {
             metadata: [
                 "floatingIpId": .string(floatingIP.id!.uuidString),
                 "address": .string(floatingIP.address),
-                "vmId": .string(request.vmId.uuidString),
+                "vmId": .string(vmID.uuidString),
                 "interfaceId": .string(interfaceId.uuidString),
             ])
         return try FloatingIPResponse(from: floatingIP, interface: interface)
@@ -545,17 +570,19 @@ struct FloatingIPController: RouteCollection {
     @Sendable
     func detachFloatingIP(req: Request) async throws -> FloatingIPResponse {
         let floatingIP = try await fetchFloatingIPWithAction(req: req, action: "floatingip:detach")
-        guard floatingIP.$interface.id != nil else {
+        guard floatingIP.$interface.id != nil || floatingIP.$loadBalancer.id != nil else {
             return try FloatingIPResponse(from: floatingIP)
         }
         let interface = try await loadedInterface(of: floatingIP, on: req.db)
+        let loadBalancer = try await loadedLoadBalancer(of: floatingIP, on: req.db)
 
         floatingIP.$interface.id = nil
+        floatingIP.$loadBalancer.id = nil
         // Bump the (former) network's generation for the same replay-safety
         // reason as attach; the NAT rule drops out of the desired state and
         // the agent tears it down.
         let network: LogicalNetwork?
-        if let networkID = interface?.$logicalNetwork.id {
+        if let networkID = interface?.$logicalNetwork.id ?? loadBalancer?.$logicalNetwork.id {
             network = try await LogicalNetwork.find(networkID, on: req.db)
         } else {
             network = nil
@@ -588,6 +615,86 @@ struct FloatingIPController: RouteCollection {
     }
 
     // MARK: - Helpers
+
+    private func attach(
+        floatingIP: FloatingIP,
+        toLoadBalancer loadBalancerID: UUID,
+        req: Request
+    ) async throws -> FloatingIPResponse {
+        let loadBalancer = try await req.authorizedLoadBalancer(
+            loadBalancerID, action: "loadbalancer:update")
+        try ProjectContainment.require(
+            "Load balancer", in: loadBalancer.$project.id,
+            sameProjectAs: "the floating IP", in: floatingIP.$project.id)
+
+        if floatingIP.$interface.id != nil {
+            throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
+        }
+        if let currentID = floatingIP.$loadBalancer.id {
+            guard currentID == loadBalancerID else {
+                throw Abort(.conflict, reason: "Floating IP is already attached; detach it first")
+            }
+            let loaded = try await loadedLoadBalancer(of: floatingIP, on: req.db)
+            return try FloatingIPResponse(from: floatingIP, loadBalancer: loaded)
+        }
+
+        guard
+            let network = try await LogicalNetwork.find(
+                loadBalancer.$logicalNetwork.id, on: req.db)
+        else {
+            throw Abort(.conflict, reason: "Load balancer's network no longer exists")
+        }
+        guard network.externalAccess else {
+            throw Abort(
+                .conflict,
+                reason: "Network '\(network.name)' has no external access; floating IPs need an egress network")
+        }
+        let pool = try await floatingIP.$pool.get(on: req.db)
+        guard network.$site.id == pool.$site.id else {
+            throw Abort(
+                .conflict,
+                reason: "Pool '\(pool.name)' is pinned to a different site than network '\(network.name)'")
+        }
+        guard let site = try await Site.find(network.$site.id, on: req.db) else {
+            throw Abort(.conflict, reason: "Load balancer's network site no longer exists")
+        }
+        if let refusal = SiteNetworkAuthority.refusal(
+            try await SiteNetworkAuthority.resolve(forSite: site, on: req.db),
+            consequence: "nothing would realize the load balancer's external address")
+        {
+            throw refusal
+        }
+
+        let existing = try await FloatingIP.query(on: req.db)
+            .filter(\.$loadBalancer.$id == loadBalancerID)
+            .count()
+        guard existing == 0 else {
+            throw Abort(.conflict, reason: "Load balancer already has a floating IP attached")
+        }
+
+        floatingIP.$loadBalancer.id = loadBalancerID
+        do {
+            try await req.db.transaction { db in
+                try await floatingIP.save(on: db)
+                switch try await DesiredStateGenerationWriter.advance(
+                    schema: LogicalNetwork.schema, id: try network.requireID(), on: db)
+                {
+                case .applied:
+                    break
+                case .missing:
+                    throw Abort(.notFound, reason: "Network no longer exists")
+                case .superseded:
+                    throw Abort(.internalServerError, reason: "Network generation did not advance")
+                }
+            }
+        } catch let error as any DatabaseError where error.isConstraintFailure {
+            throw Abort(.conflict, reason: "Load balancer already has a floating IP attached")
+        }
+
+        await req.application.agentService.syncDesiredStateToFleet()
+        let loaded = try await loadedLoadBalancer(of: floatingIP, on: req.db)
+        return try FloatingIPResponse(from: floatingIP, loadBalancer: loaded)
+    }
 
     /// Whether a pool's owning scope contains a project (same containment rule
     /// as sites serving projects).
@@ -707,6 +814,16 @@ struct FloatingIPController: RouteCollection {
             .filter(\.$id == interfaceId)
             .with(\.$addresses)
             // The response reports the NIC's network by name as well as id.
+            .with(\.$logicalNetwork)
+            .first()
+    }
+
+    /// The floating IP's attached load balancer with its display network, nil
+    /// while the address is not attached to an LB.
+    private func loadedLoadBalancer(of floatingIP: FloatingIP, on db: Database) async throws -> LoadBalancer? {
+        guard let loadBalancerID = floatingIP.$loadBalancer.id else { return nil }
+        return try await LoadBalancer.query(on: db)
+            .filter(\.$id == loadBalancerID)
             .with(\.$logicalNetwork)
             .first()
     }

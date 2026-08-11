@@ -112,7 +112,15 @@ enum IPAMService {
             .filter(\.$family == IPFamily.ipv4.rawValue)
             .all()
             .compactMap { parseIPv4($0.address) }
-        let used = Set(usedVM).union(usedSandbox)
+        // Load-balancer VIPs are first-class allocations from this same
+        // subnet (STR-28). They participate under the same advisory lock so a
+        // VM, sandbox and load balancer created concurrently cannot receive
+        // the same address even though they live in three tables.
+        let usedLoadBalancers = try await LoadBalancer.query(on: db)
+            .filter(\.$logicalNetwork.$id == networkID)
+            .all()
+            .compactMap { parseIPv4($0.vip) }
+        let used = Set(usedVM).union(usedSandbox).union(usedLoadBalancers)
 
         do {
             let allocation = try allocateIP(

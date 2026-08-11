@@ -86,6 +86,15 @@ final class ResourceQuota: Model, @unchecked Sendable {
     @Field(key: "network_count")
     var networkCount: Int
 
+    /// Project-wide native load-balancer count limit (STR-28). Like logical
+    /// networks, load balancers span environments and are governed only by a
+    /// quota whose `environment` is nil.
+    @Field(key: "max_load_balancers")
+    var maxLoadBalancers: Int
+
+    @Field(key: "load_balancer_count")
+    var loadBalancerCount: Int
+
     // Whether this quota is enabled
     @Field(key: "is_enabled")
     var isEnabled: Bool
@@ -115,6 +124,7 @@ final class ResourceQuota: Model, @unchecked Sendable {
         maxSandboxes: Int? = nil,
         maxVolumes: Int? = nil,
         maxNetworks: Int = 10,
+        maxLoadBalancers: Int? = nil,
         environment: String? = nil,
         isEnabled: Bool = true
     ) {
@@ -141,6 +151,8 @@ final class ResourceQuota: Model, @unchecked Sendable {
         self.volumeCount = 0
         self.maxNetworks = maxNetworks
         self.networkCount = 0
+        self.maxLoadBalancers = maxLoadBalancers ?? maxVMs
+        self.loadBalancerCount = 0
         self.environment = environment
         self.isEnabled = isEnabled
     }
@@ -216,6 +228,11 @@ extension ResourceQuota {
     var volumeUtilizationPercent: Double? {
         guard let maxVolumes, maxVolumes > 0 else { return nil }
         return Double(volumeCount) / Double(maxVolumes) * 100
+    }
+
+    var loadBalancerUtilizationPercent: Double {
+        guard maxLoadBalancers > 0 else { return 0 }
+        return Double(loadBalancerCount) / Double(maxLoadBalancers) * 100
     }
 }
 
@@ -435,6 +452,16 @@ extension ResourceQuota {
         return (true, nil)
     }
 
+    /// Whether `count` more project-wide load balancers fit (STR-28).
+    func canAccommodateLoadBalancers(_ count: Int = 1) -> (allowed: Bool, reason: String?) {
+        if !isEnabled || count <= 0 { return (true, nil) }
+        let (newCount, overflowed) = loadBalancerCount.addingReportingOverflow(count)
+        if overflowed || newCount > maxLoadBalancers {
+            return (false, "Load balancer limit reached: \(maxLoadBalancers) load balancers allowed")
+        }
+        return (true, nil)
+    }
+
     /// Reserve storage for a snapshot artifact or a volume resize (issues #426,
     /// #564, STR-181). The add cannot trap; see ``reserving(_:_:)``. `bytes` is
     /// not certain to be positive here — the export path passes an
@@ -468,6 +495,15 @@ extension ResourceQuota {
         }
         networkCount = Self.reserving(networkCount, count)
     }
+
+    func reserveLoadBalancerResources(count: Int = 1) throws {
+        guard count > 0 else { return }
+        let check = canAccommodateLoadBalancers(count)
+        if !check.allowed {
+            throw Abort(.forbidden, reason: check.reason ?? "Quota exceeded")
+        }
+        loadBalancerCount = Self.reserving(loadBalancerCount, count)
+    }
 }
 
 // MARK: - Validations
@@ -499,7 +535,7 @@ extension ResourceQuota {
 
         // Validate limits are positive
         if maxVCPUs <= 0 || maxMemory <= 0 || maxStorage <= 0 || maxVMs <= 0 || maxSandboxes <= 0
-            || maxNetworks <= 0
+            || maxNetworks <= 0 || maxLoadBalancers <= 0
         {
             throw Abort(.badRequest, reason: "All resource limits must be positive")
         }
@@ -531,6 +567,8 @@ struct CreateResourceQuotaRequest: Content, ValidatedRequestBody {
     let maxVolumes: Int?
     /// Project-wide network limit. Must be omitted when `environment` is set.
     let maxNetworks: Int?
+    /// Project-wide native load-balancer limit; defaults to `maxVMs`.
+    let maxLoadBalancers: Int?
     var environment: String?
     let isEnabled: Bool?
 
@@ -558,6 +596,8 @@ struct UpdateResourceQuotaRequest: Content, ValidatedRequestBody {
     let maxVolumes: Int?
     /// Project-wide network limit. Environment-scoped quotas reject this field.
     let maxNetworks: Int?
+    /// Project-wide load-balancer limit. Environment-scoped quotas reject it.
+    let maxLoadBalancers: Int?
     let isEnabled: Bool?
 
     mutating func validate() throws {
@@ -586,6 +626,7 @@ struct ResourceQuotaResponse: Content {
         /// Null means no volume count limit (STR-181).
         let maxVolumes: Int?
         let maxNetworks: Int
+        let maxLoadBalancers: Int
     }
 
     struct ResourceUsage: Content {
@@ -596,6 +637,7 @@ struct ResourceQuotaResponse: Content {
         let sandboxCount: Int
         let volumeCount: Int
         let networkCount: Int
+        let loadBalancerCount: Int
     }
 
     struct ResourceUtilization: Content {
@@ -607,6 +649,7 @@ struct ResourceQuotaResponse: Content {
         /// Null when no volume count limit is set — not 0%, which would read as
         /// a limit nobody is using.
         let volumePercent: Double?
+        let loadBalancerPercent: Double
     }
 
     init(from quota: ResourceQuota) {
@@ -639,7 +682,8 @@ struct ResourceQuotaResponse: Content {
             maxVMs: quota.maxVMs,
             maxSandboxes: quota.maxSandboxes,
             maxVolumes: quota.maxVolumes,
-            maxNetworks: quota.maxNetworks
+            maxNetworks: quota.maxNetworks,
+            maxLoadBalancers: quota.maxLoadBalancers
         )
 
         self.usage = ResourceUsage(
@@ -649,7 +693,8 @@ struct ResourceQuotaResponse: Content {
             vmCount: quota.vmCount,
             sandboxCount: quota.sandboxCount,
             volumeCount: quota.volumeCount,
-            networkCount: quota.networkCount
+            networkCount: quota.networkCount,
+            loadBalancerCount: quota.loadBalancerCount
         )
 
         self.utilization = ResourceUtilization(
@@ -658,7 +703,8 @@ struct ResourceQuotaResponse: Content {
             storagePercent: quota.storageUtilizationPercent,
             vmPercent: quota.vmUtilizationPercent,
             sandboxPercent: quota.sandboxUtilizationPercent,
-            volumePercent: quota.volumeUtilizationPercent
+            volumePercent: quota.volumeUtilizationPercent,
+            loadBalancerPercent: quota.loadBalancerUtilizationPercent
         )
 
         self.createdAt = quota.createdAt
@@ -683,6 +729,7 @@ struct QuotaLimits: Content {
     /// Null means no volume count limit (STR-181).
     let maxVolumes: Int?
     let maxNetworks: Int
+    let maxLoadBalancers: Int
 }
 
 struct QuotaUsage: Content {
@@ -693,6 +740,21 @@ struct QuotaUsage: Content {
     let sandboxes: Int
     let volumes: Int
     let networks: Int
+    let loadBalancers: Int
+
+    init(
+        vcpus: Int, memoryGB: Double, storageGB: Double, vms: Int,
+        sandboxes: Int, volumes: Int, networks: Int, loadBalancers: Int = 0
+    ) {
+        self.vcpus = vcpus
+        self.memoryGB = memoryGB
+        self.storageGB = storageGB
+        self.vms = vms
+        self.sandboxes = sandboxes
+        self.volumes = volumes
+        self.networks = networks
+        self.loadBalancers = loadBalancers
+    }
 }
 
 struct QuotaUtilization: Content {
@@ -703,6 +765,7 @@ struct QuotaUtilization: Content {
     let sandboxPercent: Double
     /// Null when no volume count limit is set (STR-181).
     let volumePercent: Double?
+    let loadBalancerPercent: Double
 }
 
 struct QuotaUsageResponse: Content {

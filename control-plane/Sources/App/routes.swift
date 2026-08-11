@@ -71,6 +71,7 @@ func routes(_ app: Application) throws {
 
     // Floating IPs: external address pools + VM NIC attachments (issue #344)
     try app.register(collection: FloatingIPController())
+    try app.register(collection: LoadBalancerController())
     try app.register(collection: SecurityGroupController())
 
     // DNS zones, records, and zone↔network attachments (issue #770). Model

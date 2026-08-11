@@ -79,6 +79,10 @@ protocol NetworkServiceProtocol: Sendable {
         metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
         dnsZones: [DesiredDNSZone]?
     ) async
+
+    /// Latest native LB programming view. Nil means this service is not the
+    /// site's topology author (or has not received a v43 opinion).
+    func observedLoadBalancers() async -> [ObservedLoadBalancerState]?
 }
 
 extension NetworkServiceProtocol {
@@ -89,6 +93,8 @@ extension NetworkServiceProtocol {
         metadataNetworks: [UUID]?, resolverNetworks: [ResolverNetworkConfig]?,
         dnsZones: [DesiredDNSZone]?
     ) async {}
+
+    func observedLoadBalancers() async -> [ObservedLoadBalancerState]? { nil }
 }
 
 // MARK: - Network Configuration Models

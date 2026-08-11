@@ -86,6 +86,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         environment: nil,
                         isEnabled: nil
                     ))
@@ -119,6 +120,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         environment: nil,
                         isEnabled: nil
                     ))
@@ -148,6 +150,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         environment: "production",
                         isEnabled: nil
                     ))
@@ -176,6 +179,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: 2,
+                        maxLoadBalancers: nil,
                         environment: "production",
                         isEnabled: nil
                     ))
@@ -206,6 +210,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: 2,
+                        maxLoadBalancers: nil,
                         isEnabled: nil))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -448,6 +453,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         isEnabled: nil
                     ))
             } afterResponse: { res in
@@ -498,6 +504,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         isEnabled: nil
                     ))
             } afterResponse: { res in
@@ -517,6 +524,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         isEnabled: nil
                     ))
             } afterResponse: { res in
@@ -563,6 +571,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         isEnabled: false
                     ))
             } afterResponse: { res in
@@ -622,6 +631,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         isEnabled: nil))
             } afterResponse: { res in
                 #expect(res.status == .ok)
@@ -654,6 +664,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: 1,
+                        maxLoadBalancers: nil,
                         isEnabled: nil))
             } afterResponse: { res in
                 #expect(res.status == .badRequest)
@@ -774,6 +785,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         environment: nil,
                         isEnabled: nil
                     ))
@@ -802,6 +814,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         isEnabled: nil
                     ))
             } afterResponse: { res in
@@ -863,6 +876,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         isEnabled: nil
                     ))
             } afterResponse: { res in
@@ -920,6 +934,7 @@ final class ResourceQuotaTests {
                         maxSandboxes: nil,
                         maxVolumes: nil,
                         maxNetworks: nil,
+                        maxLoadBalancers: nil,
                         isEnabled: nil
                     ))
             } afterResponse: { res in
