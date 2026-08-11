@@ -207,7 +207,8 @@ struct DesiredStateAssembler {
                 region: region, availabilityZone: availabilityZone,
                 instanceSPIFFEID: spiffeIDsByVM[vmId],
                 identityAudiences: identityAudiences,
-                identityTTLSeconds: identityTTLSeconds)
+                identityTTLSeconds: identityTTLSeconds,
+                siteResolverCapable: siteResolverCapable)
 
             // A zero nonce is "never asked for", and sending it would be a
             // slightly different claim than sending nothing — so both are

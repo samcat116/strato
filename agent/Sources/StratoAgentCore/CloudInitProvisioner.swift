@@ -175,6 +175,12 @@ public struct CloudInitProvisioner {
         """
     }
 
+    /// Renders the same NoCloud `meta-data` bytes from the mutable metadata
+    /// snapshot served over HTTP.
+    public static func metaDataDocument(for metadata: InstanceMetadata) -> String {
+        metaDataDocument(vmId: metadata.instanceId.uuidString, hostname: metadata.hostname)
+    }
+
     /// The label the guest configures itself under: the desired `hostname` when
     /// there is a usable one, and `vm-<id-prefix>` otherwise.
     ///
@@ -311,6 +317,14 @@ public struct CloudInitProvisioner {
             ),
         ]
         return multipartDocument(parts: parts)
+    }
+
+    /// Renders the same NoCloud `user-data` bytes from the mutable metadata
+    /// snapshot served over HTTP.
+    public static func userDataDocument(for metadata: InstanceMetadata) -> String {
+        userDataDocument(
+            sshAuthorizedKeys: metadata.sshAuthorizedKeys,
+            userData: metadata.userData)
     }
 
     /// A part of a multipart `user-data` document.
@@ -743,6 +757,43 @@ public struct CloudInitProvisioner {
             ethernets:
             \(sections.joined(separator: "\n"))
             """
+    }
+
+    /// Renders the NoCloud-net `network-config` from the metadata snapshot.
+    ///
+    /// The seed ISO and HTTP paths deliberately converge on the existing
+    /// `ResolvedNetworkAttachment` renderer. Keeping one byte-producing path
+    /// is what makes their parity a property of the implementation rather than
+    /// two sets of examples that happen to agree today.
+    public static func networkConfigYAML(for metadata: InstanceMetadata) -> String? {
+        networkConfigYAML(
+            for: metadata.nics.map { nic in
+                ResolvedNetworkAttachment(
+                    network: nic.networkName,
+                    // A caller can reach this listener only over a realized
+                    // network attachment. The control-plane snapshot has no
+                    // host TAP name, and the renderer needs only the case.
+                    attachment: .tap(interface: nic.deviceName),
+                    macAddress: nic.macAddress,
+                    ipAddress: nic.ipAddress,
+                    netmask: dottedIPv4Netmask(prefixLength: nic.prefixLength),
+                    gateway: nic.gateway,
+                    ip6Address: nic.ipv6Address,
+                    prefixLength6: nic.ipv6PrefixLength,
+                    gateway6: nic.gateway6,
+                    mtu: nic.mtu,
+                    dhcpEnabled: nic.dhcpEnabled,
+                    dnsServers: nic.dnsServers,
+                    domainName: nic.domainName,
+                    metadataEnabled: nic.metadataEnabled,
+                    resolverAddresses: nic.resolverAddresses)
+            })
+    }
+
+    private static func dottedIPv4Netmask(prefixLength: Int?) -> String? {
+        guard let prefixLength, (0...32).contains(prefixLength) else { return nil }
+        let mask: UInt32 = prefixLength == 0 ? 0 : ~UInt32(0) << (32 - prefixLength)
+        return IPv4Address(raw: mask).description
     }
 
     /// The `routes:` block giving a guest on-link routes to the link-local

@@ -69,7 +69,7 @@ struct OIDCTokenVerificationTests {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    private func jwksJSON(keys: [[String: Any]]) throws -> Data {
+    private func jwksJSON(keys: [Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: ["keys": keys])
     }
 
@@ -218,6 +218,8 @@ struct OIDCTokenVerificationTests {
         let token = try await signer.sign(makeClaims(), kid: "rsa-key")
 
         let jwks = try jwksJSON(keys: [
+            NSNull(),
+            "not a key object",
             // Key type JWTKit doesn't model.
             ["kty": "EC", "alg": "ES256K", "kid": "secp-key", "crv": "secp256k1", "x": "AA", "y": "AA"],
             // Symmetric key — must never become a verifier.
@@ -257,6 +259,11 @@ struct OIDCTokenVerificationTests {
         }
         await #expect(throws: (any Error).self) {
             try await OIDCTokenVerification.makeVerifiers(jwksJSON: Data("not json".utf8))
+        }
+        for malformed in [#"{"keys":null}"#, #"{"keys":{}}"#, #"[]"#] {
+            await #expect(throws: (any Error).self) {
+                try await OIDCTokenVerification.makeVerifiers(jwksJSON: Data(malformed.utf8))
+            }
         }
     }
 }

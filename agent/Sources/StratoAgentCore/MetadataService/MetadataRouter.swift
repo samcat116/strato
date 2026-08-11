@@ -140,14 +140,14 @@ public struct MetadataResponse: Sendable, Equatable {
 
 /// The documents this listener serves.
 ///
-/// Deliberately four. The renderer trees are downstream issues — the NoCloud-net
-/// document is STR-60, the EC2 tree is STR-65, `/strato/v1/identity` is STR-62 —
-/// and naming an EC2-shaped key here (`local-hostname`, `placement/*`,
-/// `network/interfaces/macs/...`) would commit those issues to serving it
-/// forever. What is here is the smallest set that proves attribution end to end:
-/// two instances on one network must read different values.
+/// NoCloud-net documents live at the exact sibling paths cloud-init fetches.
+/// The trailing-slash metadata index and its two probe keys remain available
+/// for the EC2 datasource proved by STR-56; STR-65 extends that tree.
 public enum MetadataDocumentPath: Sendable, Equatable, Hashable, CaseIterable {
     case root
+    case noCloudMetaData
+    case userData
+    case networkConfig
     case metaDataIndex
     case instanceID
     case hostname
@@ -265,13 +265,11 @@ public enum MetadataRouter {
         guard target.allSatisfy({ $0.isASCII && !$0.isNewline && $0 != " " }) else { return nil }
         let pieces = target.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
         guard pieces.count <= 2 else { return nil }
-        var path = String(pieces[0])
+        let path = String(pieces[0])
         let query = pieces.count == 2 ? String(pieces[1]) : nil
         // Percent encoding is useful only in the identity audience. Refusing it
         // in paths keeps the no-decoding traversal argument intact.
         guard !path.contains("%") else { return nil }
-        // One trailing slash is the same resource; EC2 clients write both forms.
-        if path.count > 1, path.hasSuffix("/") { path.removeLast() }
         return (path, query)
     }
 
@@ -291,11 +289,18 @@ public enum MetadataRouter {
 
     private static func document(for path: String) -> MetadataDocumentPath? {
         switch path {
-        case "/latest": return .root
-        case "/latest/meta-data": return .metaDataIndex
+        case "/latest", "/latest/": return .root
+        case "/latest/meta-data": return .noCloudMetaData
+        case "/latest/user-data": return .userData
+        case "/latest/network-config": return .networkConfig
+        case "/latest/meta-data/": return .metaDataIndex
         case "/latest/meta-data/instance-id": return .instanceID
         case "/latest/meta-data/hostname": return .hostname
-        default: return nil
+        default:
+            // Keep the two metadata roots distinct, but preserve the
+            // trailing-slash aliases previously accepted for leaf documents.
+            guard path.count > 1, path.hasSuffix("/"), !path.hasSuffix("//") else { return nil }
+            return document(for: String(path.dropLast()))
         }
     }
 }

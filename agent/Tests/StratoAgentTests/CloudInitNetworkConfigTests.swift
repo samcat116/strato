@@ -1,10 +1,88 @@
 import Foundation
+import StratoShared
 import Testing
 
 @testable import StratoAgentCore
 
 @Suite("Cloud-init network-config generation")
 struct CloudInitNetworkConfigTests {
+
+    @Test("NoCloud-net network-config is byte-identical to the seed ISO renderer")
+    func noCloudNetGoldenParity() {
+        let networkA = UUID(uuidString: "A8B24755-7A5A-4A0C-A541-5BD8258B1CB6")!
+        let networkB = UUID(uuidString: "3D192DA8-984F-4EB7-ACD4-067B93A1354D")!
+        let attachments = [
+            ResolvedNetworkAttachment(
+                network: "front",
+                attachment: .tap(interface: "tap0"),
+                macAddress: "52:54:00:aa:bb:01",
+                ipAddress: "10.40.0.5",
+                netmask: "255.255.255.0",
+                gateway: "10.40.0.1",
+                ip6Address: "fd40::5",
+                prefixLength6: 64,
+                gateway6: "fd40::1",
+                mtu: 1442,
+                dhcpEnabled: true,
+                dnsServers: ["10.40.0.53", "fd40::53"],
+                domainName: "front.example",
+                metadataEnabled: true,
+                resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"]),
+            ResolvedNetworkAttachment(
+                network: "back",
+                attachment: .tap(interface: "tap1"),
+                macAddress: "52:54:00:aa:bb:02",
+                ipAddress: "10.41.0.9",
+                netmask: "255.255.0.0",
+                gateway: "10.41.0.1",
+                ip6Address: "fd41::9",
+                prefixLength6: 64,
+                gateway6: "fd41::1",
+                mtu: 9000,
+                dnsServers: ["10.41.0.53", "fd41::53"],
+                domainName: "back.example",
+                metadataEnabled: true,
+                resolverAddresses: ["169.254.1.1", "fd00:ec2:1::101"]),
+        ]
+        let metadata = InstanceMetadata(
+            instanceId: UUID(),
+            projectId: UUID(),
+            nics: [
+                MetadataNIC(
+                    deviceName: "net0", macAddress: "52:54:00:aa:bb:01",
+                    networkId: networkA, networkName: "front",
+                    ipAddress: "10.40.0.5", prefixLength: 24, gateway: "10.40.0.1",
+                    ipv6Address: "fd40::5", ipv6PrefixLength: 64, gateway6: "fd40::1",
+                    mtu: 1442, dnsServers: ["10.40.0.53", "fd40::53"],
+                    domainName: "front.example", dhcpEnabled: true, metadataEnabled: true,
+                    resolverAddresses: ["169.254.1.0", "fd00:ec2:1::100"]),
+                MetadataNIC(
+                    deviceName: "net1", macAddress: "52:54:00:aa:bb:02",
+                    networkId: networkB, networkName: "back",
+                    ipAddress: "10.41.0.9", prefixLength: 16, gateway: "10.41.0.1",
+                    ipv6Address: "fd41::9", ipv6PrefixLength: 64, gateway6: "fd41::1",
+                    mtu: 9000, dnsServers: ["10.41.0.53", "fd41::53"],
+                    domainName: "back.example", metadataEnabled: true,
+                    resolverAddresses: ["169.254.1.1", "fd00:ec2:1::101"]),
+            ],
+            serviceEnabled: true)
+
+        let seedISO = CloudInitProvisioner.networkConfigYAML(for: attachments)
+        let noCloudNet = CloudInitProvisioner.networkConfigYAML(for: metadata)
+        #expect(seedISO != nil)
+        #expect(noCloudNet != nil)
+        if let seedISO, let noCloudNet {
+            #expect(noCloudNet.utf8.elementsEqual(seedISO.utf8))
+        }
+    }
+
+    @Test("NoCloud-net omits network-config when the seed ISO does")
+    func noCloudNetGoldenOmission() {
+        let metadata = InstanceMetadata(
+            instanceId: UUID(), projectId: UUID(), serviceEnabled: true)
+        #expect(CloudInitProvisioner.networkConfigYAML(for: metadata) == nil)
+        #expect(CloudInitProvisioner.networkConfigYAML(for: [ResolvedNetworkAttachment]()) == nil)
+    }
 
     @Test("static tap NIC renders a v2 ethernet entry matched by MAC")
     func staticTapNIC() {

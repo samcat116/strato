@@ -75,18 +75,18 @@ enum DesiredStateDigest {
     /// The bare hex digest, without ETag quoting. Exposed for tests.
     static func digest(of message: DesiredStateMessage) throws -> String {
         let encoded = try WireProtocol.makeEncoder().encode(message)
-        guard var object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+        guard var object = try JSONDecoder().decode(JSONValue.self, from: encoded).objectValue else {
             throw DigestError.notAnObject
         }
         for path in volatilePaths {
             object = prune(path, from: object)
         }
-        // `.sortedKeys` is what makes the re-serialization canonical: the
-        // dictionary that came out of `JSONSerialization` has no meaningful
-        // key order of its own, so hashing it unsorted would produce a
+        // `.sortedKeys` is what makes the re-serialization canonical: JSON
+        // object key order has no meaning, so hashing it unsorted would produce a
         // different digest per process (or per insertion history).
-        let canonical = try JSONSerialization.data(
-            withJSONObject: object, options: [.sortedKeys, .fragmentsAllowed])
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let canonical = try encoder.encode(JSONValue.object(object))
         return SHA256.hash(data: canonical).map { String(format: "%02x", $0) }.joined()
     }
 
@@ -94,7 +94,7 @@ enum DesiredStateDigest {
         case notAnObject
     }
 
-    private static func prune(_ path: [String], from object: [String: Any]) -> [String: Any] {
+    private static func prune(_ path: [String], from object: [String: JSONValue]) -> [String: JSONValue] {
         guard let head = path.first else { return object }
         var object = object
         let tail = Array(path.dropFirst())
@@ -106,17 +106,18 @@ enum DesiredStateDigest {
         guard let value = object[head] else { return object }
 
         if tail.first == "*" {
-            guard let array = value as? [Any] else { return object }
+            guard let array = value.arrayValue else { return object }
             let remainder = Array(tail.dropFirst())
-            object[head] = array.map { element -> Any in
-                guard let element = element as? [String: Any] else { return element }
-                return prune(remainder, from: element)
-            }
+            object[head] = .array(
+                array.map { element in
+                    guard let element = element.objectValue else { return element }
+                    return .object(prune(remainder, from: element))
+                })
             return object
         }
 
-        guard let child = value as? [String: Any] else { return object }
-        object[head] = prune(tail, from: child)
+        guard let child = value.objectValue else { return object }
+        object[head] = .object(prune(tail, from: child))
         return object
     }
 }

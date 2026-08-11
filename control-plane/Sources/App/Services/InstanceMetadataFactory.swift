@@ -50,7 +50,8 @@ extension InstanceMetadata {
         availabilityZone: String?,
         instanceSPIFFEID: String?,
         identityAudiences: [String] = [],
-        identityTTLSeconds: Int? = nil
+        identityTTLSeconds: Int? = nil,
+        siteResolverCapable: Bool? = nil
     ) -> InstanceMetadata {
         InstanceMetadata(
             instanceId: vmId,
@@ -70,7 +71,9 @@ extension InstanceMetadata {
             // matches an entry here to a link by MAC and an operator reading
             // both sees one list.
             nics: resolvedInterfaces.map {
-                MetadataNIC.build(interface: $0.interface, network: $0.network)
+                MetadataNIC.build(
+                    interface: $0.interface, network: $0.network,
+                    siteResolverCapable: siteResolverCapable)
             },
             // The same single key the spec carries. Duplicated deliberately
             // (see `InstanceMetadata.sshAuthorizedKeys`): the spec copy
@@ -109,7 +112,9 @@ extension MetadataNIC {
     /// because that is where they live; carrying them at all is what lets the
     /// IMDS tell a guest everything the seed ISO's static network config used
     /// to on networks where DHCP is off.
-    static func build(interface: VMNetworkInterface, network: LogicalNetwork) -> MetadataNIC {
+    static func build(
+        interface: VMNetworkInterface, network: LogicalNetwork, siteResolverCapable: Bool? = nil
+    ) -> MetadataNIC {
         let ipv4 = interface.ipv4Address
         let ipv6 = interface.ipv6Address
         return MetadataNIC(
@@ -130,7 +135,10 @@ extension MetadataNIC {
             gateway6: ipv6?.gateway,
             mtu: interface.mtu,
             dnsServers: network.dnsServers,
-            domainName: network.domainName
+            domainName: network.domainName,
+            dhcpEnabled: network.dhcpEnabled,
+            metadataEnabled: network.metadataEnabled,
+            resolverAddresses: network.resolverAddressesIfEnabled(siteCapable: siteResolverCapable) ?? []
         )
     }
 }

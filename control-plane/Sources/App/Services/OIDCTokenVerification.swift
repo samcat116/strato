@@ -1,5 +1,6 @@
 import Foundation
 import JWT
+import StratoShared
 import Vapor
 
 /// ID-token signature verification helpers for the OIDC login flow.
@@ -11,6 +12,10 @@ import Vapor
 /// closes the classic algorithm-confusion holes of trusting `alg` alone.
 /// Supported algorithms: RS256/RS384/RS512, ES256/ES384/ES512, and EdDSA.
 enum OIDCTokenVerification {
+    private struct JWKSKeysEnvelope: Decodable {
+        let keys: [JSONValue]
+    }
+
     /// JWS algorithms accepted in an ID token header. All are asymmetric:
     /// `none` and the HMAC family are rejected outright, since an HMAC
     /// "signature" would be forgeable by anyone holding the (public) JWKS.
@@ -36,9 +41,7 @@ enum OIDCTokenVerification {
     /// decode would turn one exotic key into a login outage for the provider.
     /// Throws only when the document is malformed or yields no usable key.
     static func makeVerifiers(jwksJSON: Data, logger: Logger? = nil) async throws -> OIDCTokenVerifiers {
-        guard let root = try? JSONSerialization.jsonObject(with: jwksJSON) as? [String: Any],
-            let rawKeys = root["keys"] as? [Any]
-        else {
+        guard let envelope = try? JSONDecoder().decode(JWKSKeysEnvelope.self, from: jwksJSON) else {
             throw Abort(.badGateway, reason: "Provider JWKS document is malformed")
         }
 
@@ -46,16 +49,16 @@ enum OIDCTokenVerification {
         let decoder = JSONDecoder()
         var registered = 0
         var knownKeyIDs: Set<String> = []
-        for rawKey in rawKeys {
-            guard let keyObject = rawKey as? [String: Any] else { continue }
+        for rawKey in envelope.keys {
+            guard let keyObject = rawKey.objectValue else { continue }
             // Keys published for encryption are not signature keys.
-            if let use = keyObject["use"] as? String, use != "sig" { continue }
-            guard let keyData = try? JSONSerialization.data(withJSONObject: keyObject),
+            if let use = keyObject["use"]?.stringValue, use != "sig" { continue }
+            guard let keyData = try? JSONEncoder().encode(JSONValue.object(keyObject)),
                 var jwk = try? decoder.decode(JWK.self, from: keyData)
             else {
                 logger?.debug(
                     "Skipping unsupported key in provider JWKS",
-                    metadata: ["kty": .string(keyObject["kty"] as? String ?? "<missing>")])
+                    metadata: ["kty": .string(keyObject["kty"]?.stringValue ?? "<missing>")])
                 continue
             }
             // JWTKit refuses keys without a `kid`. Some single-key IdPs omit it,

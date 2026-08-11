@@ -1,5 +1,6 @@
 import CedarPolicy
 import Foundation
+import StratoShared
 import Vapor
 
 // IAM authored policies (issue #606): reading an authored policy's shape off
@@ -97,7 +98,7 @@ enum CedarAuthoredPolicyInspector {
     static func describe(cedarText: String, policyID: String) throws -> AuthoredPolicyShape {
         let est = try parse(cedarText, policyID: policyID)
 
-        let effectString = est["effect"] as? String ?? "unknown"
+        let effectString = est["effect"]?.stringValue ?? "unknown"
         guard let effect = IAMPolicyEffect(rawValue: effectString) else {
             throw CedarAuthoredPolicyTextError.unknownEffect(effectString)
         }
@@ -116,8 +117,8 @@ enum CedarAuthoredPolicyInspector {
     /// for the unconstrained `principal` or a bare `principal is T` (both of
     /// which reach principals across orgs, and are handled by the caller as
     /// "not a single, resolvable principal"). Mirrors `resourceScope`.
-    private static func principalScope(_ est: [String: Any]) -> AuthoredResourceScope? {
-        guard let scope = est["principal"] as? [String: Any], let op = scope["op"] as? String else {
+    private static func principalScope(_ est: [String: JSONValue]) -> AuthoredResourceScope? {
+        guard let scope = est["principal"]?.objectValue, let op = scope["op"]?.stringValue else {
             return nil
         }
         switch op {
@@ -130,8 +131,8 @@ enum CedarAuthoredPolicyInspector {
 
     /// Whether the principal scope is constrained at all — anything other than
     /// the unconstrained `principal` (EST op `All`).
-    private static func principalConstrained(_ est: [String: Any]) -> Bool {
-        guard let scope = est["principal"] as? [String: Any], let op = scope["op"] as? String else {
+    private static func principalConstrained(_ est: [String: JSONValue]) -> Bool {
+        guard let scope = est["principal"]?.objectValue, let op = scope["op"]?.stringValue else {
             // An unreadable principal scope is treated as constrained: the
             // self-lock check errs toward *allowing* the write, and only the
             // clearly-unconstrained form should trip it.
@@ -141,18 +142,17 @@ enum CedarAuthoredPolicyInspector {
     }
 
     /// Whether the policy carries any `when`/`unless` conditions.
-    private static func hasConditions(_ est: [String: Any]) -> Bool {
-        guard let conditions = est["conditions"] as? [Any] else { return false }
+    private static func hasConditions(_ est: [String: JSONValue]) -> Bool {
+        guard let conditions = est["conditions"]?.arrayValue else { return false }
         return !conditions.isEmpty
     }
 
     // MARK: - Parsing
 
-    /// The policy's EST (Cedar's JSON policy format), as plain dictionaries —
-    /// the same untyped read `CedarPolicyInspector` uses, for the same reason:
-    /// the EST is wide and versioned, and only a handful of questions are asked
-    /// of it.
-    private static func parse(_ cedarText: String, policyID: String) throws -> [String: Any] {
+    /// The policy's EST (Cedar's JSON policy format) as the same
+    /// version-tolerant JSON tree used by `CedarPolicyInspector`. The EST stays
+    /// open to unknown nodes while the fields used here have checked types.
+    private static func parse(_ cedarText: String, policyID: String) throws -> [String: JSONValue] {
         let policy: CedarPolicy.Policy
         do {
             // Text holding more than one policy fails here — `Policy` parses
@@ -163,7 +163,7 @@ enum CedarAuthoredPolicyInspector {
         }
         do {
             let json = try policy.toJSON()
-            guard let est = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+            guard let est = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8)).objectValue else {
                 throw CedarAuthoredPolicyTextError.unparseable("the policy did not render as a JSON object")
             }
             return est
@@ -184,8 +184,8 @@ enum CedarAuthoredPolicyInspector {
     /// `resource` or `resource is T` confines nothing — it reaches every
     /// resource of a type, across orgs — so it has no containment entity and a
     /// write against it is refused.
-    private static func resourceScope(_ est: [String: Any]) -> AuthoredResourceScope? {
-        guard let scope = est["resource"] as? [String: Any], let op = scope["op"] as? String else {
+    private static func resourceScope(_ est: [String: JSONValue]) -> AuthoredResourceScope? {
+        guard let scope = est["resource"]?.objectValue, let op = scope["op"]?.stringValue else {
             return nil
         }
         switch op {
@@ -194,7 +194,7 @@ enum CedarAuthoredPolicyInspector {
         case "is":
             // `resource is T in X` — the `in` clause carries the containment
             // entity; `resource is T` alone does not.
-            if let inClause = scope["in"] as? [String: Any] {
+            if let inClause = scope["in"]?.objectValue {
                 return entityScope(inClause["entity"])
             }
             return nil
@@ -205,11 +205,11 @@ enum CedarAuthoredPolicyInspector {
 
     /// An `AuthoredResourceScope` from an EST entity reference, or nil when the
     /// reference is missing, names an unknown type, or carries a non-UUID id.
-    private static func entityScope(_ value: Any?) -> AuthoredResourceScope? {
-        guard let entity = value as? [String: Any],
-            let typeString = entity["type"] as? String,
+    private static func entityScope(_ value: JSONValue?) -> AuthoredResourceScope? {
+        guard let entity = value?.objectValue,
+            let typeString = entity["type"]?.stringValue,
             let type = CedarEntityType(rawValue: typeString),
-            let idString = entity["id"] as? String,
+            let idString = entity["id"]?.stringValue,
             let id = UUID(uuidString: idString)
         else { return nil }
         return AuthoredResourceScope(type: type, id: id)
@@ -219,8 +219,8 @@ enum CedarAuthoredPolicyInspector {
 
     /// The action scope, as far as who-can can read it. Never throws — an
     /// unreadable shape is `.unknown`, which who-can treats as "might match".
-    private static func actionScope(_ est: [String: Any]) -> AuthoredActionScope {
-        guard let scope = est["action"] as? [String: Any], let op = scope["op"] as? String else {
+    private static func actionScope(_ est: [String: JSONValue]) -> AuthoredActionScope {
+        guard let scope = est["action"]?.objectValue, let op = scope["op"]?.stringValue else {
             return .unknown
         }
         switch op {
@@ -230,7 +230,9 @@ enum CedarAuthoredPolicyInspector {
             guard let id = actionID(scope["entity"]) else { return .unknown }
             return classify([id])
         case "in":
-            if let entities = scope["entities"] as? [[String: Any]] {
+            if let values = scope["entities"]?.arrayValue {
+                let entities = values.compactMap(\.objectValue)
+                guard entities.count == values.count else { return .unknown }
                 let ids = entities.compactMap { actionID($0) }
                 guard ids.count == entities.count else { return .unknown }
                 return classify(ids)
@@ -258,11 +260,15 @@ enum CedarAuthoredPolicyInspector {
 
     /// The id of an `Action::"…"` reference; nil for a reference to anything
     /// else.
-    private static func actionID(_ value: Any?) -> String? {
-        guard let entity = value as? [String: Any], entity["type"] as? String == "Action" else {
+    private static func actionID(_ value: JSONValue?) -> String? {
+        guard let entity = value?.objectValue, entity["type"]?.stringValue == "Action" else {
             return nil
         }
-        return entity["id"] as? String
+        return entity["id"]?.stringValue
+    }
+
+    private static func actionID(_ entity: [String: JSONValue]) -> String? {
+        actionID(.object(entity))
     }
 }
 
