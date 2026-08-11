@@ -5,7 +5,7 @@ import { Plus, Server, Users, UsersRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useProjectMembers, usePermissions, useVMs } from "@/lib/hooks";
+import { useProjectMembers, usePermissions, useProjectVMs } from "@/lib/hooks";
 import { MembersTable } from "./members-table";
 import { GroupGrantsTable } from "./group-grants-table";
 import { AddMemberDialog } from "./add-member-dialog";
@@ -22,7 +22,7 @@ export function ProjectMembersSection({
   organizationId,
 }: ProjectMembersSectionProps) {
   const { data, isLoading } = useProjectMembers(projectId);
-  const { data: allVMs = [], isLoading: vmsLoading } = useVMs();
+  const { data: vms = [], isLoading: vmsLoading } = useProjectVMs(projectId);
   const { permissions } = usePermissions([
     {
       key: "set_policy",
@@ -38,7 +38,6 @@ export function ProjectMembersSection({
   const users = data?.users ?? [];
   const groups = data?.groups ?? [];
   const workloads = data?.workloads ?? [];
-  const vms = allVMs.filter((vm) => vm.projectId === projectId);
 
   return (
     <Card className="bg-card border-border">

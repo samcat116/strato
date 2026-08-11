@@ -308,10 +308,11 @@ paths:
       summary: List virtual machines
       description: >-
         Returns a page of the VMs the caller can read, newest first, optionally
-        scoped to one organization.
+        scoped to one organization and/or project.
       tags: [Virtual Machines]
       parameters:
         - $ref: "#/components/parameters/OrganizationIdQuery"
+        - $ref: "#/components/parameters/ProjectIdQuery"
         - $ref: "#/components/parameters/ListLimitQuery"
         - $ref: "#/components/parameters/ListOffsetQuery"
       responses:

@@ -17,6 +17,28 @@ import type {
 } from "@/types/api";
 import { LIST_PAGE_LIMIT } from "@/types/api";
 
+async function listAllVMPageItems(params: Record<string, string>): Promise<VM[]> {
+  const first = await api.get<Page<VM>>("/api/vms", {
+    ...params,
+    limit: LIST_PAGE_LIMIT,
+    offset: "0",
+  });
+  const remainingOffsets: number[] = [];
+  for (let offset = first.limit; offset < first.total; offset += first.limit) {
+    remainingOffsets.push(offset);
+  }
+  const remaining = await Promise.all(
+    remainingOffsets.map((offset) =>
+      api.get<Page<VM>>("/api/vms", {
+        ...params,
+        limit: LIST_PAGE_LIMIT,
+        offset: String(offset),
+      })
+    )
+  );
+  return [first, ...remaining].flatMap((page) => page.items);
+}
+
 // Lifecycle mutations are asynchronous: the server responds 202 Accepted with
 // the VM, the generation it now has to converge on, and the id of the
 // mutation's audit record (backend STR-147). The work completes in the
@@ -31,6 +53,11 @@ export const vmsApi = {
         ...(organizationId ? { organization_id: organizationId } : {}),
       })
       .then((page) => page.items);
+  },
+
+  /** Every VM the caller can read in one project, across all API pages. */
+  listProject(projectId: string): Promise<VM[]> {
+    return listAllVMPageItems({ project_id: projectId });
   },
 
   get(id: string): Promise<VM> {

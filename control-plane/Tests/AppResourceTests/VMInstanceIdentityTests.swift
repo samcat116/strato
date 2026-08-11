@@ -203,6 +203,34 @@ final class VMInstanceIdentityTests {
         }
     }
 
+    @Test("The VM list can be scoped to one project")
+    func listCanBeScopedToProject() async throws {
+        try await withIdentityTestApp { app, user, org, project, token in
+            let otherProject = try await TestDataBuilder(db: app.db).createProject(
+                name: "Other Identity Project", description: "not requested", organization: org)
+            let expected = try await self.createVM(
+                app, project: project, user: user, token: token, name: "requested-project-vm",
+                suffix: "requested-project")
+            _ = try await self.createVM(
+                app, project: otherProject, user: user, token: token, name: "other-project-vm",
+                suffix: "other-project")
+
+            try await app.test(.GET, "/api/vms?project_id=\(try project.requireID())") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .ok)
+                let listed = try res.content.decode(PagedBody.self)
+                #expect(listed.items.map(\.id) == [expected.id])
+            }
+
+            try await app.test(.GET, "/api/vms?project_id=not-a-uuid") { req in
+                req.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { res in
+                #expect(res.status == .badRequest)
+            }
+        }
+    }
+
     @Test("A VM's project role is assignable and listed with its identity")
     func projectRoleIsAssignableAndListed() async throws {
         try await withIdentityTestApp { app, user, org, project, token in

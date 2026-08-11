@@ -305,6 +305,7 @@ struct VMController: RouteCollection {
 
     /// GET /api/vms
     /// Query params: organization_id (optional) — narrows to one org's hierarchy;
+    /// project_id (optional) — narrows to one project;
     /// limit/offset (optional) — select the page.
     func index(req: Request) async throws -> PagedResponse<VMDetailResponse> {
         let paging = try ListPaging.decode(from: req)
@@ -333,6 +334,12 @@ struct VMController: RouteCollection {
             }
             .sort(\.$createdAt, .descending)
             .sort(\.$id, .descending)
+        if let rawProjectID = req.query[String.self, at: "project_id"] {
+            guard let projectID = UUID(uuidString: rawProjectID) else {
+                throw Abort(.badRequest, reason: "Invalid project_id")
+            }
+            query = query.filter(\.$project.$id == projectID)
+        }
         if let orgFilter = try await OrganizationAccessService.organizationListFilter(on: req) {
             let projectIDs = try await orgFilter.projectIDs(on: req.db)
             if projectIDs.isEmpty { return [] }

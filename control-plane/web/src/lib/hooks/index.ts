@@ -1,5 +1,6 @@
 export {
   useVMs,
+  useProjectVMs,
   useVM,
   useVMSnapshots,
   useInvalidateVMs,

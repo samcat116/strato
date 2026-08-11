@@ -113,7 +113,7 @@ export interface paths {
         };
         /**
          * List virtual machines
-         * @description Returns a page of the VMs the caller can read, newest first, optionally scoped to one organization.
+         * @description Returns a page of the VMs the caller can read, newest first, optionally scoped to one organization and/or project.
          */
         get: operations["listVMs"];
         put?: never;
@@ -9741,6 +9741,8 @@ export interface operations {
             query?: {
                 /** @description Scope results to one organization. */
                 organization_id?: components["parameters"]["OrganizationIdQuery"];
+                /** @description Scope results to one project. */
+                project_id?: components["parameters"]["ProjectIdQuery"];
                 /** @description Maximum number of items to return per page (1–500). */
                 limit?: components["parameters"]["ListLimitQuery"];
                 /** @description Number of items to skip before the page starts. */
