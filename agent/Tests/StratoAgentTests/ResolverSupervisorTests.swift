@@ -46,6 +46,7 @@ struct ResolverSupervisorTests {
         host.setClock(clock)
         return ResolverSupervisor(
             root: "/tmp/resolver-tests", host: host, now: { clock.now },
+            restartScheduler: clock.restartScheduler,
             logger: Logger(label: "test"))
     }
 
@@ -126,23 +127,25 @@ struct ResolverSupervisorTests {
         let clock = TestClock()
         let supervisor = supervisor(host: host, clock: clock)
 
-        // Each cycle lets the backoff lapse, reconciles — which notices the last
-        // exit and starts a replacement — and kills that replacement at once.
-        // The clock jump is applied *between* reconciles, never between a spawn
-        // and its exit, so every run here lasts zero seconds. That is the point:
-        // it is what a Corefile CoreDNS refuses to parse looks like.
-        for _ in 0..<8 {
-            clock.advance(by: 300)
-            await supervisor.reconcile(request([a]))
-            host.kill()
-        }
-        clock.advance(by: 300)
         await supervisor.reconcile(request([a]))
+        // Each reconciliation notices an instant exit and installs one wakeup.
+        // Advancing the clock runs that wakeup without another reconciliation,
+        // which exercises the production crash-loop path rather than manually
+        // driving every replacement from desired state.
+        for failure in 1...8 {
+            host.kill()
+            await supervisor.reconcile(request([a]))
+            #expect(clock.scheduledCount() == 1)
+            let delay = ResolverSupervisionPolicy.restartDelay(consecutiveFailures: failure)
+            await clock.advance(by: TimeInterval(delay.components.seconds))
+            #expect(await host.spawned() == failure + 1)
+        }
 
         let failures = await supervisor.failures()
         #expect(
             failures >= ResolverSupervisionPolicy.crashLoopThreshold,
             "the backoff must escalate on repeated instant deaths; got \(failures)")
+        #expect(await host.overlappingSpawns() == 0)
     }
 
     @Test("A child that ran a healthy stretch clears the counter when it exits")
@@ -156,19 +159,18 @@ struct ResolverSupervisorTests {
         // One instant death: the counter goes to 1.
         await supervisor.reconcile(request([a]))
         host.kill()
-        clock.advance(by: 300)
         await supervisor.reconcile(request([a]))
         #expect(await supervisor.failures() == 1)
 
         // Then a replacement that runs a healthy stretch before exiting.
-        clock.advance(by: 300)
-        await supervisor.reconcile(request([a]))
-        clock.advance(by: ResolverSupervisionPolicy.healthyRuntimeSeconds + 1)
+        let delay = ResolverSupervisionPolicy.restartDelay(consecutiveFailures: 1)
+        await clock.advance(by: TimeInterval(delay.components.seconds))
+        await clock.advance(by: ResolverSupervisionPolicy.healthyRuntimeSeconds + 1)
         host.kill()
-        clock.advance(by: 300)
         await supervisor.reconcile(request([a]))
         // Cleared by the healthy run, then incremented by this exit: 1, not 2.
         #expect(await supervisor.failures() == 1)
+        await supervisor.shutdown()
     }
 
     @Test("Backoff suppresses a restart until its window passes")
@@ -184,9 +186,40 @@ struct ResolverSupervisorTests {
         await supervisor.reconcile(request([a]))
         #expect(await host.spawned() == 1, "restart must wait for the backoff window")
 
-        clock.advance(by: 300)
+        // Repeated syncs inside the window must reuse the same wakeup rather
+        // than create a fleet of tasks that all try to spawn at its boundary.
         await supervisor.reconcile(request([a]))
+        await supervisor.reconcile(request([a]))
+        #expect(clock.scheduledCount() == 1)
+
+        let delay = ResolverSupervisionPolicy.restartDelay(consecutiveFailures: 1)
+        await clock.advance(by: TimeInterval(delay.components.seconds) - 0.5)
+        #expect(await host.spawned() == 1, "restart must not run before the deadline")
+
+        // No control-plane or DNS mutation after the exit: crossing the
+        // supervisor's own deadline is sufficient to start the replacement.
+        await clock.advance(by: 0.5)
         #expect(await host.spawned() == 2)
+        #expect(clock.scheduledCount() == 0)
+        #expect(await host.overlappingSpawns() == 0)
+    }
+
+    @Test("A resolver disabled during backoff is not restarted")
+    func disablingCancelsRestart() async {
+        let host = FakeResolverHost()
+        let clock = TestClock()
+        let supervisor = supervisor(host: host, clock: clock)
+
+        await supervisor.reconcile(request([a]))
+        host.kill()
+        await supervisor.reconcile(request([a]))
+        #expect(clock.scheduledCount() == 1)
+
+        await supervisor.reconcile(request([]))
+        #expect(clock.scheduledCount() == 0)
+
+        await clock.advance(by: 300)
+        #expect(host.spawned() == 1)
     }
 
     // MARK: - Adoption
@@ -322,14 +355,54 @@ struct ResolverSupervisorTests {
 /// A clock the supervisor reads instead of the wall, so backoff and the
 /// healthy-runtime floor can be crossed without sleeping.
 private final class TestClock: Sendable {
-    private let current = Mutex(Date(timeIntervalSince1970: 1_000_000))
-
-    var now: Date {
-        current.withLock { $0 }
+    private struct ScheduledRestart: Sendable {
+        let deadline: Date
+        let sequence: Int
+        let operation: ResolverRestartScheduler.Operation
     }
 
-    func advance(by seconds: TimeInterval) {
-        current.withLock { $0 = $0.addingTimeInterval(seconds) }
+    private struct State: Sendable {
+        var current = Date(timeIntervalSince1970: 1_000_000)
+        var nextSequence = 0
+        var scheduled: [UUID: ScheduledRestart] = [:]
+    }
+
+    private let state = Mutex(State())
+
+    var now: Date {
+        state.withLock(\.current)
+    }
+
+    var restartScheduler: ResolverRestartScheduler {
+        ResolverRestartScheduler { [self] deadline, operation in
+            let id = UUID()
+            self.state.withLock { state in
+                state.nextSequence += 1
+                state.scheduled[id] = ScheduledRestart(
+                    deadline: deadline, sequence: state.nextSequence, operation: operation)
+            }
+            return { [weak self] in self?.cancel(id) }
+        }
+    }
+
+    func scheduledCount() -> Int {
+        state.withLock { $0.scheduled.count }
+    }
+
+    /// Move time, then await every restart whose fixed deadline was crossed.
+    /// Running the callbacks inline makes the post-advance assertions exact.
+    func advance(by seconds: TimeInterval) async {
+        let due = state.withLock { state -> [ScheduledRestart] in
+            state.current = state.current.addingTimeInterval(seconds)
+            let due = state.scheduled.filter { $0.value.deadline <= state.current }
+            for id in due.keys { state.scheduled.removeValue(forKey: id) }
+            return due.values.sorted { $0.sequence < $1.sequence }
+        }
+        for restart in due { await restart.operation() }
+    }
+
+    private func cancel(_ id: UUID) {
+        state.withLock { $0.scheduled[id] = nil }
     }
 }
 
@@ -361,6 +434,7 @@ private final class FakeResolverHost: ResolverHosting, Sendable {
         var deadPIDs: Set<Int32> = []
         var refuseWrites = false
         var running = false
+        var overlappingSpawns = 0
         var exitedAt: Date?
         var nextPID: Int32 = 1000
         var clock: TestClock?
@@ -377,6 +451,7 @@ private final class FakeResolverHost: ResolverHosting, Sendable {
     func removed() -> Int { state.withLock { $0.removals } }
     func terminatedHandles() -> Int { state.withLock { $0.terminatedByHandle } }
     func terminatedPIDs() -> [Int32] { state.withLock { $0.terminatedByPID } }
+    func overlappingSpawns() -> Int { state.withLock { $0.overlappingSpawns } }
     func setClock(_ clock: TestClock) { state.withLock { $0.clock = clock } }
 
     // MARK: Arrangement
@@ -420,6 +495,7 @@ private final class FakeResolverHost: ResolverHosting, Sendable {
         let pid: Int32 = state.withLock { state in
             state.nextPID += 1
             state.spawns += 1
+            if state.running { state.overlappingSpawns += 1 }
             state.running = true
             state.exitedAt = nil
             return state.nextPID

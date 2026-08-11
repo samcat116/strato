@@ -54,6 +54,38 @@ public protocol ResolverHosting: Sendable {
     func terminate(pid: Int32) async
 }
 
+/// Schedules one resolver restart and returns a cancellation action.
+///
+/// The production scheduler sleeps on the continuous clock. Tests replace it
+/// with a controllable clock that runs due work inline, so crossing the backoff
+/// boundary never depends on wall time or cooperative-executor timing.
+struct ResolverRestartScheduler: Sendable {
+    typealias Operation = @Sendable () async -> Void
+    typealias Cancellation = @Sendable () -> Void
+
+    private let scheduleOperation: @Sendable (Date, @escaping Operation) -> Cancellation
+
+    init(_ scheduleOperation: @escaping @Sendable (Date, @escaping Operation) -> Cancellation) {
+        self.scheduleOperation = scheduleOperation
+    }
+
+    func schedule(at deadline: Date, operation: @escaping Operation) -> Cancellation {
+        scheduleOperation(deadline, operation)
+    }
+
+    static let continuous = ResolverRestartScheduler { deadline, operation in
+        let task = Task {
+            let remaining = deadline.timeIntervalSinceNow
+            if remaining > 0 {
+                try? await Task.sleep(for: .seconds(remaining))
+            }
+            guard !Task.isCancelled else { return }
+            await operation()
+        }
+        return { task.cancel() }
+    }
+}
+
 /// Runs the single CoreDNS that serves every resolver-enabled network on this
 /// host (STR-40).
 ///
@@ -85,10 +117,12 @@ public actor ResolverSupervisor {
     private let root: String
     private let host: any ResolverHosting
     private let now: @Sendable () -> Date
+    private let restartScheduler: ResolverRestartScheduler
     private let logger: Logger
 
     private var state = ResolverState()
     private var adopted = false
+    private var scheduledRestart: (deadline: Date, cancel: ResolverRestartScheduler.Cancellation)?
 
     private struct ResolverState {
         var handle: (any ResolverHandle)?
@@ -134,6 +168,21 @@ public actor ResolverSupervisor {
         self.root = root
         self.host = host
         self.now = now
+        self.restartScheduler = .continuous
+        self.logger = logger
+    }
+
+    init(
+        root: String,
+        host: any ResolverHosting,
+        now: @escaping @Sendable () -> Date,
+        restartScheduler: ResolverRestartScheduler,
+        logger: Logger
+    ) {
+        self.root = root
+        self.host = host
+        self.now = now
+        self.restartScheduler = restartScheduler
         self.logger = logger
     }
 
@@ -167,6 +216,12 @@ public actor ResolverSupervisor {
             state.renderKey = key
         }
         guard let desired = state.rendering else { return }
+
+        // A pending restart was scheduled for an earlier non-empty desired
+        // state. Once the host serves no resolver-enabled network, that work is
+        // no longer authorized even if there is no live process for `.stop` to
+        // reap.
+        if desired.servesNothing { cancelScheduledRestart() }
 
         for action in ResolverSupervisionPolicy.actions(
             desired: desired, observed: observedState())
@@ -224,6 +279,14 @@ public actor ResolverSupervisor {
             // Still inside the backoff window. Returning silently is deliberate:
             // this runs on every sync, and a log line per suppressed retry would
             // drown the one that explains the failure.
+            scheduleRestart(at: allowed)
+            return
+        }
+        // A scheduled retry and an ordinary desired-state reconcile can become
+        // runnable together. Actor isolation serializes them, and this liveness
+        // check makes the second arrival a no-op rather than a second CoreDNS.
+        guard !state.isRunning(isAlive: host.isAlive) else {
+            cancelScheduledRestart()
             return
         }
         // Nothing was written yet — the write failed, and starting CoreDNS
@@ -236,6 +299,7 @@ public actor ResolverSupervisor {
             state.adoptedPID = nil
             state.startedAt = now()
             state.nextStartAllowedAt = nil
+            cancelScheduledRestart()
             // Deliberately *not* clearing `consecutiveFailures` here. A
             // successful `fork` proves nothing: the failures this backoff exists
             // for spawn cleanly and exit a moment later, so clearing on spawn
@@ -248,11 +312,12 @@ public actor ResolverSupervisor {
             state.consecutiveFailures += 1
             state.nextStartAllowedAt = now().addingTimeInterval(
                 delaySeconds(state.consecutiveFailures))
+            if let deadline = state.nextStartAllowedAt { scheduleRestart(at: deadline) }
             log(failure: error.localizedDescription)
         }
     }
 
-    /// Records the child's exit, so the next sync restarts it.
+    /// Records the child's exit, so this reconciliation can schedule its retry.
     ///
     /// **The failure counter is cleared by a run, never by a spawn.** The
     /// failures this backoff exists for — a Corefile CoreDNS refuses to parse,
@@ -276,6 +341,7 @@ public actor ResolverSupervisor {
     }
 
     private func stop() async {
+        cancelScheduledRestart()
         // The pid this call is stopping, captured before the suspension below.
         // `terminate` sleeps through its SIGTERM→SIGKILL grace, and a reconcile
         // can interleave in that window: if it re-desires the resolver it will
@@ -295,6 +361,47 @@ public actor ResolverSupervisor {
         state = ResolverState()
         host.removeConfiguration(root: root)
         logger.info("Stopped the host resolver")
+    }
+
+    // MARK: - Restart scheduling
+
+    /// Own exactly one wakeup for the current backoff deadline.
+    private func scheduleRestart(at deadline: Date) {
+        if scheduledRestart?.deadline == deadline { return }
+        cancelScheduledRestart()
+        let cancel = restartScheduler.schedule(at: deadline) { [weak self] in
+            await self?.restartIfNeeded(at: deadline)
+        }
+        scheduledRestart = (deadline, cancel)
+    }
+
+    /// Re-check desired and observed state when the backoff expires. Both may
+    /// have changed while this task slept, so the deadline is a generation
+    /// token and the supervision policy remains the authority for whether a
+    /// start is still wanted.
+    private func restartIfNeeded(at deadline: Date) {
+        guard scheduledRestart?.deadline == deadline,
+            state.nextStartAllowedAt == deadline
+        else { return }
+        scheduledRestart = nil
+
+        // A scheduler returning early must not bypass the backoff. The
+        // production scheduler does not, but this keeps the invariant local.
+        if deadline > now() {
+            scheduleRestart(at: deadline)
+            return
+        }
+        guard let desired = state.rendering,
+            ResolverSupervisionPolicy.actions(
+                desired: desired, observed: observedState()
+            ).contains(.start)
+        else { return }
+        start(desired)
+    }
+
+    private func cancelScheduledRestart() {
+        scheduledRestart?.cancel()
+        scheduledRestart = nil
     }
 
     // MARK: - Restart adoption
