@@ -270,6 +270,7 @@ private final class MetadataChannelHandler: ChannelInboundHandler {
         }
     }
 
+    // `Any` is required by NIO's ChannelInboundHandler callback signature.
     func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
         if event is IdleStateHandler.IdleStateEvent {
             context.close(promise: nil)

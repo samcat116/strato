@@ -49,6 +49,8 @@ struct OVNChassisBootstrapTests {
     @Test("Route parse returns nil for missing prefsrc or invalid JSON")
     func parseRouteSourceIPEdgeCases() {
         #expect(OVNChassisBootstrap.parseRouteSourceIP("[]") == nil)
+        #expect(OVNChassisBootstrap.parseRouteSourceIP(#"[{"prefsrc":null,"unknown":true}]"#) == nil)
+        #expect(OVNChassisBootstrap.parseRouteSourceIP(#"[{"prefsrc":42}]"#) == nil)
         #expect(OVNChassisBootstrap.parseRouteSourceIP(#"[{"dst":"1.1.1.1","dev":"eth0"}]"#) == nil)
         #expect(OVNChassisBootstrap.parseRouteSourceIP("not json") == nil)
     }

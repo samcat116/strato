@@ -213,6 +213,34 @@ struct JWTSVIDAuthenticationTests {
         #expect(!JWTSVIDVerification.hasCompactJWSShape("aaa.bbb"))
     }
 
+    @Test("Normalizes SPIFFE key use and skips unrelated or malformed keys")
+    func acceptsSPIFFEJWKSWithMixedKeys() async throws {
+        let signer = try TestJWTSVIDSigner()
+        let root = try #require(try JSONSerialization.jsonObject(with: signer.jwks) as? [String: Any])
+        var signingKey = try #require((root["keys"] as? [[String: Any]])?.first)
+        signingKey["use"] = "jwt-svid"
+        let mixed = try JSONSerialization.data(withJSONObject: [
+            "keys": [
+                NSNull(),
+                ["kty": "unsupported", "kid": "bad"],
+                ["use": "x509-svid", "kid": "x509-root"],
+                signingKey,
+            ]
+        ])
+
+        let verifiers = try await JWTSVIDVerification.makeVerifiers(jwksJSON: mixed)
+        #expect(verifiers.knownKeyIDs == [signer.keyID])
+    }
+
+    @Test("Rejects malformed or unusable trust-domain JWKS documents")
+    func rejectsMalformedTrustDomainJWKS() async {
+        for json in ["not json", #"{"keys":null}"#, #"{"keys":{}}"#, #"{"keys":[]}"#] {
+            await #expect(throws: JWTSVIDVerificationError.self) {
+                try await JWTSVIDVerification.makeVerifiers(jwksJSON: Data(json.utf8))
+            }
+        }
+    }
+
     // MARK: - Authority store
 
     @Test("Picks up a rotated authority on an unknown key id")

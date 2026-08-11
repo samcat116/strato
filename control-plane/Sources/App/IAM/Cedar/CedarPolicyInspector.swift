@@ -1,5 +1,6 @@
 import CedarPolicy
 import Foundation
+import StratoShared
 import Vapor
 
 // IAM roles/policies authoring, phase 2 (issue #605): reading a role's Cedar
@@ -90,11 +91,11 @@ enum CedarPolicyInspector {
     static func inspect(cedarText: String, roleID: UUID) throws -> CedarRoleInspection {
         let est = try parse(cedarText, roleID: roleID)
 
-        let effect = est["effect"] as? String ?? "unknown"
+        let effect = est["effect"]?.stringValue ?? "unknown"
         guard effect == "permit" else { throw CedarRoleTextError.notAPermit(effect) }
 
-        guard let principal = est["principal"] as? [String: Any],
-            principal["op"] as? String == "All"
+        guard let principal = est["principal"]?.objectValue,
+            principal["op"]?.stringValue == "All"
         else { throw CedarRoleTextError.boundPrincipalScope }
 
         let actions = try actionScope(est)
@@ -110,14 +111,10 @@ enum CedarPolicyInspector {
 
     // MARK: - Parsing
 
-    /// The policy's EST (Cedar's JSON policy format), as plain dictionaries.
-    ///
-    /// Kept untyped on purpose: the EST is a wide, versioned format, and a
-    /// `Decodable` model of it would have to be extended in lockstep with
-    /// Cedar to keep *parsing* — while everything below only asks a handful of
-    /// questions of it. An unrecognized shape falls through to a shape
-    /// rejection, which is the right answer for role text anyway.
-    private static func parse(_ cedarText: String, roleID: UUID) throws -> [String: Any] {
+    /// The policy's EST (Cedar's JSON policy format) as a version-tolerant JSON
+    /// tree. Unknown EST fields and nodes are preserved, while the narrow reads
+    /// below remain typed and fail closed on shapes they do not understand.
+    private static func parse(_ cedarText: String, roleID: UUID) throws -> [String: JSONValue] {
         let policy: CedarPolicy.Policy
         do {
             // Text holding more than one policy fails here — `Policy` parses
@@ -128,7 +125,7 @@ enum CedarPolicyInspector {
         }
         do {
             let json = try policy.toJSON()
-            guard let est = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else {
+            guard let est = try JSONDecoder().decode(JSONValue.self, from: Data(json.utf8)).objectValue else {
                 throw CedarRoleTextError.unparseable("the policy did not render as a JSON object")
             }
             return est
@@ -155,19 +152,21 @@ enum CedarPolicyInspector {
     /// Only an unscoped `action` is refused here — it enumerates nothing, and
     /// a role whose action list silently grew with the next release is exactly
     /// what the curated registry exists to prevent.
-    private static func actionScope(_ est: [String: Any]) throws -> [String] {
-        guard let scope = est["action"] as? [String: Any], let op = scope["op"] as? String else {
+    private static func actionScope(_ est: [String: JSONValue]) throws -> [String] {
+        guard let scope = est["action"]?.objectValue, let op = scope["op"]?.stringValue else {
             throw CedarRoleTextError.unenumerableActionScope
         }
         guard op == "==" || op == "in" else { throw CedarRoleTextError.unenumerableActionScope }
 
-        if let entity = scope["entity"] as? [String: Any] {
+        if let entity = scope["entity"]?.objectValue {
             guard let id = actionID(entity) else { throw CedarRoleTextError.unenumerableActionScope }
             return [id]
         }
-        guard let entities = scope["entities"] as? [[String: Any]] else {
+        guard let values = scope["entities"]?.arrayValue else {
             throw CedarRoleTextError.unenumerableActionScope
         }
+        let entities = values.compactMap(\.objectValue)
+        guard entities.count == values.count else { throw CedarRoleTextError.unenumerableActionScope }
         var ids: Set<String> = []
         for entity in entities {
             guard let id = actionID(entity) else { throw CedarRoleTextError.unenumerableActionScope }
@@ -178,9 +177,9 @@ enum CedarPolicyInspector {
 
     /// The id of an `Action::"…"` reference; nil for a reference to anything
     /// else, which cannot be an action.
-    private static func actionID(_ entity: [String: Any]) -> String? {
-        guard entity["type"] as? String == "Action" else { return nil }
-        return entity["id"] as? String
+    private static func actionID(_ entity: [String: JSONValue]) -> String? {
+        guard entity["type"]?.stringValue == "Action" else { return nil }
+        return entity["id"]?.stringValue
     }
 
     // MARK: - Grants fields
@@ -221,9 +220,9 @@ enum CedarPolicyInspector {
     /// written the way `RoleDescriptor.canonicalPermitText` writes it. That is
     /// a real constraint on hand-written text, and the error message spells
     /// out the required clause rather than leaving the author to guess.
-    private static func checkGrantsGate(_ est: [String: Any], roleID: UUID) throws {
+    private static func checkGrantsGate(_ est: [String: JSONValue], roleID: UUID) throws {
         var attributes: Set<String> = []
-        collectAttributeNames(est, into: &attributes)
+        collectAttributeNames(.object(est), into: &attributes)
 
         let own: Set<String> = [
             RoleDescriptor.grantsUsersField(roleID),
@@ -237,58 +236,47 @@ enum CedarPolicyInspector {
         }
 
         let canonical = try canonicalGrantsCondition(roleID: roleID)
-        let clauses = est["conditions"] as? [[String: Any]] ?? []
+        let clauses = est["conditions"]?.arrayValue?.compactMap(\.objectValue) ?? []
         let gated = clauses.contains { clause in
-            guard clause["kind"] as? String == "when", let body = clause["body"] else { return false }
-            return stableJSON(body) == canonical
+            guard clause["kind"]?.stringValue == "when", let body = clause["body"] else { return false }
+            return body == canonical
         }
         guard gated else { throw CedarRoleTextError.grantsShapeMismatch }
     }
 
-    /// The canonical grants disjunction for a role, as a stable JSON rendering
-    /// of its EST — read from the generated permit itself, so the accepted
+    /// The canonical grants disjunction for a role, read from the generated
+    /// permit itself so the accepted
     /// shape and the generated one cannot drift apart.
     ///
     /// The action list is irrelevant to the condition and is only here because
     /// a permit needs one to parse; nothing validates it against the registry
     /// at this point.
-    private static func canonicalGrantsCondition(roleID: UUID) throws -> String {
+    private static func canonicalGrantsCondition(roleID: UUID) throws -> JSONValue {
         let text = RoleDescriptor.canonicalPermitText(id: roleID, actions: ["placeholder"])
         let est = try parse(text, roleID: roleID)
-        guard let clauses = est["conditions"] as? [[String: Any]],
-            let body = clauses.first(where: { $0["kind"] as? String == "when" })?["body"]
+        guard let clauses = est["conditions"]?.arrayValue?.compactMap(\.objectValue),
+            let body = clauses.first(where: { $0["kind"]?.stringValue == "when" })?["body"]
         else {
             throw CedarRoleTextError.unparseable("the canonical role permit has no `when` clause")
         }
-        return stableJSON(body)
-    }
-
-    /// A comparable rendering of an EST fragment: sorted keys, so two
-    /// structurally identical conditions compare equal regardless of the order
-    /// the parser happened to emit their fields in.
-    private static func stableJSON(_ value: Any) -> String {
-        guard JSONSerialization.isValidJSONObject([value]),
-            let data = try? JSONSerialization.data(withJSONObject: [value], options: [.sortedKeys])
-        else {
-            // Unrenderable means "not equal to the canonical clause", which is
-            // the safe answer: it fails the gate check rather than passing it.
-            return "<unrenderable>"
-        }
-        return String(decoding: data, as: UTF8.self)
+        return body
     }
 
     /// Every attribute name the EST reads (`x.foo` and `x["foo"]` are the same
     /// node, so both are covered).
-    private static func collectAttributeNames(_ value: Any, into names: inout Set<String>) {
-        if let object = value as? [String: Any] {
-            if let attribute = object["attr"] as? String { names.insert(attribute) }
+    private static func collectAttributeNames(_ value: JSONValue, into names: inout Set<String>) {
+        switch value {
+        case .object(let object):
+            if let attribute = object["attr"]?.stringValue { names.insert(attribute) }
             for nested in object.values {
                 collectAttributeNames(nested, into: &names)
             }
-        } else if let array = value as? [Any] {
+        case .array(let array):
             for element in array {
                 collectAttributeNames(element, into: &names)
             }
+        case .string, .int, .double, .bool, .null:
+            break
         }
     }
 

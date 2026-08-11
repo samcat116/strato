@@ -11,6 +11,26 @@ import Foundation
 /// no entry matched" — is not an error at the RPC layer and would otherwise
 /// read as success.
 public enum DelegatedIdentityProbe {
+    private struct JSONIdentityReport: Encodable {
+        let spiffeID: String
+        let expiresAt: String
+        let chainLength: Int
+        let privateKeyDERByteCount: Int
+        let federatesWith: [String]
+    }
+
+    private struct JSONReport: Encodable {
+        let socketPath: String
+        let socketPresent: Bool
+        let selectors: [String]
+        let identities: [JSONIdentityReport]
+        let trustDomains: [String: Int]
+        let outcome: String
+        let succeeded: Bool
+        let verdict: String
+        let detail: String?
+    }
+
     /// One SVID the delegate received, reduced to what is safe to print.
     public struct IdentityReport: Equatable, Sendable {
         public let spiffeID: String
@@ -262,33 +282,26 @@ public enum DelegatedIdentityProbe {
     }
 
     public static func formatJSON(_ report: Report) throws -> String {
-        var identities: [[String: Any]] = []
-        for identity in report.identities {
-            identities.append([
-                "spiffeID": identity.spiffeID,
-                "expiresAt": iso8601(identity.expiresAt),
-                "chainLength": identity.chainLength,
-                "privateKeyDERByteCount": identity.privateKeyDERByteCount,
-                "federatesWith": identity.federatesWith,
-            ])
-        }
-
-        var payload: [String: Any] = [
-            "socketPath": report.socketPath,
-            "socketPresent": report.socketPresent,
-            "selectors": report.selectors,
-            "identities": identities,
-            "trustDomains": report.trustDomains,
-            "outcome": report.outcome.rawValue,
-            "succeeded": report.succeeded,
-            "verdict": verdict(report),
-        ]
-        if let detail = report.detail {
-            payload["detail"] = detail
-        }
-
-        let data = try JSONSerialization.data(
-            withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        let payload = JSONReport(
+            socketPath: report.socketPath,
+            socketPresent: report.socketPresent,
+            selectors: report.selectors,
+            identities: report.identities.map { identity in
+                JSONIdentityReport(
+                    spiffeID: identity.spiffeID,
+                    expiresAt: iso8601(identity.expiresAt),
+                    chainLength: identity.chainLength,
+                    privateKeyDERByteCount: identity.privateKeyDERByteCount,
+                    federatesWith: identity.federatesWith)
+            },
+            trustDomains: report.trustDomains,
+            outcome: report.outcome.rawValue,
+            succeeded: report.succeeded,
+            verdict: verdict(report),
+            detail: report.detail)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(payload)
         return String(decoding: data, as: UTF8.self)
     }
 
