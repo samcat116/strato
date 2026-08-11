@@ -653,7 +653,8 @@ struct DomainXMLLibvirtTests {
         let grown = VMSpec(
             cpus: spec.cpus, maxCpus: spec.maxCpus, memoryBytes: spec.memoryBytes,
             maxMemoryBytes: spec.memoryBytes + 8 * 1024 * 1024 * 1024, boot: spec.boot,
-            machine: spec.machine, console: spec.console)
+            machine: spec.machine, guestAgentEnabled: spec.guestAgentEnabled,
+            console: spec.console)
 
         try Self.withDefinedDomain(name: name, document: document) { defined in
             let widening = try DomainRedefinition.widening(
@@ -673,7 +674,7 @@ struct DomainXMLLibvirtTests {
             #expect(
                 try DomainDiskInventory.disks(inDomainXML: after).map(\.target)
                     == DomainDiskInventory.disks(inDomainXML: defined).map(\.target))
-            for element in ["<interface", "<serial", "<console", "<channel", "<video", "<memballoon"] {
+            for element in ["<interface", "<serial", "<console", "<channel", "<vsock", "<video", "<memballoon"] {
                 #expect(
                     after.components(separatedBy: element).count
                         == defined.components(separatedBy: element).count,

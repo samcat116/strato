@@ -77,9 +77,9 @@ public enum MessageType: String, Codable, Sendable {
     case guestExecClose = "guest_exec_close"
     case guestExecClosed = "guest_exec_closed"
 
-    // Wire v43 legacy names, retained through v45 so agents can decode both
-    // sides of the STR-78 rename. Remove these aliases in wire v46; v45 is the
-    // dependency-health contract and may follow v44 before fleet rollout.
+    // Wire v43 legacy names, retained through v46 so agents can decode both
+    // sides of the STR-78 rename. Remove these aliases in wire v47; v46 is the
+    // guest-agent/vsock contract and may follow v45 before fleet rollout.
     case sandboxExecStart = "sandbox_exec_start"
     case sandboxExecStarted = "sandbox_exec_started"
     case sandboxExecInput = "sandbox_exec_input"

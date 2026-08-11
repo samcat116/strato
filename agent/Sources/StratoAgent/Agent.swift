@@ -1338,9 +1338,21 @@ actor Agent {
             // #428): snapshot mobility keys cross-agent restore placement on
             // version equality, so the control plane needs to know what each
             // host would load snapshots with.
-            hypervisors = HypervisorProbe.stampingFirecrackerVersion(
+            let versioned = HypervisorProbe.stampingFirecrackerVersion(
                 probed,
                 version: await HypervisorProbe.firecrackerVersion(binaryPath: firecrackerBinaryPath))
+            hypervisors = versioned.map { support in
+                guard support.type == .qemu else { return support }
+                return HypervisorSupport(
+                    type: support.type,
+                    available: support.available,
+                    accelerated: support.accelerated,
+                    unavailabilityReason: support.unavailabilityReason,
+                    capabilities: support.capabilities,
+                    supportsVsock: preflight.vhostVsockAvailable,
+                    version: support.version
+                )
+            }
         }
         let networkCapability = currentNetworkCapability()
 
@@ -1670,7 +1682,8 @@ actor Agent {
                 type: type,
                 available: true,
                 accelerated: true,
-                capabilities: HypervisorCapabilities.capabilities(for: type)
+                capabilities: HypervisorCapabilities.capabilities(for: type),
+                supportsVsock: type == .qemu ? true : nil
             )
         }
     }
@@ -1718,9 +1731,12 @@ actor Agent {
         #if os(Linux)
         let firecrackerSocketDirectory: String? = firecrackerSocketDir
         let qemuFirmwareDescriptorPath: String? = "/usr/share/qemu/firmware"
+        let vhostVsock: HostPreflight.VhostVsockSupport = .device(path: "/dev/vhost-vsock")
         #else
         let firecrackerSocketDirectory: String? = nil
         let qemuFirmwareDescriptorPath: String? = nil
+        let vhostVsock: HostPreflight.VhostVsockSupport = .unsupportedPlatform(
+            "virtio-vsock for QEMU is not supported on this platform")
         #endif
 
         // Mirror the driver's firmware resolution so the preflight reports
@@ -1747,6 +1763,7 @@ actor Agent {
                 tpmSupport: tpmSupport,
                 qemuFirmwareDescriptorPath: qemuFirmwareDescriptorPath,
                 libvirt: libvirt,
+                vhostVsock: vhostVsock,
                 ovnMode: effectiveNetworkMode == .ovn,
                 ovnNBConnection: ovnNorthbound ?? "unix:/var/run/ovn/ovnnb_db.sock",
                 ovnNBTLSFilePaths: ovnNorthboundTLS?.configuredFilePaths ?? []
@@ -1758,6 +1775,11 @@ actor Agent {
     /// host explains itself at startup instead of failing VM operations
     /// minutes later.
     private func logHostPreflight(_ report: HostPreflight.Report) {
+        for unsupported in report.unsupported {
+            logger.info(
+                "Host preflight: \(unsupported.detail ?? "not supported on this platform")",
+                metadata: ["check": .string(unsupported.kind.rawValue)])
+        }
         for failure in report.failures {
             let detail = failure.detail ?? failure.kind.rawValue
             let metadata: Logger.Metadata = ["check": .string(failure.kind.rawValue)]
@@ -4878,8 +4900,8 @@ extension Agent: ReconcileActuator {
         // driver runs and — like the NICs below — given back if the driver
         // never created the VM. Exhaustion fails the create rather than reusing
         // a CID, since a second guest on one CID is an isolation failure, not a
-        // degraded VM. Nothing builds a device from it yet: STR-76 is what
-        // attaches `vhost-vsock-pci` and consumes the lease.
+        // degraded VM. Only a QEMU VM opted into Strato's guest agent consumes
+        // this namespace; Firecracker's UDS-backed device is process-local.
         //
         // The durable record is written *after* the driver succeeds, so a crash
         // in that window leaves a guest whose CID no manifest entry records.
@@ -4893,7 +4915,9 @@ extension Agent: ReconcileActuator {
         // later VM handed the orphaned CID fails to start instead of joining
         // the surviving guest's channel.
         let lease = try vsockCIDs.lease(
-            for: item.id, needsHostCID: desired.hypervisorType.usesHostVsockNamespace)
+            for: item.id,
+            needsHostCID: desired.hypervisorType.usesHostVsockNamespace
+                && realizedSpec.guestAgentEnabled)
 
         // The orchestrator realizes the VM's NICs on this host before the
         // driver runs, and rolls them back if the driver never created the VM.
@@ -4909,7 +4933,8 @@ extension Agent: ReconcileActuator {
         do {
             try await service.createVM(
                 vmId: item.id, spec: realizedSpec, imageInfo: desired.imageInfo,
-                networkAttachments: attachments, metadata: desired.metadata)
+                networkAttachments: attachments, metadata: desired.metadata,
+                vsockCID: lease.cid)
         } catch {
             await networkOrchestrator.teardownAttachments(
                 vmId: item.id, networks: realizedSpec.networks)

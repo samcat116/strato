@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 45). The required registration fields
+currently 46). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -62,15 +62,19 @@ exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
 Wire v44 introduced `guest_exec_*` and kept the v43 `sandbox_exec_*`
-discriminators routable. Wire v45 retains that tolerance because it can follow
-v44 before a fleet rollout completes; the aliases are scheduled for removal in
-v46. An upgraded agent translates a legacy start to `resourceKind: sandbox`, and
+discriminators routable. Wire v46 retains that tolerance because it can follow
+v45 before a fleet rollout completes; the aliases are scheduled for removal in
+v47. An upgraded agent translates a legacy start to `resourceKind: sandbox`, and
 the control plane accepts legacy response names. This message-level tolerance
 does not weaken the exact registration handshake.
 
 Wire v45 adds typed dependency observations to agent registration and heartbeats.
 The control plane uses the latest received snapshot for feature-scoped placement
 gates without terminating workloads that are already running.
+
+Wire v46 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
+per-hypervisor host capability used to keep those VMs off nodes without
+`/dev/vhost-vsock`.
 
 Two consequences worth knowing:
 
@@ -80,10 +84,11 @@ Two consequences worth knowing:
   matching release, then restart it so it can register again.
 - **Capabilities still exist, and they are not versions.** A capability
   (`sandboxCapable`, `sandboxNetworkingCapable`, `tpmCapable`,
-  `resolverCapable`) is evidence that a *host* can realize a feature — a
-  runtime, a binary, a guest image — all installed independently of the agent
-  binary. Version says "the peer understands the payload"; capability says
-  "the host can act on it". The exact handshake answers the first question;
+  `resolverCapable`, or QEMU `supportsVsock`) is evidence that a *host* can
+  realize a feature — a runtime, a binary, a guest image — all installed
+  independently of the agent binary. Version says "the peer understands the
+  payload"; capability says "the host can act on it". The exact handshake
+  answers the first question;
   capabilities keep answering the second per host, re-probed at every
   registration.
 

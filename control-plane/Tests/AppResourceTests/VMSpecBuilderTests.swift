@@ -703,6 +703,20 @@ struct VMSpecBuilderTests {
 
     // MARK: - Graphics console (issue #566)
 
+    @Test("VMSpecBuilder carries the Strato guest-agent opt-in")
+    func testGuestAgentPassthrough() throws {
+        let image = createTestImage()
+        let vm = createTestVM()
+        vm.guestAgentEnabled = true
+
+        let spec = VMSpecBuilder.buildVMSpec(from: vm, image: image, networkInterfaces: [])
+        #expect(spec.guestAgentEnabled)
+
+        let specWithVolumes = VMSpecBuilder.buildCanonicalVMSpec(
+            from: vm, image: image, volumes: [], networkInterfaces: [])
+        #expect(specWithVolumes.guestAgentEnabled)
+    }
+
     @Test("VMSpecBuilder carries the VM's graphics console intent")
     func testGraphicsConsolePassthrough() throws {
         let image = createTestImage()

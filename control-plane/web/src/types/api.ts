@@ -179,6 +179,8 @@ export interface VM {
    */
   secureBoot?: boolean;
   tpmEnabled?: boolean;
+  /** Whether Strato's fixed-CID virtio-vsock guest-agent channel is attached. */
+  guestAgentEnabled?: boolean;
   /**
    * Whether the VM's attached security groups are actually enforced. `false`
    * means a realizing agent is too old for security groups, or its site has no
@@ -564,6 +566,7 @@ export interface HypervisorSupport {
   accelerated: boolean;
   unavailabilityReason?: string;
   capabilities: HypervisorCapabilities;
+  supportsVsock?: boolean;
 }
 
 // Descriptive hardware/platform/OS details the agent reports at registration,
@@ -1139,6 +1142,11 @@ export interface CreateVMRequest {
    * agent whose `tpmCapable` is true.
    */
   tpm?: boolean;
+  /**
+   * Attach Strato's virtio-vsock guest-agent channel. Defaults to false,
+   * is supported only for QEMU, and cannot be changed after creation.
+   */
+  guestAgentEnabled?: boolean;
   /**
    * Graphics console: gives the guest a display device and a VNC server, so a
    * graphical OS installer can be driven from the Display tab. Defaults to

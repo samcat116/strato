@@ -63,6 +63,11 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
     /// Feature capabilities of this hypervisor
     public let capabilities: HypervisorCapabilities
 
+    /// Whether this host can attach a virtio-vsock device for this
+    /// hypervisor. Optional/additive so persisted registrations from before
+    /// vsock probing still decode; absence must be treated as not capable.
+    public let supportsVsock: Bool?
+
     /// The hypervisor binary's version, probed at agent startup (e.g. "1.7.0"
     /// from `firecracker --version`). Optional/additive: nil from agents that
     /// predate version probing, or when the probe failed. Snapshot mobility
@@ -76,6 +81,7 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         accelerated: Bool,
         unavailabilityReason: String? = nil,
         capabilities: HypervisorCapabilities,
+        supportsVsock: Bool? = nil,
         version: String? = nil
     ) {
         self.type = type
@@ -83,6 +89,7 @@ public struct HypervisorSupport: Codable, Equatable, Sendable {
         self.accelerated = accelerated
         self.unavailabilityReason = unavailabilityReason
         self.capabilities = capabilities
+        self.supportsVsock = supportsVsock
         self.version = version
     }
 }

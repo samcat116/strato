@@ -51,6 +51,10 @@ public struct VMSpec: Codable, Sendable {
     /// Guest machine features that are not resource sizing: Secure Boot and a
     /// vTPM (issue #565). Nil selects `MachineProfile.default` (both off).
     public let machine: MachineProfile?
+    /// Whether Strato's in-guest agent is enabled for this VM. The flag is
+    /// default-off and fixes whether the domain gets a virtio-vsock device at
+    /// creation; it is distinct from QEMU's conventional qga channel.
+    public let guestAgentEnabled: Bool
     /// Managed volumes to attach, in boot order. Every VM has exactly one boot
     /// volume; image materialization belongs to that volume's desired state.
     public let volumes: [VolumeSpec]
@@ -80,6 +84,7 @@ public struct VMSpec: Codable, Sendable {
         hugepages: Bool = false,
         boot: BootSource,
         machine: MachineProfile? = nil,
+        guestAgentEnabled: Bool = false,
         volumes: [VolumeSpec] = [],
         networks: [NetworkSpec] = [],
         console: ConsoleSpec? = nil,
@@ -96,11 +101,43 @@ public struct VMSpec: Codable, Sendable {
         self.hugepages = hugepages
         self.boot = boot
         self.machine = machine
+        self.guestAgentEnabled = guestAgentEnabled
         self.volumes = volumes
         self.networks = networks
         self.console = console
         self.sshAuthorizedKeys = sshAuthorizedKeys
         self.userData = userData
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case cpus, maxCpus, memoryBytes, maxMemoryBytes, balloonTargetBytes, diskBytes
+        case sharedMemory, hugepages, boot, machine, guestAgentEnabled
+        case volumes, networks, console, sshAuthorizedKeys, userData
+    }
+
+    /// `guestAgentEnabled` was added after VMSpec became durable in the agent
+    /// manifest. Missing means the old, safe behavior: no Strato guest agent
+    /// and therefore no host vsock device. Every pre-existing required field
+    /// remains strict rather than acquiring a compatibility default here.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            cpus: try c.decode(Int.self, forKey: .cpus),
+            maxCpus: try c.decode(Int.self, forKey: .maxCpus),
+            memoryBytes: try c.decode(Int64.self, forKey: .memoryBytes),
+            maxMemoryBytes: try c.decode(Int64.self, forKey: .maxMemoryBytes),
+            balloonTargetBytes: try c.decodeIfPresent(Int64.self, forKey: .balloonTargetBytes),
+            diskBytes: try c.decodeIfPresent(Int64.self, forKey: .diskBytes),
+            sharedMemory: try c.decode(Bool.self, forKey: .sharedMemory),
+            hugepages: try c.decode(Bool.self, forKey: .hugepages),
+            boot: try c.decode(BootSource.self, forKey: .boot),
+            machine: try c.decodeIfPresent(MachineProfile.self, forKey: .machine),
+            guestAgentEnabled: try c.decodeIfPresent(Bool.self, forKey: .guestAgentEnabled) ?? false,
+            volumes: try c.decode([VolumeSpec].self, forKey: .volumes),
+            networks: try c.decode([NetworkSpec].self, forKey: .networks),
+            console: try c.decodeIfPresent(ConsoleSpec.self, forKey: .console),
+            sshAuthorizedKeys: try c.decode([String].self, forKey: .sshAuthorizedKeys),
+            userData: try c.decodeIfPresent(String.self, forKey: .userData))
     }
 
     /// The machine profile to realize. Nil selects the explicit both-off
@@ -129,6 +166,7 @@ public struct VMSpec: Codable, Sendable {
             hugepages: hugepages,
             boot: boot,
             machine: machine,
+            guestAgentEnabled: guestAgentEnabled,
             volumes: volumes,
             networks: networks,
             console: console,
@@ -153,6 +191,7 @@ public struct VMSpec: Codable, Sendable {
             hugepages: hugepages,
             boot: boot,
             machine: machine,
+            guestAgentEnabled: guestAgentEnabled,
             volumes: volumes,
             networks: networks,
             console: console,
@@ -175,6 +214,7 @@ public struct VMSpec: Codable, Sendable {
             hugepages: hugepages,
             boot: boot,
             machine: machine,
+            guestAgentEnabled: guestAgentEnabled,
             volumes: volumes,
             networks: networks,
             console: console,
