@@ -364,7 +364,7 @@ public enum EC2MetadataRenderer {
     }
 
     private static func isServableTagKey(_ key: String) -> Bool {
-        guard !key.isEmpty, key.utf8.count <= 128, key != ".", key != "..", key != "_index" else {
+        guard !key.isEmpty, key.utf8.count <= 128, !key.contains(".."), key != "_index" else {
             return false
         }
         let punctuation = Set("+-=.,_:@".utf8)

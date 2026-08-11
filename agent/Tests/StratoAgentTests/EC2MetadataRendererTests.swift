@@ -41,6 +41,7 @@ struct EC2MetadataRendererTests {
         tags: [
             "Role": "frontend",
             "team:name": "platform",
+            "release..channel": "hidden",
             "not/a/path": "hidden",
             "_index": "reserved",
         ],
@@ -133,6 +134,7 @@ struct EC2MetadataRendererTests {
         #expect(Self.render(.tags) == "instance/")
         #expect(Self.render(.instanceTags) == "Role\nteam:name")
         #expect(Self.render(.instanceTag(key: "Role")) == "frontend")
+        #expect(Self.render(.instanceTag(key: "release..channel")) == nil)
         #expect(Self.render(.instanceTag(key: "not/a/path")) == nil)
         #expect(Self.render(.instanceTag(key: "_index")) == nil)
     }

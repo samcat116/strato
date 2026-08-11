@@ -153,6 +153,7 @@ struct MetadataRouterTests {
             "latest/meta-data",  // not origin-form
             "http://169.254.169.254/latest/meta-data",
             "/latest/../../etc/passwd",
+            "/latest/meta-data/tags/instance/release..channel",
             "/latest/meta-data/%2e%2e",
             "/latest/meta-data?x=1",
             "/latest/meta-data#frag",
