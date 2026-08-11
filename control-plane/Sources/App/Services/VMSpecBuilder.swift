@@ -242,6 +242,7 @@ struct VMSpecBuilder {
                 firmware: vm.firmwarePath
             ),
             machine: MachineProfile(secureBoot: vm.secureBoot, tpm: vm.tpmEnabled),
+            guestAgentEnabled: vm.guestAgentEnabled,
             volumes: volumeSpecs,
             networks: networkSpecs(
                 fromResolved: resolvedInterfaces,

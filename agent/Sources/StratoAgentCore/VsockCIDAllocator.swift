@@ -210,7 +210,10 @@ public struct VsockCIDAllocator: Sendable {
         entries: [String: VMManifestEntry], quarantined: [String: QuarantinedManifestEntry]
     ) -> [VsockCIDClaimRefusal] {
         let claims =
-            entries.compactMap { id, entry in entry.vsockCID.map { (id: id, cid: $0) } }
+            entries.compactMap { id, entry in
+                guard entry.spec.guestAgentEnabled else { return nil }
+                return entry.vsockCID.map { (id: id, cid: $0) }
+            }
             + quarantined.compactMap { id, entry in entry.vsockCID.map { (id: id, cid: $0) } }
 
         var refusals: [VsockCIDClaimRefusal] = []

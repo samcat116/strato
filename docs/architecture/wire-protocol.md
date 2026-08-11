@@ -50,7 +50,7 @@ struct MessageEnvelope {
 ## Versioning
 
 `WireProtocol.swift` holds the one accepted protocol version (`currentVersion`,
-currently 44). The required registration fields
+currently 45). The required registration fields
 `AgentRegisterMessage.protocolVersion` and
 `AgentRegisterResponseMessage.protocolVersion` are the sole version handshake.
 Envelopes intentionally carry no duplicate version.
@@ -61,10 +61,15 @@ refuse missing, older, and future versions before desired or observed state is
 exchanged. There is no rolling mixed-version window and no per-feature protocol
 gate.
 
-Wire v44 keeps the v43 `sandbox_exec_*` discriminators routable for one release.
+Wire v44 introduced the generalized `guest_exec_*` stream while keeping the v43
+`sandbox_exec_*` discriminators routable.
 An upgraded agent translates a legacy start to `resourceKind: sandbox`, and the
 control plane accepts legacy response names. This is message-level tolerance for
 the exec rename only; it does not weaken the exact registration handshake.
+
+Wire v45 adds QEMU guest-agent intent, fixed host-global vsock CIDs, and the
+per-hypervisor host capability used to keep those VMs off nodes without
+`/dev/vhost-vsock`.
 
 Two consequences worth knowing:
 
@@ -74,10 +79,11 @@ Two consequences worth knowing:
   matching release, then restart it so it can register again.
 - **Capabilities still exist, and they are not versions.** A capability
   (`sandboxCapable`, `sandboxNetworkingCapable`, `tpmCapable`,
-  `resolverCapable`) is evidence that a *host* can realize a feature — a
-  runtime, a binary, a guest image — all installed independently of the agent
-  binary. Version says "the peer understands the payload"; capability says
-  "the host can act on it". The exact handshake answers the first question;
+  `resolverCapable`, or QEMU `supportsVsock`) is evidence that a *host* can
+  realize a feature — a runtime, a binary, a guest image — all installed
+  independently of the agent binary. Version says "the peer understands the
+  payload"; capability says "the host can act on it". The exact handshake
+  answers the first question;
   capabilities keep answering the second per host, re-probed at every
   registration.
 

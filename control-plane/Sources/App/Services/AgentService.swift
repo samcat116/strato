@@ -2695,7 +2695,8 @@ actor AgentService {
                     siteID: agent.$site.id,
                     supportsSandboxWorkloads: agent.sandboxCapable,
                     supportsSandboxNetworking: agent.sandboxNetworkingCapable,
-                    supportsVTPM: agent.tpmCapable
+                    supportsVTPM: agent.tpmCapable,
+                    supportsVsock: agent.supportsVsock
                 )
             }
         } catch {

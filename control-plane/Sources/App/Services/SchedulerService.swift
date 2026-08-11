@@ -51,6 +51,9 @@ struct SchedulableAgent: Sendable {
     /// Whether this agent can give a guest an emulated TPM 2.0 (issue #565):
     /// it advertised swtpm at registration.
     let supportsVTPM: Bool
+    /// Whether this agent's QEMU backend can attach a host-backed
+    /// virtio-vsock device for the Strato guest agent.
+    let supportsVsock: Bool
 
     init(
         id: String,
@@ -69,7 +72,8 @@ struct SchedulableAgent: Sendable {
         siteID: UUID? = nil,
         supportsSandboxWorkloads: Bool = false,
         supportsSandboxNetworking: Bool = false,
-        supportsVTPM: Bool = false
+        supportsVTPM: Bool = false,
+        supportsVsock: Bool = false
     ) {
         self.id = id
         self.name = name
@@ -88,6 +92,7 @@ struct SchedulableAgent: Sendable {
         self.supportsSandboxWorkloads = supportsSandboxWorkloads
         self.supportsSandboxNetworking = supportsSandboxNetworking
         self.supportsVTPM = supportsVTPM
+        self.supportsVsock = supportsVsock
     }
 
     /// Calculate resource utilization percentage (0.0 to 1.0)
@@ -142,7 +147,8 @@ struct SchedulableAgent: Sendable {
             siteID: siteID,
             supportsSandboxWorkloads: supportsSandboxWorkloads,
             supportsSandboxNetworking: supportsSandboxNetworking,
-            supportsVTPM: supportsVTPM
+            supportsVTPM: supportsVTPM,
+            supportsVsock: supportsVsock
         )
     }
 }
@@ -185,6 +191,10 @@ struct VMPlacementRequirements: Sendable {
     /// silently loses its TPM fails Windows setup with nothing in the API
     /// explaining why.
     let requiresVTPM: Bool
+    /// Whether the VM enables the Strato guest agent and therefore requires
+    /// a host-backed virtio-vsock device. Hard constraint: without it the VM
+    /// cannot start.
+    let requiresVsock: Bool
     /// Whether the VM asks for UEFI Secure Boot. Hard constraint on the wire
     /// protocol only — any agent that understands the machine profile can
     /// resolve a signed firmware set (or fail the create loudly if its host
@@ -204,7 +214,8 @@ struct VMPlacementRequirements: Sendable {
         siteID: UUID? = nil,
         requiresSandboxRuntime: Bool = false,
         requiresSandboxNetworking: Bool = false,
-        requiresVTPM: Bool = false
+        requiresVTPM: Bool = false,
+        requiresVsock: Bool = false
     ) {
         self.cpu = cpu
         self.memory = memory
@@ -216,6 +227,7 @@ struct VMPlacementRequirements: Sendable {
         self.requiresSandboxRuntime = requiresSandboxRuntime
         self.requiresSandboxNetworking = requiresSandboxNetworking
         self.requiresVTPM = requiresVTPM
+        self.requiresVsock = requiresVsock
     }
 }
 
@@ -229,6 +241,7 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
     case sandboxRuntimeUnsatisfied(eligibleAgents: Int)
     case sandboxNetworkingUnsatisfied(eligibleAgents: Int)
     case vtpmUnsatisfied(eligibleAgents: Int)
+    case vsockUnsatisfied(eligibleAgents: Int)
     case siteUnsatisfied(requiredSiteID: UUID)
     case insufficientResources(required: VMPlacementRequirements, available: [SchedulableAgent])
     case invalidStrategy(String)
@@ -269,6 +282,10 @@ enum SchedulerError: Error, CustomStringConvertible, Sendable {
                 + "hypervisor node (Debian/Ubuntu: `apt install swtpm swtpm-tools`), restart libvirtd there "
                 + "(it caches host capabilities, so installing the package alone changes nothing), and let its "
                 + "agent re-register"
+        case .vsockUnsatisfied(let eligibleAgents):
+            return
+                "No eligible QEMU agent can provide virtio-vsock (\(eligibleAgents) agent(s) checked) — load the "
+                + "vhost_vsock kernel module, ensure /dev/vhost-vsock exists, and let the agent re-register"
         case .siteUnsatisfied(let requiredSiteID):
             return
                 "No online agent belongs to site \(requiredSiteID) required by the VM's network pinning"
@@ -334,7 +351,8 @@ final class SchedulerService: Sendable {
             hypervisorType: vm.hypervisorType,
             architecture: architecture,
             siteID: siteID,
-            requiresVTPM: vm.tpmEnabled
+            requiresVTPM: vm.tpmEnabled,
+            requiresVsock: vm.guestAgentEnabled
         )
     }
 
@@ -577,6 +595,18 @@ final class SchedulerService: Sendable {
                 throw SchedulerError.vtpmUnsatisfied(eligibleAgents: machineCapable.count)
             }
             machineCapable = tpmCapable
+        }
+
+        // The Strato guest agent communicates over virtio-vsock. QEMU cannot
+        // start a domain containing that device unless the host exposes the
+        // vhost-vsock backend, so this is a placement constraint rather than
+        // merely an agent-side warning.
+        if requirements.requiresVsock {
+            let vsockCapable = machineCapable.filter { $0.supportsVsock }
+            guard !vsockCapable.isEmpty else {
+                throw SchedulerError.vsockUnsatisfied(eligibleAgents: machineCapable.count)
+            }
+            machineCapable = vsockCapable
         }
 
         // An agent with unknown architecture cannot prove it satisfies an

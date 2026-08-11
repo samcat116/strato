@@ -5356,6 +5356,11 @@ export interface components {
              */
             tpm: boolean;
             /**
+             * @description Attach Strato's fixed-CID virtio-vsock channel for the in-guest daemon. This is distinct from QEMU guest agent (qga), is supported only for QEMU VMs, and is fixed at creation because it changes the domain's PCI device topology.
+             * @default false
+             */
+            guestAgentEnabled: boolean;
+            /**
              * @description Give the guest a display device and a VNC server, so its framebuffer can be driven from the web UI — what a graphical OS installer needs. Requires a QEMU VM placed on an agent new enough to realize it; rejected for firecracker, which emulates no display device. Fixed at creation: the display lives in the hypervisor process's arguments, so an existing VM cannot gain or lose one.
              * @default false
              */
@@ -5428,6 +5433,8 @@ export interface components {
             secureBoot?: boolean;
             /** @description Whether the guest has an emulated TPM 2.0. */
             tpmEnabled?: boolean;
+            /** @description Whether this VM was created with Strato's virtio-vsock guest-agent channel. Distinct from `qgaAvailable`. */
+            guestAgentEnabled?: boolean;
             /** @description Whether the guest has a display device whose framebuffer the web UI can attach to. Fixed at creation. */
             graphicsConsole?: boolean;
             /** @description Whether the instance metadata service answers this VM. This is the VM's own switch, not the effective answer: a VM on a network with metadata turned off still reports `true` here unless someone turned it off for this VM. */
@@ -7768,6 +7775,8 @@ export interface components {
             accelerated: boolean;
             unavailabilityReason?: string | null;
             capabilities: components["schemas"]["AgentHypervisorCapabilities"];
+            /** @description Whether this host can attach a virtio-vsock device for this hypervisor; null for agents that predate vsock probing. */
+            supportsVsock?: boolean | null;
             /** @description The hypervisor binary's probed version; null for agents predating version probing or when the probe failed. */
             version?: string | null;
         };

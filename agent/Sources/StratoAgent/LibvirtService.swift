@@ -579,7 +579,8 @@ actor LibvirtService: HypervisorService {
     func createVM(
         vmId: String, spec: VMSpec, imageInfo: ImageInfo? = nil,
         networkAttachments: [ResolvedNetworkAttachment] = [],
-        metadata: InstanceMetadata? = nil
+        metadata: InstanceMetadata? = nil,
+        vsockCID: UInt32? = nil
     ) async throws {
         try await perform("create", vmId: vmId) {
             logger.info("Creating libvirt domain", metadata: ["vmId": .string(vmId)])
@@ -641,6 +642,7 @@ actor LibvirtService: HypervisorService {
                 architecture: .current,
                 accelerator: accelerator,
                 firmware: firmwareSet,
+                vsockCID: vsockCID,
                 memoryHardLimitBytes: memoryControllerAvailable
                     ? QEMUMemoryCeiling.bytes(
                         guestMemoryBytes: spec.memoryBytes, overheadBytes: memoryOverheadBytes)

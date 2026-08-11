@@ -15,7 +15,7 @@ struct AgentMessageTests {
             hypervisors: [
                 HypervisorSupport(
                     type: .firecracker, available: true, accelerated: true,
-                    capabilities: .capabilities(for: .firecracker))
+                    capabilities: .capabilities(for: .firecracker), supportsVsock: true)
             ]
         )
         let decoded = try throughEnvelope(message)
@@ -26,12 +26,36 @@ struct AgentMessageTests {
         #expect(decoded.hostname == "hv-01.example")
         #expect(decoded.version == "1.2.3")
         #expect(decoded.effectiveHypervisors.map(\.type) == [.firecracker])
+        #expect(decoded.effectiveHypervisors.first?.supportsVsock == true)
         #expect(decoded.resources.totalCPU == Fixtures.resources.totalCPU)
         #expect(decoded.resources.availableCPU == Fixtures.resources.availableCPU)
         #expect(decoded.resources.totalMemory == Fixtures.resources.totalMemory)
         #expect(decoded.resources.availableMemory == Fixtures.resources.availableMemory)
         #expect(decoded.resources.totalDisk == Fixtures.resources.totalDisk)
         #expect(decoded.resources.availableDisk == Fixtures.resources.availableDisk)
+    }
+
+    @Test("Persisted hypervisor reports from before vsock probing still decode as unknown")
+    func oldHypervisorReportDecodesWithoutVsockCapability() throws {
+        let json = """
+            {
+              "type": "qemu",
+              "available": true,
+              "accelerated": true,
+              "capabilities": {
+                "type": "qemu",
+                "supportsPause": true,
+                "supportsLiveMigration": true,
+                "supportsSnapshots": true,
+                "requiresDirectKernelBoot": false,
+                "maxVCPUs": 1024,
+                "maxMemory": 17592186044416
+              }
+            }
+            """
+
+        let decoded = try JSONDecoder().decode(HypervisorSupport.self, from: Data(json.utf8))
+        #expect(decoded.supportsVsock == nil)
     }
 
     @Test("Sandbox capability is opt-in: absent unless the runtime advertises it")
