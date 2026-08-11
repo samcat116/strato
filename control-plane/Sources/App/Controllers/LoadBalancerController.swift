@@ -159,11 +159,26 @@ struct LoadBalancerController: RouteCollection {
     func delete(req: Request) async throws -> HTTPStatus {
         let loadBalancer = try await find(req, action: "loadbalancer:delete")
         let id = try loadBalancer.requireID()
+        let networkID = loadBalancer.$logicalNetwork.id
         try await req.db.transaction { db in
             // FloatingIP.load_balancer_id is SET NULL: deleting the load
             // balancer withdraws external exposure without releasing the
             // project's reserved floating address.
             try await loadBalancer.delete(on: db)
+            // The LB and its cascading floating-IP detach both disappear from
+            // this network's authoritative desired state. Advance the network
+            // ordering key in the same transaction so an older payload cannot
+            // recreate either OVN row after this deletion commits.
+            switch try await DesiredStateGenerationWriter.advance(
+                schema: LogicalNetwork.schema, id: networkID, on: db)
+            {
+            case .applied:
+                break
+            case .missing:
+                throw Abort(.notFound, reason: "Network no longer exists")
+            case .superseded:
+                throw Abort(.internalServerError, reason: "Network generation did not advance")
+            }
             try await RoleBindingService.revokeAll(nodeType: .loadBalancer, nodeID: id, on: db)
             try await QuotaEnforcementService.release(for: loadBalancer, on: db)
         }

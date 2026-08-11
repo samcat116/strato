@@ -112,4 +112,62 @@ final class LoadBalancerControllerTests {
             #expect(unchanged.generation == 1)
         }
     }
+
+    @Test("Deleting a load balancer advances its network generation")
+    func deleteAdvancesNetworkGeneration() async throws {
+        try await withLoadBalancerTestApp { app, organization, project, token in
+            let organizationID = try organization.requireID()
+            let projectID = try project.requireID()
+            let site = Site(
+                name: "delete-site", organizationScope: .organization(organizationID))
+            try await site.save(on: app.db)
+
+            let network = LogicalNetwork(
+                name: "delete-network",
+                subnet: "10.30.0.0/24",
+                gateway: "10.30.0.1",
+                projectID: projectID,
+                siteID: try site.requireID())
+            try await network.save(on: app.db)
+
+            let loadBalancer = LoadBalancer(
+                name: "delete-api",
+                projectID: projectID,
+                logicalNetworkID: try network.requireID(),
+                vip: "10.30.0.10",
+                protocolName: .tcp)
+            try await loadBalancer.save(on: app.db)
+
+            let pool = FloatingIPPool(
+                name: "delete-public",
+                cidr: "203.0.113.0/24",
+                gateway: "203.0.113.1",
+                siteID: try site.requireID(),
+                organizationScope: .organization(organizationID))
+            try await pool.save(on: app.db)
+            let floatingIP = FloatingIP(
+                poolID: try pool.requireID(),
+                address: "203.0.113.10",
+                projectID: projectID,
+                loadBalancerID: try loadBalancer.requireID())
+            try await floatingIP.save(on: app.db)
+
+            try await app.test(
+                .DELETE, "/api/load-balancers/\(try loadBalancer.requireID())"
+            ) { request in
+                request.headers.bearerAuthorization = BearerAuthorization(token: token)
+            } afterResponse: { response in
+                #expect(response.status == .noContent)
+            }
+
+            let reloadedNetwork = try #require(
+                try await LogicalNetwork.find(try network.requireID(), on: app.db))
+            #expect(reloadedNetwork.generation == 2)
+            #expect(try await LoadBalancer.find(try loadBalancer.requireID(), on: app.db) == nil)
+
+            let reservedFloatingIP = try #require(
+                try await FloatingIP.find(try floatingIP.requireID(), on: app.db))
+            #expect(reservedFloatingIP.$loadBalancer.id == nil)
+        }
+    }
 }
