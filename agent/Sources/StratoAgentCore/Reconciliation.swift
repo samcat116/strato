@@ -137,6 +137,54 @@ public struct ObservedVolumeFacts: Equatable, Sendable {
     }
 }
 
+/// The boot-time dependency a VM has on its canonical managed root volume
+/// (STR-242).
+///
+/// Volume and VM convergence use separate work items, so queue order alone is
+/// not a proof that a successful volume step actually produced the bytes the VM
+/// is about to open. This check is deliberately over the storage inventory the
+/// agent just measured and its durable attachment record. A missing, unreadable,
+/// undersized, or not-yet-attached root disk is a dependency wait: the periodic
+/// level-triggered sync retries the boot after volume convergence changes, with
+/// no new VM mutation and no attempt burned.
+public enum VMBootVolumeDependency {
+    /// Returns why `spec` is not safe to boot, or nil once its one canonical
+    /// boot volume is present, attached to `vmId`, and exactly the requested
+    /// virtual size.
+    public static func pendingReason(
+        vmId: String,
+        spec: VMSpec,
+        desiredVolumes: [String: DesiredVolumeState],
+        observedVolumes: [String: ObservedVolumeFacts]
+    ) -> String? {
+        let bootVolumes = spec.volumes.filter { $0.bootOrder == 0 }
+        guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
+            return "VM \(vmId) does not have exactly one canonical managed boot volume"
+        }
+
+        let volumeId = bootVolume.volumeId.uuidString
+        guard let desiredVolume = desiredVolumes[volumeId], desiredVolume.desiredStatus == .present else {
+            return "managed boot volume \(volumeId) for VM \(vmId) has no present desired state"
+        }
+        let requestedSize = desiredVolume.sizeBytes
+        guard let observed = observedVolumes[volumeId] else {
+            return "managed boot volume \(volumeId) for VM \(vmId) is not present on this agent yet"
+        }
+        guard let observedSize = observed.sizeBytes else {
+            return "managed boot volume \(volumeId) for VM \(vmId) has no readable virtual size yet"
+        }
+        guard observedSize == requestedSize else {
+            return
+                "managed boot volume \(volumeId) for VM \(vmId) is \(observedSize) bytes; waiting for the requested \(requestedSize) bytes"
+        }
+        guard observed.attachedVMId == vmId, observed.deviceName == bootVolume.deviceName.rawValue else {
+            return
+                "managed boot volume \(volumeId) is not yet attached to VM \(vmId) as \(bootVolume.deviceName.rawValue)"
+        }
+        return nil
+    }
+}
+
 /// The sizing a VM on this host is actually running with, as opposed to the
 /// sizing its desired spec asks for. Only the dimensions that can move on a
 /// live guest: the two hot-addable ones (issue #568) plus its balloon target
@@ -1166,17 +1214,32 @@ public actor Reconciler {
         // a VM that references it is built. A newly created attached volume is
         // one item (`create`, then `attach`) that already holds the VM lane, so
         // it must join that first group too; otherwise its VM runs first and
-        // cannot resolve the volume's local path. Remaining attachment work goes
-        // after the VM items so it queues behind that VM's create/boot on the
-        // VM's own lane instead of racing it and burning a dependency wait.
+        // cannot resolve the volume's local path. A resize of the boot volume
+        // for a VM that is about to boot is data-plane work too, even though the
+        // volume already carries an attachment and therefore holds the VM lane.
+        // It must queue before that boot; putting it with attachment work lets
+        // the boot win and makes the grow refuse itself against the now-running
+        // guest (STR-242). Other attached resize work remains after VM items so
+        // a shutdown requested in the same sync can run first. Remaining
+        // attachment work goes there for the same reason: it queues behind that
+        // VM's create/boot on the VM's own lane instead of racing it and burning
+        // a dependency wait.
         //
         // Snapshot work goes last for the same reason volume attachment does:
         // a capture holds its parent's lane, so enqueuing it after the parent's
         // own items is what makes it queue *behind* that parent's create/boot
         // instead of racing it — and a checkpoint of a guest that is still
         // being built is not a checkpoint of anything.
+        let bootingVMIDs = Set(
+            vmPlan.items.lazy.filter { $0.steps.contains(.boot) }.map(\.id))
+        let bootVolumeIDs = Set(
+            message.vms.lazy
+                .filter { bootingVMIDs.contains($0.vmId.uuidString) }
+                .flatMap { $0.spec.volumes.lazy.filter { $0.bootOrder == 0 }.map(\.volumeId.uuidString) }
+        )
         let (volumeData, volumeAttachment) = volumePlan.items.partitioned {
             $0.laneKeys.count == 1 || $0.steps.contains(.create)
+                || ($0.steps.contains(.resize) && bootVolumeIDs.contains($0.id))
         }
         plan.items =
             volumeData + vmPlan.items + volumeAttachment + sandboxPlan.items + snapshotPlan.items

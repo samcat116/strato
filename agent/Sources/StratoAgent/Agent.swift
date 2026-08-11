@@ -369,6 +369,10 @@ actor Agent {
     /// on this sync. Creation must fail closed for these IDs: materializing the
     /// source image would silently replace the guest's changed boot disk.
     private var volumeAdoptionFailures: [String: String] = [:]
+    /// Authoritative volume desires from the latest sync. VM boot uses this
+    /// rather than `VMSpec.diskBytes`, which is a scheduler reservation and can
+    /// lag an independent managed boot-volume resize (STR-242).
+    private var desiredVolumeStates: [String: DesiredVolumeState] = [:]
 
     // Simulation ("dummy agent") mode: the agent speaks the full control-plane
     // protocol but drives a no-op mock hypervisor with no real
@@ -3784,6 +3788,9 @@ extension Agent: ReconcileActuator {
         from desiredVMs: [DesiredVMState], desiredVolumes: [DesiredVolumeState]
     ) async {
         volumeAdoptionFailures = [:]
+        desiredVolumeStates = Dictionary(
+            desiredVolumes.map { ($0.volumeId.uuidString, $0) },
+            uniquingKeysWith: { first, _ in first })
         guard let storageBackend else { return }
         var formats: [UUID: DiskFormat] = [:]
         for volume in desiredVolumes {
@@ -4007,6 +4014,32 @@ extension Agent: ReconcileActuator {
             let current = managedVMs[item.id] ?? orphanedVMs[item.id]
         else {
             throw HypervisorServiceError.invalidConfiguration("boot work item without a managed VM spec")
+        }
+
+        // A VM start is downstream of its managed boot volume, not merely of a
+        // path with that volume's id (STR-242). Image-backed creation produces
+        // the source image's native virtual size first and grows it in a later
+        // volume step. Re-check the storage inventory and durable attachment at
+        // the last possible moment so a failed or slow grow cannot be followed
+        // by a successful boot just because both items were in one sync.
+        guard let volumePresence = await observedVolumePresence() else {
+            throw DependencyPendingError(
+                "managed boot-volume inventory is unreadable; VM \(item.id) will remain stopped until it can be verified"
+            )
+        }
+        let observedVolumes = volumePresence.reduce(into: [String: ObservedVolumeFacts]()) {
+            result, entry in
+            if case .managed(let facts) = entry.value {
+                result[entry.key] = facts
+            }
+        }
+        if let reason = VMBootVolumeDependency.pendingReason(
+            vmId: item.id,
+            spec: desired.spec,
+            desiredVolumes: desiredVolumeStates,
+            observedVolumes: observedVolumes)
+        {
+            throw DependencyPendingError(reason)
         }
 
         let raw = await rawHostCapacitySnapshot()
