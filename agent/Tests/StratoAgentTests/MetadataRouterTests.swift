@@ -151,6 +151,20 @@ struct MetadataRouterTests {
         #expect(Self.status(of: Self.route("GET", target)) == 400)
     }
 
+    @Test("Identity audiences use the issuer's character limit")
+    func identityAudienceLengthLimit() {
+        let accepted = String(repeating: "a", count: 255)
+        let rejected = String(repeating: "a", count: 256)
+
+        #expect(
+            Self.route("GET", "\(MetadataRouter.identityPath)?audience=\(accepted)")
+                == .identity(audience: accepted))
+        #expect(
+            Self.status(
+                of: Self.route("GET", "\(MetadataRouter.identityPath)?audience=\(rejected)"))
+                == 400)
+    }
+
     @Test("Header lookup is case-insensitive in the name and exact in the value")
     func headerCasing() {
         #expect(

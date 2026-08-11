@@ -1,5 +1,17 @@
 import Foundation
 
+/// Bounds shared by every guest JWT-SVID entry point. Keeping these beside the
+/// wire model prevents the agent from accepting a request the control plane
+/// will refuse after the policy has already advertised it to the guest.
+public enum GuestIdentityLimits {
+    public static let maximumAudiencesPerRequest = 8
+    public static let maximumAudienceCharacters = 255
+
+    public static func isValidAudience(_ audience: String) -> Bool {
+        !audience.isEmpty && audience.count <= maximumAudienceCharacters
+    }
+}
+
 /// The guest identity document an agent asks the control plane to mint for a
 /// VM it currently hosts.
 public struct GuestJWTSVIDRequest: Codable, Sendable, Equatable {

@@ -13,8 +13,19 @@ struct GuestIdentityIssuanceConfigTests {
             ("vault", Set(["vault"])),
             (" vault,registry,vault, ", Set(["vault", "registry"])),
         ])
-    func audienceParsing(raw: String?, expected: Set<String>) {
-        #expect(GuestIdentityIssuanceConfig.audiences(rawValue: raw) == expected)
+    func audienceParsing(raw: String?, expected: Set<String>) throws {
+        #expect(try GuestIdentityIssuanceConfig.audiences(rawValue: raw) == expected)
+    }
+
+    @Test("Audience parsing rejects values the issuer cannot mint")
+    func audienceLengthLimit() throws {
+        let accepted = String(repeating: "a", count: 255)
+        let rejected = String(repeating: "a", count: 256)
+
+        #expect(try GuestIdentityIssuanceConfig.audiences(rawValue: accepted) == [accepted])
+        #expect(throws: GuestIdentityIssuanceConfigurationError.self) {
+            try GuestIdentityIssuanceConfig.audiences(rawValue: rejected)
+        }
     }
 
     @Test(

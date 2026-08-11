@@ -1,4 +1,5 @@
 import Foundation
+import StratoShared
 
 /// The request headers of the IMDSv2 handshake (STR-56).
 ///
@@ -27,11 +28,10 @@ public enum MetadataLimits {
     public static let minTokenTTLSeconds = 1
     public static let maxTokenTTLSeconds = 21600
 
-    /// Longest request target accepted. The identity audience is capped at 512
-    /// bytes by the issuer, so leave room for its path and percent encoding
-    /// while still bounding what an untrusted guest can make the agent hold.
+    /// Longest request target accepted. This leaves room for an identity
+    /// audience and percent encoding while still bounding what an untrusted
+    /// guest can make the agent hold.
     public static let maxTargetBytes = 2 * 1024
-    public static let maxIdentityAudienceBytes = 512
     /// Cap on the buffered request head, enforced by the decoder's
     /// `maximumBufferSize`.
     public static let maxRequestHeadBytes = 8 * 1024
@@ -280,8 +280,8 @@ public enum MetadataRouter {
         let pair = items[0].split(separator: "=", maxSplits: 1, omittingEmptySubsequences: false)
         guard pair.count == 2, pair[0] == "audience" else { return nil }
         let raw = String(pair[1])
-        guard let audience = raw.removingPercentEncoding, !audience.isEmpty,
-            audience.utf8.count <= MetadataLimits.maxIdentityAudienceBytes,
+        guard let audience = raw.removingPercentEncoding,
+            GuestIdentityLimits.isValidAudience(audience),
             audience.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) })
         else { return nil }
         return audience

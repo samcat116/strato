@@ -127,13 +127,14 @@ struct AgentGuestIdentityController: RouteCollection {
         }
         guard
             !audiences.isEmpty,
-            audiences.count <= 8,
-            audiences.allSatisfy({ !$0.isEmpty && $0.count <= 255 })
+            audiences.count <= GuestIdentityLimits.maximumAudiencesPerRequest,
+            audiences.allSatisfy(GuestIdentityLimits.isValidAudience)
         else {
             throw await refusal(
                 .invalidRequest,
                 status: .badRequest,
-                reason: "audiences must contain 1 to 8 non-empty values of at most 255 characters",
+                reason: "audiences must contain 1 to \(GuestIdentityLimits.maximumAudiencesPerRequest) "
+                    + "non-empty values of at most \(GuestIdentityLimits.maximumAudienceCharacters) characters",
                 req: req,
                 authenticatedAgent: authenticatedAgent,
                 agentID: agentID,
