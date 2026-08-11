@@ -437,7 +437,7 @@ public actor MockSandboxRuntime: SandboxRuntimeService {
     public func controlPlaneDisconnected() async {
         controlPlaneIsConnected = false
         // Exec sessions: their frontends are unreachable and the control plane
-        // cannot send sandboxExecClose over the dead socket — end them, as the
+        // cannot send guestExecClose over the dead socket — end them, as the
         // real runtime does (the .closed events are dropped by the dead send
         // path, which is fine).
         for (sessionId, session) in execSessions {

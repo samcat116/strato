@@ -23,6 +23,14 @@ struct MessageTypeTests {
         case .success: return "success"
         case .error: return "error"
         case .vmLog: return "vm_log"
+        case .guestExecStart: return "guest_exec_start"
+        case .guestExecStarted: return "guest_exec_started"
+        case .guestExecInput: return "guest_exec_input"
+        case .guestExecOutput: return "guest_exec_output"
+        case .guestExecResize: return "guest_exec_resize"
+        case .guestExecExit: return "guest_exec_exit"
+        case .guestExecClose: return "guest_exec_close"
+        case .guestExecClosed: return "guest_exec_closed"
         case .sandboxExecStart: return "sandbox_exec_start"
         case .sandboxExecStarted: return "sandbox_exec_started"
         case .sandboxExecInput: return "sandbox_exec_input"
@@ -40,6 +48,8 @@ struct MessageTypeTests {
         .consoleConnect, .consoleDisconnect, .consoleData, .consoleConnected, .consoleDisconnected,
         .desiredState, .observedState,
         .success, .error, .vmLog,
+        .guestExecStart, .guestExecStarted, .guestExecInput, .guestExecOutput,
+        .guestExecResize, .guestExecExit, .guestExecClose, .guestExecClosed,
         .sandboxExecStart, .sandboxExecStarted, .sandboxExecInput, .sandboxExecOutput,
         .sandboxExecResize, .sandboxExecExit, .sandboxExecClose, .sandboxExecClosed,
         .sandboxLog,

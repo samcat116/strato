@@ -353,7 +353,7 @@ actor WebSocketClient {
         // journal — enough to take the host down by itself. The same reasoning
         // has always applied to exec output, just at a survivable rate.
         switch message.type {
-        case .consoleData, .sandboxExecInput, .sandboxExecOutput:
+        case .consoleData, .guestExecInput, .guestExecOutput, .sandboxExecInput, .sandboxExecOutput:
             logger.debug(
                 "Message payload",
                 metadata: [

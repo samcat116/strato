@@ -11,10 +11,11 @@ import Foundation
 /// one pinned date representation. The current encoder emits Foundation numeric
 /// dates; the decoder also accepts ISO-8601 strings.
 public enum WireProtocol {
-    /// The only wire/schema version this build accepts. Version 43 carries the
-    /// per-NIC DHCP and link-local service inputs needed to render NoCloud-net
-    /// network-config from `InstanceMetadata` (STR-60).
-    public static let currentVersion = 43
+    /// The only wire/schema version this build accepts. Version 44 generalizes
+    /// the interactive exec stream across VMs and sandboxes with `guest_exec_*`
+    /// message types and a resource-kind discriminator on start (STR-78), on
+    /// top of v43's NoCloud-net metadata additions (STR-60).
+    public static let currentVersion = 44
 
     /// The JSON encoder for all wire messages. Dates are pinned explicitly to
     /// Foundation's `deferredToDate` numeric form.

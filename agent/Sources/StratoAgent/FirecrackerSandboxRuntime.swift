@@ -2588,7 +2588,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
         // (epoch bumped) before this one was registered, registering now would
         // bind the session to a stopped/deleted sandbox that can never deliver
         // a terminal event — refuse instead; the thrown error becomes the
-        // control plane's `sandboxExecClosed`.
+        // control plane's `guestExecClosed`.
         guard let current = sandboxes[sandboxId], current.execSweepEpoch == sweepEpoch else {
             await connection.close()
             throw SandboxRuntimeError.sandboxNotFound(
@@ -2748,7 +2748,7 @@ actor FirecrackerSandboxRuntime: SandboxRuntimeService {
 
     func controlPlaneDisconnected() async {
         // Exec sessions: their frontends are unreachable and the control plane
-        // cannot send sandboxExecClose over the dead socket. Closing the guest
+        // cannot send guestExecClose over the dead socket. Closing the guest
         // connections kills the exec process groups; the .closed events this
         // emits are dropped by the (dead) send path, which is fine — the
         // control plane tears its side down in its own agent-close handler.
