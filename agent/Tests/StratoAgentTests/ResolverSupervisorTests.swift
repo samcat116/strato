@@ -84,6 +84,7 @@ struct ResolverSupervisorTests {
         #expect(await host.terminatedHandles() == 1)
         #expect(await host.removed() == 1)
         #expect(await !supervisor.isServing())
+        #expect(await supervisor.failures() == 0, "an intentional stop is not a resolver failure")
     }
 
     @Test("A nil request list stops nothing")
@@ -128,13 +129,13 @@ struct ResolverSupervisorTests {
         let supervisor = supervisor(host: host, clock: clock)
 
         await supervisor.reconcile(request([a]))
-        // Each reconciliation notices an instant exit and installs one wakeup.
-        // Advancing the clock runs that wakeup without another reconciliation,
-        // which exercises the production crash-loop path rather than manually
-        // driving every replacement from desired state.
+        // Each child reports its own instant exit and installs one wakeup.
+        // After the first clock advance every child here was timer-started, so
+        // reaching failure eight without any further reconciliation proves the
+        // exit observer keeps the autonomous crash-loop backoff alive.
         for failure in 1...8 {
-            host.kill()
-            await supervisor.reconcile(request([a]))
+            await host.kill()
+            #expect(await supervisor.failures() == failure)
             #expect(clock.scheduledCount() == 1)
             let delay = ResolverSupervisionPolicy.restartDelay(consecutiveFailures: failure)
             await clock.advance(by: TimeInterval(delay.components.seconds))
@@ -158,16 +159,14 @@ struct ResolverSupervisorTests {
 
         // One instant death: the counter goes to 1.
         await supervisor.reconcile(request([a]))
-        host.kill()
-        await supervisor.reconcile(request([a]))
+        await host.kill()
         #expect(await supervisor.failures() == 1)
 
         // Then a replacement that runs a healthy stretch before exiting.
         let delay = ResolverSupervisionPolicy.restartDelay(consecutiveFailures: 1)
         await clock.advance(by: TimeInterval(delay.components.seconds))
         await clock.advance(by: ResolverSupervisionPolicy.healthyRuntimeSeconds + 1)
-        host.kill()
-        await supervisor.reconcile(request([a]))
+        await host.kill()
         // Cleared by the healthy run, then incremented by this exit: 1, not 2.
         #expect(await supervisor.failures() == 1)
         await supervisor.shutdown()
@@ -180,10 +179,9 @@ struct ResolverSupervisorTests {
         let supervisor = supervisor(host: host, clock: clock)
 
         await supervisor.reconcile(request([a]))
-        host.kill()
-        // The reconcile that notices the exit also imposes the window, so it
-        // must not restart in the same pass.
-        await supervisor.reconcile(request([a]))
+        await host.kill()
+        // The exit callback imposes the window, so it must not restart in the
+        // same turn.
         #expect(await host.spawned() == 1, "restart must wait for the backoff window")
 
         // Repeated syncs inside the window must reuse the same wakeup rather
@@ -211,8 +209,7 @@ struct ResolverSupervisorTests {
         let supervisor = supervisor(host: host, clock: clock)
 
         await supervisor.reconcile(request([a]))
-        host.kill()
-        await supervisor.reconcile(request([a]))
+        await host.kill()
         #expect(clock.scheduledCount() == 1)
 
         await supervisor.reconcile(request([]))
@@ -412,7 +409,7 @@ private struct FakeHandle: ResolverHandle {
 
     var isRunning: Bool { host.processIsRunning() }
     var exitedAt: Date? { host.processExitedAt() }
-    func terminate() async { host.terminateHandle() }
+    func terminate() async { await host.terminateHandle() }
 }
 
 private struct WriteRefused: Error {}
@@ -436,6 +433,7 @@ private final class FakeResolverHost: ResolverHosting, Sendable {
         var running = false
         var overlappingSpawns = 0
         var exitedAt: Date?
+        var onExit: (@Sendable () async -> Void)?
         var nextPID: Int32 = 1000
         var clock: TestClock?
     }
@@ -461,23 +459,32 @@ private final class FakeResolverHost: ResolverHosting, Sendable {
     func setDead(pids: Set<Int32>) { state.withLock { $0.deadPIDs = pids } }
 
     /// Kill the child, the way a CoreDNS that refuses its Corefile dies:
-    /// cleanly forked, then gone a moment later. The supervisor notices on its
-    /// next reconcile.
-    func kill() {
-        state.withLock { state in
+    /// cleanly forked, then gone a moment later. Awaiting the observer makes
+    /// exit accounting deterministic without another reconciliation.
+    func kill() async {
+        let onExit = state.withLock { state -> (@Sendable () async -> Void)? in
+            guard state.running else { return nil }
             state.running = false
             state.exitedAt = state.clock?.now ?? Date()
+            let onExit = state.onExit
+            state.onExit = nil
+            return onExit
         }
+        await onExit?()
     }
 
     func processIsRunning() -> Bool { state.withLock { $0.running } }
     func processExitedAt() -> Date? { state.withLock { $0.exitedAt } }
 
-    func terminateHandle() {
-        state.withLock { state in
+    func terminateHandle() async {
+        let onExit = state.withLock { state -> (@Sendable () async -> Void)? in
             state.running = false
             state.terminatedByHandle += 1
+            let onExit = state.onExit
+            state.onExit = nil
+            return onExit
         }
+        await onExit?()
     }
 
     // MARK: ResolverHosting
@@ -491,13 +498,16 @@ private final class FakeResolverHost: ResolverHosting, Sendable {
 
     func removeConfiguration(root: String) { state.withLock { $0.removals += 1 } }
 
-    func spawn(root: String) throws -> any ResolverHandle {
+    func spawn(
+        root: String, onExit: @escaping @Sendable () async -> Void
+    ) throws -> any ResolverHandle {
         let pid: Int32 = state.withLock { state in
             state.nextPID += 1
             state.spawns += 1
             if state.running { state.overlappingSpawns += 1 }
             state.running = true
             state.exitedAt = nil
+            state.onExit = onExit
             return state.nextPID
         }
         return FakeHandle(processIdentifier: pid, host: self)
