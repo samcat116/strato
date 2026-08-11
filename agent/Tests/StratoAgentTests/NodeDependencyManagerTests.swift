@@ -76,6 +76,40 @@ struct NodeDependencyManagerTests {
         #expect(await manager.refresh().first?.functionalState == .healthy)
     }
 
+    @Test("Explicit degraded inspections remain eligible without accumulating failures")
+    func preservesExplicitDegradedState() async throws {
+        let intentionalDegradation = NodeDependencyInspection(
+            supervisorState: .active,
+            compatibility: .compatible,
+            functionalState: .degraded,
+            reason: .init(
+                code: .functionalProbeFailed,
+                message: "the current X.509 SVID expires in less than five minutes"))
+        let sequence = InspectionSequence([healthy, intentionalDegradation, intentionalDegradation])
+        let manager = try NodeDependencyManager(
+            modules: [
+                ClosureNodeDependencyModule(
+                    id: .spire, role: .identity, desiredState: .required,
+                    ownership: .observeOnly, affectedCapabilities: [.workloadIdentity]
+                ) { await sequence.next() }
+            ],
+            policy: .init(functionalFailureThreshold: 2),
+            logger: Logger(label: "test"))
+
+        let healthyObservation = try #require(await manager.refresh().first)
+        let firstDegraded = try #require(await manager.refresh().first)
+        let secondDegraded = try #require(await manager.refresh().first)
+
+        #expect(healthyObservation.functionalState == .healthy)
+        #expect(firstDegraded.functionalState == .degraded)
+        #expect(secondDegraded.functionalState == .degraded)
+        #expect(firstDegraded.consecutiveFailures == 0)
+        #expect(secondDegraded.consecutiveFailures == 0)
+        #expect(secondDegraded.reason == intentionalDegradation.reason)
+        #expect(secondDegraded.lastHealthyAt == healthyObservation.lastHealthyAt)
+        #expect(secondDegraded.permitsDependentWork)
+    }
+
     @Test("A module inspection cannot hold the manager past its time budget")
     func inspectionTimeout() async throws {
         let manager = try NodeDependencyManager(

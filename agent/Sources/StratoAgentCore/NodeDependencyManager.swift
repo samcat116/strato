@@ -33,10 +33,22 @@ public struct NodeDependencyInspection: Sendable, Equatable {
         compatibility: .compatible,
         functionalState: .healthy)
 
-    var isHealthy: Bool {
+    private var isStructurallyAvailable: Bool {
         compatibility == .compatible
             && (supervisorState == .active || supervisorState == .notApplicable)
+    }
+
+    var isHealthy: Bool {
+        isStructurallyAvailable
             && functionalState == .healthy
+    }
+
+    /// A module can intentionally report a usable warning state, such as a
+    /// still-valid SPIRE SVID nearing expiry. This is not a failed health
+    /// sample and must not accumulate toward the unhealthy threshold.
+    var isExplicitlyDegraded: Bool {
+        isStructurallyAvailable
+            && functionalState == .degraded
     }
 }
 
@@ -295,6 +307,9 @@ public actor NodeDependencyManager {
 
         if module.desiredState == .disabled {
             functionalState = .healthy
+            consecutiveFailures = 0
+            state.recoverySuccesses = 0
+        } else if inspection.isExplicitlyDegraded {
             consecutiveFailures = 0
             state.recoverySuccesses = 0
         } else if inspection.isHealthy {
