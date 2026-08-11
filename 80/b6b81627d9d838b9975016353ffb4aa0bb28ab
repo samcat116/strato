@@ -1,0 +1,36 @@
+control-plane/Sources/App/Services/SchedulerService.swift
+  s_e300b0a73c2a9f::t_a3bb3b208aac06 338-343,353
+control-plane/Sources/App/Controllers/VMController.swift
+  s_e300b0a73c2a9f::t_a3bb3b208aac06 656-660
+control-plane/web/src/components/vms/create-vm-dialog.tsx
+  s_e300b0a73c2a9f::t_5d8f88d0e06f6b 593
+  s_e300b0a73c2a9f::t_a3bb3b208aac06 133-136,227,599-604
+control-plane/web/src/types/api.ts
+  s_e300b0a73c2a9f::t_a3bb3b208aac06 1178-1181
+control-plane/Tests/AppPlatformTests/SchedulerServiceTests.swift
+  s_e300b0a73c2a9f::t_a3bb3b208aac06 554-578
+docs/architecture/agent.md
+  s_e300b0a73c2a9f::t_a3bb3b208aac06 555-557,563-564
+control-plane/Tests/AppPlatformTests/VMNetworkSelectionTests.swift
+  s_e300b0a73c2a9f::t_a3bb3b208aac06 449-470
+control-plane/Sources/App/openapi.yaml
+  s_e300b0a73c2a9f::t_a3bb3b208aac06 9089-9090
+control-plane/web/src/types/openapi.ts
+  s_e300b0a73c2a9f::t_d3d7d8937326d7 5381
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "80b6b81627d9d838b9975016353ffb4aa0bb28ab",
+  "prompts": {},
+  "sessions": {
+    "s_e300b0a73c2a9f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff106-7353-7161-b6ab-b306d13023e4",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
