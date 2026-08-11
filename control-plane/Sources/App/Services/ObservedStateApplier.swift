@@ -22,6 +22,37 @@ struct ObservedStateApplier {
         let id: UUID
     }
 
+    /// Immutable report-level projection used to gate VM convergence without
+    /// issuing one boot-volume query per VM.
+    private struct BootVolumeDependency {
+        let id: UUID
+        let vmID: UUID
+        let desiredSize: Int64
+        let observedSize: Int64?
+        let generation: Int64
+        let degradedReason: String?
+        let converged: Bool
+        let status: VolumeStatus
+        let attachedAgentID: String?
+
+        init(_ volume: Volume) throws {
+            guard let attachedVMID = volume.$vm.id else {
+                throw Abort(.internalServerError, reason: "Boot volume is missing its VM relationship")
+            }
+            id = try volume.requireID()
+            vmID = attachedVMID
+            desiredSize = volume.size
+            observedSize = volume.observedSizeBytes
+            generation = volume.generation
+            degradedReason = volume.conditions.degraded.flatMap {
+                $0.sinceGeneration == volume.generation ? $0.reason : nil
+            }
+            converged = volume.isConverged
+            status = volume.status
+            attachedAgentID = volume.attachedAgentId
+        }
+    }
+
     /// What one report's teardown bookkeeping produced (STR-98), for the
     /// caller — which holds the agent row this needs to be reported against.
     struct UnrecognizedOutcome: Sendable {
@@ -196,13 +227,70 @@ struct ObservedStateApplier {
             interfacesByVMID = Dictionary(grouping: interfaces, by: \.$vm.id)
         }
 
+        // Volumes are dependencies of VM convergence (STR-242), so apply this
+        // report's volume facts before its VM facts. A single report can then
+        // make a boot volume healthy and let the dependent VM settle; doing the
+        // VM half first would leave it waiting on the previous volume state
+        // until a second otherwise-identical heartbeat.
+        //
+        // `guard let` on the field, not on a version lookup: an agent below v31
+        // omits `volumes` entirely, and treating that silence as an empty,
+        // authoritative inventory would reap terminating rows and error live
+        // ones.
+        if let reportedVolumeList = report.volumes {
+            let reportedVolumes = Dictionary(
+                reportedVolumeList.map { ($0.volumeId, $0) },
+                uniquingKeysWith: { first, _ in first }
+            )
+            let dbVolumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
+            for volume in dbVolumes {
+                guard let volumeID = volume.id else { continue }
+                if let observed = reportedVolumes[volumeID] {
+                    try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
+                        volume, tx in
+                        try await applyObservedVolumeState(
+                            volume: volume, observed: observed, agentId: report.agentId, on: tx)
+                    }
+                } else {
+                    try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
+                        volume, tx in
+                        try await handleReportedVolumeAbsence(
+                            volume: volume, agentId: report.agentId, on: tx)
+                    }
+                }
+            }
+        }
+
+        // One dependency query per report, not per VM. It runs after volume
+        // application so the snapshot includes this heartbeat's observed size,
+        // phase, and attachment.
+        let bootVolumesByVMID: [UUID: [BootVolumeDependency]]
+        if report.volumes != nil {
+            let vmIDs = dbVMs.compactMap(\.id)
+            if vmIDs.isEmpty {
+                bootVolumesByVMID = [:]
+            } else {
+                let bootVolumes = try await Volume.query(on: db)
+                    .filter(\.$vm.$id ~~ vmIDs)
+                    .filter(\.$volumeType == .boot)
+                    .all()
+                bootVolumesByVMID = Dictionary(
+                    grouping: try bootVolumes.map(BootVolumeDependency.init),
+                    by: \.vmID)
+            }
+        } else {
+            bootVolumesByVMID = [:]
+        }
+
         for vm in dbVMs {
             guard let vmID = vm.id else { continue }
             if let observed = reported[vmID] {
                 let interfaces = interfacesByVMID[vmID] ?? []
                 try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
                     try await applyObservedVMState(
-                        vm: vm, observed: observed, interfaces: interfaces, on: tx)
+                        vm: vm, observed: observed, interfaces: interfaces,
+                        bootVolumes: report.volumes == nil ? nil : bootVolumesByVMID[vmID] ?? [],
+                        on: tx)
                 }
             } else {
                 try await withLockedCurrent(vm, reportedBy: report.agentId, on: db) { vm, tx in
@@ -225,37 +313,6 @@ struct ObservedStateApplier {
                     sandbox, tx in
                     try await handleReportedSandboxAbsence(
                         sandbox: sandbox, agentId: report.agentId, on: tx)
-                }
-            }
-        }
-
-        // Volumes (STR-148). `guard let` on the *field*, not on a version
-        // lookup: an agent below v31 omits `volumes` entirely, and the whole
-        // loop below treats an unlisted volume as confirmed gone. Reading that
-        // silence as authoritative would reap every terminating volume row the
-        // agent holds and error every live one — a data-loss-shaped bug, so it
-        // is guarded by the payload describing itself rather than by a
-        // `wireProtocolVersion` column being current.
-        if let reportedVolumeList = report.volumes {
-            let reportedVolumes = Dictionary(
-                reportedVolumeList.map { ($0.volumeId, $0) },
-                uniquingKeysWith: { first, _ in first }
-            )
-            let dbVolumes = try await VolumeService.volumes(onAgent: report.agentId, on: db)
-            for volume in dbVolumes {
-                guard let volumeID = volume.id else { continue }
-                if let observed = reportedVolumes[volumeID] {
-                    try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
-                        volume, tx in
-                        try await applyObservedVolumeState(
-                            volume: volume, observed: observed, agentId: report.agentId, on: tx)
-                    }
-                } else {
-                    try await withLockedCurrent(volume, reportedBy: report.agentId, on: db) {
-                        volume, tx in
-                        try await handleReportedVolumeAbsence(
-                            volume: volume, agentId: report.agentId, on: tx)
-                    }
                 }
             }
         }
@@ -637,6 +694,7 @@ struct ObservedStateApplier {
         vm: VM,
         observed: ObservedVMState,
         interfaces: [VMNetworkInterface],
+        bootVolumes: [BootVolumeDependency]?,
         on db: Database
     ) async throws {
         let vmID = try vm.requireID()
@@ -685,15 +743,24 @@ struct ObservedStateApplier {
         // the API can project it as the VM's `conditions` block. Recorded on
         // both the converging and settled paths — the phase only exists on the
         // former, and the error pair has to be *cleared* on the latter.
+        let bootVolumePhase: String?
+        if let bootVolumes, observed.convergencePhase == nil, observed.lastError == nil,
+            vm.desiredStatus != .absent
+        {
+            bootVolumePhase = pendingBootVolumePhase(for: vm, bootVolumes: bootVolumes)
+        } else {
+            bootVolumePhase = nil
+        }
+        let effectivePhase = observed.convergencePhase ?? bootVolumePhase
         var changed = vm.recordTimestampedConvergence(
-            phase: observed.convergencePhase,
+            phase: effectivePhase,
             lastError: observed.lastError,
             failedGeneration: observed.failedGeneration
         )
 
         // Still converging: progress only. The status is not settled, so it
         // must not overwrite the row or complete operations.
-        if observed.convergencePhase != nil {
+        if effectivePhase != nil {
             if changed {
                 try await vm.save(on: db)
             }
@@ -701,7 +768,7 @@ struct ObservedStateApplier {
                 "VM converging on agent",
                 metadata: [
                     "vmId": .string(vmID.uuidString),
-                    "phase": .string(observed.convergencePhase ?? ""),
+                    "phase": .string(effectivePhase ?? ""),
                     "targetGeneration": .stringConvertible(vm.generation),
                 ])
             return
@@ -841,6 +908,42 @@ struct ObservedStateApplier {
                     vm: vm, previous: previousStatus, current: .error, on: db, logger: app.logger)
             }
         }
+    }
+
+    /// The control-plane half of the managed boot-volume dependency (STR-242).
+    ///
+    /// The agent prevents the unsafe boot. This gate prevents the independent VM
+    /// generation from being declared successful while the volume resource is
+    /// still provisioning or degraded, or while its measured virtual size
+    /// disagrees with the request. A dependency failure remains a phase, not a
+    /// VM failure: volume reconciliation is level-triggered and can repair a
+    /// transient delay at the same generation without a stop or a second start.
+    private func pendingBootVolumePhase(
+        for vm: VM, bootVolumes: [BootVolumeDependency]
+    ) -> String? {
+        guard bootVolumes.count == 1, let bootVolume = bootVolumes.first else {
+            return "waiting for exactly one canonical managed boot volume"
+        }
+
+        let prefix = "waiting for boot volume \(bootVolume.id.uuidString)"
+        if let degradedReason = bootVolume.degradedReason {
+            return "\(prefix): \(degradedReason)"
+        }
+        guard let observedSize = bootVolume.observedSize else {
+            return "\(prefix): the agent has not reported its virtual size"
+        }
+        guard observedSize == bootVolume.desiredSize else {
+            return "\(prefix): observed \(observedSize) of \(bootVolume.desiredSize) requested bytes"
+        }
+        guard bootVolume.converged else {
+            return "\(prefix) to converge to generation \(bootVolume.generation)"
+        }
+        guard bootVolume.status == .attached,
+            bootVolume.attachedAgentID == vm.hypervisorId
+        else {
+            return "\(prefix) to become healthy and attached on this VM's agent"
+        }
+        return nil
     }
 
     /// Emits `vm.state_changed` for an observed status transition, once the

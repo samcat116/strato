@@ -67,9 +67,18 @@ final class VolumeObservedSizeTests {
             ),
             protocolVersion: WireProtocol.currentVersion
         )
-        let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id
+        guard let orgID = try await Organization.query(on: app.db).sort(\.$createdAt).first()?.id else {
+            throw Abort(.internalServerError, reason: "Volume test organization is missing")
+        }
+        let site = Site(
+            name: "\(name)-site",
+            organizationScope: .organization(orgID))
+        try await site.save(on: app.db)
         let uuid = try await app.agentService.registerAgent(
-            message, agentName: name, organizationScope: orgID.map { .organization($0) })
+            message,
+            agentName: name,
+            siteID: try site.requireID(),
+            organizationScope: .organization(orgID))
         return uuid.uuidString
     }
 
@@ -104,10 +113,14 @@ final class VolumeObservedSizeTests {
         return volume
     }
 
-    private func report(agentId: String, volumes: [ObservedVolumeState]) -> ObservedStateReport {
+    private func report(
+        agentId: String,
+        vms: [ObservedVMState] = [],
+        volumes: [ObservedVolumeState]
+    ) -> ObservedStateReport {
         ObservedStateReport(
             agentId: agentId,
-            vms: [],
+            vms: vms,
             resources: AgentResources(
                 totalCPU: 16, availableCPU: 16,
                 totalMemory: 1 << 34, availableMemory: 1 << 34,
@@ -142,6 +155,95 @@ final class VolumeObservedSizeTests {
             #expect(response.size == 3 << 30)
             #expect(response.observedSize == 3 << 30)
             #expect(response.observedSizeFormatted == response.sizeFormatted)
+        }
+    }
+
+    /// End-to-end through report application for STR-242. The agent may report
+    /// the VM's target generation and `Running` in the same heartbeat that still
+    /// shows the image-backed root disk at its 112 MiB source size. That report
+    /// must not settle the start; once a later report carries the requested size
+    /// and healthy attachment, the same VM mutation completes automatically.
+    @Test("VM start remains pending until its boot volume reaches the requested observed size")
+    func vmStartWaitsForBootVolumeSize() async throws {
+        try await withVolumeApp { app, user, project in
+            let agentId = try await self.registerAgent(app: app, named: "rapid-start-agent")
+            let builder = TestDataBuilder(db: app.db)
+            let vm = try await builder.createVM(name: "rapid-start-vm", project: project)
+            vm.hypervisorId = agentId
+            vm.setStatus(.created)
+            vm.desiredStatus = .running
+            vm.generation = 2
+            vm.observedGeneration = 1
+            vm.convergenceDeadline = Date().addingTimeInterval(300)
+            try await vm.save(on: app.db)
+
+            let requestedSize: Int64 = 1 << 30
+            let sourceSize: Int64 = 112 << 20
+            let bootVolume = try await self.makeVolume(
+                app: app,
+                user: user,
+                project: project,
+                agentId: agentId,
+                size: requestedSize,
+                observedSizeBytes: nil,
+                generation: 1,
+                observedGeneration: 0)
+            bootVolume.volumeType = .boot
+            bootVolume.$vm.id = try vm.requireID()
+            bootVolume.deviceName = "disk0"
+            bootVolume.bootOrder = 0
+            try await bootVolume.save(on: app.db)
+
+            let vmObservation = ObservedVMState(
+                vmId: try vm.requireID(),
+                status: .running,
+                observedGeneration: 2)
+            _ = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: agentId,
+                    vms: [vmObservation],
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try bootVolume.requireID(),
+                            present: true,
+                            storagePath: "/var/lib/strato/volumes/root/volume.qcow2",
+                            sizeBytes: sourceSize,
+                            attachedVMId: try vm.requireID(),
+                            observedGeneration: 0,
+                            convergencePhase: "resizing")
+                    ]))
+
+            let pending = try #require(try await VM.find(try vm.requireID(), on: app.db))
+            #expect(pending.observedGeneration == 1)
+            #expect(pending.status == .created)
+            #expect(pending.conditions.converged == false)
+            #expect(pending.conditions.phase?.contains("observed \(sourceSize)") == true)
+
+            _ = try await app.observedStateApplier.apply(
+                self.report(
+                    agentId: agentId,
+                    vms: [vmObservation],
+                    volumes: [
+                        ObservedVolumeState(
+                            volumeId: try bootVolume.requireID(),
+                            present: true,
+                            storagePath: "/var/lib/strato/volumes/root/volume.qcow2",
+                            sizeBytes: requestedSize,
+                            attachedVMId: try vm.requireID(),
+                            observedGeneration: 1)
+                    ]))
+
+            let settled = try #require(try await VM.find(try vm.requireID(), on: app.db))
+            #expect(settled.observedGeneration == 2)
+            #expect(settled.status == .running)
+            #expect(settled.conditions.phase == nil)
+            #expect(settled.conditions.converged)
+
+            let settledVolume = try #require(
+                try await Volume.find(try bootVolume.requireID(), on: app.db))
+            #expect(settledVolume.observedSizeBytes == requestedSize)
+            #expect(settledVolume.status == .attached)
+            #expect(settledVolume.conditions.converged)
         }
     }
 
