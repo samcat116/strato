@@ -1,0 +1,110 @@
+agent/Tests/StratoAgentTests/MetadataResponderTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 25-26,39-40,417-421,430-431,435-437,441-464
+  s_7b4fb451d80f69::t_1f6aae44f57ef0 465-466
+agent/Sources/StratoAgentCore/MetadataService/MetadataDocument.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 4,16-27
+agent/Sources/StratoAgentCore/MetadataService/MetadataRouter.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 141-143,146-148,254-258,261-265
+agent/Tests/StratoAgentTests/CloudInitMetaDataTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 2,10-23
+  s_7b4fb451d80f69::t_0a756482c078a0 24
+control-plane/Tests/AppIdentityTests/JWTSVIDAuthenticationTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 216-243
+control-plane/Sources/App/IAM/Cedar/CedarAuthoredPolicyInspector.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 3,101,120-121,134-135,145-146,152-155,166,187-188,197,208-210,212,222-223,233-235,263-264,267-271
+control-plane/Sources/App/Services/SPIFFE/SPIREService.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 203-223,586,612-624
+  s_7b4fb451d80f69::t_3fddea6642ccc4 625
+docs/architecture/networking.md
+  s_7b4fb451d80f69::t_96a79bd879a8d1 1183-1184,1186-1191
+control-plane/Sources/App/IAM/Cedar/CedarPolicyInspector.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 3,94,97-98,114-117,128,155-156,161,165,168-169,180-182,223,225,239,241-242,247-248,254,257-258,262,267-270,274,278-279
+shared/Tests/StratoSharedTests/InstanceMetadataTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 30-33,110-112,124-126,263,275-277
+shared/Sources/StratoShared/GuestExecMessages.swift
+  s_7b4fb451d80f69::t_40b3fa8e79272b 3,258,261,316-317
+agent/Sources/StratoAgentSPIFFE/DelegatedIdentityProbe.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 14-33,285-304
+control-plane/Sources/App/Services/OIDCTokenVerification.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 3,15-18,44,52-53,55-56,61
+docs/adr/0006-imds-session-auth.md
+  s_7b4fb451d80f69::t_96a79bd879a8d1 90-95
+control-plane/Tests/AppPlatformTests/DesiredStateAssemblerTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 50,62-63,122-123,145,150,204-206,217-219
+shared/Sources/StratoShared/InstanceMetadata.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 270-281,296-299,314-316,338-340
+docs/architecture/wire-protocol.md
+  s_7b4fb451d80f69::t_40b3fa8e79272b 53,64,116
+control-plane/Tests/AppIdentityTests/OIDCTokenVerificationTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 72,221-222,263-266
+  s_7b4fb451d80f69::t_0c61cc578e664b 267
+control-plane/Sources/App/Services/DesiredStateDigest.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 78,84-85,87-89,97,109,111-115,119-120
+agent/Tests/StratoAgentTests/DelegatedIdentityClientTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 480-487
+control-plane/Sources/App/Services/SPIFFE/JWTSVIDVerification.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 3,80-82,125,132-133,139,141,143,149
+control-plane/Tests/AppIdentityTests/OIDCIdentityMappingTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 55-60
+agent/Sources/StratoAgentCore/OVNChassisBootstrap.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 45-47,199-200
+shared/Sources/StratoShared/WebSocketProtocol.swift
+  s_7b4fb451d80f69::t_40b3fa8e79272b 80-81
+  s_7b4fb451d80f69::t_96a79bd879a8d1 499-502,507-508,524,526,530,557-575,578-580
+  s_7b4fb451d80f69::t_63a853c3e31017 581
+control-plane/Sources/App/Services/DesiredStateAssembler.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 201-202
+shared/Tests/StratoSharedTests/JSONValueTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 1-28
+control-plane/Tests/AppIdentityTests/SPIREServiceTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 246-268
+shared/Sources/StratoShared/WireProtocol.swift
+  s_7b4fb451d80f69::t_40b3fa8e79272b 14,16-18
+agent/Sources/StratoAgentCore/MetadataService/MetadataHTTPServer.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 273
+agent/Tests/StratoAgentTests/OVNChassisBootstrapTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 52-53
+agent/Sources/StratoAgent/Agent.swift
+  s_7b4fb451d80f69::t_40b3fa8e79272b 2521
+agent/Tests/StratoAgentTests/CloudInitUserDataDocumentTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 2,10-47
+  s_7b4fb451d80f69::t_40e6e4743a21c8 48
+docs/architecture/agent.md
+  s_7b4fb451d80f69::t_96a79bd879a8d1 1308-1315
+agent/Tests/StratoAgentTests/MetadataRouterTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 94,96-99,101,103,111-112
+agent/Tests/StratoAgentTests/CloudInitNetworkConfigTests.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 2,10-85
+  s_7b4fb451d80f69::t_82ea47effd32e2 86
+control-plane/Sources/App/Services/OIDCIdentityService.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 3,32,36-38
+shared/Tests/StratoSharedTests/WireProtocolTests.swift
+  s_7b4fb451d80f69::t_40b3fa8e79272b 20
+shared/Tests/StratoSharedTests/GuestExecMessageTests.swift
+  s_7b4fb451d80f69::t_40b3fa8e79272b 90,106
+agent/Sources/StratoAgentCore/CloudInitProvisioner.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 178-183,322-329,762-797
+  s_7b4fb451d80f69::t_a6877bec0858b2 798
+control-plane/Sources/App/Services/InstanceMetadataFactory.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 51-52,72-74,109-111,132-135
+agent/Tests/StratoAgentTests/MessageOrderingTests.swift
+  s_7b4fb451d80f69::t_40b3fa8e79272b 202
+agent/Sources/StratoAgentCore/FileSystemStorageBackend.swift
+  s_7b4fb451d80f69::t_96a79bd879a8d1 355-356
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "971ca818d8acc3092096e0a258f19d57017208ad",
+  "prompts": {},
+  "sessions": {
+    "s_7b4fb451d80f69": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fee38-f349-77f1-8236-32e23acabede",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
