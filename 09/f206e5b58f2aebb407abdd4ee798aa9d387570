@@ -1,0 +1,21 @@
+deploy/compose/docker-compose.yml
+  s_c00c4227b18597::t_f9dd89cfab7b6a 344-345,349
+docs/architecture/storage.md
+  s_c00c4227b18597::t_f9dd89cfab7b6a 91-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "09f206e5b58f2aebb407abdd4ee798aa9d387570",
+  "prompts": {},
+  "sessions": {
+    "s_c00c4227b18597": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ff2e1-98b7-7353-ad7c-717f9036181a",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Sam Schmitt <sam@samschmitt.com>"
+    }
+  }
+}
